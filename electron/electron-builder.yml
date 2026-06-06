@@ -1,0 +1,70 @@
+# electron-builder configuration
+# Run: npx electron-builder --mac --win --linux
+
+appId: app.lifemarkai.desktop
+productName: LifemarkAI
+copyright: "Copyright © 2025 LifemarkAI"
+
+directories:
+  output: dist-electron
+  buildResources: electron/assets
+
+files:
+  - electron/**/*
+  - public/icons/**/*
+  - "!node_modules/**/*"
+  - "!src/**/*"
+  - "!.next/**/*"
+
+# macOS
+mac:
+  category: public.app-category.developer-tools
+  icon: public/icons/icon-512.png
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: electron/assets/entitlements.mac.plist
+  entitlementsInherit: electron/assets/entitlements.mac.plist
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+    - target: zip
+      arch: [x64, arm64]
+
+dmg:
+  contents:
+    - x: 410
+      y: 150
+      type: link
+      path: /Applications
+    - x: 130
+      y: 150
+      type: file
+
+# Windows
+win:
+  icon: public/icons/icon-512.png
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+# Linux
+linux:
+  icon: public/icons/icon-512.png
+  category: Development
+  target:
+    - AppImage
+    - deb
+    - rpm
+
+publish:
+  provider: github
+  owner: lifemarkai
+  repo: desktop

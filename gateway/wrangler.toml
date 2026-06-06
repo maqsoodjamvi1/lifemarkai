@@ -1,0 +1,25 @@
+name = "lifemarkai-ai-gateway"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Custom domain: ai.gateway.lifemarkai.app
+# Set up in Cloudflare dashboard → Workers & Pages → your worker → Triggers → Custom Domains
+
+[vars]
+ENVIRONMENT = "production"
+APP_URL = "https://lifemarkai.app"
+
+# ── Secrets (set via `wrangler secret put <NAME>`) ───────────────────────────
+# OPENAI_API_KEY
+# ANTHROPIC_API_KEY
+# OPENROUTER_API_KEY
+# GOOGLE_GENERATIVE_AI_API_KEY
+# SUPABASE_URL
+# SUPABASE_SERVICE_ROLE_KEY
+# GATEWAY_SECRET          – shared secret between the Next.js app and this Worker
+#                           (set LIFEMARK_GATEWAY_SECRET in Next.js .env.local to match)
+
+[[routes]]
+pattern = "ai.gateway.lifemarkai.app/*"
+zone_name = "lifemarkai.app"

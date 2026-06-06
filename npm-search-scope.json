@@ -1,0 +1,81 @@
+﻿[
+
+{"name":"opencode-kimi-full","keywords":["opencode","opencode-plugin","kimi","kimi-for-coding","moonshot","oauth","device-flow","reasoning-effort","prompt-cache-key"],"version":"1.4.0","description":"OpenCode plugin that brings the official Kimi OAuth device flow and Kimi-specific coding request fields to opencode, matching upstream kimi-cli.","sanitized_name":"opencode-kimi-full","publisher":{"email":"l3mn@ymail.com","username":"l3mn"},"maintainers":[{"email":"l3mn@ymail.com","username":"l3mn"}],"license":"MIT","date":"2026-05-09T12:09:10.447Z","links":{"homepage":"https://github.com/lemon07r/opencode-kimi-full#readme","repository":"git+https://github.com/lemon07r/opencode-kimi-full.git","bugs":"https://github.com/lemon07r/opencode-kimi-full/issues","npm":"https://www.npmjs.com/package/opencode-kimi-full"}}
+
+,
+
+{"name":"@vibe-forge/adapter-kimi","keywords":[],"version":"3.3.1","description":"Kimi CLI Adapter for Vibe Forge","sanitized_name":"@vibe-forge/adapter-kimi","publisher":{"email":"yijie4188@gmail.com","username":"yijie4188"},"maintainers":[{"email":"yijie4188@gmail.com","username":"yijie4188"},{"email":"1357711537@qq.com","username":"nirvana30"}],"date":"2026-05-16T06:03:17.598Z","links":{"npm":"https://www.npmjs.com/package/@vibe-forge/adapter-kimi"}}
+
+,
+
+{"name":"@moonshot-ai/kimi-agent-sdk","keywords":["kimi","moonshot","ai","agent","sdk","cli"],"version":"0.1.8","description":"SDK for interacting with Kimi Code CLI","sanitized_name":"@moonshot-ai/kimi-agent-sdk","publisher":{"email":"llcan1120@gmail.com","username":"tempurai"},"maintainers":[{"email":"llcan1120@gmail.com","username":"tempurai"},{"email":"justin.w.xd@gmail.com","username":"bigeagle"}],"license":"MIT","date":"2026-04-13T13:43:03.686Z","links":{"homepage":"https://github.com/MoonshotAI/kimi-agent-sdk#readme","repository":"git+https://github.com/MoonshotAI/kimi-agent-sdk.git","bugs":"https://github.com/MoonshotAI/kimi-agent-sdk/issues","npm":"https://www.npmjs.com/package/@moonshot-ai/kimi-agent-sdk"}}
+
+,
+
+{"name":"@zhivex-ai/kimi","keywords":["ai","sdk","kimi","llm","typescript"],"version":"0.6.4","description":"Kimi adapter for Zhivex AI SDK.","sanitized_name":"@zhivex-ai/kimi","publisher":{"email":"mortiz@zhivex.com","username":"mortiz.zhivex"},"maintainers":[{"email":"mortiz@zhivex.com","username":"mortiz.zhivex"}],"license":"MIT","date":"2026-05-13T12:16:56.503Z","links":{"homepage":"https://github.com/Zhivex/zhivex-ai-sdk#readme","repository":"git+https://github.com/Zhivex/zhivex-ai-sdk.git","bugs":"https://github.com/Zhivex/zhivex-ai-sdk/issues","npm":"https://www.npmjs.com/package/@zhivex-ai/kimi"}}
+
+,
+
+{"name":"pi-provider-kimi-code","keywords":["pi-package","pi-extension","pi-provider","pi","pi-coding-agent","pi-mono","coding-agent","ai-provider","llm","llm-provider","kimi","kimi-for-coding","kimi-coder","kimi-k2","kimi-k2.6","kimi-k2.5","moonshot","moonshotai","oauth","device-code","subscription"],"version":"0.3.0","description":"Pi extension for Kimi Code ΓÇö reuse your Kimi Code Plan in pi-coding-agent (K2.6, K2.5)","sanitized_name":"pi-provider-kimi-code","publisher":{"email":"npm-oidc-no-reply@github.com","trustedPublisher":{"oidcConfigId":"oidc:***","id":"github"},"username":"GitHub Actions"},"maintainers":[{"email":"yanleech@gmail.com","username":"133cha31"}],"license":"MIT","date":"2026-04-20T16:38:48.598Z","links":{"homepage":"https://github.com/Leechael/pi-provider-kimi-code#readme","repository":"git+https://github.com/Leechael/pi-provider-kimi-code.git","bugs":"https://github.com/Leechael/pi-provider-kimi-code/issues","npm":"https://www.npmjs.com/package/pi-provider-kimi-code"}}
+
+,
+
+{"name":"kimi","keywords":["animation,states,path,finding"],"version":"6.0.2","description":"Define states with values and kimi will drive between the states","sanitized_name":"kimi","publisher":{"email":"me@mikkoh.com","username":"mikkoh"},"maintainers":[{"email":"me@mikkoh.com","username":"mikkoh"}],"license":"MIT","date":"2016-03-18T15:19:20.336Z","links":{"homepage":"https://github.com/mikkoh/kimi","repository":"git://github.com/mikkoh/kimi.git","bugs":"https://github.com/mikkoh/kimi/issues","npm":"https://www.npmjs.com/package/kimi"}}
+
+,
+
+{"name":"pi-kimi-coder","keywords":["pi-package","pi-extension","kimi","moonshot","kimi-coder","ai-provider"],"version":"1.1.0","description":"Pi extension for Kimi K2 Coding plan ΓÇö OAuth-based provider with kimi-for-coding model","sanitized_name":"pi-kimi-coder","publisher":{"email":"tuanle2088@gmail.com","username":"picassio"},"maintainers":[{"email":"tuanle2088@gmail.com","username":"picassio"}],"license":"MIT","date":"2026-05-05T04:25:18.731Z","links":{"homepage":"https://github.com/picassio/pi-kimi-coder#readme","repository":"git+https://github.com/picassio/pi-kimi-coder.git","bugs":"https://github.com/picassio/pi-kimi-coder/issues","npm":"https://www.npmjs.com/package/pi-kimi-coder"}}
+
+,
+
+{"name":"@ramarivera/pi-kimi-for-coding","keywords":["pi-package","pi","pi-extension","kimi","kimi-for-coding","oauth","device-flow"],"version":"0.1.8","description":"Pi extension that adds Kimi For Coding OAuth support using the official device flow and Kimi-specific request behavior.","sanitized_name":"@ramarivera/pi-kimi-for-coding","publisher":{"email":"npm-oidc-no-reply@github.com","trustedPublisher":{"oidcConfigId":"oidc:***","id":"github"},"username":"GitHub Actions"},"maintainers":[{"email":"ramarivera@gmail.com","username":"ramarivera"}],"license":"MIT","date":"2026-05-09T14:18:04.497Z","links":{"homepage":"https://github.com/ramarivera/pi-kimi-for-coding#readme","repository":"git+https://github.com/ramarivera/pi-kimi-for-coding.git","bugs":"https://github.com/ramarivera/pi-kimi-for-coding/issues","npm":"https://www.npmjs.com/package/@ramarivera/pi-kimi-for-coding"}}
+
+,
+
+{"name":"pi-kimi-usage","keywords":["pi-package","pi","extension","kimi","statusbar"],"version":"0.1.2","description":"Shows Kimi usage in the pi status bar when a Kimi model is selected","sanitized_name":"pi-kimi-usage","publisher":{"email":"muffe2k4@googlemail.com","username":"muffe"},"maintainers":[{"email":"muffe2k4@googlemail.com","username":"muffe"}],"license":"MIT","date":"2026-04-27T11:06:11.237Z","links":{"homepage":"https://github.com/muffe/pi-kimi-usage#readme","repository":"git+https://github.com/muffe/pi-kimi-usage.git","bugs":"https://github.com/muffe/pi-kimi-usage/issues","npm":"https://www.npmjs.com/package/pi-kimi-usage"}}
+
+,
+
+{"name":"kimi-quota-feeder","keywords":["kimi","quota","claude-hud","moonshot"],"version":"1.2.0","description":"Kimi Coding Plan quota fetcher for claude-hud external usage","sanitized_name":"kimi-quota-feeder","publisher":{"email":"zhaolipei@outlook.com","username":"zhaolipei"},"maintainers":[{"email":"zhaolipei@outlook.com","username":"zhaolipei"}],"license":"MIT","date":"2026-04-29T12:21:58.706Z","links":{"npm":"https://www.npmjs.com/package/kimi-quota-feeder"}}
+
+,
+
+{"name":"@kaitranntt/ccs","keywords":["cli","claude","glm","ai","profile","switch"],"version":"7.79.1","description":"Claude Code Switch - Instant profile switching between Claude, GLM, Kimi, and more","sanitized_name":"@kaitranntt/ccs","publisher":{"email":"kaitran.ntt@gmail.com","username":"kaitranntt"},"maintainers":[{"email":"kaitran.ntt@gmail.com","username":"kaitranntt"}],"license":"MIT","date":"2026-05-14T17:24:45.328Z","links":{"homepage":"https://github.com/kaitranntt/ccs","repository":"git+https://github.com/kaitranntt/ccs.git","bugs":"https://github.com/kaitranntt/ccs/issues","npm":"https://www.npmjs.com/package/@kaitranntt/ccs"}}
+
+,
+
+{"name":"@oh-my-kimi/cli","keywords":["agent","agent-ensemble","agent-orchestration","agentic-coding","ai","ai-agent","ai-agents","ai-coding","ai-devtools","autonomous-agents","cli","cli-tool","code-assistant","code-generation","code-review-automation","coding","coding-agent","dag","design-md","developer-experience","developer-tools","ensemble","git-worktree","graph-memory","k2.6","kimi","kimi-cli","kimi-code","kimi-k2","kimi-k2.6","language-server-protocol","large-language-model","llm","local-first","lsp","mcp","model-context-protocol","moonshot","multi-agent","multi-agent-orchestration","nodejs","oh-my-kimi","orchestration","parallel-execution","quality-gates","scheduler","task-graph","task-scheduler","tmux","typescript","workflow-automation","worktree","yolo-mode"],"version":"1.1.15","description":"Verified agent runtime for Kimi Code. Stable daily-use core with alpha orchestration surfaces.","sanitized_name":"@oh-my-kimi/cli","publisher":{"email":"ingeng2004@gmail.com","username":"dmae"},"maintainers":[{"email":"ingeng2004@gmail.com","username":"dmae"}],"license":"MIT","date":"2026-05-13T05:45:44.168Z","links":{"homepage":"https://oh-my-kimi.sbs/","repository":"git+https://github.com/dmae97/oh-my-kimi.git","bugs":"https://github.com/dmae97/oh-my-kimi/issues","npm":"https://www.npmjs.com/package/@oh-my-kimi/cli"}}
+
+,
+
+{"name":"oh-my-kimi-cli","keywords":["kimi","kimi-cli","cli","workflow","agents","orchestration","ai","productivity","developer-tools","code-assistant","automation","hooks","skills","state-management","deep-interview","ralplan","ralph","moonshot"],"version":"1.0.5","description":"Workflow orchestration layer for Kimi Code CLI - Bring structured workflows, agent teams, and persistent execution to your Kimi CLI sessions","sanitized_name":"oh-my-kimi-cli","publisher":{"email":"abc2375556276@outlook.com","username":"spiritpunch"},"maintainers":[{"email":"abc2375556276@outlook.com","username":"spiritpunch"}],"license":"MIT","date":"2026-04-23T15:07:11.248Z","links":{"homepage":"https://github.com/Goblin1024/oh-my-kimi#readme","repository":"git+https://github.com/Goblin1024/oh-my-kimi.git","bugs":"https://github.com/Goblin1024/oh-my-kimi/issues","npm":"https://www.npmjs.com/package/oh-my-kimi-cli"}}
+
+,
+
+{"name":"kimi-code","keywords":["kimi","anthropic","proxy","claude","cli","ai","groq","moonshot"],"version":"1.0.11","description":"A CLI tool that starts anthropic-proxy with Kimi model and runs claude-code","sanitized_name":"kimi-code","publisher":{"email":"tomasmcm@whitesmith.co","username":"tomasmcm"},"maintainers":[{"email":"tomasmcm@whitesmith.co","username":"tomasmcm"}],"license":"MIT","date":"2025-09-15T08:49:06.643Z","links":{"homepage":"https://github.com/whitesmith/kimi-code#readme","repository":"git+https://github.com/whitesmith/kimi-code.git","bugs":"https://github.com/whitesmith/kimi-code/issues","npm":"https://www.npmjs.com/package/kimi-code"}}
+
+,
+
+{"name":"kimi-theme","keywords":[],"version":"0.0.40","description":"Kimi UI Theme","sanitized_name":"kimi-theme","publisher":{"email":"dev@kimistores.com","username":"kimistores"},"maintainers":[{"email":"dev@kimistores.com","username":"kimistores"}],"license":"MIT","date":"2025-02-01T23:40:34.279Z","links":{"homepage":"https://github.com/kimiui/theme#readme","repository":"git+https://github.com/kimiui/theme.git","bugs":"https://github.com/kimiui/theme/issues","npm":"https://www.npmjs.com/package/kimi-theme"}}
+
+,
+
+{"name":"@kimi-claw/kimi-search","keywords":["openclaw","kimi","search","fetch","web"],"version":"0.1.8","description":"OpenClaw plugin for Kimi search series tools","sanitized_name":"@kimi-claw/kimi-search","publisher":{"email":"2313678365@qq.com","username":"pvzheroes125"},"maintainers":[{"email":"2313678365@qq.com","username":"pvzheroes125"}],"license":"MIT","date":"2026-04-02T13:53:49.775Z","links":{"npm":"https://www.npmjs.com/package/@kimi-claw/kimi-search"}}
+
+,
+
+{"name":"kimiclaude","keywords":["claude-code","openai","llm","cli","agent","deepseek","ollama","gemini"],"version":"1.1.7","description":"Kimiclaude: Advanced coding assistant powered by Kimi (Moonshot AI) models and Kimiclaude architecture.","sanitized_name":"kimiclaude","publisher":{"email":"Sahsaxboxvanx@gmail.com","username":"be1lnash3"},"maintainers":[{"email":"Sahsaxboxvanx@gmail.com","username":"be1lnash3"}],"license":"SEE LICENSE FILE","date":"2026-05-07T13:22:17.085Z","links":{"homepage":"https://github.com/Gitlawb/kimiclaude#readme","repository":"git+https://github.com/Gitlawb/kimiclaude.git","bugs":"https://github.com/Gitlawb/kimiclaude/issues","npm":"https://www.npmjs.com/package/kimiclaude"}}
+
+,
+
+{"name":"@zgltyq/pi-provider-kimi-code","keywords":["pi-package","pi-extension","pi-provider","pi","pi-coding-agent","pi-mono","coding-agent","ai-provider","llm","llm-provider","kimi","kimi-for-coding","kimi-coder","kimi-k2","kimi-k2.6","kimi-k2.5","moonshot","moonshotai","oauth","device-code","subscription","fork"],"version":"0.3.2","description":"Kimi Code plan in pi-coding-agent ΓÇö fork of pi-provider-kimi-code with bearer-auth fix for OAuth tokens","sanitized_name":"@zgltyq/pi-provider-kimi-code","publisher":{"email":"zgltyq@gmail.com","username":"zgltyq"},"maintainers":[{"email":"zgltyq@gmail.com","username":"zgltyq"}],"license":"MIT","date":"2026-04-21T20:19:07.547Z","links":{"homepage":"https://github.com/ZGltYQ/pi-provider-kimi-code#readme","repository":"git+https://github.com/ZGltYQ/pi-provider-kimi-code.git","bugs":"https://github.com/ZGltYQ/pi-provider-kimi-code/issues","npm":"https://www.npmjs.com/package/@zgltyq/pi-provider-kimi-code"}}
+
+,
+
+{"name":"@boathell/kimi-plugin-cc","keywords":["claude-code","claude-code-plugin","kimi","code-review","delegation"],"version":"0.1.1","description":"Use Kimi from Claude Code to review code or delegate tasks.","sanitized_name":"@boathell/kimi-plugin-cc","publisher":{"email":"boathell@gmail.com","username":"boathell"},"maintainers":[{"email":"boathell@gmail.com","username":"boathell"}],"license":"Apache-2.0","date":"2026-05-02T03:01:46.737Z","links":{"homepage":"https://github.com/boathell/kimi-plugin-cc#readme","repository":"git+https://github.com/boathell/kimi-plugin-cc.git","bugs":"https://github.com/boathell/kimi-plugin-cc/issues","npm":"https://www.npmjs.com/package/@boathell/kimi-plugin-cc"}}
+
+,
+
+{"name":"kimi-mcp-server","keywords":["mcp","claude-code","kimi","kimi-code","llm","ai","code-analysis","model-context-protocol"],"version":"0.3.0","description":"MCP server for Claude Code ├ù Kimi K2.5 (256K context) ΓÇö delegate bulk codebase analysis to Kimi, save 90% on token costs","sanitized_name":"kimi-mcp-server","publisher":{"email":"howard.peng.tw@gmail.com","username":"howard_peng"},"maintainers":[{"email":"howard.peng.tw@gmail.com","username":"howard_peng"}],"license":"MIT","date":"2026-03-04T06:51:09.008Z","links":{"homepage":"https://github.com/howardpen9/kimi-code-mcp#readme","repository":"git+https://github.com/howardpen9/kimi-code-mcp.git","bugs":"https://github.com/howardpen9/kimi-code-mcp/issues","npm":"https://www.npmjs.com/package/kimi-mcp-server"}}
+]
+

@@ -1,0 +1,40 @@
+# dependencies
+/node_modules
+/gateway/node_modules
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# env files
+.env
+.env.local
+.env.*.local
+
+# debug
+npm-debug.log*
+debug-*.log
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE
+.idea
+.vscode
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# electron / capacitor build artifacts
+/dist
+/release
+
+# supabase
+.branches
+.temp
