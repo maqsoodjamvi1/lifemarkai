@@ -142,35 +142,54 @@ export default defineConfig({
 })`,
 };
 
+const DEMO_EMAIL = "demo@lifemarkai.app";
+const DEMO_PASSWORD = "DemoPassword123!";
+
+async function getOrCreateDemoUserId(
+  supabase: Awaited<ReturnType<typeof createAdminClient>>
+): Promise<string> {
+  const { data: created, error: createError } = await supabase.auth.admin.createUser({
+    email: DEMO_EMAIL,
+    password: DEMO_PASSWORD,
+    user_metadata: { name: "Demo User" },
+    email_confirm: true,
+  });
+
+  if (!createError && created.user) {
+    return created.user.id;
+  }
+
+  const alreadyExists =
+    createError?.status === 422 ||
+    createError?.message?.toLowerCase().includes("already");
+
+  if (!alreadyExists) {
+    throw createError ?? new Error("Failed to create demo user");
+  }
+
+  let page = 1;
+  while (true) {
+    const { data, error: listError } = await supabase.auth.admin.listUsers({
+      page,
+      perPage: 1000,
+    });
+    if (listError) throw listError;
+
+    const existing = data.users.find((u) => u.email === DEMO_EMAIL);
+    if (existing) return existing.id;
+
+    if (data.users.length < 1000) break;
+    page++;
+  }
+
+  throw new Error("Demo user exists but could not be found");
+}
+
 export async function GET(request: NextRequest) {
   try {
     const supabase = await createAdminClient();
 
-    // Create a demo user if it doesn't exist
-    const { data: { user: demoUser } } = await supabase.auth.admin.getUserById(
-      "demo-user-id"
-    );
-
-    let userId = "demo-user-id";
-
-    if (!demoUser) {
-      const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
-        email: "demo@lifemarkai.app",
-        password: "DemoPassword123!",
-        user_metadata: { name: "Demo User" },
-        email_confirm: true,
-      });
-
-      if (createError) {
-        console.error("Error creating demo user:", createError);
-        return NextResponse.json(
-          { error: "Failed to create demo user", details: createError.message },
-          { status: 500 }
-        );
-      }
-
-      if (newUser) userId = newUser.id;
-    }
+    const userId = await getOrCreateDemoUserId(supabase);
 
     // Create a demo project
     const { data: project, error: projectError } = await (supabase as any)
@@ -180,7 +199,7 @@ export async function GET(request: NextRequest) {
         name: "LifemarkAI Demo",
         description: "A sample React app to test the LifemarkAI editor and preview",
         framework: "react",
-        status: "ready",
+        status: "active",
         is_public: true,
       })
       .select()
@@ -228,8 +247,8 @@ export async function GET(request: NextRequest) {
       editorUrl: `/editor/${project.id}`,
       userId,
       demoCredentials: {
-        email: "demo@lifemarkai.app",
-        password: "DemoPassword123!",
+        email: DEMO_EMAIL,
+        password: DEMO_PASSWORD,
       },
     });
   } catch (error) {

@@ -29,6 +29,11 @@ import { ImageGenPanel } from "./image-gen-panel";
 import { SupabaseWizard } from "./supabase-wizard";
 import { EnvPanel } from "./env-panel";
 import { PreviewAnnotateModal } from "./preview-annotate-modal";
+import {
+  LovableToolsOverlay,
+  LovableOverlayHeader,
+  isLovableToolPanel,
+} from "./lovable-tools-overlay";
 import { FileToAppDropZone } from "./file-to-app-drop-zone";
 import { PlanPanel } from "./plan-panel";
 import { FigmaPanel } from "./figma-panel";
@@ -37,7 +42,6 @@ import { HistoryPanel } from "./history-panel";
 import { ShortcutsModal, useShortcutsModal } from "./shortcuts-modal";
 import { CommandPalette } from "@/components/command-palette";
 import type { CommandPaletteActions } from "@/components/command-palette";
-import { ActivityFeed } from "./activity-feed";
 import { KnowledgePanel } from "./knowledge-panel";
 import { ProjectSettingsPanel } from "./project-settings-panel";
 import { SecurityPanel } from "./security-panel";
@@ -66,7 +70,6 @@ import { WebhookPanel } from "./webhook-panel";
 import { PerformancePanel } from "./performance-panel";
 import { I18nPanel } from "./i18n-panel";
 import { ApiDocsPanel } from "./api-docs-panel";
-import { CloudPanel } from "./cloud-panel";
 import { LifemarkCloudPanel } from "./lifemark-cloud-panel";
 import { StoragePanel } from "./storage-panel";
 import { AppConnectorsPanel } from "./app-connectors-panel";
@@ -157,6 +160,13 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   const [leftPanel, setLeftPanel] = useState<LeftPanel>("chat");
   // Right-side secondary panel (null = show preview/code)
   const [rightPanel, setRightPanel] = useState<LeftPanel | null>(null);
+  const [leftChatOverlay, setLeftChatOverlay] = useState<"history" | null>(null);
+
+  const focusPreview = useCallback(() => {
+    setRightPanel(null);
+    setViewMode("preview");
+    window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
+  }, []);
   const [credits, setCredits] = useState(profile?.credits ?? 0);
   const [isVisualEditActive, setIsVisualEditActive] = useState(false);
   const [showFileTree, setShowFileTree] = useState(false);
@@ -516,6 +526,11 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
           rightPanel={rightPanel}
           onRightPanelChange={(p) => setRightPanel(p)}
           securityIssueCount={securityIssueCount}
+          chatOverlayActive={leftChatOverlay === "history"}
+          onChatOverlayToggle={() => {
+            setLeftChatOverlay((h) => (h === "history" ? null : "history"));
+            setRightPanel(null);
+          }}
         />
       )}
 
@@ -680,7 +695,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
             id="leftpanel"
             style={focusMode ? { display: "none" } : undefined}
           >
-            <div className="flex flex-col h-full border-r border-border bg-background">
+            <div className="relative flex flex-col h-full border-r border-border bg-background">
               <ChatPanel
                 project={project}
                 files={files}
@@ -705,7 +720,31 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 isLocked={isLiveLocked}
                 onApprovePlan={() => setEditorMode("build")}
                 onOpenPanel={(panel) => setRightPanel(panel as LeftPanel)}
+                onFocusPreview={focusPreview}
               />
+              {leftChatOverlay === "history" && (
+                <div className="absolute inset-0 z-10 flex flex-col bg-background">
+                  <LovableOverlayHeader title="History" onClose={() => setLeftChatOverlay(null)} />
+                  <div className="flex-1 overflow-hidden">
+                    <HistoryPanel
+                      projectId={currentProject.id}
+                      onRestore={(snapshotFiles) => {
+                        setFiles(snapshotFiles);
+                        setActiveFile(snapshotFiles[0] ?? null);
+                        setLeftChatOverlay(null);
+                        focusPreview();
+                      }}
+                      onCompare={(oldId, newId) => {
+                        window.dispatchEvent(new CustomEvent("lifemark-open-diff", {
+                          detail: { oldSnapshotId: oldId, newSnapshotId: newId, projectId: currentProject.id },
+                        }));
+                        setLeftChatOverlay(null);
+                        setRightPanel("diffviewer" as LeftPanel);
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           </Panel>
 
@@ -735,7 +774,27 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
               {/* Secondary panel overlay — shown when a tool panel is active */}
               {rightPanel && (
                 <div className="absolute inset-0 z-10 flex flex-col bg-background border-l border-border">
-                  {/* Secondary panel header */}
+                  {isLovableToolPanel(rightPanel) ? (
+                    <LovableToolsOverlay
+                      activeTab={rightPanel}
+                      onTabChange={(tab) => setRightPanel(tab)}
+                      onClose={() => setRightPanel(null)}
+                    >
+                      {rightPanel === "analytics" && <ProjectSiteAnalyticsPanel project={currentProject} />}
+                      {rightPanel === "cloud" && (
+                        <LifemarkCloudPanel
+                          project={currentProject}
+                          onOpenSubPanel={(p) => setRightPanel(p as LeftPanel)}
+                        />
+                      )}
+                      {rightPanel === "payments" && <PaymentsPanel profile={profile} />}
+                      {rightPanel === "security" && (
+                        <SecurityPanel project={currentProject} files={files} onFilesUpdate={handleFilesUpdate} />
+                      )}
+                      {rightPanel === "seo" && <SeoPanel projectId={pid} onSendToChat={sendPromptToChat} />}
+                    </LovableToolsOverlay>
+                  ) : (
+                    <>
                   <div className="flex items-center justify-between px-4 h-9 border-b border-border shrink-0">
                     <span className="text-xs font-semibold text-foreground">
                       {leftPanelTabs.find((t) => t.id === rightPanel)?.label ?? rightPanel}
@@ -747,7 +806,6 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
                     </button>
                   </div>
-                  {/* Secondary panel content */}
                   <div className="flex-1 overflow-hidden">
                     {rightPanel === "github" && (
                       <GitHubPanel
@@ -760,21 +818,8 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                         files={files}
                       />
                     )}
-                    {rightPanel === "history" && <HistoryPanel
-                      projectId={currentProject.id}
-                      onRestore={(snapshotFiles) => { setFiles(snapshotFiles); setActiveFile(snapshotFiles[0] ?? null); }}
-                      onCompare={(oldId, newId) => {
-                        // Surface the diff viewer pre-populated with the snapshot pair.
-                        window.dispatchEvent(new CustomEvent("lifemark-open-diff", {
-                          detail: { oldSnapshotId: oldId, newSnapshotId: newId, projectId: currentProject.id },
-                        }));
-                        setRightPanel("diffviewer" as LeftPanel);
-                      }}
-                    />}
                     {rightPanel === "knowledge" && <KnowledgePanel project={currentProject} profile={profile} onProjectUpdate={handleProjectUpdate} />}
-                    {rightPanel === "analytics" && <ProjectSiteAnalyticsPanel project={currentProject} />}
                     {rightPanel === "activity" && <ProjectAnalyticsPanel project={currentProject} />}
-                    {rightPanel === "security" && <SecurityPanel project={currentProject} files={files} onFilesUpdate={handleFilesUpdate} />}
                     {rightPanel === "deploys" && <DeployHistoryPanel project={currentProject} onFilesRefresh={async () => { const res = await fetch(`/api/projects/${project.id}/files`); if (res.ok) { const f = await res.json(); setFiles(f); }}} />}
                     {rightPanel === "supabase" && <SupabaseWizard projectId={pid} />}
                     {rightPanel === "env" && <EnvPanel projectId={pid} files={files} onUpdateFile={handleEnvUpdateFile} />}
@@ -789,15 +834,12 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                     {rightPanel === "designsystem" && <DesignSystemsPanel project={currentProject} onProjectUpdate={handleProjectUpdate} />}
                     {rightPanel === "figma" && <FigmaPanel projectId={pid} onGenerateFromFigma={sendPromptToChat} />}
                     {rightPanel === "collab" && <CollaborationPanel project={currentProject} currentUserId={profile?.id ?? ""} yjsCollaborators={yjsCollaborators} />}
-                    {rightPanel === "seo" && <SeoPanel projectId={pid} onSendToChat={sendPromptToChat} />}
                     {rightPanel === "customemail" && <CustomEmailsPanel />}
-                    {rightPanel === "cloud" && <LifemarkCloudPanel project={currentProject} onOpenSubPanel={(p) => setRightPanel(p as LeftPanel)} />}
                     {rightPanel === "storage" && <StoragePanel projectId={pid} />}
                     {rightPanel === "designdir" && <DesignDirectionsPanel onSendToChat={sendPromptToChat} />}
                     {rightPanel === "design" && <DesignPanel projectId={pid} onApply={sendPromptToChat} />}
                     {rightPanel === "visualedits" && <VisualEditsPanel projectId={pid} onApply={sendPromptToChat} />}
                     {rightPanel === "publishpanel" && <PublishPanel project={currentProject} />}
-                    {rightPanel === "payments" && <PaymentsPanel profile={profile} />}
                     {rightPanel === "checkout" && <PaymentCheckoutPanel projectId={pid} />}
                     {rightPanel === "problems" && <ProblemsPanel projectId={pid} />}
                     {rightPanel === "accessibility" && <AccessibilityPanel files={files} onFixWithAI={sendPromptToChat} />}
@@ -835,16 +877,27 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                     {rightPanel === "savetemplate" && <SaveAsTemplatePanel projectId={project.id} projectName={project.name} />}
                     {rightPanel === "diffviewer" && <DiffViewerPanel projectId={project.id} />}
                     {rightPanel === "depgraph" && <DependencyGraphPanel projectId={project.id} files={files} onFileOpen={(path) => { const f = files.find(x => x.path === path); if (f) setActiveFile(f); }} />}
-                    {rightPanel === "timelapse" && <div className="flex items-center justify-center h-full text-sm text-muted-foreground">Time-Lapse coming soon</div>}
+                    {rightPanel === "timelapse" && <TimeLapsePanel projectId={project.id} />}
                     {rightPanel === "aiintegration" && <AiIntegrationPanel project={currentProject} onProjectUpdate={handleProjectUpdate} />}
                     {/* plan/agent/activity/crossref/review/guidance/e2e/packages/designpanel/mcpcontext/aeo/appconnectors/email/comments */}
                     {rightPanel === "plan" && <PlanPanel project={currentProject} files={files} onApprovePlan={(md) => { setEditorMode("build"); setPendingCrossRefPrompt(`Implement this approved plan:
 
 ${md}`); setRightPanel(null); }} />}
                     {rightPanel === "agent" && <AgentPanel projectId={pid} files={files} onFilesUpdated={handleFilesUpdate} onCreditsChange={handleCreditsUpdate} credits={credits} isLocked={isLiveLocked} />}
-                    {rightPanel === "activityfeed" && <ActivityFeed projectId={pid} />}
                     {rightPanel === "crossref" && <CrossReferencePanel currentProjectId={pid} onFilesUpdate={handleFilesUpdate} onAdaptWithAI={sendPromptToChat} />}
-                    {rightPanel === "review" && <CodeReviewPanel activeFile={activeFile} onJumpToLine={() => {}} onFixWithAI={(issue) => sendPromptToChat(`Fix ${issue.category} issue: ${issue.title} — ${issue.description}`)} />}
+                    {rightPanel === "review" && (
+                      <CodeReviewPanel
+                        activeFile={activeFile}
+                        onJumpToLine={(line) => {
+                          setViewMode("code");
+                          setRightPanel(null);
+                          requestAnimationFrame(() => {
+                            window.dispatchEvent(new CustomEvent("monaco-reveal-line", { detail: { line } }));
+                          });
+                        }}
+                        onFixWithAI={(issue) => sendPromptToChat(`Fix ${issue.category} issue: ${issue.title} — ${issue.description}`)}
+                      />
+                    )}
                     {rightPanel === "guidance" && <DesignGuidancePanel projectId={pid} files={files} onApplyFix={sendPromptToChat} />}
                     {rightPanel === "e2e" && <BrowserTestingPanel project={currentProject} files={files} onFilesUpdate={handleFilesUpdate} onOpenFile={setActiveFile} />}
                     {rightPanel === "packages" && <PackagesPanel projectId={pid} files={files} onFileChange={handleFileUpdate} />}
@@ -856,6 +909,8 @@ ${md}`); setRightPanel(null); }} />}
                     {rightPanel === "components" && <ComponentsPanel onInsertPrompt={sendPromptToChat} />}
                     {rightPanel === "designpanel" && <DesignSystemPanel projectId={pid} files={files} onFilesUpdate={handleFilesUpdate} />}
                   </div>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -866,9 +921,14 @@ ${md}`); setRightPanel(null); }} />}
                     <PreviewPanel
                       files={files}
                       projectId={pid}
+                      activeFile={activeFile}
+                      isVisualEditActive={isVisualEditActive}
+                      onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
+                      onFileUpdate={handleFileUpdate}
                       isGenerating={isGenerating}
                       generatingFileCount={generatingFileCount}
                       onError={setPreviewError}
+                      onFixWithAI={(err) => { setLeftPanel("chat"); setPendingFix(err); }}
                       deployedUrl={currentProject.deployed_url ?? undefined}
                       badgeHidden={(currentProject as { badge_hidden?: boolean }).badge_hidden ?? false}
                       onSendAnnotatedToChat={(prompt, img) => {
@@ -914,9 +974,14 @@ ${md}`); setRightPanel(null); }} />}
                 <PreviewPanel
                   files={files}
                   projectId={pid}
+                  activeFile={activeFile}
+                  isVisualEditActive={isVisualEditActive}
+                  onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
+                  onFileUpdate={handleFileUpdate}
                   isGenerating={isGenerating}
                   generatingFileCount={generatingFileCount}
                   onError={setPreviewError}
+                  onFixWithAI={(err) => { setLeftPanel("chat"); setPendingFix(err); }}
                   deployedUrl={currentProject.deployed_url ?? undefined}
                   badgeHidden={(currentProject as { badge_hidden?: boolean }).badge_hidden ?? false}
                   onSendAnnotatedToChat={(prompt, img) => {

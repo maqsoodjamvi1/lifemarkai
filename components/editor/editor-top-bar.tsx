@@ -71,6 +71,16 @@ interface EditorTopBarProps {
   onRightPanelChange?: (panel: LeftPanel | null) => void;
   /** Number of static-scan security findings (used for the publish dropdown's red badge) */
   securityIssueCount?: number;
+  /** Toggle Lovable-style history overlay on the chat column */
+  onChatOverlayToggle?: () => void;
+  chatOverlayActive?: boolean;
+}
+
+function openSecondaryPanel(
+  panel: LeftPanel,
+  onRightPanelChange?: (panel: LeftPanel | null) => void
+) {
+  onRightPanelChange?.(panel);
 }
 
 /** Returns a human-readable relative time string that auto-updates every 5 s */
@@ -123,6 +133,8 @@ export function EditorTopBar({
   rightPanel,
   onRightPanelChange,
   securityIssueCount = 0,
+  onChatOverlayToggle,
+  chatOverlayActive = false,
 }: EditorTopBarProps) {
   const router = useRouter();
   const savedLabel = useRelativeTime(lastSaved);
@@ -432,7 +444,7 @@ export function EditorTopBar({
                     Duplicate project
                   </DropdownMenuItem>
                 )}
-                <DropdownMenuItem onClick={() => onLeftPanelChange("settings")} className="text-xs gap-2">
+                <DropdownMenuItem onClick={() => openSecondaryPanel("settings", onRightPanelChange)} className="text-xs gap-2">
                   <Settings className="w-3.5 h-3.5" />
                   Project settings
                 </DropdownMenuItem>
@@ -457,8 +469,8 @@ export function EditorTopBar({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon"
-                className={`h-7 w-7 flex-shrink-0 transition-all ${rightPanel === "history" ? "text-foreground bg-muted" : "text-muted-foreground hover:text-foreground"}`}
-                onClick={() => onRightPanelChange?.(rightPanel === "history" ? null : "history")}>
+                className={`h-7 w-7 flex-shrink-0 transition-all ${chatOverlayActive ? "text-foreground bg-muted" : "text-muted-foreground hover:text-foreground"}`}
+                onClick={() => onChatOverlayToggle?.()}>
                 <History className="h-3.5 w-3.5" />
               </Button>
             </TooltipTrigger>
@@ -558,7 +570,13 @@ export function EditorTopBar({
               ] as { id: LeftPanel; label: string; icon: React.ElementType }[]).map(({ id, label, icon: Icon }) => (
                 <DropdownMenuItem
                   key={id}
-                  onClick={() => id === "code" ? onViewChange("code") : onRightPanelChange?.(rightPanel === id ? null : id)}
+                  onClick={() => {
+                    if (id === "code") {
+                      onViewChange("code");
+                      return;
+                    }
+                    onRightPanelChange?.(rightPanel === id ? null : id);
+                  }}
                   className="text-xs gap-2.5 py-2"
                 >
                   <Icon className="w-3.5 h-3.5 text-muted-foreground" />
@@ -690,7 +708,10 @@ export function EditorTopBar({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground flex-shrink-0"
-                onClick={() => liveUrl ? window.open(liveUrl, "_blank") : undefined}>
+                onClick={() => {
+                  if (liveUrl) window.open(liveUrl, "_blank", "noopener,noreferrer");
+                  else window.open(`/preview/${project.id}`, "_blank", "noopener,noreferrer");
+                }}>
                 <Maximize2 className="h-3.5 w-3.5" />
               </Button>
             </TooltipTrigger>
@@ -714,7 +735,7 @@ export function EditorTopBar({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground flex-shrink-0"
-                onClick={() => onLeftPanelChange("comments")}>
+                onClick={() => openSecondaryPanel("comments", onRightPanelChange)}>
                 <MessageCircle className="h-3.5 w-3.5" />
               </Button>
             </TooltipTrigger>
@@ -752,7 +773,7 @@ export function EditorTopBar({
                 <p className="text-[11px] font-semibold text-muted-foreground mb-2">Project access</p>
                 <div className="space-y-2">
                   {/* Collaborators link */}
-                  <button onClick={() => { setShareOpen(false); onLeftPanelChange("collab"); }}
+                  <button onClick={() => { setShareOpen(false); openSecondaryPanel("collab", onRightPanelChange); }}
                     className="w-full flex items-center justify-between text-xs py-1 hover:text-foreground text-muted-foreground transition-colors">
                     <span>People you invited</span>
                     <ChevronRight className="w-3.5 h-3.5" />
@@ -856,7 +877,7 @@ export function EditorTopBar({
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-[11px] font-medium text-muted-foreground">Website URL</span>
                   <button className="text-[11px] text-[#0066FF] hover:underline"
-                    onClick={() => { onLeftPanelChange("domains"); }}>
+                    onClick={() => { openSecondaryPanel("domains", onRightPanelChange); }}>
                     Add custom domain
                   </button>
                 </div>
@@ -907,7 +928,7 @@ export function EditorTopBar({
               {/* Actions */}
               <div className="px-4 py-3 flex gap-2">
                 <Button variant="outline" size="sm" className="flex-1 h-8 text-xs border-border/60 relative"
-                  onClick={() => onLeftPanelChange("security")}>
+                  onClick={() => openSecondaryPanel("security", onRightPanelChange)}>
                   Review security
                   {securityIssueCount > 0 && (
                     <span
@@ -919,7 +940,7 @@ export function EditorTopBar({
                   )}
                 </Button>
                 <Button variant="outline" size="sm" className="flex-1 h-8 text-xs border-border/60"
-                  onClick={() => onLeftPanelChange("settings")}>
+                  onClick={() => openSecondaryPanel("settings", onRightPanelChange)}>
                   Edit settings
                 </Button>
               </div>

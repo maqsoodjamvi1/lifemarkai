@@ -514,6 +514,14 @@ The user has expressed frustration. Do the following:
                     for (const rf of repaired.files) mergedMap.set(rf.path, rf);
                     finalFiles = Array.from(mergedMap.values());
                     tokensUsed += 1000; // rough estimate for fix pass
+
+                    const remainingErrors = validateGeneratedFiles(finalFiles, existingFiles);
+                    if (shouldAutoFix(remainingErrors)) {
+                      logger.info("ai.chat.autofix_remaining", {
+                        projectId,
+                        errorCount: remainingErrors.length,
+                      });
+                    }
                   }
                 } catch (fixErr) {
                   logger.warn("ai.chat.autofix_failed", { projectId, error: String(fixErr) });

@@ -118,6 +118,8 @@ interface ChatPanelProps {
   isLocked?: boolean;
   /** Open a secondary panel on the right (History, Knowledge, GitHub, etc.) */
   onOpenPanel?: (panel: string) => void;
+  /** Focus the preview pane (Lovable Details/Preview card) */
+  onFocusPreview?: () => void;
   /** Show skeleton shimmer while messages are being fetched from the server */
   isMessagesLoading?: boolean;
 }
@@ -517,7 +519,7 @@ export function ChatPanel({
   onAutoFixComplete, onPendingFixConsumed, onPendingFileRefConsumed,
   onStreamingChange, onModeChange, onApprovePlan,
   pendingBuildFromFile, onPendingBuildFromFileConsumed,
-  isLocked = false, onOpenPanel, isMessagesLoading = false,
+  isLocked = false, onOpenPanel, onFocusPreview, isMessagesLoading = false,
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -2650,7 +2652,10 @@ ${(f.content ?? "").slice(0, 8000)}
                           Details
                         </button>
                         <button
-                          onClick={() => setExpandedDiffs((prev) => { const next = new Set(prev); next.delete(msg.id); return next; })}
+                          onClick={() => {
+                            setExpandedDiffs((prev) => { const next = new Set(prev); next.delete(msg.id); return next; });
+                            onFocusPreview?.();
+                          }}
                           className={`flex-1 py-1.5 text-[11px] font-medium transition-colors border-l border-border/40 ${
                             !expandedDiffs.has(msg.id)
                               ? "bg-background text-foreground"

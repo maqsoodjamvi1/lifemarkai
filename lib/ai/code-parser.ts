@@ -483,6 +483,28 @@ export function validateGeneratedFiles(
     }
   }
 
+  // ── Entry file required whenever we emit React/TSX ───────────────────────
+  const hasReactCode = files.some(
+    (f) => /\.(tsx|jsx)$/.test(f.path) && !/(^|\/)[\w.-]*\.config\.(t|j)sx?$/.test(f.path)
+  );
+  if (hasReactCode) {
+    const hasEntry = [...allPaths].some(
+      (p) =>
+        /(^|\/)App\.(tsx|jsx)$/.test(p) ||
+        p === "src/main.tsx" ||
+        p === "src/main.jsx" ||
+        p === "main.tsx"
+    );
+    if (!hasEntry) {
+      errors.push({
+        type: "missing_entry",
+        message:
+          "No App.tsx or src/main.tsx entry file — preview will be blank. Include a default-exported App component.",
+        severity: "error",
+      });
+    }
+  }
+
   // ── Check for required config files (new project) ─────────────────────────
   const isNewProject = existingFiles.length === 0;
   if (isNewProject) {
