@@ -1,12 +1,41 @@
 // @ts-nocheck
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/system-prompts";
 
+function parseFixResponse(raw: string): {
+  files: Array<{ path: string; content: string }>;
+  explanation: string;
+} {
+  const trimmed = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) throw new Error("No JSON object in AI response");
+
+  const parsed = JSON.parse(jsonMatch[0]) as {
+    files?: Array<{ path: string; content: string }>;
+    explanation?: string;
+    fix_description?: string;
+    diagnosis?: string;
+  };
+
+  if (!Array.isArray(parsed.files) || parsed.files.length === 0) {
+    throw new Error("AI response missing files array");
+  }
+
+  return {
+    files: parsed.files,
+    explanation:
+      parsed.explanation ??
+      parsed.fix_description ??
+      parsed.diagnosis ??
+      "Fixed the error — check the preview.",
+  };
+}
+
 export async function POST(req: NextRequest) {
-  // Rate limit
   const ip = req.headers.get("x-forwarded-for") ?? "local";
   const rl = await rateLimitAsync(ip, RATE_LIMITS.ai);
   if (!rl.success) {
@@ -14,9 +43,7 @@ export async function POST(req: NextRequest) {
   }
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { projectId, error: buildError, files } = await req.json();
@@ -25,7 +52,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "projectId and error are required" }, { status: 400 });
   }
 
-  // Check credits
   const { data: profile } = await (supabase as any)
     .from("profiles")
     .select("credits")
@@ -36,12 +62,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
   }
 
-  const fileContext = (files as Array<{ path: string; content: string }>)
+  const fileList = Array.isArray(files) ? files : [];
+  const fileContext = fileList
     .slice(0, 10)
-    .map((f) => `=== ${f.path} ===\n${f.content}`)
+    .map((f: { path: string; content: string }) => `=== ${f.path} ===\n${f.content}`)
     .join("\n\n");
-
-  const systemPrompt = AUTO_FIX_SYSTEM_PROMPT;
 
   const userPrompt = `Fix this build/runtime error:
 
@@ -58,25 +83,22 @@ Return the fixed files as JSON.`;
     const result = await generateAI({
       model: (process.env.DEFAULT_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324",
       messages: [
-        { role: "system", content: systemPrompt },
+        { role: "system", content: AUTO_FIX_SYSTEM_PROMPT },
         { role: "user", content: userPrompt },
       ],
       temperature: 0.1,
       maxTokens: 4000,
+      jsonMode: true,
     });
 
-    // Parse the JSON response
-    const jsonMatch = result.text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      return NextResponse.json({ error: "Failed to parse AI response" }, { status: 500 });
+    const rawContent = result?.content ?? "";
+
+    if (!rawContent.trim()) {
+      return NextResponse.json({ error: "AI returned empty response" }, { status: 500 });
     }
 
-    const parsed = JSON.parse(jsonMatch[0]) as {
-      files: Array<{ path: string; content: string }>;
-      explanation: string;
-    };
+    const parsed = parseFixResponse(rawContent);
 
-    // Save fixed files to DB
     for (const fixedFile of parsed.files) {
       const { data: existing } = await (supabase as any)
         .from("project_files")
@@ -104,7 +126,6 @@ Return the fixed files as JSON.`;
       }
     }
 
-    // Deduct 1 credit
     await (supabase as any).rpc("deduct_credits" as never, {
       user_id: user.id,
       amount: 1,
@@ -120,7 +141,7 @@ Return the fixed files as JSON.`;
     return NextResponse.json({
       files: parsed.files,
       explanation: parsed.explanation,
-      tokensUsed: result.usage?.totalTokens ?? 0,
+      tokensUsed: result.tokensUsed ?? 0,
     });
   } catch (err) {
     console.error("Auto-fix error:", err);

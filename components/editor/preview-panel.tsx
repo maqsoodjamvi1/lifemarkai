@@ -5,20 +5,22 @@ import {
   RefreshCw, Smartphone, Tablet, Monitor,
   ExternalLink, MousePointer, Terminal, Loader2,
   Check, X, Wand2, AlignLeft, AlignCenter, AlignRight,
-  AlertTriangle, Wrench, Frame, MessageSquarePlus, Pencil,
+  AlertTriangle, Wrench, Frame, MessageSquarePlus, Pencil, Pin,
 } from "lucide-react";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/hooks/use-toast";
 import { AnimatePresence, motion } from "framer-motion";
 import { VisualEditOverlay } from "./visual-edit-overlay";
 import { PreviewAnnotations } from "./preview-annotations";
 import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
-import { buildFallbackHtml } from "@/lib/preview/build-fallback-html";
+import { buildFallbackHtml, PREVIEW_ENGINE_REV } from "@/lib/preview/build-fallback-html";
 
 // Sandpack stubs — these branches are never reached (sandpackReady is always false)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -308,6 +310,11 @@ export function PreviewPanel({
   const [visualEdit, setVisualEdit] = useState(isVisualEditActive ?? false);
   const [showConsole, setShowConsole] = useState(false);
   const [annotateScreenshot, setAnnotateScreenshot] = useState<string | null>(null);
+  const [commentPinMode, setCommentPinMode] = useState(false);
+  const [pendingComment, setPendingComment] = useState<VebElement | null>(null);
+  const [commentDraft, setCommentDraft] = useState("");
+  const [commentSaving, setCommentSaving] = useState(false);
+  const { toast } = useToast();
   const [sandpackReady, setSandpackReady] = useState<boolean | null>(null);
   const [consoleLines, setConsoleLines] = useState<{ type: string; text: string }[]>([]);
   const [vebSelected, setVebSelected] = useState<VebElement | null>(null);
@@ -353,10 +360,18 @@ export function PreviewPanel({
           },
         });
       }
+      if (e.data?.source === "lifemark-comment-pin" && commentPinMode) {
+        const data = e.data as VebElement & { source: string };
+        setPendingComment(data);
+        setCommentDraft("");
+      }
       if (e.data?.source === "lifemark-preview") {
         const { type, text } = e.data as { source: string; type: string; text: string };
         setConsoleLines((prev) => [...prev.slice(-99), { type, text }]);
-        if (type === "error") {
+        if (type === "success") {
+          setActiveError(null);
+          setErrorDismissed(false);
+        } else if (type === "error") {
           if (onError) onError(text);
           setActiveError(text);
           setErrorDismissed(false);
@@ -382,7 +397,7 @@ export function PreviewPanel({
     }
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [onError, visualEdit]);
+  }, [onError, visualEdit, commentPinMode]);
 
   // Relay screenshot capture requests from ChatPanel → preview iframe
   useEffect(() => {
@@ -427,6 +442,63 @@ export function PreviewPanel({
     () => (sandpackReady === false ? buildFallbackHtml(files) : ""),
     [files, sandpackReady]
   );
+
+  async function submitElementComment() {
+    if (!projectId || !pendingComment || !commentDraft.trim()) return;
+    setCommentSaving(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/comments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: commentDraft.trim(),
+          element_xpath: pendingComment.xpath,
+          element_tag: pendingComment.tagName,
+          page_path: previewPath,
+          element_preview: pendingComment.textContent,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to save");
+      toast({ title: "Comment pinned to element" });
+      setPendingComment(null);
+      setCommentDraft("");
+      setCommentPinMode(false);
+    } catch {
+      toast({ title: "Could not save comment", variant: "destructive" });
+    } finally {
+      setCommentSaving(false);
+    }
+  }
+
+  // Inject element-pick script when comment pin mode is active (srcDoc iframe)
+  useEffect(() => {
+    if (!commentPinMode || !fallbackHtml) return;
+    const timer = window.setTimeout(() => {
+      const iframe = iframeRef.current;
+      const doc = iframe?.contentDocument;
+      if (!doc?.body) return;
+      const script = doc.createElement("script");
+      script.textContent = `(function(){
+        if(window.__lmCommentPin) return;
+        window.__lmCommentPin = true;
+        document.addEventListener('click', function(e) {
+          e.preventDefault(); e.stopPropagation();
+          var el = e.target;
+          function xp(n){var p=[],c=n;while(c&&c!==document.body){var t=c.tagName.toLowerCase();var s=c.parentElement?Array.from(c.parentElement.children).filter(function(x){return x.tagName===c.tagName}):[c];p.unshift(s.length>1?t+'['+(s.indexOf(c)+1)+']':t);c=c.parentElement;}return '//'+p.join('/');}
+          var r = el.getBoundingClientRect();
+          window.parent.postMessage({source:'lifemark-comment-pin',tagName:el.tagName.toLowerCase(),textContent:(el.textContent||'').trim().slice(0,80),classList:Array.from(el.classList),xpath:xp(el),rect:{top:r.top,left:r.left,width:r.width,height:r.height}},'*');
+        }, true);
+      })();`;
+      doc.body.appendChild(script);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [commentPinMode, fallbackHtml, refreshKey]);
+
+  // New iframe srcDoc — drop stale errors until the fresh preview reports status.
+  useEffect(() => {
+    setActiveError(null);
+    setErrorDismissed(false);
+  }, [fallbackHtml.length, refreshKey]);
 
   const hasFiles = files.length > 0;
   const useFallback = sandpackReady === false;
@@ -614,6 +686,25 @@ export function PreviewPanel({
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
+                  onClick={() => {
+                    setCommentPinMode((v) => !v);
+                    if (commentPinMode) setPendingComment(null);
+                  }}
+                  className={`p-1.5 rounded-md transition-all ${
+                    commentPinMode
+                      ? "bg-blue-500/20 text-blue-400 border border-blue-500/30"
+                      : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  }`}
+                >
+                  <Pin className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Pin comment to element {commentPinMode ? "(click preview)" : ""}</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
                   onClick={() => setAnnotationsEnabled((v) => !v)}
                   className={`p-1.5 rounded-md transition-all ${
                     annotationsEnabled
@@ -782,7 +873,7 @@ export function PreviewPanel({
                   // element are NOT observable in most browsers without a
                   // full element recreation. The refreshKey covers manual
                   // refresh; the length suffix covers automatic file updates.
-                  key={`${refreshKey}-${fallbackHtml.length}`}
+                  key={`${refreshKey}-${fallbackHtml.length}-${PREVIEW_ENGINE_REV}`}
                   ref={iframeRef}
                   srcDoc={fallbackHtml}
                   className="w-full h-full border-0"
@@ -925,6 +1016,38 @@ export function PreviewPanel({
           setAnnotateScreenshot(null);
         }}
       />
+    )}
+
+    {pendingComment && (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
+        <div className="w-full max-w-md rounded-xl border border-border bg-background shadow-xl p-4 space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <p className="text-sm font-semibold">Pin comment to element</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                &lt;{pendingComment.tagName}&gt; on {previewPath}
+                {pendingComment.textContent ? ` — "${pendingComment.textContent.slice(0, 40)}…"` : ""}
+              </p>
+            </div>
+            <button type="button" onClick={() => setPendingComment(null)} className="text-muted-foreground hover:text-foreground">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <Textarea
+            value={commentDraft}
+            onChange={(e) => setCommentDraft(e.target.value)}
+            placeholder="Leave a comment for your team…"
+            className="min-h-[80px] text-sm"
+            autoFocus
+          />
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setPendingComment(null)}>Cancel</Button>
+            <Button size="sm" disabled={commentSaving || !commentDraft.trim()} onClick={() => void submitElementComment()}>
+              {commentSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Post comment"}
+            </Button>
+          </div>
+        </div>
+      </div>
     )}
     </TooltipProvider>
   );

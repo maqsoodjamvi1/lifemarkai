@@ -9,6 +9,7 @@
  */
 import type { Job } from "bullmq";
 import { createWorker, QUEUES, type DeployJobPayload } from "./client";
+import { buildDeployIndexHtml, buildNetlifyFileMap, buildVercelFilesList } from "@/lib/deploy/build-deploy-files";
 import { createAdminClient } from "@/lib/supabase/server";
 
 /**
@@ -44,20 +45,7 @@ async function deployToVercel(
   if (!VERCEL_TOKEN) throw new Error("VERCEL_TOKEN not set");
   const VERCEL_API = "https://api.vercel.com";
 
-  const vercelFiles = files.map((f) => ({
-    file: f.path.startsWith("/") ? f.path.slice(1) : f.path,
-    data: f.content,
-    encoding: "utf-8" as const,
-  }));
-
-  if (!vercelFiles.some((f) => f.file === "index.html")) {
-    const appFile = files.find((f) => f.path.includes("App.tsx") || f.path.includes("App.jsx"));
-    vercelFiles.push({
-      file: "index.html",
-      encoding: "utf-8",
-      data: `<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>${projectName}</title><script src="https://cdn.tailwindcss.com"></script><script src="https://unpkg.com/react@18/umd/react.production.min.js"></script><script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script><script src="https://unpkg.com/@babel/standalone/babel.min.js"></script></head><body><div id="root"></div>${appFile ? `<script type="text/babel" data-presets="react,typescript">${appFile.content}\nReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));</script>` : ""}</body></html>`,
-    });
-  }
+  const vercelFiles = buildVercelFilesList(files, { projectId, projectName });
 
   const res = await fetch(`${VERCEL_API}/v13/deployments`, {
     method: "POST",
@@ -105,9 +93,6 @@ async function processDeployJob(job: Job<DeployJobPayload>): Promise<{ url: stri
     .select("referral_code")
     .eq("id", userId)
     .single();
-
-  const { getBadgeHtml } = await import("@/lib/badge");
-  const badgeHtml = getBadgeHtml(projectId, badgeHidden ?? false, ownerProfile?.referral_code ?? null);
 
   // Re-fetch authoritative files from the DB. The payload may carry them
   // (back-compat) but the DB is the source of truth and keeps Redis jobs small.
@@ -172,38 +157,12 @@ async function processDeployJob(job: Job<DeployJobPayload>): Promise<{ url: stri
       await job.log("Building file map...");
       await job.updateProgress(30);
 
-      const fileMap: Record<string, string> = {};
-      for (const f of files) {
-        const normalised = f.path.startsWith("/") ? f.path : `/${f.path}`;
-        // Inject badge into HTML files before </body>
-        if (normalised.endsWith(".html") && badgeHtml) {
-          fileMap[normalised] = (f.content ?? "").replace("</body>", `${badgeHtml}\n</body>`);
-        } else {
-          fileMap[normalised] = f.content ?? "";
-        }
-      }
-
-      // Ensure index.html
-      if (!fileMap["/index.html"]) {
-        const appFile = files.find((f) => f.path.includes("App.tsx") || f.path.includes("App.jsx"));
-        fileMap["/index.html"] = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>${projectName}</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-</head>
-<body>
-  <div id="root"></div>
-  ${appFile ? `<script type="text/babel" data-presets="react,typescript">${appFile.content}\nReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));</script>` : ""}
-${badgeHtml}
-</body>
-</html>`;
-      }
+      const fileMap = buildNetlifyFileMap(files, {
+        projectId,
+        projectName,
+        badgeHidden: badgeHidden ?? false,
+        referralCode: ownerProfile?.referral_code ?? null,
+      });
 
       // Deploy to Netlify
       await job.log("Uploading to Netlify...");

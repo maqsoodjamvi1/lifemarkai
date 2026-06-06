@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -40,6 +40,19 @@ import { SnippetPicker } from "./snippet-picker";
 import { FileAttachmentList, type GeneratedFile } from "./file-attachment-card";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { findMissingPackages, buildInstallCommand, syncPackageJsonDeps } from "@/lib/ai/npm-auto-install";
+import { classifyBuildIntent, type BuildIntent } from "@/lib/ai/build-intent";
+import {
+  buildProjectContextBlock,
+  enrichFollowUpSuggestions,
+  getEmptyProjectPrompts,
+  getPreviewErrorPrompts,
+  getSmartPlaceholder,
+  inferProjectStage,
+  resolvePromptMode,
+} from "@/lib/ai/editor-intelligence";
+import { shouldRunPreviewVerify } from "@/lib/ai/preview-verify";
+import type { SubagentStep } from "@/lib/ai/subagents";
+import { SubagentActivityCard } from "./subagent-activity-card";
 
 type AIModel =
   | "gpt-4o"
@@ -123,22 +136,6 @@ interface ChatPanelProps {
   /** Show skeleton shimmer while messages are being fetched from the server */
   isMessagesLoading?: boolean;
 }
-
-const MODE_PLACEHOLDERS: Record<EditorMode, string> = {
-  chat: "Ask me anything about your project...",
-  build: "Describe what you want to build or change...",
-  agent: "Give the agent a task to complete autonomously...",
-  plan: "Describe your app idea and I'll create a detailed plan...",
-  patch: "Describe a small targeted change — only modified lines will be rewritten...",
-};
-
-const QUICK_PROMPTS = [
-  "Add a dark mode toggle",
-  "Create a login page",
-  "Add a dashboard with charts",
-  "Make it responsive for mobile",
-  "Add an API integration",
-];
 
 const PROMPT_TEMPLATES: { category: string; prompts: string[] }[] = [
   {
@@ -521,8 +518,30 @@ export function ChatPanel({
   pendingBuildFromFile, onPendingBuildFromFileConsumed,
   isLocked = false, onOpenPanel, onFocusPreview, isMessagesLoading = false,
 }: ChatPanelProps) {
+  const intelCtx = useMemo(
+    () => ({
+      fileCount: files.length,
+      hasPreviewError: !!previewError,
+      activeFilePath: activeFile?.path,
+      framework: project.framework,
+      currentMode: mode,
+      files,
+    }),
+    [files, previewError, activeFile?.path, project.framework, mode],
+  );
+
+  const contextualEmptyPrompts = useMemo(() => {
+    if (previewError) return getPreviewErrorPrompts(previewError);
+    return getEmptyProjectPrompts(inferProjectStage(files), project.framework);
+  }, [files, previewError, project.framework]);
+
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
+
+  const smartPlaceholder = useMemo(
+    () => getSmartPlaceholder({ ...intelCtx, streaming, isLocked }),
+    [intelCtx, streaming, isLocked],
+  );
   /** Tracks when the current build started so we know its duration for desktop notifications */
   const buildStartTimeRef = useRef<number | null>(null);
   /** Wrapper that also notifies the parent layout so PreviewPanel can show shimmer */
@@ -604,7 +623,7 @@ export function ChatPanel({
   const [collaborators, setCollaborators] = useState<{ id: string; display: string; email: string }[]>([]);
   useEffect(() => {
     const supabase = createClient();
-    (supabase as any)
+    void (supabase as any)
       .from("collaborators")
       .select("user_id, role, profiles(id, full_name, email)")
       .eq("project_id", project.id)
@@ -619,7 +638,8 @@ export function ChatPanel({
               email: c.profiles!.email,
             }))
         );
-      });
+      })
+      .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
   // Emoji reactions: { [messageId]: Set<emoji> }
@@ -663,6 +683,10 @@ export function ChatPanel({
   const [repeatInputId, setRepeatInputId] = useState<string | null>(null);
   // Agent task step visibility
   const [agentSteps, setAgentSteps] = useState<AgentTaskStep[]>([]);
+  const [subagentSteps, setSubagentSteps] = useState<SubagentStep[]>([]);
+  const [previewVerify, setPreviewVerify] = useState<{ ok: boolean; checks: Array<{ name: string; pass: boolean; detail?: string }> } | null>(null);
+  const [messageCredits, setMessageCredits] = useState<Record<string, number>>({});
+  const [buildStatus, setBuildStatus] = useState<BuildIntent | null>(null);
   const agentTransitionedRef = useRef(false);
   // Tracks file paths the SERVER streamed via `streamedFile` SSE events.
   // Persists across re-renders so we can re-fetch them from the DB on
@@ -728,21 +752,27 @@ export function ChatPanel({
       if (!messageId || !dataUrl) return;
       setMessageScreenshots((prev) => ({ ...prev, [messageId]: dataUrl }));
 
-      // Persist to Supabase message metadata
-      const supabase = createClient();
-      void (supabase as any)
-        .from("messages")
-        .update({ metadata: { screenshot_url: dataUrl } })
-        .eq("id", messageId);
-
-      // Also update projects.preview_url so dashboard cards + explore show real screenshots
+      // Upload to storage; never write multi-MB base64 into message metadata (causes Failed to fetch).
       void fetch(`/api/projects/${project.id}/preview`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ dataUrl }),
-      }).catch(() => {
-        // Non-critical — swallow errors silently
-      });
+      })
+        .then(async (res) => {
+          if (!res.ok) return;
+          const { preview_url } = (await res.json()) as { preview_url?: string };
+          const isPersistedId =
+            messageId &&
+            !messageId.startsWith("assistant-") &&
+            !messageId.startsWith("temp-");
+          if (!preview_url || !isPersistedId) return;
+          const supabase = createClient();
+          return (supabase as any)
+            .from("messages")
+            .update({ metadata: { screenshot_url: preview_url } })
+            .eq("id", messageId);
+        })
+        .catch(() => {});
     }
     window.addEventListener("lifemark-screenshot-ready", handleScreenshotReady);
     return () => window.removeEventListener("lifemark-screenshot-ready", handleScreenshotReady);
@@ -983,19 +1013,26 @@ export function ChatPanel({
   }
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingContent]);
+    const fromMeta: Record<string, number> = {};
+    messages.forEach((m) => {
+      const c = (m.metadata as Record<string, unknown> | null)?.credits_used;
+      if (m.role === "assistant" && typeof c === "number") fromMeta[m.id] = c;
+    });
+    if (Object.keys(fromMeta).length > 0) {
+      setMessageCredits((prev) => ({ ...fromMeta, ...prev }));
+    }
+  }, [messages]);
 
   // Auto-fire starter prompt from URL (new project with ?prompt=...)
   useEffect(() => {
     if (starterPrompt && !starterFired && messages.length === 0 && !streaming) {
       setStarterFired(true);
       setInput(starterPrompt);
-      // Small delay so the component is fully mounted
+      const starterMode = resolvePromptMode(starterPrompt, intelCtx);
+      onModeChange?.(starterMode);
       const timer = setTimeout(() => {
         setInput("");
-        // Directly trigger send with the starter prompt
-        void sendMessage(starterPrompt, "build");
+        void sendMessage(starterPrompt, starterMode);
       }, 600);
       return () => clearTimeout(timer);
     }
@@ -1353,7 +1390,10 @@ export function ChatPanel({
   async function sendMessage(userMessage: string, overrideMode?: EditorMode, historyOverride?: Message[]) {
     if (!userMessage.trim() || streaming || credits <= 0) return;
 
-    const effectiveMode = overrideMode ?? mode;
+    const effectiveMode = resolvePromptMode(userMessage, intelCtx, overrideMode);
+    if (!overrideMode && effectiveMode !== mode) {
+      onModeChange?.(effectiveMode);
+    }
     setInput("");
     // Request desktop notification permission on first build (non-blocking)
     if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
@@ -1364,6 +1404,8 @@ export function ChatPanel({
     setStreamingContent("");
     setStreamingFiles([]);
     setPendingSkills([]);
+    setSubagentSteps([]);
+    setPreviewVerify(null);
     const imageToSend = attachedImage;
     const imageNameToSend = attachedImageName;
     setAttachedImage(null);
@@ -1381,11 +1423,16 @@ export function ChatPanel({
     // Agent mode: initialise task step visibility
     if (effectiveMode === "agent") {
       agentTransitionedRef.current = false;
-      // Fresh per-send set of paths the server has confirmed it wrote to DB.
       serverStreamedPathsRef.current = new Set<string>();
       setAgentSteps([{ label: "Exploring codebase…", status: "running" }]);
+      setBuildStatus(null);
+    } else if (effectiveMode === "build" || effectiveMode === "patch") {
+      setAgentSteps([]);
+      const intent = classifyBuildIntent(userMessage);
+      setBuildStatus(intent);
     } else {
       setAgentSteps([]);
+      setBuildStatus(null);
     }
 
     // Set up AbortController for stop generation
@@ -1457,6 +1504,8 @@ ${(f.content ?? "").slice(0, 8000)}
         ).join("\n\n");
         messageWithContext = `${contextBlock}\n\n${userMessageFinal}`;
       }
+
+      messageWithContext = `${buildProjectContextBlock({ ...intelCtx, lastPrompt: userMessage })}\n\n${messageWithContext}`;
 
       // Extract @file mentions (current project) and @ProjectName/path (cross-project)
       const mentionedPaths = [...userMessageFinal.matchAll(/@([\w./\-]+)/g)].map((m) => m[1]);
@@ -1550,6 +1599,23 @@ ${(f.content ?? "").slice(0, 8000)}
 
             // Skill auto-match: API sends matched skills before the model output begins
             // so we can render a "using skill: X" chip on the pending assistant message.
+            if (data.subagent) {
+              const step = data.subagent as SubagentStep;
+              setSubagentSteps((prev) => {
+                const idx = prev.findIndex((s) => s.id === step.id);
+                if (idx >= 0) {
+                  const next = [...prev];
+                  next[idx] = step;
+                  return next;
+                }
+                return [...prev, step];
+              });
+            }
+
+            if (data.build_intent) {
+              setBuildStatus(data.build_intent as BuildIntent);
+            }
+
             if (Array.isArray(data.skills_attached) && data.skills_attached.length > 0) {
               setPendingSkills(
                 data.skills_attached.map((s: { id: string; name: string; reason?: string }) => ({
@@ -1620,6 +1686,7 @@ ${(f.content ?? "").slice(0, 8000)}
             }
 
             if (data.done) {
+              setBuildStatus(null);
               // Agent mode: mark all steps complete, then clear after a moment
               if (effectiveMode === "agent") {
                 setAgentSteps((prev) => {
@@ -1631,6 +1698,7 @@ ${(f.content ?? "").slice(0, 8000)}
               // Update credits
               if (data.creditsUsed) {
                 onCreditsUpdate(credits - data.creditsUsed);
+                setMessageCredits((prev) => ({ ...prev, [assistantId]: data.creditsUsed as number }));
               }
 
               const assistantId = `assistant-${Date.now()}`;
@@ -1776,9 +1844,21 @@ ${(f.content ?? "").slice(0, 8000)}
               }
 
               // Generate follow-up suggestion chips
-              const filePaths = (data.files as Array<{ path: string }> | undefined)?.map((f) => f.path) ?? [];
-              const chips = generateSuggestions(userMessage, accumulated, filePaths);
+              const filePaths = (data.files as Array<{ path: string }> | undefined)?.map((f) => f.path)
+                ?? Array.from(serverStreamedPathsRef.current);
+              const chips = enrichFollowUpSuggestions(
+                generateSuggestions(userMessage, accumulated, filePaths),
+                inferProjectStage(files),
+                filePaths,
+              );
               setSuggestions((prev) => ({ ...prev, [assistantId]: chips }));
+
+              if (shouldRunPreviewVerify(userMessage, effectiveMode)) {
+                void fetch(`/api/projects/${project.id}/preview-verify`, { method: "POST" })
+                  .then((r) => r.json())
+                  .then((result) => setPreviewVerify(result))
+                  .catch(() => setPreviewVerify(null));
+              }
 
               // Multi-role test chips (Lovable best-practice: recheck multi-role behavior after big edits)
               const roleChips = buildRoleTestChips(filePaths);
@@ -2334,10 +2414,13 @@ ${(f.content ?? "").slice(0, 8000)}
             </p>
             {/* Suggestion chips — Lovable-style bordered cards */}
             <div className="w-full space-y-2">
-              {QUICK_PROMPTS.map((prompt) => (
+              {contextualEmptyPrompts.map((prompt) => (
                 <button
                   key={prompt}
-                  onClick={() => { setInput(prompt); textareaRef.current?.focus(); }}
+                  onClick={() => {
+                    setInput(prompt);
+                    textareaRef.current?.focus();
+                  }}
                   className="w-full text-left text-xs px-3.5 py-2.5 rounded-xl border border-border/60 bg-muted/30 hover:bg-muted hover:border-border transition-all text-muted-foreground hover:text-foreground group"
                 >
                   <span className="flex items-start gap-2">
@@ -2763,6 +2846,15 @@ ${(f.content ?? "").slice(0, 8000)}
                       ⚡ {s.name}
                     </span>
                   ))}
+                  {/* Credit cost badge — Lovable-style per-message cost */}
+                  {msg.role === "assistant" && messageCredits[msg.id] != null && (
+                    <span
+                      className="text-[10px] text-muted-foreground/50 px-1.5 py-0.5 rounded border border-border/30 select-none"
+                      title="Credits used for this message"
+                    >
+                      {messageCredits[msg.id]} credit{messageCredits[msg.id] === 1 ? "" : "s"}
+                    </span>
+                  )}
                   {/* AI thinking time badge */}
                   {msg.role === "assistant" && genTimes[msg.id] != null && (
                     <span className="text-[10px] text-muted-foreground/40 px-0.5 select-none" title="AI generation time">
@@ -3124,8 +3216,54 @@ ${(f.content ?? "").slice(0, 8000)}
                 )}
               </AnimatePresence>
 
+              {/* Subagent investigation card */}
+              {subagentSteps.length > 0 && (
+                <SubagentActivityCard steps={subagentSteps} />
+              )}
+
+              {/* Preview verification after build */}
+              {previewVerify && (
+                <div className={`rounded-xl border overflow-hidden mb-1 ${previewVerify.ok ? "border-green-500/30 bg-green-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
+                  <div className="px-3 py-2 text-xs font-semibold">
+                    {previewVerify.ok ? "Preview verified" : "Preview check — review suggested"}
+                  </div>
+                  <div className="px-3 pb-2 space-y-0.5">
+                    {previewVerify.checks.map((c) => (
+                      <div key={c.name} className="text-[10px] text-muted-foreground flex gap-1.5">
+                        <span className={c.pass ? "text-green-400" : "text-amber-400"}>{c.pass ? "✓" : "!"}</span>
+                        <span>{c.name}{c.detail ? ` — ${c.detail}` : ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Lovable-style "Working…" card — keyed on buildStatus so auto-build works before mode prop updates */}
+              {buildStatus && (
+                <div className="rounded-xl border border-border/60 bg-muted/20 overflow-hidden mb-1">
+                  <div className="flex items-center gap-2 px-3 py-2 border-b border-border/40 bg-muted/30">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-400 shrink-0" />
+                    <span className="text-xs font-semibold text-foreground">Working…</span>
+                  </div>
+                  <div className="px-3 py-2.5">
+                    <p className="text-sm text-foreground/90">{buildStatus.statusLabel}</p>
+                    {streamingFiles.length > 0 && (
+                      <div className="mt-2 space-y-0.5 font-mono text-[10px] text-violet-300/80">
+                        {streamingFiles.slice(-4).map((path) => (
+                          <div key={path} className="flex items-center gap-1 truncate">
+                            <span className="text-violet-500">+</span>
+                            <span className="truncate">{path}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Hide raw JSON stream in build mode — chat stays conversational like Lovable */}
               <div className="text-sm leading-relaxed py-0.5">
-                {streamingContent ? (
+                {(mode === "build" || mode === "patch" || buildStatus) ? null : streamingContent ? (
                   <MessageContent content={streamingContent} mode={mode} />
                 ) : (
                   <div className="flex items-center gap-1.5 py-1">
@@ -3135,9 +3273,9 @@ ${(f.content ?? "").slice(0, 8000)}
                   </div>
                 )}
               </div>
-              {/* Real-time file generation progress (chat/build modes) */}
+              {/* Real-time file generation progress (chat/agent modes) */}
               <AnimatePresence>
-                {streamingFiles.length > 0 && agentSteps.length === 0 && (
+                {streamingFiles.length > 0 && agentSteps.length === 0 && mode !== "build" && mode !== "patch" && (
                   <motion.div
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: "auto" }}
@@ -3520,19 +3658,14 @@ ${(f.content ?? "").slice(0, 8000)}
       {/* ── Quick prompt pills — shown above input when chat is empty ── */}
       {messages.length === 0 && !streaming && (
         <div className="px-3 pt-2 pb-1 flex gap-1.5 flex-wrap shrink-0">
-          {[
-            { label: "Add a button", icon: "+" },
-            { label: "Fix a bug", icon: "🐛" },
-            { label: "Dark mode", icon: "🌙" },
-            { label: "Improve styling", icon: "✨" },
-          ].map(({ label, icon }) => (
+          {contextualEmptyPrompts.slice(0, 4).map((label) => (
             <button
               key={label}
               onClick={() => { setInput(label); setTimeout(() => textareaRef.current?.focus(), 0); }}
               className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-border/60 bg-muted/20 hover:bg-muted/60 hover:border-violet-500/40 text-muted-foreground hover:text-foreground transition-all"
             >
-              <span>{icon}</span>
-              <span>{label}</span>
+              <span>→</span>
+              <span>{label.length > 28 ? `${label.slice(0, 28)}…` : label}</span>
             </button>
           ))}
         </div>
@@ -4349,7 +4482,7 @@ Please confirm the breakdown before implementing anything.`,
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            placeholder={isLocked ? "Switch to Test mode to make AI edits…" : streaming ? "Message will be queued…" : "Ask LifemarkAI…"}
+            placeholder={smartPlaceholder}
             className={`min-h-[60px] max-h-40 resize-none border-0 bg-transparent px-4 pt-4 pb-2 text-sm focus-visible:ring-0 placeholder:text-muted-foreground/40 ${input.length > 3800 ? "ring-1 ring-red-500/50 rounded" : ""}`}
             disabled={noCredits || isLocked}
           />
@@ -4455,18 +4588,51 @@ Please confirm the breakdown before implementing anything.`,
 
             <div className="flex-1" />
 
-            {/* Build ∨ mode selector — Lovable style */}
+            {/* Plan / Build toggle — Lovable primary modes */}
+            <div className="flex items-center rounded-lg border border-border/70 overflow-hidden flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => onModeChange?.("plan")}
+                className={`h-7 px-2.5 text-xs font-medium transition-colors ${
+                  mode === "plan" || mode === "chat"
+                    ? "bg-muted text-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                }`}
+              >
+                Plan
+              </button>
+              <button
+                type="button"
+                onClick={() => onModeChange?.("build")}
+                className={`h-7 px-2.5 text-xs font-medium transition-colors border-l border-border/70 ${
+                  mode === "build" || mode === "agent" || mode === "patch"
+                    ? "bg-muted text-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                }`}
+              >
+                Build
+              </button>
+            </div>
+
+            {/* More modes + model — Lovable style */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button className="flex items-center gap-1 h-7 px-2.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors flex-shrink-0 border border-border/70">
                   {/* Label must reflect the REAL mode — the old fallback showed
                       "Build" even in chat mode, so users believed they were
                       building while their messages went out as conversation. */}
-                  {mode === "plan" ? "Plan" : mode === "agent" ? "Agent" : mode === "build" ? "Build" : mode === "patch" ? "Quick Edit" : "Chat"}
+                  {mode === "plan" ? "Plan" : mode === "agent" ? "Agent" : mode === "build" ? "Build" : mode === "patch" ? "Quick Edit" : mode === "chat" ? "Chat" : "Build"}
                   <ChevronDown className="w-3 h-3 opacity-60" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" side="top" className="w-52 p-1">
+                <DropdownMenuItem className="text-xs gap-2 py-2.5" onClick={() => onModeChange?.("chat")}>
+                  <div className="w-4 h-4 flex items-center justify-center">{mode === "chat" && <Check className="w-3 h-3" />}</div>
+                  <div>
+                    <p className="font-medium">Chat</p>
+                    <p className="text-[10px] text-muted-foreground">Q&amp;A without code changes</p>
+                  </div>
+                </DropdownMenuItem>
                 <DropdownMenuItem className="text-xs gap-2 py-2.5" onClick={() => onModeChange?.("build")}>
                   <div className="w-4 h-4 flex items-center justify-center">{mode === "build" && <Check className="w-3 h-3" />}</div>
                   <div>
@@ -4479,6 +4645,13 @@ Please confirm the breakdown before implementing anything.`,
                   <div>
                     <p className="font-medium">Plan</p>
                     <p className="text-[10px] text-muted-foreground">Discuss before building</p>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem className="text-xs gap-2 py-2.5" onClick={() => onModeChange?.("patch")}>
+                  <div className="w-4 h-4 flex items-center justify-center">{mode === "patch" && <Check className="w-3 h-3" />}</div>
+                  <div>
+                    <p className="font-medium">Quick Edit</p>
+                    <p className="text-[10px] text-muted-foreground">Small targeted patches</p>
                   </div>
                 </DropdownMenuItem>
                 <DropdownMenuItem className="text-xs gap-2 py-2.5" onClick={() => onModeChange?.("agent")}>

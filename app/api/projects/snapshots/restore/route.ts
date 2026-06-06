@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { reconstructFromChain, type SnapshotChainEntry } from "@/lib/diff/snapshot-diff";
 
@@ -58,7 +59,7 @@ function detectSchemaChanges(
  */
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { snapshotId, projectId, dryRun, confirmSchema } = await req.json() as {

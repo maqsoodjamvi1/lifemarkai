@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import {
   computePatches,
@@ -15,7 +16,7 @@ import {
 
 export async function GET(req: NextRequest) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const projectId  = req.nextUrl.searchParams.get("projectId");
@@ -62,7 +63,7 @@ export async function GET(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { snapshotId, isPinned } = await req.json() as {
@@ -92,7 +93,7 @@ export async function PATCH(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { projectId, label } = await req.json() as { projectId: string; label?: string };
@@ -147,50 +148,58 @@ export async function POST(req: NextRequest) {
     };
   } else {
     // ── Reconstruct previous state and compute delta ──────────────────────────
-    let previousFiles: SnapshotFile[];
-
-    if (latest.is_baseline) {
-      previousFiles = (latest.files ?? []) as SnapshotFile[];
-    } else {
-      // Reconstruct from chain to get previous state
-      const { data: chain } = await (supabase as any)
-        .rpc("get_snapshot_chain", { p_snapshot_id: latest.id });
-      previousFiles = reconstructFromChain((chain ?? []) as SnapshotChainEntry[]);
-    }
-
-    const patches      = computePatches(previousFiles, currentFiles as SnapshotFile[]);
-    const chainDepth   = await getChainDepth(supabase, latest.id);
-    const forceBase    = shouldStoreBaseline({
-      hasPrevious:  true,
-      chainDepth,
-      patchBytes:   patchesSize(patches),
-      fullBytes:    filesSize(currentFiles as SnapshotFile[]),
+    const baselinePayload = (): Record<string, unknown> => ({
+      project_id: projectId,
+      user_id: user.id,
+      label: snapshotLabel,
+      is_baseline: true,
+      files: currentFiles,
+      patches: null,
+      parent_id: null,
+      screenshot_url: screenshotUrl,
     });
 
-    if (forceBase || patches.length === 0) {
-      // Store full baseline (either forced or nothing changed but user explicitly snapshotted)
-      insertPayload = {
-        project_id:    projectId,
-        user_id:       user.id,
-        label:         snapshotLabel,
-        is_baseline:   true,
-        files:         currentFiles,
-        patches:       null,
-        parent_id:     null,
-        screenshot_url: screenshotUrl,
-      };
-    } else {
-      // Store lightweight delta
-      insertPayload = {
-        project_id:    projectId,
-        user_id:       user.id,
-        label:         snapshotLabel,
-        is_baseline:   false,
-        files:         null,
-        patches:       patches,
-        parent_id:     latest.id,
-        screenshot_url: screenshotUrl,
-      };
+    try {
+      let previousFiles: SnapshotFile[];
+
+      if (latest.is_baseline) {
+        previousFiles = (latest.files ?? []) as SnapshotFile[];
+      } else {
+        const { data: chain, error: chainErr } = await (supabase as any)
+          .rpc("get_snapshot_chain", { p_snapshot_id: latest.id });
+        if (chainErr || !chain?.length) {
+          throw new Error(chainErr?.message ?? "snapshot chain unavailable");
+        }
+        previousFiles = reconstructFromChain(chain as SnapshotChainEntry[]);
+      }
+
+      const patches = computePatches(previousFiles, currentFiles as SnapshotFile[]);
+      const chainDepth = await getChainDepth(supabase, latest.id);
+      const forceBase = shouldStoreBaseline({
+        hasPrevious: true,
+        chainDepth,
+        patchBytes: patchesSize(patches),
+        fullBytes: filesSize(currentFiles as SnapshotFile[]),
+      });
+
+      if (forceBase || patches.length === 0) {
+        insertPayload = baselinePayload();
+      } else {
+        // files is NOT NULL in DB — deltas use [] and store changes in patches
+        insertPayload = {
+          project_id: projectId,
+          user_id: user.id,
+          label: snapshotLabel,
+          is_baseline: false,
+          files: [],
+          patches,
+          parent_id: latest.id,
+          screenshot_url: screenshotUrl,
+        };
+      }
+    } catch (chainError) {
+      console.warn("[snapshots] delta unavailable, storing baseline:", chainError);
+      insertPayload = baselinePayload();
     }
   }
 
@@ -200,7 +209,10 @@ export async function POST(req: NextRequest) {
     .select("id, label, is_baseline, created_at, screenshot_url")
     .single();
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  if (error) {
+    console.error("[snapshots] insert failed:", error.message);
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
 
   const changedCount = insertPayload.is_baseline
     ? (currentFiles.length)
@@ -216,7 +228,7 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const snapshotId = req.nextUrl.searchParams.get("id");

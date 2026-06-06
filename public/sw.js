@@ -1,7 +1,7 @@
 // LifemarkAI Service Worker
 // Caches the app shell for offline access and faster loads.
 
-const CACHE_NAME = "lifemarkai-v2";
+const CACHE_NAME = "lifemarkai-v4";
 // NOTE: only public, non-redirecting URLs belong here. /dashboard is
 // auth-gated (redirects to /login when signed out) — cache.addAll() rejects
 // on redirects, which made the whole install throw on every page load.
@@ -45,6 +45,11 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
+  // Editor is highly dynamic — bypass SW entirely so chunk recovery works.
+  if (url.pathname.startsWith("/editor")) {
+    return;
+  }
+
   // Never intercept cross-origin or API/SSE/auth requests
   if (
     url.origin !== self.location.origin ||
@@ -54,9 +59,15 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Static assets (_next/static, icons, fonts) → cache-first
+  // Never cache-first Next.js hashed chunks — after deploy old chunk URLs 404
+  // and cache-first serves stale bundles that cause "Failed to load chunk".
+  if (url.pathname.startsWith("/_next/static/")) {
+    event.respondWith(fetch(request));
+    return;
+  }
+
+  // Icons / fonts → cache-first
   if (
-    url.pathname.startsWith("/_next/static/") ||
     url.pathname.startsWith("/icons/") ||
     url.pathname.match(/\.(png|jpg|jpeg|svg|webp|woff2?|ico)$/)
   ) {

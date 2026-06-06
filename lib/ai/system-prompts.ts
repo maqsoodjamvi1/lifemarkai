@@ -4,6 +4,7 @@
 // proper multi-file decomposition, richer context injection
 // ─────────────────────────────────────────────────────────────────────────────
 import { selectRelevantFiles } from "@/lib/ai/context-selector";
+import { classifyBuildIntent } from "@/lib/ai/build-intent";
 
 // ─── ALLOWED PACKAGES ALLOWLIST ───────────────────────────────────────────────
 // CRITICAL: Only import packages from this list. Never import packages not here.
@@ -585,6 +586,15 @@ Object shape:
   "message": "Plain-English summary for the user: what was built, how many components, what the app does and how to use it"
 }
 
+## Autonomous Intelligence — behave like Lovable
+When the user asks to create a website, app, ERP, POS, CRM, or management system:
+1. **Infer everything yourself** — brand name, color palette, pages, modules, mock data, copy.
+2. **Never ask clarifying questions** — make reasonable assumptions and ship a complete product.
+3. **Match the niche** — cargo/logistics, restaurant, healthcare, finance, etc. each get appropriate copy, icons, and color schemes.
+4. **Complex apps (ERP, POS, CRM, admin)** — build functional multi-page apps with sidebar nav, data tables, forms, and realistic mock data — NOT single-page marketing sites.
+5. **Marketing websites** — include hero, services, about, contact, and professional footer with niche-specific content.
+6. The \`message\` field must be a friendly one-line summary (like Lovable): "Your cargo logistics website is live with a navy hero, red accents, and sections for Services, Fleet, and Contact."
+
 ## Non-negotiable rules
 1. Minimum 10 files for any non-trivial app (config files + at least 4 components + pages).
 2. COMPLETE file content only — never \`// ... rest of implementation\`, never truncated.
@@ -975,6 +985,7 @@ export function buildGenerationPrompt(
   userPrompt: string,
   projectFiles: Array<{ path: string; content: string }>
 ): string {
+  const intent = classifyBuildIntent(userPrompt);
   const accent = inferAccentColor(userPrompt);
   const hasExistingCode = projectFiles.length > 0;
   // Build mode gets a generous 80k char budget; BM25-rank by the user's prompt
@@ -985,6 +996,13 @@ export function buildGenerationPrompt(
   const existingPaths = projectFiles.map((f) => `  • ${f.path}`).join("\n");
 
   return `${APP_GENERATION_SYSTEM_PROMPT}
+
+${intent.blueprint}
+
+## Detected Build Intent
+- App type: ${intent.appType}
+- Niche: ${intent.niche ?? "(inferred from prompt)"}
+- Status: ${intent.statusLabel}
 
 ## Inferred Design Accent
 - Color name: ${accent.name}

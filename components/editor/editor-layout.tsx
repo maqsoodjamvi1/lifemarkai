@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { countFindings } from "@/lib/security/static-scan";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import dynamic from "next/dynamic";
+import { importWithRetry, installChunkErrorRecovery, clearChunkReloadFlag } from "@/lib/import-with-retry";
 import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
 import {
   ChevronDown, MessageSquare, Sparkles, Bot, FolderOpen, GitBranch,
@@ -18,116 +19,113 @@ import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { EditorTopBar } from "./editor-top-bar";
-import { ChatPanel } from "./chat-panel";
-import { FileTreePanel } from "./file-tree-panel";
-import { PreviewPanel } from "./preview-panel";
-import { AgentPanel } from "./agent-panel";
-import { GitHubPanel } from "./github-panel";
-import { PackagesPanel } from "./packages-panel";
-import { CollaborationPanel } from "./collaboration-panel";
-import { ImageGenPanel } from "./image-gen-panel";
-import { SupabaseWizard } from "./supabase-wizard";
-import { EnvPanel } from "./env-panel";
-import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import {
   LovableToolsOverlay,
   LovableOverlayHeader,
   isLovableToolPanel,
 } from "./lovable-tools-overlay";
 import { FileToAppDropZone } from "./file-to-app-drop-zone";
-import { PlanPanel } from "./plan-panel";
-import { FigmaPanel } from "./figma-panel";
-import { DomainsPanel } from "./domains-panel";
-import { HistoryPanel } from "./history-panel";
-import { ShortcutsModal, useShortcutsModal } from "./shortcuts-modal";
-import { CommandPalette } from "@/components/command-palette";
+import { useShortcutsModal } from "@/hooks/use-shortcuts-modal";
 import type { CommandPaletteActions } from "@/components/command-palette";
-import { KnowledgePanel } from "./knowledge-panel";
-import { ProjectSettingsPanel } from "./project-settings-panel";
-import { SecurityPanel } from "./security-panel";
-import { DeployHistoryPanel } from "./deploy-history-panel";
-import { ProjectAnalyticsPanel } from "./project-analytics-panel";
-import { ProjectSiteAnalyticsPanel } from "./project-site-analytics-panel";
-import { AppAuthPanel } from "./app-auth-panel";
-import { DesignSystemsPanel } from "./design-systems-panel";
-import { SearchPanel } from "./search-panel";
-import { ComponentsPanel } from "./components-panel";
-import { DesignSystemPanel } from "./design-system-panel";
-import { CommentsPanel } from "./comments-panel";
-import { CrossReferencePanel } from "./cross-reference-panel";
-import { EmailPanel } from "./email-panel";
-import { TestingPanel } from "./testing-panel";
-import { DesignGuidancePanel } from "./design-guidance-panel";
-import { BrowserTestingPanel } from "./browser-testing-panel";
-import { CodeReviewPanel } from "./code-review-panel";
-import { McpPanel } from "./mcp-panel";
-import { SeoPanel } from "./seo-panel";
-import { ProblemsPanel } from "./problems-panel";
-import { ConnectorWizardPanel } from "./connector-wizard-panel";
-import { AccessibilityPanel } from "./accessibility-panel";
-import { SchemaPanel } from "./schema-panel";
-import { WebhookPanel } from "./webhook-panel";
-import { PerformancePanel } from "./performance-panel";
-import { I18nPanel } from "./i18n-panel";
-import { ApiDocsPanel } from "./api-docs-panel";
-import { LifemarkCloudPanel } from "./lifemark-cloud-panel";
-import { StoragePanel } from "./storage-panel";
-import { AppConnectorsPanel } from "./app-connectors-panel";
-import { McpContextPanel } from "./mcp-context-panel";
-import { AeoPanel } from "./aeo-panel";
-import { VulnerabilityPanel } from "./vulnerability-panel";
-import { DbSeedingPanel } from "./db-seeding-panel";
-import { MonetizationPanel } from "./monetization-panel";
-import { CopyGenPanel } from "./copy-gen-panel";
-import { FeedbackWidgetPanel } from "./feedback-widget-panel";
-import { GoLiveChecklistPanel } from "./golive-checklist-panel";
-import { IconGenPanel } from "./icon-gen-panel";
-import { ComponentMarketplacePanel } from "./component-marketplace-panel";
-import { PwaPanel } from "./pwa-panel";
-import { EdgeFunctionsPanel } from "./edge-functions-panel";
-import { ApiPlaygroundPanel } from "./api-playground-panel";
-import { BundleAnalyzerPanel } from "./bundle-analyzer-panel";
-import { FormBuilderPanel } from "./form-builder-panel";
-import { FeatureFlagsPanel } from "./feature-flags-panel";
-import { ChangelogPanel } from "./changelog-panel";
-import { DbQueryPanel } from "./db-query-panel";
-import { RouterWizardPanel } from "./router-wizard-panel";
-import { EnvHealthPanel } from "./env-health-panel";
-import { PromptOptimizerPanel } from "./prompt-optimizer-panel";
-import { SecretsVaultPanel } from "./secrets-vault-panel";
-import { MigrationsWizardPanel } from "./migrations-wizard-panel";
-import { ModelComparePanel } from "./model-compare-panel";
-import { AiPersonaPanel } from "./ai-persona-panel";
-import { ActivityTimelinePanel } from "./activity-timeline-panel";
-import { CodeOwnershipPanel } from "./code-ownership-panel";
-import { ConfigExportPanel } from "./config-export-panel";
-import { SaveAsTemplatePanel } from "./save-as-template-panel";
-import { DiffViewerPanel } from "./diff-viewer-panel";
-import { DependencyGraphPanel } from "./dependency-graph-panel";
-import { TimeLapsePanel } from "./time-lapse-panel";
-import { CustomEmailsPanel } from "./custom-emails-panel";
-import { DesignDirectionsPanel } from "./design-directions-panel";
-import { AiIntegrationPanel } from "./ai-integration-panel";
-import { DesignPanel } from "./design-panel";
-import { VisualEditsPanel } from "./visual-edits-panel";
-import { PublishPanel } from "./publish-panel";
-import { PaymentsPanel } from "./payments-panel";
-import { PaymentCheckoutPanel } from "./payment-checkout-panel";
 import { useRecordProjectVisit } from "@/hooks/use-recent-projects";
 import type { Project, ProjectFile, Message, Profile } from "@/types/database";
+import {
+  pickActiveFileAfterUpdate,
+  resolvePromptMode,
+  shouldFocusPreviewAfterGeneration,
+} from "@/lib/ai/editor-intelligence";
 
-const CodePanel = dynamic(() => import("./code-panel").then((m) => m.CodePanel), {
-  ssr: false,
-  loading: () => (
-    <div className="flex-1 flex items-center justify-center bg-[#1e1e1e]">
-      <div className="text-muted-foreground text-sm">Loading editor...</div>
-    </div>
-  ),
-});
+const CommandPalette = dynamic(
+  importWithRetry(() => import("@/components/command-palette").then((m) => m.CommandPalette)),
+  { ssr: false }
+);
+
+const HistoryPanel = dynamic(
+  importWithRetry(() => import("./history-panel").then((m) => m.HistoryPanel)),
+  { ssr: false }
+);
+
+const SearchPanel = dynamic(
+  importWithRetry(() => import("./search-panel").then((m) => m.SearchPanel)),
+  { ssr: false }
+);
+
+const ComponentsPanel = dynamic(
+  importWithRetry(() => import("./components-panel").then((m) => m.ComponentsPanel)),
+  { ssr: false }
+);
+
+const PreviewAnnotateModal = dynamic(
+  importWithRetry(() => import("./preview-annotate-modal").then((m) => m.PreviewAnnotateModal)),
+  { ssr: false }
+);
+
+const ShortcutsModal = dynamic(
+  importWithRetry(() => import("./shortcuts-modal").then((m) => m.ShortcutsModal)),
+  { ssr: false }
+);
+
+const FileTreePanel = dynamic(
+  importWithRetry(() => import("./file-tree-panel").then((m) => m.FileTreePanel)),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
+        Loading files…
+      </div>
+    ),
+  }
+);
+
+const ChatPanel = dynamic(
+  importWithRetry(() => import("./chat-panel").then((m) => m.ChatPanel)),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex-1 flex items-center justify-center bg-background">
+        <div className="text-muted-foreground text-sm">Loading chat...</div>
+      </div>
+    ),
+  }
+);
+
+const CodePanel = dynamic(
+  importWithRetry(() => import("./code-panel").then((m) => m.CodePanel)),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex-1 flex items-center justify-center bg-[#1e1e1e]">
+        <div className="text-muted-foreground text-sm">Loading editor...</div>
+      </div>
+    ),
+  }
+);
+
+const LazyLovablePanel = dynamic(
+  importWithRetry(() => import("./lazy-editor-panels").then((m) => m.LovableToolPanelContent)),
+  { ssr: false }
+);
+
+const LazySecondaryPanel = dynamic(
+  importWithRetry(() => import("./lazy-editor-panels").then((m) => m.SecondaryPanelContent)),
+  { ssr: false }
+);
+
+const PreviewPanel = dynamic(
+  importWithRetry(() => import("./preview-panel").then((m) => m.PreviewPanel)),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex-1 flex items-center justify-center bg-background">
+        <div className="text-muted-foreground text-sm">Loading preview...</div>
+      </div>
+    ),
+  }
+);
 
 export type EditorMode = "chat" | "plan" | "build" | "agent" | "patch";
 export type ViewMode = "preview" | "code" | "both";
-export type LeftPanel = "chat" | "plan" | "agent" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "code";
+export type LeftPanel = "chat" | "plan" | "agent" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "code";
 
 interface EditorLayoutProps {
   project: Project;
@@ -153,9 +151,18 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
       initialFiles[0] ||
       null
   );
-  // Default to Build — users open the editor to make things ("create a login
-  // page"), and chat mode never writes files. Chat is one tab-click away.
-  const [editorMode, setEditorMode] = useState<EditorMode>("build");
+  const [editorMode, setEditorMode] = useState<EditorMode>(() => {
+    if (starterPrompt) {
+      return resolvePromptMode(starterPrompt, {
+        fileCount: initialFiles.length,
+        hasPreviewError: false,
+        framework: project.framework,
+        currentMode: "build",
+        files: initialFiles,
+      });
+    }
+    return initialFiles.length === 0 ? "build" : "build";
+  });
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
   const [leftPanel, setLeftPanel] = useState<LeftPanel>("chat");
   // Right-side secondary panel (null = show preview/code)
@@ -224,6 +231,11 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   const { isMobile } = useIsMobile();
   const [annotateOpen, setAnnotateOpen] = useState(false);
   const [annotateImage, setAnnotateImage] = useState<string | null>(null);
+
+  useEffect(() => {
+    clearChunkReloadFlag();
+    return installChunkErrorRecovery();
+  }, []);
 
   // Mobile detection now lives in the useIsMobile() hook above.
 
@@ -304,12 +316,27 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   const handleFilesUpdate = useCallback((updatedFiles: ProjectFile[]) => {
     setFiles((prev) => {
       const map = new Map(prev.map((f) => [f.path, f]));
-      updatedFiles.forEach((f) => map.set(f.path, f));
-      return Array.from(map.values());
+      const changedPaths: string[] = [];
+      updatedFiles.forEach((f) => {
+        const existing = map.get(f.path);
+        if (!existing || existing.content !== f.content) changedPaths.push(f.path);
+        map.set(f.path, f);
+      });
+      const next = Array.from(map.values());
+
+      if (changedPaths.length > 0) {
+        queueMicrotask(() => {
+          setActiveFile((current) => pickActiveFileAfterUpdate(next, changedPaths, current) ?? current);
+          if (shouldFocusPreviewAfterGeneration(editorMode, changedPaths.length)) {
+            focusPreview();
+          }
+        });
+      }
+
+      return next;
     });
-    // On mobile, jump to preview after AI generates files
     if (isMobile && updatedFiles.length > 0) setMobilePaneActive("preview");
-  }, [isMobile]);
+  }, [editorMode, focusPreview, isMobile]);
 
   const handleFileCreate = useCallback((newFile: ProjectFile) => {
     setFiles((prev) => [...prev, newFile]);
@@ -446,6 +473,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     { id: "copygen",       label: "Copy",       emoji: "✍️" },
     { id: "feedback",      label: "Feedback",   emoji: "💬" },
     { id: "golive",        label: "Go Live",    emoji: "🚀" },
+    { id: "nativeapps",    label: "Native Apps", emoji: "📲" },
     { id: "icongen",       label: "Icon Gen",   emoji: "🎨" },
     { id: "compmarket",    label: "Components", emoji: "📦" },
     { id: "pwa",           label: "PWA",        emoji: "📱" },
@@ -780,18 +808,16 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                       onTabChange={(tab) => setRightPanel(tab)}
                       onClose={() => setRightPanel(null)}
                     >
-                      {rightPanel === "analytics" && <ProjectSiteAnalyticsPanel project={currentProject} />}
-                      {rightPanel === "cloud" && (
-                        <LifemarkCloudPanel
-                          project={currentProject}
-                          onOpenSubPanel={(p) => setRightPanel(p as LeftPanel)}
-                        />
-                      )}
-                      {rightPanel === "payments" && <PaymentsPanel profile={profile} />}
-                      {rightPanel === "security" && (
-                        <SecurityPanel project={currentProject} files={files} onFilesUpdate={handleFilesUpdate} />
-                      )}
-                      {rightPanel === "seo" && <SeoPanel projectId={pid} onSendToChat={sendPromptToChat} />}
+                      <LazyLovablePanel
+                        rightPanel={rightPanel}
+                        currentProject={currentProject}
+                        profile={profile}
+                        files={files}
+                        pid={pid}
+                        setRightPanel={setRightPanel}
+                        handleFilesUpdate={handleFilesUpdate}
+                        sendPromptToChat={sendPromptToChat}
+                      />
                     </LovableToolsOverlay>
                   ) : (
                     <>
@@ -807,107 +833,31 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                     </button>
                   </div>
                   <div className="flex-1 overflow-hidden">
-                    {rightPanel === "github" && (
-                      <GitHubPanel
-                        project={currentProject}
-                        githubUsername={profile?.github_username ?? null}
-                        githubToken={profile?.github_access_token ?? null}
-                        gitlabUsername={profile?.gitlab_username ?? null}
-                        gitlabToken={profile?.gitlab_access_token ?? null}
-                        onProjectUpdated={handleProjectUpdate}
-                        files={files}
-                      />
-                    )}
-                    {rightPanel === "knowledge" && <KnowledgePanel project={currentProject} profile={profile} onProjectUpdate={handleProjectUpdate} />}
-                    {rightPanel === "activity" && <ProjectAnalyticsPanel project={currentProject} />}
-                    {rightPanel === "deploys" && <DeployHistoryPanel project={currentProject} onFilesRefresh={async () => { const res = await fetch(`/api/projects/${project.id}/files`); if (res.ok) { const f = await res.json(); setFiles(f); }}} />}
-                    {rightPanel === "supabase" && <SupabaseWizard projectId={pid} />}
-                    {rightPanel === "env" && <EnvPanel projectId={pid} files={files} onUpdateFile={handleEnvUpdateFile} />}
-                    {rightPanel === "image" && <ImageGenPanel projectId={pid} />}
-                    {rightPanel === "testing" && <TestingPanel projectId={pid} files={files} onFilesUpdate={handleFilesUpdate} onOpenFile={setActiveFile} />}
-                    {rightPanel === "mcp" && <McpPanel />}
-                    {rightPanel === "connectors" && <ConnectorWizardPanel onApplyConnector={sendPromptToChat} />}
-                    {rightPanel === "settings" && <ProjectSettingsPanel project={currentProject} profile={profile} onProjectUpdate={handleProjectUpdate} />}
-                    {rightPanel === "search" && <SearchPanel files={files} projectId={project.id} onFileSelect={(f) => { setActiveFile(f); setRightPanel(null); setViewMode("code"); }} onFilesUpdate={handleFilesUpdate} />}
-                    {rightPanel === "domains" && <DomainsPanel project={currentProject} />}
-                    {rightPanel === "appauth" && <AppAuthPanel project={currentProject} />}
-                    {rightPanel === "designsystem" && <DesignSystemsPanel project={currentProject} onProjectUpdate={handleProjectUpdate} />}
-                    {rightPanel === "figma" && <FigmaPanel projectId={pid} onGenerateFromFigma={sendPromptToChat} />}
-                    {rightPanel === "collab" && <CollaborationPanel project={currentProject} currentUserId={profile?.id ?? ""} yjsCollaborators={yjsCollaborators} />}
-                    {rightPanel === "customemail" && <CustomEmailsPanel />}
-                    {rightPanel === "storage" && <StoragePanel projectId={pid} />}
-                    {rightPanel === "designdir" && <DesignDirectionsPanel onSendToChat={sendPromptToChat} />}
-                    {rightPanel === "design" && <DesignPanel projectId={pid} onApply={sendPromptToChat} />}
-                    {rightPanel === "visualedits" && <VisualEditsPanel projectId={pid} onApply={sendPromptToChat} />}
-                    {rightPanel === "publishpanel" && <PublishPanel project={currentProject} />}
-                    {rightPanel === "checkout" && <PaymentCheckoutPanel projectId={pid} />}
-                    {rightPanel === "problems" && <ProblemsPanel projectId={pid} />}
-                    {rightPanel === "accessibility" && <AccessibilityPanel files={files} onFixWithAI={sendPromptToChat} />}
-                    {rightPanel === "schema" && <SchemaPanel files={files} onGenerateMigration={sendPromptToChat} />}
-                    {rightPanel === "webhooks" && <WebhookPanel projectId={pid} />}
-                    {rightPanel === "performance" && <PerformancePanel files={files} onFixWithAI={sendPromptToChat} />}
-                    {rightPanel === "i18n" && <I18nPanel files={files} onGenerateTranslations={sendPromptToChat} />}
-                    {rightPanel === "apidocs" && <ApiDocsPanel files={files} />}
-                    {rightPanel === "vulnscan" && <VulnerabilityPanel files={files} onFixWithAI={sendPromptToChat} />}
-                    {rightPanel === "dbseed" && <DbSeedingPanel projectId={pid} files={files} />}
-                    {rightPanel === "monetize" && <MonetizationPanel projectId={pid} projectSlug={projectSlug} />}
-                    {rightPanel === "copygen" && <CopyGenPanel projectId={pid} files={files} onInsertCopy={sendPromptToChat} />}
-                    {rightPanel === "feedback" && <FeedbackWidgetPanel projectId={pid} projectSlug={projectSlug} />}
-                    {rightPanel === "golive" && <GoLiveChecklistPanel projectId={project.id} files={files} onFixWithAI={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />}
-                    {rightPanel === "icongen" && <IconGenPanel projectId={project.id} files={files} />}
-                    {rightPanel === "compmarket" && <ComponentMarketplacePanel projectId={project.id} onInstall={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />}
-                    {rightPanel === "pwa" && <PwaPanel projectId={project.id} files={files} onGenerateFiles={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />}
-                    {rightPanel === "edgefn" && <EdgeFunctionsPanel projectId={project.id} />}
-                    {rightPanel === "apiplay" && <ApiPlaygroundPanel projectId={project.id} files={files} />}
-                    {rightPanel === "bundle" && <BundleAnalyzerPanel files={files} onFixWithAI={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />}
-                    {rightPanel === "formgen" && <FormBuilderPanel projectId={project.id} onInsertForm={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />}
-                    {rightPanel === "flags" && <FeatureFlagsPanel projectId={project.id} onInsertCode={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />}
-                    {rightPanel === "changelog" && <ChangelogPanel projectId={project.id} onInsertChangelog={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />}
-                    {rightPanel === "dbquery" && <DbQueryPanel projectId={project.id} />}
-                    {rightPanel === "routerwiz" && <RouterWizardPanel projectId={project.id} files={files} onInsertCode={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />}
-                    {rightPanel === "envhealth" && <EnvHealthPanel projectId={project.id} />}
-                    {rightPanel === "promptopt" && <PromptOptimizerPanel onSendToChat={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />}
-                    {rightPanel === "secrets" && <SecretsVaultPanel projectId={project.id} />}
-                    {rightPanel === "migrations" && <MigrationsWizardPanel projectId={project.id} files={files} onInsertCode={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />}
-                    {rightPanel === "modelcmp" && <ModelComparePanel projectId={project.id} onSendToChat={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />}
-                    {rightPanel === "persona" && <AiPersonaPanel projectId={project.id} />}
-                    {rightPanel === "activityfeed" && <ActivityTimelinePanel projectId={project.id} />}
-                    {rightPanel === "ownership" && <CodeOwnershipPanel projectId={project.id} files={files} />}
-                    {rightPanel === "configexport" && <ConfigExportPanel projectId={project.id} />}
-                    {rightPanel === "savetemplate" && <SaveAsTemplatePanel projectId={project.id} projectName={project.name} />}
-                    {rightPanel === "diffviewer" && <DiffViewerPanel projectId={project.id} />}
-                    {rightPanel === "depgraph" && <DependencyGraphPanel projectId={project.id} files={files} onFileOpen={(path) => { const f = files.find(x => x.path === path); if (f) setActiveFile(f); }} />}
-                    {rightPanel === "timelapse" && <TimeLapsePanel projectId={project.id} />}
-                    {rightPanel === "aiintegration" && <AiIntegrationPanel project={currentProject} onProjectUpdate={handleProjectUpdate} />}
-                    {/* plan/agent/activity/crossref/review/guidance/e2e/packages/designpanel/mcpcontext/aeo/appconnectors/email/comments */}
-                    {rightPanel === "plan" && <PlanPanel project={currentProject} files={files} onApprovePlan={(md) => { setEditorMode("build"); setPendingCrossRefPrompt(`Implement this approved plan:
-
-${md}`); setRightPanel(null); }} />}
-                    {rightPanel === "agent" && <AgentPanel projectId={pid} files={files} onFilesUpdated={handleFilesUpdate} onCreditsChange={handleCreditsUpdate} credits={credits} isLocked={isLiveLocked} />}
-                    {rightPanel === "crossref" && <CrossReferencePanel currentProjectId={pid} onFilesUpdate={handleFilesUpdate} onAdaptWithAI={sendPromptToChat} />}
-                    {rightPanel === "review" && (
-                      <CodeReviewPanel
-                        activeFile={activeFile}
-                        onJumpToLine={(line) => {
-                          setViewMode("code");
-                          setRightPanel(null);
-                          requestAnimationFrame(() => {
-                            window.dispatchEvent(new CustomEvent("monaco-reveal-line", { detail: { line } }));
-                          });
-                        }}
-                        onFixWithAI={(issue) => sendPromptToChat(`Fix ${issue.category} issue: ${issue.title} — ${issue.description}`)}
-                      />
-                    )}
-                    {rightPanel === "guidance" && <DesignGuidancePanel projectId={pid} files={files} onApplyFix={sendPromptToChat} />}
-                    {rightPanel === "e2e" && <BrowserTestingPanel project={currentProject} files={files} onFilesUpdate={handleFilesUpdate} onOpenFile={setActiveFile} />}
-                    {rightPanel === "packages" && <PackagesPanel projectId={pid} files={files} onFileChange={handleFileUpdate} />}
-                    {rightPanel === "email" && <EmailPanel projectId={pid} files={files} onFilesUpdate={handleFilesUpdate} />}
-                    {rightPanel === "comments" && <CommentsPanel projectId={pid} currentUserId={profile?.id ?? ""} />}
-                    {rightPanel === "mcpcontext" && <McpContextPanel projectId={pid} />}
-                    {rightPanel === "aeo" && <AeoPanel files={files} onGenerateSchema={sendPromptToChat} />}
-                    {rightPanel === "appconnectors" && <AppConnectorsPanel projectId={pid} />}
-                    {rightPanel === "components" && <ComponentsPanel onInsertPrompt={sendPromptToChat} />}
-                    {rightPanel === "designpanel" && <DesignSystemPanel projectId={pid} files={files} onFilesUpdate={handleFilesUpdate} />}
+                    <LazySecondaryPanel
+                      rightPanel={rightPanel}
+                      project={project}
+                      currentProject={currentProject}
+                      profile={profile}
+                      files={files}
+                      activeFile={activeFile}
+                      pid={pid}
+                      projectSlug={projectSlug}
+                      credits={credits}
+                      isLiveLocked={isLiveLocked}
+                      yjsCollaborators={yjsCollaborators}
+                      setRightPanel={setRightPanel}
+                      setViewMode={setViewMode}
+                      setActiveFile={setActiveFile}
+                      setFiles={setFiles}
+                      setEditorMode={setEditorMode}
+                      setPendingCrossRefPrompt={setPendingCrossRefPrompt}
+                      handleProjectUpdate={handleProjectUpdate}
+                      handleFilesUpdate={handleFilesUpdate}
+                      handleFileUpdate={handleFileUpdate}
+                      handleEnvUpdateFile={handleEnvUpdateFile}
+                      handleCreditsUpdate={handleCreditsUpdate}
+                      sendPromptToChat={sendPromptToChat}
+                    />
                   </div>
                     </>
                   )}

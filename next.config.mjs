@@ -4,6 +4,8 @@ import path from "path";
 
 // ESM-safe __dirname — works in .mjs without needing "type":"module" in package.json
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const isDev = process.env.NODE_ENV !== "production";
+const debugConnectSrc = isDev ? " http://127.0.0.1:7580" : "";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -34,7 +36,7 @@ const nextConfig = {
               "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com https://cdn.jsdelivr.net",
               "img-src 'self' data: blob: https:",
               "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
-              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.openai.com https://api.anthropic.com https://api.stripe.com blob: https://cdn.jsdelivr.net",
+              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.openai.com https://api.anthropic.com https://api.stripe.com blob: https://cdn.jsdelivr.net" + debugConnectSrc,
               "frame-src 'self' blob: data:",
               "worker-src 'self' blob:",
               "child-src 'self' blob: data:",

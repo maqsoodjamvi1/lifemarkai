@@ -23,12 +23,41 @@ import {
   Bot,
   Sparkles,
   Scan,
+  BarChart3,
+  TrendingUp,
+  ExternalLink,
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
 interface SeoPanelProps {
   projectId?: string;
   onSendToChat?: (prompt: string) => void;
+}
+
+type PanelView = "audit" | "research";
+type ResearchMode = "keyword" | "domain";
+
+interface KeywordResult {
+  keyword: string;
+  searchVolume: number;
+  cpc: number;
+  competition: number;
+  results: number;
+}
+
+interface RelatedResult {
+  keyword: string;
+  searchVolume: number;
+  cpc: number;
+  competition: number;
+}
+
+interface DomainResult {
+  domain: string;
+  rank: number;
+  organicKeywords: number;
+  organicTraffic: number;
+  organicCost: number;
 }
 
 type Severity = "pass" | "info" | "warning" | "critical";
@@ -230,6 +259,7 @@ const RESEARCH_QUESTIONS = [
 ];
 
 export function SeoPanel({ onSendToChat }: SeoPanelProps) {
+  const [panelView, setPanelView] = useState<PanelView>("audit");
   const [findings, setFindings] = useState<SeoFinding[]>([]);
   const [isScanning, setIsScanning] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -238,6 +268,16 @@ export function SeoPanel({ onSendToChat }: SeoPanelProps) {
   const [scanSummary, setScanSummary] = useState<{
     pass: number; info: number; warning: number; critical: number;
   } | null>(null);
+
+  const [researchMode, setResearchMode] = useState<ResearchMode>("keyword");
+  const [researchQuery, setResearchQuery] = useState("");
+  const [researchDb, setResearchDb] = useState("us");
+  const [researchLoading, setResearchLoading] = useState(false);
+  const [semrushConfigured, setSemrushConfigured] = useState<boolean | null>(null);
+  const [keywordResult, setKeywordResult] = useState<KeywordResult | null>(null);
+  const [relatedResults, setRelatedResults] = useState<RelatedResult[]>([]);
+  const [domainResult, setDomainResult] = useState<DomainResult | null>(null);
+  const [researchError, setResearchError] = useState<string | null>(null);
 
   const handleScan = async () => {
     setIsScanning(true);
@@ -322,15 +362,249 @@ export function SeoPanel({ onSendToChat }: SeoPanelProps) {
     sendToChat(prompt);
   };
 
+  const runSemrushResearch = async () => {
+    const q = researchQuery.trim();
+    if (!q) {
+      toast({ title: "Enter a keyword or domain", variant: "destructive" });
+      return;
+    }
+    setResearchLoading(true);
+    setResearchError(null);
+    setKeywordResult(null);
+    setRelatedResults([]);
+    setDomainResult(null);
+
+    try {
+      const action = researchMode === "domain" ? "domain" : "keyword";
+      const res = await fetch(
+        `/api/integrations/semrush?action=${action}&q=${encodeURIComponent(q)}&database=${researchDb}`
+      );
+      const data = await res.json();
+
+      if (data.configured === false) {
+        setSemrushConfigured(false);
+        setResearchError(data.error ?? "Semrush not configured");
+        return;
+      }
+      setSemrushConfigured(true);
+
+      if (!res.ok) {
+        setResearchError(data.error ?? "Research failed");
+        return;
+      }
+
+      if (data.domain) setDomainResult(data.domain);
+      if (data.keyword) setKeywordResult(data.keyword);
+      if (data.related) setRelatedResults(data.related);
+    } catch {
+      setResearchError("Could not reach Semrush API");
+    } finally {
+      setResearchLoading(false);
+    }
+  };
+
+  const sendResearchToChat = () => {
+    const lines = ["Use this Semrush SEO research to improve my project:"];
+    if (keywordResult) {
+      lines.push(
+        `Keyword "${keywordResult.keyword}": ${keywordResult.searchVolume.toLocaleString()} monthly searches, CPC $${keywordResult.cpc.toFixed(2)}, competition ${(keywordResult.competition * 100).toFixed(0)}%`
+      );
+    }
+    if (relatedResults.length) {
+      lines.push("Related keywords:");
+      for (const r of relatedResults.slice(0, 8)) {
+        lines.push(`- ${r.keyword}: ${r.searchVolume.toLocaleString()} vol`);
+      }
+    }
+    if (domainResult) {
+      lines.push(
+        `Domain ${domainResult.domain}: rank ${domainResult.rank}, ${domainResult.organicKeywords.toLocaleString()} organic keywords`
+      );
+    }
+    lines.push("Suggest on-page SEO changes, target keywords, and content ideas based on this data.");
+    sendToChat(lines.join("\n"));
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto p-3 space-y-3">
         {/* Header */}
         <div className="flex items-center gap-2">
           <Search className="w-4 h-4 text-violet-500" />
-          <h2 className="text-sm font-semibold">SEO Audit</h2>
+          <h2 className="text-sm font-semibold">SEO</h2>
         </div>
 
+        {/* Audit vs Semrush Research */}
+        <div className="flex gap-0.5 p-0.5 bg-muted rounded-lg">
+          {(
+            [
+              { key: "audit" as const, label: "Site Audit", icon: Scan },
+              { key: "research" as const, label: "Semrush Research", icon: BarChart3 },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setPanelView(t.key)}
+              className={`flex-1 py-1.5 text-[10px] font-medium rounded-md transition flex items-center justify-center gap-1 ${
+                panelView === t.key
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <t.icon className="w-3 h-3" />
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {panelView === "research" ? (
+          <div className="space-y-3">
+            <div className="p-2.5 bg-violet-50 border border-violet-200 rounded-xl">
+              <div className="flex items-center gap-1.5 mb-1">
+                <TrendingUp className="w-3.5 h-3.5 text-violet-600" />
+                <span className="text-[11px] font-semibold text-violet-900">Live keyword & domain research</span>
+              </div>
+              <p className="text-[10px] text-violet-800/80 leading-relaxed">
+                Powered by Semrush API. Results can be sent to AI chat to optimize your app content.
+              </p>
+            </div>
+
+            <div className="flex gap-1">
+              {(["keyword", "domain"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setResearchMode(m)}
+                  className={`flex-1 py-1 text-[10px] font-medium rounded-lg border transition ${
+                    researchMode === m
+                      ? "border-violet-500 bg-violet-500/10 text-violet-700"
+                      : "border-border text-muted-foreground"
+                  }`}
+                >
+                  {m === "keyword" ? "Keyword" : "Domain"}
+                </button>
+              ))}
+            </div>
+
+            <div className="space-y-2">
+              <input
+                value={researchQuery}
+                onChange={(e) => setResearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && void runSemrushResearch()}
+                placeholder={researchMode === "keyword" ? "e.g. project management software" : "e.g. example.com"}
+                className="w-full px-3 py-2 text-xs border border-border rounded-lg bg-background"
+              />
+              <select
+                value={researchDb}
+                onChange={(e) => setResearchDb(e.target.value)}
+                className="w-full px-2 py-1.5 text-[10px] border border-border rounded-lg bg-background"
+              >
+                <option value="us">United States</option>
+                <option value="uk">United Kingdom</option>
+                <option value="ca">Canada</option>
+                <option value="au">Australia</option>
+                <option value="de">Germany</option>
+              </select>
+              <button
+                onClick={() => void runSemrushResearch()}
+                disabled={researchLoading}
+                className="w-full py-2 bg-gradient-to-r from-violet-500 to-purple-600 text-white text-[11px] font-medium rounded-lg hover:opacity-90 transition flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {researchLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <BarChart3 className="w-3.5 h-3.5" />}
+                {researchLoading ? "Researching…" : "Run Semrush Research"}
+              </button>
+            </div>
+
+            {semrushConfigured === false && (
+              <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[10px] text-amber-900">
+                <p className="font-medium mb-1">Semrush API key required</p>
+                <p className="text-amber-800/80 leading-relaxed">
+                  Add <code className="text-[9px] bg-white/60 px-1 rounded">SEMRUSH_API_KEY</code> to your server environment, or use the Connectors panel to build Semrush into your app.
+                </p>
+                <a
+                  href="https://developer.semrush.com/api/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 mt-1.5 text-violet-600 hover:underline"
+                >
+                  Semrush API docs <ExternalLink className="w-2.5 h-2.5" />
+                </a>
+              </div>
+            )}
+
+            {researchError && semrushConfigured !== false && (
+              <p className="text-[10px] text-red-600">{researchError}</p>
+            )}
+
+            {keywordResult && (
+              <div className="rounded-xl border border-border overflow-hidden">
+                <div className="px-2.5 py-2 bg-muted/40 border-b border-border">
+                  <span className="text-[10px] font-semibold">Keyword Overview</span>
+                </div>
+                <div className="grid grid-cols-2 gap-px bg-border">
+                  {[
+                    { label: "Volume", value: keywordResult.searchVolume.toLocaleString() },
+                    { label: "CPC", value: `$${keywordResult.cpc.toFixed(2)}` },
+                    { label: "Competition", value: `${(keywordResult.competition * 100).toFixed(0)}%` },
+                    { label: "Results", value: keywordResult.results.toLocaleString() },
+                  ].map((m) => (
+                    <div key={m.label} className="bg-background p-2 text-center">
+                      <div className="text-[9px] text-muted-foreground">{m.label}</div>
+                      <div className="text-sm font-semibold">{m.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {domainResult && (
+              <div className="rounded-xl border border-border overflow-hidden">
+                <div className="px-2.5 py-2 bg-muted/40 border-b border-border">
+                  <span className="text-[10px] font-semibold">{domainResult.domain}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-px bg-border">
+                  {[
+                    { label: "Authority Rank", value: domainResult.rank.toLocaleString() },
+                    { label: "Organic Keywords", value: domainResult.organicKeywords.toLocaleString() },
+                    { label: "Organic Traffic", value: domainResult.organicTraffic.toLocaleString() },
+                    { label: "Traffic Value", value: `$${domainResult.organicCost.toLocaleString()}` },
+                  ].map((m) => (
+                    <div key={m.label} className="bg-background p-2 text-center">
+                      <div className="text-[9px] text-muted-foreground">{m.label}</div>
+                      <div className="text-sm font-semibold">{m.value}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {relatedResults.length > 0 && (
+              <div className="rounded-xl border border-border overflow-hidden">
+                <div className="px-2.5 py-2 bg-muted/40 border-b border-border">
+                  <span className="text-[10px] font-semibold">Related Keywords</span>
+                </div>
+                <div className="divide-y divide-border max-h-40 overflow-y-auto">
+                  {relatedResults.map((r) => (
+                    <div key={r.keyword} className="flex items-center justify-between px-2.5 py-1.5 text-[10px]">
+                      <span className="truncate flex-1">{r.keyword}</span>
+                      <span className="text-muted-foreground tabular-nums ml-2">{r.searchVolume.toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(keywordResult || domainResult) && onSendToChat && (
+              <button
+                onClick={sendResearchToChat}
+                className="w-full py-2 border border-violet-500/40 text-violet-700 text-[10px] font-medium rounded-lg hover:bg-violet-500/5 transition flex items-center justify-center gap-1"
+              >
+                <Sparkles className="w-3 h-3" />
+                Send research to AI chat
+              </button>
+            )}
+          </div>
+        ) : (
+          <>
         {/* Summary cards */}
         {scanSummary && (
           <div className="grid grid-cols-4 gap-1.5">
@@ -604,6 +878,8 @@ export function SeoPanel({ onSendToChat }: SeoPanelProps) {
               })}
             </div>
           </div>
+        )}
+          </>
         )}
       </div>
     </div>

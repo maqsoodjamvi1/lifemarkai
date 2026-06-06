@@ -1,0 +1,123 @@
+/**
+ * Production readiness — runs all Lovable parity checks + env/migration gates.
+ * Writes NDJSON to debug-799475.log (session 799475).
+ */
+import { appendFileSync, existsSync, readFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
+import { execSync } from "child_process";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const LOG = join(ROOT, "debug-799475.log");
+const SESSION = "799475";
+
+function log(payload: Record<string, unknown>) {
+  const line = JSON.stringify({ sessionId: SESSION, timestamp: Date.now(), runId: "production", ...payload });
+  appendFileSync(LOG, `${line}\n`);
+  console.log(line);
+}
+
+let passed = 0;
+let failed = 0;
+let warned = 0;
+
+function assert(id: string, name: string, ok: boolean, data?: Record<string, unknown>) {
+  if (ok) passed++;
+  else failed++;
+  log({ hypothesisId: id, location: "verify-production-ready.ts", message: name, data: { ok, ...data } });
+}
+
+function warn(id: string, name: string, detail: string) {
+  warned++;
+  log({ hypothesisId: id, location: "verify-production-ready.ts", message: name, data: { ok: true, warn: true, detail } });
+}
+
+function runScript(script: string, id: string) {
+  try {
+    execSync(`npx tsx ${script}`, { cwd: ROOT, stdio: "pipe", encoding: "utf8" });
+    assert(id, `${script} exit 0`, true);
+    return true;
+  } catch (e) {
+    const err = e as { stdout?: string; stderr?: string; status?: number };
+    assert(id, `${script} exit 0`, false, {
+      status: err.status,
+      stderr: (err.stderr ?? "").slice(0, 200),
+    });
+    return false;
+  }
+}
+
+// ── Parity suites ─────────────────────────────────────────────────────────────
+runScript("scripts/verify-lovable-gaps.ts", "P1");
+runScript("scripts/verify-tier2-gaps.ts", "P2");
+runScript("scripts/verify-tier3-gaps.ts", "P3");
+runScript("scripts/verify-editor-intelligence.ts", "P4");
+
+// ── Required migrations for parity features ─────────────────────────────────
+const REQUIRED_MIGRATIONS = [
+  "058_element_comments.sql",
+  "061_cloud_tool_permissions.sql",
+];
+for (const m of REQUIRED_MIGRATIONS) {
+  assert("P5", `migration ${m}`, existsSync(join(ROOT, "supabase/migrations", m)));
+}
+
+// ── Env vars (warn if missing — optional keys don't fail) ─────────────────────
+const REQUIRED_ENV = [
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "NEXT_PUBLIC_APP_URL",
+];
+const AI_ENV_KEYS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY"];
+const OPTIONAL_ENV = [
+  "SEMRUSH_API_KEY",
+  "NETLIFY_AUTH_TOKEN",
+  "LIFEMARK_GATEWAY_URL",
+  "STRIPE_SECRET_KEY",
+];
+
+const envPath = join(ROOT, ".env.local");
+let envKeys = new Set<string>();
+if (existsSync(envPath)) {
+  for (const line of readFileSync(envPath, "utf8").split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const i = t.indexOf("=");
+    if (i > 0) envKeys.add(t.slice(0, i));
+  }
+  for (const key of REQUIRED_ENV) {
+    if (!envKeys.has(key)) {
+      assert("P6", `env ${key}`, false, { hint: "Set in .env.local" });
+    } else {
+      assert("P6", `env ${key}`, true);
+    }
+  }
+  const hasAiKey = AI_ENV_KEYS.some((k) => envKeys.has(k));
+  assert("P6", "env AI provider (any)", hasAiKey, {
+    hint: hasAiKey ? undefined : `Set one of: ${AI_ENV_KEYS.join(", ")}`,
+  });
+  for (const key of OPTIONAL_ENV) {
+    if (!envKeys.has(key)) {
+      warn("P6", `optional env ${key}`, "Not set — related features disabled");
+    }
+  }
+} else {
+  warn("P6", ".env.local", "File not found — skipping env checks (CI may inject env differently)");
+}
+
+// ── Build artifacts sanity ────────────────────────────────────────────────────
+assert("P7", "docs route", existsSync(join(ROOT, "app/(marketing)/docs/page.tsx")));
+assert("P7", "MCP route", existsSync(join(ROOT, "app/api/mcp/route.ts")));
+assert("P7", "native panel", existsSync(join(ROOT, "components/editor/native-distribution-panel.tsx")));
+assert("P8", "production build (.next/BUILD_ID)", existsSync(join(ROOT, ".next", "BUILD_ID")), {
+  hint: "Run npm run build before deploy",
+});
+
+log({
+  location: "verify-production-ready.ts",
+  message: "summary",
+  data: { passed, failed, warned, ready: failed === 0 },
+});
+
+process.exit(failed > 0 ? 1 : 0);

@@ -15,11 +15,13 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { BUILT_IN_TEMPLATES } from "@/lib/templates/built-in";
+import { enqueueDeployJob, getDeployQueue } from "@/lib/queue/client";
 
 // ── MCP Protocol constants ───────────────────────────────────────────────────
 const MCP_VERSION = "2024-11-05";
 const SERVER_NAME = "lifemarkai";
-const SERVER_VERSION = "1.0.0";
+const SERVER_VERSION = "1.1.0";
 
 // ── Tool definitions ─────────────────────────────────────────────────────────
 const TOOLS = [
@@ -100,6 +102,38 @@ const TOOLS = [
         project_id: { type: "string", description: "The project UUID" },
       },
       required: ["project_id"],
+    },
+  },
+  {
+    name: "deploy_project",
+    description: "Trigger a deployment for a project (queues build + publish)",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "string", description: "The project UUID" },
+        provider: { type: "string", description: "Deploy provider", enum: ["netlify", "vercel"] },
+      },
+      required: ["project_id"],
+    },
+  },
+  {
+    name: "get_deploy_status",
+    description: "Get the latest deployment status and URL for a project",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_id: { type: "string", description: "The project UUID" },
+      },
+      required: ["project_id"],
+    },
+  },
+  {
+    name: "list_templates",
+    description: "List built-in project starter templates",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      required: [],
     },
   },
 ] as const;
@@ -225,12 +259,88 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
       const { project_id } = args;
       const { data: proj, error } = await (admin as any)
         .from("projects")
-        .select("id, name, description, framework, status, deployed_url, preview_url, created_at, updated_at")
+        .select("id, name, description, framework, status, deployed_url, preview_url, cloud_enabled, cloud_status, created_at, updated_at")
         .eq("id", project_id)
         .eq("user_id", userId)
         .single();
       if (error || !proj) throw new Error("Project not found or access denied");
       return { project: proj };
+    }
+
+    case "deploy_project": {
+      const { project_id, provider = "netlify" } = args;
+      const { data: project } = await (admin as any)
+        .from("projects")
+        .select("id, name, user_id, project_files(path, content, language)")
+        .eq("id", project_id)
+        .eq("user_id", userId)
+        .single();
+      if (!project) throw new Error("Project not found or access denied");
+
+      const files = (project.project_files ?? []) as Array<{ path: string; content: string; language?: string }>;
+      const { data: deployment, error: depErr } = await (admin as any)
+        .from("deployments")
+        .insert({
+          project_id,
+          user_id: userId,
+          status: "building",
+          provider,
+          file_count: files.length,
+        })
+        .select("id, status, provider, created_at")
+        .single();
+      if (depErr || !deployment) throw new Error(depErr?.message ?? "Failed to create deployment");
+
+      const queue = getDeployQueue();
+      if (queue) {
+        await enqueueDeployJob({
+          projectId: project_id,
+          userId,
+          deploymentId: deployment.id,
+          provider: provider as "netlify" | "vercel" | "lifemarkai",
+          projectName: project.name ?? "app",
+          badgeHidden: false,
+        });
+      }
+
+      return {
+        ok: true,
+        deployment_id: deployment.id,
+        status: deployment.status,
+        message: queue ? "Deployment queued" : "Deployment record created (queue unavailable)",
+      };
+    }
+
+    case "get_deploy_status": {
+      const { project_id } = args;
+      const { data: proj } = await (admin as any)
+        .from("projects")
+        .select("id, deployed_url, status")
+        .eq("id", project_id)
+        .eq("user_id", userId)
+        .single();
+      if (!proj) throw new Error("Project not found or access denied");
+
+      const { data: deployment } = await (admin as any)
+        .from("deployments")
+        .select("id, status, url, provider, error_message, created_at")
+        .eq("project_id", project_id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      return {
+        project: { id: proj.id, deployed_url: proj.deployed_url, status: proj.status },
+        latest_deployment: deployment ?? null,
+      };
+    }
+
+    case "list_templates": {
+      const templates = BUILT_IN_TEMPLATES.map(({ files: _f, ...meta }) => ({
+        ...meta,
+        file_count: _f.length,
+      }));
+      return { templates };
     }
 
     default:

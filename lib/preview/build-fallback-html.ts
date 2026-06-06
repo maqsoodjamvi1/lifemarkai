@@ -1,5 +1,8 @@
 import type { ProjectFile } from "@/types/database";
 
+/** Bump when preview transform logic changes — forces iframe remount in editor. */
+export const PREVIEW_ENGINE_REV = "8";
+
 export function buildFallbackHtml(files: ProjectFile[]): string {
   // Static HTML project — serve as-is
   const indexHtml = files.find(
@@ -21,6 +24,8 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     // code — executing them in the preview just throws (defineConfig undefined,
     // module.exports, etc.) and would blank the render.
     if (/(^|\/)[\w.-]*\.config\.(t|j)sx?$/.test(f.path)) return false;
+    // Vite entry mounts the app — preview bootstrap handles rendering separately.
+    if (f.path === "src/main.tsx" || f.path === "src/index.tsx") return false;
     return true;
   });
 
@@ -34,11 +39,13 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     );
   }
 
-  // Sort so dependency files come before entry points
+  // Sort: components → pages → App entry (alphabetical path ensures components/ before pages/)
   const sorted = [...codeFiles].sort((a, b) => {
-    const isEntry = (p: string) =>
-      p.includes("App.") || p === "src/index.tsx" || p === "src/main.tsx";
-    return (isEntry(a.path) ? 1 : 0) - (isEntry(b.path) ? 1 : 0);
+    const isEntry = (p: string) => p.includes("App.");
+    const aE = isEntry(a.path) ? 1 : 0;
+    const bE = isEntry(b.path) ? 1 : 0;
+    if (aE !== bE) return aE - bE;
+    return a.path.localeCompare(b.path);
   });
 
   const mainFile =
@@ -54,6 +61,25 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
   }
 
   const inlineCss = cssFiles.map((f) => f.content ?? "").join("\n");
+
+  /** Resolve ./ and ../ imports to a stable project path for __Mrequire. */
+  function resolveProjectImport(fromFile: string, importPath: string): string {
+    const clean = importPath.replace(/\.(tsx?|jsx?)$/, "");
+    if (clean.startsWith("@/")) return `src/${clean.slice(2)}`;
+    if (!clean.startsWith(".")) return clean;
+    const base = fromFile.includes("/") ? fromFile.slice(0, fromFile.lastIndexOf("/")) : "";
+    const parts = `${base}/${clean}`.split("/");
+    const out: string[] = [];
+    for (const p of parts) {
+      if (p === "..") out.pop();
+      else if (p !== "." && p) out.push(p);
+    }
+    return out.join("/");
+  }
+
+  /** Default import binding — {} from a failed require is NOT a valid component. */
+  const defaultImportExpr = (modVar: string, binding: string) =>
+    `const ${binding} = (function(){var m=${modVar};var c=m&&(m.default!==undefined?m.default:m);return typeof c==='function'?c:function(){return null;};})();`;
 
   /** Transform one source file into a self-contained Babel script block */
   function wrapFile(file: ProjectFile): string {
@@ -85,16 +111,25 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     // Strip import type
     src = src.replace(/import\s+type\s+[^\n;]+;?\n?/g, "");
 
+    // `import { A as B }` must become `{ A: B }` in object destructuring (not `as`)
+    const destructure = (named: string) => named.trim().replace(/\s+as\s+/g, ": ");
+
+    // AI sometimes emits window-shim destructuring with import-style `as` aliases
+    src = src.replace(
+      /const\s*\{([^}]+)\}\s*=\s*(window\.__[\w]+)/g,
+      (_, named: string, srcObj: string) => `const { ${destructure(named)} } = ${srcObj}`,
+    );
+
     // import React[, { ... }] from 'react'
     src = src.replace(
       /import\s+React\s*,?\s*(?:\{([^}]*)\})?\s*from\s+['"]react['"]\s*;?\n?/g,
       (_, named?: string) =>
-        named?.trim() ? `const { ${named.trim()} } = React;\n` : ""
+        named?.trim() ? `const { ${destructure(named)} } = React;\n` : ""
     );
     // import { ... } from 'react'
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]react['"]\s*;?\n?/g,
-      (_, named: string) => `const { ${named.trim()} } = React;\n`
+      (_, named: string) => `const { ${destructure(named)} } = React;\n`
     );
 
     // import X from 'react-dom[/client]'
@@ -105,14 +140,14 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     // import { ... } from 'react-dom[/client]'
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]react-dom(?:\/client)?['"]\s*;?\n?/g,
-      (_, named: string) => `const { ${named.trim()} } = ReactDOM;\n`
+      (_, named: string) => `const { ${destructure(named)} } = ReactDOM;\n`
     );
 
     // import { ... } from 'lucide-react'
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]lucide-react['"]\s*;?\n?/g,
       (_, named: string) =>
-        `const { ${named.trim()} } = window.__lucideReact || {};\n`
+        `const { ${destructure(named)} } = window.__lucideReact || {};\n`
     );
     // import * as X from 'lucide-react'
     src = src.replace(
@@ -124,13 +159,13 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]framer-motion['"]\s*;?\n?/g,
       (_, named: string) =>
-        `const { ${named.trim()} } = window.__framerMotion || {};\n`
+        `const { ${destructure(named)} } = window.__framerMotion || {};\n`
     );
 
     // import { ... } from 'recharts'
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]recharts['"]\s*;?\n?/g,
-      (_, named: string) => `const { ${named.trim()} } = window.__recharts || {};\n`
+      (_, named: string) => `const { ${destructure(named)} } = window.__recharts || {};\n`
     );
     // import * as X from 'recharts'
     src = src.replace(
@@ -141,25 +176,25 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     // import { ... } from 'react-router-dom'
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]react-router(?:-dom)?['"]\s*;?\n?/g,
-      (_, named: string) => `const { ${named.trim()} } = window.__reactRouterDom || {};\n`
+      (_, named: string) => `const { ${destructure(named)} } = window.__reactRouterDom;\n`
     );
 
     // import { ... } from '@tanstack/react-query'  or  'react-query'
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"](?:@tanstack\/)?react-query['"]\s*;?\n?/g,
-      (_, named: string) => `const { ${named.trim()} } = window.__reactQuery || {};\n`
+      (_, named: string) => `const { ${destructure(named)} } = window.__reactQuery || {};\n`
     );
 
     // import { ... } from 'react-hook-form'
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]react-hook-form['"]\s*;?\n?/g,
-      (_, named: string) => `const { ${named.trim()} } = window.__reactHookForm || {};\n`
+      (_, named: string) => `const { ${destructure(named)} } = window.__reactHookForm || {};\n`
     );
 
     // import { z } / import * as z from 'zod' / import { z, ZodSchema } from 'zod'
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]zod['"]\s*;?\n?/g,
-      (_, named: string) => `const { ${named.trim()} } = window.__zod ? Object.assign({ z: window.__zod }, window.__zod) : {};\n`
+      (_, named: string) => `const { ${destructure(named)} } = window.__zod ? Object.assign({ z: window.__zod }, window.__zod) : {};\n`
     );
     src = src.replace(
       /import\s+\*\s+as\s+(\w+)\s+from\s+['"]zod['"]\s*;?\n?/g,
@@ -169,33 +204,33 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     // import { format, ... } from 'date-fns'
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]date-fns(?:\/[^'"]*)?['"]\s*;?\n?/g,
-      (_, named: string) => `const { ${named.trim()} } = window.__dateFns || {};\n`
+      (_, named: string) => `const { ${destructure(named)} } = window.__dateFns || {};\n`
     );
 
     // import { clsx } from 'clsx'  /  import clsx from 'clsx'
     src = src.replace(
       /import\s+(?:\{([^}]+)\}|(\w+))\s+from\s+['"]clsx['"]\s*;?\n?/g,
       (_, named: string | undefined, def: string | undefined) =>
-        named ? `const { ${named.trim()} } = { clsx: window.__clsx };\n`
+        named ? `const { ${destructure(named)} } = { clsx: window.__clsx };\n`
               : `const ${def} = window.__clsx;\n`
     );
 
     // import { twMerge } from 'tailwind-merge' / import { cn } from ...
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]tailwind-merge['"]\s*;?\n?/g,
-      (_, named: string) => `const { ${named.trim()} } = { twMerge: window.__twMerge, merge: window.__twMerge };\n`
+      (_, named: string) => `const { ${destructure(named)} } = { twMerge: window.__twMerge, merge: window.__twMerge };\n`
     );
 
     // import { cva, ... } from 'class-variance-authority'
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]class-variance-authority['"]\s*;?\n?/g,
-      (_, named: string) => `const { ${named.trim()} } = { cva: window.__cva, cx: window.__clsx };\n`
+      (_, named: string) => `const { ${destructure(named)} } = { cva: window.__cva, cx: window.__clsx };\n`
     );
 
     // import { toast, Toaster } from 'sonner'  /  'react-hot-toast'
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]sonner['"]\s*;?\n?/g,
-      (_, named: string) => `const { ${named.trim()} } = window.__sonner || {};\n`
+      (_, named: string) => `const { ${destructure(named)} } = window.__sonner || {};\n`
     );
     src = src.replace(
       /import\s+(?:(\w+)|\{([^}]+)\})\s*,?\s*(?:\{([^}]+)\})?\s*from\s+['"]react-hot-toast['"]\s*;?\n?/g,
@@ -203,7 +238,7 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
         const lines: string[] = [];
         if (def) lines.push(`const ${def} = window.__reactHotToast?.default || window.__reactHotToast || function(){};`);
         const named = named1 || named2;
-        if (named) lines.push(`const { ${named.trim()} } = window.__reactHotToast || {};`);
+        if (named) lines.push(`const { ${destructure(named)} } = window.__reactHotToast || {};`);
         return lines.join("\n") + "\n";
       }
     );
@@ -212,11 +247,12 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     src = src.replace(
       /import\s+(\w+)\s*,\s*\{([^}]+)\}\s+from\s+['"](\.\.?\/[^'"]+)['"]\s*;?\n?/g,
       (_, def: string, named: string, path: string) => {
-        const v = `__mod_${path.replace(/[^a-zA-Z0-9]/g, "_")}`;
+        const resolved = resolveProjectImport(file.path, path);
+        const v = `__mod_${resolved.replace(/[^a-zA-Z0-9]/g, "_")}`;
         return [
-          `const ${v} = window.__Mrequire('${path}');`,
-          `const ${def.trim()} = ${v}.default ?? ${v};`,
-          `const { ${named.trim()} } = ${v};`,
+          `const ${v} = window.__Mrequire('${resolved}');`,
+          defaultImportExpr(v, def.trim()),
+          `const { ${destructure(named)} } = ${v};`,
         ].join("\n") + "\n";
       }
     );
@@ -224,10 +260,11 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"](\.\.?\/[^'"]+)['"]\s*;?\n?/g,
       (_, named: string, path: string) => {
-        const v = `__mod_${path.replace(/[^a-zA-Z0-9]/g, "_")}`;
+        const resolved = resolveProjectImport(file.path, path);
+        const v = `__mod_${resolved.replace(/[^a-zA-Z0-9]/g, "_")}`;
         return [
-          `const ${v} = window.__Mrequire('${path}');`,
-          `const { ${named.trim()} } = ${v};`,
+          `const ${v} = window.__Mrequire('${resolved}');`,
+          `const { ${destructure(named)} } = ${v};`,
         ].join("\n") + "\n";
       }
     );
@@ -235,8 +272,9 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     src = src.replace(
       /import\s+(\w+)\s+from\s+['"](\.\.?\/[^'"]+)['"]\s*;?\n?/g,
       (_, name: string, path: string) => {
-        const v = `__mod_${path.replace(/[^a-zA-Z0-9]/g, "_")}`;
-        return `const ${v} = window.__Mrequire('${path}'); const ${name} = ${v}.default ?? ${v};\n`;
+        const resolved = resolveProjectImport(file.path, path);
+        const v = `__mod_${resolved.replace(/[^a-zA-Z0-9]/g, "_")}`;
+        return `const ${v} = window.__Mrequire('${resolved}'); ${defaultImportExpr(v, name)}\n`;
       }
     );
 
@@ -247,8 +285,6 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     // these non-module Babel scripts and takes down the ENTIRE preview — an
     // unknown binding is merely undefined and __Mrequire warns about it.
     const genericRequire = (spec: string) => `window.__Mrequire('${spec.replace(/'/g, "\\'")}')`;
-    // `import { A as B }` must become `{ A: B }` in destructuring
-    const destructure = (named: string) => named.trim().replace(/\s+as\s+/g, ": ");
     // import * as N from 'x'
     src = src.replace(
       /import\s+\*\s+as\s+([\w$]+)\s+from\s+['"]([^'"]+)['"]\s*;?\n?/g,
@@ -259,7 +295,7 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
       /import\s+([\w$]+)\s*,\s*\{([\s\S]*?)\}\s*from\s+['"]([^'"]+)['"]\s*;?\n?/g,
       (_, def: string, named: string, spec: string) => {
         const v = `__gmod_${spec.replace(/[^a-zA-Z0-9]/g, "_")}`;
-        return `var ${v} = ${genericRequire(spec)};\nconst ${def} = ${v}.default ?? ${v};\nconst { ${destructure(named)} } = ${v};\n`;
+        return `var ${v} = ${genericRequire(spec)};\n${defaultImportExpr(v, def)}\nconst { ${destructure(named)} } = ${v};\n`;
       }
     );
     // import { A, B } from 'x'   (braces may span lines)
@@ -272,7 +308,7 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
       /import\s+([\w$]+)\s+from\s+['"]([^'"]+)['"]\s*;?\n?/g,
       (_, def: string, spec: string) => {
         const v = `__gmod_${spec.replace(/[^a-zA-Z0-9]/g, "_")}`;
-        return `const ${v} = ${genericRequire(spec)};\nconst ${def} = ${v}.default ?? ${v};\n`;
+        return `const ${v} = ${genericRequire(spec)};\n${defaultImportExpr(v, def)}\n`;
       }
     );
     // Side-effect imports: import 'x'
@@ -444,8 +480,18 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
 window.__M = {};
 window.__Mdefine = function(name, exports) { window.__M[name] = exports; };
 window.__Mrequire = function(path) {
-  var norm = path.replace(/^@\\//,'').replace(/^\\.\\//,'').replace(/\\.(tsx?|jsx?)$/,'');
-  var candidates = [path, norm, 'src/' + norm, norm.replace(/^src\\//,'')];
+  function normPreviewPath(p) {
+    var s = p.replace(/^@\\//, 'src/').replace(/\\.(tsx?|jsx?)$/, '');
+    var parts = s.split('/');
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i] === '..') out.pop();
+      else if (parts[i] !== '.' && parts[i] !== '') out.push(parts[i]);
+    }
+    return out.join('/');
+  }
+  var norm = normPreviewPath(path);
+  var candidates = [path, norm, 'src/' + norm.replace(/^src\\//, ''), norm + '.tsx', norm + '.jsx'];
   for (var i = 0; i < candidates.length; i++) {
     if (window.__M[candidates[i]]) return window.__M[candidates[i]];
   }
@@ -453,7 +499,7 @@ window.__Mrequire = function(path) {
   if (path === 'react' || path === 'React') return window.React;
   if (path === 'react-dom' || path === 'react-dom/client') return window.ReactDOM;
   // UI / icons / animation
-  if (path === 'lucide-react') return window.__lucideReact || {};
+  if (path === 'lucide-react') return window.__lucideReact || new Proxy({}, { get: function() { return function(){return null;}; } });
   if (path === 'framer-motion') return window.__framerMotion || {};
   // Charts
   if (path === 'recharts') return window.__recharts || {};
@@ -488,6 +534,26 @@ window.__twMerge = function() { return Array.from(arguments).filter(Boolean).joi
 window.__cva = function(base, config) { return function(opts) { var out = base || ''; if (config && config.variants && opts) { Object.keys(opts).forEach(function(k) { var v = config.variants[k]; if (v && opts[k] != null && v[String(opts[k])]) out += ' ' + v[String(opts[k])]; }); } if (config && config.defaultVariants && !opts) { Object.keys(config.defaultVariants).forEach(function(k) { var v = config.variants && config.variants[k]; if (v && v[config.defaultVariants[k]]) out += ' ' + v[config.defaultVariants[k]]; }); } return out.trim(); }; };
 window.__sonner = { toast: Object.assign(function(msg){console.log('[toast]',msg);return '';}, { success:function(m){console.log('[toast:ok]',m);}, error:function(m){console.log('[toast:err]',m);}, info:function(m){console.log('[toast:info]',m);} }), Toaster: function(){ return null; } };
 window.__reactHotToast = { default: Object.assign(function(m){console.log('[toast]',m);}, { success:function(m){console.log('[toast:ok]',m);}, error:function(m){console.log('[toast:err]',m);} }), toast: function(m){console.log('[toast]',m);}, Toaster: function(){return null;} };
+// react-hook-form — stub so Contact/Login forms render without CDN
+window.__reactHookForm = (function() {
+  function useForm() {
+    return {
+      register: function() { return {}; },
+      handleSubmit: function(fn) { return function(e) { if (e && e.preventDefault) e.preventDefault(); if (fn) fn({}); }; },
+      formState: { errors: {} },
+    };
+  }
+  return { useForm: useForm };
+})();
+// zod — minimal stub so schema definitions at module load don't throw
+window.__zod = (function() {
+  function field() { return { email: function(){return this;}, min: function(){return this;} }; }
+  var z = function() { return z; };
+  z.object = function() { return { parse: function(v) { return v || {}; } }; };
+  z.string = field;
+  z.infer = function() { return {}; };
+  return z;
+})();
 // framer-motion has no browser UMD build — provide an inert stub: motion.div
 // etc. render the real DOM element (animation props stripped, layout intact),
 // AnimatePresence passes children through, hooks return static values.
@@ -525,6 +591,151 @@ window.__framerMotion = (function() {
     useReducedMotion: function() { return false; }
   };
 })();
+// lucide-react CDN is unreliable — proxy returns a placeholder icon for any missing name.
+window.__lucideReact = (function() {
+  var icons = {};
+  var stubs = {};
+  function stubIcon() {
+    return React.forwardRef(function LucideStub(props, ref) {
+      var size = props.size || 24;
+      return React.createElement('svg', {
+        ref: ref,
+        xmlns: 'http://www.w3.org/2000/svg',
+        width: size,
+        height: size,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 2,
+        className: props.className,
+        'aria-hidden': true,
+      }, React.createElement('circle', { cx: 12, cy: 12, r: 9 }));
+    });
+  }
+  return new Proxy(icons, {
+    get: function(t, name) {
+      if (name === '__esModule') return true;
+      var n = String(name);
+      if (t[n]) return t[n];
+      if (!stubs[n]) stubs[n] = stubIcon();
+      return stubs[n];
+    },
+  });
+})();
+// react-router-dom CDN path is fragile — in-preview mini-router with SPA navigation.
+window.__reactRouterDom = (function() {
+  var LocCtx = React.createContext({ pathname: '/', search: '', hash: '', state: null, key: 'default' });
+  var listeners = [];
+
+  function readLoc() {
+    var href = window.location.pathname + window.location.search + window.location.hash;
+    var q = href.indexOf('?');
+    var h = href.indexOf('#');
+    var pathname = q >= 0 ? href.slice(0, q) : (h >= 0 ? href.slice(0, h) : href);
+    var search = q >= 0 ? href.slice(q, h >= 0 ? h : undefined) : '';
+    var hash = h >= 0 ? href.slice(h) : '';
+    if (!pathname) pathname = '/';
+    return { pathname: pathname, search: search, hash: hash, state: null, key: String(Date.now()) };
+  }
+
+  function notify() { listeners.forEach(function(fn) { fn(); }); }
+
+  function navigate(to) {
+    var path = typeof to === 'string' ? to : (to && to.pathname ? to.pathname : '/');
+    if (!path.startsWith('/')) path = '/' + path;
+    try {
+      window.history.pushState({}, '', path);
+      notify();
+    } catch (e) {}
+  }
+
+  function matchRoute(pattern, pathname) {
+    if (pattern == null || pattern === '*') return pathname === '/' || pathname === '';
+    if (pattern === '/') return pathname === '/' || pathname === '';
+    if (pattern.endsWith('/*')) {
+      var base = pattern.slice(0, -2);
+      return pathname === base || pathname.indexOf(base + '/') === 0;
+    }
+    return pattern === pathname;
+  }
+
+  function RouterShell(props) {
+    var state = React.useState(readLoc);
+    var loc = state[0];
+    var setLoc = state[1];
+    React.useEffect(function() {
+      function sync() { setLoc(readLoc()); }
+      listeners.push(sync);
+      window.addEventListener('popstate', sync);
+      return function() {
+        listeners = listeners.filter(function(fn) { return fn !== sync; });
+        window.removeEventListener('popstate', sync);
+      };
+    }, []);
+    return React.createElement(LocCtx.Provider, { value: loc }, props.children);
+  }
+
+  function useLocation() { return React.useContext(LocCtx); }
+
+  function Routes(props) {
+    var loc = useLocation();
+    var pathname = loc.pathname || '/';
+    var kids = React.Children.toArray(props.children);
+    var indexEl = null;
+    for (var i = 0; i < kids.length; i++) {
+      var r = kids[i];
+      if (!r || !r.props) continue;
+      var p = r.props.path;
+      if (p == null) { indexEl = r.props.element || null; continue; }
+      if (matchRoute(p, pathname)) return r.props.element || null;
+    }
+    if ((pathname === '/' || pathname === '') && indexEl) return indexEl;
+    return null;
+  }
+
+  function Route() { return null; }
+
+  function Link(props) {
+    var p = Object.assign({}, props);
+    var to = p.to || '/';
+    delete p.to;
+    return React.createElement('a', Object.assign({
+      href: to,
+      onClick: function(e) {
+        e.preventDefault();
+        navigate(to);
+      }
+    }, p));
+  }
+
+  function NavLink(props) {
+    var p = Object.assign({}, props);
+    var to = p.to || '/';
+    var cls = p.className;
+    delete p.to; delete p.className;
+    var loc = useLocation();
+    var active = matchRoute(to, loc.pathname || '/');
+    var merged = typeof cls === 'function' ? cls({ isActive: active }) : ((cls || '') + (active ? ' active' : ''));
+    return React.createElement(Link, Object.assign({}, p, { to: to, className: merged }));
+  }
+
+  return {
+    BrowserRouter: RouterShell,
+    HashRouter: RouterShell,
+    MemoryRouter: RouterShell,
+    Router: RouterShell,
+    Routes: Routes,
+    Route: Route,
+    Link: Link,
+    NavLink: NavLink,
+    Outlet: function() { return null; },
+    Navigate: function(props) { navigate(props && props.to ? props.to : '/'); return null; },
+    useNavigate: function() { return navigate; },
+    useParams: function() { return {}; },
+    useLocation: useLocation,
+    useSearchParams: function() { return [new URLSearchParams(), function() {}]; },
+  };
+})();
 </script>`;
 
   return `<!DOCTYPE html>
@@ -541,24 +752,24 @@ window.__framerMotion = (function() {
        the useless "Script error." — with it, real messages reach the console
        bridge. unpkg + jsdelivr both send Access-Control-Allow-Origin: *. -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
-  <script src="https://cdn.jsdelivr.net/npm/lucide-react@latest/dist/umd/lucide-react.js" crossorigin
-    onload="window.__lucideReact=window.LucideReact||window.lucideReact||window.lucide||{};"
-    onerror="window.__lucideReact={};"></script>
+  <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.js" crossorigin
+    onload="(function(){var s=window.LucideReact||window.lucideReact||window.lucide;if(s&&window.__lucideReact)Object.assign(window.__lucideReact,s);})();"
+    onerror="console.warn('[preview] lucide-react CDN failed — using icon stubs');"></script>
   <script src="https://cdn.jsdelivr.net/npm/recharts@2/umd/Recharts.js" crossorigin
     onload="window.__recharts=window.Recharts||{};"
     onerror="window.__recharts={};"></script>
-  <script src="https://cdn.jsdelivr.net/npm/react-router-dom@6/umd/react-router-dom.development.js" crossorigin
-    onload="window.__reactRouterDom=window.ReactRouterDOM||{};"
-    onerror="window.__reactRouterDom={};"></script>
+  <!-- react-router-dom UMD requires react-router + @remix-run/router peers — loading it
+       without those deps overwrote our function stubs with broken module objects
+       ("Element type is invalid: got: object"). In-preview routing uses __reactRouterDom stubs. -->
   <script src="https://cdn.jsdelivr.net/npm/@tanstack/react-query@5/build/umd/index.development.js" crossorigin
     onload="window.__reactQuery=window.ReactQuery||{};"
     onerror="window.__reactQuery={};"></script>
   <script src="https://cdn.jsdelivr.net/npm/react-hook-form@7/dist/index.umd.js" crossorigin
-    onload="window.__reactHookForm=window.ReactHookForm||{};"
-    onerror="window.__reactHookForm={};"></script>
+    onload="if(window.ReactHookForm)Object.assign(window.__reactHookForm,window.ReactHookForm);"
+    onerror="console.warn('[preview] react-hook-form CDN failed — using stubs');"></script>
   <script src="https://cdn.jsdelivr.net/npm/zod@3/lib/index.umd.js" crossorigin
-    onload="window.__zod=window.Zod||{};"
-    onerror="window.__zod={};"></script>
+    onload="if(window.Zod)window.__zod=window.Zod;"
+    onerror="console.warn('[preview] zod CDN failed — using stubs');"></script>
   <script src="https://cdn.jsdelivr.net/npm/date-fns@3/cdn.min.js" crossorigin
     onload="window.__dateFns=window.dateFns||{};"
     onerror="window.__dateFns={};"></script>
@@ -626,10 +837,12 @@ window.__framerMotion = (function() {
       }
       try {
         var mod = window.__Mrequire('${mainFile.path}');
-        var AppComp = (mod && mod.default) || null;
+        var _entry = mod && (mod.default !== undefined ? mod.default : mod);
+        var AppComp = typeof _entry === 'function' ? _entry : null;
         if (!AppComp) { showError('${mainFile.path}', 'No default export (App component) found.'); return; }
         var root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(React.createElement(React.StrictMode, null, React.createElement(AppComp)));
+        try { window.parent.postMessage({ source: 'lifemark-preview', type: 'success', text: 'render ok' }, '*'); } catch (e) {}
       } catch (err) { showError('${mainFile.path}', (err && err.message) || err); }
     }
     // Wait for window load so the async CDN libs (lucide/recharts/etc.) are ready.

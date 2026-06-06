@@ -1,6 +1,9 @@
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 import { redirect, notFound } from "next/navigation";
 import { EditorLayout } from "@/components/editor/editor-layout";
+
+export const dynamic = "force-dynamic";
 
 interface EditorPageProps {
   params: Promise<{ projectId: string }>;
@@ -52,8 +55,10 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
     const { prompt, deploy } = await searchParams;
 
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) redirect("/login");
+    const { user } = await getServerUser(supabase);
+    if (!user) {
+      redirect("/login");
+    }
 
     // Allow collaborators to open the editor too
     const { data: project, error: projectError } = await (supabase as any)

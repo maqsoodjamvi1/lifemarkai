@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 
 interface Params { params: Promise<{ id: string }> }
 
@@ -20,7 +21,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   const { id: projectId } = await params;
 
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { dataUrl } = await req.json();

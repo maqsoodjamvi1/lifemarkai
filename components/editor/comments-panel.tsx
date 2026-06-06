@@ -31,6 +31,10 @@ interface Comment {
   resolved_at: string | null;
   created_at: string;
   updated_at: string;
+  element_xpath?: string | null;
+  element_tag?: string | null;
+  page_path?: string | null;
+  element_preview?: string | null;
   author: CommentAuthor | null;
 }
 
@@ -116,6 +120,13 @@ function CommentCard({
               )}
               <span className="text-[10px] text-muted-foreground ml-auto">{timeAgo(comment.created_at)}</span>
             </div>
+
+            {comment.element_xpath && (
+              <p className="text-[10px] text-blue-400/80 mt-1 font-mono truncate" title={comment.element_xpath}>
+                📍 &lt;{comment.element_tag ?? "element"}&gt; on {comment.page_path ?? "/"}
+                {comment.element_preview ? ` — ${comment.element_preview}` : ""}
+              </p>
+            )}
 
             {/* Content */}
             <p className="text-xs text-foreground/90 mt-1 leading-relaxed whitespace-pre-wrap break-words">

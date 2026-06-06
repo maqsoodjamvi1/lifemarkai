@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
+import { importWithRetry } from "@/lib/import-with-retry";
 import {
   X, Save, Loader2, FileCode, FilePlus, Copy, Check, Download,
   Maximize2, Minimize2, MessageSquare, Wand2, Sparkles,
@@ -24,7 +25,7 @@ loader.config({
   paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0/min/vs" },
 });
 
-const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
+const MonacoEditor = dynamic(importWithRetry(() => import("@monaco-editor/react")), {
   ssr: false,
   loading: () => (
     <div className="flex items-center justify-center h-full bg-[#1e1e2e]">

@@ -2721,6 +2721,106 @@ export default function App() {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Shopify Storefront Starter
+// ─────────────────────────────────────────────────────────────────────────────
+const shopifyStorefront: BuiltInTemplate = {
+  id: "shopify-storefront",
+  name: "Shopify Storefront",
+  description: "Headless Shopify storefront with product grid, cart drawer, and Storefront API setup guide.",
+  category: "ecommerce",
+  is_featured: true,
+  fork_count: 620,
+  tags: ["shopify", "ecommerce", "storefront", "hydrogen"],
+  files: scaffold({
+    path: "src/App.tsx",
+    language: "typescriptreact",
+    content: `import { useState } from 'react'
+import { ShoppingBag, X, Plus, Minus, ExternalLink, Store } from 'lucide-react'
+
+interface Product { id: string; title: string; price: number; image: string; handle: string }
+
+const DEMO_PRODUCTS: Product[] = [
+  { id: '1', title: 'Classic Tee', price: 32, image: '👕', handle: 'classic-tee' },
+  { id: '2', title: 'Canvas Tote', price: 24, image: '👜', handle: 'canvas-tote' },
+  { id: '3', title: 'Ceramic Mug', price: 18, image: '☕', handle: 'ceramic-mug' },
+  { id: '4', title: 'Studio Cap', price: 28, image: '🧢', handle: 'studio-cap' },
+]
+
+export default function App() {
+  const [cart, setCart] = useState<Array<{ product: Product; qty: number }>>([])
+  const [open, setOpen] = useState(false)
+
+  const add = (p: Product) => setCart(c => {
+    const ex = c.find(i => i.product.id === p.id)
+    return ex ? c.map(i => i.product.id === p.id ? { ...i, qty: i.qty + 1 } : i) : [...c, { product: p, qty: 1 }]
+  })
+  const total = cart.reduce((s, i) => s + i.product.price * i.qty, 0)
+  const count = cart.reduce((s, i) => s + i.qty, 0)
+
+  return (
+    <div className="min-h-screen bg-stone-50 text-stone-900">
+      <header className="border-b bg-white sticky top-0 z-20">
+        <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
+          <div className="flex items-center gap-2 font-semibold"><Store className="w-4 h-4" /> My Shopify Store</div>
+          <button onClick={() => setOpen(true)} className="relative p-2 rounded-full hover:bg-stone-100">
+            <ShoppingBag className="w-5 h-5" />
+            {count > 0 && <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-emerald-600 text-white text-[10px] rounded-full flex items-center justify-center">{count}</span>}
+          </button>
+        </div>
+      </header>
+
+      <main className="max-w-5xl mx-auto px-4 py-8">
+        <div className="mb-6 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-sm">
+          <p className="font-medium text-emerald-900 mb-1">Connect your Shopify store</p>
+          <p className="text-emerald-800/80 text-xs leading-relaxed">Add SHOPIFY_STORE_DOMAIN and SHOPIFY_STOREFRONT_ACCESS_TOKEN in Env, then ask AI to wire the Storefront GraphQL API. Demo products shown until connected.</p>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {DEMO_PRODUCTS.map(p => (
+            <div key={p.id} className="bg-white rounded-2xl border overflow-hidden hover:shadow-md transition-shadow">
+              <div className="aspect-square bg-stone-100 flex items-center justify-center text-4xl">{p.image}</div>
+              <div className="p-3">
+                <div className="text-sm font-medium truncate">{p.title}</div>
+                <div className="text-emerald-700 font-semibold mt-0.5">\${p.price}</div>
+                <button onClick={() => add(p)} className="mt-2 w-full py-1.5 text-xs font-medium bg-stone-900 text-white rounded-lg hover:bg-stone-700">Add to cart</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </main>
+
+      {open && (
+        <div className="fixed inset-0 z-30 flex justify-end">
+          <div className="absolute inset-0 bg-black/30" onClick={() => setOpen(false)} />
+          <aside className="relative w-full max-w-sm bg-white h-full shadow-xl flex flex-col">
+            <div className="flex items-center justify-between p-4 border-b">
+              <span className="font-semibold">Cart ({count})</span>
+              <button onClick={() => setOpen(false)}><X className="w-5 h-5" /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {cart.length === 0 ? <p className="text-sm text-stone-500">Your cart is empty</p> : cart.map(i => (
+                <div key={i.product.id} className="flex gap-3 items-center">
+                  <span className="text-2xl">{i.product.image}</span>
+                  <div className="flex-1"><div className="text-sm font-medium">{i.product.title}</div><div className="text-xs text-stone-500">Qty {i.qty}</div></div>
+                  <div className="font-medium">\${i.product.price * i.qty}</div>
+                </div>
+              ))}
+            </div>
+            {cart.length > 0 && (
+              <div className="p-4 border-t">
+                <div className="flex justify-between font-semibold mb-3"><span>Total</span><span>\${total}</span></div>
+                <button className="w-full py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-medium flex items-center justify-center gap-1">Checkout <ExternalLink className="w-3.5 h-3.5" /></button>
+              </div>
+            )}
+          </aside>
+        </div>
+      )}
+    </div>
+  )
+}`,
+  }),
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Export
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -2728,6 +2828,7 @@ export const BUILT_IN_TEMPLATES: BuiltInTemplate[] = [
   saasLanding,
   adminDashboard,
   ecommerceStore,
+  shopifyStorefront,
   saasStarter,
   kanbanBoard,
   todoApp,

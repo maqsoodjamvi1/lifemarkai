@@ -23,11 +23,17 @@ import {
   Cloud, Database, Lock, FolderOpen, Zap, Sparkles, KeyRound,
   Activity, BarChart3, Settings, Loader2, MapPin, Cpu,
   AlertCircle, Check, ArrowUpRight, RefreshCw, Server,
-  HeartPulse,
+  HeartPulse, ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import type { Project } from "@/types/database";
+import {
+  CLOUD_TOOL_LABELS,
+  DEFAULT_CLOUD_TOOL_PERMISSIONS,
+  type CloudToolId,
+  type CloudToolPermission,
+} from "@/lib/cloud/permissions";
 
 interface LifemarkCloudPanelProps {
   project: Project & {
@@ -108,6 +114,10 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
   const [usage, setUsage] = useState<UsageResp | null>(null);
   const [busy, setBusy] = useState(false);
   const [provisioningRegion, setProvisioningRegion] = useState<string>("americas");
+  const [toolPermissions, setToolPermissions] = useState<Record<CloudToolId, CloudToolPermission>>(
+    DEFAULT_CLOUD_TOOL_PERMISSIONS
+  );
+  const [permissionsLoaded, setPermissionsLoaded] = useState(false);
 
   const loadStatus = useCallback(async () => {
     const res = await fetch(`/api/cloud/status?projectId=${project.id}`);
@@ -176,6 +186,35 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
   useEffect(() => {
     if (active === "usage") void loadUsage();
   }, [active, project.id]);
+
+  async function loadPermissions() {
+    const res = await fetch("/api/cloud/permissions");
+    if (res.ok) {
+      const data = await res.json();
+      setToolPermissions(data.permissions ?? DEFAULT_CLOUD_TOOL_PERMISSIONS);
+    }
+    setPermissionsLoaded(true);
+  }
+
+  useEffect(() => {
+    if (active === "advanced" && !permissionsLoaded) void loadPermissions();
+  }, [active, permissionsLoaded]);
+
+  async function savePermission(tool: CloudToolId, value: CloudToolPermission) {
+    const next = { ...toolPermissions, [tool]: value };
+    setToolPermissions(next);
+    const res = await fetch("/api/cloud/permissions", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ permissions: { [tool]: value } }),
+    });
+    if (!res.ok) {
+      toast({ title: "Failed to save permission", variant: "destructive" });
+      void loadPermissions();
+      return;
+    }
+    toast({ title: "Permission updated", description: `${CLOUD_TOOL_LABELS[tool].label}: ${value}` });
+  }
 
   // ── Render: not provisioned yet → enablement card ────────────────────────────
   if (!cloudActive) {
@@ -479,6 +518,40 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
 
         {active === "advanced" && (
           <div className="space-y-4">
+            {/* AI tool permissions */}
+            <div className="rounded-xl border border-border bg-card p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <ShieldCheck className="w-4 h-4 text-violet-400" />
+                <span className="text-sm font-medium">AI tool permissions</span>
+              </div>
+              <p className="text-[11px] text-muted-foreground mb-3 leading-relaxed">
+                Control how the AI uses Lifemark Cloud tools — Allow runs automatically, Ask prompts you first, Never blocks the action.
+              </p>
+              <div className="space-y-2">
+                {(Object.keys(CLOUD_TOOL_LABELS) as CloudToolId[]).map((tool) => {
+                  const meta = CLOUD_TOOL_LABELS[tool];
+                  return (
+                    <div key={tool} className="flex items-center gap-3 p-2.5 rounded-lg border border-border bg-muted/10">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11px] font-medium">{meta.label}</div>
+                        <div className="text-[10px] text-muted-foreground truncate">{meta.description}</div>
+                      </div>
+                      <select
+                        value={toolPermissions[tool]}
+                        onChange={(e) => void savePermission(tool, e.target.value as CloudToolPermission)}
+                        disabled={busy}
+                        className="text-[10px] px-2 py-1 rounded-md border border-border bg-background shrink-0"
+                      >
+                        <option value="allow">Allow</option>
+                        <option value="ask">Ask</option>
+                        <option value="never">Never</option>
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Instance tier picker */}
             <div className="rounded-xl border border-border bg-card p-4">
               <div className="flex items-center gap-2 mb-3">

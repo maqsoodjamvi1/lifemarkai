@@ -1,5 +1,7 @@
 // @ts-nocheck
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
+import { buildDeployIndexHtml, buildNetlifyFileMap, buildVercelFilesList } from "@/lib/deploy/build-deploy-files";
 import { NextRequest, NextResponse } from "next/server";
 import { sendDeploymentEmail } from "@/lib/email/resend";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
@@ -73,59 +75,6 @@ async function getOrCreateSite(
   });
 }
 
-/** Build a flat file map for Netlify (path → content string). */
-function buildFileMap(
-  files: Array<{ path: string; content: string }>,
-  opts: { projectId?: string; badgeHidden?: boolean; referralCode?: string | null } = {}
-): Record<string, string> {
-  const { getBadgeHtml } = require("@/lib/badge") as typeof import("@/lib/badge");
-  const badgeHtml = getBadgeHtml(opts.projectId, opts.badgeHidden ?? false, opts.referralCode ?? null);
-
-  const map: Record<string, string> = {};
-  for (const f of files) {
-    const normalised = f.path.startsWith("/") ? f.path : `/${f.path}`;
-    // Inject badge into any HTML files before </body>
-    if (normalised.endsWith(".html") && badgeHtml) {
-      map[normalised] = (f.content ?? "").replace("</body>", `${badgeHtml}\n</body>`);
-    } else {
-      map[normalised] = f.content ?? "";
-    }
-  }
-
-  // Ensure an index.html entry-point for static hosting
-  if (!map["/index.html"]) {
-    const appFile = files.find(
-      (f) => f.path.includes("App.tsx") || f.path.includes("App.jsx")
-    );
-    map["/index.html"] = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>App</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-</head>
-<body>
-  <div id="root"></div>
-  ${
-    appFile
-      ? `<script type="text/babel" data-presets="react,typescript">
-    ${appFile.content}
-    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
-  </script>`
-      : ""
-  }
-${badgeHtml}
-</body>
-</html>`;
-  }
-
-  return map;
-}
-
 /** Deploy files to a Netlify site and wait for it to go live (max 30s). */
 async function deployToNetlify(
   siteId: string,
@@ -177,41 +126,7 @@ async function deployToVercel(
 ): Promise<string> {
   if (!VERCEL_TOKEN) throw new Error("VERCEL_TOKEN not set");
 
-  // Build Vercel file list (each file as inline content)
-  const vercelFiles = files.map((f) => ({
-    file: f.path.startsWith("/") ? f.path.slice(1) : f.path,
-    data: f.content,
-    encoding: "utf-8" as const,
-  }));
-
-  // Ensure index.html for static deployments
-  const hasIndex = vercelFiles.some((f) => f.file === "index.html");
-  if (!hasIndex) {
-    const appFile = files.find((f) => f.path.includes("App.tsx") || f.path.includes("App.jsx"));
-    vercelFiles.push({
-      file: "index.html",
-      encoding: "utf-8",
-      data: `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${projectName}</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-</head>
-<body>
-  <div id="root"></div>
-  ${appFile ? `<script type="text/babel" data-presets="react,typescript">
-    ${appFile.content}
-    ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(App));
-  </script>` : ""}
-</body>
-</html>`,
-    });
-  }
+  const vercelFiles = buildVercelFilesList(files, { projectId, projectName });
 
   const deployName = `lifemark-${projectId.slice(0, 12)}`;
 
@@ -265,7 +180,7 @@ async function deployToVercel(
 /** GET /api/deploy?projectId=<id> — list deploy history for a project */
 export async function GET(req: NextRequest) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const projectId = req.nextUrl.searchParams.get("projectId");
@@ -293,10 +208,10 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const { user } = await getServerUser(supabase);
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
 
   const rl = await rateLimitAsync(user.id, RATE_LIMITS.deploy);
   if (!rl.success) {
@@ -397,8 +312,9 @@ export async function POST(req: NextRequest) {
           .select("referral_code")
           .eq("id", user.id)
           .single();
-        const fileMap = buildFileMap(projectFiles, {
+        const fileMap = buildNetlifyFileMap(projectFiles, {
           projectId,
+          projectName: project.name as string,
           badgeHidden: (project as any).badge_hidden ?? false,
           referralCode: ownerProfile?.referral_code ?? null,
         });

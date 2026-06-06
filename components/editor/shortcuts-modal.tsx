@@ -161,20 +161,5 @@ export function ShortcutsModal({ open, onClose }: ShortcutsModalProps) {
   );
 }
 
-// Hook to listen for shortcut
-export function useShortcutsModal() {
-  const [open, setOpen] = useState(false);
-
-  useEffect(() => {
-    function handler(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === "/") {
-        e.preventDefault();
-        setOpen((v) => !v);
-      }
-    }
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, []);
-
-  return { open, setOpen };
-}
+// Hook re-exported from @/hooks/use-shortcuts-modal for backward compatibility
+export { useShortcutsModal } from "@/hooks/use-shortcuts-modal";

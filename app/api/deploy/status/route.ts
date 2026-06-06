@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 
 export async function GET(req: NextRequest) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const projectId = req.nextUrl.searchParams.get("projectId");
@@ -36,28 +37,28 @@ export async function GET(req: NextRequest) {
       });
       if (resp.ok) {
         const netlify = await resp.json() as { state: string; ssl_url?: string; url?: string; error_message?: string };
-        const netlifyStatus =
-          netlify.state === "ready" ? "deployed"
+        const dbStatus =
+          netlify.state === "ready" ? "live"
           : netlify.state === "error" ? "failed"
-          : "deploying";
+          : "building";
 
         // Sync back to DB if status changed
-        if (netlifyStatus !== deployment.status) {
+        if (dbStatus !== deployment.status) {
           await (supabase as any)
             .from("deployments")
-            .update({ status: netlifyStatus, url: netlify.ssl_url ?? netlify.url })
+            .update({ status: dbStatus, url: netlify.ssl_url ?? netlify.url })
             .eq("id", deployment.id);
 
-          if (netlifyStatus === "deployed") {
+          if (dbStatus === "live") {
             await (supabase as any)
               .from("projects")
-              .update({ deployed_url: netlify.ssl_url ?? netlify.url, status: "deployed" })
+              .update({ deployed_url: netlify.ssl_url ?? netlify.url, status: "active" })
               .eq("id", projectId);
           }
         }
 
         return NextResponse.json({
-          status: netlifyStatus,
+          status: dbStatus,
           url: netlify.ssl_url ?? netlify.url ?? deployment.url,
           deployedAt: deployment.created_at,
           error: netlify.error_message ?? null,
@@ -68,9 +69,16 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  const url = deployment?.url ?? project.deployed_url ?? null;
+  let status = deployment?.status ?? project.status ?? "idle";
+  // Normalize: projects.status is "active" when live; deployments use "live"
+  if (url && (status === "live" || status === "active" || status === "deployed")) {
+    status = "live";
+  }
+
   return NextResponse.json({
-    status: deployment?.status ?? project.status ?? "idle",
-    url: deployment?.url ?? project.deployed_url ?? null,
+    status,
+    url,
     deployedAt: deployment?.created_at ?? null,
     error: deployment?.error_message ?? null,
   });

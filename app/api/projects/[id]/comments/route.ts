@@ -38,7 +38,7 @@ export async function POST(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { content, parent_id } = body;
+  const { content, parent_id, element_xpath, element_tag, page_path, element_preview } = body;
 
   if (!content || typeof content !== "string" || content.trim().length === 0) {
     return NextResponse.json({ error: "Content is required" }, { status: 400 });
@@ -54,6 +54,10 @@ export async function POST(
       user_id: user.id,
       content: content.trim(),
       parent_id: parent_id ?? null,
+      element_xpath: element_xpath ?? null,
+      element_tag: element_tag ?? null,
+      page_path: page_path ?? null,
+      element_preview: element_preview ? String(element_preview).slice(0, 120) : null,
     })
     .select(`
       *,

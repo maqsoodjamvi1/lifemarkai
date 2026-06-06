@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { reconstructFromChain, type SnapshotChainEntry } from "@/lib/diff/snapshot-diff";
 import { logger } from "@/lib/logger";
@@ -12,7 +13,7 @@ import { logger } from "@/lib/logger";
  */
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { projectId, deploymentId } = await req.json() as { projectId: string; deploymentId: string };

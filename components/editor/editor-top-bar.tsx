@@ -241,6 +241,29 @@ export function EditorTopBar({
   const [deployStatus, setDeployStatus] = useState<DeployStatus>(
     project.deployed_url ? "deployed" : "idle"
   );
+
+  // Sync deploy status from DB on mount (SSR project may be stale)
+  useEffect(() => {
+    void fetch(`/api/deploy/status?projectId=${project.id}`, { credentials: "include" })
+      .then(async (res) => {
+        const data = (await res.json().catch(() => ({}))) as { status?: string; url?: string | null };
+        if (!res.ok) return;
+        const isLive =
+          data.status === "live" ||
+          data.status === "deployed" ||
+          (data.status === "active" && !!data.url);
+        if (isLive) {
+          setDeployStatus("deployed");
+          if (data.url) setLiveUrl(data.url);
+        } else if (data.status === "building") {
+          setDeployStatus("deploying");
+        } else if (data.status === "failed") {
+          setDeployStatus("failed");
+        }
+      })
+      .catch(() => {});
+  }, [project.id]);
+
   const [liveUrl, setLiveUrl] = useState<string | null>(project.deployed_url ?? null);
   const [isSharing, setIsSharing] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
@@ -333,10 +356,25 @@ export function EditorTopBar({
     if (deployStatus !== "deploying") return;
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/deploy/status?projectId=${project.id}`);
-        if (!res.ok) return;
+        const res = await fetch(`/api/deploy/status?projectId=${project.id}`, { credentials: "include" });
+        if (!res.ok) {
+          if (res.status === 401) {
+            setDeployStatus("failed");
+            clearInterval(interval);
+            toast({
+              title: "Deploy status check failed",
+              description: "Session expired — please log in again and retry.",
+              variant: "destructive",
+            });
+          }
+          return;
+        }
         const data = await res.json() as { status: string; url?: string | null };
-        if (data.status === "deployed") {
+        const isLive =
+          data.status === "live" ||
+          data.status === "deployed" ||
+          (data.status === "active" && !!data.url);
+        if (isLive) {
           setDeployStatus("deployed");
           if (data.url) setLiveUrl(data.url);
           clearInterval(interval);
@@ -358,12 +396,23 @@ export function EditorTopBar({
       const res = await fetch("/api/deploy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ projectId: project.id, provider }),
       });
-      const data = await res.json();
+      const data = (await res.json()) as { error?: string; url?: string; message?: string; deploymentId?: string };
+      if (!res.ok) {
+        setDeployStatus("failed");
+        const msg =
+          res.status === 401
+            ? "Session expired — please log in again and retry."
+            : (data.error ?? "Deploy failed");
+        toast({ title: "Deploy failed", description: msg, variant: "destructive" });
+        return;
+      }
+      if (data.url) setLiveUrl(data.url);
       toast({
         title: `Deploying to ${provider === "vercel" ? "Vercel" : "Netlify"}…`,
-        description: data.url ? `Your app will be live at ${data.url}` : "Deployment started.",
+        description: data.url ? `Your app will be live at ${data.url}` : (data.message ?? "Deployment started."),
       });
     } catch {
       setDeployStatus("failed");
@@ -846,18 +895,28 @@ export function EditorTopBar({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* ── Publish panel — Lovable-style ── */}
+          {/* ── Publish — main click deploys; chevron opens settings ── */}
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
+            <div className="flex items-center flex-shrink-0">
               <Button
                 size="sm"
                 disabled={isDeploying}
-                className="h-7 gap-1.5 text-xs font-semibold flex-shrink-0 bg-[#0066FF] hover:bg-[#0052cc] text-white border-0 px-3"
+                onClick={() => { void handleDeploy(deployProvider); }}
+                className="h-7 gap-1.5 text-xs font-semibold bg-[#0066FF] hover:bg-[#0052cc] text-white border-0 rounded-r-none px-3"
               >
-                {isDeploying ? <><Loader2 className="h-3 w-3 animate-spin" />Publishing…</> : "Publish"}
-                <ChevronDown className="h-3 w-3 opacity-70" />
+                {isDeploying ? <><Loader2 className="h-3 w-3 animate-spin" />Publishing…</> : <><Rocket className="h-3 w-3" />Publish</>}
               </Button>
-            </DropdownMenuTrigger>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  size="sm"
+                  disabled={isDeploying}
+                  className="h-7 px-1.5 text-xs bg-[#0066FF] hover:bg-[#0052cc] text-white border-0 rounded-l-none border-l border-white/20"
+                  aria-label="Publish options"
+                >
+                  <ChevronDown className="h-3 w-3 opacity-70" />
+                </Button>
+              </DropdownMenuTrigger>
+            </div>
             <DropdownMenuContent align="end" className="w-80 p-0 overflow-hidden">
               {/* Header */}
               <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-border/60">

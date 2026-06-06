@@ -1,4 +1,5 @@
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
 import { sendLowCreditsEmail } from "@/lib/email/resend";
@@ -21,6 +22,13 @@ import { validateApiKey } from "@/app/api/keys/route";
 import { logger } from "@/lib/logger";
 import { getProjectSchemaContext } from "@/lib/supabase/schema-reader";
 import { matchSkills, renderSkillBlock, type SkillCandidate, type SkillMatch } from "@/lib/ai/skill-matcher";
+import { shouldUseSubagents, runSubagentInvestigation, type SubagentStep } from "@/lib/ai/subagents";
+import { computeCreditCost } from "@/lib/ai/credit-cost";
+import {
+  parseCloudToolPermissions,
+  buildCloudPermissionsPromptBlock,
+  shouldBlockCloudAction,
+} from "@/lib/cloud/permissions";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -40,8 +48,10 @@ export async function POST(req: NextRequest) {
       userId = result.userId;
     } else {
       const supabase = await createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      const { user } = await getServerUser(supabase);
+      if (!user) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
       userId = user.id;
     }
 
@@ -88,7 +98,7 @@ export async function POST(req: NextRequest) {
     // Check credits
     const { data: profile } = await (supabase as any)
       .from("profiles")
-      .select("credits, plan, email, workspace_knowledge")
+      .select("credits, plan, email, workspace_knowledge, cloud_tool_permissions")
       .eq("id", userId)
       .single();
 
@@ -98,7 +108,7 @@ export async function POST(req: NextRequest) {
 
     // Fetch project knowledge + recent messages + DB schema in parallel
     const [projectRes, recentMessagesRes, schemaContext] = await Promise.all([
-      (supabase as any).from("projects").select("knowledge, name, metadata, disabled_skill_ids").eq("id", projectId).single(),
+      (supabase as any).from("projects").select("knowledge, name, metadata, disabled_skill_ids, cloud_enabled").eq("id", projectId).single(),
       (supabase as any).from("messages").select("role, content, mode, metadata").eq("project_id", projectId)
         .order("created_at", { ascending: false }).limit(40),
       // Schema reading is best-effort — never blocks the response
@@ -129,6 +139,7 @@ export async function POST(req: NextRequest) {
       name?: string;
       metadata?: Record<string, unknown> | null;
       disabled_skill_ids?: string[] | null;
+      cloud_enabled?: boolean;
     } | null;
     const projectKnowledge = projectData?.knowledge?.trim();
     const knowledgeBlock = projectKnowledge
@@ -150,6 +161,38 @@ export async function POST(req: NextRequest) {
 
     // Compact schema block — injected into all modes when available
     const schemaBlock = schemaContext ? `\n\n---\n${schemaContext}\n---` : "";
+
+    const cloudPermissions = parseCloudToolPermissions(
+      (profile as { cloud_tool_permissions?: unknown }).cloud_tool_permissions,
+    );
+    const cloudEnabled = !!projectData?.cloud_enabled;
+    const cloudPermissionsBlock = `\n\n${buildCloudPermissionsPromptBlock(cloudPermissions, cloudEnabled)}`;
+
+    const cloudBlockCheck = shouldBlockCloudAction(message, cloudPermissions);
+    if (cloudBlockCheck.blocked && cloudBlockCheck.reason) {
+      const blockText = cloudBlockCheck.reason;
+      const blockEncoder = new TextEncoder();
+      const blockStream = new ReadableStream({
+        async start(controller) {
+          controller.enqueue(
+            blockEncoder.encode(`data: ${JSON.stringify({ chunk: blockText })}\n\n`),
+          );
+          controller.enqueue(
+            blockEncoder.encode(
+              `data: ${JSON.stringify({ done: true, tokensUsed: 0, creditsUsed: 0, cloud_blocked: true, tool: cloudBlockCheck.tool })}\n\n`,
+            ),
+          );
+          controller.close();
+        },
+      });
+      await (supabase as any).from("messages").insert([
+        { project_id: projectId, role: "user", content: message, mode },
+        { project_id: projectId, role: "assistant", content: blockText, mode },
+      ]);
+      return new Response(blockStream, {
+        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" },
+      });
+    }
 
     // Build system prompt based on mode + framework
     // Chat/plan modes get full codebase context (up to 60k chars); build mode embeds up to 80k.
@@ -184,6 +227,8 @@ export async function POST(req: NextRequest) {
       if (projectContext) systemPrompt += `\n\n${projectContext}`;
       systemPrompt += schemaBlock + summaryBlock + fileChangesBlock + workspaceKnowledgeBlock + knowledgeBlock;
     }
+
+    systemPrompt += cloudPermissionsBlock;
 
     // ── Design Systems: inject .lovable/system.md + rules from connected DS ───
     try {
@@ -323,13 +368,30 @@ The user has expressed frustration. Do the following:
 ---`;
     }
 
+    // Enrich build-mode user message with autonomous directive (models read this reliably)
+    let buildIntent: import("@/lib/ai/build-intent").BuildIntent | null = null;
+    let userMessage = message;
+    if (mode === "build") {
+      const { classifyBuildIntent, buildUserDirective } = await import("@/lib/ai/build-intent");
+      buildIntent = classifyBuildIntent(message);
+      userMessage = `${message}\n\n${buildUserDirective(buildIntent)}`;
+    }
+
+    // ── Subagents: read-only parallel investigation (Lovable-style) ─────────
+    let subagentSteps: SubagentStep[] = [];
+    if (shouldUseSubagents(message, mode, files.length)) {
+      const investigation = runSubagentInvestigation(message, files);
+      subagentSteps = investigation.steps;
+      if (investigation.contextBlock) systemPrompt += investigation.contextBlock;
+    }
+
     // Build messages array — support image attachments (vision)
     const userContent = imageBase64
       ? [
-          { type: "text" as const, text: message },
+          { type: "text" as const, text: userMessage },
           { type: "image_url" as const, image_url: { url: imageBase64 } },
         ]
-      : message;
+      : userMessage;
 
     const messages: import("@/lib/ai/provider").AIMessage[] = [
       { role: "system", content: systemPrompt },
@@ -392,11 +454,24 @@ The user has expressed frustration. Do the following:
       async start(controller) {
         let fullContent = "";
         let tokensUsed = 0;
+        let usedAutoFix = false;
         const streamedFilePaths = new Set<string>();
+
+        for (const step of subagentSteps) {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ subagent: step })}\n\n`),
+          );
+        }
 
         // Surface auto-attached skills to the client before the model output
         // begins, so the chat panel can render a "using skill: X" chip on the
         // pending assistant message.
+        if (mode === "build" && buildIntent) {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ build_intent: buildIntent })}\n\n`),
+          );
+        }
+
         if (attachedSkills.length > 0) {
           controller.enqueue(
             encoder.encode(
@@ -481,6 +556,7 @@ The user has expressed frustration. Do the following:
               const validationErrors = validateGeneratedFiles(finalFiles, existingFiles);
 
               if (shouldAutoFix(validationErrors) && validationErrors.length > 0) {
+                usedAutoFix = true;
                 // ── Auto-fix pass — send errors back to AI ────────────────
                 controller.enqueue(
                   encoder.encode(`data: ${JSON.stringify({ status: "fixing", message: `Auto-fixing ${validationErrors.length} issue(s)…` })}\n\n`)
@@ -616,24 +692,39 @@ The user has expressed frustration. Do the following:
             }
           }
 
-          // Save messages to DB — attach files_changed metadata to build/patch-mode assistant turns
-          const assistantMetadata = (mode === "build" || mode === "patch") && parsedFiles.length > 0
-            ? { files_changed: parsedFiles.map((f) => f.path) }
-            : null;
-          // Persist the human-readable message for build/patch turns — raw JSON
-          // in chat history reads as garbage on reload. Files live in
-          // project_files; files_changed metadata records what was touched.
+          const assistantMetadata: Record<string, unknown> | null =
+            (mode === "build" || mode === "patch") && parsedFiles.length > 0
+              ? { files_changed: parsedFiles.map((f) => f.path) }
+              : null;
+
+          const creditCost = computeCreditCost({
+            mode,
+            filesGenerated: parsedFiles.length,
+            tokensUsed,
+            usedSubagents: subagentSteps.length > 0,
+            usedAutoFix,
+          });
+
+          // Save messages to DB — attach files_changed + credits metadata
           const persistedContent =
             mode === "build" || mode === "patch"
               ? parseAIResponse(fullContent).message
               : fullContent;
           await (supabase as any).from("messages").insert([
             { project_id: projectId, role: "user", content: message, mode },
-            { project_id: projectId, role: "assistant", content: persistedContent, tokens_used: tokensUsed, model: model ?? (process.env.DEFAULT_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324", mode, metadata: assistantMetadata },
+            {
+              project_id: projectId,
+              role: "assistant",
+              content: persistedContent,
+              tokens_used: tokensUsed,
+              model: model ?? (process.env.DEFAULT_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324",
+              mode,
+              metadata: assistantMetadata
+                ? { ...assistantMetadata, credits_used: creditCost }
+                : { credits_used: creditCost },
+            },
           ]);
 
-          // Deduct credits (1 for chat, 2 for build)
-          const creditCost = mode === "build" ? 2 : 1;
           await (supabase as any).rpc("deduct_credits", {
             user_id: userId,
             amount: creditCost,
@@ -732,7 +823,13 @@ The user has expressed frustration. Do the following:
                 // client renders the raw JSON blob (escaped \n and all).
                 displayMessage:
                   mode === "build" || mode === "patch"
-                    ? parseAIResponse(fullContent).message
+                    ? (() => {
+                        const parsed = parseAIResponse(fullContent);
+                        const msg = parsed.message?.trim() ?? "";
+                        if (msg && msg !== "Changes applied." && !msg.startsWith("{")) return msg;
+                        if (buildIntent) return `${buildIntent.statusLabel.replace(/…$/, "")} — ${parsed.files.length} file${parsed.files.length === 1 ? "" : "s"} generated. Open preview to see the result.`;
+                        return msg || "Build complete. Open preview to see the result.";
+                      })()
                     : undefined,
               })}\n\n`
             )

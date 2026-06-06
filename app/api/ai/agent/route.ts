@@ -3,6 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { runAgent, type AgentStep } from "@/lib/ai/agent";
 import { detectLanguage } from "@/lib/ai/code-parser";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import {
+  parseCloudToolPermissions,
+  buildCloudPermissionsPromptBlock,
+  shouldBlockCloudAction,
+} from "@/lib/cloud/permissions";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -28,14 +33,20 @@ export async function POST(req: NextRequest) {
 
   // Check credits (agents cost more)
   const { data: profile } = await (supabase as any).from("profiles")
-    .select("credits, workspace_knowledge").eq("id", user.id).single();
+    .select("credits, workspace_knowledge, cloud_tool_permissions").eq("id", user.id).single();
   if (!profile || profile.credits < 5) {
     return NextResponse.json({ error: "Need at least 5 credits for Agent Mode" }, { status: 402 });
   }
 
-  // Fetch project knowledge — injected into the agent system prompt
+  const cloudPermissions = parseCloudToolPermissions(profile.cloud_tool_permissions);
+
   const { data: projectRow } = await (supabase as any)
-    .from("projects").select("knowledge").eq("id", projectId).single();
+    .from("projects").select("knowledge, cloud_enabled").eq("id", projectId).single();
+
+  const cloudBlock = shouldBlockCloudAction(task, cloudPermissions);
+  if (cloudBlock.blocked) {
+    return NextResponse.json({ error: cloudBlock.reason, cloud_blocked: true, tool: cloudBlock.tool }, { status: 403 });
+  }
   const projectKnowledge = (projectRow as { knowledge?: string | null } | null)?.knowledge?.trim();
   const workspaceKnowledge = (profile as { workspace_knowledge?: string | null }).workspace_knowledge?.trim();
 
@@ -43,6 +54,7 @@ export async function POST(req: NextRequest) {
   const knowledgeParts: string[] = [];
   if (workspaceKnowledge) knowledgeParts.push(`# Workspace Standards (always follow)\n${workspaceKnowledge}`);
   if (projectKnowledge) knowledgeParts.push(`# Project Instructions (takes precedence)\n${projectKnowledge}`);
+  knowledgeParts.push(buildCloudPermissionsPromptBlock(cloudPermissions, !!projectRow?.cloud_enabled));
   const knowledge = knowledgeParts.length > 0 ? knowledgeParts.join("\n\n---\n\n") : undefined;
 
   const { data: files } = await (supabase as any)

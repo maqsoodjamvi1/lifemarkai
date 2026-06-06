@@ -25,15 +25,19 @@ export async function proxy(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
   const { pathname } = request.nextUrl;
 
-  // Protected routes
   const protectedPaths = ["/dashboard", "/editor", "/settings", "/billing", "/team", "/integrations"];
   const isProtected = protectedPaths.some((p) => pathname.startsWith(p));
+  const isAuthPage = pathname === "/login" || pathname === "/signup";
+
+  // Public routes skip auth entirely — getUser() was adding ~10s per request when Supabase timed out.
+  if (!isProtected && !isAuthPage) {
+    return supabaseResponse;
+  }
+
+  const { data: { session } } = await supabase.auth.getSession();
+  const user = session?.user ?? null;
 
   if (isProtected && !user) {
     const url = request.nextUrl.clone();
@@ -42,8 +46,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Redirect logged-in users away from auth pages
-  if (user && (pathname === "/login" || pathname === "/signup")) {
+  if (user && isAuthPage) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
