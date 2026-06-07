@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "type-check": "tsc --noEmit",
-    "verify:parity": "npx tsx scripts/verify-lovable-gaps.ts && npx tsx scripts/verify-tier2-gaps.ts && npx tsx scripts/verify-tier3-gaps.ts && npx tsx scripts/verify-tier5-gaps.ts && npx tsx scripts/verify-tier6-gaps.ts && npx tsx scripts/verify-tier7-gaps.ts",
+    "verify:parity": "npx tsx scripts/verify-lovable-gaps.ts && npx tsx scripts/verify-tier2-gaps.ts && npx tsx scripts/verify-tier3-gaps.ts && npx tsx scripts/verify-tier5-gaps.ts && npx tsx scripts/verify-tier6-gaps.ts && npx tsx scripts/verify-tier7-gaps.ts && npx tsx scripts/verify-tier8-gaps.ts",
     "verify:production": "npx tsx scripts/verify-production-ready.ts",
     "verify:smoke": "node scripts/verify-production-smoke.mjs",
     "electron:dev": "NODE_ENV=development concurrently \"npm run dev\" \"wait-on http://localhost:3000 && electron electron/main.js\"",

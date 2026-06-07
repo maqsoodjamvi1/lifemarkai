@@ -3,11 +3,13 @@
  *
  * GET    /api/projects/db-backup?projectId=  — list backups
  * POST   /api/projects/db-backup             — create a backup (exports project_files as SQL seed + schema)
+ * POST   { action: "restore", projectId, content } — restore files from a SQL dump
  * DELETE /api/projects/db-backup?id=         — delete a backup record
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { parseSqlBackup } from "@/lib/backup/parse-sql-backup";
 
 // ── GET — list backups ────────────────────────────────────────────────────────
 export async function GET(req: NextRequest) {
@@ -36,7 +38,8 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { projectId, label } = await req.json() as { projectId: string; label?: string };
+  const body = await req.json() as { projectId: string; label?: string; action?: string; content?: string };
+  const { projectId, label, action, content } = body;
   if (!projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 });
 
   const admin = await createAdminClient();
@@ -46,6 +49,37 @@ export async function POST(req: NextRequest) {
     .from("projects").select("id, name").eq("id", projectId).eq("user_id", user.id).single();
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
+  if (action === "restore") {
+    if (!content?.trim()) {
+      return NextResponse.json({ error: "content is required for restore" }, { status: 400 });
+    }
+    const parsed = parseSqlBackup(content);
+    if (parsed.length === 0) {
+      return NextResponse.json({ error: "No files found in backup — invalid or empty dump" }, { status: 400 });
+    }
+
+    await (admin as any).from("project_files").delete().eq("project_id", projectId);
+
+    const rows = parsed.map((f) => ({
+      project_id: projectId,
+      path: f.path,
+      content: f.content,
+      language: f.language,
+    }));
+
+    const { error: insertErr } = await (admin as any).from("project_files").insert(rows);
+    if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
+
+    await (admin as any).from("projects").update({ updated_at: new Date().toISOString() }).eq("id", projectId);
+
+    return NextResponse.json({
+      ok: true,
+      restored: parsed.length,
+      files: parsed.map((f) => ({ path: f.path, content: f.content, language: f.language })),
+    });
+  }
+
+  // ── Create backup (default) ──
   // Fetch all files for the project (these represent the DB seed + schema for AI-generated apps)
   const { data: files } = await (admin as any)
     .from("project_files")

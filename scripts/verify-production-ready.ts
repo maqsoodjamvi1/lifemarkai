@@ -54,6 +54,7 @@ runScript("scripts/verify-tier3-gaps.ts", "P3");
 runScript("scripts/verify-tier5-gaps.ts", "P3b");
 runScript("scripts/verify-tier6-gaps.ts", "P3c");
 runScript("scripts/verify-tier7-gaps.ts", "P3d");
+runScript("scripts/verify-tier8-gaps.ts", "P3e");
 runScript("scripts/verify-editor-intelligence.ts", "P4");
 
 // ── Required migrations for parity features ─────────────────────────────────

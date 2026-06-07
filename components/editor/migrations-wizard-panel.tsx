@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { GitBranch, Plus, Check, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, FileText, Clock, AlertCircle , HardDrive, Download} from "lucide-react";
+import { useState, useMemo, useRef } from "react";
+import { GitBranch, Plus, Check, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, FileText, Clock, AlertCircle, HardDrive, Download, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ interface MigrationsWizardPanelProps {
   projectId: string;
   files: { path: string; content: string }[];
   onInsertCode: (prompt: string) => void;
+  onFilesUpdate?: (files: Array<{ path: string; content: string; language?: string }>) => void;
 }
 
 interface Migration {
@@ -48,7 +49,7 @@ const MIGRATION_TEMPLATES = [
   { label: "Add FK", description: "Add foreign key constraint", sql: "ALTER TABLE <table>\n  ADD CONSTRAINT fk_<name>\n  FOREIGN KEY (<column>)\n  REFERENCES <ref_table>(id)\n  ON DELETE CASCADE;" },
 ];
 
-export function MigrationsWizardPanel({ projectId, files, onInsertCode }: MigrationsWizardPanelProps) {
+export function MigrationsWizardPanel({ projectId, files, onInsertCode, onFilesUpdate }: MigrationsWizardPanelProps) {
   const migrations = useMemo(() => parseMigrations(files), [files]);
   const [description, setDescription] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -62,6 +63,8 @@ export function MigrationsWizardPanel({ projectId, files, onInsertCode }: Migrat
   const [creatingBackup, setCreatingBackup] = useState(false);
   const [deletingBackup, setDeletingBackup] = useState<string|null>(null);
   const [backupLabel, setBackupLabel] = useState("");
+  const [restoringBackup, setRestoringBackup] = useState(false);
+  const restoreInputRef = useRef<HTMLInputElement>(null);
 
   async function generateMigration() {
     if (!description.trim() || generating) return;
@@ -340,8 +343,54 @@ Migration index: ${nextIdx}`;
           </div>
 
           <p className="text-[10px] text-muted-foreground">
-            Exports all project files as a downloadable SQL archive. Stored locally — restore by uploading the file.
+            Exports all project files as a downloadable SQL archive. Restore by uploading a previously exported .sql file.
           </p>
+
+          <input
+            ref={restoreInputRef}
+            type="file"
+            accept=".sql,text/plain"
+            className="hidden"
+            onChange={async (e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              setRestoringBackup(true);
+              try {
+                const content = await file.text();
+                const res = await fetch("/api/projects/db-backup", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ action: "restore", projectId, content }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                  toast({ title: "Restore failed", description: data.error ?? "Invalid backup file", variant: "destructive" });
+                  return;
+                }
+                if (data.files && onFilesUpdate) {
+                  onFilesUpdate(data.files);
+                }
+                toast({
+                  title: "Backup restored",
+                  description: `${data.restored} file${data.restored === 1 ? "" : "s"} restored from ${file.name}`,
+                });
+              } finally {
+                setRestoringBackup(false);
+                e.target.value = "";
+              }
+            }}
+          />
+
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 px-3 text-xs gap-1.5 w-full"
+            disabled={restoringBackup}
+            onClick={() => restoreInputRef.current?.click()}
+          >
+            {restoringBackup ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+            Restore from .sql file
+          </Button>
 
           {/* Backup list */}
           {backupsLoading ? (

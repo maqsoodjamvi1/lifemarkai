@@ -275,7 +275,7 @@ export function SecondaryPanelContent(ctx: LazyPanelContext) {
   }
   if (rightPanel === "secrets") return <SecretsVaultPanel projectId={project.id} />;
   if (rightPanel === "migrations") {
-    return <MigrationsWizardPanel projectId={project.id} files={files} onInsertCode={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />;
+    return <MigrationsWizardPanel projectId={project.id} files={files} onInsertCode={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} onFilesUpdate={handleFilesUpdate} />;
   }
   if (rightPanel === "modelcmp") {
     return <ModelComparePanel projectId={project.id} onSendToChat={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />;

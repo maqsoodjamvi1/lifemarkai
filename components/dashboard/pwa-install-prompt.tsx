@@ -34,11 +34,6 @@ export function PwaInstallPrompt() {
     }
     if (dismissedRecently()) return;
 
-    // Only show on mobile or once browser fires the install event
-    const isMobile = typeof window !== "undefined"
-      && /Mobi|Android|iPhone|iPad/i.test(window.navigator.userAgent);
-    if (!isMobile) return;
-
     function handle(e: Event) {
       e.preventDefault();
       setEvent(e as BeforeInstallPromptEvent);
