@@ -8,7 +8,7 @@ import { FeaturedTemplates } from "./featured-templates";
 import { getRecentProjects } from "@/hooks/use-recent-projects";
 import type { Project } from "@/types/database";
 
-type TabId = "mine" | "recent" | "starred" | "shared" | "templates";
+type TabId = "mine" | "recent" | "starred" | "shared" | "visitors" | "templates";
 
 interface TemplateMeta {
   id: string;
@@ -31,6 +31,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "recent", label: "Recently viewed" },
   { id: "starred", label: "Starred" },
   { id: "shared", label: "Shared with me" },
+  { id: "visitors", label: "Most visitors" },
   { id: "templates", label: "Templates" },
 ];
 
@@ -44,6 +45,11 @@ export function ProjectBrowserTabs({ projects, templates, initialTab = "mine" }:
       const recentIds = getRecentProjects().map((r) => r.id);
       const byId = new Map(projects.map((p) => [p.id, p]));
       return recentIds.map((id) => byId.get(id)).filter(Boolean) as Project[];
+    }
+    if (tab === "visitors") {
+      return [...projects]
+        .filter((p) => (p.total_views ?? 0) > 0)
+        .sort((a, b) => (b.total_views ?? 0) - (a.total_views ?? 0));
     }
     return projects;
   }, [projects, tab]);
@@ -83,10 +89,12 @@ export function ProjectBrowserTabs({ projects, templates, initialTab = "mine" }:
               ? "Star projects from the editor to see them here."
               : tab === "recent"
                 ? "Open a project to see it in recently viewed."
-                : "No projects yet — use the prompt above to create one."}
+                : tab === "visitors"
+                  ? "No visitor data yet — deploy a project and share it to see traffic here."
+                  : "No projects yet — use the prompt above to create one."}
         </div>
       ) : (
-        <ProjectsGrid projects={filtered} />
+        <ProjectsGrid projects={filtered} emphasizeViews={tab === "visitors"} />
       )}
     </div>
   );

@@ -510,6 +510,27 @@ function formatMsgTime(isoString: string | null | undefined): string {
   return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + time;
 }
 
+/** Lovable-style date divider label between messages on different days */
+function formatDateSeparator(isoString: string | null | undefined): string {
+  if (!isoString) return "";
+  const d = new Date(isoString);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (isToday) return `Today at ${time}`;
+  if (isYesterday) return `Yesterday at ${time}`;
+  const datePart = d.toLocaleDateString([], { month: "short", day: "numeric" });
+  return `${datePart} at ${time}`;
+}
+
+function sameCalendarDay(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return true;
+  return new Date(a).toDateString() === new Date(b).toDateString();
+}
+
 /** Group a flat message array into per-turn threads (each user message starts a new thread) */
 function groupIntoThreads(msgs: Message[]): Message[][] {
   const threads: Message[][] = [];
@@ -2554,9 +2575,21 @@ ${(f.content ?? "").slice(0, 8000)}
                 </div>
               )}
               <AnimatePresence initial={false}>
-                {!isCollapsed && thread.map((msg) => (
+                {!isCollapsed && thread.map((msg, msgIdx) => {
+                  const prevMsg = msgIdx > 0 ? thread[msgIdx - 1] : null;
+                  const showDateSep = !sameCalendarDay(msg.created_at, prevMsg?.created_at);
+                  return (
+                  <div key={msg.id}>
+                    {showDateSep && (
+                      <div className="flex items-center gap-3 my-4 px-1">
+                        <div className="flex-1 h-px bg-border/40" />
+                        <span className="text-[11px] text-muted-foreground/70 whitespace-nowrap shrink-0">
+                          {formatDateSeparator(msg.created_at)}
+                        </span>
+                        <div className="flex-1 h-px bg-border/40" />
+                      </div>
+                    )}
             <motion.div
-              key={msg.id}
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
@@ -3128,7 +3161,9 @@ ${(f.content ?? "").slice(0, 8000)}
                 )}
               </div>
             </motion.div>
-                ))}
+                  </div>
+                );
+                })}
               </AnimatePresence>
             </div>
           );

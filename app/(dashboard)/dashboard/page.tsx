@@ -48,7 +48,11 @@ export default async function DashboardPage({
     profile?.full_name?.split(" ")[0] ?? user.email?.split("@")[0] ?? "Builder";
 
   const initialTab =
-    tab === "starred" ? "starred" : tab === "recent" ? "recent" : tab === "shared" ? "shared" : "mine";
+    tab === "starred" ? "starred"
+    : tab === "recent" ? "recent"
+    : tab === "shared" ? "shared"
+    : tab === "visitors" ? "visitors"
+    : "mine";
 
   return (
     <div className="flex-1 overflow-auto">

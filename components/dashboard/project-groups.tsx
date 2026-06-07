@@ -24,8 +24,32 @@ export interface ProjectGroup {
   name: string;
   color: string;
   position: number;
+  parent_id?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Flatten groups into tree order with depth (max 3 levels). */
+function buildGroupTree(groups: ProjectGroup[]): Array<{ group: ProjectGroup; depth: number }> {
+  const byParent = new Map<string | null, ProjectGroup[]>();
+  for (const g of groups) {
+    const key = g.parent_id ?? null;
+    if (!byParent.has(key)) byParent.set(key, []);
+    byParent.get(key)!.push(g);
+  }
+  for (const list of byParent.values()) {
+    list.sort((a, b) => a.position - b.position || a.name.localeCompare(b.name));
+  }
+  const result: Array<{ group: ProjectGroup; depth: number }> = [];
+  function walk(parentId: string | null, depth: number) {
+    if (depth > 2) return;
+    for (const g of byParent.get(parentId) ?? []) {
+      result.push({ group: g, depth });
+      walk(g.id, depth + 1);
+    }
+  }
+  walk(null, 0);
+  return result;
 }
 
 interface ProjectGroupsProps {
@@ -77,11 +101,13 @@ function GroupDialog({
   open,
   onClose,
   initial,
+  title,
   onSave,
 }: {
   open: boolean;
   onClose: () => void;
   initial?: { name: string; color: string };
+  title?: string;
   onSave: (name: string, color: string) => Promise<void>;
 }) {
   const [name, setName] = useState(initial?.name ?? "");
@@ -111,7 +137,7 @@ function GroupDialog({
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>{initial ? "Rename group" : "New group"}</DialogTitle>
+          <DialogTitle>{title ?? (initial ? "Rename group" : "New group")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3 py-1">
           <Input
@@ -154,6 +180,7 @@ export function ProjectGroups({
   const [groups, setGroups] = useState<ProjectGroup[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createParentId, setCreateParentId] = useState<string | null>(null);
   const [editingGroup, setEditingGroup] = useState<ProjectGroup | null>(null);
 
   const loadGroups = useCallback(async () => {
@@ -171,9 +198,14 @@ export function ProjectGroups({
     const res = await fetch("/api/projects/groups", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, color }),
+      body: JSON.stringify({
+        name,
+        color,
+        ...(createParentId ? { parent_id: createParentId } : {}),
+      }),
     });
     if (res.ok) {
+      setCreateParentId(null);
       await loadGroups();
       onGroupsChange();
     }
@@ -229,11 +261,11 @@ export function ProjectGroups({
         {loading ? (
           <div className="px-2.5 py-1 text-xs text-muted-foreground">Loading…</div>
         ) : (
-          groups.map((group) => {
+          buildGroupTree(groups).map(({ group, depth }) => {
             const isActive = activeGroupId === group.id;
             const count = groupCounts[group.id] ?? 0;
             return (
-              <div key={group.id} className="flex items-center gap-0.5 group/row">
+              <div key={group.id} className="flex items-center gap-0.5 group/row" style={{ paddingLeft: depth * 12 }}>
                 <button
                   onClick={() => onGroupSelect(group.id)}
                   className={`flex-1 flex items-center gap-2 px-2.5 py-1.5 rounded-md text-sm transition-colors text-left min-w-0 ${
@@ -261,7 +293,18 @@ export function ProjectGroups({
                       <MoreHorizontal className="w-3.5 h-3.5 text-muted-foreground" />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-36">
+                  <DropdownMenuContent align="end" className="w-40">
+                    {depth < 2 && (
+                      <DropdownMenuItem
+                        className="text-xs gap-2"
+                        onClick={() => {
+                          setCreateParentId(group.id);
+                          setCreateOpen(true);
+                        }}
+                      >
+                        <Plus className="w-3.5 h-3.5" />New subfolder
+                      </DropdownMenuItem>
+                    )}
                     <DropdownMenuItem
                       className="text-xs gap-2"
                       onClick={() => setEditingGroup(group)}
@@ -284,7 +327,10 @@ export function ProjectGroups({
 
         {/* New group button */}
         <button
-          onClick={() => setCreateOpen(true)}
+          onClick={() => {
+            setCreateParentId(null);
+            setCreateOpen(true);
+          }}
           className="flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors w-full mt-0.5"
         >
           <Plus className="w-3.5 h-3.5" />
@@ -295,7 +341,11 @@ export function ProjectGroups({
       {/* Create dialog */}
       <GroupDialog
         open={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={() => {
+          setCreateOpen(false);
+          setCreateParentId(null);
+        }}
+        title={createParentId ? "New subfolder" : "New group"}
         onSave={handleCreate}
       />
 

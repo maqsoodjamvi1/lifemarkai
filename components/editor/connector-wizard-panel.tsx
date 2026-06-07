@@ -30,7 +30,7 @@ interface Connector {
   id: string;
   name: string;
   description: string;
-  category: "payments" | "database" | "analytics" | "Analytics" | "communication" | "Communication" | "storage" | "auth" | "ecommerce" | "devtools" | "AI" | "Finance" | "Project Management";
+  category: "payments" | "database" | "analytics" | "Analytics" | "communication" | "Communication" | "storage" | "auth" | "ecommerce" | "crm" | "devtools" | "AI" | "Finance" | "Project Management";
   icon: string;          // emoji or URL
   color: string;         // Tailwind bg class
   docsUrl: string;
@@ -104,6 +104,27 @@ const CONNECTORS: Connector[] = [
       "Click 'Apply to project' to add Airtable integration",
     ],
     integrationPrompt: "Integrate Airtable into this app using the official airtable npm package. Use AIRTABLE_API_KEY and AIRTABLE_BASE_ID env vars. Create a lib/airtable.ts client. Add API routes: GET /api/airtable/records to fetch all records from the first table, POST /api/airtable/records to create a new record, PATCH /api/airtable/records/[id] to update a record. Add a simple CRUD UI page that lists records in a table and allows adding/editing/deleting rows.",
+  },
+  {
+    id: "hubspot",
+    name: "HubSpot",
+    description: "Sync contacts, deals, and CRM events with HubSpot",
+    category: "crm",
+    icon: "🧡",
+    color: "bg-[#FF7A59]/10 border-[#FF7A59]/20",
+    docsUrl: "https://developers.hubspot.com/docs/api/overview",
+    npm: ["@hubspot/api-client"],
+    envVars: [
+      { key: "HUBSPOT_ACCESS_TOKEN", description: "HubSpot private app access token", example: "pat-na1-..." },
+      { key: "HUBSPOT_PORTAL_ID", description: "HubSpot portal (account) ID", example: "12345678" },
+    ],
+    setupSteps: [
+      "In HubSpot, go to Settings → Integrations → Private Apps",
+      "Create a private app with crm.objects.contacts read/write scopes",
+      "Copy the access token and your portal ID",
+      "Click 'Apply to project' to add HubSpot CRM integration",
+    ],
+    integrationPrompt: "Integrate HubSpot CRM into this app. Install @hubspot/api-client. Use HUBSPOT_ACCESS_TOKEN and HUBSPOT_PORTAL_ID env vars. Create lib/hubspot.ts with a configured Client. Add API routes: GET /api/hubspot/contacts (list contacts), POST /api/hubspot/contacts (create contact with email, firstname, lastname), GET /api/hubspot/deals (list deals). Add a /crm page showing a contacts table with search and a form to add new contacts. Wire signup and lead-capture forms to create HubSpot contacts automatically. Handle rate limits gracefully with retry.",
   },
   {
     id: "slack",

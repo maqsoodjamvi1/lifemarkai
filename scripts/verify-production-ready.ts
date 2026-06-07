@@ -51,12 +51,14 @@ function runScript(script: string, id: string) {
 runScript("scripts/verify-lovable-gaps.ts", "P1");
 runScript("scripts/verify-tier2-gaps.ts", "P2");
 runScript("scripts/verify-tier3-gaps.ts", "P3");
+runScript("scripts/verify-tier5-gaps.ts", "P3b");
 runScript("scripts/verify-editor-intelligence.ts", "P4");
 
 // ── Required migrations for parity features ─────────────────────────────────
 const REQUIRED_MIGRATIONS = [
   "058_element_comments.sql",
   "061_cloud_tool_permissions.sql",
+  "062_nested_project_groups.sql",
 ];
 for (const m of REQUIRED_MIGRATIONS) {
   assert("P5", `migration ${m}`, existsSync(join(ROOT, "supabase/migrations", m)));

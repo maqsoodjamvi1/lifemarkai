@@ -8,7 +8,7 @@ import {
   MoreHorizontal, Globe, Github, Rocket, Clock, Lock,
   Archive, Trash2, ExternalLink, Code2, FolderOpen, Download,
   Search, SortAsc, X, Copy, Loader2, Star, FileText, ChevronDown,
-  CheckSquare, Square, CheckCheck, LayoutTemplate, Zap, StickyNote,
+  CheckSquare, Square, CheckCheck, LayoutTemplate, Zap, StickyNote, Eye,
 } from "lucide-react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
@@ -23,6 +23,8 @@ import { ProjectThumbnail } from "@/components/dashboard/project-thumbnail";
 
 interface ProjectsGridProps {
   projects: Project[];
+  /** When true, show visitor counts prominently (Most visitors tab). */
+  emphasizeViews?: boolean;
 }
 
 type SortKey = "updated" | "created" | "name" | "deploys" | "oldest" | "popular";
@@ -86,7 +88,7 @@ const STATUS_FILTERS: { id: StatusFilter; label: string }[] = [
   { id: "draft",    label: "Draft" },
 ];
 
-export function ProjectsGrid({ projects }: ProjectsGridProps) {
+export function ProjectsGrid({ projects, emphasizeViews = false }: ProjectsGridProps) {
   const router = useRouter();
   const confirm = useConfirm();
   const [deletingId, setDeletingId]         = useState<string | null>(null);
@@ -729,6 +731,15 @@ export function ProjectsGrid({ projects }: ProjectsGridProps) {
                           </div>
                         );
                       })()}
+                      {(emphasizeViews || (project.total_views ?? 0) > 0) && (
+                        <div
+                          className={`flex items-center gap-1 text-xs ${emphasizeViews ? "text-violet-400 font-medium" : "text-muted-foreground"}`}
+                          title="Total page views"
+                        >
+                          <Eye className="w-3 h-3" />
+                          <span>{(project.total_views ?? 0).toLocaleString()}</span>
+                        </div>
+                      )}
                       {(() => {
                         const fc = (project as any).project_files?.[0]?.count;
                         return fc != null && fc > 0 ? (
