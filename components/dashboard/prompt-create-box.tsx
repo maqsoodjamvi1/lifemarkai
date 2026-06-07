@@ -1,14 +1,28 @@
 "use client";
 
 import { useState, useRef } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Sparkles, ArrowRight, Loader2, Code2, Zap, Box, Wind,
-  Wand2, RefreshCw, ChevronDown,
+  Wand2, RefreshCw, ChevronDown, Plus, Paperclip, Palette,
+  Link2, Database, Mic, Map,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
+
+type CreateMode = "build" | "plan";
+
+interface PromptCreateBoxProps {
+  variant?: "default" | "hero";
+}
 
 const FRAMEWORKS = [
   { id: "react",  label: "React",    icon: Code2, color: "text-cyan-400 border-cyan-500/30 hover:bg-cyan-500/10" },
@@ -42,10 +56,13 @@ const CONCEPT_ACCENTS = [
   { bg: "bg-emerald-500/10",border: "border-emerald-500/30",text: "text-emerald-400",ring: "ring-emerald-500/40"},
 ];
 
-export function PromptCreateBox() {
+export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
   const [prompt, setPrompt] = useState("");
   const [framework, setFramework] = useState<Framework>("react");
+  const [createMode, setCreateMode] = useState<CreateMode>("build");
   const [loading, setLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const isHero = variant === "hero";
   const [brainstorming, setBrainstorming] = useState(false);
   const [concepts, setConcepts] = useState<AppConcept[]>([]);
   const [buildingConceptIdx, setBuildingConceptIdx] = useState<number | null>(null);
@@ -67,7 +84,8 @@ export function PromptCreateBox() {
       });
       if (!res.ok) throw new Error(await res.text());
       const project = await res.json();
-      router.push(`/editor/${project.id}?prompt=${encodeURIComponent(trimmed)}`);
+      const modeParam = createMode === "plan" ? "&mode=plan" : "";
+      router.push(`/editor/${project.id}?prompt=${encodeURIComponent(trimmed)}${modeParam}`);
     } catch (err: unknown) {
       toast({
         title: "Failed to create project",
@@ -89,7 +107,8 @@ export function PromptCreateBox() {
       });
       if (!res.ok) throw new Error(await res.text());
       const project = await res.json();
-      router.push(`/editor/${project.id}?prompt=${encodeURIComponent(concept.prompt)}`);
+      const modeParam = createMode === "plan" ? "&mode=plan" : "";
+      router.push(`/editor/${project.id}?prompt=${encodeURIComponent(concept.prompt)}${modeParam}`);
     } catch (err: unknown) {
       toast({
         title: "Failed to create project",
@@ -182,6 +201,10 @@ export function PromptCreateBox() {
     }
   }
 
+  const cardClass = isHero
+    ? "relative rounded-2xl border border-white/80 bg-white/95 shadow-xl backdrop-blur-sm overflow-hidden text-left"
+    : "relative rounded-2xl border border-border bg-card shadow-lg overflow-hidden";
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -189,10 +212,28 @@ export function PromptCreateBox() {
       transition={{ duration: 0.4 }}
       className="w-full"
     >
+      <input
+        ref={fileInputRef}
+        type="file"
+        className="hidden"
+        accept="image/*,.pdf,.txt,.md,.json"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            toast({
+              title: "Attachment noted",
+              description: `"${file.name}" — attach files in the editor after your project opens.`,
+            });
+          }
+          e.target.value = "";
+        }}
+      />
+
       {/* Main prompt card */}
-      <div className="relative rounded-2xl border border-border bg-card shadow-lg overflow-hidden">
-        {/* Subtle gradient top bar */}
-        <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-violet-500 via-blue-500 to-violet-500 opacity-60" />
+      <div className={cardClass}>
+        {!isHero && (
+          <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-violet-500 via-blue-500 to-violet-500 opacity-60" />
+        )}
 
         <div className="p-4 pt-5">
           <textarea
@@ -200,62 +241,173 @@ export function PromptCreateBox() {
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="What do you want to build? e.g. 'A SaaS dashboard with dark mode, user auth, and billing...'"
-            className="w-full bg-transparent resize-none outline-none text-sm leading-relaxed placeholder:text-muted-foreground min-h-[72px] max-h-40"
+            placeholder={
+              isHero
+                ? "Describe what you want to build…"
+                : "What do you want to build? e.g. 'A SaaS dashboard with dark mode, user auth, and billing...'"
+            }
+            className={`w-full bg-transparent resize-none outline-none text-sm leading-relaxed placeholder:text-muted-foreground min-h-[72px] max-h-40 ${
+              isHero ? "text-slate-800" : ""
+            }`}
             disabled={loading}
           />
 
-          <div className="flex items-center justify-between gap-3 mt-3 pt-3 border-t border-border/50">
-            {/* Framework pills */}
+          <div className={`flex items-center justify-between gap-3 mt-3 pt-3 ${isHero ? "border-t border-slate-200/80" : "border-t border-border/50"}`}>
             <div className="flex items-center gap-1.5 flex-wrap">
-              {FRAMEWORKS.map((fw) => {
-                const Icon = fw.icon;
-                const active = framework === fw.id;
-                return (
-                  <button
-                    key={fw.id}
-                    onClick={() => setFramework(fw.id)}
-                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-medium transition-all ${fw.color} ${
-                      active
-                        ? "border-opacity-100 bg-opacity-20 ring-1 ring-current ring-opacity-30"
-                        : "border-transparent"
-                    }`}
-                  >
-                    <Icon className="w-3 h-3" />
-                    {fw.label}
-                  </button>
-                );
-              })}
+              {isHero ? (
+                <>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 transition-colors"
+                        title="Add context"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-48">
+                      <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
+                        <Paperclip className="w-4 h-4 mr-2" /> Attach
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild>
+                        <Link href="/templates"><Palette className="w-4 h-4 mr-2" /> Design</Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild>
+                        <Link href="/connectors"><Link2 className="w-4 h-4 mr-2" /> Connectors</Link>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild>
+                        <Link href="/dashboard/settings?tab=cloud"><Database className="w-4 h-4 mr-2" /> Databases</Link>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex items-center gap-1 h-8 px-2.5 rounded-lg border border-slate-200 bg-slate-50 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                      >
+                        {FRAMEWORKS.find((f) => f.id === framework)?.label}
+                        <ChevronDown className="w-3 h-3 opacity-60" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start">
+                      {FRAMEWORKS.map((fw) => {
+                        const Icon = fw.icon;
+                        return (
+                          <DropdownMenuItem key={fw.id} onClick={() => setFramework(fw.id)}>
+                            <Icon className="w-4 h-4 mr-2" /> {fw.label}
+                          </DropdownMenuItem>
+                        );
+                      })}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </>
+              ) : (
+                FRAMEWORKS.map((fw) => {
+                  const Icon = fw.icon;
+                  const active = framework === fw.id;
+                  return (
+                    <button
+                      key={fw.id}
+                      onClick={() => setFramework(fw.id)}
+                      className={`flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-medium transition-all ${fw.color} ${
+                        active
+                          ? "border-opacity-100 bg-opacity-20 ring-1 ring-current ring-opacity-30"
+                          : "border-transparent"
+                      }`}
+                    >
+                      <Icon className="w-3 h-3" />
+                      {fw.label}
+                    </button>
+                  );
+                })
+              )}
             </div>
 
-            {/* Action buttons */}
             <div className="flex items-center gap-2 shrink-0">
-              {/* Brainstorm / Get ideas button */}
-              <button
-                onClick={handleBrainstorm}
-                disabled={!prompt.trim() || brainstorming || loading}
-                className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Generate 3 app concepts from your idea"
-              >
-                {brainstorming ? (
-                  <><Loader2 className="w-3 h-3 animate-spin" /> Thinking…</>
-                ) : (
-                  <><Wand2 className="w-3 h-3" /> Get ideas</>
-                )}
-              </button>
+              {isHero && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    toast({
+                      title: "Voice input",
+                      description: "Open your project in the editor and use the mic button in chat.",
+                    })
+                  }
+                  className="flex items-center justify-center w-8 h-8 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50"
+                  title="Voice input (in editor)"
+                >
+                  <Mic className="w-4 h-4" />
+                </button>
+              )}
 
-              {/* Build it button */}
-              <Button
-                onClick={() => void handleCreate()}
-                disabled={!prompt.trim() || loading}
-                className="h-8 px-4 gap-1.5 text-xs bg-gradient-brand text-white hover:opacity-90"
-              >
-                {loading && buildingConceptIdx === null ? (
-                  <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Building…</>
-                ) : (
-                  <><Sparkles className="w-3.5 h-3.5" /> Build it <ArrowRight className="w-3 h-3" /></>
-                )}
-              </Button>
+              {!isHero && (
+                <button
+                  onClick={handleBrainstorm}
+                  disabled={!prompt.trim() || brainstorming || loading}
+                  className="flex items-center gap-1.5 h-8 px-3 rounded-lg border border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Generate 3 app concepts from your idea"
+                >
+                  {brainstorming ? (
+                    <><Loader2 className="w-3 h-3 animate-spin" /> Thinking…</>
+                  ) : (
+                    <><Wand2 className="w-3 h-3" /> Get ideas</>
+                  )}
+                </button>
+              )}
+
+              {isHero ? (
+                <div className="flex items-center rounded-lg overflow-hidden border border-slate-900/10">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex items-center gap-1 h-8 px-2.5 text-xs font-medium bg-slate-900/5 border-r border-slate-200"
+                      >
+                        {createMode === "plan" ? (
+                          <><Map className="w-3 h-3" /> Plan</>
+                        ) : (
+                          <><Sparkles className="w-3 h-3" /> Build</>
+                        )}
+                        <ChevronDown className="w-3 h-3 opacity-60" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => setCreateMode("build")}>
+                        <Sparkles className="w-4 h-4 mr-2" /> Build — generate code
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setCreateMode("plan")}>
+                        <Map className="w-4 h-4 mr-2" /> Plan — architecture first
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <Button
+                    onClick={() => void handleCreate()}
+                    disabled={!prompt.trim() || loading}
+                    className="h-8 px-4 gap-1 rounded-none text-xs bg-slate-900 text-white hover:bg-slate-800"
+                  >
+                    {loading && buildingConceptIdx === null ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <ArrowRight className="w-4 h-4" />
+                    )}
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  onClick={() => void handleCreate()}
+                  disabled={!prompt.trim() || loading}
+                  className="h-8 px-4 gap-1.5 text-xs bg-gradient-brand text-white hover:opacity-90"
+                >
+                  {loading && buildingConceptIdx === null ? (
+                    <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Building…</>
+                  ) : (
+                    <><Sparkles className="w-3.5 h-3.5" /> Build it <ArrowRight className="w-3 h-3" /></>
+                  )}
+                </Button>
+              )}
             </div>
           </div>
         </div>

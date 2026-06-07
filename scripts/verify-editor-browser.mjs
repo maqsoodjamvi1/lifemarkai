@@ -88,6 +88,16 @@ log("verify-editor-browser", "editor fetch", {
   hasEditorLayout: html.includes("EditorLayout") || html.includes("Loading chat"),
 }, "H4");
 
+const promptRes = await fetch(
+  `${BASE}/editor/${projectId}?prompt=${encodeURIComponent("Build a hello world page")}&mode=build`,
+  { headers: { Cookie: cookie }, redirect: "manual" },
+);
+log("verify-editor-browser", "editor with starter prompt", {
+  projectId,
+  status: promptRes.status,
+  ok: promptRes.status === 200,
+}, "H7");
+
 if (editorRes.status !== 200) {
   console.error("Editor fetch failed — status", editorRes.status);
   process.exit(1);

@@ -105,7 +105,7 @@ export function getSmartPlaceholder(
   ctx: EditorIntelContext & { streaming: boolean; isLocked: boolean },
 ): string {
   if (ctx.isLocked) return "Switch to Test mode to make AI edits…";
-  if (ctx.streaming) return "Message will be queued…";
+  if (ctx.streaming) return "queue follow-up…";
 
   const stage = stageFromCtx(ctx);
 

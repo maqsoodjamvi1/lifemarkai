@@ -9,7 +9,7 @@ import {
   CreditCard, Users, BookTemplate, LogOut,
   ChevronRight, Plus, Sparkles, BarChart3,
   ClipboardList, Shield, KeyRound, Server, Brain,
-  MessageCircle, BookOpen, Inbox,
+  MessageCircle, BookOpen, Inbox, Star, History,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -21,6 +21,7 @@ import type { User } from "@supabase/supabase-js";
 interface DashboardSidebarProps {
   user: User;
   profile: Profile | null;
+  recentProjects?: { id: string; name: string; updated_at?: string | null }[];
 }
 
 const navItems = [
@@ -58,7 +59,7 @@ const PLAN_CREDIT_LIMITS: Record<string, number> = {
   enterprise: 10000,
 };
 
-export function DashboardSidebar({ user, profile }: DashboardSidebarProps) {
+export function DashboardSidebar({ user, profile, recentProjects = [] }: DashboardSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createClient();
@@ -120,7 +121,68 @@ export function DashboardSidebar({ user, profile }: DashboardSidebarProps) {
 
       {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        {navItems.map((item) => {
+        {navItems.slice(0, 1).map((item) => {
+          const active = pathname === item.href || pathname.startsWith(item.href + "/");
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all group ${
+                active
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : "text-sidebar-foreground hover:bg-sidebar-accent/50"
+              }`}
+            >
+              <item.icon className={`w-4 h-4 ${active ? "text-sidebar-primary" : "text-muted-foreground group-hover:text-foreground"}`} />
+              {item.label}
+              {active && <ChevronRight className="w-3 h-3 ml-auto opacity-50" />}
+            </Link>
+          );
+        })}
+
+        {/* Recents — Lovable-style sidebar rail */}
+        {recentProjects.length > 0 && (
+          <div className="pt-3 pb-1">
+            <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Recents
+            </p>
+            {recentProjects.slice(0, 8).map((p) => (
+              <Link
+                key={p.id}
+                href={`/editor/${p.id}`}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground truncate"
+                title={p.name}
+              >
+                <History className="w-3 h-3 shrink-0 opacity-60" />
+                <span className="truncate">{p.name}</span>
+              </Link>
+            ))}
+          </div>
+        )}
+
+        <div className="pt-2 pb-1">
+          <p className="px-3 mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Projects
+          </p>
+          <Link
+            href="/dashboard/projects"
+            className={`flex items-center gap-3 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              pathname === "/dashboard/projects"
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground"
+            }`}
+          >
+            <FolderOpen className="w-3.5 h-3.5" /> All projects
+          </Link>
+          <Link
+            href="/dashboard?tab=starred"
+            className="flex items-center gap-3 px-3 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:bg-sidebar-accent/50 hover:text-foreground"
+          >
+            <Star className="w-3.5 h-3.5" /> Starred
+          </Link>
+        </div>
+
+        {navItems.slice(1).map((item) => {
           const active = pathname === item.href || pathname.startsWith(item.href + "/");
           return (
             <Link

@@ -19,6 +19,7 @@ import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { EditorTopBar } from "./editor-top-bar";
+import { EditorPaymentBanner } from "./editor-payment-banner";
 import {
   LovableToolsOverlay,
   LovableOverlayHeader,
@@ -133,10 +134,11 @@ interface EditorLayoutProps {
   initialMessages: Message[];
   profile: Profile | null;
   starterPrompt?: string;
+  starterMode?: EditorMode;
   autoDeploy?: boolean;
 }
 
-export function EditorLayout({ project, initialFiles, initialMessages, profile, starterPrompt, autoDeploy }: EditorLayoutProps) {
+export function EditorLayout({ project, initialFiles, initialMessages, profile, starterPrompt, starterMode, autoDeploy }: EditorLayoutProps) {
   // Record this project visit for the dashboard "Recently visited" rail
   useRecordProjectVisit({ id: project.id, name: project.name, framework: project.framework ?? "react" });
 
@@ -152,6 +154,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
       null
   );
   const [editorMode, setEditorMode] = useState<EditorMode>(() => {
+    if (starterMode) return starterMode;
     if (starterPrompt) {
       return resolvePromptMode(starterPrompt, {
         fileCount: initialFiles.length,
@@ -260,6 +263,16 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   useEffect(() => {
     setCredits(profile?.credits ?? 0);
   }, [profile]);
+
+  // Sync live credit balance (dev auto-grants empty accounts via /api/billing/credits)
+  useEffect(() => {
+    fetch("/api/billing/credits")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d && typeof d.credits === "number") setCredits(d.credits);
+      })
+      .catch(() => {});
+  }, [project.id]);
 
   // Auto-switch left panel when mode changes to agent
   // NOTE: plan mode now uses the chat panel (leftPanel stays "chat"), so we don't auto-switch for it
@@ -561,6 +574,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
           }}
         />
       )}
+      {!focusMode && <EditorPaymentBanner profile={profile} credits={credits} />}
 
       {/* ── Mobile layout ─────────────────────────────────────────────────── */}
       {isMobile && (

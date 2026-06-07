@@ -11,9 +11,10 @@ import type { User } from "@supabase/supabase-js";
 interface DashboardHeaderProps {
   user: User;
   profile: Profile | null;
+  compact?: boolean;
 }
 
-export function DashboardHeader({ user, profile }: DashboardHeaderProps) {
+export function DashboardHeader({ user, profile, compact }: DashboardHeaderProps) {
   const hour = new Date().getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   const firstName = profile?.full_name?.split(" ")[0] ?? user.email?.split("@")[0] ?? "Builder";
@@ -22,17 +23,24 @@ export function DashboardHeader({ user, profile }: DashboardHeaderProps) {
   const avatarFallback = (profile?.full_name ?? user.email ?? "U")[0].toUpperCase();
 
   return (
-    <div className="border-b border-border px-6 py-4 flex items-center justify-between gap-4 bg-background/50 backdrop-blur-sm sticky top-0 z-10">
-      <div>
-        <h1 className="text-lg font-semibold">{greeting}, {firstName} 👋</h1>
-        <p className="text-sm text-muted-foreground">What are you building today?</p>
-      </div>
-
-      <div className="flex items-center gap-3">
-        {/* Global search — projects, files, chat messages */}
-        <div className="hidden md:block">
+    <div className={`border-b border-border px-6 py-3 flex items-center justify-between gap-4 bg-background/50 backdrop-blur-sm sticky top-0 z-10 ${compact ? "py-2.5" : "py-4"}`}>
+      {!compact ? (
+        <div>
+          <h1 className="text-lg font-semibold">{greeting}, {firstName} 👋</h1>
+          <p className="text-sm text-muted-foreground">What are you building today?</p>
+        </div>
+      ) : (
+        <div className="hidden md:block flex-1 max-w-md">
           <GlobalSearch />
         </div>
+      )}
+
+      <div className="flex items-center gap-3 ml-auto">
+        {!compact && (
+          <div className="hidden md:block">
+            <GlobalSearch />
+          </div>
+        )}
 
         {/* Notifications bell */}
         <Button variant="ghost" size="icon" className="relative h-9 w-9" title="Notifications">

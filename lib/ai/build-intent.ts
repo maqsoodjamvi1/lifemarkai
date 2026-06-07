@@ -20,6 +20,7 @@ const CRM_KEYWORDS = /\b(crm|customer relationship|sales pipeline|lead managemen
 const ADMIN_KEYWORDS = /\b(admin panel|admin dashboard|back office|management system|management app|operations dashboard|internal tool|backoffice|business management)\b/i;
 const APP_KEYWORDS = /\b(application|app|platform|portal|system|software)\b/i;
 const SAAS_KEYWORDS = /\b(saas|subscription|billing portal|multi-tenant|pricing tier)\b/i;
+const BUILDER_KEYWORDS = /\b(chat-to-app|app builder|lovable|builder ui|lovable-style|lovable clone)\b/i;
 const WEBSITE_KEYWORDS = /\b(website|landing page|marketing site|company site|business site|homepage|portfolio|rebrand|rebranding|brand)\b/i;
 
 function extractNiche(prompt: string): string | null {
@@ -179,6 +180,15 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
   let appType: BuildAppType = "general-app";
 
   const wantsBuild = /\b(create|build|make|design|develop|generate|rebrand|change)\b/i.test(prompt);
+
+  if (BUILDER_KEYWORDS.test(prompt)) {
+    return {
+      appType: "general-app",
+      niche: extractNiche(prompt),
+      statusLabel: "Designing Lovable-inspired builder UI…",
+      blueprint: BLUEPRINTS["general-app"](extractNiche(prompt)),
+    };
+  }
 
   if (ERP_KEYWORDS.test(prompt)) appType = "erp";
   else if (POS_KEYWORDS.test(prompt)) appType = "pos";

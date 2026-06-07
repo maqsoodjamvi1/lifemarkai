@@ -13,15 +13,19 @@ export default async function DashboardLayout({
   const { user } = await getServerUser(supabase);
   if (!user) redirect("/login");
 
-  const { data: profile } = await (supabase as any)
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .single();
+  const [{ data: profile }, { data: recentProjects }] = await Promise.all([
+    (supabase as any).from("profiles").select("*").eq("id", user.id).single(),
+    (supabase as any)
+      .from("projects")
+      .select("id, name, updated_at")
+      .eq("user_id", user.id)
+      .order("updated_at", { ascending: false })
+      .limit(8),
+  ]);
 
   return (
     <div className="flex h-screen bg-background">
-      <DashboardSidebar user={user} profile={profile} />
+      <DashboardSidebar user={user} profile={profile} recentProjects={recentProjects ?? []} />
       <main className="flex-1 flex flex-col overflow-hidden">
         {children}
       </main>

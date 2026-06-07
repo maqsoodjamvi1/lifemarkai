@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
+import { ensureDevCredits, getDevProfile } from "@/lib/dev-credits";
 import { redirect, notFound } from "next/navigation";
 import { EditorLayout } from "@/components/editor/editor-layout";
 
@@ -7,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 interface EditorPageProps {
   params: Promise<{ projectId: string }>;
-  searchParams: Promise<{ prompt?: string; deploy?: string }>;
+  searchParams: Promise<{ prompt?: string; deploy?: string; mode?: string }>;
 }
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://lifemarkai.app";
@@ -52,7 +53,11 @@ export async function generateMetadata({ params }: EditorPageProps) {
 export default async function EditorPage({ params, searchParams }: EditorPageProps) {
   try {
     const { projectId } = await params;
-    const { prompt, deploy } = await searchParams;
+    const { prompt, deploy, mode } = await searchParams;
+    const starterMode =
+      mode === "plan" || mode === "build" || mode === "agent" || mode === "chat"
+        ? mode
+        : undefined;
 
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
@@ -84,6 +89,8 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
       if (!collab && !project.is_public) notFound();
     }
 
+    await ensureDevCredits(user.id);
+
     const [filesResult, messagesResult, profileResult] = await Promise.all([
       (supabase as any)
         .from("project_files")
@@ -103,13 +110,19 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
         .single(),
     ]);
 
+    let profile = profileResult.data;
+    if ((!profile || (profile.credits ?? 0) <= 0) && process.env.NODE_ENV === "development") {
+      profile = (await getDevProfile(user.id)) ?? profile;
+    }
+
     return (
       <EditorLayout
         project={project}
         initialFiles={filesResult.data ?? []}
         initialMessages={messagesResult.data ?? []}
-        profile={profileResult.data}
+        profile={profile}
         starterPrompt={prompt}
+        starterMode={starterMode as import("@/components/editor/editor-layout").EditorMode | undefined}
         autoDeploy={deploy === "true"}
       />
     );

@@ -3,12 +3,15 @@ import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { stripe } from "@/lib/stripe/client";
 import { CREDIT_PACKS } from "@/lib/stripe/plans";
+import { ensureDevCredits } from "@/lib/dev-credits";
 
 // GET — user credit balance + team pools
 export async function GET() {
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  await ensureDevCredits(user.id);
 
   const { data: profile } = await (supabase as any)
     .from("profiles")

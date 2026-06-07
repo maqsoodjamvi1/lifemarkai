@@ -2,22 +2,24 @@
 import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { DashboardHeader } from "@/components/dashboard/dashboard-header";
-import { ProjectsGrid } from "@/components/dashboard/projects-grid";
-import { PromptCreateBox } from "@/components/dashboard/prompt-create-box";
+import { DashboardHero } from "@/components/dashboard/dashboard-hero";
 import { StatsCards } from "@/components/dashboard/stats-cards";
 import { DashboardClient } from "@/components/dashboard/dashboard-client";
-import { ProjectsWithGroups } from "@/components/dashboard/projects-with-groups";
+import { ProjectBrowserTabs } from "@/components/dashboard/project-browser-tabs";
 import { ActivityFeed } from "@/components/dashboard/activity-feed";
 import { PinnedRail } from "@/components/dashboard/pinned-rail";
-import { RecentlyVisited } from "@/components/dashboard/recently-visited";
 import { GettingStartedChecklist } from "@/components/dashboard/getting-started-checklist";
 import { ContinueCard } from "@/components/dashboard/continue-card";
-import { FeaturedTemplates } from "@/components/dashboard/featured-templates";
-import { ProjectInsightsCard } from "@/components/dashboard/project-insights-card";
+import { BillingAlertBanner } from "@/components/dashboard/billing-alert-banner";
 
 export const metadata = { title: "Dashboard" };
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ tab?: string }>;
+}) {
+  const { tab } = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -27,7 +29,7 @@ export default async function DashboardPage() {
     .from("projects")
     .select("*, project_files(count)")
     .eq("user_id", user.id)
-    .order("created_at", { ascending: false });
+    .order("updated_at", { ascending: false });
 
   const { data: profile } = await (supabase as any)
     .from("profiles")
@@ -35,43 +37,34 @@ export default async function DashboardPage() {
     .eq("id", user.id)
     .single();
 
-  // Fetch featured templates (for quick-access section)
   const { data: featuredTemplates } = await (supabase as any)
     .from("templates")
     .select("id, name, description, framework, fork_count, tags, preview_url")
     .order("fork_count", { ascending: false })
     .limit(6);
 
-  // Show onboarding for new users (no projects yet)
   const isNewUser = !projects || projects.length === 0;
+  const firstName =
+    profile?.full_name?.split(" ")[0] ?? user.email?.split("@")[0] ?? "Builder";
+
+  const initialTab =
+    tab === "starred" ? "starred" : tab === "recent" ? "recent" : tab === "shared" ? "shared" : "mine";
 
   return (
     <div className="flex-1 overflow-auto">
-      <DashboardHeader user={user} profile={profile} />
-      <div className="max-w-7xl mx-auto px-6 py-8 space-y-8">
-        <StatsCards projects={projects ?? []} credits={profile?.credits ?? 0} />
+      <DashboardHeader user={user} profile={profile} compact />
+      <BillingAlertBanner credits={profile?.credits ?? 0} plan={profile?.plan ?? "free"} />
 
-        {/* Pinned projects rail — hidden when no starred projects */}
-        <PinnedRail projects={projects ?? []} />
+      <div className="max-w-5xl mx-auto px-6 py-6 space-y-8">
+        <DashboardHero firstName={firstName} />
 
-        {/* Weekly AI insights — aggregates usage for last 7 days */}
-        <ProjectInsightsCard
-          projectId={projects?.[0]?.id}
-          projectName={projects?.[0]?.name}
-        />
-
-        {/* Recently visited — client-side, reads localStorage */}
-        <RecentlyVisited projects={projects ?? []} />
-
-        {/* Lovable-style prompt-first project creation */}
-        <PromptCreateBox />
-
-        {/* Continue where you left off — most recently updated project */}
         {!isNewUser && (
-          <ContinueCard projects={projects ?? []} />
+          <>
+            <PinnedRail projects={projects ?? []} />
+            <ContinueCard projects={projects ?? []} />
+          </>
         )}
 
-        {/* Getting started checklist — shown to new users with 0 projects */}
         {isNewUser && (
           <GettingStartedChecklist
             hasProjects={!isNewUser}
@@ -80,26 +73,21 @@ export default async function DashboardPage() {
           />
         )}
 
-        {/* Featured templates quick-access row */}
-        <FeaturedTemplates
-          templates={featuredTemplates ?? []}
-          projectCount={projects?.length ?? 0}
-        />
-
-        {/* Recent activity feed */}
-        <ActivityFeed />
-
         <div>
-          <h2 className="text-xl font-semibold mb-1">Your Projects</h2>
-          <p className="text-sm text-muted-foreground mb-4">
-            {projects?.length ?? 0} project{projects?.length !== 1 ? "s" : ""}
-          </p>
-          <ProjectsWithGroups projects={projects ?? []} />
+          <ProjectBrowserTabs
+            projects={projects ?? []}
+            templates={featuredTemplates ?? []}
+            initialTab={initialTab}
+          />
         </div>
+
+        {!isNewUser && (
+          <StatsCards projects={projects ?? []} credits={profile?.credits ?? 0} />
+        )}
+
+        {!isNewUser && <ActivityFeed />}
       </div>
 
-
-      {/* Client-side: onboarding modal + command palette + low-credits toast */}
       <DashboardClient
         showOnboarding={isNewUser}
         showSetupWizard={!(profile as any)?.setup_complete && isNewUser}

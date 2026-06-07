@@ -29,6 +29,7 @@ import {
   buildCloudPermissionsPromptBlock,
   shouldBlockCloudAction,
 } from "@/lib/cloud/permissions";
+import { ensureDevCredits, getDevProfile } from "@/lib/dev-credits";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -95,16 +96,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Image too large (max 5MB)" }, { status: 413 });
     }
 
-    // Check credits
-    const { data: profile } = await (supabase as any)
-      .from("profiles")
-      .select("credits, plan, email, workspace_knowledge, cloud_tool_permissions")
-      .eq("id", userId)
-      .single();
+    // Check credits (dev: auto-grant if empty so local builds are testable)
+    await ensureDevCredits(userId);
+
+    let profile = (
+      await (supabase as any)
+        .from("profiles")
+        .select("credits, plan, email, workspace_knowledge")
+        .eq("id", userId)
+        .maybeSingle()
+    ).data;
+
+    // Dev fallback: user-scoped client may not see profile row (RLS / missing sync)
+    if ((!profile || profile.credits <= 0) && process.env.NODE_ENV === "development") {
+      profile = await getDevProfile(userId);
+    }
 
     if (!profile || profile.credits <= 0) {
       return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
     }
+
+    const cloudPermissionsRaw = (
+      await (supabase as any)
+        .from("profiles")
+        .select("cloud_tool_permissions")
+        .eq("id", userId)
+        .maybeSingle()
+    ).data?.cloud_tool_permissions;
 
     // Fetch project knowledge + recent messages + DB schema in parallel
     const [projectRes, recentMessagesRes, schemaContext] = await Promise.all([
@@ -162,9 +180,7 @@ export async function POST(req: NextRequest) {
     // Compact schema block — injected into all modes when available
     const schemaBlock = schemaContext ? `\n\n---\n${schemaContext}\n---` : "";
 
-    const cloudPermissions = parseCloudToolPermissions(
-      (profile as { cloud_tool_permissions?: unknown }).cloud_tool_permissions,
-    );
+    const cloudPermissions = parseCloudToolPermissions(cloudPermissionsRaw);
     const cloudEnabled = !!projectData?.cloud_enabled;
     const cloudPermissionsBlock = `\n\n${buildCloudPermissionsPromptBlock(cloudPermissions, cloudEnabled)}`;
 
