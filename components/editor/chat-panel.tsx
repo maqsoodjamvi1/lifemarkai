@@ -38,6 +38,7 @@ import type { EditorMode } from "./editor-layout";
 import { VoiceMode } from "./voice-mode";
 import { SnippetPicker } from "./snippet-picker";
 import { FileAttachmentList, type GeneratedFile } from "./file-attachment-card";
+import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { findMissingPackages, buildInstallCommand, syncPackageJsonDeps } from "@/lib/ai/npm-auto-install";
 import { classifyBuildIntent, type BuildIntent } from "@/lib/ai/build-intent";
@@ -628,6 +629,7 @@ export function ChatPanel({
   const [lastFixedError, setLastFixedError] = useState<string | null>(null);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const [attachedImageName, setAttachedImageName] = useState<string | null>(null);
+  const [chatAnnotateOpen, setChatAnnotateOpen] = useState(false);
   const [attachedText, setAttachedText] = useState<{ name: string; content: string } | null>(null);
   const [contextFiles, setContextFiles] = useState<ProjectFile[]>([]);
   const [showFilePicker, setShowFilePicker] = useState(false);
@@ -1045,6 +1047,10 @@ export function ChatPanel({
     const truncated = idx >= 0 ? messages.slice(0, idx) : messages;
     setEditingMessageId(null);
     onMessagesUpdate(truncated);
+    toast({
+      title: "Branch saved",
+      description: "Previous state saved to History → Branches.",
+    });
     await sendMessage(editInput, undefined, truncated);
     setEditInput("");
   }
@@ -3902,6 +3908,12 @@ Please confirm the breakdown before implementing anything.`,
                 </p>
                 <div className="flex flex-wrap gap-1">
                   <button
+                    onClick={() => setChatAnnotateOpen(true)}
+                    className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 hover:bg-rose-500/30 transition-colors"
+                  >
+                    ✏️ Draw on image
+                  </button>
+                  <button
                     onClick={() => {
                       setInput("Recreate this UI exactly. Match every layout detail, color, typography, spacing, and component.");
                       setTimeout(() => textareaRef.current?.focus(), 50);
@@ -4829,6 +4841,18 @@ Please confirm the breakdown before implementing anything.`,
           </div>
         </div>
       </div>
+
+      {chatAnnotateOpen && attachedImage && (
+        <PreviewAnnotateModal
+          screenshotDataUrl={attachedImage}
+          onClose={() => setChatAnnotateOpen(false)}
+          onSend={(annotated, note) => {
+            setAttachedImage(annotated);
+            if (note?.trim()) setInput(note);
+            setChatAnnotateOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -8,8 +8,9 @@ import {
   User, Bell, Shield, Key, Palette, Loader2, Save,
   Eye, EyeOff, Trash2, LogOut, Plus, Copy, Check,
   Terminal, ChevronDown, ChevronUp, AlertTriangle,
-  Globe, Lock, ExternalLink,
+  Globe, Lock, ExternalLink, Plug,
 } from "lucide-react";
+import { TelegramSettingsPanel } from "@/components/dashboard/telegram-settings-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -425,6 +426,7 @@ const SECTIONS = [
   { id: "privacy", label: "Privacy", icon: Globe },
   { id: "appearance", label: "Appearance", icon: Palette },
   { id: "notifications", label: "Notifications", icon: Bell },
+  { id: "integrations", label: "Integrations", icon: Plug },
   { id: "security", label: "Security", icon: Shield },
   { id: "api", label: "API Keys", icon: Key },
   { id: "danger", label: "Danger Zone", icon: Trash2 },
@@ -563,6 +565,62 @@ export function SettingsPage({ user, profile }: SettingsPageProps) {
                   <Button onClick={saveProfile} disabled={saving} className="gap-2">
                     {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                     Save changes
+                  </Button>
+                </div>
+              )}
+
+              {active === "privacy" && (
+                <div className="bg-card border border-border rounded-2xl p-6 space-y-5">
+                  <h2 className="font-semibold text-lg">Privacy</h2>
+                  <div className="flex items-center justify-between py-2">
+                    <div>
+                      <p className="text-sm font-medium">Public profile</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Show your projects on your public builder page.</p>
+                    </div>
+                    <button
+                      role="switch"
+                      aria-checked={isPublic}
+                      onClick={() => void savePrivacy(!isPublic)}
+                      disabled={privacySaving}
+                      className={`relative shrink-0 ml-4 inline-flex h-6 w-11 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors ${
+                        isPublic ? "bg-violet-600" : "bg-input"
+                      }`}
+                    >
+                      <span className={`pointer-events-none block h-5 w-5 rounded-full bg-white shadow-lg transition-transform ${isPublic ? "translate-x-5" : "translate-x-0"}`} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {active === "appearance" && (
+                <div className="bg-card border border-border rounded-2xl p-6 space-y-3">
+                  <h2 className="font-semibold text-lg">Appearance</h2>
+                  <p className="text-sm text-muted-foreground">Theme follows your system preference. Use the theme toggle in the dashboard header to override.</p>
+                </div>
+              )}
+
+              {active === "notifications" && <NotificationsPanel userId={user.id} />}
+
+              {active === "integrations" && <TelegramSettingsPanel />}
+
+              {active === "security" && (
+                <div className="bg-card border border-border rounded-2xl p-6 space-y-5">
+                  <h2 className="font-semibold text-lg">Security</h2>
+                  <p className="text-sm text-muted-foreground">Manage account access.</p>
+                  <Button variant="outline" className="gap-2" onClick={() => void signOut()}>
+                    <LogOut className="w-4 h-4" /> Sign out
+                  </Button>
+                </div>
+              )}
+
+              {active === "api" && <ApiKeysPanel userId={user.id} />}
+
+              {active === "danger" && (
+                <div className="bg-card border border-destructive/30 rounded-2xl p-6 space-y-5">
+                  <h2 className="font-semibold text-lg text-destructive">Danger Zone</h2>
+                  <p className="text-sm text-muted-foreground">Permanently delete your account and all projects.</p>
+                  <Button variant="destructive" className="gap-2" onClick={() => void deleteAccount()}>
+                    <Trash2 className="w-4 h-4" /> Delete account
                   </Button>
                 </div>
               )}
