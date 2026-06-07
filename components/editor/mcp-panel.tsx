@@ -589,6 +589,7 @@ function MarketplaceTab({ servers, setServers }: { servers: McpServer[]; setServ
   const [expanded, setExpanded] = useState<string | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [envValues, setEnvValues] = useState<Record<string, string>>({});
+  const [customMcpUrls, setCustomMcpUrls] = useState<Record<string, string>>({});
 
   const installedIds = new Set(servers.map((s) => s.name.toLowerCase()));
 
@@ -601,6 +602,30 @@ function MarketplaceTab({ servers, setServers }: { servers: McpServer[]; setServ
   const handleInstall = async (entry: MarketplaceEntry) => {
     if (installedIds.has(entry.name.toLowerCase())) {
       toast({ title: entry.name + " already installed" }); return;
+    }
+    if (entry.id === "custom-mcp") {
+      const url = customMcpUrls[entry.id]?.trim();
+      if (!url || !/^https?:\/\//i.test(url)) {
+        toast({ title: "Enter a valid MCP server URL (https://…)", variant: "destructive" });
+        return;
+      }
+      setInstallingId(entry.id);
+      await new Promise((r) => setTimeout(r, 400));
+      setServers((prev) => [...prev, {
+        id: `custom-${Date.now()}`,
+        name: "Custom MCP",
+        command: "remote",
+        args: url,
+        status: "disconnected",
+        tools: entry.tools,
+        description: entry.description,
+        envKey: entry.envKey,
+        envValue: envValues[entry.id] || undefined,
+      }]);
+      setInstallingId(null);
+      setExpanded(null);
+      toast({ title: "Custom MCP server added", description: "Switch to My Servers to connect." });
+      return;
     }
     if (entry.envKey && !envValues[entry.id]) {
       toast({ title: "Enter your " + entry.envKey + " first", variant: "destructive" }); return;
@@ -698,10 +723,25 @@ function MarketplaceTab({ servers, setServers }: { servers: McpServer[]; setServ
                   <div>
                     <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-1">Install command</p>
                     <div className="font-mono bg-muted rounded px-2 py-1.5 flex items-center justify-between gap-2 text-[11px]">
-                      <span className="truncate">{"npx " + entry.args}</span>
-                      <CopyBtn text={"npx " + entry.args} />
+                      <span className="truncate">
+                        {entry.id === "custom-mcp" ? "remote URL (user-supplied)" : "npx " + entry.args}
+                      </span>
+                      {entry.id !== "custom-mcp" && <CopyBtn text={"npx " + entry.args} />}
                     </div>
                   </div>
+                  {entry.id === "custom-mcp" && (
+                    <div>
+                      <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-1">
+                        MCP server URL
+                      </p>
+                      <Input
+                        placeholder="https://your-mcp-server.example.com/mcp"
+                        value={customMcpUrls[entry.id] ?? ""}
+                        onChange={(e) => setCustomMcpUrls((prev) => ({ ...prev, [entry.id]: e.target.value }))}
+                        className="h-8 text-xs font-mono"
+                      />
+                    </div>
+                  )}
                   {entry.envKey && (
                     <div>
                       <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mb-1">{entry.envKey}</p>

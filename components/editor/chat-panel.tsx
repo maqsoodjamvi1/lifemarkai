@@ -4735,6 +4735,21 @@ Please confirm the breakdown before implementing anything.`,
               </button>
             </div>
 
+            {(mode === "build" || mode === "agent") && files.length === 0 && (
+              <button
+                type="button"
+                onClick={() => setClarifyFirst((v) => !v)}
+                className={`h-7 px-2.5 rounded-lg border text-xs font-medium transition-colors flex-shrink-0 ${
+                  clarifyFirst
+                    ? "border-violet-500/50 bg-violet-500/15 text-violet-300"
+                    : "border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                }`}
+                title="Ask clarifying questions before the first build"
+              >
+                Clarify
+              </button>
+            )}
+
             {/* More modes + model — Lovable style */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>

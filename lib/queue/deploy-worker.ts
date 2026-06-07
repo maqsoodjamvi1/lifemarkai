@@ -10,6 +10,7 @@
 import type { Job } from "bullmq";
 import { createWorker, QUEUES, type DeployJobPayload } from "./client";
 import { buildDeployIndexHtml, buildNetlifyFileMap, buildVercelFilesList } from "@/lib/deploy/build-deploy-files";
+import { buildLifemarkDeployUrl } from "@/lib/deploy/branded-deploy-url";
 import { createAdminClient } from "@/lib/supabase/server";
 
 /**
@@ -90,7 +91,7 @@ async function processDeployJob(job: Job<DeployJobPayload>): Promise<{ url: stri
   // visitor signs up from the deployed app (the built-in growth loop).
   const { data: ownerProfile } = await supabase
     .from("profiles")
-    .select("referral_code")
+    .select("referral_code, branded_subdomain, branded_status")
     .eq("id", userId)
     .single();
 
@@ -208,7 +209,12 @@ async function processDeployJob(job: Job<DeployJobPayload>): Promise<{ url: stri
     } else {
       // Non-production only: simulate so local dev without tokens still works.
       await new Promise((r) => setTimeout(r, 2000));
-      deployedUrl = `https://lifemark-${projectId.slice(0, 8)}.lifemarkai.app`;
+      deployedUrl = buildLifemarkDeployUrl({
+        projectName,
+        projectId,
+        brandedSubdomain: ownerProfile?.branded_subdomain,
+        brandedStatus: ownerProfile?.branded_status,
+      });
       await job.log("Simulated deployment (dev mode — no deploy token configured)");
     }
 

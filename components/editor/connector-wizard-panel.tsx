@@ -586,6 +586,28 @@ const CONNECTORS: Connector[] = [
     integrationPrompt: "Integrate Inngest into this Next.js app for durable background jobs. Install inngest. Use INNGEST_EVENT_KEY and INNGEST_SIGNING_KEY. Create lib/inngest/client.ts with new Inngest({ id: 'app' }). Define functions in inngest/functions/: sendWelcomeEmail (triggered on user/signup), processOrder (triggered on order/created with retries), dailyCleanup (cron at 0 3 * * *). Add app/api/inngest/route.ts as the serve handler. Emit events from API routes with inngest.send(). Add a /admin/jobs page listing recent function runs (mock UI if needed).",
   },
   {
+    id: "microsoft_365",
+    name: "Microsoft 365",
+    description: "Outlook, Teams, OneDrive, Word, Excel — Microsoft Graph integration",
+    category: "communication",
+    icon: "🪟",
+    color: "bg-sky-500/10 border-sky-500/20",
+    docsUrl: "https://learn.microsoft.com/en-us/graph/overview",
+    npm: ["@microsoft/microsoft-graph-client", "@azure/identity"],
+    envVars: [
+      { key: "MS_TENANT_ID", description: "Azure AD tenant ID", example: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" },
+      { key: "MS_CLIENT_ID", description: "App registration client ID", example: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" },
+      { key: "MS_CLIENT_SECRET", description: "App client secret", example: "..." },
+    ],
+    setupSteps: [
+      "Register an app in Azure Portal → App registrations",
+      "Add Microsoft Graph delegated permissions (Mail.Read, Calendars.Read, User.Read)",
+      "Create a client secret and copy tenant ID + client ID",
+      "Click 'Apply to project' to add Microsoft 365 integration",
+    ],
+    integrationPrompt: "Integrate Microsoft 365 via Microsoft Graph into this app. Install @microsoft/microsoft-graph-client and @azure/identity. Use MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET. Create lib/graph.ts with ClientSecretCredential + Graph client. Add API routes: GET /api/ms/me (profile), GET /api/ms/messages (recent Outlook mail), GET /api/ms/calendar (upcoming events). Add OAuth flow at /api/ms/auth and callback. Build a /dashboard/ms page showing inbox preview and calendar widget. Support Teams webhook notifications via incoming webhook URL env var MS_TEAMS_WEBHOOK_URL.",
+  },
+  {
     id: "plaid",
     name: "Plaid",
     description: "Banking & finance — connect bank accounts, transactions, balance data",

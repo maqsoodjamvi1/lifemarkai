@@ -2,6 +2,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { buildDeployIndexHtml, buildNetlifyFileMap, buildVercelFilesList } from "@/lib/deploy/build-deploy-files";
+import { buildLifemarkDeployUrl } from "@/lib/deploy/branded-deploy-url";
 import { NextRequest, NextResponse } from "next/server";
 import { sendDeploymentEmail } from "@/lib/email/resend";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
@@ -233,6 +234,20 @@ export async function POST(req: NextRequest) {
 
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
+  const { data: ownerBranding } = await (supabase as any)
+    .from("profiles")
+    .select("branded_subdomain, branded_status")
+    .eq("id", user.id)
+    .single();
+
+  const lifemarkUrl = () =>
+    buildLifemarkDeployUrl({
+      projectName: project.name as string,
+      projectId,
+      brandedSubdomain: ownerBranding?.branded_subdomain,
+      brandedStatus: ownerBranding?.branded_status,
+    });
+
   const projectFiles = (project.project_files as Array<{ path: string; content: string; language?: string }>) ?? [];
 
   // Auto-snapshot current files for rollback capability
@@ -292,6 +307,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       deploymentId: deployment.id,
       status: "queued",
+      url: lifemarkUrl(),
       message: "Deployment queued — you'll get a notification when it's live.",
     });
   }
@@ -322,11 +338,7 @@ export async function POST(req: NextRequest) {
       } else {
         // ── Simulated deployment (fallback / lifemarkai provider) ──
         await new Promise((r) => setTimeout(r, 2500));
-        const slug = (project.name as string)
-          .toLowerCase()
-          .replace(/[^a-z0-9]/g, "-")
-          .replace(/-+/g, "-");
-        deployedUrl = `https://${slug}-${projectId.slice(0, 8)}.lifemarkai.app`;
+        deployedUrl = lifemarkUrl();
       }
 
       // Update deployment record
@@ -369,16 +381,12 @@ export async function POST(req: NextRequest) {
   })();
 
   // Return immediately so the UI can poll for status
-  const slug = (project.name as string)
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "-")
-    .replace(/-+/g, "-");
   const estimatedUrl =
     provider === "vercel" && VERCEL_TOKEN
       ? `https://lifemark-${projectId.slice(0, 12)}.vercel.app`
       : NETLIFY_TOKEN && provider === "netlify"
         ? `https://lifemark-${projectId.slice(0, 12)}.netlify.app`
-        : `https://${slug}-${projectId.slice(0, 8)}.lifemarkai.app`;
+        : lifemarkUrl();
 
   const providerLabel = provider === "vercel" ? "Vercel" : provider === "netlify" ? "Netlify" : "LifemarkAI";
 
