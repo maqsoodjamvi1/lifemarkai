@@ -2,6 +2,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
+import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -76,7 +77,7 @@ Return ONLY the replacement code for lines ${startLine}-${endLine}:`;
 
   try {
     const result = await generateAI({
-      model: model ?? (process.env.DEFAULT_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324",
+      model: model ?? getDefaultAiModel(),
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userMessage },

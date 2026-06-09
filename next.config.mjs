@@ -6,6 +6,11 @@ import path from "path";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV !== "production";
 const debugConnectSrc = isDev ? " http://127.0.0.1:7580" : "";
+// WebContainers fetch assets from StackBlitz CDNs and serve preview iframes on webcontainer.io.
+const webContainerConnectSrc =
+  " https://*.staticblitz.com https://*.webcontainer.io https://*.webcontainer-api.io https://*.stackblitz.io wss://*.webcontainer.io wss://*.webcontainer-api.io";
+const webContainerFrameSrc =
+  " https://*.webcontainer.io https://*.webcontainer-api.io https://*.staticblitz.com https://*.stackblitz.io https://stackblitz.io";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -20,6 +25,14 @@ const nextConfig = {
 
   async headers() {
     return [
+      {
+        // WebContainers (SharedArrayBuffer) require strict cross-origin isolation on editor routes.
+        source: "/editor/:path*",
+        headers: [
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+        ],
+      },
       {
         // Exclude /_next/static so we don't interfere with Next.js's own
         // cache-control headers for static assets.
@@ -36,9 +49,9 @@ const nextConfig = {
               "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com https://cdn.jsdelivr.net",
               "img-src 'self' data: blob: https:",
               "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
-              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.openai.com https://api.anthropic.com https://api.stripe.com blob: https://cdn.jsdelivr.net" + debugConnectSrc,
-              "frame-src 'self' blob: data:",
-              "worker-src 'self' blob:",
+              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.openai.com https://api.anthropic.com https://api.stripe.com blob: https://cdn.jsdelivr.net" + webContainerConnectSrc + debugConnectSrc,
+              "frame-src 'self' blob: data:" + webContainerFrameSrc,
+              "worker-src 'self' blob:" + webContainerFrameSrc,
               "child-src 'self' blob: data:",
             ].join("; "),
           },

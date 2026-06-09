@@ -1,6 +1,8 @@
 // @ts-nocheck
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { AIModel } from "@/lib/ai/provider";
+import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 
 interface AppState {
   // Theme
@@ -8,8 +10,10 @@ interface AppState {
   toggleSidebar: () => void;
 
   // Editor preferences
-  preferredModel: "gpt-4o" | "moonshotai/kimi-k2-instruct-0905" | "claude-sonnet-4-6";
-  setPreferredModel: (model: "gpt-4o" | "moonshotai/kimi-k2-instruct-0905" | "claude-sonnet-4-6") => void;
+  preferredModel: AIModel;
+  modelManuallySelected: boolean;
+  setPreferredModel: (model: AIModel) => void;
+  setModelManuallySelected: (manual: boolean) => void;
 
   editorFontSize: number;
   setEditorFontSize: (size: number) => void;
@@ -36,14 +40,29 @@ interface AppState {
   clearNotifications: () => void;
 }
 
+export type EditorModelPrefs = Pick<
+  AppState,
+  "preferredModel" | "modelManuallySelected" | "setPreferredModel" | "setModelManuallySelected"
+>;
+
+export const useEditorModelPrefs = (): EditorModelPrefs =>
+  useAppStore((s) => ({
+    preferredModel: s.preferredModel,
+    modelManuallySelected: s.modelManuallySelected,
+    setPreferredModel: s.setPreferredModel,
+    setModelManuallySelected: s.setModelManuallySelected,
+  }));
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
       sidebarCollapsed: false,
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
-      preferredModel: "gpt-4o",
+      preferredModel: DEFAULT_CODING_MODEL,
+      modelManuallySelected: false,
       setPreferredModel: (model) => set({ preferredModel: model }),
+      setModelManuallySelected: (manual) => set({ modelManuallySelected: manual }),
 
       editorFontSize: 14,
       setEditorFontSize: (size) => set({ editorFontSize: size }),
@@ -77,6 +96,7 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         sidebarCollapsed: state.sidebarCollapsed,
         preferredModel: state.preferredModel,
+        modelManuallySelected: state.modelManuallySelected,
         editorFontSize: state.editorFontSize,
         editorTabSize: state.editorTabSize,
         recentPrompts: state.recentPrompts,

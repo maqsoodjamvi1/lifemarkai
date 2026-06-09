@@ -14,6 +14,7 @@
  */
 
 import type { GenerateOptions, GenerateResult, AIModel } from "./provider";
+import { getDefaultAiModel } from "./model-defaults";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -81,7 +82,7 @@ export async function generateViaGateway(
     throw new Error("[gateway-client] Gateway not configured. Set LIFEMARK_GATEWAY_URL and LIFEMARK_GATEWAY_SECRET.");
   }
 
-  const model: AIModel = options.model ?? (process.env.DEFAULT_AI_MODEL as AIModel) ?? "gpt-4o";
+  const model: AIModel = options.model ?? getDefaultAiModel();
 
   // Build the OpenAI-compatible payload
   const payload: Record<string, unknown> = {

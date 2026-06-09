@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
+import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 
 interface FormBuilderPanelProps {
   projectId: string;
@@ -96,7 +97,7 @@ Rules:
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       messages: [{ role: "user", content: `Generate a form for: ${description}` }],
-      model: "gpt-4o",
+      model: DEFAULT_CODING_MODEL,
       system: systemPrompt,
       mode: "chat",
       projectId: "form-gen",

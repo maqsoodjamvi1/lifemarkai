@@ -1,12 +1,28 @@
 import type { EditorMode } from "@/components/editor/editor-layout";
 import type { ProjectFile } from "@/types/database";
 import { classifyBuildIntent, shouldAutoBuildMode } from "./build-intent";
+import type { AIModel } from "./provider";
+import {
+  BALANCED_CODING_MODEL,
+  DEFAULT_CODING_MODEL,
+  FAST_CODING_MODEL,
+} from "./model-defaults";
+
+export { DEFAULT_CODING_MODEL, BALANCED_CODING_MODEL, FAST_CODING_MODEL };
+
+export const CLAUDE_MODELS = {
+  opus: DEFAULT_CODING_MODEL,
+  sonnet: BALANCED_CODING_MODEL,
+  haiku: FAST_CODING_MODEL,
+} as const;
 
 export type ProjectStage = "empty" | "scaffold" | "app";
 
 export interface EditorIntelContext {
   fileCount: number;
   hasPreviewError: boolean;
+  /** When false, suppress preview-error prompts and fix placeholders */
+  hasCredits?: boolean;
   activeFilePath?: string | null;
   framework?: string | null;
   currentMode: EditorMode;
@@ -25,6 +41,10 @@ const FIX_KEYWORDS = /\b(fix|debug|resolve|repair|broken|error|bug|crash|not wor
 
 const CHAT_KEYWORDS =
   /\b(explain|what does|what is|how does|how do|describe|tell me about|summarize|walk me through)\b/i;
+
+/** Investigation / hypotheticals — stay conversational, never auto-build (Lovable parity). */
+const INVESTIGATE_KEYWORDS =
+  /\b(please investigate|what would happen if|what happens if|what if we|could you investigate|help me investigate|look into why|figure out why|find out why|diagnose why|root cause)\b/i;
 
 const ENTRYPOINTS = [
   "app/page.tsx",
@@ -45,6 +65,39 @@ export function inferProjectStage(files: Pick<ProjectFile, "path">[]): ProjectSt
   return "scaffold";
 }
 
+/**
+ * Pick the best Claude model for a prompt given editor mode and project context.
+ * Opus is the default for coding; Haiku/Sonnet handle lighter conversational work.
+ */
+export function resolveSmartModel(
+  mode: EditorMode,
+  ctx: Pick<EditorIntelContext, "fileCount" | "hasPreviewError">,
+  prompt?: string,
+): AIModel {
+  const trimmed = prompt?.trim() ?? "";
+
+  if (ctx.hasPreviewError && /\b(fix|debug|resolve|repair|error|bug)\b/i.test(trimmed)) {
+    return CLAUDE_MODELS.opus;
+  }
+
+  if (mode === "agent" || mode === "build") {
+    return CLAUDE_MODELS.opus;
+  }
+
+  if (mode === "plan") {
+    return trimmed.length > 200 ? CLAUDE_MODELS.opus : CLAUDE_MODELS.sonnet;
+  }
+
+  if (mode === "patch") {
+    return trimmed.length < 100 ? CLAUDE_MODELS.haiku : CLAUDE_MODELS.sonnet;
+  }
+
+  // chat / default
+  if (trimmed.length < 80) return CLAUDE_MODELS.haiku;
+  if (trimmed.length < 200) return CLAUDE_MODELS.sonnet;
+  return CLAUDE_MODELS.opus;
+}
+
 /** Pick the best editor mode for a user prompt given project context. */
 export function resolvePromptMode(
   prompt: string,
@@ -60,6 +113,22 @@ export function resolvePromptMode(
   if (/^\/plan\b/i.test(trimmed)) return "plan";
   if (/^\/build\b/i.test(trimmed)) return "build";
   if (/^\/agent\b/i.test(trimmed)) return "agent";
+
+  // Honor explicitly selected Agent tab — don't downgrade to build/chat via keywords
+  if (ctx.currentMode === "agent") return "agent";
+
+  // Investigation prompts → chat even when Build toggle is active
+  if (INVESTIGATE_KEYWORDS.test(trimmed) && !shouldAutoBuildMode(trimmed)) {
+    return "chat";
+  }
+  if (/\binvestigate\b/i.test(trimmed) && !shouldAutoBuildMode(trimmed) && !/\bplan\b/i.test(trimmed)) {
+    return "chat";
+  }
+
+  // Honor Build / Quick Edit tabs — user expects code changes, not chat replies
+  if (ctx.currentMode === "build" || ctx.currentMode === "patch") {
+    return ctx.currentMode;
+  }
 
   if (CHAT_KEYWORDS.test(trimmed) && !shouldAutoBuildMode(trimmed)) {
     return "chat";
@@ -106,6 +175,9 @@ export function getSmartPlaceholder(
 ): string {
   if (ctx.isLocked) return "Switch to Test mode to make AI edits…";
   if (ctx.streaming) return "queue follow-up…";
+  if (ctx.hasCredits === false) {
+    return "Out of credits — upgrade your plan to keep building with AI…";
+  }
 
   const stage = stageFromCtx(ctx);
 
@@ -159,6 +231,15 @@ export function getEmptyProjectPrompts(stage: ProjectStage, framework?: string |
     "Add dark mode support",
     "Make the layout mobile responsive",
     "Polish spacing, typography, and empty states",
+  ];
+}
+
+/** Quick actions when the user is out of credits. */
+export function getNoCreditsPrompts(): string[] {
+  return [
+    "Upgrade plan to continue building",
+    "Review my project files without making changes",
+    "What can I do while waiting for credits to reset?",
   ];
 }
 

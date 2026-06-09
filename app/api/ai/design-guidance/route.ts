@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
+import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -76,7 +77,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await generateAI({
-      model: screenshotBase64 ? "gpt-4o" : "gpt-4o",
+      model: DEFAULT_CODING_MODEL,
       messages,
       maxTokens: 3000,
       temperature: 0.3,

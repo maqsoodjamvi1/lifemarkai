@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
+import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 
 interface MigrationsWizardPanelProps {
   projectId: string;
@@ -98,7 +99,7 @@ Migration index: ${nextIdx}`;
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: [{ role: "user", content: prompt }],
-          model: "gpt-4o",
+          model: DEFAULT_CODING_MODEL,
           mode: "chat",
           projectId: "migrations",
         }),

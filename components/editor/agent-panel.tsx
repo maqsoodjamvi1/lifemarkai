@@ -9,6 +9,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentStep } from "@/lib/ai/agent";
+import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 import type { ProjectFile } from "@/types/database";
 
 interface AgentPanelProps {
@@ -72,7 +73,7 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
       const res = await fetch("/api/ai/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, task, model: "gpt-4o" }),
+        body: JSON.stringify({ projectId, task, model: DEFAULT_CODING_MODEL }),
         signal: abortRef.current.signal,
       });
 

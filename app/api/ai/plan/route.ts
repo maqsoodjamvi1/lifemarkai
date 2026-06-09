@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
+import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
@@ -62,7 +63,7 @@ Return ONLY valid JSON in this exact format:
 Use exactly 5-7 steps. Categories must be one of: ui, api, database, auth, deployment.`;
 
     const aiResult = await generateAI({
-      model: (process.env.DEFAULT_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324",
+      model: getDefaultAiModel(),
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: `Create an implementation plan for: ${prompt}` },

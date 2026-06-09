@@ -440,7 +440,7 @@ async function handleChat(request: Request, env: Env, ctx: ExecutionContext): Pr
     });
   }
 
-  const model = (body.model as string | undefined) ?? "gpt-4o";
+  const model = (body.model as string | undefined) ?? "claude-opus-4-6";
   const isStreaming = body.stream === true;
   const projectId = request.headers.get("X-Lifemark-Project-Id") ?? "";
   const userId = request.headers.get("X-Lifemark-User-Id") ?? "";

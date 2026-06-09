@@ -20,7 +20,18 @@ import { PreviewAnnotations } from "./preview-annotations";
 import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
+import dynamic from "next/dynamic";
 import { buildFallbackHtml, PREVIEW_ENGINE_REV } from "@/lib/preview/build-fallback-html";
+import { resolvePreviewEngine, type PreviewEngine } from "@/lib/preview/resolve-preview-engine";
+
+const WebContainerPreview = dynamic(() => import("./webcontainer-preview"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex-1 flex items-center justify-center bg-[#0a0a0a]">
+      <Loader2 className="w-5 h-5 animate-spin text-muted-foreground/50" />
+    </div>
+  ),
+});
 
 // Sandpack stubs — these branches are never reached (sandpackReady is always false)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -287,6 +298,7 @@ export function PreviewPanel({
   onFileUpdate,
   onError,
   onFixWithAI,
+  useWebContainers,
 
   isGenerating = false,
   generatingFileCount = 0,
@@ -315,7 +327,7 @@ export function PreviewPanel({
   const [commentDraft, setCommentDraft] = useState("");
   const [commentSaving, setCommentSaving] = useState(false);
   const { toast } = useToast();
-  const [sandpackReady, setSandpackReady] = useState<boolean | null>(null);
+  const [previewEngine, setPreviewEngine] = useState<PreviewEngine>("detecting");
   const [consoleLines, setConsoleLines] = useState<{ type: string; text: string }[]>([]);
   const [vebSelected, setVebSelected] = useState<VebElement | null>(null);
   const [activeError, setActiveError] = useState<string | null>(null);
@@ -333,12 +345,19 @@ export function PreviewPanel({
     if (!visualEdit) setVebSelected(null);
   }, [visualEdit]);
 
-  // Always use the local srcdoc/Babel preview engine — Sandpack requires an
-  // active connection to CodeSandbox CDN servers which causes timeout errors.
-  // Setting sandpackReady=false immediately activates the offline fallback.
+  // Pick WebContainers (Lovable-style Vite runtime) or srcdoc fallback.
   useEffect(() => {
-    setSandpackReady(false);
-  }, []);
+    if (files.length === 0) {
+      setPreviewEngine("detecting");
+      return;
+    }
+    const isolated = typeof window !== "undefined" ? window.crossOriginIsolated : false;
+    const engine = resolvePreviewEngine(files, {
+      preferWebContainers: useWebContainers,
+      crossOriginIsolated: isolated,
+    });
+    setPreviewEngine(engine);
+  }, [files, useWebContainers, projectId]);
 
   useEffect(() => {
     function handler(e: MessageEvent) {
@@ -439,8 +458,8 @@ export function PreviewPanel({
     return visualEdit ? addVebBridge(base) : base;
   }, [files, visualEdit]);
   const fallbackHtml = useMemo(
-    () => (sandpackReady === false ? buildFallbackHtml(files) : ""),
-    [files, sandpackReady]
+    () => (previewEngine === "fallback" ? buildFallbackHtml(files) : ""),
+    [files, previewEngine]
   );
 
   async function submitElementComment() {
@@ -501,7 +520,7 @@ export function PreviewPanel({
   }, [fallbackHtml.length, refreshKey]);
 
   const hasFiles = files.length > 0;
-  const useFallback = sandpackReady === false;
+  const useFallback = previewEngine === "fallback";
 
   function refresh() {
     setRefreshKey((k) => k + 1);
@@ -559,8 +578,8 @@ export function PreviewPanel({
    * Wrap `children` in the appropriate device frame (or nothing for desktop).
    */
   function withDeviceFrame(children: React.ReactNode): React.ReactNode {
-    const previewUrl = sandpackReady === true
-      ? `sandpack://${template}`
+    const previewUrl = previewEngine === "webcontainer"
+      ? `webcontainer://project/${projectId ?? "local"}`
       : `preview://project/${projectId ?? "local"}`;
 
     if (device === "mobile" && showFrame) return <PhoneFrame>{children}</PhoneFrame>;
@@ -661,9 +680,9 @@ export function PreviewPanel({
           </div>
 
           <div className="flex items-center gap-0.5">
-            {sandpackReady === true && (
+            {previewEngine === "webcontainer" && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-400 border border-violet-500/30 mr-1">
-                Live
+                Vite
               </span>
             )}
 
@@ -799,68 +818,21 @@ export function PreviewPanel({
               </p>
             </div>
           </div>
-        ) : sandpackReady === null ? (
+        ) : previewEngine === "detecting" ? (
           <div className="flex-1 flex items-center justify-center bg-[#0a0a0a]">
             <div className="text-center">
               <Loader2 className="w-5 h-5 animate-spin text-muted-foreground/50 mx-auto mb-2" />
               <p className="text-xs text-muted-foreground/40">Loading preview…</p>
             </div>
           </div>
-        ) : sandpackReady === true ? (
+        ) : previewEngine === "webcontainer" ? (
           <div className="flex flex-col flex-1 overflow-hidden relative" ref={sandpackContainerRef}>
-            <SandpackProvider
+            <WebContainerPreview
               key={refreshKey}
-              template={template}
-              files={sandpackFiles}
-              theme="dark"
-              options={{
-                externalResources: ["https://cdn.tailwindcss.com"],
-                recompileMode: "delayed",
-                recompileDelay: 600,
-              }}
-              customSetup={{
-                dependencies: {
-                  "lucide-react": "latest",
-                  "framer-motion": "^11.0.0",
-                  "date-fns": "^3.0.0",
-                },
-              }}
-            >
-              <div className="flex flex-col h-full">
-                <div className="flex-1 overflow-hidden flex flex-col bg-[#13131a]">
-                  {withDeviceFrame(
-                    /* @ts-expect-error dynamic sandpack types */
-                    <SandpackPreviewComp
-                      showNavigator={false}
-                      showOpenInCodeSandbox={false}
-                      style={{ width: "100%", height: "100%", border: "none" }}
-                    />
-                  )}
-                </div>
-                {showConsole && (
-                  <div className="h-40 border-t border-[#1e1e2e] bg-[#0d0d14] overflow-hidden">
-                    <SandpackConsoleComp style={{ height: "100%" }} />
-                  </div>
-                )}
-              </div>
-            </SandpackProvider>
-
-            {/* VEB selection overlay for Sandpack mode */}
-            {visualEdit && vebSelected && (
-              <VebPopover
-                selected={vebSelected}
-                files={files}
-                onFileChange={handleVebFileChange}
-                onClose={() => setVebSelected(null)}
-              />
-            )}
-
-            {/* Visual edit hint banner */}
-            {visualEdit && !vebSelected && (
-              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-violet-600/90 backdrop-blur-sm text-white text-xs px-3 py-1.5 rounded-full shadow-lg pointer-events-none">
-                Click any element to edit it
-              </div>
-            )}
+              files={files}
+              embedded
+              onError={() => setPreviewEngine("fallback")}
+            />
           </div>
         ) : (
           /* Fallback: Babel + CDN iframe (same-origin, so VisualEditOverlay can inject directly) */

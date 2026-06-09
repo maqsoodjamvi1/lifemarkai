@@ -5,6 +5,7 @@ import { BookOpen, Sparkles, Copy, Check, Loader2, Download, RefreshCw, FileText
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
+import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
 
 interface ChangelogPanelProps {
   projectId: string;
@@ -90,7 +91,7 @@ Rules:
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       messages: [{ role: "user", content: `Project: ${projectName}\n\nDevelopment history:\n${summaries || "No messages yet — generate a sample changelog for a new project."}` }],
-      model: "gpt-4o",
+      model: BALANCED_CODING_MODEL,
       system: systemPrompt,
       mode: "chat",
       projectId: "changelog",

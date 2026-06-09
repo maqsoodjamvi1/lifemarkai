@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
+import { getDefaultAiModel } from "./model-defaults";
 
 export type AIModel =
   | "gpt-4o"
@@ -138,7 +139,7 @@ function isFallbackableError(err: unknown): boolean {
 }
 
 export async function generateAI(options: GenerateOptions): Promise<GenerateResult> {
-  const model = options.model ?? (process.env.DEFAULT_AI_MODEL as AIModel) ?? "gpt-4o";
+  const model = options.model ?? getDefaultAiModel();
   const provider = getProvider(model);
 
   // Primary attempt — the model's native provider.

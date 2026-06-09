@@ -7,11 +7,13 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import {
   resolvePromptMode,
+  resolveSmartModel,
   inferProjectStage,
   getSmartPlaceholder,
   pickActiveFileAfterUpdate,
   shouldFocusPreviewAfterGeneration,
   getEmptyProjectPrompts,
+  CLAUDE_MODELS,
 } from "../lib/ai/editor-intelligence";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -35,9 +37,16 @@ const baseCtx = {
 const cases = [
   {
     hypothesisId: "H1",
-    name: "explain → chat",
+    name: "explain on build tab → build",
     prompt: "Explain how React hooks work",
     ctx: baseCtx,
+    expect: "build" as const,
+  },
+  {
+    hypothesisId: "H1",
+    name: "explain on chat tab → chat",
+    prompt: "Explain how React hooks work",
+    ctx: { ...baseCtx, currentMode: "chat" as const },
     expect: "chat" as const,
   },
   {
@@ -49,17 +58,29 @@ const cases = [
   },
   {
     hypothesisId: "H1",
-    name: "plan keywords → plan",
+    name: "plan keywords on build tab → build",
     prompt: "Plan the architecture for a multi-tenant SaaS",
     ctx: { ...baseCtx, fileCount: 3, files: [{ path: "src/App.tsx" }] },
-    expect: "plan" as const,
+    expect: "build" as const,
   },
   {
     hypothesisId: "H1",
-    name: "small patch → patch",
+    name: "small patch on build tab → build",
     prompt: "Change the header color to blue",
     ctx: {
       ...baseCtx,
+      fileCount: 5,
+      files: [{ path: "src/App.tsx" }, { path: "src/components/Header.tsx" }],
+    },
+    expect: "build" as const,
+  },
+  {
+    hypothesisId: "H1",
+    name: "small patch on patch tab → patch",
+    prompt: "Change the header color to blue",
+    ctx: {
+      ...baseCtx,
+      currentMode: "patch" as const,
       fileCount: 5,
       files: [{ path: "src/App.tsx" }, { path: "src/components/Header.tsx" }],
     },
@@ -67,10 +88,35 @@ const cases = [
   },
   {
     hypothesisId: "H1",
+    name: "create login page on build tab → build",
+    prompt: "Create a login page with email and password",
+    ctx: {
+      ...baseCtx,
+      fileCount: 12,
+      files: [{ path: "src/App.tsx" }, { path: "src/pages/Home.tsx" }],
+    },
+    expect: "build" as const,
+  },
+  {
+    hypothesisId: "H1",
     name: "preview error fix → build",
     prompt: "Fix the runtime error in the preview",
     ctx: { ...baseCtx, hasPreviewError: true, fileCount: 4, files: [{ path: "src/App.tsx" }] },
     expect: "build" as const,
+  },
+  {
+    hypothesisId: "H4",
+    name: "investigate while build toggle → chat",
+    prompt: "Please investigate why the login form validation fails",
+    ctx: { ...baseCtx, fileCount: 8, files: [{ path: "src/App.tsx" }, { path: "src/Login.tsx" }] },
+    expect: "chat" as const,
+  },
+  {
+    hypothesisId: "H4",
+    name: "what-if while build toggle → chat",
+    prompt: "What would happen if we switched from localStorage to cookies?",
+    ctx: { ...baseCtx, fileCount: 5, files: [{ path: "src/App.tsx" }] },
+    expect: "chat" as const,
   },
 ];
 
@@ -150,6 +196,26 @@ log({
   message: "getEmptyProjectPrompts",
   data: { count: emptyPrompts.length, first: emptyPrompts[0], ok: emptyPrompts.length >= 3 },
 });
+
+const modelCases = [
+  { name: "build → opus", mode: "build" as const, prompt: "Build a todo app", expect: CLAUDE_MODELS.opus },
+  { name: "agent → opus", mode: "agent" as const, prompt: "Add auth", expect: CLAUDE_MODELS.opus },
+  { name: "short patch → haiku", mode: "patch" as const, prompt: "Make header blue", expect: CLAUDE_MODELS.haiku },
+  { name: "short chat → haiku", mode: "chat" as const, prompt: "What is React?", expect: CLAUDE_MODELS.haiku },
+  { name: "plan → sonnet", mode: "plan" as const, prompt: "Plan a SaaS dashboard", expect: CLAUDE_MODELS.sonnet },
+];
+for (const mc of modelCases) {
+  const got = resolveSmartModel(mc.mode, { fileCount: 5, hasPreviewError: false }, mc.prompt);
+  const ok = got === mc.expect;
+  if (ok) passed++;
+  else failed++;
+  log({
+    hypothesisId: "H5",
+    location: "verify-editor-intelligence.ts",
+    message: `resolveSmartModel: ${mc.name}`,
+    data: { mode: mc.mode, expect: mc.expect, got, ok },
+  });
+}
 
 log({
   location: "verify-editor-intelligence.ts",

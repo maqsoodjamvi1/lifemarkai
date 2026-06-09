@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
+import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
 // POST /api/projects/[id]/readme
@@ -77,7 +78,7 @@ Generate a complete README.md for this project.`;
   let readme: string;
   try {
     const response = await generateAI({
-      model: "gpt-4o-mini",
+      model: FAST_CODING_MODEL,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },

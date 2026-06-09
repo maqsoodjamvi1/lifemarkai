@@ -13,6 +13,7 @@ import { loadEditorSettings, saveEditorSettings, DEFAULT_EDITOR_SETTINGS, type E
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 import type { ProjectFile } from "@/types/database";
 import { CollabCursors } from "./collab-cursors";
 import { useYjsEditor, type Collaborator as YjsCollaborator } from "@/hooks/use-yjs-editor";
@@ -445,7 +446,7 @@ export function CodePanel({
                 "\n```",
             },
           ],
-          model: "gpt-4o",
+          model: DEFAULT_CODING_MODEL,
           system:
             "You are an expert code explainer. Explain what the given code does " +
             "step by step in plain English. Be concise but thorough. Use markdown.",

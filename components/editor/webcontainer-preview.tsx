@@ -9,10 +9,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
 import type { ProjectFile } from "@/types/database";
+import { patchFilesForWebContainer } from "@/lib/preview/patch-vite-for-webcontainer";
 
 interface WebContainerPreviewProps {
   files: ProjectFile[];
   onError?: (err: string) => void;
+  /** Hide the internal toolbar when embedded inside PreviewPanel */
+  embedded?: boolean;
   className?: string;
 }
 
@@ -33,7 +36,7 @@ let _lastPackageJsonContent: string | null = null;
 const MAX_WATCHDOG_ATTEMPTS = 3;
 const WATCHDOG_COUNTDOWN_SECS = 5;
 
-const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onError, className = "" }) => {
+const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onError, embedded = false, className = "" }) => {
   const [status, setStatus] = useState<Status>("idle");
   const [logs, setLogs] = useState<string[]>([]);
   // Watchdog state
@@ -88,7 +91,8 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
   }, []);
 
   const mountFiles = useCallback(async (wc: any, filesToLoad: ProjectFile[]) => {
-    const fileTree = buildFileTree(filesToLoad);
+    const patched = patchFilesForWebContainer(filesToLoad);
+    const fileTree = buildFileTree(patched);
     await wc.mount(fileTree);
     addLog("Files mounted");
   }, [addLog, buildFileTree]);
@@ -362,6 +366,7 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
 
   return (
     <div className={`flex flex-col h-full bg-[#0a0a0f] ${className}`}>
+      {!embedded && (
       <div className="flex items-center gap-2 px-3 h-10 border-b border-white/[0.06] shrink-0">
         <div className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${
           status === "ready" ? "bg-emerald-500/15 text-emerald-400" :
@@ -405,6 +410,7 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
           </Button>
         )}
       </div>
+      )}
 
       <div className="flex-1 flex flex-col overflow-hidden relative">
         <AnimatePresence>

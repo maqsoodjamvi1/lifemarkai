@@ -1,20 +1,24 @@
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { runAgent, type AgentStep } from "@/lib/ai/agent";
 import { detectLanguage } from "@/lib/ai/code-parser";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { ensureDevCredits } from "@/lib/dev-credits";
 import {
   parseCloudToolPermissions,
   buildCloudPermissionsPromptBlock,
   shouldBlockCloudAction,
 } from "@/lib/cloud/permissions";
+import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const rl = await rateLimitAsync(user.id, RATE_LIMITS.ai);
@@ -27,18 +31,29 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
   const { projectId, task, model } = body;
+  if (!projectId || typeof projectId !== "string") {
+    return NextResponse.json({ error: "projectId is required" }, { status: 400 });
+  }
   if (!task || typeof task !== "string" || task.length > 8000) {
     return NextResponse.json({ error: "Task must be a string under 8000 characters" }, { status: 400 });
   }
 
-  // Check credits (agents cost more)
+  const access = await getProjectAccess(supabase, projectId, user.id);
+  if (!canWriteProjectFiles(access)) {
+    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
+
+  // Check credits (agents cost more). Dev accounts auto-grant via ensureDevCredits.
   const { data: profile } = await (supabase as any).from("profiles")
     .select("credits, workspace_knowledge, cloud_tool_permissions").eq("id", user.id).single();
-  if (!profile || profile.credits < 5) {
+  let creditsBalance = profile?.credits ?? 0;
+  const granted = await ensureDevCredits(user.id);
+  if (granted !== null) creditsBalance = granted;
+  if (creditsBalance < 5) {
     return NextResponse.json({ error: "Need at least 5 credits for Agent Mode" }, { status: 402 });
   }
 
-  const cloudPermissions = parseCloudToolPermissions(profile.cloud_tool_permissions);
+  const cloudPermissions = parseCloudToolPermissions(profile?.cloud_tool_permissions);
 
   const { data: projectRow } = await (supabase as any)
     .from("projects").select("knowledge, cloud_enabled").eq("id", projectId).single();
@@ -48,7 +63,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: cloudBlock.reason, cloud_blocked: true, tool: cloudBlock.tool }, { status: 403 });
   }
   const projectKnowledge = (projectRow as { knowledge?: string | null } | null)?.knowledge?.trim();
-  const workspaceKnowledge = (profile as { workspace_knowledge?: string | null }).workspace_knowledge?.trim();
+  const workspaceKnowledge = profile?.workspace_knowledge?.trim();
 
   // Combine workspace + project knowledge (workspace first, project-level overrides)
   const knowledgeParts: string[] = [];
@@ -91,7 +106,7 @@ export async function POST(req: NextRequest) {
           {
             project_id: projectId, role: "assistant",
             content: result.summary, tokens_used: result.tokensUsed,
-            model: model ?? (process.env.DEFAULT_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324", mode: "agent",
+            model: model ?? getDefaultAiModel(), mode: "agent",
             metadata: { steps: result.steps.length, files_changed: result.filesChanged },
           },
         ]);

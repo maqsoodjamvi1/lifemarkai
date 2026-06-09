@@ -1,7 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
+import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -23,17 +26,20 @@ interface Params {
 export async function POST(req: NextRequest, { params }: Params) {
   try {
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const { user } = await getServerUser(supabase);
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { id: projectId } = await params;
 
-    // Verify ownership
+    const access = await getProjectAccess(supabase, projectId, user.id);
+    if (!canWriteProjectFiles(access)) {
+      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
+
     const { data: project } = await (supabase as any)
       .from("projects")
       .select("id, name, metadata")
       .eq("id", projectId)
-      .eq("user_id", user.id)
       .single();
 
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
@@ -64,7 +70,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
     let summary = "";
     await generateAI({
-      model: "gpt-4o-mini",
+      model: FAST_CODING_MODEL,
       messages: [
         { role: "system", content: SUMMARISE_SYSTEM },
         {

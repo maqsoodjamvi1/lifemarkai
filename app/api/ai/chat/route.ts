@@ -2,6 +2,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
+import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { sendLowCreditsEmail } from "@/lib/email/resend";
 import {
   CHAT_SYSTEM_PROMPT,
@@ -24,12 +25,15 @@ import { getProjectSchemaContext } from "@/lib/supabase/schema-reader";
 import { matchSkills, renderSkillBlock, type SkillCandidate, type SkillMatch } from "@/lib/ai/skill-matcher";
 import { shouldUseSubagents, runSubagentInvestigation, type SubagentStep } from "@/lib/ai/subagents";
 import { computeCreditCost } from "@/lib/ai/credit-cost";
+import { buildCompletedBuildActivity } from "@/lib/ai/build-activity";
 import {
   parseCloudToolPermissions,
   buildCloudPermissionsPromptBlock,
   shouldBlockCloudAction,
 } from "@/lib/cloud/permissions";
 import { ensureDevCredits, getDevProfile } from "@/lib/dev-credits";
+import { buildMcpContextBlock } from "@/lib/ai/mcp-context";
+import { ENV_FILE_PATH, parseEnvFile } from "@/lib/project/env-file";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -126,7 +130,7 @@ export async function POST(req: NextRequest) {
 
     // Fetch project knowledge + recent messages + DB schema in parallel
     const [projectRes, recentMessagesRes, schemaContext] = await Promise.all([
-      (supabase as any).from("projects").select("knowledge, name, metadata, disabled_skill_ids, cloud_enabled").eq("id", projectId).single(),
+      (supabase as any).from("projects").select("knowledge, name, metadata, disabled_skill_ids, cloud_enabled, github_repo").eq("id", projectId).single(),
       (supabase as any).from("messages").select("role, content, mode, metadata").eq("project_id", projectId)
         .order("created_at", { ascending: false }).limit(40),
       // Schema reading is best-effort — never blocks the response
@@ -158,6 +162,7 @@ export async function POST(req: NextRequest) {
       metadata?: Record<string, unknown> | null;
       disabled_skill_ids?: string[] | null;
       cloud_enabled?: boolean;
+      github_repo?: string | null;
     } | null;
     const projectKnowledge = projectData?.knowledge?.trim();
     const knowledgeBlock = projectKnowledge
@@ -245,6 +250,26 @@ export async function POST(req: NextRequest) {
     }
 
     systemPrompt += cloudPermissionsBlock;
+
+    // MCP context — inject catalogue blocks when matching keys exist in .env.local
+    let envFileContent =
+      (files as Array<{ path: string; content: string }>).find(
+        (f) => f.path === ENV_FILE_PATH || f.path.endsWith(`/${ENV_FILE_PATH}`),
+      )?.content ?? "";
+    if (!envFileContent) {
+      const { data: envRow } = await (supabase as any)
+        .from("project_files")
+        .select("content")
+        .eq("project_id", projectId)
+        .eq("path", ENV_FILE_PATH)
+        .maybeSingle();
+      envFileContent = envRow?.content ?? "";
+    }
+    if (envFileContent) {
+      const envKeys = Object.keys(parseEnvFile(envFileContent));
+      const mcpBlock = buildMcpContextBlock(envKeys);
+      if (mcpBlock) systemPrompt += mcpBlock;
+    }
 
     // ── Design Systems: inject .lovable/system.md + rules from connected DS ───
     try {
@@ -432,7 +457,7 @@ The user has expressed frustration. Do the following:
           try {
             let questionsJson = "";
             await generateAI({
-              model: model ?? (process.env.DEFAULT_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324",
+              model: model ?? getDefaultAiModel(),
               messages: [
                 { role: "system", content: clarifySystemPrompt },
                 { role: "user", content: "Build request: " + message + "\n\nProject has " + files.length + " existing files." },
@@ -525,7 +550,7 @@ The user has expressed frustration. Do the following:
 
         try {
           const result = await generateAI({
-            model: model ?? (process.env.DEFAULT_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324",
+            model: model ?? getDefaultAiModel(),
             messages,
             maxTokens: 8000,
             stream: true,
@@ -588,7 +613,7 @@ The user has expressed frustration. Do the following:
                   const repairPrompt = buildRepairPrompt(finalFiles, validationErrors.map((e) => e.message));
                   let repairContent = "";
                   await generateAI({
-                    model: model ?? (process.env.DEFAULT_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324",
+                    model: model ?? getDefaultAiModel(),
                     messages: [
                       { role: "system" as const, content: AUTO_FIX_SYSTEM_PROMPT },
                       { role: "user" as const, content: repairPrompt },
@@ -632,7 +657,7 @@ The user has expressed frustration. Do the following:
               try {
                 let retryContent = "";
                 await generateAI({
-                  model: model ?? (process.env.DEFAULT_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324",
+                  model: model ?? getDefaultAiModel(),
                   messages: [
                     ...messages,
                     { role: "assistant" as const, content: fullContent },
@@ -708,10 +733,25 @@ The user has expressed frustration. Do the following:
             }
           }
 
+          const buildActivity =
+            (mode === "build" || mode === "patch") && (parsedFiles.length > 0 || Array.isArray(files) && files.length > 0)
+              ? buildCompletedBuildActivity(
+                  Array.isArray(files) ? files.length : 0,
+                  buildIntent?.statusLabel ?? null,
+                  Math.max(parsedFiles.length, streamedFilePaths.size),
+                  { githubRepo: projectData?.github_repo ?? null },
+                )
+              : null;
+
           const assistantMetadata: Record<string, unknown> | null =
             (mode === "build" || mode === "patch") && parsedFiles.length > 0
-              ? { files_changed: parsedFiles.map((f) => f.path) }
-              : null;
+              ? {
+                  files_changed: parsedFiles.map((f) => f.path),
+                  ...(buildActivity ? { build_activity: buildActivity } : {}),
+                }
+              : buildActivity
+                ? { build_activity: buildActivity }
+                : null;
 
           const creditCost = computeCreditCost({
             mode,
@@ -726,20 +766,26 @@ The user has expressed frustration. Do the following:
             mode === "build" || mode === "patch"
               ? parseAIResponse(fullContent).message
               : fullContent;
-          await (supabase as any).from("messages").insert([
-            { project_id: projectId, role: "user", content: message, mode },
-            {
-              project_id: projectId,
-              role: "assistant",
-              content: persistedContent,
-              tokens_used: tokensUsed,
-              model: model ?? (process.env.DEFAULT_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324",
-              mode,
-              metadata: assistantMetadata
-                ? { ...assistantMetadata, credits_used: creditCost }
-                : { credits_used: creditCost },
-            },
-          ]);
+          const { data: insertedMessages } = await (supabase as any)
+            .from("messages")
+            .insert([
+              { project_id: projectId, role: "user", content: message, mode },
+              {
+                project_id: projectId,
+                role: "assistant",
+                content: persistedContent,
+                tokens_used: tokensUsed,
+                model: model ?? getDefaultAiModel(),
+                mode,
+                metadata: assistantMetadata
+                  ? { ...assistantMetadata, credits_used: creditCost }
+                  : { credits_used: creditCost },
+              },
+            ])
+            .select("id, role");
+          const assistantMessageId = (insertedMessages as Array<{ id: string; role: string }> | null)?.find(
+            (row) => row.role === "assistant",
+          )?.id;
 
           await (supabase as any).rpc("deduct_credits", {
             user_id: userId,
@@ -835,6 +881,8 @@ The user has expressed frustration. Do the following:
                 files: finalFilesForClient,
                 creditsUsed: creditCost,
                 fileCount: finalFilesForClient.length,
+                assistantMessageId,
+                build_activity: buildActivity ?? undefined,
                 // Human-readable summary for the chat bubble — without this the
                 // client renders the raw JSON blob (escaped \n and all).
                 displayMessage:

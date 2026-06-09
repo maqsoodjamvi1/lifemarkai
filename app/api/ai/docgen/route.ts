@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
+import { getFastAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
 const SYSTEM = `You are an expert TypeScript/JavaScript developer.
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await generateAI({
-      model: (process.env.FAST_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324",
+      model: getFastAiModel(),
       messages: [
         {
           role: "user" as const,

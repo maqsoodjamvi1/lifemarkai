@@ -83,7 +83,7 @@ async function liveChatSmoke() {
       projectId,
       message: "Build a simple hello world page",
       mode: "build",
-      model: "gpt-4o-mini",
+      model: "claude-opus-4-6",
       files: [],
       history: [],
     }),

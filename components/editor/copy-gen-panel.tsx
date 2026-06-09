@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
 import type { ProjectFile } from "@/types/database";
+import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
 
 interface CopyGenPanelProps {
   projectId: string;
@@ -70,7 +71,7 @@ Each value is a short string (no markdown, no quotes within the value). Keep it 
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: [{ role: "user", content: userMsg }],
-        model: "gpt-4o",
+        model: BALANCED_CODING_MODEL,
         system: systemPrompt,
         mode: "chat",
         projectId: "copy-gen",

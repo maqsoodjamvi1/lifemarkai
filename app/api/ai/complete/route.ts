@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
+import { getFastAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
 // POST /api/ai/complete
@@ -53,7 +54,7 @@ Framework: ${project.framework ?? "react"}
 
   try {
     const response = await generateAI({
-      model: (process.env.FAST_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324",
+      model: getFastAiModel(),
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },

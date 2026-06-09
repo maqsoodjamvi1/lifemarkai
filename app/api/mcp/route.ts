@@ -17,6 +17,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { BUILT_IN_TEMPLATES } from "@/lib/templates/built-in";
 import { enqueueDeployJob, getDeployQueue } from "@/lib/queue/client";
+import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 
 // ── MCP Protocol constants ───────────────────────────────────────────────────
 const MCP_VERSION = "2024-11-05";
@@ -69,7 +70,7 @@ const TOOLS = [
         message: { type: "string", description: "The instruction for the AI" },
         model: {
           type: "string",
-          description: "AI model to use. Defaults to gpt-4o.",
+          description: "AI model to use. Defaults to claude-opus-4-6.",
           enum: ["gpt-4o", "gpt-4o-mini", "claude-opus-4-6", "claude-sonnet-4-6", "gemini-2.0-flash"],
         },
       },
@@ -214,7 +215,7 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
     }
 
     case "send_chat_message": {
-      const { project_id, message, model = "gpt-4o" } = args;
+      const { project_id, message, model = DEFAULT_CODING_MODEL } = args;
       // Verify ownership
       const { data: proj } = await (admin as any)
         .from("projects").select("id").eq("id", project_id).eq("user_id", userId).single();

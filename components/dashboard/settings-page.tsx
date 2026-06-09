@@ -433,17 +433,18 @@ const SECTIONS = [
 ];
 
 const AI_MODELS = [
-  { id: "gpt-4o", label: "GPT-4o (Recommended)", provider: "OpenAI" },
+  { id: "claude-opus-4-6", label: "Claude Opus 4.6 (Recommended)", provider: "Anthropic" },
+  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (Balanced)", provider: "Anthropic" },
+  { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 (Fast)", provider: "Anthropic" },
+  { id: "gpt-4o", label: "GPT-4o", provider: "OpenAI" },
   { id: "gpt-4o-mini", label: "GPT-4o Mini (Faster)", provider: "OpenAI" },
   { id: "moonshotai/kimi-k2-instruct-0905", label: "Kimi K2 (Code)", provider: "Kimi" },
-  { id: "claude-opus-4-6", label: "Claude Opus 4.6 (Powerful)", provider: "Anthropic" },
-  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (Balanced)", provider: "Anthropic" },
 ];
 
 export function SettingsPage({ user, profile }: SettingsPageProps) {
   const [active, setActive] = useState("profile");
   const [name, setName] = useState(profile?.full_name ?? "");
-  const [defaultModel, setDefaultModel] = useState("gpt-4o");
+  const [defaultModel, setDefaultModel] = useState("claude-opus-4-6");
   const [saving, setSaving] = useState(false);
   const [isPublic, setIsPublic] = useState<boolean>(profile?.is_public ?? false);
   const [privacySaving, setPrivacySaving] = useState(false);

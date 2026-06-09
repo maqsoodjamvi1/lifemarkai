@@ -275,7 +275,27 @@ export function SecondaryPanelContent(ctx: LazyPanelContext) {
   }
   if (rightPanel === "secrets") return <SecretsVaultPanel projectId={project.id} />;
   if (rightPanel === "migrations") {
-    return <MigrationsWizardPanel projectId={project.id} files={files} onInsertCode={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} onFilesUpdate={handleFilesUpdate} />;
+    return (
+      <MigrationsWizardPanel
+        projectId={project.id}
+        files={files}
+        onInsertCode={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }}
+        onFilesUpdate={(partial) => {
+          const now = new Date().toISOString();
+          setFiles(
+            partial.map((pf) => ({
+              id: `restore-${pf.path}`,
+              project_id: project.id,
+              path: pf.path,
+              content: pf.content,
+              language: pf.language ?? "plaintext",
+              created_at: now,
+              updated_at: now,
+            }))
+          );
+        }}
+      />
+    );
   }
   if (rightPanel === "modelcmp") {
     return <ModelComparePanel projectId={project.id} onSendToChat={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />;

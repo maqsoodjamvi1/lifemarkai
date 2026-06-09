@@ -46,16 +46,6 @@ const HistoryPanel = dynamic(
   { ssr: false }
 );
 
-const SearchPanel = dynamic(
-  importWithRetry(() => import("./search-panel").then((m) => m.SearchPanel)),
-  { ssr: false }
-);
-
-const ComponentsPanel = dynamic(
-  importWithRetry(() => import("./components-panel").then((m) => m.ComponentsPanel)),
-  { ssr: false }
-);
-
 const PreviewAnnotateModal = dynamic(
   importWithRetry(() => import("./preview-annotate-modal").then((m) => m.PreviewAnnotateModal)),
   { ssr: false }
@@ -172,11 +162,6 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   const [rightPanel, setRightPanel] = useState<LeftPanel | null>(null);
   const [leftChatOverlay, setLeftChatOverlay] = useState<"history" | null>(null);
 
-  const focusPreview = useCallback(() => {
-    setRightPanel(null);
-    setViewMode("preview");
-    window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
-  }, []);
   const [credits, setCredits] = useState(profile?.credits ?? 0);
   const [isVisualEditActive, setIsVisualEditActive] = useState(false);
   const [showFileTree, setShowFileTree] = useState(false);
@@ -246,6 +231,25 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     setCurrentProject((prev) => ({ ...prev, ...updates }));
   }, []);
   const { open: shortcutsOpen, setOpen: setShortcutsOpen } = useShortcutsModal();
+
+  const handleOpenPanel = useCallback((panel: string) => {
+    if (panel === "history") {
+      setLeftChatOverlay("history");
+      setRightPanel(null);
+    } else {
+      setRightPanel(panel as LeftPanel);
+      setLeftChatOverlay(null);
+    }
+  }, []);
+
+  const handleFocusPreview = useCallback(() => {
+    setRightPanel(null);
+    setLeftChatOverlay(null);
+    setViewMode("preview");
+    if (isMobile) setMobilePaneActive("preview");
+    window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
+  }, [isMobile]);
+
   const commandPaletteActions: CommandPaletteActions = {
     onOpenFile: (file) => setActiveFile(files.find(f => f.id === file.id) || null),
     onOpenPanel: (panel) => {
@@ -253,7 +257,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
       if (chatPanels.includes(panel as LeftPanel)) {
         setLeftPanel(panel as LeftPanel);
       } else {
-        setRightPanel(panel as LeftPanel);
+        handleOpenPanel(panel);
       }
     },
     onSetViewMode: (mode) => setViewMode(mode),
@@ -341,7 +345,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
         queueMicrotask(() => {
           setActiveFile((current) => pickActiveFileAfterUpdate(next, changedPaths, current) ?? current);
           if (shouldFocusPreviewAfterGeneration(editorMode, changedPaths.length)) {
-            focusPreview();
+            handleFocusPreview();
           }
         });
       }
@@ -349,7 +353,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
       return next;
     });
     if (isMobile && updatedFiles.length > 0) setMobilePaneActive("preview");
-  }, [editorMode, focusPreview, isMobile]);
+  }, [editorMode, handleFocusPreview, isMobile]);
 
   const handleFileCreate = useCallback((newFile: ProjectFile) => {
     setFiles((prev) => [...prev, newFile]);
@@ -416,6 +420,14 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     setPendingCrossRefPrompt(p);
     setRightPanel(null);
   }, []);
+
+  // Sync top-bar preview/code toggles with mobile bottom-nav panes
+  useEffect(() => {
+    if (!isMobile || rightPanel || leftChatOverlay) return;
+    if (viewMode === "code") setMobilePaneActive("code");
+    else setMobilePaneActive("preview");
+  }, [isMobile, viewMode, rightPanel, leftChatOverlay]);
+
   const handleEnvUpdateFile = useCallback((path: string, content: string) => {
     setFiles((prev) => prev.map((f) => (f.path === path ? { ...f, content } : f)));
     setActiveFile((prev) => (prev?.path === path ? { ...prev, content } : prev));
@@ -576,85 +588,65 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
       )}
       {!focusMode && <EditorPaymentBanner profile={profile} credits={credits} />}
 
-      {/* ── Mobile layout ─────────────────────────────────────────────────── */}
+      {/* ── Mobile layout (Lovable-style: chat-only left, tools via overlays) ─ */}
       {isMobile && (
         <>
           <div className="flex-1 overflow-hidden relative">
-            {/* Left panel */}
+            {/* Chat pane — always chat-only, no emoji tab strip */}
             <div className={`absolute inset-0 flex flex-col ${mobilePaneActive === "left" ? "" : "hidden"}`}>
-              <div className="flex-1 overflow-hidden">
-                {/* Scrollable tab strip */}
-                <div className="flex border-b border-border overflow-x-auto bg-background">
-                  {leftPanelTabs.map((tab) => (
-                    <button
-                      key={tab.id}
-                      onClick={() => setLeftPanel(tab.id)}
-                      title={tab.label}
-                      className={`flex items-center gap-1 px-3 py-2 text-xs font-medium whitespace-nowrap border-b-2 transition-colors flex-shrink-0 ${
-                        leftPanel === tab.id
-                          ? "border-primary text-primary"
-                          : "border-transparent text-muted-foreground"
-                      }`}
-                    >
-                      <span>{tab.emoji}</span>
-                    </button>
-                  ))}
-                </div>
-                <div className="h-full overflow-hidden">
-                  {/* AI/chat panel — same as desktop left panel */}
-                  {leftPanel === "chat" && (
-                    <ChatPanel
-                      project={project}
-                      files={files}
-                      messages={messages}
-                      activeFile={activeFile}
-                      mode={editorMode}
-                      credits={credits}
-                      starterPrompt={pendingConnectorPrompt ?? pendingComponentPrompt ?? starterPrompt}
-                      previewError={previewError}
-                      pendingFixPrompt={pendingFix}
-                      pendingFileRef={pendingFileRef}
-                      onMessagesUpdate={handleMessagesUpdate}
-                      onFilesUpdate={handleFilesUpdate}
-                      onCreditsUpdate={handleCreditsUpdate}
-                      onAutoFixComplete={() => setPreviewError(null)}
-                      onPendingFixConsumed={() => setPendingFix(null)}
-                      onPendingFileRefConsumed={() => setPendingFileRef(null)}
-                      onStreamingChange={(s, fc) => { setIsGenerating(s); if (fc !== undefined) setGeneratingFileCount(fc); }}
-                      onModeChange={setEditorMode}
-                      pendingBuildFromFile={pendingBuildFromFile}
-                      onPendingBuildFromFileConsumed={() => setPendingBuildFromFile(null)}
-                      isLocked={isLiveLocked}
-                      onApprovePlan={() => {
-                        setEditorMode("build");
-                        setMobilePaneActive("preview");
-                      }}
-                    />
-                  )}
-                  {leftPanel === "search" && (
-                    <SearchPanel
-                      files={files}
-                      projectId={project.id}
-                      onFileSelect={(file, _line) => {
-                        setActiveFile(file);
-                        setMobilePaneActive("code");
-                      }}
-                      onFilesUpdate={(updated) => setFiles(updated)}
-                    />
-                  )}
-                  {leftPanel === "components" && (
-                    <ComponentsPanel
-                      onInsertPrompt={(prompt) => {
-                        setPendingComponentPrompt(prompt);
-                        setLeftPanel("chat");
-                      }}
-                    />
-                  )}
-                  {leftPanel !== "chat" && leftPanel !== "search" && (
-                    <div className="flex items-center justify-center h-full text-xs text-muted-foreground p-4 text-center">
-                      Switch to desktop view for full panel access
+              <div className="relative flex-1 overflow-hidden">
+                <ChatPanel
+                  project={project}
+                  files={files}
+                  messages={messages}
+                  activeFile={activeFile}
+                  mode={editorMode}
+                  credits={credits}
+                  starterPrompt={pendingConnectorPrompt ?? pendingComponentPrompt ?? starterPrompt}
+                  previewError={previewError}
+                  pendingFixPrompt={pendingFix}
+                  pendingFileRef={pendingFileRef}
+                  onMessagesUpdate={handleMessagesUpdate}
+                  onFilesUpdate={handleFilesUpdate}
+                  onCreditsUpdate={handleCreditsUpdate}
+                  onAutoFixComplete={() => setPreviewError(null)}
+                  onPendingFixConsumed={() => setPendingFix(null)}
+                  onPendingFileRefConsumed={() => setPendingFileRef(null)}
+                  onStreamingChange={(s, fc) => { setIsGenerating(s); if (fc !== undefined) setGeneratingFileCount(fc); }}
+                  onModeChange={setEditorMode}
+                  pendingBuildFromFile={pendingBuildFromFile}
+                  onPendingBuildFromFileConsumed={() => setPendingBuildFromFile(null)}
+                  isLocked={isLiveLocked}
+                  onApprovePlan={() => {
+                    setEditorMode("build");
+                    handleFocusPreview();
+                  }}
+                  onOpenPanel={handleOpenPanel}
+                  onFocusPreview={handleFocusPreview}
+                />
+                {leftChatOverlay === "history" && (
+                  <div className="absolute inset-0 z-10 flex flex-col bg-background">
+                    <LovableOverlayHeader title="History" onClose={() => setLeftChatOverlay(null)} />
+                    <div className="flex-1 overflow-hidden">
+                      <HistoryPanel
+                        projectId={currentProject.id}
+                        onRestore={(snapshotFiles) => {
+                          setFiles(snapshotFiles);
+                          setActiveFile(snapshotFiles[0] ?? null);
+                          setLeftChatOverlay(null);
+                          handleFocusPreview();
+                        }}
+                        onCompare={(oldId, newId) => {
+                          window.dispatchEvent(new CustomEvent("lifemark-open-diff", {
+                            detail: { oldSnapshotId: oldId, newSnapshotId: newId, projectId: currentProject.id },
+                          }));
+                          setLeftChatOverlay(null);
+                          handleOpenPanel("diffviewer");
+                        }}
+                      />
                     </div>
-                  )}                </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -679,15 +671,79 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 onFileUpdate={handleFileUpdate}
                 onError={setPreviewError}
                 onFixWithAI={(err) => { setMobilePaneActive("left"); setLeftPanel("chat"); setPendingFix(err); }}
-                useWebContainers
                 isGenerating={isGenerating}
                 generatingFileCount={generatingFileCount}
                 deployedUrl={project.deployed_url ?? undefined}
-                badgeHidden={(project as any).badge_hidden ?? false}
+                badgeHidden={(project as { badge_hidden?: boolean }).badge_hidden ?? false}
                 projectId={project.id}
                 onSendAnnotatedToChat={(prompt, img) => { setMobilePaneActive("left"); setLeftPanel("chat"); setPendingBuildFromFile({ prompt, imageBase64: img }); }}
               />
             </div>
+
+            {/* Tool panel overlay — same as desktop right-side panels */}
+            {rightPanel && (
+              <div className="absolute inset-0 z-20 flex flex-col bg-background">
+                {isLovableToolPanel(rightPanel) ? (
+                  <LovableToolsOverlay
+                    activeTab={rightPanel}
+                    onTabChange={(tab) => setRightPanel(tab)}
+                    onClose={() => setRightPanel(null)}
+                  >
+                    <LazyLovablePanel
+                      rightPanel={rightPanel}
+                      currentProject={currentProject}
+                      profile={profile}
+                      files={files}
+                      pid={pid}
+                      setRightPanel={setRightPanel}
+                      handleFilesUpdate={handleFilesUpdate}
+                      sendPromptToChat={sendPromptToChat}
+                    />
+                  </LovableToolsOverlay>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between px-4 h-9 border-b border-border shrink-0">
+                      <span className="text-xs font-semibold text-foreground">
+                        {leftPanelTabs.find((t) => t.id === rightPanel)?.label ?? rightPanel}
+                      </span>
+                      <button
+                        onClick={() => setRightPanel(null)}
+                        className="flex items-center justify-center w-6 h-6 rounded hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                      </button>
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                      <LazySecondaryPanel
+                        rightPanel={rightPanel}
+                        project={project}
+                        currentProject={currentProject}
+                        profile={profile}
+                        files={files}
+                        activeFile={activeFile}
+                        pid={pid}
+                        projectSlug={projectSlug}
+                        credits={credits}
+                        isLiveLocked={isLiveLocked}
+                        yjsCollaborators={yjsCollaborators}
+                        setRightPanel={setRightPanel}
+                        setViewMode={setViewMode}
+                        setActiveFile={setActiveFile}
+                        setFiles={setFiles}
+                        setEditorMode={setEditorMode}
+                        setPendingCrossRefPrompt={setPendingCrossRefPrompt}
+                        handleProjectUpdate={handleProjectUpdate}
+                        handleFilesUpdate={handleFilesUpdate}
+                        handleFileUpdate={handleFileUpdate}
+                        handleEnvUpdateFile={handleEnvUpdateFile}
+                        handleCreditsUpdate={handleCreditsUpdate}
+                        sendPromptToChat={sendPromptToChat}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Mobile bottom nav */}
@@ -704,14 +760,17 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                   key={pane}
                   aria-label={config.label}
                   onClick={() => {
+                    setRightPanel(null);
+                    setLeftChatOverlay(null);
                     setMobilePaneActive(pane);
                     if (pane === "left") setLeftPanel("chat");
+                    if (pane === "code") setViewMode("code");
+                    if (pane === "preview") setViewMode("preview");
                   }}
                   className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 text-[11px] font-medium transition-all relative ${
                     isActive ? "text-primary" : "text-muted-foreground active:text-foreground"
                   }`}
                 >
-                  {/* Active indicator bar */}
                   {isActive && (
                     <span className="absolute top-0 left-1/4 right-1/4 h-0.5 rounded-full bg-primary" />
                   )}
@@ -761,8 +820,8 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 onPendingBuildFromFileConsumed={() => setPendingBuildFromFile(null)}
                 isLocked={isLiveLocked}
                 onApprovePlan={() => setEditorMode("build")}
-                onOpenPanel={(panel) => setRightPanel(panel as LeftPanel)}
-                onFocusPreview={focusPreview}
+                onOpenPanel={handleOpenPanel}
+                onFocusPreview={handleFocusPreview}
               />
               {leftChatOverlay === "history" && (
                 <div className="absolute inset-0 z-10 flex flex-col bg-background">
@@ -774,14 +833,14 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                         setFiles(snapshotFiles);
                         setActiveFile(snapshotFiles[0] ?? null);
                         setLeftChatOverlay(null);
-                        focusPreview();
+                        handleFocusPreview();
                       }}
                       onCompare={(oldId, newId) => {
                         window.dispatchEvent(new CustomEvent("lifemark-open-diff", {
                           detail: { oldSnapshotId: oldId, newSnapshotId: newId, projectId: currentProject.id },
                         }));
                         setLeftChatOverlay(null);
-                        setRightPanel("diffviewer" as LeftPanel);
+                        handleOpenPanel("diffviewer");
                       }}
                     />
                   </div>

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
+import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -44,7 +45,7 @@ Rules:
 - Never generate DROP, TRUNCATE, or ALTER TABLE statements`;
 
   const result = await generateAI({
-    model: (process.env.DEFAULT_AI_MODEL as import("@/lib/ai/provider").AIModel) ?? "deepseek/deepseek-chat-v3-0324",
+    model: getDefaultAiModel(),
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: body.prompt },

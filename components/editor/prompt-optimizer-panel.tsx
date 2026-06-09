@@ -5,6 +5,7 @@ import { Wand2, Loader2, Copy, Check, ChevronRight, Sparkles, BarChart3, Refresh
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
+import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
 
 interface PromptOptimizerPanelProps {
   onSendToChat: (prompt: string) => void;
@@ -105,7 +106,7 @@ Rules:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           messages: [{ role: "user", content: `Original prompt: "${input.trim()}"` }],
-          model: "gpt-4o",
+          model: BALANCED_CODING_MODEL,
           system: systemPrompt,
           mode: "chat",
           projectId: "optimizer",

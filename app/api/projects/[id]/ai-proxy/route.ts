@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/provider";
+import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 
 // ─── POST /api/projects/[id]/ai-proxy ────────────────────────────────────────
 // Managed AI proxy for apps built with LifemarkAI.
@@ -94,7 +95,7 @@ export async function POST(
 
   try {
     const result = await generateAI({
-      model: project.ai_integration_model ?? "gpt-4o-mini",
+      model: project.ai_integration_model ?? DEFAULT_CODING_MODEL,
       messages: aiMessages as Parameters<typeof generateAI>[0]["messages"],
       maxTokens: Math.min(maxTokens, 2000),
       temperature,

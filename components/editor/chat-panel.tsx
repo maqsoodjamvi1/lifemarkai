@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useMemo } from "react";
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -33,7 +33,7 @@ import { DiffViewer, computeFileDiff, type FileState } from "@/components/editor
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { Project, ProjectFile, Message } from "@/types/database";
+import type { Project, ProjectFile, Message, Json } from "@/types/database";
 import type { EditorMode } from "./editor-layout";
 import { VoiceMode } from "./voice-mode";
 import { SnippetPicker } from "./snippet-picker";
@@ -42,18 +42,31 @@ import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { findMissingPackages, buildInstallCommand, syncPackageJsonDeps } from "@/lib/ai/npm-auto-install";
 import { classifyBuildIntent, type BuildIntent } from "@/lib/ai/build-intent";
+import { useEditorModelPrefs } from "@/store/app-store";
+import type { AgentStep } from "@/lib/ai/agent";
 import {
   buildProjectContextBlock,
   enrichFollowUpSuggestions,
   getEmptyProjectPrompts,
+  getNoCreditsPrompts,
   getPreviewErrorPrompts,
   getSmartPlaceholder,
   inferProjectStage,
   resolvePromptMode,
+  resolveSmartModel,
+  DEFAULT_CODING_MODEL,
 } from "@/lib/ai/editor-intelligence";
 import { shouldRunPreviewVerify } from "@/lib/ai/preview-verify";
 import type { SubagentStep } from "@/lib/ai/subagents";
 import { SubagentActivityCard } from "./subagent-activity-card";
+import { BuildActivityCard } from "./build-activity-card";
+import {
+  initialBuildActivitySteps,
+  applyBuildIntentLabel,
+  onBuildFileProgress,
+  finalizeBuildActivity,
+  type BuildActivityStep,
+} from "@/lib/ai/build-activity";
 
 /** Prose intro shown above Working/Edited cards during build streams. */
 function extractStreamingProse(content: string): string | null {
@@ -64,13 +77,6 @@ function extractStreamingProse(content: string): string | null {
   if (beforeFence.length < 8) return null;
   return beforeFence.slice(0, 800);
 }
-
-const LIVE_BUILD_STATUS = [
-  "Designing Lovable-inspired builder UI…",
-  "Continuously composing Lovable-style UI flow…",
-  "Fetching Lovable-style builder details now…",
-  "Applying component structure and layout…",
-];
 
 type AIModel =
   | "gpt-4o"
@@ -233,6 +239,23 @@ interface AgentTaskStep {
   label: string;
   status: "running" | "done";
   detail?: string;
+}
+
+function agentStepToTaskStep(step: AgentStep): AgentTaskStep {
+  if (step.type === "thought") {
+    return { label: "Thinking…", status: "running", detail: step.content.slice(0, 120) || undefined };
+  }
+  if (step.type === "action") {
+    const tool = step.tool ?? "tool";
+    return { label: `Running ${tool}`, status: "running", detail: step.content.slice(0, 120) || undefined };
+  }
+  if (step.type === "observation") {
+    return { label: "Observing result", status: "running", detail: step.content.slice(0, 120) || undefined };
+  }
+  if (step.type === "done") {
+    return { label: "Complete", status: "done", detail: step.content.slice(0, 120) || undefined };
+  }
+  return { label: step.type, status: "running", detail: step.content.slice(0, 120) || undefined };
 }
 
 const MAX_AUTO_FIX_ATTEMPTS = 3;
@@ -561,18 +584,20 @@ export function ChatPanel({
     () => ({
       fileCount: files.length,
       hasPreviewError: !!previewError,
+      hasCredits: credits > 0,
       activeFilePath: activeFile?.path,
       framework: project.framework,
       currentMode: mode,
       files,
     }),
-    [files, previewError, activeFile?.path, project.framework, mode],
+    [files, previewError, credits, activeFile?.path, project.framework, mode],
   );
 
   const contextualEmptyPrompts = useMemo(() => {
+    if (credits <= 0) return getNoCreditsPrompts();
     if (previewError) return getPreviewErrorPrompts(previewError);
     return getEmptyProjectPrompts(inferProjectStage(files), project.framework);
-  }, [files, previewError, project.framework]);
+  }, [files, previewError, credits, project.framework]);
 
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -623,7 +648,19 @@ export function ChatPanel({
   const [pendingSkills, setPendingSkills] = useState<Array<{ id: string; name: string; reason?: string }>>([]);
   const [messageSkills, setMessageSkills] = useState<Record<string, Array<{ id: string; name: string; reason?: string }>>>({});
   const [expandedDiffs, setExpandedDiffs] = useState<Set<string>>(new Set());
-  const [selectedModel, setSelectedModel] = useState<AIModel>("gpt-4o");
+  const {
+    preferredModel: storedPreferredModel,
+    modelManuallySelected,
+    setPreferredModel: persistPreferredModel,
+    setModelManuallySelected,
+  } = useEditorModelPrefs();
+  const modelManuallySelectedRef = useRef(modelManuallySelected);
+  const [selectedModel, setSelectedModel] = useState<AIModel>(() =>
+    AI_MODELS.some((m) => m.id === storedPreferredModel) ? storedPreferredModel : DEFAULT_CODING_MODEL,
+  );
+  useEffect(() => {
+    modelManuallySelectedRef.current = modelManuallySelected;
+  }, [modelManuallySelected]);
   const [autoFixing, setAutoFixing] = useState(false);
   const [autoFixAttempts, setAutoFixAttempts] = useState(0);
   const [lastFixedError, setLastFixedError] = useState<string | null>(null);
@@ -728,7 +765,16 @@ export function ChatPanel({
   const [previewVerify, setPreviewVerify] = useState<{ ok: boolean; checks: Array<{ name: string; pass: boolean; detail?: string }> } | null>(null);
   const [messageCredits, setMessageCredits] = useState<Record<string, number>>({});
   const [buildStatus, setBuildStatus] = useState<BuildIntent | null>(null);
-  const agentTransitionedRef = useRef(false);
+  const [buildActivitySteps, setBuildActivitySteps] = useState<BuildActivityStep[]>([]);
+  const [messageBuildActivity, setMessageBuildActivity] = useState<Record<string, BuildActivityStep[]>>({});
+  /** Sync mirror of buildActivitySteps — safe to read inside SSE loop without stale closures. */
+  const buildActivityStepsRef = useRef<BuildActivityStep[]>([]);
+  const applyBuildSteps = useCallback((next: BuildActivityStep[] | ((prev: BuildActivityStep[]) => BuildActivityStep[])) => {
+    const resolved = typeof next === "function" ? next(buildActivityStepsRef.current) : next;
+    buildActivityStepsRef.current = resolved;
+    setBuildActivitySteps(resolved);
+  }, []);
+
   // Tracks file paths the SERVER streamed via `streamedFile` SSE events.
   // Persists across re-renders so we can re-fetch them from the DB on
   // data.done — even when parseAIResponse on the server returned no files.
@@ -1100,12 +1146,15 @@ export function ChatPanel({
 
   // Populate input when user clicks "Fix with AI" on the error banner in preview panel
   useEffect(() => {
-    if (!pendingFixPrompt) return;
+    if (!pendingFixPrompt || credits <= 0) {
+      if (pendingFixPrompt && credits <= 0) onPendingFixConsumed?.();
+      return;
+    }
     setInput(`Fix this runtime error:\n\n${pendingFixPrompt}`);
     onPendingFixConsumed?.();
     setTimeout(() => textareaRef.current?.focus(), 50);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingFixPrompt]);
+  }, [pendingFixPrompt, credits]);
 
   // Handle "Ask AI" / "Explain" from Monaco selection action bar
   useEffect(() => {
@@ -1247,7 +1296,7 @@ export function ChatPanel({
         role: "assistant",
         content: `✅ **Auto-fix applied** — ${data.explanation ?? "Fixed the error, check the preview."}`,
         tokens_used: data.tokensUsed ?? null,
-        model: "gpt-4o",
+        model: DEFAULT_CODING_MODEL,
         mode: "build",
         metadata: null,
         rating: null,
@@ -1448,9 +1497,35 @@ export function ChatPanel({
 
   async function sendMessage(userMessage: string, overrideMode?: EditorMode, historyOverride?: Message[]) {
     if (!userMessage.trim() || streaming) return;
-    if (credits <= 0) return;
 
     const effectiveMode = resolvePromptMode(userMessage, intelCtx, overrideMode);
+    const effectiveModel = modelManuallySelectedRef.current
+      ? selectedModel
+      : resolveSmartModel(effectiveMode, intelCtx, userMessage);
+    let availableCredits = credits;
+    if (effectiveMode === "agent" && availableCredits < 5) {
+      try {
+        const cr = await fetch("/api/billing/credits");
+        if (cr.ok) {
+          const { credits: fresh } = (await cr.json()) as { credits?: number };
+          if (typeof fresh === "number") {
+            availableCredits = fresh;
+            onCreditsUpdate(fresh);
+          }
+        }
+      } catch {}
+    }
+    const minCredits = effectiveMode === "agent" ? 5 : 1;
+    if (availableCredits < minCredits) {
+      if (effectiveMode === "agent") {
+        toast({
+          title: "Insufficient credits",
+          description: "Agent mode needs at least 5 credits.",
+          variant: "destructive",
+        });
+      }
+      return;
+    }
     if (!overrideMode && effectiveMode !== mode) {
       onModeChange?.(effectiveMode);
     }
@@ -1482,17 +1557,18 @@ export function ChatPanel({
 
     // Agent mode: initialise task step visibility
     if (effectiveMode === "agent") {
-      agentTransitionedRef.current = false;
       serverStreamedPathsRef.current = new Set<string>();
-      setAgentSteps([{ label: "Exploring codebase…", status: "running" }]);
+      setAgentSteps([{ label: "Starting agent…", status: "running" }]);
       setBuildStatus(null);
     } else if (effectiveMode === "build" || effectiveMode === "patch") {
       setAgentSteps([]);
       const intent = classifyBuildIntent(userMessage);
       setBuildStatus(intent);
+      applyBuildSteps(initialBuildActivitySteps(files.length));
     } else {
       setAgentSteps([]);
       setBuildStatus(null);
+      applyBuildSteps([]);
     }
 
     // Set up AbortController for stop generation
@@ -1600,6 +1676,149 @@ ${(f.content ?? "").slice(0, 8000)}
         }
       }
 
+      if (effectiveMode === "agent") {
+        const agentTask = messageWithContext + crossProjectContext;
+        const res = await fetch("/api/ai/agent", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            projectId: project.id,
+            task: agentTask,
+            model: effectiveModel,
+          }),
+        });
+
+        if (!res.ok || !res.body) {
+          if (res.status === 402) {
+            toast({
+              title: "Insufficient credits",
+              description: "Agent mode needs at least 5 credits.",
+              variant: "destructive",
+            });
+            try {
+              const cr = await fetch("/api/billing/credits");
+              if (cr.ok) {
+                const { credits: newCredits } = (await cr.json()) as { credits?: number };
+                if (typeof newCredits === "number") onCreditsUpdate(newCredits);
+              }
+            } catch {}
+            onMessagesUpdate(baseMessages);
+            return;
+          }
+          throw new Error(`Agent API error: ${res.status}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        const changedPaths = new Set<string>();
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          for (const line of decoder.decode(value).split("\n")) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+
+              if (data.step) {
+                const step = data.step as AgentStep;
+                setAgentSteps((prev) => {
+                  const donePrev = prev.map((s) => ({ ...s, status: "done" as const }));
+                  return [...donePrev, agentStepToTaskStep(step)];
+                });
+              }
+
+              if (typeof data.fileUpdated?.path === "string") {
+                changedPaths.add(data.fileUpdated.path);
+                setStreamingFiles(Array.from(changedPaths));
+                onStreamingChange?.(true, changedPaths.size);
+              }
+
+              if (data.done) {
+                setAgentSteps((prev) => prev.map((s) => ({ ...s, status: "done" as const })));
+                setTimeout(() => setAgentSteps([]), 1800);
+
+                const supabase = createClient();
+                const { data: updatedFiles } = await (supabase as any)
+                  .from("project_files")
+                  .select("*")
+                  .eq("project_id", project.id);
+
+                if (updatedFiles) {
+                  const diffSource = Array.from(changedPaths).map((path) => {
+                    const row = (updatedFiles as Array<{ path: string; content: string }>).find((f) => f.path === path);
+                    return { path, content: row?.content ?? "" };
+                  });
+                  const assistantId = `assistant-${Date.now()}`;
+                  const diffs: FileDiffEntry[] = diffSource
+                    .map((newFile) => {
+                      const oldFile = files.find((f) => f.path === newFile.path);
+                      return {
+                        path: newFile.path,
+                        fileId: oldFile?.id,
+                        oldContent: oldFile?.content ?? "",
+                        newContent: newFile.content ?? "",
+                      };
+                    })
+                    .filter((d) => d.oldContent !== d.newContent || !files.find((f) => f.path === d.path));
+                  if (diffs.length > 0) {
+                    setMessageDiffs((prev) => ({ ...prev, [assistantId]: diffs }));
+                    setCanUndo(true);
+                  }
+                  onFilesUpdate(updatedFiles);
+
+                  const missingPkgs = findMissingPackages(diffSource, updatedFiles.find((f: { path: string }) => f.path === "package.json")?.content ?? null);
+                  if (missingPkgs.length > 0) {
+                    toast({
+                      title: `${missingPkgs.length} new package${missingPkgs.length > 1 ? "s" : ""} detected`,
+                      description: `Run: ${buildInstallCommand(missingPkgs)}`,
+                      duration: 8000,
+                    });
+                  }
+                }
+
+                try {
+                  const cr = await fetch("/api/billing/credits");
+                  if (cr.ok) {
+                    const { credits: newCredits } = (await cr.json()) as { credits?: number };
+                    if (typeof newCredits === "number") onCreditsUpdate(newCredits);
+                  }
+                } catch {}
+
+                const { data: syncedMessages } = await (supabase as any)
+                  .from("messages")
+                  .select("*")
+                  .eq("project_id", project.id)
+                  .order("created_at", { ascending: true });
+                if (syncedMessages) {
+                  onMessagesUpdate(syncedMessages);
+                }
+
+                if (shouldRunPreviewVerify(userMessage, effectiveMode)) {
+                  void fetch(`/api/projects/${project.id}/preview-verify`, { method: "POST" })
+                    .then((r) => r.json())
+                    .then((result) => setPreviewVerify(result))
+                    .catch(() => setPreviewVerify(null));
+                }
+
+                const captureId = syncedMessages?.at(-1)?.id ?? `assistant-${Date.now()}`;
+                setTimeout(() => {
+                  window.dispatchEvent(new CustomEvent("lifemark-request-screenshot", { detail: { messageId: captureId } }));
+                }, 2500);
+              }
+
+              if (data.error) {
+                toast({ title: "Agent Error", description: data.error, variant: "destructive" });
+                onMessagesUpdate(baseMessages);
+              }
+            } catch {}
+          }
+        }
+        return;
+      }
+
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1608,7 +1827,7 @@ ${(f.content ?? "").slice(0, 8000)}
           projectId: project.id,
           message: messageWithContext + crossProjectContext,
           mode: effectiveMode,
-          model: selectedModel,
+          model: effectiveModel,
           framework: mobileMode ? "react-native" : "web",
           clarifyFirst: effectiveMode === "build" && clarifyFirst && files.length === 0,
           // If @mentions present, only send those files for context (saves tokens + focuses AI)
@@ -1682,7 +1901,11 @@ ${(f.content ?? "").slice(0, 8000)}
             }
 
             if (data.build_intent) {
-              setBuildStatus(data.build_intent as BuildIntent);
+              const intent = data.build_intent as BuildIntent;
+              setBuildStatus(intent);
+              applyBuildSteps((prev) =>
+                prev.length > 0 ? applyBuildIntentLabel(prev, intent.statusLabel) : prev,
+              );
             }
 
             if (Array.isArray(data.skills_attached) && data.skills_attached.length > 0) {
@@ -1701,6 +1924,7 @@ ${(f.content ?? "").slice(0, 8000)}
             // data.files at done).
             if (typeof data.streamedFile === "string") {
               serverStreamedPathsRef.current.add(data.streamedFile);
+              applyBuildSteps((prev) => (prev.length > 0 ? onBuildFileProgress(prev) : prev));
             }
 
             if (data.chunk) {
@@ -1712,24 +1936,10 @@ ${(f.content ?? "").slice(0, 8000)}
                 const paths = pathMatches.map((m) => m[1]);
                 setStreamingFiles(paths);
                 onStreamingChange?.(true, paths.length);
-                // Agent step: transition from "exploring" → "modifying files"
-                if (effectiveMode === "agent" && !agentTransitionedRef.current) {
-                  agentTransitionedRef.current = true;
-                  setAgentSteps([
-                    { label: "Explored codebase", status: "done" },
-                    {
-                      label: `Modifying ${paths.length} file${paths.length !== 1 ? "s" : ""}…`,
-                      status: "running",
-                      detail: paths[paths.length - 1]?.split("/").pop(),
-                    },
-                  ]);
-                } else if (effectiveMode === "agent" && agentTransitionedRef.current) {
-                  // Keep file count up to date
-                  setAgentSteps((prev) => prev.map((s, i) =>
-                    i === prev.length - 1 && s.status === "running"
-                      ? { ...s, label: `Modifying ${paths.length} file${paths.length !== 1 ? "s" : ""}…`, detail: paths[paths.length - 1]?.split("/").pop() }
-                      : s
-                  ));
+                if (paths.length > 0) {
+                  applyBuildSteps((prev) =>
+                    prev.length > 0 ? onBuildFileProgress(prev) : prev,
+                  );
                 }
               }
             }
@@ -1755,22 +1965,34 @@ ${(f.content ?? "").slice(0, 8000)}
             }
 
             if (data.done) {
-              setBuildStatus(null);
-              // Agent mode: mark all steps complete, then clear after a moment
-              if (effectiveMode === "agent") {
-                setAgentSteps((prev) => {
-                  const updated = prev.map((s) => ({ ...s, status: "done" as const }));
-                  return updated;
-                });
-                setTimeout(() => setAgentSteps([]), 1800);
+              const assistantId =
+                (typeof data.assistantMessageId === "string" && data.assistantMessageId) ||
+                streamingAssistantId;
+              let completedBuildActivity: BuildActivityStep[] | null = null;
+
+              const streamedCount = Math.max(
+                serverStreamedPathsRef.current.size,
+                (data.files as unknown[] | undefined)?.length ?? 0,
+              );
+              if (buildActivityStepsRef.current.length > 0) {
+                completedBuildActivity = finalizeBuildActivity(
+                  buildActivityStepsRef.current,
+                  streamedCount,
+                  { githubRepo: project.github_repo },
+                );
+              } else if (Array.isArray(data.build_activity) && data.build_activity.length > 0) {
+                completedBuildActivity = data.build_activity as BuildActivityStep[];
               }
+              if (completedBuildActivity) {
+                applyBuildSteps([]);
+                setMessageBuildActivity((prev) => ({ ...prev, [assistantId]: completedBuildActivity! }));
+              }
+              setBuildStatus(null);
               // Update credits
               if (data.creditsUsed) {
                 onCreditsUpdate(credits - data.creditsUsed);
                 setMessageCredits((prev) => ({ ...prev, [assistantId]: data.creditsUsed as number }));
               }
-
-              const assistantId = `assistant-${Date.now()}`;
 
               // Persist any auto-matched skills onto the final assistant message
               // and clear the pending state so the chip doesn't flash onto the
@@ -1835,7 +2057,7 @@ ${(f.content ?? "").slice(0, 8000)}
                   onFilesUpdate(updatedFiles);
 
                   // ── npm auto-install + package.json auto-sync ──────────────────
-                  if (effectiveMode === "build" || effectiveMode === "agent") {
+                  if (effectiveMode === "build") {
                     // Same fallback as the diff source — use data.files when present,
                     // otherwise reconstruct from streamed paths + DB content.
                     const generatedFiles: Array<{ path: string; content: string }> =
@@ -1893,19 +2115,21 @@ ${(f.content ?? "").slice(0, 8000)}
                 // the raw JSON blob in build mode.
                 content: (data.displayMessage as string | undefined) || accumulated,
                 tokens_used: data.tokensUsed ?? null,
-                model: selectedModel,
+                model: effectiveModel,
                 // Same narrowing as the user message above — collapse "patch"
                 // to "build" so the assistant row fits Message['mode'].
                 mode: (effectiveMode === "patch" ? "build" : effectiveMode) as "chat" | "plan" | "build" | "agent",
-                metadata: null,
+                metadata: completedBuildActivity
+                  ? ({ build_activity: completedBuildActivity } as unknown as Json)
+                  : null,
                 rating: null,
                 created_at: new Date().toISOString(),
               };
-              onMessagesUpdate([...messages, tempUserMsg, assistantMsg]);
+              onMessagesUpdate([...baseMessages, tempUserMsg, assistantMsg]);
               setGenTimes((prev) => ({ ...prev, [assistantId]: Math.round((Date.now() - genStartRef.current) / 100) / 10 }));
 
               // Request preview screenshot for build/agent messages (2.5 s delay for React to re-render)
-              if (effectiveMode === "build" || effectiveMode === "agent" || effectiveMode === "patch") {
+              if (effectiveMode === "build" || effectiveMode === "patch") {
                 const captureId = assistantId;
                 setTimeout(() => {
                   window.dispatchEvent(new CustomEvent("lifemark-request-screenshot", { detail: { messageId: captureId } }));
@@ -1943,6 +2167,7 @@ ${(f.content ?? "").slice(0, 8000)}
         }
       }
     } catch (err: unknown) {
+      applyBuildSteps([]);
       toast({
         title: "Request failed",
         description: err instanceof Error ? err.message : "Unknown error",
@@ -1955,6 +2180,7 @@ ${(f.content ?? "").slice(0, 8000)}
       setBuildStatus(null);
       setSubagentSteps([]);
       setPreviewVerify(null);
+      // buildActivitySteps cleared in data.done; completed steps live on the assistant message
     }
   }
 
@@ -1968,7 +2194,7 @@ ${(f.content ?? "").slice(0, 8000)}
       setInput("");
       return;
     }
-    void sendMessage(input.trim());
+    void sendMessage(input.trim(), mode);
   }
 
   // Auto-drain the queue when streaming finishes (unless paused)
@@ -1984,7 +2210,7 @@ ${(f.content ?? "").slice(0, 8000)}
     } else {
       setPromptQueue(rest);
     }
-    void sendMessage(next.text);
+    void sendMessage(next.text, mode);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streaming]);
 
@@ -2750,6 +2976,19 @@ ${(f.content ?? "").slice(0, 8000)}
                   </div>
                 )}
 
+                {/* Persisted build activity — Lovable-style Complete card in message history */}
+                {msg.role === "assistant" && (() => {
+                  const steps =
+                    messageBuildActivity[msg.id] ??
+                    ((msg.metadata as { build_activity?: BuildActivityStep[] } | null)?.build_activity ?? null);
+                  if (!steps?.length) return null;
+                  return (
+                    <div className="w-full mt-1">
+                      <BuildActivityCard steps={steps} title="Complete" />
+                    </div>
+                  );
+                })()}
+
                 {/* Commit-title card for build/agent messages with file changes */}
                 {msg.role === "assistant" && messageDiffs[msg.id] && messageDiffs[msg.id].length > 0 && (() => {
                   const diffs = messageDiffs[msg.id];
@@ -3336,25 +3575,14 @@ ${(f.content ?? "").slice(0, 8000)}
                 </p>
               )}
 
-              {/* Lovable-style "Working…" card — before files land */}
-              {buildStatus && streamingFiles.length === 0 && (
-                <div className="rounded-xl border border-border/60 bg-muted/20 overflow-hidden mb-1">
-                  <div className="flex items-center gap-2 px-3 py-2 border-b border-border/40 bg-muted/30">
-                    <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-400 shrink-0" />
-                    <span className="text-xs font-semibold text-foreground">Working…</span>
-                  </div>
-                  <div className="px-3 py-2.5">
-                    <p className="text-sm text-foreground/90">
-                      {LIVE_BUILD_STATUS[thoughtSeconds % LIVE_BUILD_STATUS.length]}
-                    </p>
-                  </div>
-                </div>
+              {/* Lovable-style build activity steps — real progress, not rotating placeholders */}
+              {buildActivitySteps.length > 0 && (
+                <BuildActivityCard steps={buildActivitySteps} />
               )}
 
               {/* Lovable-style per-file "Edited …" cards */}
               {streamingFiles.length > 0 && streamingFiles.map((path, idx) => {
                 const fileName = path.split("/").pop() ?? path;
-                const isActive = idx === streamingFiles.length - 1;
                 return (
                   <div
                     key={`${path}-${idx}`}
@@ -3365,13 +3593,6 @@ ${(f.content ?? "").slice(0, 8000)}
                         Edited {fileName}
                       </span>
                     </div>
-                    {isActive && (
-                      <div className="px-3 py-2.5">
-                        <p className="text-sm text-muted-foreground">
-                          {LIVE_BUILD_STATUS[thoughtSeconds % LIVE_BUILD_STATUS.length]}
-                        </p>
-                      </div>
-                    )}
                   </div>
                 );
               })}
@@ -3444,7 +3665,7 @@ ${(f.content ?? "").slice(0, 8000)}
       )}
 
       {/* Loop-detection nudge (when max attempts reached) — Lovable's recovery flow */}
-      {previewError && autoFixAttempts >= MAX_AUTO_FIX_ATTEMPTS && !autoFixing && (
+      {previewError && !noCredits && autoFixAttempts >= MAX_AUTO_FIX_ATTEMPTS && !autoFixing && (
         <div className="mx-3 mb-2 px-3 py-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs">
           <div className="flex items-start gap-2 mb-2">
             <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400" />
@@ -3786,8 +4007,8 @@ ${(f.content ?? "").slice(0, 8000)}
         </div>
       )}
 
-      {/* ── Stuck? guarded-prompt chips — visible any time, helps users avoid loops ── */}
-      {!streaming && (
+      {/* ── Stuck? guarded-prompt chips — hidden when out of credits (can't run AI fixes) ── */}
+      {!streaming && !noCredits && (
         <div className="px-3 pt-1 pb-1 flex gap-1.5 flex-wrap shrink-0">
           {[
             {
@@ -4810,7 +5031,12 @@ Please confirm the breakdown before implementing anything.`,
                 {AI_MODELS.map((model) => (
                   <DropdownMenuItem
                     key={model.id}
-                    onClick={() => setSelectedModel(model.id)}
+                    onClick={() => {
+                      modelManuallySelectedRef.current = true;
+                      setSelectedModel(model.id);
+                      persistPreferredModel(model.id);
+                      setModelManuallySelected(true);
+                    }}
                     className={`text-xs gap-2 py-2 ${selectedModel === model.id ? "bg-muted" : ""}`}
                   >
                     <div className="w-4 h-4 flex items-center justify-center flex-shrink-0">

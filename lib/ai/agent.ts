@@ -1,4 +1,5 @@
 import { generateAI, type AIMessage, type ToolDefinition, type ToolCall } from "./provider";
+import { DEFAULT_CODING_MODEL } from "./model-defaults";
 import { AGENT_SYSTEM_PROMPT } from "./system-prompts";
 
 export interface AgentTool {
@@ -159,7 +160,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
   const {
     task,
     files,
-    model = "gpt-4o",
+    model = DEFAULT_CODING_MODEL,
     maxIterations = 20,
     knowledge,
     onStep,
