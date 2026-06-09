@@ -48,7 +48,7 @@ test("extracts files from backtick-labeled prose+fence response (Lovable style)"
 
   const login = parsed.files.find((f) => f.path === "src/Login.tsx")!;
   assert.ok(login.content.includes("useForm"));
-  assert.equal(login.language, "typescript");
+  assert.equal(login.language, "typescriptreact");
 });
 
 test("extracts files from // comment-labeled fences", () => {

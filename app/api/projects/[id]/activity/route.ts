@@ -1,32 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
+import {
+  canReadProjectFiles,
+  canWriteProjectFiles,
+  getProjectAccess,
+} from "@/lib/project/access";
 
 interface Params { params: Promise<{ id: string }> }
 
 export async function GET(req: NextRequest, { params }: Params) {
   const { id } = await params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Verify project access
-  const { data: project } = await (supabase as any)
-    .from("projects")
-    .select("id, user_id")
-    .eq("id", id)
-    .single();
-
-  if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-  const isOwner = (project as any).user_id === user.id;
-  if (!isOwner) {
-    const { data: collab } = await (supabase as any)
-      .from("collaborators")
-      .select("role")
-      .eq("project_id", id)
-      .eq("user_id", user.id)
-      .single();
-    if (!collab) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const access = await getProjectAccess(supabase, id, user.id);
+  if (!canReadProjectFiles(access)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   const url = new URL(req.url);
@@ -132,8 +123,13 @@ export async function POST(req: NextRequest, { params }: Params) {
   // Allow external event ingestion (e.g. from webhook handlers)
   const { id } = await params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const access = await getProjectAccess(supabase, id, user.id);
+  if (!canWriteProjectFiles(access)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
 
   const body = await req.json() as { type: string; title: string; detail?: string; meta?: Record<string, unknown> };
   if (!body.type || !body.title) return NextResponse.json({ error: "Missing fields" }, { status: 400 });

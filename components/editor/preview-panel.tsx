@@ -5,7 +5,7 @@ import {
   RefreshCw, Smartphone, Tablet, Monitor,
   ExternalLink, MousePointer, Terminal, Loader2,
   Check, X, Wand2, AlignLeft, AlignCenter, AlignRight,
-  AlertTriangle, Wrench, Frame, MessageSquarePlus, Pencil, Pin,
+  AlertTriangle, Wrench, Frame, MessageSquarePlus, Pencil, Pin, Globe,
 } from "lucide-react";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
@@ -22,7 +22,9 @@ import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
 import dynamic from "next/dynamic";
 import { buildFallbackHtml, PREVIEW_ENGINE_REV } from "@/lib/preview/build-fallback-html";
-import { resolvePreviewEngine, type PreviewEngine } from "@/lib/preview/resolve-preview-engine";
+import { filesContentSignature } from "@/lib/preview/files-signature";
+import { resolvePreviewEngine, WC_UNAVAILABLE_KEY, type PreviewEngine } from "@/lib/preview/resolve-preview-engine";
+import Link from "next/link";
 
 const WebContainerPreview = dynamic(() => import("./webcontainer-preview"), {
   ssr: false,
@@ -120,6 +122,30 @@ interface PreviewPanelProps {
   badgeHidden?: boolean;
   /** Send annotated screenshot + prompt to chat */
   onSendAnnotatedToChat?: (prompt: string, imageBase64: string) => void;
+  /** When 0, hide preview errors and show upgrade state instead of fix prompts */
+  credits?: number;
+}
+
+function OutOfCreditsPreviewPaused() {
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#0a0a0a]">
+      <div className="text-center max-w-sm px-8 py-10">
+        <div className="w-12 h-12 rounded-xl bg-violet-500/15 border border-violet-500/25 flex items-center justify-center mx-auto mb-4">
+          <AlertTriangle className="w-5 h-5 text-violet-400" />
+        </div>
+        <p className="text-sm font-semibold text-foreground mb-2">Preview paused</p>
+        <p className="text-xs text-muted-foreground leading-relaxed mb-5">
+          Your files are saved. Add credits to rebuild and preview your app.
+        </p>
+        <Link
+          href="/dashboard/billing"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium px-4 py-2 transition-colors"
+        >
+          Upgrade plan
+        </Link>
+      </div>
+    </div>
+  );
 }
 
 const DEVICE_WIDTHS: Record<DeviceSize, string> = {
@@ -305,7 +331,9 @@ export function PreviewPanel({
   deployedUrl,
   badgeHidden = false,
   onSendAnnotatedToChat,
+  credits,
 }: PreviewPanelProps) {
+  const outOfCredits = credits !== undefined && credits <= 0;
   const [device, setDevice] = useState<DeviceSize>("desktop");
   const [showFrame, setShowFrame] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -327,11 +355,17 @@ export function PreviewPanel({
   const [commentDraft, setCommentDraft] = useState("");
   const [commentSaving, setCommentSaving] = useState(false);
   const { toast } = useToast();
-  const [previewEngine, setPreviewEngine] = useState<PreviewEngine>("detecting");
+  const [previewEngine, setPreviewEngine] = useState<PreviewEngine>(() => {
+    if (typeof window === "undefined") return "detecting";
+    if (sessionStorage.getItem(WC_UNAVAILABLE_KEY) === "1") return "fallback";
+    return "detecting";
+  });
   const [consoleLines, setConsoleLines] = useState<{ type: string; text: string }[]>([]);
   const [vebSelected, setVebSelected] = useState<VebElement | null>(null);
   const [activeError, setActiveError] = useState<string | null>(null);
   const [errorDismissed, setErrorDismissed] = useState(false);
+  const [previewCompileFailed, setPreviewCompileFailed] = useState(false);
+  const [previewCompileOk, setPreviewCompileOk] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const sandpackContainerRef = useRef<HTMLDivElement>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
@@ -351,6 +385,16 @@ export function PreviewPanel({
       setPreviewEngine("detecting");
       return;
     }
+
+    const wcBlocked =
+      typeof window !== "undefined" &&
+      sessionStorage.getItem(WC_UNAVAILABLE_KEY) === "1";
+
+    if (wcBlocked) {
+      setPreviewEngine("fallback");
+      return;
+    }
+
     const isolated = typeof window !== "undefined" ? window.crossOriginIsolated : false;
     const engine = resolvePreviewEngine(files, {
       preferWebContainers: useWebContainers,
@@ -389,8 +433,15 @@ export function PreviewPanel({
         setConsoleLines((prev) => [...prev.slice(-99), { type, text }]);
         if (type === "success") {
           setActiveError(null);
+          setPreviewCompileFailed(false);
+          setPreviewCompileOk(true);
           setErrorDismissed(false);
         } else if (type === "error") {
+          if (outOfCredits) {
+            setPreviewCompileFailed(true);
+            setPreviewCompileOk(false);
+            return;
+          }
           if (onError) onError(text);
           setActiveError(text);
           setErrorDismissed(false);
@@ -416,7 +467,18 @@ export function PreviewPanel({
     }
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [onError, visualEdit, commentPinMode]);
+  }, [onError, visualEdit, commentPinMode, outOfCredits]);
+
+  useEffect(() => {
+    if (outOfCredits) {
+      setActiveError(null);
+      setErrorDismissed(true);
+      setPreviewCompileOk(false);
+    } else {
+      setPreviewCompileFailed(false);
+      setPreviewCompileOk(false);
+    }
+  }, [outOfCredits]);
 
   // Relay screenshot capture requests from ChatPanel → preview iframe
   useEffect(() => {
@@ -461,6 +523,18 @@ export function PreviewPanel({
     () => (previewEngine === "fallback" ? buildFallbackHtml(files) : ""),
     [files, previewEngine]
   );
+  const filesSignature = useMemo(() => filesContentSignature(files), [files]);
+
+  useEffect(() => {
+    setPreviewCompileFailed(false);
+    setPreviewCompileOk(false);
+  }, [files, fallbackHtml]);
+
+  // At 0 credits: probe local preview first; fall back to deployment only if compile fails
+  const showDeployedPreview =
+    outOfCredits && !!deployedUrl && previewCompileFailed && !previewCompileOk;
+  const iframeVisible = !outOfCredits || previewCompileOk;
+  const showPausedOverlay = outOfCredits && !previewCompileOk && !showDeployedPreview;
 
   async function submitElementComment() {
     if (!projectId || !pendingComment || !commentDraft.trim()) return;
@@ -831,27 +905,44 @@ export function PreviewPanel({
               key={refreshKey}
               files={files}
               embedded
-              onError={() => setPreviewEngine("fallback")}
+              onError={() => {
+                if (typeof window !== "undefined") {
+                  sessionStorage.setItem(WC_UNAVAILABLE_KEY, "1");
+                }
+                setPreviewEngine("fallback");
+              }}
             />
           </div>
         ) : (
-          /* Fallback: Babel + CDN iframe (same-origin, so VisualEditOverlay can inject directly) */
+          /* Fallback: Babel + CDN iframe — still renders at 0 credits (errors suppressed below) */
           <div ref={previewContainerRef} className="flex flex-col flex-1 overflow-hidden relative">
             <div className="flex-1 overflow-hidden flex flex-col bg-background">
               {withDeviceFrame(
-                <iframe
-                  // Re-key on srcDoc length so the iframe actually re-renders
-                  // when files change. srcDoc updates on an existing iframe
-                  // element are NOT observable in most browsers without a
-                  // full element recreation. The refreshKey covers manual
-                  // refresh; the length suffix covers automatic file updates.
-                  key={`${refreshKey}-${fallbackHtml.length}-${PREVIEW_ENGINE_REV}`}
-                  ref={iframeRef}
-                  srcDoc={fallbackHtml}
-                  className="w-full h-full border-0"
-                  title="App Preview"
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                />
+                showDeployedPreview ? (
+                  <iframe
+                    key={`deployed-${refreshKey}`}
+                    src={deployedUrl}
+                    className="w-full h-full border-0"
+                    title="Live deployment"
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                  />
+                ) : (
+                  <div className="relative w-full h-full">
+                    {showPausedOverlay && <OutOfCreditsPreviewPaused />}
+                    <iframe
+                      key={`${refreshKey}-${filesSignature}-${PREVIEW_ENGINE_REV}`}
+                      ref={iframeRef}
+                      srcDoc={fallbackHtml}
+                      className={
+                        iframeVisible
+                          ? "w-full h-full border-0"
+                          : "absolute w-px h-px opacity-0 pointer-events-none border-0"
+                      }
+                      title="App Preview"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                    />
+                  </div>
+                )
               )}
             </div>
 
@@ -945,9 +1036,16 @@ export function PreviewPanel({
           )}
         </AnimatePresence>
 
+        {showDeployedPreview && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/15 border border-violet-500/25 text-[10px] text-violet-300">
+            <Globe className="w-3 h-3" />
+            Live deployment
+          </div>
+        )}
+
         {/* Fix-with-AI error banner */}
         <AnimatePresence>
-          {activeError && !errorDismissed && (
+          {activeError && !errorDismissed && !outOfCredits && (
             <motion.div
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}

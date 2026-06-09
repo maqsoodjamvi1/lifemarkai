@@ -144,7 +144,7 @@ function recoverPartialJSON(raw: string): string | null {
  *   3. A derived name from the language tag ("file1.jsx", "file2.jsx")
  *
  * Returns an empty array if no fenced blocks exist OR if every block has
- * fewer than 3 lines (too small to be a real file).
+ * fewer than 2 non-empty lines (too small to be a real file).
  */
 function extractFencesAsFiles(raw: string): ParsedFile[] {
   const files: ParsedFile[] = [];
@@ -156,7 +156,8 @@ function extractFencesAsFiles(raw: string): ParsedFile[] {
   while ((match = fenceRe.exec(raw)) !== null) {
     const lang = (match[1] || "").trim();
     const body = match[2] || "";
-    if (body.split("\n").length < 3) continue; // too small to be a file
+    // Single-line snippets (e.g. `x++`) are not files; real components are often 2 lines.
+    if (body.trim().split("\n").filter((l) => l.trim()).length < 2) continue;
 
     // Look at the line immediately before the fence for a path label. Catch
     // four common shapes the AI uses to introduce a file:

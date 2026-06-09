@@ -45,8 +45,13 @@ check("vite project eligible", shouldUseWebContainer(viteProject), "H7");
 check("static html not eligible", !shouldUseWebContainer(staticProject), "H7");
 
 check(
-  "isolated + vite → webcontainer",
-  resolvePreviewEngine(viteProject, { crossOriginIsolated: true }) === "webcontainer",
+  "default (no opt-in) → fallback",
+  resolvePreviewEngine(viteProject, { crossOriginIsolated: true }) === "fallback",
+  "H7",
+);
+check(
+  "preferWebContainers true + isolated + vite → webcontainer",
+  resolvePreviewEngine(viteProject, { crossOriginIsolated: true, preferWebContainers: true }) === "webcontainer",
   "H7",
 );
 check(

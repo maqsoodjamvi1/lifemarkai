@@ -1,7 +1,8 @@
-// @ts-nocheck
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
+import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
 
 interface Params { params: Promise<{ id: string }> }
 
@@ -20,20 +21,23 @@ interface Params { params: Promise<{ id: string }> }
 export async function POST(_req: NextRequest, { params }: Params) {
   const { id } = await params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Verify ownership
-  const { data: project } = await supabase
+  const access = await getProjectAccess(supabase, id, user.id);
+  if (!canReadProjectFiles(access)) {
+    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
+
+  const { data: project } = await (supabase as any)
     .from("projects")
     .select("id, name, description, framework")
     .eq("id", id)
-    .eq("user_id", user.id)
     .single();
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
   // Pull the current files (cap to 25 most relevant by reasonable heuristic)
-  const { data: filesRaw } = await supabase
+  const { data: filesRaw } = await (supabase as any)
     .from("project_files")
     .select("path, content, language")
     .eq("project_id", id);

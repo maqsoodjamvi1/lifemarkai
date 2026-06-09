@@ -1,19 +1,14 @@
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
+import {
+  canReadProjectFiles,
+  canWriteProjectFiles,
+  getProjectAccess,
+} from "@/lib/project/access";
 import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "@/lib/project/env-file";
 
 interface Params { params: Promise<{ id: string }> }
-
-async function assertProjectOwner(supabase: Awaited<ReturnType<typeof createClient>>, projectId: string, userId: string) {
-  const { data } = await (supabase as any)
-    .from("projects")
-    .select("id")
-    .eq("id", projectId)
-    .eq("user_id", userId)
-    .single();
-  return !!data;
-}
 
 async function loadEnvRecord(supabase: Awaited<ReturnType<typeof createClient>>, projectId: string) {
   const { data } = await (supabase as any)
@@ -31,7 +26,9 @@ export async function GET(_: NextRequest, { params }: Params) {
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!(await assertProjectOwner(supabase, projectId, user.id))) {
+
+  const access = await getProjectAccess(supabase, projectId, user.id);
+  if (!canReadProjectFiles(access)) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
@@ -46,7 +43,9 @@ export async function POST(req: NextRequest, { params }: Params) {
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (!(await assertProjectOwner(supabase, projectId, user.id))) {
+
+  const access = await getProjectAccess(supabase, projectId, user.id);
+  if (!canWriteProjectFiles(access)) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 

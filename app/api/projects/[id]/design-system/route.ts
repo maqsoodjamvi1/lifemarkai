@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
+import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 
 export const runtime = "nodejs";
 
@@ -9,7 +11,7 @@ export async function POST(
 ) {
   const { id } = await params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { cssContent } = await req.json();
@@ -18,33 +20,8 @@ export async function POST(
   }
 
   const projectId = id;
-
-  // Verify user has access to this project (owner or collaborator).
-  // Note: the previous version filtered on `owner_id` (column doesn't exist —
-  // projects uses `user_id`) and embedded a SQL subquery inside .or(), which
-  // PostgREST doesn't support. Check ownership and collaboration separately.
-  const { data: project } = await (supabase as any)
-    .from("projects")
-    .select("id, user_id")
-    .eq("id", projectId)
-    .single();
-
-  if (!project) {
-    return NextResponse.json({ error: "Project not found" }, { status: 404 });
-  }
-
-  const isOwner = project.user_id === user.id;
-  const isCollaborator =
-    !isOwner &&
-    (await (supabase as any)
-      .from("collaborators")
-      .select("id")
-      .eq("project_id", projectId)
-      .eq("user_id", user.id)
-      .maybeSingle()
-    ).data != null;
-
-  if (!isOwner && !isCollaborator) {
+  const access = await getProjectAccess(supabase, projectId, user.id);
+  if (!canWriteProjectFiles(access)) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 

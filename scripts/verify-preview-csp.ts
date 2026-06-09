@@ -76,7 +76,7 @@ const csp = editorRes.headers.get("content-security-policy") ?? "";
 const connectSrc = csp.match(/connect-src[^;]+/)?.[0] ?? "";
 const frameSrc = csp.match(/frame-src[^;]+/)?.[0] ?? "";
 const workerSrc = csp.match(/worker-src[^;]+/)?.[0] ?? "";
-const wcDomains = ["staticblitz.com", "webcontainer.io", "webcontainer-api.io", "stackblitz.io"];
+const wcDomains = ["staticblitz.com", "webcontainer.io", "webcontainer-api.io", "stackblitz.io", "stackblitz.com"];
 
 log("editor headers + CSP audit", {
   status: editorRes.status,

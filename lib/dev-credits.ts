@@ -1,8 +1,8 @@
 import { createAdminClient } from "@/lib/supabase/server";
 
-const DEV_CREDIT_GRANT = 50;
+const DEV_CREDIT_GRANT = 100;
 
-/** In local dev, top up empty accounts so AI builds are testable. No-op in production. */
+/** In local dev, ensure accounts have demo credits for testing. No-op in production. */
 export async function ensureDevCredits(userId: string): Promise<number | null> {
   if (process.env.NODE_ENV !== "development") return null;
 
@@ -14,7 +14,9 @@ export async function ensureDevCredits(userId: string): Promise<number | null> {
     .maybeSingle();
 
   const current = profile?.credits ?? 0;
-  if (current > 0) return current;
+  if (current >= DEV_CREDIT_GRANT) {
+    return current;
+  }
 
   if (profile) {
     await (admin as any)

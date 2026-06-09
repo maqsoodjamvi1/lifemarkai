@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { createAdminClient } from "@/lib/supabase/server";
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 
 const SAMPLE_FILES = {
   "package.json": `{
@@ -145,6 +145,14 @@ export default defineConfig({
 
 const DEMO_EMAIL = "demo@lifemarkai.app";
 const DEMO_PASSWORD = "DemoPassword123!";
+const DEMO_PROJECT_NAME = "LifemarkAI Demo";
+
+function isDemoEndpointEnabled(): boolean {
+  return (
+    process.env.NODE_ENV === "development" ||
+    process.env.ALLOW_DEMO_ENDPOINT === "true"
+  );
+}
 
 async function getOrCreateDemoUserId(
   supabase: Awaited<ReturnType<typeof createAdminClient>>
@@ -186,18 +194,56 @@ async function getOrCreateDemoUserId(
   throw new Error("Demo user exists but could not be found");
 }
 
-export async function GET(request: NextRequest) {
+async function findExistingDemoProject(
+  supabase: Awaited<ReturnType<typeof createAdminClient>>,
+  userId: string,
+) {
+  const { data: projects } = await (supabase as any)
+    .from("projects")
+    .select("id, created_at")
+    .eq("user_id", userId)
+    .eq("name", DEMO_PROJECT_NAME)
+    .eq("status", "active")
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  const project = projects?.[0];
+  if (!project) return null;
+
+  const { count } = await (supabase as any)
+    .from("project_files")
+    .select("id", { count: "exact", head: true })
+    .eq("project_id", project.id);
+
+  if ((count ?? 0) > 0) return project;
+  return null;
+}
+
+export async function GET() {
+  if (!isDemoEndpointEnabled()) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   try {
     const supabase = await createAdminClient();
-
     const userId = await getOrCreateDemoUserId(supabase);
 
-    // Create a demo project
+    const existing = await findExistingDemoProject(supabase, userId);
+    if (existing) {
+      return NextResponse.json({
+        success: true,
+        message: "Sample project ready",
+        projectId: existing.id,
+        editorUrl: `/editor/${existing.id}`,
+        reused: true,
+      });
+    }
+
     const { data: project, error: projectError } = await (supabase as any)
       .from("projects")
       .insert({
         user_id: userId,
-        name: "LifemarkAI Demo",
+        name: DEMO_PROJECT_NAME,
         description: "A sample React app to test the LifemarkAI editor and preview",
         framework: "react",
         status: "active",
@@ -206,22 +252,14 @@ export async function GET(request: NextRequest) {
       .select()
       .single();
 
-    if (projectError) {
+    if (projectError || !project) {
       console.error("Error creating project:", projectError);
       return NextResponse.json(
-        { error: "Failed to create project", details: projectError.message },
+        { error: "Failed to create project", details: projectError?.message },
         { status: 500 }
       );
     }
 
-    if (!project) {
-      return NextResponse.json(
-        { error: "Project creation returned no data" },
-        { status: 500 }
-      );
-    }
-
-    // Create sample files
     const files = Object.entries(SAMPLE_FILES).map(([path, content]) => ({
       project_id: project.id,
       path,
@@ -246,11 +284,7 @@ export async function GET(request: NextRequest) {
       message: "Sample project created successfully",
       projectId: project.id,
       editorUrl: `/editor/${project.id}`,
-      userId,
-      demoCredentials: {
-        email: DEMO_EMAIL,
-        password: DEMO_PASSWORD,
-      },
+      reused: false,
     });
   } catch (error) {
     console.error("Unexpected error:", error);

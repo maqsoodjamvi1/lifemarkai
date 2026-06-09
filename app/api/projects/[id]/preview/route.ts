@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
+import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 
 interface Params { params: Promise<{ id: string }> }
 
@@ -29,14 +30,10 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "dataUrl required" }, { status: 400 });
   }
 
-  // Verify user owns (or collaborates on) the project
-  const { data: project } = await (supabase as any)
-    .from("projects")
-    .select("id, user_id")
-    .eq("id", projectId)
-    .single();
-
-  if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  const access = await getProjectAccess(supabase, projectId, user.id);
+  if (!canWriteProjectFiles(access)) {
+    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
 
   // Extract base64 bytes from data URL
   // dataUrl is either "data:image/jpeg;base64,<b64>" or plain base64

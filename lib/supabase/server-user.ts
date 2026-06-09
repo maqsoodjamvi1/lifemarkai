@@ -3,7 +3,7 @@ import type { createClient } from "@/lib/supabase/server";
 
 type SupabaseServer = Awaited<ReturnType<typeof createClient>>;
 
-const GET_USER_TIMEOUT_MS = 3000;
+const GET_USER_TIMEOUT_MS = 10000;
 
 export type ServerUserResult = {
   user: User | null;

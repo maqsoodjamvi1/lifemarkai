@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
 import type { ProjectFile } from "@/types/database";
 import { patchFilesForWebContainer } from "@/lib/preview/patch-vite-for-webcontainer";
+import { filesContentSignature } from "@/lib/preview/files-signature";
 
 interface WebContainerPreviewProps {
   files: ProjectFile[];
@@ -30,11 +31,34 @@ const DEVICE_SIZES: Record<DeviceMode, { width: string; label: string }> = {
 
 let _wcInstance: any = null;
 let _wcBooting: Promise<any> | null = null;
+let _bootInProgress = false;
 let _npmInstalled: boolean = false;
 let _lastPackageJsonContent: string | null = null;
+let _wcDevServerReady = false;
+let _wcPreviewUrl: string | null = null;
+let _lastWrittenGlobal = new Map<string, string>();
 
 const MAX_WATCHDOG_ATTEMPTS = 3;
 const WATCHDOG_COUNTDOWN_SECS = 5;
+const BOOT_TIMEOUT_MS = 15_000;
+const BOOT_STALL_MS = 18_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+    }),
+  ]);
+}
+
+function resetWebContainerSingleton() {
+  _wcInstance = null;
+  _wcBooting = null;
+  _wcDevServerReady = false;
+  _wcPreviewUrl = null;
+  _lastWrittenGlobal.clear();
+}
 
 const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onError, embedded = false, className = "" }) => {
   const [status, setStatus] = useState<Status>("idle");
@@ -94,31 +118,80 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
     const patched = patchFilesForWebContainer(filesToLoad);
     const fileTree = buildFileTree(patched);
     await wc.mount(fileTree);
+    for (const file of patched) {
+      const path = file.path.replace(/\\/g, "/").replace(/^\/+/, "");
+      if (path) _lastWrittenGlobal.set(path, file.content ?? "");
+    }
     addLog("Files mounted");
   }, [addLog, buildFileTree]);
 
+  const syncFiles = useCallback(async (wc: any, filesToLoad: ProjectFile[]) => {
+    const patched = patchFilesForWebContainer(filesToLoad);
+    let changed = 0;
+    for (const file of patched) {
+      const path = file.path.replace(/\\/g, "/").replace(/^\/+/, "");
+      if (!path) continue;
+      const content = file.content ?? "";
+      if (_lastWrittenGlobal.get(path) === content) continue;
+      const parts = path.split("/");
+      if (parts.length > 1) {
+        let dir = "";
+        for (let i = 0; i < parts.length - 1; i++) {
+          dir = dir ? `${dir}/${parts[i]}` : parts[i];
+          try { await wc.fs.mkdir(dir); } catch { /* exists */ }
+        }
+      }
+      await wc.fs.writeFile(path, content);
+      _lastWrittenGlobal.set(path, content);
+      changed++;
+    }
+    if (changed > 0) addLog(`Updated ${changed} file${changed !== 1 ? "s" : ""} in preview`);
+    // #region agent log
+    fetch('http://127.0.0.1:7580/ingest/4eab943a-2827-4583-b27a-87e40bad58c8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'148b16'},body:JSON.stringify({sessionId:'148b16',runId:'preview-sync-v2',hypothesisId:'H-PREVIEW-SYNC',location:'webcontainer-preview.tsx:syncFiles',message:'Incremental file sync',data:{changed,total:patched.length},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+  }, [addLog]);
+
   const boot = useCallback(async (filesToLoad: ProjectFile[]) => {
-    if (bootingRef.current) return;
+    if (bootingRef.current || _bootInProgress) return;
+
+    // Dev server already running — hot-sync changed files (Vite HMR picks these up)
+    if (_wcInstance && _wcDevServerReady) {
+      bootedRef.current = true;
+      if (_wcPreviewUrl) setPreviewUrl(_wcPreviewUrl);
+      setStatus("ready");
+      try {
+        await syncFiles(_wcInstance, filesToLoad);
+      } catch (syncErr) {
+        const msg = syncErr instanceof Error ? syncErr.message : String(syncErr);
+        addLog(`Error syncing files: ${msg}`);
+      }
+      return;
+    }
 
     const shouldStart = !_wcInstance;
     if (!shouldStart && bootedRef.current && _wcInstance) {
       try {
-        await mountFiles(_wcInstance, filesToLoad);
+        await syncFiles(_wcInstance, filesToLoad);
       } catch (mountErr) {
         const msg = mountErr instanceof Error ? mountErr.message : String(mountErr);
-        addLog(`Error mounting files: ${msg}`);
+        addLog(`Error syncing files: ${msg}`);
       }
       return;
     }
 
     bootingRef.current = true;
+    _bootInProgress = true;
     setStatus("booting");
     setErrorMsg(null);
     setLogs([]);
     setPreviewUrl(null);
 
     try {
-      const { WebContainer } = await import("@webcontainer/api");
+      const { WebContainer } = await withTimeout(
+        import("@webcontainer/api"),
+        BOOT_TIMEOUT_MS,
+        "WebContainer module load",
+      );
 
       // Check cross-origin isolation support
       if (!window.crossOriginIsolated) {
@@ -131,14 +204,22 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
       }
 
       if (!_wcInstance) {
-        if (_wcBooting) {
-          _wcInstance = await _wcBooting;
-        } else {
-          addLog("Booting WebContainer...");
-          _wcBooting = WebContainer.boot({ coep: "require-corp" });
-          _wcInstance = await _wcBooting;
+        try {
+          if (_wcBooting) {
+            addLog("Waiting for in-flight WebContainer boot...");
+            _wcInstance = await withTimeout(_wcBooting, BOOT_TIMEOUT_MS, "WebContainer boot");
+          } else {
+            addLog("Booting WebContainer...");
+            _wcBooting = withTimeout(
+              WebContainer.boot({ coep: "require-corp" }),
+              BOOT_TIMEOUT_MS,
+              "WebContainer boot",
+            );
+            _wcInstance = await _wcBooting;
+            addLog("WebContainer ready");
+          }
+        } finally {
           _wcBooting = null;
-          addLog("WebContainer ready");
         }
       }
 
@@ -246,10 +327,13 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
         serverReadyUnsubscribe = wc.on("server-ready", (_port: number, url: string) => {
           clearTimeout(serverReadyTimeout);
           addLog(`Server ready at ${url}`);
+          _wcPreviewUrl = url;
+          _wcDevServerReady = true;
           setPreviewUrl(url);
           setStatus("ready");
           bootedRef.current = true;
           bootingRef.current = false;
+          _bootInProgress = false;
           resolve();
         });
       });
@@ -286,16 +370,51 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
       onError?.(msg);
       bootedRef.current = false;
       bootingRef.current = false;
-      _wcInstance = null;
+      _bootInProgress = false;
+      resetWebContainerSingleton();
+    } finally {
+      _bootInProgress = false;
     }
-  }, [addLog, mountFiles, onError]);
+  }, [addLog, mountFiles, onError, syncFiles]);
+
+  const filesSignature = React.useMemo(() => filesContentSignature(files), [files]);
+
+  useEffect(() => {
+    if (_wcPreviewUrl) setPreviewUrl(_wcPreviewUrl);
+    if (_wcDevServerReady) {
+      bootedRef.current = true;
+      setStatus("ready");
+    }
+  }, []);
 
   useEffect(() => {
     if (files.length === 0) return;
-    if (!bootedRef.current && !bootingRef.current) {
-      boot(files);
-    }
-  }, [files]);
+    if (bootingRef.current) return;
+    // #region agent log
+    fetch('http://127.0.0.1:7580/ingest/4eab943a-2827-4583-b27a-87e40bad58c8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'148b16'},body:JSON.stringify({sessionId:'148b16',runId:'preview-sync',hypothesisId:'H-PREVIEW-SYNC',location:'webcontainer-preview.tsx:files-sync',message:'Sync files to WebContainer',data:{fileCount:files.length,booted:bootedRef.current,hasInstance:!!_wcInstance},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    void boot(files);
+  }, [filesSignature, boot, files]);
+
+  // Abort stuck boot/install/start phases and fall back to iframe preview.
+  useEffect(() => {
+    if (status !== "booting" && status !== "installing" && status !== "starting") return;
+    const stalledPhase = status;
+    const timer = setTimeout(() => {
+      setStatus((current) => {
+        if (current === "ready" || current === "error" || current === "idle") return current;
+        const msg = `Preview stalled at "${stalledPhase}" — switching to standard preview`;
+        addLog(`⚠ ${msg}`);
+        bootingRef.current = false;
+        bootedRef.current = false;
+        resetWebContainerSingleton();
+        setErrorMsg(msg);
+        onError?.(msg);
+        return "error";
+      });
+    }, BOOT_STALL_MS);
+    return () => clearTimeout(timer);
+  }, [status, addLog, onError]);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -304,8 +423,7 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
   const hardRefresh = () => {
     bootedRef.current = false;
     bootingRef.current = false;
-    _wcInstance = null;
-    _wcBooting = null;
+    resetWebContainerSingleton();
     _npmInstalled = false;
     _lastPackageJsonContent = null;
     setWatchdogCountdown(null);

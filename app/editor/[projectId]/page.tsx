@@ -3,6 +3,9 @@ import { getServerUser } from "@/lib/supabase/server-user";
 import { ensureDevCredits, getDevProfile } from "@/lib/dev-credits";
 import { redirect, notFound } from "next/navigation";
 import { EditorLayout } from "@/components/editor/editor-layout";
+import { EditorConnectivityError } from "@/components/editor/editor-connectivity-error";
+import { isTransientSupabaseError, sleep } from "@/lib/supabase/transient-error";
+import type { Project } from "@/types/database";
 
 export const dynamic = "force-dynamic";
 
@@ -65,15 +68,41 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
       redirect("/login");
     }
 
-    // Allow collaborators to open the editor too
-    const { data: project, error: projectError } = await (supabase as any)
-      .from("projects")
-      .select("*")
-      .eq("id", projectId)
-      .single();
+    // Allow collaborators to open the editor too — retry transient Supabase timeouts.
+    let project: Project | null = null;
+    let projectError: { code?: string; message?: string } | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await (supabase as any)
+        .from("projects")
+        .select("*")
+        .eq("id", projectId)
+        .single();
+      project = result.data;
+      projectError = result.error;
+      if (project || !projectError || projectError.code === "PGRST116") break;
+      if (!isTransientSupabaseError(projectError)) break;
+      await sleep(1000 * (attempt + 1));
+    }
+
+    // Retry once after refreshing session — stale JWT can make RLS return 0 rows (PGRST116).
+    if ((projectError?.code === "PGRST116" || !project) && user) {
+      const { data: refreshed } = await supabase.auth.refreshSession();
+      if (refreshed.session) {
+        const retry = await (supabase as any)
+          .from("projects")
+          .select("*")
+          .eq("id", projectId)
+          .single();
+        project = retry.data;
+        projectError = retry.error;
+      }
+    }
 
     if (projectError || !project) {
       console.error("Project fetch error:", projectError);
+      if (isTransientSupabaseError(projectError)) {
+        return <EditorConnectivityError detail={projectError?.message} />;
+      }
       notFound();
     }
 
@@ -128,6 +157,13 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
     );
   } catch (error) {
     console.error("Editor page error:", error);
+    if (isTransientSupabaseError(error)) {
+      return (
+        <EditorConnectivityError
+          detail={error instanceof Error ? error.message : String(error)}
+        />
+      );
+    }
     notFound();
   }
 }

@@ -9,17 +9,25 @@
  * the SW and clear lifemarkai-* caches so chunks load fresh from the network.
  */
 
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { clearLifemarkServiceWorker } from "@/lib/sw-cleanup";
+import { clearChunkReloadFlag, installChunkErrorRecovery } from "@/lib/import-with-retry";
 
 export function ServiceWorkerRegistrar() {
+  useLayoutEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!window.location.pathname.startsWith("/editor")) return;
+    clearLifemarkServiceWorker();
+    clearChunkReloadFlag();
+    return installChunkErrorRecovery();
+  }, []);
+
   useEffect(() => {
     if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
 
     const onEditor = window.location.pathname.startsWith("/editor");
 
     if (onEditor || process.env.NODE_ENV !== "production") {
-      clearLifemarkServiceWorker();
       return;
     }
 

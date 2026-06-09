@@ -1,7 +1,11 @@
-// @ts-nocheck
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
+import {
+  canReadProjectFiles,
+  canWriteProjectFiles,
+  getProjectAccess,
+} from "@/lib/project/access";
 
 interface Params { params: Promise<{ id: string }> }
 
@@ -10,6 +14,11 @@ export async function GET(_: NextRequest, { params }: Params) {
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const access = await getProjectAccess(supabase, id, user.id);
+  if (!canReadProjectFiles(access)) {
+    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
 
   const { data, error } = await (supabase as any)
     .from("project_files")
@@ -27,10 +36,14 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const access = await getProjectAccess(supabase, id, user.id);
+  if (!canWriteProjectFiles(access)) {
+    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
+
   const body = await req.json();
   const { fileId, content, path: newPath } = body;
 
-  // Build update payload — support rename (path) OR content update
   const updatePayload: Record<string, string> = { updated_at: new Date().toISOString() };
   if (content !== undefined) updatePayload.content = content;
   if (newPath !== undefined) updatePayload.path = newPath;
@@ -53,6 +66,11 @@ export async function POST(req: NextRequest, { params }: Params) {
   const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const access = await getProjectAccess(supabase, id, user.id);
+  if (!canWriteProjectFiles(access)) {
+    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
+
   const { path, content = "", language = "plaintext" } = await req.json();
 
   const { data, error } = await (supabase as any)
@@ -70,6 +88,11 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const access = await getProjectAccess(supabase, id, user.id);
+  if (!canWriteProjectFiles(access)) {
+    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
 
   const { fileId } = await req.json();
 

@@ -4,7 +4,7 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { countFindings } from "@/lib/security/static-scan";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import dynamic from "next/dynamic";
-import { importWithRetry, installChunkErrorRecovery, clearChunkReloadFlag } from "@/lib/import-with-retry";
+import { importWithRetry } from "@/lib/import-with-retry";
 import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
 import {
   ChevronDown, MessageSquare, Sparkles, Bot, FolderOpen, GitBranch,
@@ -163,6 +163,65 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   const [leftChatOverlay, setLeftChatOverlay] = useState<"history" | null>(null);
 
   const [credits, setCredits] = useState(profile?.credits ?? 0);
+  /** Dev-only: simulate 0-credits UX without changing DB balance */
+  const [simulateZeroCredits, setSimulateZeroCredits] = useState(() => {
+    if (typeof window === "undefined" || process.env.NODE_ENV !== "development") return false;
+    const params = new URLSearchParams(window.location.search);
+    const q = params.get("debugZeroCredits");
+    if (q === "1") {
+      sessionStorage.setItem("lifemark-debug-zero-credits", "1");
+      sessionStorage.removeItem("lifemark-debug-zero-credits-off");
+      return true;
+    }
+    if (q === "0") {
+      sessionStorage.removeItem("lifemark-debug-zero-credits");
+      sessionStorage.setItem("lifemark-debug-zero-credits-off", "1");
+      return false;
+    }
+    if (sessionStorage.getItem("lifemark-debug-zero-credits-off") === "1") return false;
+    return sessionStorage.getItem("lifemark-debug-zero-credits") === "1";
+  });
+  const uiCredits = simulateZeroCredits ? 0 : credits;
+
+  const syncCredits = useCallback((simulate: boolean) => {
+    fetch("/api/billing/credits", {
+      headers: simulate ? { "X-Debug-Zero-Credits": "1" } : {},
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d && typeof d.credits === "number") setCredits(d.credits);
+      })
+      .catch(() => {});
+  }, []);
+
+  const grantDevCredits = useCallback(async () => {
+    setSimulateZeroCredits(false);
+    sessionStorage.removeItem("lifemark-debug-zero-credits");
+    sessionStorage.setItem("lifemark-debug-zero-credits-off", "1");
+    try {
+      const res = await fetch("/api/billing/dev-grant", { method: "POST" });
+      const d = res.ok ? await res.json() : null;
+      if (res.ok && d && typeof d.credits === "number") setCredits(d.credits);
+      else syncCredits(false);
+    } catch {
+      syncCredits(false);
+    }
+  }, [syncCredits]);
+
+  const toggleSimulateZeroCredits = useCallback(() => {
+    setSimulateZeroCredits((prev) => {
+      const next = !prev;
+      if (next) {
+        sessionStorage.setItem("lifemark-debug-zero-credits", "1");
+        sessionStorage.removeItem("lifemark-debug-zero-credits-off");
+      } else {
+        sessionStorage.removeItem("lifemark-debug-zero-credits");
+        sessionStorage.setItem("lifemark-debug-zero-credits-off", "1");
+      }
+      syncCredits(next);
+      return next;
+    });
+  }, [syncCredits]);
   const [isVisualEditActive, setIsVisualEditActive] = useState(false);
   const [showFileTree, setShowFileTree] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
@@ -220,11 +279,6 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   const [annotateOpen, setAnnotateOpen] = useState(false);
   const [annotateImage, setAnnotateImage] = useState<string | null>(null);
 
-  useEffect(() => {
-    clearChunkReloadFlag();
-    return installChunkErrorRecovery();
-  }, []);
-
   // Mobile detection now lives in the useIsMobile() hook above.
 
   const handleProjectUpdate = useCallback((updates: Partial<Project>) => {
@@ -268,15 +322,17 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     setCredits(profile?.credits ?? 0);
   }, [profile]);
 
-  // Sync live credit balance (dev auto-grants empty accounts via /api/billing/credits)
   useEffect(() => {
-    fetch("/api/billing/credits")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d && typeof d.credits === "number") setCredits(d.credits);
-      })
-      .catch(() => {});
-  }, [project.id]);
+    if (uiCredits <= 0) {
+      setPreviewError(null);
+      setPendingFix(null);
+    }
+  }, [uiCredits]);
+
+  // Sync live credit balance (dev auto-grants via ensureDevCredits)
+  useEffect(() => {
+    syncCredits(simulateZeroCredits);
+  }, [project.id, simulateZeroCredits, syncCredits]);
 
   // Auto-switch left panel when mode changes to agent
   // NOTE: plan mode now uses the chat panel (leftPanel stays "chat"), so we don't auto-switch for it
@@ -562,7 +618,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
           project={currentProject}
           editorMode={editorMode}
           viewMode={viewMode}
-          credits={credits}
+          credits={uiCredits}
           leftPanel={leftPanel}
           onModeChange={setEditorMode}
           onViewChange={(v) => { if (devMode || v === "preview") setViewMode(v); }}
@@ -586,7 +642,30 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
           }}
         />
       )}
-      {!focusMode && <EditorPaymentBanner profile={profile} credits={credits} />}
+      {!focusMode && <EditorPaymentBanner profile={profile} credits={uiCredits} />}
+      {process.env.NODE_ENV === "development" && (
+        <div className="shrink-0 px-3 py-1.5 flex items-center justify-center gap-3 text-[11px] bg-amber-500/15 border-b border-amber-500/25 text-amber-300">
+          {simulateZeroCredits ? (
+            <span>Simulating 0 credits — preview/chat use zero-credit UX</span>
+          ) : (
+            <span>Dev: test zero-credits UX without spending credits</span>
+          )}
+          <button
+            type="button"
+            onClick={grantDevCredits}
+            className="rounded px-2.5 py-0.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 font-medium transition-colors"
+          >
+            Grant 100 credits
+          </button>
+          <button
+            type="button"
+            onClick={toggleSimulateZeroCredits}
+            className="rounded px-2.5 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-200 font-medium transition-colors"
+          >
+            {simulateZeroCredits ? "Exit simulation" : "Simulate 0 credits"}
+          </button>
+        </div>
+      )}
 
       {/* ── Mobile layout (Lovable-style: chat-only left, tools via overlays) ─ */}
       {isMobile && (
@@ -601,7 +680,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                   messages={messages}
                   activeFile={activeFile}
                   mode={editorMode}
-                  credits={credits}
+                  credits={uiCredits}
                   starterPrompt={pendingConnectorPrompt ?? pendingComponentPrompt ?? starterPrompt}
                   previewError={previewError}
                   pendingFixPrompt={pendingFix}
@@ -676,6 +755,8 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 deployedUrl={project.deployed_url ?? undefined}
                 badgeHidden={(project as { badge_hidden?: boolean }).badge_hidden ?? false}
                 projectId={project.id}
+                credits={uiCredits}
+                useWebContainers
                 onSendAnnotatedToChat={(prompt, img) => { setMobilePaneActive("left"); setLeftPanel("chat"); setPendingBuildFromFile({ prompt, imageBase64: img }); }}
               />
             </div>
@@ -723,7 +804,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                         activeFile={activeFile}
                         pid={pid}
                         projectSlug={projectSlug}
-                        credits={credits}
+                        credits={uiCredits}
                         isLiveLocked={isLiveLocked}
                         yjsCollaborators={yjsCollaborators}
                         setRightPanel={setRightPanel}
@@ -803,7 +884,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 messages={messages}
                 activeFile={activeFile}
                 mode={editorMode}
-                credits={credits}
+                credits={uiCredits}
                 starterPrompt={pendingConnectorPrompt ?? pendingCrossRefPrompt ?? starterPrompt}
                 previewError={previewError}
                 pendingFixPrompt={pendingFix}
@@ -915,7 +996,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                       activeFile={activeFile}
                       pid={pid}
                       projectSlug={projectSlug}
-                      credits={credits}
+                      credits={uiCredits}
                       isLiveLocked={isLiveLocked}
                       yjsCollaborators={yjsCollaborators}
                       setRightPanel={setRightPanel}
@@ -954,6 +1035,8 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                       onFixWithAI={(err) => { setLeftPanel("chat"); setPendingFix(err); }}
                       deployedUrl={currentProject.deployed_url ?? undefined}
                       badgeHidden={(currentProject as { badge_hidden?: boolean }).badge_hidden ?? false}
+                      credits={uiCredits}
+                      useWebContainers
                       onSendAnnotatedToChat={(prompt, img) => {
                         setPendingBuildFromFile({ prompt, imageBase64: img });
                         setLeftPanel("chat");
@@ -1007,6 +1090,8 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                   onFixWithAI={(err) => { setLeftPanel("chat"); setPendingFix(err); }}
                   deployedUrl={currentProject.deployed_url ?? undefined}
                   badgeHidden={(currentProject as { badge_hidden?: boolean }).badge_hidden ?? false}
+                  credits={uiCredits}
+                  useWebContainers
                   onSendAnnotatedToChat={(prompt, img) => {
                     setPendingBuildFromFile({ prompt, imageBase64: img });
                     setLeftPanel("chat");

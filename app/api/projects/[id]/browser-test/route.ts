@@ -1,7 +1,8 @@
-// @ts-nocheck
 import { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
 import { generateAI } from "@/lib/ai/provider";
+import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -113,7 +114,7 @@ async function snapshotViaPlaywright(playwright: { chromium: any }, url: string)
     });
     const page = await ctx.newPage();
     let status = 200;
-    page.on("response", (r) => {
+    page.on("response", (r: { url: () => string; status: () => number }) => {
       // First response only — the main document. Subsequent assets shouldn't
       // override the page's status code in our reporting.
       if (r.url() === url || r.url().endsWith("/")) {
@@ -178,16 +179,22 @@ function evaluateStep(step: TestStep, snap: PageSnapshot): { status: "pass" | "f
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const { id: projectId } = await ctx.params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401, headers: { "Content-Type": "application/json" },
     });
   }
 
-  // Verify ownership
+  const access = await getProjectAccess(supabase, projectId, user.id);
+  if (!canWriteProjectFiles(access)) {
+    return new Response(JSON.stringify({ error: "Project not found" }), {
+      status: 404, headers: { "Content-Type": "application/json" },
+    });
+  }
+
   const { data: project } = await supabase
-    .from("projects").select("id, name").eq("id", projectId).eq("user_id", user.id).single();
+    .from("projects").select("id, name").eq("id", projectId).single();
   if (!project) {
     return new Response(JSON.stringify({ error: "Project not found" }), {
       status: 404, headers: { "Content-Type": "application/json" },

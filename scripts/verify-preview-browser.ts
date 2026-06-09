@@ -1,16 +1,17 @@
 /**
- * Headless browser check: crossOriginIsolated + preview engine selection on /editor.
+ * Headless browser check: crossOriginIsolated + preview engine on /editor.
+ * Uses domcontentloaded (not networkidle) to avoid cold-compile timeouts.
  */
-import { readFileSync, appendFileSync, unlinkSync } from "fs";
+import { readFileSync, appendFileSync } from "fs";
 import { createClient } from "@supabase/supabase-js";
 import { chromium } from "playwright";
 
-const LOG = "debug-83daa0.log";
+const LOG = "debug-148b16.log";
 const BASE = "http://localhost:3000";
 
 function log(message: string, data: Record<string, unknown>, hypothesisId: string) {
   const entry = {
-    sessionId: "83daa0",
+    sessionId: "148b16",
     timestamp: Date.now(),
     runId: "preview-browser-verify",
     location: "verify-preview-browser.ts",
@@ -39,7 +40,7 @@ async function main() {
     password: "DemoPassword123!",
   });
   if (authErr || !auth.session) {
-    log("auth failed", { error: authErr?.message }, "H7c");
+    log("auth failed", { error: authErr?.message }, "H-PREVIEW");
     process.exit(1);
   }
 
@@ -61,9 +62,8 @@ async function main() {
     sameSite: "Lax" as const,
   };
 
-  let projectId: string;
   const demoRes = await fetch(`${BASE}/api/demo/create-sample-project`);
-  projectId = demoRes.ok ? (await demoRes.json()).projectId : "2fc379dd-f915-4451-ba47-b9af0296a9b9";
+  const projectId = demoRes.ok ? (await demoRes.json()).projectId : "2fc379dd-f915-4451-ba47-b9af0296a9b9";
 
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
@@ -78,19 +78,21 @@ async function main() {
     }
   });
 
-  await page.goto(`${BASE}/editor/${projectId}`, { waitUntil: "networkidle", timeout: 120_000 });
+  await page.goto(`${BASE}/editor/${projectId}`, { waitUntil: "domcontentloaded", timeout: 120_000 });
+  await page.waitForTimeout(5000);
 
   const browserState = await page.evaluate(() => ({
     crossOriginIsolated: window.crossOriginIsolated,
     href: location.href,
     hasViteBadge: !!document.body?.innerText?.includes("Vite"),
+    hasPreviewIframe: document.querySelectorAll("iframe").length,
     bodySnippet: document.body?.innerText?.slice(0, 500) ?? "",
   }));
 
-  log("browser editor state", { projectId, ...browserState, cspViolations }, "H7c");
+  log("browser editor state", { projectId, ...browserState, cspViolations }, "H-PREVIEW");
 
-  // Wait for WebContainer boot attempt (up to 90s)
-  await page.waitForTimeout(90_000);
+  // Allow WebContainer boot attempt without blocking on networkidle
+  await page.waitForTimeout(30_000);
 
   const afterBoot = await page.evaluate(() => ({
     crossOriginIsolated: window.crossOriginIsolated,
@@ -100,9 +102,15 @@ async function main() {
     bodySnippet: document.body?.innerText?.slice(0, 800) ?? "",
   }));
 
-  log("browser after boot wait", { projectId, ...afterBoot, cspViolations }, "H7e");
+  const ok =
+    afterBoot.crossOriginIsolated === true &&
+    !afterBoot.hasWebContainerError &&
+    cspViolations.filter((v) => v.includes("stackblitz")).length === 0;
+
+  log("browser after boot wait", { projectId, ok, ...afterBoot, cspViolations }, "H-PREVIEW");
 
   await browser.close();
+  process.exit(ok ? 0 : 1);
 }
 
 main().catch((e) => {

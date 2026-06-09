@@ -84,7 +84,7 @@ log("verify-editor-browser", "editor fetch", {
   projectId,
   status: editorRes.status,
   htmlLen: html.length,
-  hasBootScript: html.includes("editor-chunk-recovery") || html.includes("editor boot script"),
+  hasBootScript: html.includes("lifemark-chunk-reload") || html.includes("editor-chunk-recovery"),
   hasEditorLayout: html.includes("EditorLayout") || html.includes("Loading chat"),
 }, "H4");
 

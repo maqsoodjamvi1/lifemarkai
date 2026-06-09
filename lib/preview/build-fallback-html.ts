@@ -1,7 +1,83 @@
 import type { ProjectFile } from "@/types/database";
+import { generateFallbackUtilityCss } from "@/lib/preview/generate-fallback-utilities";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "8";
+export const PREVIEW_ENGINE_REV = "16";
+
+/** Strip PostCSS-only directives — invalid in a raw <style> tag. */
+export function sanitizePreviewCss(css: string): string {
+  return css
+    .replace(/@tailwind\s+[^;]+;/g, "")
+    .replace(/@import\s+["'][^"']*tailwindcss[^"']*["']\s*;?/gi, "")
+    .replace(/@apply\s+[^;]+;/g, "")
+    .trim();
+}
+
+export function projectUsesTailwindV4(files: ProjectFile[]): boolean {
+  return files.some(
+    (f) =>
+      f.path.endsWith(".css") &&
+      /@import\s+["']tailwindcss/.test(f.content ?? ""),
+  );
+}
+
+export function projectUsesTailwind(files: ProjectFile[]): boolean {
+  if (projectUsesTailwindV4(files)) return true;
+  if (files.some((f) => /tailwind\.config/i.test(f.path))) return true;
+  if (
+    files.some(
+      (f) =>
+        f.path.endsWith(".css") &&
+        /(@tailwind|--background|@layer)/.test(f.content ?? ""),
+    )
+  ) {
+    return true;
+  }
+  return files.some(
+    (f) =>
+      /\.(tsx|jsx)$/.test(f.path) &&
+      /className=["'][^"']*(?:flex|grid|bg-|text-|p-|m-|gap-|rounded|min-h-|max-w-)/.test(
+        f.content ?? "",
+      ),
+  );
+}
+
+export function preparePreviewCss(
+  css: string,
+  usesV4: boolean,
+  usesTailwind: boolean,
+): string {
+  if (usesV4) return css.replace(/@tailwind\s+[^;]+;/g, "").trim();
+  if (usesTailwind) return sanitizePreviewCss(css);
+  return css;
+}
+
+const SHADCN_TAILWIND_CDN_CONFIG = `tailwind.config = {
+  darkMode: ['class'],
+  theme: {
+    extend: {
+      colors: {
+        border: 'hsl(var(--border))',
+        input: 'hsl(var(--input))',
+        ring: 'hsl(var(--ring))',
+        background: 'hsl(var(--background))',
+        foreground: 'hsl(var(--foreground))',
+        primary: { DEFAULT: 'hsl(var(--primary))', foreground: 'hsl(var(--primary-foreground))' },
+        secondary: { DEFAULT: 'hsl(var(--secondary))', foreground: 'hsl(var(--secondary-foreground))' },
+        destructive: { DEFAULT: 'hsl(var(--destructive))', foreground: 'hsl(var(--destructive-foreground))' },
+        muted: { DEFAULT: 'hsl(var(--muted))', foreground: 'hsl(var(--muted-foreground))' },
+        accent: { DEFAULT: 'hsl(var(--accent))', foreground: 'hsl(var(--accent-foreground))' },
+        card: { DEFAULT: 'hsl(var(--card))', foreground: 'hsl(var(--card-foreground))' },
+        popover: { DEFAULT: 'hsl(var(--popover))', foreground: 'hsl(var(--popover-foreground))' },
+      },
+      borderRadius: {
+        lg: 'var(--radius)',
+        md: 'calc(var(--radius) - 2px)',
+        sm: 'calc(var(--radius) - 4px)',
+      },
+    },
+  },
+};`;
 
 export function buildFallbackHtml(files: ProjectFile[]): string {
   // Static HTML project — serve as-is
@@ -60,7 +136,34 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     );
   }
 
-  const inlineCss = cssFiles.map((f) => f.content ?? "").join("\n");
+  const usesTailwindV4 = projectUsesTailwindV4(files);
+  const usesTailwind = projectUsesTailwind(files);
+  const inlineCss = preparePreviewCss(
+    cssFiles.map((f) => f.content ?? "").join("\n"),
+    usesTailwindV4,
+    usesTailwind,
+  );
+  const fallbackUtilityCss = usesTailwind ? generateFallbackUtilityCss(files) : "";
+  const tailwindScripts = usesTailwind
+    ? `<script>${SHADCN_TAILWIND_CDN_CONFIG}</script>
+  <script id="lm-tw-cdn" src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"
+    onload="window.__twLoaded=1;window.__twBrowserV4=1"></script>
+  <script>
+  (function() {
+    var s = document.getElementById('lm-tw-cdn');
+    if (!s) return;
+    s.onerror = function() {
+      window.__twError = 1;
+      var fb = document.createElement('script');
+      fb.src = 'https://cdn.tailwindcss.com/3.4.17?plugins=forms,typography,aspect-ratio';
+      fb.onload = function() { window.__twLoaded = 1; window.__twError = 0; };
+      fb.onerror = function() { window.__twError = 1; };
+      document.head.appendChild(fb);
+    };
+  })();
+  </script>`
+    : "";
+  const styleTypeAttr = usesTailwind ? ' type="text/tailwindcss"' : "";
 
   /** Resolve ./ and ../ imports to a stable project path for __Mrequire. */
   function resolveProjectImport(fromFile: string, importPath: string): string {
@@ -111,13 +214,29 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     // Strip import type
     src = src.replace(/import\s+type\s+[^\n;]+;?\n?/g, "");
 
-    // `import { A as B }` must become `{ A: B }` in object destructuring (not `as`)
-    const destructure = (named: string) => named.trim().replace(/\s+as\s+/g, ": ");
+    // `import { A as B }` → `{ A: B }`; strip TypeScript `type` imports (no runtime binding)
+    const destructure = (named: string) =>
+      named
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part) => part && !/^type\s/.test(part))
+        .map((part) => part.replace(/^type\s+/, "").replace(/\s+as\s+/g, ": "))
+        .filter(Boolean)
+        .join(", ");
 
     // AI sometimes emits window-shim destructuring with import-style `as` aliases
     src = src.replace(
       /const\s*\{([^}]+)\}\s*=\s*(window\.__[\w]+)/g,
       (_, named: string, srcObj: string) => `const { ${destructure(named)} } = ${srcObj}`,
+    );
+
+    // Strip `type X` from any remaining const-destructuring (e.g. corrupted utils.ts)
+    src = src.replace(
+      /const\s*\{([^}]+)\}\s*=/g,
+      (_, named: string) => {
+        const cleaned = destructure(named);
+        return cleaned ? `const { ${cleaned} } =` : "const {} =";
+      },
     );
 
     // import React[, { ... }] from 'react'
@@ -744,7 +863,7 @@ window.__reactRouterDom = (function() {
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Preview</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  ${tailwindScripts}
   <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
   <!-- crossorigin on all CDN scripts: without it, runtime errors that surface
@@ -773,11 +892,12 @@ window.__reactRouterDom = (function() {
   <script src="https://cdn.jsdelivr.net/npm/date-fns@3/cdn.min.js" crossorigin
     onload="window.__dateFns=window.dateFns||{};"
     onerror="window.__dateFns={};"></script>
-  <style>
+  <style${styleTypeAttr}>
     *, *::before, *::after { box-sizing: border-box; }
     body { margin: 0; font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     ${inlineCss}
   </style>
+  ${fallbackUtilityCss ? `<style id="lifemark-fallback-utils">\n${fallbackUtilityCss}\n</style>` : ""}
 </head>
 <body>
   <div id="root"></div>
@@ -842,12 +962,36 @@ window.__reactRouterDom = (function() {
         if (!AppComp) { showError('${mainFile.path}', 'No default export (App component) found.'); return; }
         var root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(React.createElement(React.StrictMode, null, React.createElement(AppComp)));
+        function refreshTailwind() {
+          try {
+            if (typeof tailwind !== 'undefined' && typeof tailwind.refresh === 'function') {
+              tailwind.refresh();
+            }
+          } catch (e) {}
+        }
+        refreshTailwind();
+        requestAnimationFrame(refreshTailwind);
+        setTimeout(refreshTailwind, 0);
+        setTimeout(refreshTailwind, 100);
+        setTimeout(refreshTailwind, 400);
         try { window.parent.postMessage({ source: 'lifemark-preview', type: 'success', text: 'render ok' }, '*'); } catch (e) {}
       } catch (err) { showError('${mainFile.path}', (err && err.message) || err); }
     }
-    // Wait for window load so the async CDN libs (lucide/recharts/etc.) are ready.
-    if (document.readyState === 'complete') run();
-    else window.addEventListener('load', run);
+    function tailwindRuntimeReady() {
+      if (window.__twBrowserV4 && window.__twLoaded) return true;
+      return typeof tailwind !== 'undefined';
+    }
+    function whenRuntimeReady(cb) {
+      var attempts = 0;
+      (function poll() {
+        attempts++;
+        if (tailwindRuntimeReady() || window.__twError || attempts > 100) { cb(); return; }
+        setTimeout(poll, 50);
+      })();
+    }
+    function boot() { whenRuntimeReady(run); }
+    if (document.readyState === 'complete') boot();
+    else window.addEventListener('load', boot);
   })();
   </script>
 

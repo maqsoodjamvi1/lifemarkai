@@ -1,5 +1,4 @@
-import Script from "next/script";
-import { EDITOR_BOOT_SCRIPT } from "@/lib/sw-cleanup";
+import { EditorBootScript } from "@/components/editor/editor-boot-script";
 
 export default function EditorProjectLayout({
   children,
@@ -8,9 +7,7 @@ export default function EditorProjectLayout({
 }) {
   return (
     <>
-      <Script id="editor-chunk-recovery" strategy="beforeInteractive">
-        {EDITOR_BOOT_SCRIPT}
-      </Script>
+      <EditorBootScript />
       {children}
     </>
   );

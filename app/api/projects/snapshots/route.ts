@@ -2,6 +2,11 @@ import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import {
+  canReadProjectFiles,
+  canWriteProjectFiles,
+  getProjectAccess,
+} from "@/lib/project/access";
+import {
   computePatches,
   reconstructFromChain,
   filesSize,
@@ -24,13 +29,16 @@ export async function GET(req: NextRequest) {
 
   // ── Reconstruct a specific snapshot's full file list ────────────────────────
   if (snapshotId) {
-    // Verify user owns the target snapshot
     const { data: snap } = await (supabase as any)
       .from("project_snapshots")
-      .select("id, user_id")
+      .select("id, user_id, project_id")
       .eq("id", snapshotId)
       .single();
-    if (!snap || snap.user_id !== user.id) {
+    if (!snap) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const access = await getProjectAccess(supabase, snap.project_id, user.id);
+    if (!canReadProjectFiles(access)) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
@@ -47,6 +55,11 @@ export async function GET(req: NextRequest) {
 
   // ── List snapshots for a project ─────────────────────────────────────────────
   if (!projectId) return NextResponse.json({ error: "projectId or id required" }, { status: 400 });
+
+  const access = await getProjectAccess(supabase, projectId, user.id);
+  if (!canReadProjectFiles(access)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
 
   const { data } = await (supabase as any)
     .from("project_snapshots")
@@ -74,6 +87,18 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "snapshotId required" }, { status: 400 });
   }
 
+  const { data: snap } = await (supabase as any)
+    .from("project_snapshots")
+    .select("id, project_id")
+    .eq("id", snapshotId)
+    .single();
+  if (!snap) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const access = await getProjectAccess(supabase, snap.project_id, user.id);
+  if (!canWriteProjectFiles(access)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   const { data, error } = await (supabase as any)
     .from("project_snapshots")
     .update({
@@ -81,7 +106,6 @@ export async function PATCH(req: NextRequest) {
       pinned_at: isPinned ? new Date().toISOString() : null,
     })
     .eq("id", snapshotId)
-    .eq("user_id", user.id)
     .select("id, is_pinned, pinned_at")
     .single();
 
@@ -99,12 +123,15 @@ export async function POST(req: NextRequest) {
   const { projectId, label } = await req.json() as { projectId: string; label?: string };
   if (!projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 });
 
-  // Verify ownership and grab current preview_url for the screenshot thumbnail
+  const access = await getProjectAccess(supabase, projectId, user.id);
+  if (!canWriteProjectFiles(access)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   const { data: project } = await (supabase as any)
     .from("projects")
     .select("id, user_id, preview_url")
     .eq("id", projectId)
-    .eq("user_id", user.id)
     .single();
   if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
   const screenshotUrl: string | null = (project as { preview_url?: string | null }).preview_url ?? null;
@@ -234,11 +261,22 @@ export async function DELETE(req: NextRequest) {
   const snapshotId = req.nextUrl.searchParams.get("id");
   if (!snapshotId) return NextResponse.json({ error: "id required" }, { status: 400 });
 
+  const { data: snap } = await (supabase as any)
+    .from("project_snapshots")
+    .select("id, project_id")
+    .eq("id", snapshotId)
+    .single();
+  if (!snap) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  const access = await getProjectAccess(supabase, snap.project_id, user.id);
+  if (!canWriteProjectFiles(access)) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
   await (supabase as any)
     .from("project_snapshots")
     .delete()
-    .eq("id", snapshotId)
-    .eq("user_id", user.id);
+    .eq("id", snapshotId);
 
   return NextResponse.json({ ok: true });
 }

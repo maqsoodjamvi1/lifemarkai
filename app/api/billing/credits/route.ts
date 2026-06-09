@@ -6,12 +6,16 @@ import { CREDIT_PACKS } from "@/lib/stripe/plans";
 import { ensureDevCredits } from "@/lib/dev-credits";
 
 // GET — user credit balance + team pools
-export async function GET() {
+export async function GET(req: NextRequest) {
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  await ensureDevCredits(user.id);
+  const referer = req.headers.get("referer") ?? "";
+  const debugZeroCredits =
+    process.env.NODE_ENV === "development" &&
+    (referer.includes("debugZeroCredits=1") ||
+      req.headers.get("x-debug-zero-credits") === "1");
 
   const { data: profile } = await (supabase as any)
     .from("profiles")
@@ -25,8 +29,17 @@ export async function GET() {
     .eq("user_id", user.id)
     .not("accepted_at", "is", null);
 
+  let credits = profile?.credits ?? 0;
+  const profileCredits = credits;
+  if (debugZeroCredits) {
+    credits = 0;
+  } else {
+    const granted = await ensureDevCredits(user.id);
+    if (granted !== null) credits = granted;
+  }
+
   return NextResponse.json({
-    credits: profile?.credits ?? 0,
+    credits,
     plan: profile?.plan ?? "free",
     teams: memberships ?? [],
   });
