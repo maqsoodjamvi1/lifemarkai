@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
-import { getDefaultAiModel } from "./model-defaults";
+import { getDefaultAiModel, useOpenRouterForAll, resolveOpenRouterModelId } from "./model-defaults";
 
 export type AIModel =
   | "gpt-4o"
@@ -83,6 +83,7 @@ function isOpenRouterModel(model: string): boolean {
 }
 
 function getProvider(model: AIModel): AIProvider {
+  if (useOpenRouterForAll()) return "openrouter";
   if (model.startsWith("gpt-")) return "openai";
   // Prefer native Anthropic SDK (supports prompt caching) when key is present
   if (model.startsWith("claude-")) {
@@ -140,6 +141,17 @@ function isFallbackableError(err: unknown): boolean {
 
 export async function generateAI(options: GenerateOptions): Promise<GenerateResult> {
   const model = options.model ?? getDefaultAiModel();
+
+  if (useOpenRouterForAll()) {
+    if (!process.env.OPENROUTER_API_KEY) {
+      throw new Error(
+        'OpenRouter is enabled (AI_VIA_OPENROUTER) but OPENROUTER_API_KEY is missing. Set it in .env.local.',
+      );
+    }
+    const orModel = resolveOpenRouterModelId(model);
+    return generateOpenRouter({ ...options, model: orModel });
+  }
+
   const provider = getProvider(model);
 
   // Primary attempt — the model's native provider.
@@ -186,11 +198,17 @@ function isGroqModel(model: AIModel) {
 
 function createOpenAIClient(model: AIModel) {
   const isGroq = isGroqModel(model);
-  // OpenRouter: explicit OR model IDs *or* Claude fallback when no Anthropic key
-  const isOR = isOpenRouterModel(model) || (model.startsWith("claude-") && !process.env.ANTHROPIC_API_KEY);
-  const isGoogle = model.startsWith("gemini-");
+  const forceOR = useOpenRouterForAll();
+  // OpenRouter: forced for all models, explicit OR model IDs, or Claude fallback when no Anthropic key
+  const isOR =
+    forceOR ||
+    isOpenRouterModel(model) ||
+    (model.startsWith("claude-") && !process.env.ANTHROPIC_API_KEY);
+  const isGoogle = !forceOR && model.startsWith("gemini-");
 
-  const apiKey = isGoogle
+  const apiKey = forceOR
+    ? process.env.OPENROUTER_API_KEY
+    : isGoogle
     ? process.env.GOOGLE_GENERATIVE_AI_API_KEY
     : isOR
     ? process.env.OPENROUTER_API_KEY
@@ -199,16 +217,15 @@ function createOpenAIClient(model: AIModel) {
     : process.env.OPENAI_API_KEY;
 
   if (!apiKey) {
-    const providerName = isGoogle ? "Google AI" : isOR ? "OpenRouter" : isGroq ? "Groq/Kimi" : "OpenAI";
-    const envVar = isGoogle ? "GOOGLE_GENERATIVE_AI_API_KEY" : isOR ? "OPENROUTER_API_KEY" : isGroq ? "GROQ_API_KEY" : "OPENAI_API_KEY";
+    const providerName = forceOR || isOR ? "OpenRouter" : isGoogle ? "Google AI" : isGroq ? "Groq/Kimi" : "OpenAI";
+    const envVar =
+      forceOR || isOR ? "OPENROUTER_API_KEY" : isGoogle ? "GOOGLE_GENERATIVE_AI_API_KEY" : isGroq ? "GROQ_API_KEY" : "OPENAI_API_KEY";
     throw new Error(`Missing API key for ${providerName} model "${model}". Set ${envVar} in your environment.`);
   }
 
   return new OpenAI({
     apiKey,
-    ...(isGoogle
-      ? { baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/" }
-      : isOR
+    ...(forceOR || isOR
       ? {
           baseURL: "https://openrouter.ai/api/v1",
           defaultHeaders: {
@@ -216,6 +233,8 @@ function createOpenAIClient(model: AIModel) {
             "X-Title": "LifemarkAI",
           },
         }
+      : isGoogle
+      ? { baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/" }
       : isGroq
       ? { baseURL: process.env.GROQ_API_BASE_URL ?? "https://api.groq.com/openai/v1" }
       : {}),
@@ -315,6 +334,43 @@ async function generateOpenAI(options: GenerateOptions & { model: AIModel }): Pr
 async function generateOpenRouter(options: GenerateOptions & { model: AIModel }): Promise<GenerateResult> {
   const model = normalizeOpenRouterModel(options.model) as AIModel;
   const openrouter = createOpenAIClient(model);
+
+  if (options.tools && options.tools.length > 0) {
+    const oaiTools: OpenAI.Chat.Completions.ChatCompletionTool[] = options.tools.map((t) => ({
+      type: "function" as const,
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+
+    const response = await openrouter.chat.completions.create({
+      model,
+      messages: options.messages,
+      max_tokens: options.maxTokens ?? 4000,
+      temperature: options.temperature ?? 0.3,
+      tools: oaiTools,
+      tool_choice: "auto",
+    });
+
+    const msg = response.choices[0]?.message;
+    const toolCalls: ToolCall[] = (msg?.tool_calls ?? []).map((tc) => ({
+      id: tc.id,
+      name: tc.function.name,
+      args: (() => {
+        try { return JSON.parse(tc.function.arguments) as Record<string, unknown>; }
+        catch { return {}; }
+      })(),
+    }));
+
+    return {
+      content: msg?.content ?? "",
+      tokensUsed: response.usage?.total_tokens ?? 0,
+      model,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    };
+  }
 
   if (options.stream && options.onChunk) {
     const stream = await openrouter.chat.completions.create({

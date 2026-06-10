@@ -42,7 +42,7 @@ import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { findMissingPackages, buildInstallCommand, syncPackageJsonDeps } from "@/lib/ai/npm-auto-install";
 import { classifyBuildIntent, type BuildIntent } from "@/lib/ai/build-intent";
-import { useEditorModelPrefs } from "@/store/app-store";
+import { useAppStore } from "@/store/app-store";
 import type { AgentStep } from "@/lib/ai/agent";
 import {
   buildProjectContextBlock,
@@ -648,19 +648,8 @@ export function ChatPanel({
   const [pendingSkills, setPendingSkills] = useState<Array<{ id: string; name: string; reason?: string }>>([]);
   const [messageSkills, setMessageSkills] = useState<Record<string, Array<{ id: string; name: string; reason?: string }>>>({});
   const [expandedDiffs, setExpandedDiffs] = useState<Set<string>>(new Set());
-  const {
-    preferredModel: storedPreferredModel,
-    modelManuallySelected,
-    setPreferredModel: persistPreferredModel,
-    setModelManuallySelected,
-  } = useEditorModelPrefs();
-  const modelManuallySelectedRef = useRef(modelManuallySelected);
-  const [selectedModel, setSelectedModel] = useState<AIModel>(() =>
-    AI_MODELS.some((m) => m.id === storedPreferredModel) ? storedPreferredModel : DEFAULT_CODING_MODEL,
-  );
-  useEffect(() => {
-    modelManuallySelectedRef.current = modelManuallySelected;
-  }, [modelManuallySelected]);
+  const modelManuallySelectedRef = useRef(false);
+  const [selectedModel, setSelectedModel] = useState<AIModel>(DEFAULT_CODING_MODEL);
   const [autoFixing, setAutoFixing] = useState(false);
   const [autoFixAttempts, setAutoFixAttempts] = useState(0);
   const [lastFixedError, setLastFixedError] = useState<string | null>(null);
@@ -5034,8 +5023,6 @@ Please confirm the breakdown before implementing anything.`,
                     onClick={() => {
                       modelManuallySelectedRef.current = true;
                       setSelectedModel(model.id);
-                      persistPreferredModel(model.id);
-                      setModelManuallySelected(true);
                     }}
                     className={`text-xs gap-2 py-2 ${selectedModel === model.id ? "bg-muted" : ""}`}
                   >

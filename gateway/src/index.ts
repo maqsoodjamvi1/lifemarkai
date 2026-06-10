@@ -40,6 +40,8 @@ export interface Env {
   // Injected by wrangler.toml [vars]
   ENVIRONMENT: string;
   APP_URL: string;
+  /** When not "false", route all models through OpenRouter when OPENROUTER_API_KEY is set. */
+  AI_VIA_OPENROUTER?: string;
 }
 
 type AIProvider = "openai" | "anthropic" | "openrouter" | "google";
@@ -96,7 +98,24 @@ function computeAiCents(model: string, promptTokens: number, completionTokens: n
 
 // ── Provider routing ──────────────────────────────────────────────────────────
 
+function shouldUseOpenRouter(env: Env): boolean {
+  const flag = env.AI_VIA_OPENROUTER?.toLowerCase();
+  if (flag === "false" || flag === "0") return false;
+  if (flag === "true" || flag === "1") return true;
+  return !!env.OPENROUTER_API_KEY;
+}
+
 function resolveRoute(model: string, env: Env): RouteInfo {
+  if (shouldUseOpenRouter(env)) {
+    if (!env.OPENROUTER_API_KEY) {
+      throw new Error("OPENROUTER_API_KEY is required when AI_VIA_OPENROUTER is enabled");
+    }
+    return {
+      provider: "openrouter",
+      upstreamUrl: "https://openrouter.ai/api/v1/chat/completions",
+      apiKey: env.OPENROUTER_API_KEY,
+    };
+  }
   if (model.startsWith("gpt-")) {
     return {
       provider: "openai",
@@ -444,6 +463,11 @@ async function handleChat(request: Request, env: Env, ctx: ExecutionContext): Pr
   const isStreaming = body.stream === true;
   const projectId = request.headers.get("X-Lifemark-Project-Id") ?? "";
   const userId = request.headers.get("X-Lifemark-User-Id") ?? "";
+
+  if (shouldUseOpenRouter(env)) {
+    const orModel = toOpenRouterModel(model) ?? (model.includes("/") ? model : model);
+    if (orModel !== model) body = { ...body, model: orModel };
+  }
 
   let route: RouteInfo;
   try {

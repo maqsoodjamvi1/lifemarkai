@@ -40,29 +40,14 @@ interface AppState {
   clearNotifications: () => void;
 }
 
-export type EditorModelPrefs = Pick<
-  AppState,
-  "preferredModel" | "modelManuallySelected" | "setPreferredModel" | "setModelManuallySelected"
->;
-
-export const useEditorModelPrefs = (): EditorModelPrefs =>
-  useAppStore((s) => ({
-    preferredModel: s.preferredModel,
-    modelManuallySelected: s.modelManuallySelected,
-    setPreferredModel: s.setPreferredModel,
-    setModelManuallySelected: s.setModelManuallySelected,
-  }));
-
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
       sidebarCollapsed: false,
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
-      preferredModel: DEFAULT_CODING_MODEL,
-      modelManuallySelected: false,
+      preferredModel: "claude-opus-4-6",
       setPreferredModel: (model) => set({ preferredModel: model }),
-      setModelManuallySelected: (manual) => set({ modelManuallySelected: manual }),
 
       editorFontSize: 14,
       setEditorFontSize: (size) => set({ editorFontSize: size }),
@@ -96,7 +81,6 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         sidebarCollapsed: state.sidebarCollapsed,
         preferredModel: state.preferredModel,
-        modelManuallySelected: state.modelManuallySelected,
         editorFontSize: state.editorFontSize,
         editorTabSize: state.editorTabSize,
         recentPrompts: state.recentPrompts,

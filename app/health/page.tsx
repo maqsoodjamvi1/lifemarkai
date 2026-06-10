@@ -45,8 +45,9 @@ async function runChecks(): Promise<Check[]> {
   }
 
   const optionalEnv = [
-    { key: "OPENAI_API_KEY", note: "required for /api/ai/chat" },
-    { key: "ANTHROPIC_API_KEY", note: "required for Claude models" },
+    { key: "OPENROUTER_API_KEY", note: "primary AI provider when AI_VIA_OPENROUTER=true" },
+    { key: "OPENAI_API_KEY", note: "fallback when AI_VIA_OPENROUTER=false" },
+    { key: "ANTHROPIC_API_KEY", note: "fallback for native Claude when AI_VIA_OPENROUTER=false" },
     { key: "STRIPE_SECRET_KEY", note: "required for billing" },
     { key: "RESEND_API_KEY", note: "required for transactional email" },
     { key: "SUPABASE_SERVICE_ROLE_KEY", note: "required for createAdminClient()" },

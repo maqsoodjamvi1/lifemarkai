@@ -27,3 +27,6 @@ jobs:
 
       - name: Agent mode routing
         run: npx tsx scripts/verify-agent-mode-routing.ts
+
+      - name: OpenRouter routing
+        run: npx tsx scripts/verify-openrouter-routing.ts

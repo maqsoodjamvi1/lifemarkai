@@ -56,6 +56,7 @@ runScript("scripts/verify-tier6-gaps.ts", "P3c");
 runScript("scripts/verify-tier7-gaps.ts", "P3d");
 runScript("scripts/verify-tier8-gaps.ts", "P3e");
 runScript("scripts/verify-editor-intelligence.ts", "P4");
+runScript("scripts/verify-openrouter-routing.ts", "P4b");
 
 // ── Required migrations for parity features ─────────────────────────────────
 const REQUIRED_MIGRATIONS = [
@@ -98,10 +99,19 @@ if (existsSync(envPath)) {
       assert("P6", `env ${key}`, true);
     }
   }
-  const hasAiKey = AI_ENV_KEYS.some((k) => envKeys.has(k));
-  assert("P6", "env AI provider (any)", hasAiKey, {
-    hint: hasAiKey ? undefined : `Set one of: ${AI_ENV_KEYS.join(", ")}`,
-  });
+  const hasAiKey = envKeys.has("OPENROUTER_API_KEY") || AI_ENV_KEYS.some((k) => envKeys.has(k));
+  const orPreferred = envKeys.has("AI_VIA_OPENROUTER")
+    ? !["false", "0"].includes((process.env.AI_VIA_OPENROUTER ?? "").toLowerCase())
+    : envKeys.has("OPENROUTER_API_KEY");
+  if (orPreferred && !envKeys.has("OPENROUTER_API_KEY")) {
+    assert("P6", "env OPENROUTER_API_KEY (AI_VIA_OPENROUTER)", false, {
+      hint: "Set OPENROUTER_API_KEY — all AI tools route through OpenRouter",
+    });
+  } else {
+    assert("P6", "env AI provider (any)", hasAiKey, {
+      hint: hasAiKey ? undefined : "Set OPENROUTER_API_KEY (recommended) or a direct provider key",
+    });
+  }
   for (const key of OPTIONAL_ENV) {
     if (!envKeys.has(key)) {
       warn("P6", `optional env ${key}`, "Not set — related features disabled");
