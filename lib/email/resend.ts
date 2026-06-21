@@ -1,6 +1,26 @@
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+// Constructing `new Resend()` with a missing/empty key THROWS. Because this
+// module is imported by API routes (e.g. /api/deploy), that throw happens at
+// module-eval time and crashes `next build` ("Failed to collect page data").
+// Construct lazily only when a key is configured; without one, email sends
+// no-op gracefully and the build/runtime never throw.
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const _resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
+
+const resend = {
+  emails: {
+    send: async (payload: any) => {
+      if (!_resend) {
+        return {
+          data: null,
+          error: { name: "missing_api_key", message: "RESEND_API_KEY not set — email skipped" },
+        };
+      }
+      return _resend.emails.send(payload);
+    },
+  },
+};
 
 const FROM_EMAIL = "LifemarkAI <noreply@lifemarkai.com>";
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://lifemarkai.com";
