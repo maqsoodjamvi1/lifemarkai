@@ -2,6 +2,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
+import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
 
 /**
  * POST /api/account/generate-workspace-knowledge
@@ -73,7 +74,7 @@ Be specific, cite what you observed. Do NOT invent rules. If you can't extract e
 
   try {
     const aiRes = await generateAI({
-      model: "claude-sonnet-4-6",
+      model: BALANCED_CODING_MODEL,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },

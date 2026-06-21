@@ -2,7 +2,7 @@ import type { ProjectFile } from "@/types/database";
 import { generateFallbackUtilityCss } from "@/lib/preview/generate-fallback-utilities";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "16";
+export const PREVIEW_ENGINE_REV = "20";
 
 /** Strip PostCSS-only directives — invalid in a raw <style> tag. */
 export function sanitizePreviewCss(css: string): string {
@@ -115,12 +115,27 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     );
   }
 
-  // Sort: components → pages → App entry (alphabetical path ensures components/ before pages/)
+  // Load order matters: each module's imports are resolved EAGERLY at its own
+  // script execution (const { x } = __Mrequire(...)), so a dependency must be
+  // registered BEFORE its consumer. Emit leaf/dependency modules (lib, utils,
+  // types, data, hooks, context, store, constants, services) first, then
+  // components, then pages, then the App entry last. Without this, a component
+  // that imports `formatCurrency` from lib/utils gets `undefined` ("x is not a
+  // function") because lib/ sorts after components/ alphabetically.
+  const loadRank = (p: string): number => {
+    const s = p.toLowerCase();
+    if (/(^|\/)app\.(tsx|jsx)$/.test(s)) return 5; // entry — render root, last
+    if (/\/pages?\//.test(s)) return 4;
+    if (/\/components?\//.test(s)) return 3;
+    if (
+      /\/(lib|utils?|types?|constants?|data|hooks?|context|contexts|store|stores|config|services?|api|helpers?)\//.test(s) ||
+      /(^|\/)(types?|utils?|constants?|helpers?)\.(t|j)sx?$/.test(s)
+    ) return 1; // leaf/dependency modules first
+    return 2; // everything else between leaves and components
+  };
   const sorted = [...codeFiles].sort((a, b) => {
-    const isEntry = (p: string) => p.includes("App.");
-    const aE = isEntry(a.path) ? 1 : 0;
-    const bE = isEntry(b.path) ? 1 : 0;
-    if (aE !== bE) return aE - bE;
+    const ra = loadRank(a.path), rb = loadRank(b.path);
+    if (ra !== rb) return ra - rb;
     return a.path.localeCompare(b.path);
   });
 
@@ -184,9 +199,46 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
   const defaultImportExpr = (modVar: string, binding: string) =>
     `const ${binding} = (function(){var m=${modVar};var c=m&&(m.default!==undefined?m.default:m);return typeof c==='function'?c:function(){return null;};})();`;
 
+  /**
+   * Remove // and /* *\/ comments, string-aware so we never touch text inside
+   * '...', "...", or \`...\`. Critical: the import-rewriting regexes below would
+   * otherwise mangle import-like example text in a comment (e.g.
+   * `// import { useCart } from './hooks/useCart'`), and a stray backtick in a
+   * comment becomes an "unterminated template" that kills the whole preview.
+   */
+  function stripCommentsSafe(code: string): string {
+    let out = "";
+    let i = 0;
+    const n = code.length;
+    let strDelim: string | null = null;
+    while (i < n) {
+      const ch = code[i];
+      const next = code[i + 1];
+      if (strDelim) {
+        out += ch;
+        if (ch === "\\") { out += next ?? ""; i += 2; continue; }
+        if (ch === strDelim) strDelim = null;
+        i++;
+        continue;
+      }
+      if (ch === "'" || ch === '"' || ch === "`") { strDelim = ch; out += ch; i++; continue; }
+      if (ch === "/" && next === "/") { while (i < n && code[i] !== "\n") i++; continue; }
+      if (ch === "/" && next === "*") {
+        i += 2;
+        while (i < n && !(code[i] === "*" && code[i + 1] === "/")) i++;
+        i += 2;
+        continue;
+      }
+      out += ch;
+      i++;
+    }
+    return out;
+  }
+
   /** Transform one source file into a self-contained Babel script block */
   function wrapFile(file: ProjectFile): string {
     let src = file.content ?? "";
+    const fileShortPath = file.path.replace(/\.(tsx?|jsx?)$/, "");
 
     // Defensive: strip markdown code fences if the AI response parser ever
     // let them leak into stored file content (a single backtick fence is an
@@ -208,6 +260,10 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
         .replace(/\\"/g, '"')
         .replace(/\\u0000/g, "\\\\");
     }
+
+    // Strip comments (string-aware) BEFORE any import rewriting, so import-like
+    // text or backticks inside comments can't be mangled into broken code.
+    src = stripCommentsSafe(src);
 
     // Strip CSS / asset imports
     src = src.replace(/import\s+['"][^'"]+\.css['"]\s*;?\n?/g, "");
@@ -480,12 +536,16 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     src = src.replace(/export\s+type\s+/g, "type ");
     src = src.replace(/export\s+(interface|enum|declare)\s+/g, "$1 ");
 
+    const resolveRuntimeSpec = (spec: string) =>
+      spec.startsWith(".") ? resolveProjectImport(file.path, spec) : spec;
+
     // Re-exports: export { A, B as C } from './path'
     // MUST run before the plain `export { … }` handler below, which would
     // otherwise eat the brace group and leave a dangling `from './path'`.
     src = src.replace(
       /export\s+\{([\s\S]*?)\}\s*from\s+['"]([^'"]+)['"]\s*;?\n?/g,
       (_, names: string, spec: string) => {
+        const resolved = resolveRuntimeSpec(spec);
         const v = `__re_${spec.replace(/[^a-zA-Z0-9]/g, "_")}`;
         const entries = names
           .split(",")
@@ -498,14 +558,14 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
           .join(", ");
         // `var` (not const) — barrel files often re-export from the same path
         // twice, and a duplicate const declaration is itself a SyntaxError.
-        return `var ${v} = window.__Mrequire('${spec}');\ntry { window.__Mdefine('${file.path}', Object.assign(window.__M['${file.path}'] || {}, { ${entries} })); } catch(e) {}\n`;
+        return `var ${v} = window.__Mrequire('${resolved}');\ntry { var __re_exports = Object.assign(window.__M['${file.path}'] || {}, { ${entries} }); window.__Mdefine('${file.path}', __re_exports); window.__Mdefine('${fileShortPath}', __re_exports); } catch(e) {}\n`;
       }
     );
     // export * from './path'
     src = src.replace(
       /export\s+\*\s+from\s+['"]([^'"]+)['"]\s*;?\n?/g,
       (_, spec: string) =>
-        `try { window.__Mdefine('${file.path}', Object.assign(window.__M['${file.path}'] || {}, window.__Mrequire('${spec}'))); } catch(e) {}\n`
+        `try { var __star_exports = Object.assign(window.__M['${file.path}'] || {}, window.__Mrequire('${resolveRuntimeSpec(spec)}')); window.__Mdefine('${file.path}', __star_exports); window.__Mdefine('${fileShortPath}', __star_exports); } catch(e) {}\n`
     );
 
     // export { A, B as C }
@@ -536,7 +596,7 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     });
 
     // Register at bottom of script
-    const shortPath = file.path.replace(/\.(tsx?|jsx?)$/, "");
+    const shortPath = fileShortPath;
     if (defaultExportName) {
       src += `\ntry { window.__Mdefine('${file.path}', { default: ${defaultExportName} }); window.__Mdefine('${shortPath}', { default: ${defaultExportName} }); } catch(e) {}\n`;
     }
@@ -746,15 +806,26 @@ window.__reactRouterDom = (function() {
   var LocCtx = React.createContext({ pathname: '/', search: '', hash: '', state: null, key: 'default' });
   var listeners = [];
 
+  // The preview iframe is served at /preview/<id>, so window.location.pathname is
+  // NOT the app's route ("/"). Route off a VIRTUAL path kept in the URL hash
+  // (#/services) instead — it starts at "/" so index routes match on load, and
+  // it never collides with the preview host path or 404s on reload.
+  function currentVirtualPath() {
+    var h = window.location.hash || '';
+    if (h.length > 1) {
+      var raw = h.slice(1); // drop leading '#'
+      return raw.charAt(0) === '/' ? raw : '/' + raw;
+    }
+    return '/';
+  }
+
   function readLoc() {
-    var href = window.location.pathname + window.location.search + window.location.hash;
-    var q = href.indexOf('?');
-    var h = href.indexOf('#');
-    var pathname = q >= 0 ? href.slice(0, q) : (h >= 0 ? href.slice(0, h) : href);
-    var search = q >= 0 ? href.slice(q, h >= 0 ? h : undefined) : '';
-    var hash = h >= 0 ? href.slice(h) : '';
+    var full = currentVirtualPath();
+    var q = full.indexOf('?');
+    var pathname = q >= 0 ? full.slice(0, q) : full;
+    var search = q >= 0 ? full.slice(q) : '';
     if (!pathname) pathname = '/';
-    return { pathname: pathname, search: search, hash: hash, state: null, key: String(Date.now()) };
+    return { pathname: pathname, search: search, hash: '', state: null, key: String(Date.now()) };
   }
 
   function notify() { listeners.forEach(function(fn) { fn(); }); }
@@ -763,7 +834,7 @@ window.__reactRouterDom = (function() {
     var path = typeof to === 'string' ? to : (to && to.pathname ? to.pathname : '/');
     if (!path.startsWith('/')) path = '/' + path;
     try {
-      window.history.pushState({}, '', path);
+      window.history.pushState({}, '', '#' + path);
       notify();
     } catch (e) {}
   }
@@ -786,9 +857,11 @@ window.__reactRouterDom = (function() {
       function sync() { setLoc(readLoc()); }
       listeners.push(sync);
       window.addEventListener('popstate', sync);
+      window.addEventListener('hashchange', sync);
       return function() {
         listeners = listeners.filter(function(fn) { return fn !== sync; });
         window.removeEventListener('popstate', sync);
+        window.removeEventListener('hashchange', sync);
       };
     }, []);
     return React.createElement(LocCtx.Provider, { value: loc }, props.children);
@@ -818,8 +891,9 @@ window.__reactRouterDom = (function() {
     var p = Object.assign({}, props);
     var to = p.to || '/';
     delete p.to;
+    var hrefTo = typeof to === 'string' ? to : (to && to.pathname ? to.pathname : '/');
     return React.createElement('a', Object.assign({
-      href: to,
+      href: '#' + (hrefTo.charAt(0) === '/' ? hrefTo : '/' + hrefTo),
       onClick: function(e) {
         e.preventDefault();
         navigate(to);
@@ -939,14 +1013,16 @@ window.__reactRouterDom = (function() {
         var el = mods[i];
         var file = el.getAttribute('data-file') || ('module ' + i);
         var code;
-        // Compile TSX explicitly: isTSX + allExtensions make preset-typescript
-        // strip type annotations / generics / 'type' aliases (auto data-presets
-        // does NOT, which produced "Unexpected token" on every typed file).
+        // Compile generated files as TypeScript with JSX syntax regardless of
+        // extension. Newer Babel standalone removed isTSX/allExtensions; the
+        // supported path is ignoreExtensions + syntax-jsx.
         try {
+          var virtualFile = file.replace(/\.ts$/, '.tsx').replace(/\.js$/, '.jsx');
           code = Babel.transform(el.textContent, {
-            presets: [['react', { runtime: 'classic' }], ['typescript', { isTSX: true, allExtensions: true, allowDeclareFields: true }]],
+            plugins: ['syntax-jsx'],
+            presets: [['react', { runtime: 'classic' }], ['typescript', { ignoreExtensions: true }]],
             sourceType: 'unambiguous',
-            filename: file,
+            filename: virtualFile,
           }).code;
         } catch (err) { showError(file, (err && err.message) || err); return; }
         // Execute in an isolated IIFE so per-file const/let can't collide; cross
@@ -1026,15 +1102,26 @@ window.__reactRouterDom = (function() {
       reportLocation();
     };
     window.addEventListener('popstate', reportLocation);
+    // The in-preview router routes off location.hash (#/route); report on hash
+    // changes too so the parent address bar stays in sync.
+    window.addEventListener('hashchange', reportLocation);
 
-    // Inbound navigation requests from the parent address bar.
+    // Inbound navigation requests from the parent address bar. The in-preview
+    // router reads location.hash, so drive navigation via the hash (not the real
+    // pathname, which is the /preview/<id> host path).
     window.addEventListener('message', function(e) {
       if (!e.data || e.data.type !== 'lifemark-preview-navigate') return;
       var next = e.data.pathname || '/';
       try {
-        if (next !== window.location.pathname + window.location.search + window.location.hash) {
-          window.history.pushState({}, '', next);
-          window.dispatchEvent(new PopStateEvent('popstate'));
+        // Strip any scheme/host (preview://… or http://…) and existing hash.
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(next)) {
+          try { next = new URL(next).pathname; } catch (e2) {}
+        }
+        if (next.indexOf('#') >= 0) next = next.slice(next.indexOf('#') + 1);
+        if (!next) next = '/';
+        if (next.charAt(0) !== '/') next = '/' + next;
+        if (window.location.hash !== '#' + next) {
+          window.location.hash = next; // fires hashchange → router re-renders
         }
       } catch (err) {}
     });

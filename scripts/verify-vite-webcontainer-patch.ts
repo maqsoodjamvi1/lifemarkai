@@ -41,6 +41,7 @@ export default defineConfig({
 
 const patched = patchViteConfigForWebContainer(demoConfig);
 check("adds host:true to existing server block", /host:\s*true/.test(patched), patched);
+check("adds clean react babel config", /react\(\{\s*babel:\s*\{\s*plugins:\s*\[\]\s*\}\s*\}\)/.test(patched), patched);
 
 const already = patchViteConfigForWebContainer("export default { server: { host: true } }");
 check("idempotent when host already set", already.includes("host: true"), already);

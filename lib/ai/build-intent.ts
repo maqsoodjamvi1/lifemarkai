@@ -1,10 +1,15 @@
 export type BuildAppType =
   | "marketing-website"
+  | "ecommerce"
   | "erp"
   | "pos"
   | "crm"
   | "admin-dashboard"
   | "saas"
+  | "booking"
+  | "marketplace"
+  | "education"
+  | "social"
   | "general-app";
 
 export interface BuildIntent {
@@ -12,14 +17,43 @@ export interface BuildIntent {
   niche: string | null;
   statusLabel: string;
   blueprint: string;
+  /** Minimum file count a real version of this app type should have. */
+  minFiles: number;
 }
 
+/**
+ * Per-type minimum file counts — the quality gate uses these to detect a build
+ * that came out too thin (e.g. only the scaffold) and trigger an enrichment pass.
+ * Keep in sync with each blueprint's stated "Minimum N files".
+ */
+export const MIN_FILES_BY_TYPE: Record<BuildAppType, number> = {
+  "marketing-website": 12,
+  ecommerce: 14,
+  erp: 15,
+  pos: 12,
+  crm: 12,
+  "admin-dashboard": 12,
+  saas: 14,
+  booking: 12,
+  marketplace: 14,
+  education: 13,
+  social: 12,
+  "general-app": 10,
+};
+
+const ECOMMERCE_KEYWORDS = /\b(e-?commerce|online store|online shop|web ?shop|storefront|shopping cart|add to cart|product catalog|product listing|stripe checkout|sell products?|store with cart|shop with cart|clothing store|shoe store|fashion store|electronics store|grocery store)\b/i;
 const ERP_KEYWORDS = /\b(erp|enterprise resource|inventory management|supply chain|procurement|warehouse|purchase order|bill of materials|bom)\b/i;
-const POS_KEYWORDS = /\b(pos|point of sale|cash register|checkout|retail terminal|receipt|barcode scanner|shift report)\b/i;
+// POS = in-person retail terminal. Note: bare "checkout"/"cart" are intentionally
+// NOT here — those belong to e-commerce. POS needs explicit point-of-sale terms.
+const POS_KEYWORDS = /\b(pos|point[- ]of[- ]sale|cash register|retail terminal|receipt printer|barcode scanner|shift report|cashier station)\b/i;
 const CRM_KEYWORDS = /\b(crm|customer relationship|sales pipeline|lead management|deal stage|contact management)\b/i;
 const ADMIN_KEYWORDS = /\b(admin panel|admin dashboard|back office|management system|management app|operations dashboard|internal tool|backoffice|business management)\b/i;
 const APP_KEYWORDS = /\b(application|app|platform|portal|system|software)\b/i;
 const SAAS_KEYWORDS = /\b(saas|subscription|billing portal|multi-tenant|pricing tier)\b/i;
+const BOOKING_KEYWORDS = /\b(booking|appointment|reservation|reserve|scheduling app|time slot|calendar booking|salon booking|clinic booking|table booking|rental)\b/i;
+const MARKETPLACE_KEYWORDS = /\b(marketplace|multi-vendor|multi vendor|buyers and sellers|listings platform|classifieds|peer-to-peer|p2p platform)\b/i;
+const EDUCATION_KEYWORDS = /\b(lms|learning platform|course platform|e-?learning|online courses?|student portal|school portal|quiz app|tutoring)\b/i;
+const SOCIAL_KEYWORDS = /\b(social network|social app|community platform|forum|discussion board|feed app|follow(ers)? system|posts and comments)\b/i;
 const BUILDER_KEYWORDS = /\b(chat-to-app|app builder|lovable|builder ui|lovable-style|lovable clone)\b/i;
 const WEBSITE_KEYWORDS = /\b(website|landing page|marketing site|company site|business site|homepage|portfolio|rebrand|rebranding|brand)\b/i;
 
@@ -64,6 +98,25 @@ Brand & design (infer from niche):
 
 Minimum files: index.html, vite.config.ts, package.json, tailwind.config.js, postcss.config.js, src/main.tsx, src/index.css, src/App.tsx, src/pages/Home.tsx, src/components/Header.tsx, src/components/Hero.tsx, src/components/Footer.tsx, src/data/content.ts`,
 
+  ecommerce: (niche) => `## Autonomous E-Commerce Storefront Blueprint
+Build a complete, polished online store${niche ? ` for **${titleCase(niche)}**` : ""} — a customer-facing storefront, NOT a POS terminal or admin panel. This must look like a real shop with lots of products and multiple rich sections, never a thin one-page placeholder.
+
+Required pages & sections:
+1. **Home / Storefront** — sticky header (logo, nav, search, cart icon with item count), hero banner with a promo headline + CTA, "Shop by category" tiles, a FEATURED PRODUCTS grid (at least 8 products), a value-props row (free shipping · easy returns · secure checkout), a newsletter signup, and a rich multi-column footer.
+2. **Shop / Category listing** — filter sidebar (category, price range, rating), a sort dropdown, and a responsive product-card grid (image placeholder, name, price, star rating, Add-to-cart button).
+3. **Product detail** — large image placeholder + thumbnails, title, price, star rating + review count, quantity selector, Add-to-cart, a description, and a "You may also like" related row.
+4. **Cart** — line items with quantity steppers and remove, plus an order summary (subtotal, shipping, tax, total) and a "Proceed to checkout" button.
+5. **Checkout** — contact + shipping form, an order summary, a mock Stripe payment step, and a success/confirmation screen with an order number.
+
+Architecture:
+- React Router for all pages above; cart state in \`src/hooks/useCart.ts\` (add / remove / updateQty / total) — interactions must actually work, not dead buttons.
+- \`src/data/products.ts\` — at least 12 realistic ${niche ?? "retail"} products across 4+ categories, each with name, price (in cents), description, category, rating, and an emoji or image placeholder. Use real product names and copy — never "Item 1" or lorem ipsum.
+- Reusable \`src/components/ProductCard.tsx\`, \`CartDrawer.tsx\`, and a shared \`src/components/ui/\` kit (Button, Badge, Card).
+- Money via \`formatCurrency\`; ratings as star rows.
+- Mock Stripe checkout: a styled, validated payment form that shows a success screen — no real Stripe key, clearly labelled as a demo charge.
+
+Minimum 14+ files. Every page navigable; the home page must be visually full (hero + categories + 8+ products + value props + footer), not two lines of text.`,
+
   erp: (niche) => `## Autonomous ERP System Blueprint
 Build a full ERP-style management application${niche ? ` for **${titleCase(niche)}**` : ""}. This is a business operations system, NOT a marketing site.
 
@@ -83,7 +136,7 @@ Architecture:
 - \`src/data/mock.ts\` with 20+ realistic rows per entity
 - \`src/hooks/use<Entity>.ts\` per domain (useInventory, useOrders, useCustomers…)
 - Tables: sortable columns, search, pagination UI, empty/loading states
-- Use shadcn-style UI: cards, tables, badges, dialogs, dropdowns via Tailwind
+- Use the shared src/components/ui kit: cards, tables, badges, dialogs, dropdowns
 
 Minimum 15+ files. Every module must be navigable and populated with realistic ${niche ?? "industry"} data.`,
 
@@ -149,6 +202,78 @@ Required:
 
 Minimum 14+ files.`,
 
+  booking: (niche) => `## Autonomous Booking System Blueprint
+Build a booking/appointment application${niche ? ` for **${titleCase(niche)}**` : ""}.
+
+Required:
+1. **Browse** — service/resource cards (name, duration, price, photo placeholder), category filter
+2. **Booking flow** — pick service → pick date (calendar grid) → pick time slot (chips, disabled = taken) → details form → confirmation screen with booking ref
+3. **My bookings** — upcoming/past tabs, cancel/reschedule actions
+4. **Provider/admin view** — day calendar with booked slots, manage availability, customer list
+5. **Settings** — business hours, slot duration, blackout dates
+
+Architecture:
+- \`src/data/services.ts\` + \`src/data/bookings.ts\` with realistic ${niche ?? "service"} entries
+- \`src/hooks/useBookings.ts\` — create/cancel/reschedule with slot-conflict checks
+- Calendar built from CSS grid (no external calendar lib), time slots computed from business hours
+- Status badges: confirmed / pending / cancelled / completed
+
+Minimum 12+ files. The full booking flow must work end-to-end with mock data.`,
+
+  marketplace: (niche) => `## Autonomous Marketplace Blueprint
+Build a multi-vendor marketplace${niche ? ` for **${titleCase(niche)}**` : ""}.
+
+Required:
+1. **Home** — featured listings, category grid, search bar with suggestions
+2. **Browse/Search** — filter sidebar (category, price range, rating, location), sort, listing cards
+3. **Listing detail** — gallery placeholder, price, seller card (rating, member-since), description, reviews
+4. **Seller dashboard** — my listings table, create/edit listing form, orders received, earnings KPI
+5. **Buyer flows** — cart or "contact seller" flow, favorites, order history
+6. **Reviews** — star ratings + comments on listings and sellers
+
+Architecture:
+- \`src/data/listings.ts\` with 25+ realistic ${niche ?? "marketplace"} listings across 5+ categories
+- \`src/data/sellers.ts\` — seller profiles with ratings
+- \`src/hooks/useListings.ts\` with filter/sort logic; \`useFavorites\`, \`useCart\`
+- Two distinct UX surfaces: polished consumer browsing + data-dense seller dashboard
+
+Minimum 14+ files.`,
+
+  education: (niche) => `## Autonomous Learning Platform Blueprint
+Build an e-learning/LMS application${niche ? ` for **${titleCase(niche)}**` : ""}.
+
+Required:
+1. **Course catalog** — course cards (cover, instructor, duration, level, rating, price/free)
+2. **Course detail** — syllabus accordion (modules → lessons), instructor bio, enroll CTA
+3. **Lesson player** — lesson content area (video placeholder + text), sidebar lesson list with completion ticks, prev/next
+4. **Progress dashboard** — enrolled courses with progress bars, streak, certificates earned
+5. **Quiz** — multiple-choice quiz with instant feedback and score screen
+6. **Instructor/admin view** — course management table, student progress overview
+
+Architecture:
+- \`src/data/courses.ts\` — 8+ realistic ${niche ?? "subject"} courses with full module/lesson trees
+- \`src/hooks/useProgress.ts\` — completion tracking per lesson, course % computed
+- Progress persisted in state; completion drives dashboard + certificates
+
+Minimum 13+ files.`,
+
+  social: (niche) => `## Autonomous Community Platform Blueprint
+Build a social/community application${niche ? ` for **${titleCase(niche)}**` : ""}.
+
+Required:
+1. **Feed** — post cards (author, avatar initial, timestamp, content, like/comment counts), composer at top
+2. **Post detail** — full post + threaded comments with reply UI
+3. **Profiles** — user page with avatar, bio, stats (posts/followers/following), their posts, follow button
+4. **Discover** — trending topics/tags, suggested users
+5. **Notifications** — likes/comments/follows list with read state
+
+Architecture:
+- \`src/data/users.ts\` + \`src/data/posts.ts\` — 10+ users, 25+ realistic ${niche ?? "community"} posts with comments
+- \`src/hooks/useFeed.ts\` — like/unlike, add comment, follow/unfollow all working against state
+- Relative timestamps ("2h ago"), optimistic like animation, infinite-scroll-style "load more"
+
+Minimum 12+ files. Interactions must actually update state — not dead buttons.`,
+
   "general-app": (niche) => `## Autonomous Application Blueprint
 Build a complete application${niche ? ` for **${titleCase(niche)}**` : ""} based on the user's request.
 
@@ -160,6 +285,8 @@ Minimum 10+ files.`,
 const STATUS_LABELS: Record<BuildAppType, (niche: string | null, prompt: string) => string> = {
   "marketing-website": (niche) =>
     niche ? `Building ${titleCase(niche)} website…` : "Building your website…",
+  ecommerce: (niche) =>
+    niche ? `Building ${titleCase(niche)} online store…` : "Building your online store…",
   erp: (niche) =>
     niche ? `Building ${titleCase(niche)} ERP system…` : "Building ERP management system…",
   pos: (niche) =>
@@ -170,6 +297,14 @@ const STATUS_LABELS: Record<BuildAppType, (niche: string | null, prompt: string)
     niche ? `Building ${titleCase(niche)} admin dashboard…` : "Building management dashboard…",
   saas: (niche) =>
     niche ? `Building ${titleCase(niche)} SaaS app…` : "Building SaaS application…",
+  booking: (niche) =>
+    niche ? `Building ${titleCase(niche)} booking system…` : "Building booking system…",
+  marketplace: (niche) =>
+    niche ? `Building ${titleCase(niche)} marketplace…` : "Building marketplace…",
+  education: (niche) =>
+    niche ? `Building ${titleCase(niche)} learning platform…` : "Building learning platform…",
+  social: (niche) =>
+    niche ? `Building ${titleCase(niche)} community…` : "Building community platform…",
   "general-app": (niche) =>
     niche ? `Building ${titleCase(niche)} application…` : "Building your application…",
 };
@@ -187,12 +322,18 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
       niche: extractNiche(prompt),
       statusLabel: "Designing Lovable-inspired builder UI…",
       blueprint: BLUEPRINTS["general-app"](extractNiche(prompt)),
+      minFiles: MIN_FILES_BY_TYPE["general-app"],
     };
   }
 
-  if (ERP_KEYWORDS.test(prompt)) appType = "erp";
+  if (ECOMMERCE_KEYWORDS.test(prompt)) appType = "ecommerce";
+  else if (ERP_KEYWORDS.test(prompt)) appType = "erp";
   else if (POS_KEYWORDS.test(prompt)) appType = "pos";
   else if (CRM_KEYWORDS.test(prompt)) appType = "crm";
+  else if (BOOKING_KEYWORDS.test(prompt)) appType = "booking";
+  else if (MARKETPLACE_KEYWORDS.test(prompt)) appType = "marketplace";
+  else if (EDUCATION_KEYWORDS.test(prompt)) appType = "education";
+  else if (SOCIAL_KEYWORDS.test(prompt)) appType = "social";
   else if (ADMIN_KEYWORDS.test(prompt)) appType = "admin-dashboard";
   else if (SAAS_KEYWORDS.test(prompt)) appType = "saas";
   else if (WEBSITE_KEYWORDS.test(prompt) || (niche && wantsBuild && !APP_KEYWORDS.test(prompt))) {
@@ -201,8 +342,13 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
     appType = "admin-dashboard";
   }
 
-  // "change services to cargo" → marketing rebrand
-  if (/change|rebrand|update.*(website|site|services|brand)/i.test(prompt)) {
+  // "change services to cargo" / "rebrand the site" → marketing rebrand.
+  // (Anchored: the old `/change|rebrand|…/` matched "change" ANYWHERE and
+  // reclassified ERP/booking prompts as websites.)
+  if (
+    /\b(change|rebrand|update)\b[^.]*\b(website|site|services|branding?)\b/i.test(prompt) &&
+    (appType === "general-app" || appType === "admin-dashboard")
+  ) {
     appType = "marketing-website";
   }
 
@@ -211,6 +357,7 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
     niche,
     statusLabel: STATUS_LABELS[appType](niche, prompt),
     blueprint: BLUEPRINTS[appType](niche),
+    minFiles: MIN_FILES_BY_TYPE[appType],
   };
 }
 
@@ -227,5 +374,5 @@ export function buildUserDirective(intent: BuildIntent): string {
 /** Detect prompts that should run in build mode even if chat is selected. */
 export function shouldAutoBuildMode(prompt: string): boolean {
   return /\b(create|build|make|design|develop|rebrand|change)\b/i.test(prompt) &&
-    /\b(website|site|app|erp|pos|crm|system|platform|dashboard|portal|landing|management|store|shop|business)\b/i.test(prompt);
+    /\b(website|site|app|erp|pos|crm|system|platform|dashboard|portal|landing|management|store|shop|business|marketplace|booking|course|community|forum)\b/i.test(prompt);
 }

@@ -4,6 +4,10 @@
     {
       "path": "/api/cloud/daily-backups",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cloud/bill-usage",
+      "schedule": "30 3 * * *"
     }
   ]
 }

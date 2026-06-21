@@ -164,6 +164,44 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
     } finally { setBusy(false); }
   }
 
+  async function restoreBackup(snapshotId: string, runDate: string) {
+    // Lovable-style restore: dry-run first to surface schema-affecting
+    // changes, then confirm with the user before applying.
+    setBusy(true);
+    try {
+      const dry = await fetch("/api/projects/snapshots/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ snapshotId, projectId: project.id, dryRun: true }),
+      });
+      const dryData = await dry.json();
+      if (!dry.ok) {
+        toast({ title: "Restore failed", description: dryData.error, variant: "destructive" });
+        return;
+      }
+      const schemaPaths: string[] = dryData?.schemaChanges?.schemaPaths ?? [];
+      const warning = schemaPaths.length > 0
+        ? `\n\nWarning: this restore changes schema files (${schemaPaths.slice(0, 3).join(", ")}${schemaPaths.length > 3 ? "…" : ""}). Your app may need patching afterwards.`
+        : "";
+      if (!window.confirm(
+        `Restore the ${runDate} backup?\n\nRestoring is permanent — files changed after this backup will be lost.${warning}`
+      )) return;
+
+      const res = await fetch("/api/projects/snapshots/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ snapshotId, projectId: project.id, confirmSchema: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast({ title: "Restore failed", description: data.error, variant: "destructive" });
+        return;
+      }
+      toast({ title: "Backup restored", description: `Project rolled back to ${runDate}. Reload the editor to see the restored files.` });
+      window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
+    } finally { setBusy(false); }
+  }
+
   async function runHealthCheck() {
     setBusy(true);
     setHealth(null);
@@ -377,7 +415,16 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
                       <span className={`w-1.5 h-1.5 rounded-full ${b.status === "ok" ? "bg-emerald-400" : "bg-red-400"}`} />
                       <span className="font-mono">{b.run_date}</span>
                       <span className="text-muted-foreground capitalize">{b.status}</span>
-                      {b.notes && <span className="text-muted-foreground/60 text-[10px] ml-auto">{b.notes}</span>}
+                      {b.notes && <span className="text-muted-foreground/60 text-[10px]">{b.notes}</span>}
+                      {b.status === "ok" && b.snapshot_id && (
+                        <button
+                          onClick={() => void restoreBackup(b.snapshot_id!, b.run_date)}
+                          disabled={busy}
+                          className="ml-auto text-[10px] px-2 py-0.5 rounded border border-border hover:bg-accent text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
+                        >
+                          Restore
+                        </button>
+                      )}
                     </li>
                   ))}
                 </ul>

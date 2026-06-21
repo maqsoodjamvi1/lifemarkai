@@ -34,6 +34,7 @@ import {
   pickActiveFileAfterUpdate,
   resolvePromptMode,
   shouldFocusPreviewAfterGeneration,
+  inferProjectStage,
 } from "@/lib/ai/editor-intelligence";
 
 const CommandPalette = dynamic(
@@ -116,7 +117,7 @@ const PreviewPanel = dynamic(
 
 export type EditorMode = "chat" | "plan" | "build" | "agent" | "patch";
 export type ViewMode = "preview" | "code" | "both";
-export type LeftPanel = "chat" | "plan" | "agent" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "code";
+export type LeftPanel = "chat" | "plan" | "agent" | "company" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "code";
 
 interface EditorLayoutProps {
   project: Project;
@@ -154,7 +155,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
         files: initialFiles,
       });
     }
-    return initialFiles.length === 0 ? "build" : "build";
+    return inferProjectStage(initialFiles) === "app" ? "agent" : "build";
   });
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
   const [leftPanel, setLeftPanel] = useState<LeftPanel>("chat");
@@ -384,7 +385,20 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   const handleFileUpdate = useCallback((updatedFile: ProjectFile) => {
     setFiles((prev) => prev.map((f) => (f.id === updatedFile.id ? updatedFile : f)));
     setActiveFile((prev) => (prev?.id === updatedFile.id ? updatedFile : prev));
-  }, []);
+
+    // Persist visual edits / inline updates (Lovable parity — WYSIWYG survives refresh)
+    if (updatedFile.path && updatedFile.content !== undefined) {
+      void fetch(`/api/projects/${project.id}/files`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: updatedFile.path,
+          content: updatedFile.content,
+          language: updatedFile.language,
+        }),
+      }).catch(() => {});
+    }
+  }, [project.id]);
 
   const handleFilesUpdate = useCallback((updatedFiles: ProjectFile[]) => {
     setFiles((prev) => {
@@ -501,6 +515,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     { id: "chat",      label: "Chat",     emoji: "💬" },
     { id: "plan",      label: "Plan",     emoji: "🗺️" },
     { id: "agent",     label: "Agent",    emoji: "🤖" },
+    { id: "company",   label: "Company",  emoji: "AI" },
     { id: "knowledge", label: "Knowledge",emoji: "🧠" },
     { id: "activity",  label: "Activity", emoji: "📋" },
     { id: "github",    label: "Git",      emoji: "🐙" },
@@ -749,7 +764,13 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
                 onFileUpdate={handleFileUpdate}
                 onError={setPreviewError}
-                onFixWithAI={(err) => { setMobilePaneActive("left"); setLeftPanel("chat"); setPendingFix(err); }}
+                onFixWithAI={(err) => {
+                  window.dispatchEvent(new CustomEvent("lifemark-preview-heal-start"));
+                  setMobilePaneActive("left");
+                  setLeftPanel("chat");
+                  setPendingFix(err);
+                }}
+                onSendPromptToChat={(p) => { setMobilePaneActive("left"); setLeftPanel("chat"); setPendingCrossRefPrompt(p); }}
                 isGenerating={isGenerating}
                 generatingFileCount={generatingFileCount}
                 deployedUrl={project.deployed_url ?? undefined}
@@ -1032,7 +1053,12 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                       isGenerating={isGenerating}
                       generatingFileCount={generatingFileCount}
                       onError={setPreviewError}
-                      onFixWithAI={(err) => { setLeftPanel("chat"); setPendingFix(err); }}
+                      onFixWithAI={(err) => {
+                        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-start"));
+                        setLeftPanel("chat");
+                        setPendingFix(err);
+                      }}
+                      onSendPromptToChat={(p) => { setLeftPanel("chat"); setPendingCrossRefPrompt(p); }}
                       deployedUrl={currentProject.deployed_url ?? undefined}
                       badgeHidden={(currentProject as { badge_hidden?: boolean }).badge_hidden ?? false}
                       credits={uiCredits}
@@ -1087,7 +1113,12 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                   isGenerating={isGenerating}
                   generatingFileCount={generatingFileCount}
                   onError={setPreviewError}
-                  onFixWithAI={(err) => { setLeftPanel("chat"); setPendingFix(err); }}
+                  onFixWithAI={(err) => {
+                    window.dispatchEvent(new CustomEvent("lifemark-preview-heal-start"));
+                    setLeftPanel("chat");
+                    setPendingFix(err);
+                  }}
+                  onSendPromptToChat={(p) => { setLeftPanel("chat"); setPendingCrossRefPrompt(p); }}
                   deployedUrl={currentProject.deployed_url ?? undefined}
                   badgeHidden={(currentProject as { badge_hidden?: boolean }).badge_hidden ?? false}
                   credits={uiCredits}

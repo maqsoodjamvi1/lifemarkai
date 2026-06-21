@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { starterIdForName } from "@/lib/templates/starter-catalog";
 
 interface TemplateItem {
   id: string;
@@ -80,6 +81,14 @@ export function TemplatesGrid() {
   const regular = filtered.filter((t) => !t.is_featured);
 
   async function forkTemplate(template: TemplateItem) {
+    // Design-baseline starter (from the curated catalog): there are no files to
+    // fork — instead send the user to the create box with this design preselected
+    // so they describe their app and the build refines this template.
+    const designId = starterIdForName(template.name);
+    if (designId) {
+      router.push(`/dashboard?template=${encodeURIComponent(designId)}`);
+      return;
+    }
     setForkingId(template.id);
     try {
       const res = await fetch("/api/projects", {

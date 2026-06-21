@@ -1,3 +1,5 @@
+import { salvageFilesFromStreamJson } from "./streaming-file-extractor";
+
 export interface ValidationError {
   type: string;
   file?: string;
@@ -19,26 +21,40 @@ export interface ParsedAIResponse {
   message: string;
   error?: string;
   validationErrors?: ValidationError[];
+  /**
+   * True when the raw text could not be parsed as a single complete JSON object
+   * and had to be recovered from a truncated stream. Signals the caller that the
+   * model's output was cut off (hit max_tokens) and a continuation pass is needed
+   * to get the remaining files.
+   */
+  truncated?: boolean;
 }
 
 /**
  * Normalise a raw parsed object into a clean ParsedAIResponse.
  */
-function normalizeResponse(parsed: Record<string, unknown>): ParsedAIResponse {
+function normalizeResponse(parsed: Record<string, unknown>, truncated = false): ParsedAIResponse {
   const rawFiles = Array.isArray(parsed.files) ? parsed.files : [];
   return {
     thoughts: typeof parsed.thoughts === "string" ? parsed.thoughts : undefined,
     plan: Array.isArray(parsed.plan) ? (parsed.plan as string[]) : undefined,
     files: rawFiles.map((f: unknown) => {
-      const file = f as Partial<ParsedFile>;
+      const file = f as Partial<ParsedFile> & { name?: string };
       return {
-        path: file.path ?? "",
+        path: file.path ?? file.name ?? "",
         content: file.content ?? "",
-        language: file.language ?? detectLanguage(file.path ?? ""),
+        language: file.language ?? detectLanguage(file.path ?? file.name ?? ""),
       };
     }).filter((f) => f.path),
     message: typeof parsed.message === "string" ? parsed.message : "Changes applied.",
+    truncated,
   };
+}
+
+/** Return normalized response only when at least one file was extracted. */
+function fromParsedObject(parsed: Record<string, unknown>, truncated = false): ParsedAIResponse | null {
+  const result = normalizeResponse(parsed, truncated);
+  return result.files.length > 0 ? result : null;
 }
 
 /**
@@ -210,6 +226,23 @@ function extractFencesAsFiles(raw: string): ParsedFile[] {
   return files;
 }
 
+/**
+ * True when a build-mode JSON response was cut off before the closing brace.
+ * Drives the continuation loop in the chat route (separate from format-retry).
+ */
+export function needsBuildContinuation(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("{") || !trimmed.includes('"files"')) return false;
+  const parsed = parseAIResponse(trimmed);
+  if (parsed.truncated) return true;
+  try {
+    JSON.parse(trimmed);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 export function parseAIResponse(raw: string): ParsedAIResponse {
   const trimmed = raw.trim();
 
@@ -219,12 +252,15 @@ export function parseAIResponse(raw: string): ParsedAIResponse {
       const parsed = JSON.parse(trimmed) as Record<string, unknown>;
       return normalizeResponse(parsed);
     } catch {
-      // Try partial-stream recovery before moving on
       const recovered = recoverPartialJSON(trimmed);
       if (recovered) {
         try {
           const parsed = JSON.parse(recovered) as Record<string, unknown>;
-          return normalizeResponse(parsed);
+          const result = fromParsedObject(
+            parsed,
+            recovered.length < trimmed.length || recovered !== trimmed,
+          );
+          if (result) return result;
         } catch { /* fall through */ }
       }
     }
@@ -235,7 +271,8 @@ export function parseAIResponse(raw: string): ParsedAIResponse {
   if (jsonFence) {
     try {
       const parsed = JSON.parse(jsonFence[1]) as Record<string, unknown>;
-      return normalizeResponse(parsed);
+      const result = fromParsedObject(parsed);
+      if (result) return result;
     } catch { /* fall through */ }
   }
 
@@ -244,7 +281,8 @@ export function parseAIResponse(raw: string): ParsedAIResponse {
   if (genericFence) {
     try {
       const parsed = JSON.parse(genericFence[1]) as Record<string, unknown>;
-      return normalizeResponse(parsed);
+      const result = fromParsedObject(parsed);
+      if (result) return result;
     } catch { /* fall through */ }
   }
 
@@ -253,7 +291,8 @@ export function parseAIResponse(raw: string): ParsedAIResponse {
   if (largest) {
     try {
       const parsed = JSON.parse(largest) as Record<string, unknown>;
-      return normalizeResponse(parsed);
+      const result = fromParsedObject(parsed);
+      if (result) return result;
     } catch { /* fall through */ }
   }
 
@@ -262,7 +301,8 @@ export function parseAIResponse(raw: string): ParsedAIResponse {
   if (recovered && recovered !== raw) {
     try {
       const parsed = JSON.parse(recovered) as Record<string, unknown>;
-      return normalizeResponse(parsed);
+      const result = fromParsedObject(parsed, true);
+      if (result) return result;
     } catch { /* fall through */ }
   }
 
@@ -279,6 +319,24 @@ export function parseAIResponse(raw: string): ParsedAIResponse {
     const firstFenceIdx = raw.search(/```/);
     const message = firstFenceIdx > 0 ? raw.slice(0, firstFenceIdx).trim() : "Generated files from your prompt.";
     return { files: proseFiles, message };
+  }
+
+  // ── Strategy 7: salvage complete file objects from truncated build JSON ─────
+  // When the model hits max_tokens mid-JSON, earlier files in the "files" array
+  // may be fully closed even though JSON.parse fails on the whole blob.
+  if (trimmed.startsWith("{") && trimmed.includes('"files"')) {
+    const salvaged = salvageFilesFromStreamJson(raw);
+    if (salvaged.length > 0) {
+      return {
+        files: salvaged.map((f) => ({
+          path: f.path,
+          content: f.content,
+          language: f.language || detectLanguage(f.path),
+        })),
+        message: "Partial build recovered — continuing generation for remaining files…",
+        truncated: true,
+      };
+    }
   }
 
   // ── Fallback: treat as plain conversational message ───────────────────────────
@@ -504,6 +562,26 @@ export function validateGeneratedFiles(
         severity: "error",
       });
     }
+
+    // Catch a generation that "succeeded" structurally but left the entry as the
+    // default scaffold placeholder — i.e. the real UI was never produced (often
+    // because the response was truncated and App.tsx dropped). The effective App
+    // is the newly-generated one if present, else the existing file.
+    const effectiveApp =
+      files.find((f) => /(^|\/)App\.(tsx|jsx)$/.test(f.path)) ??
+      existingFiles.find((f) => /(^|\/)App\.(tsx|jsx)$/.test(f.path));
+    if (
+      effectiveApp &&
+      /Start chatting with AI to build it|Your app is ready\./i.test(effectiveApp.content)
+    ) {
+      errors.push({
+        type: "placeholder_entry",
+        file: effectiveApp.path,
+        message:
+          "App entry is still the starter placeholder — the requested UI was not generated (the response may have been truncated). Generate the real App component and its imported pages/components.",
+        severity: "error",
+      });
+    }
   }
 
   // ── Check for required config files (new project) ─────────────────────────
@@ -522,6 +600,82 @@ export function validateGeneratedFiles(
           severity: "error",
         });
       }
+    }
+  }
+
+  return errors;
+}
+
+/**
+ * Type-agnostic GENERATION QUALITY gate.
+ *
+ * validateGeneratedFiles catches *correctness* (broken imports, missing config).
+ * This catches *thinness* — a build that is structurally valid but too sparse to
+ * be a real app (the "header + footer + two lines" failure). It measures the
+ * effective result (new files merged over existing) against the app type's
+ * expected size, and returns error-severity issues so the existing auto-fix /
+ * enrichment loop kicks in. Works for every app type, not just one.
+ */
+export function assessGenerationQuality(
+  files: ParsedFile[],
+  existingFiles: ParsedFile[] = [],
+  opts: { minFiles?: number } = {}
+): ValidationError[] {
+  const errors: ValidationError[] = [];
+  const minFiles = opts.minFiles ?? 10;
+
+  // Effective file set = existing files with this build's files layered on top.
+  const byPath = new Map<string, ParsedFile>(existingFiles.map((f) => [f.path, f]));
+  for (const f of files) byPath.set(f.path, f);
+  const all = [...byPath.values()];
+
+  // 1. Too few files overall — likely only the scaffold landed.
+  if (all.length < minFiles) {
+    errors.push({
+      type: "too_thin_filecount",
+      message: `Only ${all.length} files generated, but a complete app of this type needs at least ${minFiles}. Generate the missing feature components, pages, hooks, and data per the blueprint — keep all existing files.`,
+      severity: "error",
+    });
+  }
+
+  // 2. Too few feature components (excluding the ui/ primitive kit).
+  const featureComponents = all.filter(
+    (f) => /(^|\/)src\/components\//.test("/" + f.path) && !/\/components\/ui\//.test("/" + f.path)
+  );
+  if (minFiles >= 12 && featureComponents.length < 3) {
+    errors.push({
+      type: "too_few_components",
+      message: `Only ${featureComponents.length} feature component(s) under src/components/. Break the UI into the sections/cards/panels the blueprint calls for (header, hero, cards, etc.).`,
+      severity: "error",
+    });
+  }
+
+  // 3. Sparse main page — the entry/home page is just a heading and a line.
+  // Prefer a real Home page; else the largest page file; fall back to App.tsx
+  // ONLY when there are no page files (i.e. App.tsx truly is the whole app).
+  // A short App.tsx that just wires a router to real pages is correct, not sparse.
+  const pageFiles = all.filter((f) => /(^|\/)src\/pages\//.test("/" + f.path));
+  const homePage = all.find((f) => /(^|\/)pages\/Home\.(tsx|jsx)$/.test(f.path));
+  const appFile = all.find((f) => /(^|\/)App\.(tsx|jsx)$/.test(f.path));
+  const main =
+    homePage ??
+    (pageFiles.length > 0
+      ? pageFiles.reduce((a, b) => (a.content.length >= b.content.length ? a : b))
+      : appFile);
+  const appIsRouterOnly = main === appFile && pageFiles.length > 0;
+  if (main && !appIsRouterOnly) {
+    const sections = (main.content.match(/<section\b/gi) ?? []).length;
+    const jsxTags = (main.content.match(/<[A-Za-z]/g) ?? []).length;
+    // A page is rich enough if it has several sections, OR lots of markup, OR is
+    // substantial in size. Flag only when it fails ALL three (a heading + a line).
+    const looksRich = sections >= 3 || jsxTags >= 25 || main.content.length >= 1500;
+    if (!looksRich) {
+      errors.push({
+        type: "sparse_main_page",
+        file: main.path,
+        message: `${main.path} is too sparse — a landing/home/storefront page must have 5+ content-rich sections (hero, grids of 8+ items, value props, footer), not a heading and a sentence.`,
+        severity: "error",
+      });
     }
   }
 

@@ -39,7 +39,7 @@ const PACKAGE_ALLOWLIST = `
 - @capacitor/android (devDependency)
 - @capacitor/ios (devDependency)
 
-### ❌ NEVER USE — these will cause build errors:
+### ❌ NEVER USE — these will cause build errors in the srcdoc fallback engine:
 - axios (use fetch instead)
 - lodash (use native JS)
 - moment (use date-fns)
@@ -47,7 +47,9 @@ const PACKAGE_ALLOWLIST = `
 - material-ui / @mui/* (use Tailwind + Radix)
 - antd (use Tailwind + Radix)
 - jquery
-- Any package not in the list above — if unsure, use native browser APIs or fetch
+
+### WebContainer / Vite projects (Lovable-style live preview):
+When the app uses Vite + WebContainers, ANY npm package may be added to package.json — the preview runs real \`npm install\`. Always include packages you import (e.g. @supabase/supabase-js, @stripe/stripe-js, react-router-dom). Prefer the list above when possible.
 `.trim();
 
 // ─── SHARED DESIGN SYSTEM ────────────────────────────────────────────────────
@@ -64,13 +66,26 @@ const DESIGN_SYSTEM = `
 | Food / Lifestyle | from-orange-500 to-amber-500 | 249,115,22 |
 | Default | from-violet-600 to-purple-600 | 139,92,246 |
 
-### Dark-First Surface System
+### Theme & Surface — CHOOSE per app (do NOT default everything to dark)
+Pick the theme that fits the domain + mood of THIS request, so each build looks
+distinct. Vary it — most consumer, e-commerce, health, education, finance, food,
+and SaaS sites look best LIGHT or colorful; dark suits dev-tools, AI, gaming,
+crypto, music, and "premium/luxury" moods. When unsure, prefer a clean LIGHT
+theme. Also vary radius (sharp vs rounded), density, and font pairing per app.
+
+**Light surface system** (default for most domains):
 \`\`\`
-bg-[#0a0a0f]        page background
-bg-[#0f0f1a]        cards, panels
-bg-[#151520]        elevated surfaces, modals
-border-white/[0.06] subtle borders
+bg-white or bg-slate-50   page background
+bg-white                  cards (with border border-slate-200, subtle shadow-sm)
+bg-slate-100              elevated/muted surfaces
+text-slate-900 / text-slate-600 (muted) ; borders border-slate-200
 \`\`\`
+**Dark surface system** (dev-tools / AI / gaming / luxury):
+\`\`\`
+bg-[#0a0a0f] page · bg-[#0f0f1a] cards · bg-[#151520] elevated · border-white/[0.06]
+\`\`\`
+Apply the chosen theme consistently. The domain accent (table above) works on
+either. Don't mix a dark hero with light cards.
 
 ### Typography Scale
 - Hero:     text-5xl sm:text-7xl font-bold tracking-tight
@@ -99,13 +114,114 @@ border-white/[0.06] subtle borders
                    hover:text-white hover:border-white/20 hover:bg-white/[0.04] transition-all">
 \`\`\`
 
-### MANDATORY for every app:
-- Glassmorphism fixed nav: bg-[#0a0a0f]/80 backdrop-blur-xl border-b border-white/[0.06]
-- Ambient glow blobs in hero: w-[600px] h-[300px] bg-violet-600/20 blur-[120px] rounded-full
+### MANDATORY for every app (theme-aware):
+- Fixed nav: backdrop-blur + a subtle bottom border, colored to MATCH the theme
+  (light: bg-white/80 border-slate-200; dark: bg-[#0a0a0f]/80 border-white/[0.06]).
 - Framer Motion on page entry: initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-- Shimmer skeletons for loading: animate-pulse bg-white/[0.06] rounded-lg
-- Beautiful empty states — never a blank div
+- Skeletons for loading (animate-pulse, theme-colored), beautiful empty states — never a blank div
 - Responsive at sm/md/lg breakpoints
+### Style accents — OPTIONAL, use only when they fit (don't put them on every app):
+- Ambient glow blobs + glassmorphism: ONLY for dark "premium/tech" themes. Skip on light/clean apps.
+- Match radius/shadow to the mood: soft rounded + shadows for friendly brands, sharp + flat for editorial/enterprise.
+
+### Real images — use them (Lovable does). NEVER ship empty grey placeholder divs.
+Generated apps must look real, so use actual photos via these reliable, key-free
+CDNs (allowed by the preview CSP), ALWAYS inside a container that has an emoji/
+gradient fallback so a slow or failed image never leaves a blank box:
+- **Content/product/people photos (keyword-matched):**
+  \`https://loremflickr.com/<w>/<h>/<keyword>?lock=<n>\` — e.g.
+  \`https://loremflickr.com/600/450/headphones?lock=12\`. Pick a keyword that
+  matches the item; give each a different \`lock\` number so images stay stable
+  and distinct. Multiple keywords: comma-separate, URL-encoded (\`coffee%2Ccup\`).
+- **Generic/abstract imagery (hero backgrounds, cards):**
+  \`https://picsum.photos/seed/<unique-seed>/<w>/<h>\` — always resolves.
+- **Avatars:** \`https://i.pravatar.cc/100?img=<1-70>\` or initials in a colored circle.
+- Store image URLs in your mock data (a \`image\` field per item) and render with
+  \`loading="lazy"\` + \`object-cover\`. Required fallback pattern:
+\`\`\`tsx
+<div className="relative aspect-[4/3] bg-gradient-to-br from-slate-800 to-slate-900 overflow-hidden">
+  <span className="absolute inset-0 flex items-center justify-center text-5xl">{item.emoji}</span>
+  {item.image && (
+    <img src={item.image} alt={item.name} loading="lazy"
+      className="absolute inset-0 w-full h-full object-cover"
+      onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+  )}
+</div>
+\`\`\`
+A real hero image + real product/content photos are what separate a professional
+app from a wireframe. Use them on every storefront, landing page, blog, and gallery.
+
+### E-COMMERCE / STOREFRONT — images are MANDATORY (not optional)
+A store without images is a FAILED build. For any e-commerce / shop / catalog page:
+- EVERY product object in your mock data MUST have an \`image\` URL — never omit it,
+  never leave a grey box. Use \`https://loremflickr.com/600/600/<product-keyword>?lock=<n>\`
+  with a keyword matching the product (e.g. \`sneakers\`, \`watch\`, \`sofa\`) and a
+  unique \`lock\` per product so each card shows a different, stable photo.
+- The hero/banner MUST have a real background image (a wide lifestyle/category shot):
+  \`https://loremflickr.com/1600/600/<category>\` or a picsum seed — with the gradient
+  fallback layer behind it. Overlay the headline + CTA on top.
+- Category tiles and promo banners also get images. Aim for an image-rich page.
+
+### AI-generated images (Gemini / DALL-E) — for custom, on-brand visuals
+When the app needs CUSTOM generated images (a unique hero banner, a brand-specific
+illustration) rather than stock photos, call the managed image endpoint — no API
+keys in client code, generated server-side via Gemini (Nano Banana) → DALL-E 3:
+\`\`\`ts
+const res = await fetch(\`/api/projects/PROJECT_ID/image-proxy\`, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ prompt: "minimalist hero banner, navy + gold, premium watches", size: "1792x1024" }),
+});
+const { url } = await res.json(); // use as <img src={url}>
+\`\`\`
+Use stock CDN images for product grids (fast, free) and the image-proxy for the
+one or two hero/brand images that should feel bespoke.
+
+### Admin / ERP / Dashboard Apps — data-dense design language
+(Use INSTEAD of hero/marketing patterns when building admin panels, ERP, POS, CRM, dashboards.)
+
+**Shell** — fixed sidebar (w-64, collapsible to w-16 on toggle, drawer on mobile):
+\`\`\`tsx
+<aside className="w-64 shrink-0 h-screen sticky top-0 border-r border-white/[0.06] bg-[#0c0c14]
+                  flex flex-col">
+  {/* logo row, nav sections with uppercase text-[11px] text-slate-500 group labels,
+      items: flex gap-3 px-3 py-2 rounded-lg text-sm text-slate-400
+      active: bg-violet-600/15 text-violet-300 border-l-2 border-violet-500 */}
+</aside>
+\`\`\`
+Top bar inside content: h-14, breadcrumb left, search (⌘K) center, avatar/notifications right.
+
+**KPI stat card** (dashboard rows of 4):
+\`\`\`tsx
+<div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+  <p className="text-xs text-slate-500">Revenue (30d)</p>
+  <p className="text-2xl font-bold tabular-nums mt-1">$48,210</p>
+  <p className="text-xs text-emerald-400 mt-1">▲ 12.4% vs last month</p>
+</div>
+\`\`\`
+
+**Data table** — the core ERP surface. Always: sticky header row (text-xs uppercase text-slate-500),
+row hover bg-white/[0.03], tabular-nums for numbers, right-aligned amounts, per-row action menu (⋯),
+toolbar above with search input + filter dropdowns + primary action button, pagination footer
+("1–20 of 240"), and selection checkboxes when bulk actions make sense.
+
+**Status badges** — px-2 py-0.5 rounded-full text-[11px] font-medium:
+paid/active/delivered = bg-emerald-500/15 text-emerald-400 · pending/processing = bg-amber-500/15 text-amber-400 ·
+failed/overdue = bg-red-500/15 text-red-400 · draft/inactive = bg-slate-500/15 text-slate-400
+
+**Charts** — recharts AreaChart/BarChart inside cards, violet/indigo gradients, CartesianGrid stroke="rgba(255,255,255,0.04)".
+**Forms** — right-side Sheet/drawer (not page navigation) for create/edit; labeled inputs bg-white/[0.04] border-white/[0.08].
+**Density** — compact paddings (p-4 cards, py-2 rows), no hero sections, no ambient blobs, no marketing CTAs.
+
+### Shared UI Kit — generate ONCE, reuse everywhere
+Every multi-page app must include \`src/components/ui/\` with these primitives, then import them
+instead of re-styling raw elements per page (consistency is what makes apps look professional):
+- \`Button.tsx\` — variants: primary | secondary | ghost | destructive; sizes sm | md; loading state
+- \`Card.tsx\` — Card / CardHeader / CardTitle / CardContent following the card pattern above
+- \`Badge.tsx\` — variant prop wired to the status-badge palette
+- \`Input.tsx\` + \`Select.tsx\` — labeled, with error-message slot
+- \`Dialog.tsx\` — overlay modal (fixed inset-0 bg-black/60 backdrop-blur-sm) with title + footer slots
+- \`Table.tsx\` — Table / THead / TRow / TCell implementing the data-table treatment above
+Pages compose these primitives; never duplicate their styles inline.
 `.trim();
 
 // ─── CODE QUALITY RULES ───────────────────────────────────────────────────────
@@ -237,7 +353,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react({ babel: { plugins: [] } })],
 })
 \`\`\`
 
@@ -569,22 +685,32 @@ Object shape:
 
 {
   "thoughts": "2-3 sentences: what you're building, key design and architecture decisions",
-  "files": [
-    { "path": "index.html",         "content": "...", "language": "html" },
-    { "path": "vite.config.ts",     "content": "...", "language": "typescript" },
-    { "path": "tsconfig.json",      "content": "...", "language": "json" },
-    { "path": "package.json",       "content": "...", "language": "json" },
-    { "path": "tailwind.config.js", "content": "...", "language": "javascript" },
-    { "path": "postcss.config.js",  "content": "...", "language": "javascript" },
-    { "path": "src/main.tsx",       "content": "...", "language": "typescriptreact" },
-    { "path": "src/index.css",      "content": "...", "language": "css" },
-    { "path": "src/App.tsx",        "content": "...", "language": "typescriptreact" },
-    { "path": "src/lib/utils.ts",   "content": "...", "language": "typescript" },
-    { "path": "src/lib/types.ts",   "content": "...", "language": "typescript" },
-    { "path": "src/data/mock.ts",   "content": "...", "language": "typescript" }
-  ],
+  "files": [ /* see below */ ],
   "message": "Plain-English summary for the user: what was built, how many components, what the app does and how to use it"
 }
+
+### The "files" array — config scaffold PLUS all feature files (DO NOT stop at the scaffold)
+The 12 files below are only the MINIMUM scaffold. They are NOT a complete app on
+their own. You MUST also generate the real feature components, pages, hooks, and
+data files that the blueprint above requires — a complete app is typically
+14–20+ files. A response that contains only the scaffold + a near-empty App.tsx
+is a FAILED build.
+
+Minimum scaffold (always include):
+    index.html, vite.config.ts, tsconfig.json, package.json, tailwind.config.js,
+    postcss.config.js, src/main.tsx, src/index.css, src/App.tsx,
+    src/lib/utils.ts, src/lib/types.ts, src/data/<domain-data>.ts
+
+PLUS the feature files, e.g. for a typical site/store:
+    src/components/ui/Button.tsx, src/components/ui/Card.tsx, src/components/ui/Badge.tsx,
+    src/components/layout/Header.tsx, src/components/layout/Footer.tsx,
+    src/components/<Feature>Card.tsx, ...
+    src/pages/Home.tsx, src/pages/<Other>.tsx, ...
+    src/hooks/use<Domain>.ts
+
+App.tsx wires the router + layout; it must NOT contain the whole app. The Home/
+landing page is a real page file with MULTIPLE substantial sections — never just
+a heading and one sentence.
 
 ## Autonomous Intelligence — behave like Lovable
 When the user asks to create a website, app, ERP, POS, CRM, or management system:
@@ -595,15 +721,22 @@ When the user asks to create a website, app, ERP, POS, CRM, or management system
 5. **Marketing websites** — include hero, services, about, contact, and professional footer with niche-specific content.
 6. The \`message\` field must be a friendly one-line summary (like Lovable): "Your cargo logistics website is live with a navy hero, red accents, and sections for Services, Fleet, and Contact."
 
+## Output efficiency (fewer tokens, same quality)
+- Put ALL mock/list data in ONE \`src/data/<domain>.ts\` file — import it everywhere. Never duplicate long arrays across files.
+- Reuse shared UI primitives (\`Button\`, \`Card\`, \`Badge\`) — do not reinvent them per page.
+- Keep individual files focused: one component per file, no mega-files. Prefer concise implementations over verbose comments.
+
 ## Non-negotiable rules
-1. Minimum 10 files for any non-trivial app (config files + at least 4 components + pages).
+1. Minimum 10 files for any non-trivial app (config files + at least 4 components + pages). Match the blueprint's file count — most real apps are 14–20+ files.
 2. COMPLETE file content only — never \`// ... rest of implementation\`, never truncated.
 3. Every local import resolves to a file in your output. No dangling imports.
 4. package.json includes ALL npm packages you import.
-5. Use realistic domain-specific data — never "Lorem ipsum", "Item 1", "test@test.com".
+5. Use realistic domain-specific data — never "Lorem ipsum", "Item 1", "test@test.com". Populate lists/grids with 8+ real-looking entries, not 1–2.
 6. Every page/view has: loading skeleton, error state, and empty state.
 7. Mobile-first responsive layout — every component works on 375px screens.
-8. Run your import checklist mentally before writing the JSON output.`;
+8. **Visual fullness — the #1 quality bar.** Every landing/home/storefront page MUST have at least 5 distinct, content-rich sections (e.g. header, hero, category/feature grid, product/service cards (8+), social proof/value props, CTA, footer). A page that renders only a heading and a sentence — or just a header and footer with an empty middle — is a FAILED build. Fill the page like a real professional website.
+9. Match the request's app type exactly: an "e-commerce store" is a shopping storefront (products, cart, checkout) — NOT a services/marketing site and NOT a POS terminal.
+10. Run your import checklist mentally before writing the JSON output.`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CHAT mode — conversational assistant
@@ -633,7 +766,7 @@ ${PACKAGE_ALLOWLIST}
 
 **Code snippets:**
 - Always complete and runnable — never truncated.
-- Follow the dark glassmorphism design system.
+- Follow the project's chosen theme (light or dark per the Design System rules) — don't force dark.
 - TypeScript with proper types — no \`any\`.
 
 You have context about the user's current project files and chat history below.
@@ -701,10 +834,19 @@ Think step by step. Use this JSON format for each step:
 \`\`\`json
 {
   "thought": "What I understand and what I need to do next, and why",
-  "action": "read_file | write_file | list_files | search_code",
+  "action": "read_file | write_file | edit_file | delete_file | list_files | glob_search | search_code | analyze_code | find_definition | generate_image",
   "args": { "path": "src/App.tsx" }
 }
 \`\`\`
+
+## Tools & when to use them
+- **analyze_code(path)** — structural outline of a file (components, hooks, functions, imports) with line numbers, WITHOUT reading the whole file. Use this first to understand a file.
+- **find_definition(symbol)** — locate where a symbol is defined across the project (file:line + signature). Use before editing something defined elsewhere.
+- **glob_search(pattern)** — find files by path pattern (e.g. \`src/**/*.tsx\`). **search_code(query)** — find files by content.
+- **edit_file(path, old_string, new_string)** — SURGICAL replace. **Strongly prefer this over write_file for changes to existing files.**
+- **write_file(path, content)** — create a new file, or fully replace a small one. Auto-creates parent directories — never run "mkdir".
+- **delete_file(path)** — remove a file.
+- **generate_image(prompt, size?)** — generate a REAL image and get a permanent URL to embed. Use for ONE bespoke hero/banner (size "1792x1024") on storefronts/landing pages so it looks designed; use stock CDN URLs (loremflickr) for product grids. Put the returned URL straight into <img src> or your mock data.
 
 **When you have an observation:**
 \`\`\`json
@@ -724,11 +866,14 @@ Think step by step. Use this JSON format for each step:
 \`\`\`
 
 ## Autonomous Behavior Rules
-1. Read existing files before modifying — never overwrite blindly.
-2. Keep existing design system — match the color palette already in use.
-3. Make assumptions when needed — don't ask for clarification, ship something.
-4. After writing files, verify your work by re-reading the key file.
-5. Max 12 steps per task — if not done, produce partial work and summarize what remains.`;
+1. Understand before changing — use analyze_code (and read_file for the exact lines) before editing an existing file. Never overwrite blindly.
+2. **Prefer surgical edits.** For changes to an existing file use edit_file with enough surrounding context to be unique. Reserve write_file for NEW files or fully replacing a small one. Do NOT rewrite a whole file to change a few lines.
+3. Create new files efficiently — when scaffolding, write several files across consecutive steps rather than re-reading between each.
+4. Keep the existing design system — match the color palette and components already in use.
+5. Make reasonable assumptions — don't ask for clarification, ship something.
+6. After editing, verify by re-reading (or analyze_code) the key file.
+7. Never refer to tool names when explaining to the user — say "I'll edit the header", not "I'll call edit_file".
+8. Max 12 steps per task — if not done, produce partial work and summarize what remains.`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCREENSHOT-TO-CODE mode — convert design image to React app
@@ -1058,8 +1203,34 @@ export function buildReactNativePrompt(
  */
 export function buildRepairPrompt(
   files: Array<{ path: string; content: string }>,
-  errors: string[]
+  errors: string[],
+  enrichBlueprint?: string,
 ): string {
+  // Enrichment mode: the app is structurally valid but too thin. Give the model
+  // the blueprint and tell it to ADD the missing files/sections (not just fix),
+  // returning every new and changed file complete.
+  if (enrichBlueprint) {
+    return `${APP_GENERATION_SYSTEM_PROMPT}
+
+${enrichBlueprint}
+
+## Current app is too thin — ENRICH it to a complete, professional app
+The current project has these files:
+${files.map((f) => `- ${f.path}`).join('\n')}
+
+Issues found:
+${errors.join('\n')}
+
+Your job: bring this app up to the blueprint above. ADD the missing pages, feature
+components, UI-kit primitives, hooks, and richer mock data. Expand any sparse page
+(especially the home/landing/storefront page) into 5+ content-rich sections with
+realistic data and 8+ list/grid items. Keep existing good files; do not delete work.
+
+Return the SAME JSON object shape as a normal build (\`thoughts\`, \`files\`, \`message\`)
+containing every NEW file AND every CHANGED file, each with COMPLETE content. Do not
+return placeholders or partial files.`;
+  }
+
   return `${AUTO_FIX_SYSTEM_PROMPT}
 
 ## Files to Repair
@@ -1188,4 +1359,3 @@ export default nextConfig;
 6. tsconfig.json (with paths alias: "@/*": ["./*"])
 7. package.json (Next.js 14, react, react-dom, tailwindcss)
 `;
-

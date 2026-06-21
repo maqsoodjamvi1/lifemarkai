@@ -5,8 +5,11 @@ import {
   Palette, CheckCircle2, ChevronDown, ChevronUp, Check, Sparkles,
   RefreshCw, Type, Layout, Eye, BookOpen, HelpCircle, Lightbulb,
   Zap, TrendingUp, Layers, ArrowRight, XCircle, Info, Ban,
-  AlignLeft, AlignCenter, AlignRight, AlertTriangle,
+  AlignLeft, AlignCenter, AlignRight, AlertTriangle, Loader2,
 } from "lucide-react";
+import type { DesignPreviewDirection } from "@/lib/ai/design-previews";
+import { buildDesignBrief } from "@/lib/ai/design-previews";
+import { DesignPreviewCards } from "./design-preview-cards";
 
 /* ─── Data ─────────────────────────────────────────────── */
 
@@ -140,9 +143,15 @@ interface DesignPanelProps {
   onApply?: (prompt: string) => void;
 }
 
-export function DesignPanel({ projectId: _projectId, onApply }: DesignPanelProps) {
+export function DesignPanel({ projectId, onApply }: DesignPanelProps) {
   const [activeTab, setActiveTab] = useState<"editor" | "learn">("editor");
   const [selectedDir, setSelectedDir] = useState<string>("modern");
+  const [previewPrompt, setPreviewPrompt] = useState("Build a modern landing page for a specialty coffee roastery");
+  const [aiDirections, setAiDirections] = useState<DesignPreviewDirection[]>([]);
+  const [aiSelectedId, setAiSelectedId] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [useAiPreviews, setUseAiPreviews] = useState(false);
   const [showCustomizer, setShowCustomizer] = useState(false);
   const [selectedFont, setSelectedFont] = useState(0);
   const [selectedColor, setSelectedColor] = useState(0);
@@ -161,13 +170,43 @@ export function DesignPanel({ projectId: _projectId, onApply }: DesignPanelProps
   const [showHowToUse, setShowHowToUse] = useState(false);
 
   const direction = DESIGN_DIRECTIONS.find((d) => d.id === selectedDir) || DESIGN_DIRECTIONS[0];
+  const aiDirection = aiDirections.find((d) => d.id === aiSelectedId) ?? null;
   const colorPreset = COLOR_PRESETS[selectedColor];
+
+  async function handleGenerateAiPreviews() {
+    if (!previewPrompt.trim()) return;
+    setAiLoading(true);
+    setAiError(null);
+    setAiDirections([]);
+    setAiSelectedId(null);
+    try {
+      const res = await fetch("/api/ai/design-previews", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: previewPrompt.trim(), projectId, fileCount: 0, force: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to generate previews");
+      setAiDirections(data.directions ?? []);
+      setUseAiPreviews(true);
+      if (data.directions?.[0]?.id) setAiSelectedId(data.directions[0].id);
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : "Preview generation failed");
+    } finally {
+      setAiLoading(false);
+    }
+  }
 
   const handleApplyDesign = () => {
     const font = TYPOGRAPHY_OPTIONS[selectedFont];
     const layout = LAYOUT_OPTIONS[selectedLayout];
-    const prompt = `Apply design direction: ${direction.label}. Typography: ${font.name}. Color palette: ${colorPreset.name} (primary ${customPrimary}, accent ${customAccent}). Layout: ${layout.label}. Density: ${layoutDensity}.`;
-    onApply?.(prompt);
+    if (useAiPreviews && aiDirection) {
+      const buildPrompt = `${previewPrompt.trim()}\n\n${buildDesignBrief(aiDirection)}\n\nTypography: ${font.name}. Layout: ${layout.label}. Density: ${layoutDensity}.`;
+      onApply?.(buildPrompt);
+    } else {
+      const prompt = `Apply design direction: ${direction.label}. Typography: ${font.name}. Color palette: ${colorPreset.name} (primary ${customPrimary}, accent ${customAccent}). Layout: ${layout.label}. Density: ${layoutDensity}.`;
+      onApply?.(prompt);
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -221,7 +260,49 @@ export function DesignPanel({ projectId: _projectId, onApply }: DesignPanelProps
         {/* ═══ EDITOR TAB ═══ */}
         {activeTab === "editor" && (
           <div className="p-3 space-y-3">
+            {/* AI-generated 3-preview flow (Lovable parity) */}
+            <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-2.5 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider">AI Design Previews</span>
+                {aiDirections.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setUseAiPreviews(!useAiPreviews)}
+                    className="text-[9px] text-muted-foreground hover:text-foreground"
+                  >
+                    {useAiPreviews ? "Use presets" : "Use AI previews"}
+                  </button>
+                )}
+              </div>
+              <textarea
+                value={previewPrompt}
+                onChange={(e) => setPreviewPrompt(e.target.value)}
+                rows={2}
+                className="w-full text-[10px] rounded-lg border border-border bg-background px-2 py-1.5 resize-none focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+                placeholder="Describe the app you want to build…"
+              />
+              <button
+                type="button"
+                onClick={() => void handleGenerateAiPreviews()}
+                disabled={aiLoading || !previewPrompt.trim()}
+                className="flex items-center justify-center gap-1.5 w-full py-1.5 rounded-lg text-[10px] font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 transition"
+              >
+                {aiLoading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                {aiLoading ? "Generating 3 previews…" : "Generate 3 AI previews"}
+              </button>
+              {aiError && <p className="text-[9px] text-destructive">{aiError}</p>}
+              {useAiPreviews && aiDirections.length > 0 && (
+                <DesignPreviewCards
+                  directions={aiDirections}
+                  selectedId={aiSelectedId}
+                  onSelect={setAiSelectedId}
+                  compact
+                />
+              )}
+            </div>
+
             {/* Design Direction Selection */}
+            {(!useAiPreviews || aiDirections.length === 0) && (
             <div>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Design Direction</span>
@@ -255,6 +336,7 @@ export function DesignPanel({ projectId: _projectId, onApply }: DesignPanelProps
                 ))}
               </div>
             </div>
+            )}
 
             {/* Customizer Toggle */}
             <button

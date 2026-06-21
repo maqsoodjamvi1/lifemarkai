@@ -38,3 +38,4 @@ Thumbs.db
 # supabase
 .branches
 .temp
+\n# Ignore local installer and nested git backup\nDockerDesktopInstaller.exe\nlifemarkai/.git.bak

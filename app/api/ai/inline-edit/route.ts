@@ -18,6 +18,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
   }
 
+  // Grant today's daily free credits before the balance gate (migration 063)
+  await (await import("@/lib/credits")).claimDailyCredits(supabase, user.id);
   const { data: profile } = await (supabase as any)
     .from("profiles").select("credits").eq("id", user.id).single();
   if (!profile || profile.credits <= 0) {

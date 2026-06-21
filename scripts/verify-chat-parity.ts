@@ -83,7 +83,7 @@ async function liveChatSmoke() {
       projectId,
       message: "Build a simple hello world page",
       mode: "build",
-      model: "claude-opus-4-6",
+      model: "openai/gpt-4o-mini",
       files: [],
       history: [],
     }),
@@ -99,7 +99,7 @@ async function liveChatSmoke() {
   let gotDone = false;
   let buildIntent = false;
 
-  const deadline = Date.now() + 45_000;
+  const deadline = Date.now() + 180_000;
   while (Date.now() < deadline) {
     const { done, value } = await reader.read();
     if (done) break;

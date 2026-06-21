@@ -1,0 +1,52 @@
+# Keep the Docker build context small + reproducible.
+node_modules
+.next
+out
+build
+dist
+
+# Desktop / mobile packaging (not part of the web deploy)
+electron
+ios
+android
+*.dmg
+*.exe
+*.AppImage
+
+# Local env + secrets (inject via Coolify, never bake into the image)
+.env
+.env.local
+.env.*.local
+
+# VCS / editor / CI
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# Logs, caches, temp
+*.log
+npm-debug.log*
+.cache
+.turbo
+coverage
+*.tsbuildinfo
+
+# Scratch / debug artifacts in the repo root
+__sim.js
+__sync_marker__.txt
+_tmp_*.mjs
+debug-*.log
+build-*.txt
+build-output.txt
+build-result*.txt
+install.log
+npm-install.log
+npm-search*.json
+tsconfig-audit*
+
+# Docs don't need to be in the image
+docs
+*.md
+!README.md

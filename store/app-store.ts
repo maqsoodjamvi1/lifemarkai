@@ -46,7 +46,7 @@ export const useAppStore = create<AppState>()(
       sidebarCollapsed: false,
       toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
-      preferredModel: "claude-opus-4-6",
+      preferredModel: DEFAULT_CODING_MODEL,
       setPreferredModel: (model) => set({ preferredModel: model }),
 
       editorFontSize: 14,
@@ -78,6 +78,19 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: "lifemarkai-app-store",
+      // Bump when the model catalog changes shape. v1 migrates any persisted
+      // native model id (no "/", e.g. "claude-opus-4-6") — which 400s on
+      // OpenRouter — back to the current OpenRouter default. Without this, a
+      // user who selected a model before the OpenRouter switch keeps a stale
+      // value in localStorage and every AI call fails.
+      version: 1,
+      migrate: (persisted: unknown) => {
+        const p = (persisted ?? {}) as Partial<AppState>;
+        if (typeof p.preferredModel === "string" && !p.preferredModel.includes("/")) {
+          p.preferredModel = DEFAULT_CODING_MODEL;
+        }
+        return p as AppState;
+      },
       partialize: (state) => ({
         sidebarCollapsed: state.sidebarCollapsed,
         preferredModel: state.preferredModel,

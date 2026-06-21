@@ -317,9 +317,18 @@ export async function POST(req: NextRequest) {
     try {
       let deployedUrl: string;
 
+      // Phase 4 — preview == deploy: try a real `vite build` (opt-in via
+      // ENABLE_SERVER_VITE_BUILD); on success deploy the production dist/.
+      let deployProjectFiles = projectFiles;
+      try {
+        const { tryViteBuild } = await import("@/lib/deploy/build-project");
+        const built = await tryViteBuild(projectFiles);
+        if (built && built.length > 0) deployProjectFiles = built as typeof projectFiles;
+      } catch { /* fall back to static files */ }
+
       if (provider === "vercel" && VERCEL_TOKEN) {
         // ── Real Vercel deployment ──
-        deployedUrl = await deployToVercel(project.name as string, projectId, projectFiles);
+        deployedUrl = await deployToVercel(project.name as string, projectId, deployProjectFiles);
       } else if (provider === "netlify" && NETLIFY_TOKEN) {
         // ── Real Netlify deployment ──
         const site = await getOrCreateSite(projectId, project.name as string);
@@ -328,7 +337,7 @@ export async function POST(req: NextRequest) {
           .select("referral_code")
           .eq("id", user.id)
           .single();
-        const fileMap = buildNetlifyFileMap(projectFiles, {
+        const fileMap = buildNetlifyFileMap(deployProjectFiles, {
           projectId,
           projectName: project.name as string,
           badgeHidden: (project as any).badge_hidden ?? false,

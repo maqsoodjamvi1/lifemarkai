@@ -15,12 +15,12 @@ interface AiIntegrationPanelProps {
   onProjectUpdate: (updated: Partial<Project>) => void;
 }
 
+// OpenRouter slugs — the managed AI proxy routes these via OPENROUTER_API_KEY.
 const MODELS = [
-  { value: "claude-opus-4-6",           label: "Claude Opus",       cost: "2 credits/call",  desc: "Best coding quality — recommended default" },
-  { value: "claude-sonnet-4-6",         label: "Claude Sonnet",     cost: "1 credit/call",   desc: "Balanced quality and speed" },
-  { value: "claude-haiku-4-5-20251001", label: "Claude Haiku",    cost: "0.5 credit/call", desc: "Fast, great for text summarisation" },
-  { value: "gpt-4o-mini",               label: "GPT-4o Mini",       cost: "0.5 credit/call", desc: "Fast, affordable — best for chatbots" },
-  { value: "gpt-4o",                    label: "GPT-4o",            cost: "1 credit/call",   desc: "Strong general reasoning" },
+  { value: "openai/gpt-4o",                label: "GPT-4o",            cost: "2 credits/call",  desc: "Strong general reasoning — recommended default" },
+  { value: "openai/gpt-4o-mini",           label: "GPT-4o Mini",       cost: "0.5 credit/call", desc: "Fast, affordable — best for chatbots" },
+  { value: "anthropic/claude-3.5-sonnet",  label: "Claude 3.5 Sonnet", cost: "1 credit/call",   desc: "Balanced quality and speed" },
+  { value: "deepseek/deepseek-chat-v3-0324", label: "DeepSeek V3",     cost: "0.5 credit/call", desc: "Fast, great for text + code" },
 ];
 
 const CODE_SNIPPET = (projectId: string, model: string) => `// In your app — call the LifemarkAI managed AI proxy
@@ -58,7 +58,7 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
     (project as any).ai_integration_enabled ?? false
   );
   const [model, setModel] = useState<string>(
-    (project as any).ai_integration_model ?? "claude-opus-4-6"
+    (project as any).ai_integration_model ?? "openai/gpt-4o"
   );
   const [creditLimit, setCreditLimit] = useState<number>(
     (project as any).ai_credit_limit ?? 100
@@ -80,7 +80,7 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
         .single();
       if (data) {
         setEnabled(data.ai_integration_enabled ?? false);
-        setModel(data.ai_integration_model ?? "claude-opus-4-6");
+        setModel(data.ai_integration_model ?? "openai/gpt-4o");
         setCreditLimit(data.ai_credit_limit ?? 100);
         setCreditsUsed(data.ai_credits_used ?? 0);
       }

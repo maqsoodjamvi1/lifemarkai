@@ -120,12 +120,13 @@ export class StreamingFileExtractor {
           const raw = buf.slice(this.fileObjectStart, i + 1);
           this.fileObjectStart = -1;
           try {
-            const parsed = JSON.parse(raw) as Partial<StreamingFile>;
-            if (parsed.path && parsed.content !== undefined) {
+            const parsed = JSON.parse(raw) as Partial<StreamingFile> & { name?: string };
+            const filePath = parsed.path ?? parsed.name;
+            if (filePath && parsed.content !== undefined) {
               this.onFile({
-                path: parsed.path,
+                path: filePath,
                 content: parsed.content,
-                language: parsed.language ?? inferLanguage(parsed.path),
+                language: parsed.language ?? inferLanguage(filePath),
               });
             }
           } catch {
@@ -175,12 +176,13 @@ export class StreamingFileExtractor {
           const raw = buf.slice(this.fileObjectStart, i + 1);
           this.fileObjectStart = -1;
           try {
-            const parsed = JSON.parse(raw) as Partial<StreamingFile>;
-            if (parsed.path && parsed.content !== undefined) {
+            const parsed = JSON.parse(raw) as Partial<StreamingFile> & { name?: string };
+            const filePath = parsed.path ?? parsed.name;
+            if (filePath && parsed.content !== undefined) {
               await this.onFile({
-                path: parsed.path,
+                path: filePath,
                 content: parsed.content,
-                language: parsed.language ?? inferLanguage(parsed.path),
+                language: parsed.language ?? inferLanguage(filePath),
               });
             }
           } catch { /* skip */ }
@@ -208,6 +210,20 @@ export class StreamingFileExtractor {
     this.inString = false;
     this.escape = false;
   }
+}
+
+/**
+ * Extract every *complete* file object from a partial or complete build JSON
+ * stream. Used when the model hits max_tokens mid-JSON — we still ship the
+ * files that finished before the cut-off and trigger a continuation pass.
+ */
+export function salvageFilesFromStreamJson(raw: string): StreamingFile[] {
+  const files: StreamingFile[] = [];
+  const extractor = new StreamingFileExtractor((file) => {
+    files.push(file);
+  });
+  extractor.feed(raw);
+  return files;
 }
 
 /** Infer language from file extension when not provided by AI */

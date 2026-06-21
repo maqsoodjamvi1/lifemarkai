@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
-import { getDefaultAiModel } from "@/lib/ai/model-defaults";
+import { REASONING_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
@@ -60,16 +60,19 @@ Return ONLY valid JSON in this exact format:
   ]
 }
 
-Use exactly 5-7 steps. Categories must be one of: ui, api, database, auth, deployment.`;
+Use exactly 5-7 steps. Categories must be one of: ui, api, database, auth, deployment.
+Think strategically: order steps by dependency, call out architectural trade-offs in each description, and surface risks/edge cases the build should handle.`;
 
     const aiResult = await generateAI({
-      model: getDefaultAiModel(),
+      // Route planning through the strong reasoning tier (Claude Opus) for
+      // genuine strategic planning rather than the default coding model.
+      model: REASONING_MODEL,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: `Create an implementation plan for: ${prompt}` },
       ],
       temperature: 0.7,
-      maxTokens: 2000,
+      maxTokens: 8000,
       jsonMode: true,
     });
 

@@ -21,9 +21,11 @@ interface ModelResult {
   error?: string;
 }
 
+// OpenRouter slugs — route through the single OPENROUTER_API_KEY.
 const MODELS: { id: string; label: string; color: string }[] = [
-  { id: "gpt-4o",                label: "GPT-4o",           color: "text-emerald-400 border-emerald-500/30" },
-  { id: "claude-opus-4-6",   label: "Claude Opus 4.6", color: "text-violet-400 border-violet-500/30" },
+  { id: "openai/gpt-4o",                       label: "GPT-4o",        color: "text-emerald-400 border-emerald-500/30" },
+  { id: "anthropic/claude-3.5-sonnet",         label: "Claude 3.5 Sonnet", color: "text-violet-400 border-violet-500/30" },
+  { id: "deepseek/deepseek-chat-v3-0324",      label: "DeepSeek V3",   color: "text-blue-400 border-blue-500/30" },
 ];
 
 const SAMPLE_PROMPTS = [

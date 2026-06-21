@@ -5,16 +5,93 @@ import type { AIModel } from "./provider";
 import {
   BALANCED_CODING_MODEL,
   DEFAULT_CODING_MODEL,
+  DEFAULT_CHAT_MODEL,
   FAST_CODING_MODEL,
+  REASONING_MODEL,
+  DESIGN_MODEL,
+  CONTENT_MODEL,
+  IMAGE_MODEL,
 } from "./model-defaults";
 
-export { DEFAULT_CODING_MODEL, BALANCED_CODING_MODEL, FAST_CODING_MODEL };
+export { DEFAULT_CODING_MODEL, BALANCED_CODING_MODEL, FAST_CODING_MODEL, DEFAULT_CHAT_MODEL, REASONING_MODEL };
 
 export const CLAUDE_MODELS = {
   opus: DEFAULT_CODING_MODEL,
   sonnet: BALANCED_CODING_MODEL,
   haiku: FAST_CODING_MODEL,
 } as const;
+
+/**
+ * Per-task model tiers — the best model for each kind of work (Lovable-style
+ * orchestration). All resolve to OpenRouter slugs in model-defaults.ts so they
+ * route through the single OPENROUTER_API_KEY; override any tier via env
+ * (OPENROUTER_CODING_MODEL, OPENROUTER_DESIGN_MODEL, OPENROUTER_CONTENT_MODEL, …).
+ * Defaults: code/design/content/reasoning → Claude Sonnet (quality), chat/fast →
+ * a cheap fast model (cost), image → the native image model.
+ */
+export const MODEL_TIERS = {
+  /** Code generation, agent runs, error fixing — best coder. */
+  coding: DEFAULT_CODING_MODEL,
+  /** UI / layout / styling / polish — best at Tailwind + design. */
+  design: DESIGN_MODEL,
+  /** Copywriting, marketing content, SEO text — strong writer. */
+  content: CONTENT_MODEL,
+  /** Architecture / planning — strong general reasoning. */
+  reasoning: REASONING_MODEL,
+  /** Conversational Q&A — fast + cheap. */
+  chat: DEFAULT_CHAT_MODEL,
+  /** Medium-complexity work. */
+  balanced: BALANCED_CODING_MODEL,
+  /** Trivial/lightweight tasks — fastest + cheapest. */
+  fast: FAST_CODING_MODEL,
+  /** Image generation — handled by /api/ai/image, not the text providers. */
+  image: IMAGE_MODEL,
+} as const;
+
+export type TaskType = "code" | "design" | "content" | "image" | "reasoning" | "chat";
+
+const DESIGN_KEYWORDS =
+  /\b(design|styl(e|ing)|theme|colou?r|palette|layout|spacing|typograph|font|ui|ux|responsive|animation|hero section|landing page look|polish|beautif|modern look|redesign|visual|gradient|dark mode|make it look)\b/i;
+
+const CONTENT_KEYWORDS =
+  /\b(copy|copywriting|content|headlines?|taglines?|slogans?|descriptions?|blog post|articles?|about (us|page)|marketing copy|product descriptions?|write (the|some|a|product|copy|content|text)|rewrite the (text|copy)|seo|microcopy|cta text|placeholder text)\b/i;
+
+const IMAGE_KEYWORDS =
+  /\b(image|images|photo|picture|hero image|banner image|background image|logo|icon|illustration|product photo|avatar|generate (an? )?(image|photo|logo|icon)|add (an? )?(image|photo|logo|icon|picture))\b/i;
+
+const IMAGE_ACTION = /\b(add|create|generate|make|need|want|insert|put|replace|design)\b/i;
+
+/** True when the prompt is asking to add/generate an image (route to /api/ai/image). */
+export function detectImageIntent(prompt: string): boolean {
+  const p = prompt ?? "";
+  return IMAGE_KEYWORDS.test(p) && IMAGE_ACTION.test(p);
+}
+
+/** Classify the dominant task type of a prompt for best-model routing. */
+export function detectTaskType(prompt: string): TaskType {
+  const p = prompt ?? "";
+  if (detectImageIntent(p)) return "image";
+  if (PLAN_KEYWORDS.test(p)) return "reasoning";
+  // Design vs content can co-occur with code; prefer design when both styling and
+  // copy are mentioned, since layout quality dominates perceived quality.
+  if (DESIGN_KEYWORDS.test(p)) return "design";
+  if (CONTENT_KEYWORDS.test(p)) return "content";
+  if (CHAT_KEYWORDS.test(p)) return "chat";
+  return "code";
+}
+
+/** Resolve the best model for an explicit task type. */
+export function getModelForTask(task: TaskType): AIModel {
+  switch (task) {
+    case "design": return MODEL_TIERS.design as AIModel;
+    case "content": return MODEL_TIERS.content as AIModel;
+    case "reasoning": return MODEL_TIERS.reasoning;
+    case "chat": return MODEL_TIERS.chat;
+    case "image": return MODEL_TIERS.image as AIModel;
+    case "code":
+    default: return MODEL_TIERS.coding;
+  }
+}
 
 export type ProjectStage = "empty" | "scaffold" | "app";
 
@@ -66,8 +143,14 @@ export function inferProjectStage(files: Pick<ProjectFile, "path">[]): ProjectSt
 }
 
 /**
- * Pick the best Claude model for a prompt given editor mode and project context.
- * Opus is the default for coding; Haiku/Sonnet handle lighter conversational work.
+ * Pick the best model for a prompt given editor mode and project context.
+ * Multi-provider per-task selection (Lovable-style orchestration):
+ *   coding/fixing  → Claude Opus 4.8 (best coder)
+ *   planning       → GPT-5.2 (strong general reasoning), Opus for long specs
+ *   quick patches  → Gemini 3 Flash (fast + cheap), Sonnet when non-trivial
+ *   chat           → Gemini 3 Flash, escalating to Sonnet/Opus with length
+ * The provider layer degrades gracefully (OpenRouter, then Claude) when a
+ * provider's API key isn't configured — see lib/ai/provider.ts.
  */
 export function resolveSmartModel(
   mode: EditorMode,
@@ -77,25 +160,40 @@ export function resolveSmartModel(
   const trimmed = prompt?.trim() ?? "";
 
   if (ctx.hasPreviewError && /\b(fix|debug|resolve|repair|error|bug)\b/i.test(trimmed)) {
-    return CLAUDE_MODELS.opus;
+    return MODEL_TIERS.coding;
   }
 
   if (mode === "agent" || mode === "build") {
-    return CLAUDE_MODELS.opus;
+    return MODEL_TIERS.coding;
   }
 
   if (mode === "plan") {
-    return trimmed.length > 200 ? CLAUDE_MODELS.opus : CLAUDE_MODELS.sonnet;
+    return trimmed.length > 200 ? MODEL_TIERS.coding : MODEL_TIERS.reasoning;
   }
 
   if (mode === "patch") {
-    return trimmed.length < 100 ? CLAUDE_MODELS.haiku : CLAUDE_MODELS.sonnet;
+    const task = detectTaskType(trimmed);
+    if (task === "design") return MODEL_TIERS.design as AIModel;
+    if (task === "content") return MODEL_TIERS.content as AIModel;
+    return trimmed.length < 100 ? MODEL_TIERS.chat : MODEL_TIERS.balanced;
   }
 
-  // chat / default
-  if (trimmed.length < 80) return CLAUDE_MODELS.haiku;
-  if (trimmed.length < 200) return CLAUDE_MODELS.sonnet;
-  return CLAUDE_MODELS.opus;
+  // chat / default — route by task type first (design/content/reasoning get the
+  // best tier), then fall back to length-based escalation for general Q&A.
+  const task = detectTaskType(trimmed);
+  if (task === "design") return MODEL_TIERS.design as AIModel;
+  if (task === "content") return MODEL_TIERS.content as AIModel;
+  if (task === "reasoning") return MODEL_TIERS.reasoning;
+  if (trimmed.length < 120) return MODEL_TIERS.chat;
+  if (trimmed.length < 300) return MODEL_TIERS.balanced;
+  return MODEL_TIERS.coding;
+}
+
+function isCodeChangeIntent(prompt: string): boolean {
+  if (CHAT_KEYWORDS.test(prompt) || PLAN_KEYWORDS.test(prompt) || INVESTIGATE_KEYWORDS.test(prompt)) {
+    return false;
+  }
+  return /\b(add|create|implement|integrate|update|change|fix|remove|delete|build|make|refactor|wire|connect)\b/i.test(prompt);
 }
 
 /** Pick the best editor mode for a user prompt given project context. */
@@ -117,6 +215,15 @@ export function resolvePromptMode(
   // Honor explicitly selected Agent tab — don't downgrade to build/chat via keywords
   if (ctx.currentMode === "agent") return "agent";
 
+  // Lovable parity: Chat tab is Q&A only — never auto-promote to build/agent.
+  // Slash commands (/build, /agent, /plan) are the escape hatch.
+  if (ctx.currentMode === "chat") {
+    if (/^\/build\b/i.test(trimmed)) return "build";
+    if (/^\/agent\b/i.test(trimmed)) return "agent";
+    if (/^\/plan\b/i.test(trimmed)) return "plan";
+    return "chat";
+  }
+
   // Investigation prompts → chat even when Build toggle is active
   if (INVESTIGATE_KEYWORDS.test(trimmed) && !shouldAutoBuildMode(trimmed)) {
     return "chat";
@@ -125,9 +232,15 @@ export function resolvePromptMode(
     return "chat";
   }
 
-  // Honor Build / Quick Edit tabs — user expects code changes, not chat replies
-  if (ctx.currentMode === "build" || ctx.currentMode === "patch") {
-    return ctx.currentMode;
+  // Honor Build tab — on existing apps, code changes go through agent (Lovable default).
+  if (ctx.currentMode === "build") {
+    if (stageFromCtx(ctx) === "app" && isCodeChangeIntent(trimmed)) {
+      return "agent";
+    }
+    return "build";
+  }
+  if (ctx.currentMode === "patch") {
+    return "patch";
   }
 
   if (CHAT_KEYWORDS.test(trimmed) && !shouldAutoBuildMode(trimmed)) {
@@ -152,6 +265,10 @@ export function resolvePromptMode(
   }
 
   if (shouldAutoBuildMode(trimmed)) {
+    // Lovable parity: Agent is default for edits on existing apps (Aug 2025+).
+    if (stageFromCtx(ctx) === "app") {
+      return "agent";
+    }
     return "build";
   }
 
@@ -160,6 +277,16 @@ export function resolvePromptMode(
   }
 
   return ctx.currentMode;
+}
+
+/** Multi-step / cross-cutting prompts that benefit from the agentic loop. */
+function isComplexEdit(prompt: string): boolean {
+  if (/\b(refactor|restructure|migrate|reorganize|rename across|all (the )?(pages|components|files)|every page|entire app|whole app|across the (app|codebase|project))\b/i.test(prompt)) {
+    return true;
+  }
+  // Two or more coordinated steps ("add X and then Y, also Z")
+  const coordinators = prompt.match(/\b(and|then|also|plus|after that)\b/gi)?.length ?? 0;
+  return coordinators >= 2 && prompt.length > 120;
 }
 
 function stageFromCtx(ctx: EditorIntelContext): ProjectStage {

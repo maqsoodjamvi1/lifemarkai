@@ -283,6 +283,32 @@ const CONNECTORS: Connector[] = [
     docsUrl: "https://developers.google.com/workspace",
     oauthFlow: true,
   },
+  {
+    id: "google_calendar",
+    name: "Google Calendar",
+    description: "List events, create meetings, manage calendars",
+    category: "Productivity",
+    emoji: "📅",
+    color: "bg-blue-500/20 text-blue-400",
+    fields: [
+      { key: "GOOGLE_ACCESS_TOKEN", label: "OAuth Access Token", placeholder: "ya29.…", secret: true, helpUrl: "https://developers.google.com/calendar/api/guides/auth" },
+    ],
+    docsUrl: "https://developers.google.com/calendar/api",
+    oauthFlow: true,
+  },
+  {
+    id: "google_sheets",
+    name: "Google Sheets",
+    description: "Read and write spreadsheet rows and ranges",
+    category: "Productivity",
+    emoji: "📊",
+    color: "bg-green-600/20 text-green-400",
+    fields: [
+      { key: "GOOGLE_ACCESS_TOKEN", label: "OAuth Access Token", placeholder: "ya29.…", secret: true, helpUrl: "https://developers.google.com/sheets/api/guides/authorizing" },
+    ],
+    docsUrl: "https://developers.google.com/sheets/api",
+    oauthFlow: true,
+  },
 
   // ── Infrastructure ─────────────────────────────────────────────────────────
   {
@@ -436,6 +462,7 @@ const CONNECTORS: Connector[] = [
       { key: "MS_TENANT_ID", label: "Tenant ID", placeholder: "your-tenant.onmicrosoft.com", secret: false },
       { key: "MS_CLIENT_ID", label: "App Client ID", placeholder: "GUID", secret: false },
       { key: "MS_CLIENT_SECRET", label: "App Secret", placeholder: "…", secret: true, helpUrl: "https://portal.azure.com/" },
+      { key: "MS_ACCESS_TOKEN", label: "Graph Access Token", placeholder: "eyJ…", secret: true, helpUrl: "https://learn.microsoft.com/en-us/graph/auth/" },
     ],
     docsUrl: "https://learn.microsoft.com/en-us/graph/overview",
     oauthFlow: true,

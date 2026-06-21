@@ -113,6 +113,21 @@ async function processDeployJob(job: Job<DeployJobPayload>): Promise<{ url: stri
   await supabase.from("deployments").update({ status: "building" }).eq("id", deploymentId);
   await job.log(`Starting ${provider} deployment for project ${projectId}`);
 
+  // Phase 4 — preview == deploy: attempt a real `vite build`. When it succeeds,
+  // deploy the production `dist/` bundle instead of the static CDN index.html.
+  // Opt-in (ENABLE_SERVER_VITE_BUILD); returns null → falls back to static.
+  let deployFiles = files;
+  try {
+    const { tryViteBuild } = await import("@/lib/deploy/build-project");
+    const built = await tryViteBuild(files, (line: string) => { void job.log(line); });
+    if (built && built.length > 0) {
+      deployFiles = built;
+      await job.log(`Production build ready — deploying ${built.length} built file(s)`);
+    }
+  } catch (buildErr) {
+    await job.log(`Build step skipped: ${buildErr instanceof Error ? buildErr.message : String(buildErr)}`);
+  }
+
   let deployedUrl = "";
 
   try {
@@ -158,7 +173,7 @@ async function processDeployJob(job: Job<DeployJobPayload>): Promise<{ url: stri
       await job.log("Building file map...");
       await job.updateProgress(30);
 
-      const fileMap = buildNetlifyFileMap(files, {
+      const fileMap = buildNetlifyFileMap(deployFiles, {
         projectId,
         projectName,
         badgeHidden: badgeHidden ?? false,
@@ -198,7 +213,7 @@ async function processDeployJob(job: Job<DeployJobPayload>): Promise<{ url: stri
     } else if (provider === "vercel" && process.env.VERCEL_TOKEN) {
       await job.log("Uploading to Vercel...");
       await job.updateProgress(40);
-      deployedUrl = await deployToVercel(projectName, projectId, files);
+      deployedUrl = await deployToVercel(projectName, projectId, deployFiles);
       await job.updateProgress(90);
     } else if (process.env.NODE_ENV === "production") {
       // No real provider configured — fail loudly rather than return a fake

@@ -13,7 +13,7 @@ import {
   pickActiveFileAfterUpdate,
   shouldFocusPreviewAfterGeneration,
   getEmptyProjectPrompts,
-  CLAUDE_MODELS,
+  MODEL_TIERS,
 } from "../lib/ai/editor-intelligence";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -198,11 +198,12 @@ log({
 });
 
 const modelCases = [
-  { name: "build → opus", mode: "build" as const, prompt: "Build a todo app", expect: CLAUDE_MODELS.opus },
-  { name: "agent → opus", mode: "agent" as const, prompt: "Add auth", expect: CLAUDE_MODELS.opus },
-  { name: "short patch → haiku", mode: "patch" as const, prompt: "Make header blue", expect: CLAUDE_MODELS.haiku },
-  { name: "short chat → haiku", mode: "chat" as const, prompt: "What is React?", expect: CLAUDE_MODELS.haiku },
-  { name: "plan → sonnet", mode: "plan" as const, prompt: "Plan a SaaS dashboard", expect: CLAUDE_MODELS.sonnet },
+  // Multi-provider per-task orchestration (Lovable parity)
+  { name: "build → opus (coding)", mode: "build" as const, prompt: "Build a todo app", expect: MODEL_TIERS.coding },
+  { name: "agent → opus (coding)", mode: "agent" as const, prompt: "Add auth", expect: MODEL_TIERS.coding },
+  { name: "short patch → gemini flash", mode: "patch" as const, prompt: "Make header blue", expect: MODEL_TIERS.chat },
+  { name: "short chat → gemini flash", mode: "chat" as const, prompt: "What is React?", expect: MODEL_TIERS.chat },
+  { name: "plan → gpt-5.2 (reasoning)", mode: "plan" as const, prompt: "Plan a SaaS dashboard", expect: MODEL_TIERS.reasoning },
 ];
 for (const mc of modelCases) {
   const got = resolveSmartModel(mc.mode, { fileCount: 5, hasPreviewError: false }, mc.prompt);

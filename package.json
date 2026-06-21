@@ -78,6 +78,7 @@
     "next": "^16.2.4",
     "next-themes": "^0.4.6",
     "openai": "^4.55.7",
+    "pg": "^8.22.0",
     "react": "^18",
     "react-dom": "^18",
     "react-hook-form": "^7.77.0",
@@ -115,5 +116,8 @@
     "tailwindcss": "^3.4.1",
     "typescript": "^5",
     "wait-on": "^7.2.0"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.49.0"
   }
 }

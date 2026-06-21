@@ -6,33 +6,20 @@ import { generateAI } from "@/lib/ai/provider";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/system-prompts";
+import { claimDailyCredits } from "@/lib/credits";
+import { parseAIResponse } from "@/lib/ai/code-parser";
 
 function parseFixResponse(raw: string): {
   files: Array<{ path: string; content: string }>;
   explanation: string;
 } {
-  const trimmed = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
-  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) throw new Error("No JSON object in AI response");
-
-  const parsed = JSON.parse(jsonMatch[0]) as {
-    files?: Array<{ path: string; content: string }>;
-    explanation?: string;
-    fix_description?: string;
-    diagnosis?: string;
-  };
-
-  if (!Array.isArray(parsed.files) || parsed.files.length === 0) {
+  const parsed = parseAIResponse(raw);
+  if (!parsed.files?.length) {
     throw new Error("AI response missing files array");
   }
-
   return {
     files: parsed.files,
-    explanation:
-      parsed.explanation ??
-      parsed.fix_description ??
-      parsed.diagnosis ??
-      "Fixed the error — check the preview.",
+    explanation: parsed.message ?? "Fixed the error — check the preview.",
   };
 }
 
@@ -53,13 +40,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "projectId and error are required" }, { status: 400 });
   }
 
+  await claimDailyCredits(supabase, user.id);
   const { data: profile } = await (supabase as any)
     .from("profiles")
     .select("credits")
     .eq("id", user.id)
     .single();
 
-  if (!profile || profile.credits < 1) {
+  if (!profile || profile.credits < 0.5) {
     return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
   }
 

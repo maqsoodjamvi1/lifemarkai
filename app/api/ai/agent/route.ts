@@ -6,15 +6,20 @@ import { detectLanguage } from "@/lib/ai/code-parser";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 import { ensureDevCredits } from "@/lib/dev-credits";
+import { claimDailyCredits } from "@/lib/credits";
+import { autoWireBackend } from "@/lib/cloud/auto-wire";
+import { runSelfVerification } from "@/lib/ai/self-verify";
 import {
   parseCloudToolPermissions,
   buildCloudPermissionsPromptBlock,
   shouldBlockCloudAction,
 } from "@/lib/cloud/permissions";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
+import { attachSkillsToPrompt } from "@/lib/ai/attach-skills";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+// Agent run + backend wiring + browser verification (Lovable budgets 15 min).
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -44,19 +49,34 @@ export async function POST(req: NextRequest) {
   }
 
   // Check credits (agents cost more). Dev accounts auto-grant via ensureDevCredits.
+  await claimDailyCredits(supabase, user.id); // grants today's free credits before the gate
   const { data: profile } = await (supabase as any).from("profiles")
     .select("credits, workspace_knowledge, cloud_tool_permissions").eq("id", user.id).single();
   let creditsBalance = profile?.credits ?? 0;
   const granted = await ensureDevCredits(user.id);
   if (granted !== null) creditsBalance = granted;
-  if (creditsBalance < 5) {
-    return NextResponse.json({ error: "Need at least 5 credits for Agent Mode" }, { status: 402 });
+  if (creditsBalance < 1) {
+    return NextResponse.json({ error: "Need at least 1 credit for Agent Mode" }, { status: 402 });
   }
 
   const cloudPermissions = parseCloudToolPermissions(profile?.cloud_tool_permissions);
 
   const { data: projectRow } = await (supabase as any)
-    .from("projects").select("knowledge, cloud_enabled").eq("id", projectId).single();
+    .from("projects")
+    .select("knowledge, cloud_enabled, environment, disabled_skill_ids")
+    .eq("id", projectId)
+    .single();
+
+  // Test/Live environments: Agent mode writes files — block when Live.
+  if ((projectRow as { environment?: string } | null)?.environment === "live") {
+    return NextResponse.json(
+      {
+        error: "This project is in the Live environment. Switch to Test to make changes, then publish them to Live.",
+        environment_locked: true,
+      },
+      { status: 423 }
+    );
+  }
 
   const cloudBlock = shouldBlockCloudAction(task, cloudPermissions);
   if (cloudBlock.blocked) {
@@ -70,6 +90,15 @@ export async function POST(req: NextRequest) {
   if (workspaceKnowledge) knowledgeParts.push(`# Workspace Standards (always follow)\n${workspaceKnowledge}`);
   if (projectKnowledge) knowledgeParts.push(`# Project Instructions (takes precedence)\n${projectKnowledge}`);
   knowledgeParts.push(buildCloudPermissionsPromptBlock(cloudPermissions, !!projectRow?.cloud_enabled));
+
+  const { block: skillBlock } = await attachSkillsToPrompt(
+    supabase,
+    user.id,
+    task,
+    Array.isArray(projectRow?.disabled_skill_ids) ? projectRow.disabled_skill_ids : [],
+  );
+  if (skillBlock) knowledgeParts.push(skillBlock);
+
   const knowledge = knowledgeParts.length > 0 ? knowledgeParts.join("\n\n---\n\n") : undefined;
 
   const { data: files } = await (supabase as any)
@@ -122,7 +151,45 @@ export async function POST(req: NextRequest) {
           .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
           .catch(() => {});
 
-        send({ done: true, summary: result.summary, filesChanged: result.filesChanged });
+        // ── Lovable parity: backend auto-wiring + self-verification ──────────
+        let backendWiring = null;
+        let verification = null;
+        if (Array.isArray(result.filesChanged) && result.filesChanged.length > 0) {
+          try {
+            const { data: changedRows } = await (supabase as any)
+              .from("project_files")
+              .select("path, content, language")
+              .eq("project_id", projectId)
+              .in("path", result.filesChanged);
+            backendWiring = await autoWireBackend({
+              supabase,
+              projectId,
+              userId: user.id,
+              prompt: task,
+              generatedFiles: (changedRows ?? []) as Array<{ path: string; content: string }>,
+              cloudToolPermissionsRaw: profile?.cloud_tool_permissions,
+              emit: (status) => send({ wiring_status: status }),
+            });
+          } catch { backendWiring = null; }
+
+          try {
+            verification = await runSelfVerification({
+              supabase,
+              projectId,
+              emit: (status) => send({ verify_status: status }),
+            });
+          } catch { verification = null; }
+        }
+
+        send({
+          done: true,
+          summary: result.summary,
+          filesChanged: result.filesChanged,
+          backend_wired: backendWiring ?? undefined,
+          verification: verification
+            ? { engine: verification.engine, passed: verification.passed, fixesApplied: verification.fixesApplied, errors: verification.errors }
+            : undefined,
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Agent failed";
         send({ error: msg });

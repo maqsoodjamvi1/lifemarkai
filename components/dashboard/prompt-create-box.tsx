@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
@@ -17,8 +17,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
+import { useEnhancePrompt } from "@/lib/hooks/use-enhance-prompt";
+import { listStarterTemplates } from "@/lib/templates/starter-catalog";
 
 type CreateMode = "build" | "plan";
+
+const STARTER_TEMPLATES = listStarterTemplates();
 
 interface PromptCreateBoxProps {
   variant?: "default" | "hero";
@@ -60,6 +64,7 @@ export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
   const [prompt, setPrompt] = useState("");
   const [framework, setFramework] = useState<Framework>("react");
   const [createMode, setCreateMode] = useState<CreateMode>("build");
+  const [templateId, setTemplateId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const isHero = variant === "hero";
@@ -69,6 +74,22 @@ export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const router = useRouter();
   const { toast } = useToast();
+  const { enhance, enhancing } = useEnhancePrompt();
+
+  // Preselect a design template when arriving from the gallery (?template=<id>).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const t = new URLSearchParams(window.location.search).get("template");
+    if (t && STARTER_TEMPLATES.some((s) => s.id === t)) setTemplateId(t);
+  }, []);
+
+  async function handleEnhance() {
+    const trimmed = prompt.trim();
+    if (!trimmed || enhancing || loading) return;
+    const better = await enhance(trimmed);
+    setPrompt(better);
+    textareaRef.current?.focus();
+  }
 
   async function handleCreate(overridePrompt?: string, overrideName?: string) {
     const trimmed = (overridePrompt ?? prompt).trim();
@@ -85,7 +106,8 @@ export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
       if (!res.ok) throw new Error(await res.text());
       const project = await res.json();
       const modeParam = createMode === "plan" ? "&mode=plan" : "";
-      router.push(`/editor/${project.id}?prompt=${encodeURIComponent(trimmed)}${modeParam}`);
+      const tplParam = templateId ? `&template=${encodeURIComponent(templateId)}` : "";
+      router.push(`/editor/${project.id}?prompt=${encodeURIComponent(trimmed)}${modeParam}${tplParam}`);
     } catch (err: unknown) {
       toast({
         title: "Failed to create project",
@@ -327,6 +349,20 @@ export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => void handleEnhance()}
+                disabled={!prompt.trim() || enhancing || loading}
+                className={`flex items-center justify-center w-8 h-8 rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  isHero
+                    ? "border-slate-200 text-slate-500 hover:bg-slate-50"
+                    : "border-border text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                }`}
+                title="Enhance prompt — rewrite into a precise build prompt"
+              >
+                {enhancing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+              </button>
+
               {isHero && (
                 <button
                   type="button"
@@ -412,6 +448,42 @@ export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
           </div>
         </div>
       </div>
+
+      {/* Design template picker — refine a designer baseline instead of a blank generation */}
+      {concepts.length === 0 && (
+        <div className="flex flex-wrap items-center gap-2 mt-3">
+          <span className="text-xs text-muted-foreground self-center flex items-center gap-1">
+            <Palette className="w-3 h-3" /> Design:
+          </span>
+          {STARTER_TEMPLATES.map((t) => {
+            const active = templateId === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTemplateId(active ? null : t.id)}
+                title={t.description}
+                className={`text-xs px-3 py-1 rounded-full border transition-colors ${
+                  active
+                    ? "bg-violet-500/15 border-violet-500/50 text-violet-300 ring-1 ring-violet-500/40"
+                    : "bg-muted hover:bg-accent border-border text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {t.name}
+              </button>
+            );
+          })}
+          {templateId && (
+            <button
+              type="button"
+              onClick={() => setTemplateId(null)}
+              className="text-[11px] text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+            >
+              clear
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Suggestion chips */}
       {concepts.length === 0 && (

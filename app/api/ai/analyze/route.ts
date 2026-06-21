@@ -2,6 +2,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
+import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { spawn } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
@@ -46,6 +47,7 @@ const MAX_OUTPUT_BYTES = 20 * 1024 * 1024; // 20 MB total
 
 interface AnalyzeBody {
   instruction: string;
+  projectId?: string;
   inputFile?: { name: string; base64: string; mimeType?: string };
 }
 
@@ -69,7 +71,7 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { instruction, inputFile } = await req.json() as AnalyzeBody;
+  const { instruction, inputFile, projectId } = await req.json() as AnalyzeBody;
   if (!instruction?.trim()) {
     return NextResponse.json({ error: "instruction is required" }, { status: 400 });
   }
@@ -82,7 +84,7 @@ export async function POST(req: NextRequest) {
   let script = "";
   try {
     const aiRes = await generateAI({
-      model: "claude-sonnet-4-6",
+      model: BALANCED_CODING_MODEL,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: userMsg },
@@ -179,6 +181,53 @@ export async function POST(req: NextRequest) {
   // ── 5) Cleanup ─────────────────────────────────────────────────────────────
   try { fs.rmSync(sandboxDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
+  const fileManifest = files.map((f) => ({
+    name: f.name,
+    base64: f.base64,
+    sizeBytes: f.sizeBytes,
+    mimeType: f.mimeType,
+  }));
+
+  let persistedMessages: Array<{ id: string; role: string; content: string; metadata: unknown }> = [];
+  if (projectId) {
+    const summary =
+      result.stdout?.trim().slice(0, 500) ||
+      `Generated ${files.length} file${files.length === 1 ? "" : "s"} from your data analysis request.`;
+    const { data: inserted, error: msgErr } = await (supabase as any)
+      .from("messages")
+      .insert([
+        {
+          project_id: projectId,
+          role: "user",
+          content: instruction.trim(),
+          mode: "chat",
+          metadata: { kind: "analyze_request" },
+        },
+        {
+          project_id: projectId,
+          role: "assistant",
+          content: summary,
+          mode: "chat",
+          metadata: {
+            kind: "analyze",
+            instruction: instruction.trim(),
+            stdout: result.stdout?.slice(0, 4000) ?? "",
+            stderr: result.stderr?.slice(0, 2000) ?? "",
+            files: fileManifest,
+          },
+        },
+      ])
+      .select("id, role, content, metadata, created_at");
+    if (!msgErr && inserted) persistedMessages = inserted;
+
+    await (supabase as any).rpc("deduct_credits", {
+      user_id: user.id,
+      amount: 1,
+      action: "analyze",
+      project_id: projectId,
+    });
+  }
+
   return NextResponse.json({
     ok: result.code === 0,
     exitCode: result.code,
@@ -186,6 +235,7 @@ export async function POST(req: NextRequest) {
     stdout: result.stdout,
     stderr: result.stderr,
     files,
+    messages: persistedMessages,
   });
 }
 

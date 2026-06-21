@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { AnimatePresence, motion } from "framer-motion";
-import { VisualEditOverlay } from "./visual-edit-overlay";
+import { VisualEditOverlay, VebBridgePopover } from "./visual-edit-overlay";
 import { PreviewAnnotations } from "./preview-annotations";
 import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { LifemarkBadge } from "@/components/shared/lifemark-badge";
@@ -24,6 +24,9 @@ import dynamic from "next/dynamic";
 import { buildFallbackHtml, PREVIEW_ENGINE_REV } from "@/lib/preview/build-fallback-html";
 import { filesContentSignature } from "@/lib/preview/files-signature";
 import { resolvePreviewEngine, WC_UNAVAILABLE_KEY, type PreviewEngine } from "@/lib/preview/resolve-preview-engine";
+import { useSandboxPreview } from "@/lib/preview/use-sandbox-preview";
+import { usePreviewErrorGuard } from "@/hooks/use-preview-error-guard";
+import { PreviewHealingOverlay } from "./preview-healing-overlay";
 import Link from "next/link";
 
 const WebContainerPreview = dynamic(() => import("./webcontainer-preview"), {
@@ -124,6 +127,8 @@ interface PreviewPanelProps {
   onSendAnnotatedToChat?: (prompt: string, imageBase64: string) => void;
   /** When 0, hide preview errors and show upgrade state instead of fix prompts */
   credits?: number;
+  /** Send a plain prompt to the chat panel (visual-edit AI fallback) */
+  onSendPromptToChat?: (prompt: string) => void;
 }
 
 function OutOfCreditsPreviewPaused() {
@@ -332,6 +337,7 @@ export function PreviewPanel({
   badgeHidden = false,
   onSendAnnotatedToChat,
   credits,
+  onSendPromptToChat,
 }: PreviewPanelProps) {
   const outOfCredits = credits !== undefined && credits <= 0;
   const [device, setDevice] = useState<DeviceSize>("desktop");
@@ -361,6 +367,9 @@ export function PreviewPanel({
     return "detecting";
   });
   const [consoleLines, setConsoleLines] = useState<{ type: string; text: string }[]>([]);
+  // Real sandbox preview (E2B). Resolves to a live URL when configured; otherwise
+  // the hook stays empty and we fall back to WebContainers / srcdoc.
+  const { previewUrl: sandboxUrl, requestPreview: requestSandboxPreview, stopPreview: stopSandboxPreview } = useSandboxPreview(projectId ?? "");
   const [vebSelected, setVebSelected] = useState<VebElement | null>(null);
   const [activeError, setActiveError] = useState<string | null>(null);
   const [errorDismissed, setErrorDismissed] = useState(false);
@@ -368,8 +377,32 @@ export function PreviewPanel({
   const [previewCompileOk, setPreviewCompileOk] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const sandpackContainerRef = useRef<HTMLDivElement>(null);
+  const unifiedIframeRef = useRef<HTMLIFrameElement | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(false);
+
+  const errorGuard = usePreviewErrorGuard({
+    iframeRef: unifiedIframeRef,
+    onHealRequest: (prompt) => {
+      onFixWithAI?.(prompt);
+    },
+  });
+
+  const handleFixWithAI = useCallback(
+    (error: string) => {
+      errorGuard.startHealing();
+      onFixWithAI?.(error);
+    },
+    [errorGuard, onFixWithAI],
+  );
+
+  useEffect(() => {
+    function onHealStart() {
+      errorGuard.startHealing();
+    }
+    window.addEventListener("lifemark-preview-heal-start", onHealStart);
+    return () => window.removeEventListener("lifemark-preview-heal-start", onHealStart);
+  }, [errorGuard]);
 
   useEffect(() => {
     if (isVisualEditActive !== undefined) setVisualEdit(isVisualEditActive);
@@ -378,6 +411,18 @@ export function PreviewPanel({
   useEffect(() => {
     if (!visualEdit) setVebSelected(null);
   }, [visualEdit]);
+
+  // Keep the WebContainer iframe's visual-edit picker in sync with the toggle.
+  // The bridge script (lib/preview/veb-bridge.ts) is injected dormant at mount
+  // and activates on this message.
+  useEffect(() => {
+    if (previewEngine !== "webcontainer") return;
+    const iframe = sandpackContainerRef.current?.querySelector("iframe");
+    iframe?.contentWindow?.postMessage({ type: "lifemark-veb-mode", enabled: visualEdit }, "*");
+    if (!visualEdit) {
+      iframe?.contentWindow?.postMessage({ type: "lifemark-veb-clear" }, "*");
+    }
+  }, [visualEdit, previewEngine]);
 
   // Pick WebContainers (Lovable-style Vite runtime) or srcdoc fallback.
   useEffect(() => {
@@ -399,9 +444,27 @@ export function PreviewPanel({
     const engine = resolvePreviewEngine(files, {
       preferWebContainers: useWebContainers,
       crossOriginIsolated: isolated,
+      sandboxUrl,
     });
     setPreviewEngine(engine);
-  }, [files, useWebContainers, projectId]);
+  }, [files, useWebContainers, projectId, sandboxUrl]);
+
+  // Attempt a real sandbox preview once files are present. Gated behind an env
+  // flag (default OFF) so there's no extra request unless E2B preview is enabled.
+  // No-ops cheaply when E2B isn't configured; when it returns a live URL, the
+  // resolver effect above switches the engine to "sandbox".
+  useEffect(() => {
+    if (process.env.NEXT_PUBLIC_ENABLE_SANDBOX_PREVIEW !== "1") return;
+    if (!projectId || files.length === 0 || sandboxUrl) return;
+    void requestSandboxPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, files.length]);
+
+  // Tear down the running sandbox when the panel unmounts (E2B bills per minute).
+  useEffect(() => {
+    return () => stopSandboxPreview();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     function handler(e: MessageEvent) {
@@ -423,6 +486,12 @@ export function PreviewPanel({
           },
         });
       }
+      // WC bridge announces readiness (initial load + HMR reloads) — push the
+      // current visual-edit mode so the picker stays in sync.
+      if (e.data?.type === "lifemark-veb-ready") {
+        const iframe = sandpackContainerRef.current?.querySelector("iframe");
+        iframe?.contentWindow?.postMessage({ type: "lifemark-veb-mode", enabled: visualEdit }, "*");
+      }
       if (e.data?.source === "lifemark-comment-pin" && commentPinMode) {
         const data = e.data as VebElement & { source: string };
         setPendingComment(data);
@@ -432,6 +501,7 @@ export function PreviewPanel({
         const { type, text } = e.data as { source: string; type: string; text: string };
         setConsoleLines((prev) => [...prev.slice(-99), { type, text }]);
         if (type === "success") {
+          errorGuard.clearErrors();
           setActiveError(null);
           setPreviewCompileFailed(false);
           setPreviewCompileOk(true);
@@ -467,7 +537,7 @@ export function PreviewPanel({
     }
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [onError, visualEdit, commentPinMode, outOfCredits]);
+  }, [onError, visualEdit, commentPinMode, outOfCredits, errorGuard]);
 
   useEffect(() => {
     if (outOfCredits) {
@@ -524,6 +594,13 @@ export function PreviewPanel({
     [files, previewEngine]
   );
   const filesSignature = useMemo(() => filesContentSignature(files), [files]);
+
+  useEffect(() => {
+    unifiedIframeRef.current =
+      previewEngine === "webcontainer"
+        ? sandpackContainerRef.current?.querySelector("iframe") ?? null
+        : iframeRef.current;
+  }, [previewEngine, refreshKey, filesSignature]);
 
   useEffect(() => {
     setPreviewCompileFailed(false);
@@ -597,6 +674,19 @@ export function PreviewPanel({
   const useFallback = previewEngine === "fallback";
 
   function refresh() {
+    if (previewEngine === "webcontainer") {
+      const iframe = sandpackContainerRef.current?.querySelector("iframe");
+      if (iframe?.contentWindow) {
+        try {
+          iframe.contentWindow.location.reload();
+          setConsoleLines([]);
+          setVebSelected(null);
+          return;
+        } catch {
+          /* cross-origin — fall through to remount */
+        }
+      }
+    }
     setRefreshKey((k) => k + 1);
     setConsoleLines([]);
     setVebSelected(null);
@@ -899,23 +989,71 @@ export function PreviewPanel({
               <p className="text-xs text-muted-foreground/40">Loading preview…</p>
             </div>
           </div>
+        ) : previewEngine === "sandbox" && sandboxUrl ? (
+          /* Real sandbox (E2B) — live dev server running server-side */
+          <div className={`flex flex-col flex-1 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}>
+            {withDeviceFrame(
+              <iframe
+                key={`sandbox-${refreshKey}`}
+                src={sandboxUrl}
+                className="w-full h-full border-0"
+                title="Live sandbox preview"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+              />
+            )}
+          </div>
         ) : previewEngine === "webcontainer" ? (
-          <div className="flex flex-col flex-1 overflow-hidden relative" ref={sandpackContainerRef}>
-            <WebContainerPreview
-              key={refreshKey}
-              files={files}
-              embedded
-              onError={() => {
-                if (typeof window !== "undefined") {
-                  sessionStorage.setItem(WC_UNAVAILABLE_KEY, "1");
-                }
-                setPreviewEngine("fallback");
-              }}
-            />
+          <div
+            className={`flex flex-col flex-1 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}
+            ref={sandpackContainerRef}
+          >
+            {withDeviceFrame(
+              <WebContainerPreview
+                key={refreshKey}
+                files={files}
+                embedded
+                onError={(msg) => {
+                  if (typeof window !== "undefined") {
+                    sessionStorage.setItem(WC_UNAVAILABLE_KEY, "1");
+                  }
+                  queueMicrotask(() => {
+                    toast({
+                      title: "WebContainer preview unavailable",
+                      description: msg,
+                      variant: "destructive",
+                    });
+                    setPreviewEngine("fallback");
+                  });
+                }}
+              />
+            )}
+
+            {/* Visual edits — cross-origin engine, driven via postMessage bridge */}
+            {visualEdit && vebSelected && (
+              <VebBridgePopover
+                selection={vebSelected}
+                files={files}
+                onFileChange={handleVebFileChange}
+                onLiveApply={(payload) => {
+                  const iframe = sandpackContainerRef.current?.querySelector("iframe");
+                  iframe?.contentWindow?.postMessage({ type: "lifemark-veb-apply", ...payload }, "*");
+                }}
+                onRequestAiEdit={onSendPromptToChat}
+                onClose={() => {
+                  setVebSelected(null);
+                  const iframe = sandpackContainerRef.current?.querySelector("iframe");
+                  iframe?.contentWindow?.postMessage({ type: "lifemark-veb-clear" }, "*");
+                }}
+                onSelectionChange={setVebSelected}
+              />
+            )}
           </div>
         ) : (
           /* Fallback: Babel + CDN iframe — still renders at 0 credits (errors suppressed below) */
-          <div ref={previewContainerRef} className="flex flex-col flex-1 overflow-hidden relative">
+          <div
+            ref={previewContainerRef}
+            className={`flex flex-col flex-1 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}
+          >
             <div className="flex-1 overflow-hidden flex flex-col bg-background">
               {withDeviceFrame(
                 showDeployedPreview ? (
@@ -952,6 +1090,7 @@ export function PreviewPanel({
               files={files}
               onFileChange={handleVebFileChange}
               enabled={visualEdit}
+              onRequestAiEdit={onSendPromptToChat}
             />
 
             {/* Preview Annotations overlay */}
@@ -1036,6 +1175,13 @@ export function PreviewPanel({
           )}
         </AnimatePresence>
 
+        <PreviewHealingOverlay
+          phase={errorGuard.phase}
+          report={errorGuard.report}
+          onRetry={() => errorGuard.startHealing()}
+          onDismiss={() => errorGuard.clearErrors()}
+        />
+
         {showDeployedPreview && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/15 border border-violet-500/25 text-[10px] text-violet-300">
             <Globe className="w-3 h-3" />
@@ -1045,7 +1191,7 @@ export function PreviewPanel({
 
         {/* Fix-with-AI error banner */}
         <AnimatePresence>
-          {activeError && !errorDismissed && !outOfCredits && (
+          {activeError && !errorDismissed && !outOfCredits && !errorGuard.freezePreview && (
             <motion.div
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
@@ -1059,7 +1205,7 @@ export function PreviewPanel({
               </span>
               {onFixWithAI && (
                 <button
-                  onClick={() => { onFixWithAI(activeError); setErrorDismissed(true); }}
+                  onClick={() => { handleFixWithAI(activeError); setErrorDismissed(true); }}
                   className="flex items-center gap-1 shrink-0 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-200 px-2 py-1 rounded-lg transition-colors"
                 >
                   <Wrench className="w-3 h-3" />

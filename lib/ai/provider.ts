@@ -3,12 +3,17 @@ import Anthropic from "@anthropic-ai/sdk";
 import { getDefaultAiModel, useOpenRouterForAll, resolveOpenRouterModelId } from "./model-defaults";
 
 export type AIModel =
+  | "gpt-5.2"
   | "gpt-4o"
   | "gpt-4o-mini"
   | "moonshotai/kimi-k2-instruct-0905"
+  | "claude-opus-4-8"
   | "claude-opus-4-6"
   | "claude-sonnet-4-6"
   | "claude-haiku-4-5-20251001"
+  | "gemini-3.1-pro"
+  | "gemini-3-flash-preview"
+  | "gemini-3.1-flash-lite"
   | "gemini-2.0-flash"
   | "gemini-2.0-flash-lite"
   | "gemini-1.5-pro"
@@ -139,8 +144,62 @@ function isFallbackableError(err: unknown): boolean {
   return /quota|rate limit|insufficient_quota|exceeded|429|missing api key/i.test(msg);
 }
 
+/**
+ * A known-good OpenRouter slug to fall back to when a configured/selected model
+ * ID is rejected. Env-overridable. gpt-4o is broadly available and cheap.
+ */
+const OPENROUTER_SAFE_MODEL: string =
+  process.env.OPENROUTER_SAFE_FALLBACK_MODEL || "openai/gpt-4o";
+
+/**
+ * True when OpenRouter rejected the request because the model slug itself is
+ * bad (e.g. "xxx is not a valid model ID", a stale/renamed slug, or a bare
+ * native id sent without a provider prefix). This is a request-shape bug, NOT a
+ * quota/auth issue — so the right recovery is to retry with a different,
+ * known-good model rather than the same one.
+ */
+function isInvalidModelError(err: unknown): boolean {
+  const status = (err as { status?: number; response?: { status?: number } }).status
+    ?? (err as { response?: { status?: number } }).response?.status;
+  const msg = (err as { message?: string }).message ?? "";
+  if (/not a valid model|no such model|model_not_found|invalid model|unknown model|is not a valid model id|no endpoints found/i.test(msg)) {
+    return true;
+  }
+  // 400/404 that mention the model or endpoints is almost always a bad/retired slug.
+  return (status === 400 || status === 404) && /\b(model|endpoints)\b/i.test(msg);
+}
+
+/**
+ * Call OpenRouter, but if the slug is rejected as invalid, retry ONCE with a
+ * known-good model so a stale or mistyped model ID degrades instead of
+ * hard-failing a build/chat. (Reliability-at-scale: model slugs drift as
+ * OpenRouter renames/retires them; a generation must never die on that.)
+ */
+async function generateOpenRouterSafe(
+  options: GenerateOptions,
+  model: string,
+): Promise<GenerateResult> {
+  try {
+    return await generateOpenRouter({ ...options, model: model as AIModel });
+  } catch (err) {
+    if (isInvalidModelError(err) && model !== OPENROUTER_SAFE_MODEL) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[ai/provider] OpenRouter rejected "${model}" as an invalid model; ` +
+          `retrying with ${OPENROUTER_SAFE_MODEL}.`,
+      );
+      return generateOpenRouter({ ...options, model: OPENROUTER_SAFE_MODEL as AIModel });
+    }
+    throw err;
+  }
+}
+
 export async function generateAI(options: GenerateOptions): Promise<GenerateResult> {
   const model = options.model ?? getDefaultAiModel();
+
+  // Clamp the requested output budget to what this model supports, so a 64K
+  // request degrades safely (e.g. to 16K) if the slug falls back to gpt-4o.
+  options = { ...options, maxTokens: clampMaxTokens(model, options.maxTokens) };
 
   if (useOpenRouterForAll()) {
     if (!process.env.OPENROUTER_API_KEY) {
@@ -149,7 +208,7 @@ export async function generateAI(options: GenerateOptions): Promise<GenerateResu
       );
     }
     const orModel = resolveOpenRouterModelId(model);
-    return generateOpenRouter({ ...options, model: orModel });
+    return generateOpenRouterSafe(options, orModel);
   }
 
   const provider = getProvider(model);
@@ -166,7 +225,7 @@ export async function generateAI(options: GenerateOptions): Promise<GenerateResu
       const orModel = normalizeOpenRouterModel(
         model.includes("/") ? model : (toOpenRouterModel(model) ?? model),
       );
-      return await generateOpenRouter({ ...options, model: orModel as AIModel });
+      return await generateOpenRouterSafe(options, orModel);
     } else if (provider === "google") {
       return await generateGoogle({ ...options, model });
     } else {
@@ -186,7 +245,23 @@ export async function generateAI(options: GenerateOptions): Promise<GenerateResu
         `[ai/provider] ${provider} returned ${(err as { status?: number }).status ?? "error"} for "${model}"; ` +
           `falling back to OpenRouter (${orModel}).`,
       );
-      return generateOpenRouter({ ...options, model: orModel as AIModel });
+      return generateOpenRouterSafe(options, orModel);
+    }
+
+    // Second-tier fallback: smart routing may pick a Gemini/GPT model on a
+    // workspace that only has an Anthropic key (and no OpenRouter). Rather
+    // than failing the request, degrade to the balanced Claude model.
+    if (
+      provider !== "anthropic" &&
+      !model.startsWith("claude-") &&
+      process.env.ANTHROPIC_API_KEY &&
+      isFallbackableError(err)
+    ) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[ai/provider] ${provider} unavailable for "${model}"; degrading to Claude (claude-sonnet-4-6).`,
+      );
+      return generateAnthropic({ ...options, model: "claude-sonnet-4-6" });
     }
     throw err;
   }
@@ -241,6 +316,33 @@ function createOpenAIClient(model: AIModel) {
   });
 }
 
+/** GPT-5-family models reject `max_tokens` on chat completions — they take `max_completion_tokens`. */
+function openAiTokenArg(model: string, n: number): Record<string, number> {
+  return model.startsWith("gpt-5") ? { max_completion_tokens: n } : { max_tokens: n };
+}
+
+/**
+ * Maximum output tokens a model can return. Requesting more than the model
+ * supports makes some providers (OpenAI) hard-error, so we clamp the requested
+ * value down to the model's ceiling. Lets us ask for 64K on Claude/Gemini for
+ * complete-app builds while staying safe when the slug falls back to gpt-4o.
+ */
+function maxOutputFor(model: string): number {
+  const m = model.toLowerCase();
+  if (m.includes("claude")) return 64000; // Claude Opus/Sonnet 4.x: 64K output
+  if (m.includes("gpt-5")) return 64000;
+  if (m.includes("gemini")) return 64000; // Gemini 3.x flash/pro: 64K output
+  if (m.includes("gpt-4o")) return 16384; // 4o / 4o-mini cap
+  if (m.includes("deepseek")) return 32000;
+  return 16384; // conservative default for unknown / open-weight models
+}
+
+/** Clamp a requested output-token count to what the model actually supports. */
+export function clampMaxTokens(model: string, requested?: number): number | undefined {
+  if (requested == null) return requested;
+  return Math.min(requested, maxOutputFor(model));
+}
+
 async function generateOpenAI(options: GenerateOptions & { model: AIModel }): Promise<GenerateResult> {
   const openai = createOpenAIClient(options.model);
 
@@ -258,7 +360,7 @@ async function generateOpenAI(options: GenerateOptions & { model: AIModel }): Pr
     const response = await openai.chat.completions.create({
       model: options.model,
       messages: options.messages,
-      max_tokens: options.maxTokens ?? 4000,
+      ...openAiTokenArg(options.model, options.maxTokens ?? 4000),
       temperature: options.temperature ?? 0.3,
       tools: oaiTools,
       tool_choice: "auto",
@@ -287,7 +389,7 @@ async function generateOpenAI(options: GenerateOptions & { model: AIModel }): Pr
     const stream = await openai.chat.completions.create({
       model: options.model,
       messages: options.messages,
-      max_tokens: options.maxTokens ?? 8000,
+      ...openAiTokenArg(options.model, options.maxTokens ?? 8000),
       temperature: options.temperature ?? 0.7,
       stream: true,
       ...(options.jsonMode ? { response_format: { type: "json_object" as const } } : {}),
@@ -319,7 +421,7 @@ async function generateOpenAI(options: GenerateOptions & { model: AIModel }): Pr
   const response = await openai.chat.completions.create({
     model: options.model,
     messages: options.messages,
-    max_tokens: options.maxTokens ?? 8000,
+    ...openAiTokenArg(options.model, options.maxTokens ?? 8000),
     temperature: options.temperature ?? 0.7,
     ...(options.jsonMode ? { response_format: { type: "json_object" as const } } : {}),
   });
@@ -348,7 +450,7 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
     const response = await openrouter.chat.completions.create({
       model,
       messages: options.messages,
-      max_tokens: options.maxTokens ?? 4000,
+      ...openAiTokenArg(options.model, options.maxTokens ?? 4000),
       temperature: options.temperature ?? 0.3,
       tools: oaiTools,
       tool_choice: "auto",
@@ -376,7 +478,7 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
     const stream = await openrouter.chat.completions.create({
       model: model,
       messages: options.messages,
-      max_tokens: options.maxTokens ?? 8000,
+      ...openAiTokenArg(options.model, options.maxTokens ?? 8000),
       temperature: options.temperature ?? 0.7,
       stream: true,
       // OpenRouter forwards response_format to the underlying provider.
@@ -601,6 +703,7 @@ async function generateAnthropic(options: GenerateOptions & { model: AIModel }):
         inputTokens = event.message.usage.input_tokens;
       }
     }
+
 
     return { content: fullContent, tokensUsed: inputTokens + outputTokens, model: options.model };
   }

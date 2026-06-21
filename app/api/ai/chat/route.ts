@@ -15,16 +15,22 @@ import {
   buildProjectContext,
   buildRepairPrompt,
 } from "@/lib/ai/system-prompts";
+import { buildTemplateRefinementBlock } from "@/lib/ai/template-refine";
+import { buildDesignDirectionBlock } from "@/lib/ai/design-directions";
 import { applyPatches, parsePatchResponse } from "@/lib/ai/patch-applier";
-import { parseAIResponse, validateGeneratedFiles, shouldAutoFix, type ParsedFile } from "@/lib/ai/code-parser";
+import { parseAIResponse, validateGeneratedFiles, assessGenerationQuality, shouldAutoFix, needsBuildContinuation, type ParsedFile } from "@/lib/ai/code-parser";
 import { StreamingFileExtractor } from "@/lib/ai/streaming-file-extractor";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { validateApiKey } from "@/app/api/keys/route";
 import { logger } from "@/lib/logger";
 import { getProjectSchemaContext } from "@/lib/supabase/schema-reader";
-import { matchSkills, renderSkillBlock, type SkillCandidate, type SkillMatch } from "@/lib/ai/skill-matcher";
+import { attachSkillsToPrompt } from "@/lib/ai/attach-skills";
+import type { SkillMatch } from "@/lib/ai/skill-matcher";
 import { shouldUseSubagents, runSubagentInvestigation, type SubagentStep } from "@/lib/ai/subagents";
 import { computeCreditCost } from "@/lib/ai/credit-cost";
+import { claimDailyCredits } from "@/lib/credits";
+import { autoWireBackend, type AutoWireResult } from "@/lib/cloud/auto-wire";
+import { runSelfVerification, type SelfVerifyResult } from "@/lib/ai/self-verify";
 import { buildCompletedBuildActivity } from "@/lib/ai/build-activity";
 import {
   parseCloudToolPermissions,
@@ -36,7 +42,61 @@ import { buildMcpContextBlock } from "@/lib/ai/mcp-context";
 import { ENV_FILE_PATH, parseEnvFile } from "@/lib/project/env-file";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// Generation + backend wiring + self-verification can exceed a minute on
+// complex builds (Lovable budgets 15 min for agent runs).
+export const maxDuration = 300;
+
+// Output token budget for full-app builds. 8000 was too small for multi-file
+// generations — the response was cut off mid-JSON and later files (e.g. App.tsx)
+// were silently dropped, leaving a placeholder app. Env-overridable.
+// Defaults to the prior 32K for zero behavior change; set BUILD_MAX_TOKENS=64000
+// to generate complete apps in one pass on Claude/Gemini. provider.ts clamps the
+// value down per-model (e.g. to 16K) if the slug falls back to gpt-4o, so raising
+// it is always safe.
+const BUILD_MAX_TOKENS = Number(process.env.BUILD_MAX_TOKENS) || 32000;
+const CHAT_MAX_TOKENS = Number(process.env.CHAT_MAX_TOKENS) || 4096;
+// If the model still hits the cap mid-JSON, ask it to continue this many times
+// before giving up — guarantees we don't ship a half-generated build.
+const BUILD_CONTINUATION_ROUNDS = Number(process.env.BUILD_CONTINUATION_ROUNDS) || 3;
+
+/** Safe SSE enqueue/close — avoids "Controller is already closed" when the client disconnects mid-build. */
+function createStreamSink(
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  encoder: TextEncoder,
+  signal: AbortSignal,
+  onDisconnect?: () => void,
+) {
+  let clientDisconnected = signal.aborted;
+  const onAbort = () => {
+    clientDisconnected = true;
+    onDisconnect?.();
+  };
+  signal.addEventListener("abort", onAbort);
+
+  const safeEnqueue = (chunk: Uint8Array): boolean => {
+    if (clientDisconnected) return false;
+    try {
+      controller.enqueue(chunk);
+      return true;
+    } catch {
+      clientDisconnected = true;
+      return false;
+    }
+  };
+
+  const safeClose = () => {
+    signal.removeEventListener("abort", onAbort);
+    if (clientDisconnected) return;
+    try {
+      controller.close();
+    } catch {
+      /* already closed */
+    }
+    clientDisconnected = true;
+  };
+
+  return { safeEnqueue, safeClose, isClientGone: () => clientDisconnected };
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -81,6 +141,8 @@ export async function POST(req: NextRequest) {
       imageBase64,
       clarifyFirst = false,
       framework = "web",
+      // Optional: starter template to refine from (Horizons-style design baseline)
+      templateId,
       // Optional: project-level Supabase overrides for schema reading
       projectSupabaseUrl,
       projectServiceKey,
@@ -102,6 +164,7 @@ export async function POST(req: NextRequest) {
 
     // Check credits (dev: auto-grant if empty so local builds are testable)
     await ensureDevCredits(userId);
+    await claimDailyCredits(supabase, userId);
 
     let profile = (
       await (supabase as any)
@@ -130,12 +193,41 @@ export async function POST(req: NextRequest) {
 
     // Fetch project knowledge + recent messages + DB schema in parallel
     const [projectRes, recentMessagesRes, schemaContext] = await Promise.all([
-      (supabase as any).from("projects").select("knowledge, name, metadata, disabled_skill_ids, cloud_enabled, github_repo").eq("id", projectId).single(),
+      // select("*") — NOT an explicit column list: cloud_* columns arrive with
+      // migration 064 and an explicit list would make this query fail (and
+      // degrade chat) on databases that haven't run it yet.
+      (supabase as any).from("projects").select("*").eq("id", projectId).single(),
       (supabase as any).from("messages").select("role, content, mode, metadata").eq("project_id", projectId)
         .order("created_at", { ascending: false }).limit(40),
       // Schema reading is best-effort — never blocks the response
       getProjectSchemaContext(projectSupabaseUrl, projectServiceKey).catch(() => ""),
     ]);
+
+    // Cloud-managed backend (migration 064): when the project has a dedicated
+    // Supabase backend and the client didn't supply integration credentials,
+    // read the schema context from the managed backend server-side.
+    let cloudSchemaContext = schemaContext;
+    const cloudCreds = projectRes.data as { cloud_supabase_url?: string | null; cloud_service_key?: string | null } | null;
+    if (!cloudSchemaContext && cloudCreds?.cloud_supabase_url && cloudCreds?.cloud_service_key) {
+      cloudSchemaContext = await getProjectSchemaContext(
+        cloudCreds.cloud_supabase_url,
+        cloudCreds.cloud_service_key
+      ).catch(() => "");
+    }
+
+    // Test/Live environments (migration 046): when the project is Live, block
+    // code-writing modes so production isn't changed accidentally (Lovable
+    // behaviour). Read-only chat/plan conversations stay allowed.
+    const projectEnvironment = (projectRes.data as { environment?: string } | null)?.environment;
+    if (projectEnvironment === "live" && mode !== "chat" && mode !== "plan") {
+      return NextResponse.json(
+        {
+          error: "This project is in the Live environment. Switch to Test to make changes, then publish them to Live.",
+          environment_locked: true,
+        },
+        { status: 423 }
+      );
+    }
 
     type MessageRow = { role: string; content: string; mode?: string; metadata?: Record<string, unknown> | null };
     const rawHistory = ((recentMessagesRes.data ?? []) as MessageRow[]).reverse();
@@ -183,7 +275,7 @@ export async function POST(req: NextRequest) {
       : "";
 
     // Compact schema block — injected into all modes when available
-    const schemaBlock = schemaContext ? `\n\n---\n${schemaContext}\n---` : "";
+    const schemaBlock = cloudSchemaContext ? `\n\n---\n${cloudSchemaContext}\n---` : "";
 
     const cloudPermissions = parseCloudToolPermissions(cloudPermissionsRaw);
     const cloudEnabled = !!projectData?.cloud_enabled;
@@ -195,15 +287,20 @@ export async function POST(req: NextRequest) {
       const blockEncoder = new TextEncoder();
       const blockStream = new ReadableStream({
         async start(controller) {
-          controller.enqueue(
+          const { safeEnqueue: blockEnqueue, safeClose: blockClose } = createStreamSink(
+            controller,
+            blockEncoder,
+            req.signal,
+          );
+          blockEnqueue(
             blockEncoder.encode(`data: ${JSON.stringify({ chunk: blockText })}\n\n`),
           );
-          controller.enqueue(
+          blockEnqueue(
             blockEncoder.encode(
               `data: ${JSON.stringify({ done: true, tokensUsed: 0, creditsUsed: 0, cloud_blocked: true, tool: cloudBlockCheck.tool })}\n\n`,
             ),
           );
-          controller.close();
+          blockClose();
         },
       });
       await (supabase as any).from("messages").insert([
@@ -229,6 +326,15 @@ export async function POST(req: NextRequest) {
       } else {
         systemPrompt = buildGenerationPrompt(message, files) + suffix;
       }
+      // Anchor to a designer template baseline when one was chosen; otherwise
+      // pick a distinct, polished design direction from the prompt so each build
+      // looks intentional and different (avoids the "every app looks the same" issue).
+      // Only on the FIRST build (no existing files) so iterations stay consistent.
+      if (templateId) {
+        systemPrompt += buildTemplateRefinementBlock(templateId);
+      } else if (files.length === 0) {
+        systemPrompt += buildDesignDirectionBlock(message);
+      }
     } else if (mode === "patch") {
       // Patch mode: inject full codebase (40k budget) so AI can write precise find strings
       systemPrompt = PATCH_SYSTEM_PROMPT + workspaceKnowledgeBlock + knowledgeBlock;
@@ -251,6 +357,18 @@ export async function POST(req: NextRequest) {
 
     systemPrompt += cloudPermissionsBlock;
 
+    // Connected backend — teach the AI to use the wired Supabase backend
+    // instead of inventing its own setup (Lovable Cloud parity).
+    const backendCreds = projectRes.data as {
+      cloud_enabled?: boolean;
+      cloud_supabase_url?: string | null;
+      cloud_anon_key?: string | null;
+    } | null;
+    if (backendCreds?.cloud_enabled) {
+      const credsReady = !!(backendCreds.cloud_supabase_url && backendCreds.cloud_anon_key);
+      systemPrompt += `\n\n---\n# Connected Backend (Lifemark Cloud)\nThis project has a managed Supabase backend${credsReady ? ` at ${backendCreds.cloud_supabase_url}` : " (still provisioning — credentials connect automatically)"}.\nRules:\n- Use the shared client: \`import { supabase } from "./lib/supabase"\` (src/lib/supabase.ts — auto-scaffolded; never create another client or hardcode keys).\n- Credentials live in .env.local as VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY — already configured, do not ask the user for them.\n- Auth: use supabase.auth (signUp, signInWithPassword, signOut, onAuthStateChange).\n- Database schema changes: write SQL files at supabase/migrations/NNN_description.sql — they are applied to the backend automatically after the build.\n- Always enable RLS on new tables and add owner-scoped policies.\n---`;
+    }
+
     // MCP context — inject catalogue blocks when matching keys exist in .env.local
     let envFileContent =
       (files as Array<{ path: string; content: string }>).find(
@@ -269,6 +387,21 @@ export async function POST(req: NextRequest) {
       const envKeys = Object.keys(parseEnvFile(envFileContent));
       const mcpBlock = buildMcpContextBlock(envKeys);
       if (mcpBlock) systemPrompt += mcpBlock;
+
+      // Connector gateway — when connector credentials are configured, teach
+      // the AI to route third-party API calls through the gateway so secrets
+      // never reach client code (Lovable-parity connector gateway).
+      const CONNECTOR_ENV_KEYS: Record<string, string> = {
+        SLACK_BOT_TOKEN: "slack", RESEND_API_KEY: "resend", NOTION_API_KEY: "notion",
+        HUBSPOT_ACCESS_TOKEN: "hubspot", LINEAR_API_KEY: "linear", ASANA_ACCESS_TOKEN: "asana",
+        ELEVENLABS_API_KEY: "elevenlabs", FIRECRAWL_API_KEY: "firecrawl", PERPLEXITY_API_KEY: "perplexity",
+        AIRTABLE_API_KEY: "airtable", TWILIO_ACCOUNT_SID: "twilio", MAILGUN_API_KEY: "mailgun",
+        TELEGRAM_BOT_TOKEN: "telegram", STRIPE_SECRET_KEY: "stripe",
+      };
+      const configuredConnectors = [...new Set(envKeys.map((k) => CONNECTOR_ENV_KEYS[k]).filter(Boolean))];
+      if (configuredConnectors.length > 0) {
+        systemPrompt += `\n\n---\n# Connector Gateway\nConnectors configured for this project: ${configuredConnectors.join(", ")}.\nWhen the app calls these third-party APIs, NEVER put API keys in client code. Route calls through the gateway instead:\n  POST ${process.env.NEXT_PUBLIC_APP_URL ?? ""}/api/projects/${projectId}/connector-proxy\n  body: { "connector": "${configuredConnectors[0]}", "path": "/<api-path>", "method": "POST", "body": { ... } }\nThe gateway injects credentials server-side and forwards to the connector's official API host.\n---`;
+      }
     }
 
     // ── Design Systems: inject .lovable/system.md + rules from connected DS ───
@@ -322,39 +455,14 @@ export async function POST(req: NextRequest) {
     // not a requirement.
     let attachedSkills: SkillMatch[] = [];
     try {
-      const { data: skillRows } = await (supabase as any)
-        .from("workspace_skills")
-        .select("id, name, description, prompt, tags, use_count")
-        .eq("user_id", userId)
-        .limit(100);
-      // Honor per-project skill opt-outs (migration 055). NULL/[] means none disabled.
-      const disabledIds = new Set<string>(
+      const { block, matches } = await attachSkillsToPrompt(
+        supabase,
+        userId,
+        message,
         Array.isArray(projectData?.disabled_skill_ids) ? projectData!.disabled_skill_ids! : [],
       );
-      const candidates: SkillCandidate[] = (skillRows ?? [])
-        .filter((r: any) => !disabledIds.has(r.id))
-        .map((r: any) => ({
-          id: r.id,
-          name: r.name,
-          description: r.description,
-          prompt: r.prompt,
-          tags: r.tags,
-        }));
-      attachedSkills = matchSkills(message, candidates, { topN: 2 });
-      if (attachedSkills.length > 0) {
-        systemPrompt += renderSkillBlock(attachedSkills);
-        // Bump use_count for telemetry, fire-and-forget. We do this per-row
-        // (rather than via a single bulk SQL increment) because Supabase JS
-        // doesn't support `use_count = use_count + 1` natively without an RPC,
-        // and the per-row update path is fast enough at our scale (<= 2 rows).
-        for (const m of attachedSkills) {
-          void (supabase as any)
-            .from("workspace_skills")
-            .update({ use_count: ((skillRows ?? []).find((r: any) => r.id === m.skill.id)?.use_count ?? 0) + 1 })
-            .eq("id", m.skill.id)
-            .then(() => null, () => null);
-        }
-      }
+      attachedSkills = matches;
+      if (block) systemPrompt += block;
     } catch {
       // Non-fatal
     }
@@ -454,6 +562,11 @@ The user has expressed frustration. Do the following:
       const clarifyEncoder = new TextEncoder();
       const clarifyStream = new ReadableStream({
         async start(controller) {
+          const { safeEnqueue: clarifyEnqueue, safeClose: clarifyClose } = createStreamSink(
+            controller,
+            clarifyEncoder,
+            req.signal,
+          );
           try {
             let questionsJson = "";
             await generateAI({
@@ -473,13 +586,13 @@ The user has expressed frustration. Do the following:
             if (!Array.isArray(questions)) questions = [];
 
             const qPayload = JSON.stringify({ clarifying_questions: questions, originalPrompt: message });
-            controller.enqueue(clarifyEncoder.encode("data: " + qPayload + "\n\n"));
-            controller.enqueue(clarifyEncoder.encode("data: {}\n\n"));
+            clarifyEnqueue(clarifyEncoder.encode("data: " + qPayload + "\n\n"));
+            clarifyEnqueue(clarifyEncoder.encode("data: {}\n\n"));
           } catch {
             const errPayload = JSON.stringify({ error: "Failed to generate clarifying questions" });
-            controller.enqueue(clarifyEncoder.encode("data: " + errPayload + "\n\n"));
+            clarifyEnqueue(clarifyEncoder.encode("data: " + errPayload + "\n\n"));
           } finally {
-            controller.close();
+            clarifyClose();
           }
         },
       });
@@ -493,13 +606,14 @@ The user has expressed frustration. Do the following:
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
+        const { safeEnqueue, safeClose, isClientGone } = createStreamSink(controller, encoder, req.signal);
         let fullContent = "";
         let tokensUsed = 0;
         let usedAutoFix = false;
         const streamedFilePaths = new Set<string>();
 
         for (const step of subagentSteps) {
-          controller.enqueue(
+          safeEnqueue(
             encoder.encode(`data: ${JSON.stringify({ subagent: step })}\n\n`),
           );
         }
@@ -508,13 +622,13 @@ The user has expressed frustration. Do the following:
         // begins, so the chat panel can render a "using skill: X" chip on the
         // pending assistant message.
         if (mode === "build" && buildIntent) {
-          controller.enqueue(
+          safeEnqueue(
             encoder.encode(`data: ${JSON.stringify({ build_intent: buildIntent })}\n\n`),
           );
         }
 
         if (attachedSkills.length > 0) {
-          controller.enqueue(
+          safeEnqueue(
             encoder.encode(
               `data: ${JSON.stringify({
                 skills_attached: attachedSkills.map((m) => ({
@@ -542,7 +656,7 @@ The user has expressed frustration. Do the following:
                 language: file.language,
               }, { onConflict: "project_id,path" });
               // Notify client that a file is available early
-              controller.enqueue(
+              safeEnqueue(
                 encoder.encode(`data: ${JSON.stringify({ streamedFile: file.path })}\n\n`)
               );
             })
@@ -552,20 +666,67 @@ The user has expressed frustration. Do the following:
           const result = await generateAI({
             model: model ?? getDefaultAiModel(),
             messages,
-            maxTokens: 8000,
+            maxTokens: mode === "build" ? BUILD_MAX_TOKENS : CHAT_MAX_TOKENS,
             stream: true,
             // Force structured JSON output in build mode so parseAIResponse
             // reliably gets a complete JSON object rather than prose + code fence.
             jsonMode: mode === "build",
             onChunk: (chunk) => {
               fullContent += chunk;
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
+              safeEnqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
               // Feed chunk into incremental file extractor (build mode only)
               fileExtractor?.feed(chunk);
             },
           });
 
           tokensUsed = result.tokensUsed;
+
+          // ── Continuation: never ship a truncated build ───────────────────
+          // If the model hit the token cap mid-JSON, the response is incomplete
+          // and later files would be lost. Ask it to continue from where it
+          // stopped and append, until the JSON parses cleanly (or we run out of
+          // rounds). This is what makes a 10-file app reliably complete.
+          if (mode === "build") {
+            let contRounds = 0;
+            while (
+              needsBuildContinuation(fullContent) &&
+              contRounds < BUILD_CONTINUATION_ROUNDS
+            ) {
+              contRounds++;
+              safeEnqueue(
+                encoder.encode(`data: ${JSON.stringify({ status: "continuing", message: `Response was long — continuing generation (${contRounds}/${BUILD_CONTINUATION_ROUNDS})…` })}\n\n`)
+              );
+              let contChunk = "";
+              try {
+                await generateAI({
+                  model: model ?? getDefaultAiModel(),
+                  messages: [
+                    ...messages,
+                    { role: "assistant" as const, content: fullContent },
+                    {
+                      role: "user" as const,
+                      content:
+                        "Your previous JSON response was cut off before it finished. Continue from EXACTLY where it stopped and output ONLY the remaining raw characters needed to complete the JSON object. Do not repeat any earlier content, do not restart, no code fences, no commentary.",
+                    },
+                  ],
+                  maxTokens: BUILD_MAX_TOKENS,
+                  stream: true,
+                  jsonMode: false, // raw continuation of the existing object, not a new one
+                  onChunk: (chunk) => {
+                    fullContent += chunk;
+                    contChunk += chunk;
+                    safeEnqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
+                    fileExtractor?.feed(chunk);
+                  },
+                });
+              } catch (contErr) {
+                logger.warn("ai.chat.continuation_failed", { projectId, error: String(contErr) });
+                break;
+              }
+              if (!contChunk.trim()) break; // model produced nothing more
+              tokensUsed += 1000; // rough estimate for the continuation pass
+            }
+          }
 
           // ── Patch mode: apply find-and-replace patches ────────────────────
           let parsedFiles: ParsedFile[] = [];
@@ -585,7 +746,7 @@ The user has expressed frustration. Do the following:
                   project_id: projectId, path: pr.path, content: pr.content, language: langMap[lang] ?? lang,
                 }, { onConflict: "project_id,path" });
               }
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ status: "patches_applied", count: patchResults.filter((r) => r.applied).length })}\n\n`));
+              safeEnqueue(encoder.encode(`data: ${JSON.stringify({ status: "patches_applied", count: patchResults.filter((r) => r.applied).length })}\n\n`));
             }
           } else if (mode === "build") {
             const parsed = parseAIResponse(fullContent);
@@ -594,12 +755,20 @@ The user has expressed frustration. Do the following:
             // ── Validation pass ───────────────────────────────────────────
             if (finalFiles.length > 0) {
               const existingFiles = (files as ParsedFile[]) ?? [];
-              const validationErrors = validateGeneratedFiles(finalFiles, existingFiles);
+              // Correctness errors (broken imports, missing config) + type-agnostic
+              // RICHNESS errors (too thin / sparse) — both feed the auto-fix loop,
+              // so a structurally-valid-but-empty app gets enriched, not shipped.
+              const correctnessErrors = validateGeneratedFiles(finalFiles, existingFiles);
+              const richnessErrors = assessGenerationQuality(finalFiles, existingFiles, {
+                minFiles: buildIntent?.minFiles,
+              });
+              const validationErrors = [...correctnessErrors, ...richnessErrors];
+              const needsEnrichment = richnessErrors.length > 0;
 
               if (shouldAutoFix(validationErrors) && validationErrors.length > 0) {
                 usedAutoFix = true;
                 // ── Auto-fix pass — send errors back to AI ────────────────
-                controller.enqueue(
+                safeEnqueue(
                   encoder.encode(`data: ${JSON.stringify({ status: "fixing", message: `Auto-fixing ${validationErrors.length} issue(s)…` })}\n\n`)
                 );
 
@@ -610,15 +779,27 @@ The user has expressed frustration. Do the following:
                 });
 
                 try {
-                  const repairPrompt = buildRepairPrompt(finalFiles, validationErrors.map((e) => e.message));
+                  const repairPrompt = buildRepairPrompt(
+                    finalFiles,
+                    validationErrors.map((e) => e.message),
+                    needsEnrichment ? buildIntent?.blueprint : undefined,
+                  );
                   let repairContent = "";
                   await generateAI({
                     model: model ?? getDefaultAiModel(),
                     messages: [
-                      { role: "system" as const, content: AUTO_FIX_SYSTEM_PROMPT },
+                      {
+                        role: "system" as const,
+                        // Enrichment carries its own full build instructions in the
+                        // user message; the "fix only" AutoFix system prompt would
+                        // fight it, so use a neutral system prompt when enriching.
+                        content: needsEnrichment
+                          ? "You are LifemarkAI Build Engine. Follow the user message exactly and respond with ONLY the required JSON object."
+                          : AUTO_FIX_SYSTEM_PROMPT,
+                      },
                       { role: "user" as const, content: repairPrompt },
                     ],
-                    maxTokens: 8000,
+                    maxTokens: BUILD_MAX_TOKENS,
                     stream: true,
                     jsonMode: true,
                     onChunk: (chunk) => { repairContent += chunk; },
@@ -650,7 +831,7 @@ The user has expressed frustration. Do the following:
               // (common with weaker models that answer in prose + code fences).
               // Retry once with an explicit format demand; if that also fails,
               // tell the user instead of silently doing nothing.
-              controller.enqueue(
+              safeEnqueue(
                 encoder.encode(`data: ${JSON.stringify({ status: "fixing", message: "Model returned prose instead of files — requesting proper file output…" })}\n\n`)
               );
               logger.warn("ai.chat.no_files_parsed", { projectId, model: model ?? process.env.DEFAULT_AI_MODEL });
@@ -669,7 +850,7 @@ The user has expressed frustration. Do the following:
                         "no explanations, no installation steps, no markdown fences.",
                     },
                   ],
-                  maxTokens: 8000,
+                  maxTokens: BUILD_MAX_TOKENS,
                   stream: true,
                   jsonMode: true,
                   onChunk: (chunk) => { retryContent += chunk; },
@@ -680,13 +861,13 @@ The user has expressed frustration. Do the following:
                   fullContent = retryContent; // persist the output that actually contained files
                   tokensUsed += 1500; // rough estimate for the retry pass
                 } else {
-                  controller.enqueue(
+                  safeEnqueue(
                     encoder.encode(`data: ${JSON.stringify({ status: "no_files", message: "The model didn't produce files in the required format. Try again, or switch to a stronger model (e.g. GPT-4o) in the model picker." })}\n\n`)
                   );
                 }
               } catch (retryErr) {
                 logger.warn("ai.chat.format_retry_failed", { projectId, error: String(retryErr) });
-                controller.enqueue(
+                safeEnqueue(
                   encoder.encode(`data: ${JSON.stringify({ status: "no_files", message: "The model didn't produce files in the required format. Try again, or switch to a stronger model." })}\n\n`)
                 );
               }
@@ -731,6 +912,49 @@ The user has expressed frustration. Do the following:
                 }
               }
             }
+          }
+
+          // ── Lovable parity: backend auto-wiring + self-verification ────────
+          // Both run inside the stream so the user sees live progress; both
+          // are best-effort and never fail the build.
+          let backendWiring: AutoWireResult | null = null;
+          let verification: SelfVerifyResult | null = null;
+          if ((mode === "build" || mode === "patch") && parsedFiles.length > 0) {
+            const emitStatus = (key: string) => (status: string) => {
+              safeEnqueue(encoder.encode(`data: ${JSON.stringify({ [key]: status })}\n\n`));
+            };
+
+            // 1. Backend wiring — auto-connect Cloud + credentials + migrations
+            try {
+              backendWiring = await autoWireBackend({
+                supabase,
+                projectId,
+                userId,
+                prompt: message,
+                generatedFiles: parsedFiles,
+                cloudToolPermissionsRaw: cloudPermissionsRaw,
+                emit: emitStatus("wiring_status"),
+              });
+            } catch { backendWiring = null; }
+
+            // 2. Self-verification — render the app, auto-fix runtime errors
+            try {
+              verification = await runSelfVerification({
+                supabase,
+                projectId,
+                emit: emitStatus("verify_status"),
+              });
+              if (verification && verification.fixesApplied > 0) {
+                usedAutoFix = true;
+                // Merge fix-round rewrites into the build's file list so the
+                // client and files_changed metadata reflect the final state.
+                for (const fixed of verification.fixedFiles) {
+                  const idx = parsedFiles.findIndex((f) => f.path === fixed.path);
+                  if (idx >= 0) parsedFiles[idx] = { ...parsedFiles[idx], content: fixed.content };
+                  else parsedFiles.push({ path: fixed.path, content: fixed.content, language: fixed.language });
+                }
+              }
+            } catch { verification = null; }
           }
 
           const buildActivity =
@@ -842,7 +1066,7 @@ The user has expressed frustration. Do the following:
                 await (admin as any).from("notifications").insert({
                   user_id: userId,
                   type: "ai_done",
-                  title: "Build complete \u2713",
+                  title: "Build complete ✓",
                   body: `Generated ${parsedFiles.length} file${parsedFiles.length !== 1 ? "s" : ""} in your project`,
                   link: `/editor/${projectId}`,
                   is_read: false,
@@ -872,10 +1096,11 @@ The user has expressed frustration. Do the following:
             if (dbFiles) finalFilesForClient = dbFiles as typeof parsedFiles;
           }
 
-          // Send final event
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({
+          // Send final event (skip SSE when client already left — DB work above still completed)
+          if (!isClientGone()) {
+            safeEnqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
                 done: true,
                 tokensUsed,
                 files: finalFilesForClient,
@@ -883,6 +1108,15 @@ The user has expressed frustration. Do the following:
                 fileCount: finalFilesForClient.length,
                 assistantMessageId,
                 build_activity: buildActivity ?? undefined,
+                backend_wired: backendWiring ?? undefined,
+                verification: verification
+                  ? {
+                      engine: verification.engine,
+                      passed: verification.passed,
+                      fixesApplied: verification.fixesApplied,
+                      errors: verification.errors,
+                    }
+                  : undefined,
                 // Human-readable summary for the chat bubble — without this the
                 // client renders the raw JSON blob (escaped \n and all).
                 displayMessage:
@@ -896,19 +1130,20 @@ The user has expressed frustration. Do the following:
                       })()
                     : undefined,
               })}\n\n`
-            )
-          );
+              )
+            );
+          }
         } catch (error) {
           logger.error("ai.chat.stream_error", error instanceof Error ? error : new Error(String(error)), {
             projectId,
             userId,
             mode,
           });
-          controller.enqueue(
+          safeEnqueue(
             encoder.encode(`data: ${JSON.stringify({ error: String(error) })}\n\n`)
           );
         } finally {
-          controller.close();
+          safeClose();
         }
       },
     });

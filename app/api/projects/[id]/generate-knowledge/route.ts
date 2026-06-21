@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
+import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
 
 interface Params { params: Promise<{ id: string }> }
@@ -102,7 +103,7 @@ Generate the Knowledge file now.`;
 
   try {
     const aiRes = await generateAI({
-      model: "claude-sonnet-4-6",
+      model: BALANCED_CODING_MODEL,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },

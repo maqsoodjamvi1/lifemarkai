@@ -432,19 +432,20 @@ const SECTIONS = [
   { id: "danger", label: "Danger Zone", icon: Trash2 },
 ];
 
+// OpenRouter slugs — route through the single OPENROUTER_API_KEY.
 const AI_MODELS = [
-  { id: "claude-opus-4-6", label: "Claude Opus 4.6 (Recommended)", provider: "Anthropic" },
-  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 (Balanced)", provider: "Anthropic" },
-  { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 (Fast)", provider: "Anthropic" },
-  { id: "gpt-4o", label: "GPT-4o", provider: "OpenAI" },
-  { id: "gpt-4o-mini", label: "GPT-4o Mini (Faster)", provider: "OpenAI" },
-  { id: "moonshotai/kimi-k2-instruct-0905", label: "Kimi K2 (Code)", provider: "Kimi" },
+  { id: "openai/gpt-4o", label: "GPT-4o (Recommended)", provider: "OpenAI" },
+  { id: "openai/gpt-4o-mini", label: "GPT-4o mini (Fast)", provider: "OpenAI" },
+  { id: "anthropic/claude-3.5-sonnet", label: "Claude 3.5 Sonnet", provider: "Anthropic" },
+  { id: "google/gemini-flash-1.5", label: "Gemini 1.5 Flash (Fast)", provider: "Google" },
+  { id: "deepseek/deepseek-chat-v3-0324", label: "DeepSeek V3", provider: "DeepSeek" },
+  { id: "meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3 70B", provider: "Meta" },
 ];
 
 export function SettingsPage({ user, profile }: SettingsPageProps) {
   const [active, setActive] = useState("profile");
   const [name, setName] = useState(profile?.full_name ?? "");
-  const [defaultModel, setDefaultModel] = useState("claude-opus-4-6");
+  const [defaultModel, setDefaultModel] = useState("openai/gpt-4o");
   const [saving, setSaving] = useState(false);
   const [isPublic, setIsPublic] = useState<boolean>(profile?.is_public ?? false);
   const [privacySaving, setPrivacySaving] = useState(false);

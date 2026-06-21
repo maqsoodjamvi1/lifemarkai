@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["lib/ai/model-defaults.ts", "lib/ai/provider.ts", "lib/validations.ts"]
+}

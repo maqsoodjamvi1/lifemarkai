@@ -80,7 +80,7 @@ export function MonetizationPanel({ projectId, projectSlug }: MonetizationPanelP
     } finally { setSaving(false); }
   }
 
-  const embedScript = `<script src="https://lifemarkai.com/embed/paywall.js" data-project="${projectSlug}"></script>`;
+  const embedScript = `<script src="${typeof window !== "undefined" ? window.location.origin : "https://lifemarkai.com"}/embed/paywall.js" data-project="${projectId}"></script>`;
   const appUrl = `${typeof window !== "undefined" ? window.location.origin : "https://lifemarkai.com"}/app/${projectSlug}`;
   const sym = CURRENCY_SYMBOLS[config.currency] ?? "$";
 

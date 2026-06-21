@@ -32,10 +32,10 @@ for (const c of mappingCases) {
   check(`resolveOpenRouterModelId: ${c.in}`, got === c.out, { expect: c.out, got });
 }
 
-check("DEFAULT_CODING_MODEL maps to anthropic/opus", resolveOpenRouterModelId(DEFAULT_CODING_MODEL) === "anthropic/claude-opus-4-6", {
+check("DEFAULT_CODING_MODEL maps to anthropic/sonnet", resolveOpenRouterModelId(DEFAULT_CODING_MODEL) === "anthropic/claude-sonnet-4-6", {
   got: resolveOpenRouterModelId(DEFAULT_CODING_MODEL),
 });
-check("FAST_CODING_MODEL maps to anthropic/haiku", resolveOpenRouterModelId(FAST_CODING_MODEL) === "anthropic/claude-haiku-4-5-20251001", {
+check("FAST_CODING_MODEL maps to openai mini", resolveOpenRouterModelId(FAST_CODING_MODEL) === "openai/gpt-4o-mini", {
   got: resolveOpenRouterModelId(FAST_CODING_MODEL),
 });
 check("BALANCED maps to anthropic/sonnet", resolveOpenRouterModelId(BALANCED_CODING_MODEL) === "anthropic/claude-sonnet-4-6", {

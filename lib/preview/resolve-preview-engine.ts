@@ -1,6 +1,6 @@
 import type { ProjectFile } from "@/types/database";
 
-export type PreviewEngine = "detecting" | "webcontainer" | "fallback";
+export type PreviewEngine = "detecting" | "sandbox" | "webcontainer" | "fallback";
 
 /** Set in sessionStorage when WebContainer.boot() fails — skip retrying this session. */
 export const WC_UNAVAILABLE_KEY = "lifemark-wc-unavailable";
@@ -23,8 +23,16 @@ export function resolvePreviewEngine(
   opts?: {
     preferWebContainers?: boolean;
     crossOriginIsolated?: boolean;
+    /** Live URL from a real sandbox (E2B). When present, it wins — it's the
+     *  highest-fidelity preview (real dev server running server-side). */
+    sandboxUrl?: string | null;
   },
 ): Exclude<PreviewEngine, "detecting"> {
+  // 1) A real sandbox URL is the best preview — use it whenever available.
+  if (opts?.sandboxUrl) {
+    return "sandbox";
+  }
+
   const prefer = opts?.preferWebContainers === true;
   const isolated = opts?.crossOriginIsolated ?? false;
 

@@ -146,9 +146,29 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
       changed++;
     }
     if (changed > 0) addLog(`Updated ${changed} file${changed !== 1 ? "s" : ""} in preview`);
-    // #region agent log
-    fetch('http://127.0.0.1:7580/ingest/4eab943a-2827-4583-b27a-87e40bad58c8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'148b16'},body:JSON.stringify({sessionId:'148b16',runId:'preview-sync-v2',hypothesisId:'H-PREVIEW-SYNC',location:'webcontainer-preview.tsx:syncFiles',message:'Incremental file sync',data:{changed,total:patched.length},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
+  }, [addLog]);
+
+  // Phase 2 — live dependency changes. When package.json changes while the dev
+  // server is already running (user/AI adds a dep mid-session), HMR writes the
+  // new package.json but Vite can't resolve the new import until it's installed.
+  // Detect the change and run `npm install` in the live container; Vite then
+  // re-optimizes deps on the next import. Returns true if a reinstall ran.
+  const reinstallIfDepsChanged = useCallback(async (wc: any, filesToLoad: ProjectFile[]) => {
+    const pkg = filesToLoad.find((f) => f.path.replace(/\\/g, "/").endsWith("package.json"));
+    const content = pkg?.content ?? null;
+    if (!content || content === _lastPackageJsonContent) return false;
+    _lastPackageJsonContent = content;
+    addLog("package.json changed — installing new dependencies…");
+    try {
+      const install = await wc.spawn("npm", ["install", "--legacy-peer-deps"]);
+      install.output.pipeTo(new WritableStream({ write: (c: string) => addLog(c) }));
+      const code = await install.exit;
+      if (code === 0) { addLog("✓ Dependencies updated"); _npmInstalled = true; }
+      else addLog(`⚠ npm install exited with code ${code}`);
+    } catch (e) {
+      addLog(`⚠ Dependency install failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    return true;
   }, [addLog]);
 
   const boot = useCallback(async (filesToLoad: ProjectFile[]) => {
@@ -161,6 +181,7 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
       setStatus("ready");
       try {
         await syncFiles(_wcInstance, filesToLoad);
+        await reinstallIfDepsChanged(_wcInstance, filesToLoad);
       } catch (syncErr) {
         const msg = syncErr instanceof Error ? syncErr.message : String(syncErr);
         addLog(`Error syncing files: ${msg}`);
@@ -172,6 +193,7 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
     if (!shouldStart && bootedRef.current && _wcInstance) {
       try {
         await syncFiles(_wcInstance, filesToLoad);
+        await reinstallIfDepsChanged(_wcInstance, filesToLoad);
       } catch (mountErr) {
         const msg = mountErr instanceof Error ? mountErr.message : String(mountErr);
         addLog(`Error syncing files: ${msg}`);
@@ -375,7 +397,7 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
     } finally {
       _bootInProgress = false;
     }
-  }, [addLog, mountFiles, onError, syncFiles]);
+  }, [addLog, mountFiles, onError, syncFiles, reinstallIfDepsChanged]);
 
   const filesSignature = React.useMemo(() => filesContentSignature(files), [files]);
 
@@ -390,9 +412,6 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
   useEffect(() => {
     if (files.length === 0) return;
     if (bootingRef.current) return;
-    // #region agent log
-    fetch('http://127.0.0.1:7580/ingest/4eab943a-2827-4583-b27a-87e40bad58c8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'148b16'},body:JSON.stringify({sessionId:'148b16',runId:'preview-sync',hypothesisId:'H-PREVIEW-SYNC',location:'webcontainer-preview.tsx:files-sync',message:'Sync files to WebContainer',data:{fileCount:files.length,booted:bootedRef.current,hasInstance:!!_wcInstance},timestamp:Date.now()})}).catch(()=>{});
-    // #endregion
     void boot(files);
   }, [filesSignature, boot, files]);
 
@@ -401,17 +420,18 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
     if (status !== "booting" && status !== "installing" && status !== "starting") return;
     const stalledPhase = status;
     const timer = setTimeout(() => {
+      const msg = `Preview stalled at "${stalledPhase}" — switching to standard preview`;
       setStatus((current) => {
         if (current === "ready" || current === "error" || current === "idle") return current;
-        const msg = `Preview stalled at "${stalledPhase}" — switching to standard preview`;
-        addLog(`⚠ ${msg}`);
-        bootingRef.current = false;
-        bootedRef.current = false;
-        resetWebContainerSingleton();
-        setErrorMsg(msg);
-        onError?.(msg);
         return "error";
       });
+      addLog(`⚠ ${msg}`);
+      bootingRef.current = false;
+      bootedRef.current = false;
+      resetWebContainerSingleton();
+      setErrorMsg(msg);
+      // Defer parent callback — calling toast/setState upstream inside setStatus caused React warnings
+      queueMicrotask(() => onError?.(msg));
     }, BOOT_STALL_MS);
     return () => clearTimeout(timer);
   }, [status, addLog, onError]);

@@ -7,6 +7,7 @@ import {
   type SnapshotFile,
 } from "@/lib/diff/snapshot-diff";
 import { generateAI } from "@/lib/ai/provider";
+import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
 
 /**
  * POST /api/projects/snapshots/compare
@@ -102,7 +103,7 @@ Be specific and concrete. No filler. Use plain prose, no headings, no bullets.`;
 
     try {
       const aiRes = await generateAI({
-        model: "claude-haiku-4-5-20251001",
+        model: FAST_CODING_MODEL,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: `Comparing snapshot "${oldRow?.label}" (T-1, ${oldRow?.created_at}) → "${newRow?.label}" (T-0, ${newRow?.created_at}).\n\nDiff digest:\n\n${digest}` },

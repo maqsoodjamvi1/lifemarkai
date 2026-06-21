@@ -1,6 +1,12 @@
 // @ts-nocheck
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
+import {
+  isManagementConfigured,
+  createManagedProject,
+  managedProjectUrl,
+  setManagedComputeTier,
+} from "@/lib/cloud/management";
 
 const VALID_REGIONS = ["americas", "europe", "asia-pacific"] as const;
 const VALID_INSTANCES = ["tiny", "mini", "small", "medium", "large"] as const;
@@ -58,9 +64,47 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `Invalid instance: ${chosenInstance}` }, { status: 400 });
   }
 
-  // "Provision" — in the real version this would spin up a managed Postgres
-  // pool/edge function namespace. For now we mark the project active and rely
-  // on the existing Supabase integration as the backing store.
+  // Provision. Two modes:
+  //  - Managed (SUPABASE_MANAGEMENT_TOKEN + SUPABASE_ORG_ID set): creates a
+  //    real, dedicated Supabase project (Postgres + Auth + Storage + Edge
+  //    Functions) in the chosen region via the Management API. The project
+  //    boots asynchronously; /api/cloud/status polls until ACTIVE_HEALTHY
+  //    and then stores the API keys (migration 064).
+  //  - Local (no Management credentials): mark the project active and rely on
+  //    the platform's existing Supabase integration as the backing store.
+  if (isManagementConfigured()) {
+    try {
+      const { ref } = await createManagedProject({ projectId, region: chosenRegion });
+      const { error } = await supabase
+        .from("projects")
+        .update({
+          cloud_enabled: true,
+          cloud_region: chosenRegion,
+          cloud_instance: chosenInstance,
+          cloud_status: "provisioning",
+          cloud_project_ref: ref,
+          cloud_supabase_url: managedProjectUrl(ref),
+          cloud_provisioned_at: new Date().toISOString(),
+        })
+        .eq("id", projectId);
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+      return NextResponse.json({
+        ok: true,
+        region: chosenRegion,
+        instance: chosenInstance,
+        status: "provisioning",
+        ref,
+        message: `Dedicated backend booting in ${chosenRegion} — usually ready in 1–2 minutes.`,
+      });
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Provisioning failed" },
+        { status: 502 }
+      );
+    }
+  }
+
   const { error } = await supabase
     .from("projects")
     .update({
@@ -78,6 +122,7 @@ export async function POST(req: NextRequest) {
     ok: true,
     region: chosenRegion,
     instance: chosenInstance,
+    status: "active",
     message: `Lifemark Cloud provisioned in ${chosenRegion} on ${chosenInstance} tier.`,
   });
 }
@@ -105,12 +150,22 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: "Invalid instance tier" }, { status: 400 });
   }
 
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from("projects")
     .update({ cloud_instance: tier })
     .eq("id", projectId)
-    .eq("user_id", user.id);
+    .eq("user_id", user.id)
+    .select("cloud_project_ref")
+    .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json({ ok: true, instance: tier });
+  // Managed mode: apply a real Supabase compute add-on for the tier.
+  // Best-effort — local tier persists even if the billing API rejects.
+  let computeNote: string | undefined;
+  if (updated?.cloud_project_ref && isManagementConfigured()) {
+    const result = await setManagedComputeTier(updated.cloud_project_ref, tier);
+    if (!result.ok) computeNote = `Tier saved, but compute add-on update failed: ${result.note}`;
+  }
+
+  return NextResponse.json({ ok: true, instance: tier, ...(computeNote ? { warning: computeNote } : {}) });
 }

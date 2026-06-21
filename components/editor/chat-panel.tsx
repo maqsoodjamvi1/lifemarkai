@@ -38,10 +38,13 @@ import type { EditorMode } from "./editor-layout";
 import { VoiceMode } from "./voice-mode";
 import { SnippetPicker } from "./snippet-picker";
 import { FileAttachmentList, type GeneratedFile } from "./file-attachment-card";
+import { AnalyzeMessageCard, parseAnalyzeMetadata } from "./analyze-message-card";
 import { PreviewAnnotateModal } from "./preview-annotate-modal";
+import { DesignPreviewPicker } from "./design-preview-picker";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { findMissingPackages, buildInstallCommand, syncPackageJsonDeps } from "@/lib/ai/npm-auto-install";
 import { classifyBuildIntent, type BuildIntent } from "@/lib/ai/build-intent";
+import { buildDesignBrief, shouldOfferDesignPreviews, type DesignPreviewDirection } from "@/lib/ai/design-previews";
 import { useAppStore } from "@/store/app-store";
 import type { AgentStep } from "@/lib/ai/agent";
 import {
@@ -67,6 +70,7 @@ import {
   finalizeBuildActivity,
   type BuildActivityStep,
 } from "@/lib/ai/build-activity";
+import { useAIStreamChat } from "@/hooks/use-ai-stream-chat";
 
 /** Prose intro shown above Working/Edited cards during build streams. */
 function extractStreamingProse(content: string): string | null {
@@ -78,18 +82,18 @@ function extractStreamingProse(content: string): string | null {
   return beforeFence.slice(0, 800);
 }
 
+// All picker models are OpenRouter slugs (provider/model) so they route through
+// the single OPENROUTER_API_KEY. Native IDs (gpt-5.2, claude-opus-4-8, …) were
+// removed — they aren't OpenRouter slugs and 400 with "not a valid model ID".
 type AIModel =
-  | "gpt-4o"
-  | "gpt-4o-mini"
-  | "moonshotai/kimi-k2-instruct-0905"
-  | "claude-opus-4-6"
-  | "claude-sonnet-4-6"
-  | "claude-haiku-4-5-20251001"
-  | "gemini-2.0-flash"
-  | "gemini-2.0-flash-lite"
-  | "gemini-1.5-pro"
-  | "meta-llama/llama-3.3-70b-instruct"
+  | "anthropic/claude-opus-4.8"
+  | "anthropic/claude-sonnet-4.6"
+  | "anthropic/claude-haiku-4.5"
+  | "openai/gpt-4o"
+  | "openai/gpt-4o-mini"
+  | "google/gemini-flash-1.5"
   | "meta-llama/llama-4-maverick"
+  | "meta-llama/llama-3.3-70b-instruct"
   | "deepseek/deepseek-r1"
   | "deepseek/deepseek-chat-v3-0324"
   | "mistralai/mistral-large"
@@ -99,29 +103,25 @@ type AIModel =
   | "google/gemma-3-27b-it";
 
 const AI_MODELS: { id: AIModel; label: string; badge: string; fast?: boolean; new?: boolean; best?: boolean; creditMultiplier?: number }[] = [
+  // ── Anthropic (Claude — default lineup) ──────────────────────────────────
+  { id: "anthropic/claude-opus-4.8", label: "Claude Opus 4.8", badge: "Anthropic", best: true, new: true, creditMultiplier: 2 },
+  { id: "anthropic/claude-sonnet-4.6", label: "Claude Sonnet 4.6", badge: "Anthropic", new: true },
+  { id: "anthropic/claude-haiku-4.5", label: "Claude Haiku 4.5", badge: "Anthropic", fast: true, new: true },
   // ── OpenAI ───────────────────────────────────────────────────────────────
-  { id: "gpt-4o", label: "GPT-4o", badge: "OpenAI" },
-  { id: "gpt-4o-mini", label: "GPT-4o mini", badge: "OpenAI", fast: true },
-  // ── Anthropic ────────────────────────────────────────────────────────────
-  { id: "claude-opus-4-6", label: "Claude Opus 4", badge: "Anthropic", best: true, creditMultiplier: 2 },
-  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4", badge: "Anthropic" },
-  { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5", badge: "Anthropic", fast: true },
+  { id: "openai/gpt-4o", label: "GPT-4o", badge: "OpenAI", creditMultiplier: 2 },
+  { id: "openai/gpt-4o-mini", label: "GPT-4o mini", badge: "OpenAI", fast: true },
   // ── Google ───────────────────────────────────────────────────────────────
-  { id: "gemini-2.0-flash", label: "Gemini 2.0 Flash", badge: "Google", fast: true, new: true },
-  { id: "gemini-2.0-flash-lite", label: "Gemini 2.0 Flash Lite", badge: "Google", fast: true },
-  { id: "gemini-1.5-pro", label: "Gemini 1.5 Pro", badge: "Google" },
-  // ── OpenRouter ───────────────────────────────────────────────────────────
-  { id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick", badge: "OpenRouter", new: true },
-  { id: "meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3 70B", badge: "OpenRouter" },
-  { id: "deepseek/deepseek-r1", label: "DeepSeek R1", badge: "OpenRouter", new: true },
-  { id: "deepseek/deepseek-chat-v3-0324", label: "DeepSeek V3", badge: "OpenRouter" },
-  { id: "mistralai/mistral-large", label: "Mistral Large", badge: "OpenRouter" },
-  { id: "mistralai/devstral-small", label: "Devstral Small", badge: "OpenRouter", fast: true, new: true },
-  { id: "qwen/qwen3-235b-a22b", label: "Qwen3 235B", badge: "OpenRouter", new: true },
-  { id: "x-ai/grok-2-1212", label: "Grok 2", badge: "OpenRouter" },
-  { id: "google/gemma-3-27b-it", label: "Gemma 3 27B", badge: "OpenRouter", fast: true },
-  // ── Kimi (Groq) ──────────────────────────────────────────────────────────
-  { id: "moonshotai/kimi-k2-instruct-0905", label: "Kimi K2", badge: "Kimi", new: true },
+  { id: "google/gemini-flash-1.5", label: "Gemini 1.5 Flash", badge: "Google", fast: true },
+  // ── Open weights ─────────────────────────────────────────────────────────
+  { id: "deepseek/deepseek-chat-v3-0324", label: "DeepSeek V3", badge: "DeepSeek" },
+  { id: "deepseek/deepseek-r1", label: "DeepSeek R1", badge: "DeepSeek", new: true },
+  { id: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick", badge: "Meta", new: true },
+  { id: "meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3 70B", badge: "Meta" },
+  { id: "mistralai/mistral-large", label: "Mistral Large", badge: "Mistral" },
+  { id: "mistralai/devstral-small", label: "Devstral Small", badge: "Mistral", fast: true },
+  { id: "qwen/qwen3-235b-a22b", label: "Qwen3 235B", badge: "Qwen", new: true },
+  { id: "x-ai/grok-2-1212", label: "Grok 2", badge: "xAI" },
+  { id: "google/gemma-3-27b-it", label: "Gemma 3 27B", badge: "Google", fast: true },
 ];
 
 interface ChatPanelProps {
@@ -593,6 +593,15 @@ export function ChatPanel({
     [files, previewError, credits, activeFile?.path, project.framework, mode],
   );
 
+  const { consume: consumeAIStream, fileSync: streamFileSync } = useAIStreamChat({
+    projectId: project.id,
+    files,
+    onFilesChange: onFilesUpdate,
+    applyFileUpdates: mode === "build" || mode === "agent" || mode === "patch",
+  });
+
+  const { toast } = useToast();
+
   const contextualEmptyPrompts = useMemo(() => {
     if (credits <= 0) return getNoCreditsPrompts();
     if (previewError) return getPreviewErrorPrompts(previewError);
@@ -649,7 +658,7 @@ export function ChatPanel({
   const [messageSkills, setMessageSkills] = useState<Record<string, Array<{ id: string; name: string; reason?: string }>>>({});
   const [expandedDiffs, setExpandedDiffs] = useState<Set<string>>(new Set());
   const modelManuallySelectedRef = useRef(false);
-  const [selectedModel, setSelectedModel] = useState<AIModel>(DEFAULT_CODING_MODEL);
+  const [selectedModel, setSelectedModel] = useState<AIModel>(DEFAULT_CODING_MODEL as AIModel);
   const [autoFixing, setAutoFixing] = useState(false);
   const [autoFixAttempts, setAutoFixAttempts] = useState(0);
   const [lastFixedError, setLastFixedError] = useState<string | null>(null);
@@ -668,6 +677,9 @@ export function ChatPanel({
   const [detectedUrl, setDetectedUrl] = useState<string | null>(null);
   const [isScraping, setIsScraping] = useState(false);
   const [scrapedMeta, setScrapedMeta] = useState<{ title: string; description: string; ogImage: string; textContent: string } | null>(null);
+  const [designPreviewOpen, setDesignPreviewOpen] = useState(false);
+  const [pendingDesignPrompt, setPendingDesignPrompt] = useState<string | null>(null);
+  const skipDesignPreviewOnceRef = useRef(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editInput, setEditInput] = useState("");
   // Per-message per-file accept/revert state
@@ -754,6 +766,9 @@ export function ChatPanel({
   const [previewVerify, setPreviewVerify] = useState<{ ok: boolean; checks: Array<{ name: string; pass: boolean; detail?: string }> } | null>(null);
   const [messageCredits, setMessageCredits] = useState<Record<string, number>>({});
   const [buildStatus, setBuildStatus] = useState<BuildIntent | null>(null);
+  // Post-build pipeline status — backend wiring + self-verification progress
+  // streamed from the server (wiring_status / verify_status events).
+  const [postBuildStatus, setPostBuildStatus] = useState<string | null>(null);
   const [buildActivitySteps, setBuildActivitySteps] = useState<BuildActivityStep[]>([]);
   const [messageBuildActivity, setMessageBuildActivity] = useState<Record<string, BuildActivityStep[]>>({});
   /** Sync mirror of buildActivitySteps — safe to read inside SSE loop without stale closures. */
@@ -788,15 +803,27 @@ export function ChatPanel({
   const [analyzeInstruction, setAnalyzeInstruction] = useState("");
   const [analyzeFile, setAnalyzeFile] = useState<{ name: string; base64: string; mimeType: string } | null>(null);
   const [analyzeRunning, setAnalyzeRunning] = useState(false);
-  // Results render as their own "system" bubbles in the chat — list of past runs.
-  const [analyzeResults, setAnalyzeResults] = useState<Array<{
-    id: string;
-    instruction: string;
-    stdout: string;
-    stderr: string;
-    files: Array<{ name: string; base64: string; sizeBytes: number; mimeType: string }>;
-    createdAt: number;
-  }>>([]);
+  const saveGeneratedFileToProject = useCallback(async (file: GeneratedFile) => {
+    try {
+      const res = await fetch(`/api/projects/${project.id}/files`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          path: `generated/${file.name}`,
+          content: file.base64,
+          language: file.mimeType.startsWith("text/") || file.mimeType.includes("json") ? "json" : "binary",
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to save");
+      toast({ title: `Saved generated/${file.name} to project` });
+    } catch (err) {
+      toast({
+        title: "Save failed",
+        description: err instanceof Error ? err.message : "Try again.",
+        variant: "destructive",
+      });
+    }
+  }, [project.id, toast]);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [collapsedThreads, setCollapsedThreads] = useState<Set<number>>(new Set());
@@ -911,7 +938,6 @@ export function ChatPanel({
       if (data.user) setCurrentUserId(data.user.id);
     });
   }, []);
-  const { toast } = useToast();
 
   useEffect(() => {
     if (!streaming) {
@@ -1269,7 +1295,6 @@ export function ChatPanel({
       onCreditsUpdate(credits - 1);
 
       // Refresh files from DB
-      const { createClient } = await import("@/lib/supabase/client");
       const supabase = createClient();
       const { data: updatedFiles } = await (supabase as any)
         .from("project_files")
@@ -1293,6 +1318,7 @@ export function ChatPanel({
       };
       onMessagesUpdate([...messages, fixingMsg, successMsg]);
       onAutoFixComplete?.();
+      window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
     } catch {
       const errMsg: Message = {
         id: `autofix-fail-${Date.now()}`,
@@ -1515,7 +1541,7 @@ export function ChatPanel({
       }
       return;
     }
-    if (!overrideMode && effectiveMode !== mode) {
+    if (!overrideMode && effectiveMode !== mode && mode !== "chat") {
       onModeChange?.(effectiveMode);
     }
     setInput("");
@@ -1725,7 +1751,13 @@ ${(f.content ?? "").slice(0, 8000)}
                 onStreamingChange?.(true, changedPaths.size);
               }
 
+              // Backend wiring + self-verification progress (Lovable-style)
+              if (typeof data.wiring_status === "string" || typeof data.verify_status === "string") {
+                setPostBuildStatus((data.wiring_status ?? data.verify_status) as string);
+              }
+
               if (data.done) {
+                setPostBuildStatus(null);
                 setAgentSteps((prev) => prev.map((s) => ({ ...s, status: "done" as const })));
                 setTimeout(() => setAgentSteps([]), 1800);
 
@@ -1808,6 +1840,10 @@ ${(f.content ?? "").slice(0, 8000)}
         return;
       }
 
+      // Design baseline (starter template) chosen on the create screen — carried
+      // in the editor URL (?template=). Only applied for build mode.
+      const designTemplateId =
+        typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("template") : null;
       const res = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1819,6 +1855,7 @@ ${(f.content ?? "").slice(0, 8000)}
           model: effectiveModel,
           framework: mobileMode ? "react-native" : "web",
           clarifyFirst: effectiveMode === "build" && clarifyFirst && files.length === 0,
+          ...(effectiveMode === "build" && designTemplateId ? { templateId: designTemplateId } : {}),
           // If @mentions present, only send those files for context (saves tokens + focuses AI)
           files: mentionedFiles
             ? mentionedFiles.map((f) => ({ path: f.path, content: f.content }))
@@ -1848,112 +1885,88 @@ ${(f.content ?? "").slice(0, 8000)}
         throw new Error(`API error: ${res.status}`);
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
       let accumulated = "";
-      // Pre-generate ID so mid-stream events (patches_applied) can reference the same message
       const streamingAssistantId = `assistant-${Date.now()}`;
+      let clarifyExited = false;
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      const processChatStreamEvent = async (data: Record<string, unknown>) => {
+        try {
+          if (data.chunk) return;
 
-        const text = decoder.decode(value);
-        const lines = text.split("\n");
+          if (data.status === "no_files") {
+            toast({
+              title: "No files generated",
+              description: (data.message as string | undefined) ?? "Try again or switch to a stronger model.",
+              variant: "destructive",
+            });
+          }
 
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const data = JSON.parse(line.slice(6));
+          if (data.status === "patches_applied" && data.count != null) {
+            setPatchCounts((prev) => ({ ...prev, __pending: data.count as number }));
+          }
 
-            // Patch mode: capture how many patches were applied.
-            // assistantId is only created when data.done fires; for in-flight
-            // patches_applied events we stash the count under a "pending" key
-            // and reconcile it onto the real assistant message at data.done.
-            if (data.status === "patches_applied" && data.count != null) {
-              setPatchCounts((prev) => ({ ...prev, __pending: data.count as number }));
-            }
-
-            // Skill auto-match: API sends matched skills before the model output begins
-            // so we can render a "using skill: X" chip on the pending assistant message.
-            if (data.subagent) {
-              const step = data.subagent as SubagentStep;
-              setSubagentSteps((prev) => {
-                const idx = prev.findIndex((s) => s.id === step.id);
-                if (idx >= 0) {
-                  const next = [...prev];
-                  next[idx] = step;
-                  return next;
-                }
-                return [...prev, step];
-              });
-            }
-
-            if (data.build_intent) {
-              const intent = data.build_intent as BuildIntent;
-              setBuildStatus(intent);
-              applyBuildSteps((prev) =>
-                prev.length > 0 ? applyBuildIntentLabel(prev, intent.statusLabel) : prev,
-              );
-            }
-
-            if (Array.isArray(data.skills_attached) && data.skills_attached.length > 0) {
-              setPendingSkills(
-                data.skills_attached.map((s: { id: string; name: string; reason?: string }) => ({
-                  id: s.id,
-                  name: s.name,
-                  reason: s.reason,
-                })),
-              );
-            }
-
-            // Server confirms a file landed in project_files. Track so we can
-            // re-fetch on data.done even if the server's parseAIResponse
-            // returns empty (prose+fences case — file is in DB but not in
-            // data.files at done).
-            if (typeof data.streamedFile === "string") {
-              serverStreamedPathsRef.current.add(data.streamedFile);
-              applyBuildSteps((prev) => (prev.length > 0 ? onBuildFileProgress(prev) : prev));
-            }
-
-            if (data.chunk) {
-              accumulated += data.chunk;
-              setStreamingContent(accumulated);
-              // Extract file paths from partial JSON as they stream in
-              const pathMatches = [...accumulated.matchAll(/"path"\s*:\s*"([^"]+)"/g)];
-              if (pathMatches.length > 0) {
-                const paths = pathMatches.map((m) => m[1]);
-                setStreamingFiles(paths);
-                onStreamingChange?.(true, paths.length);
-                if (paths.length > 0) {
-                  applyBuildSteps((prev) =>
-                    prev.length > 0 ? onBuildFileProgress(prev) : prev,
-                  );
-                }
+          if (data.subagent) {
+            const step = data.subagent as SubagentStep;
+            setSubagentSteps((prev) => {
+              const idx = prev.findIndex((s) => s.id === step.id);
+              if (idx >= 0) {
+                const next = [...prev];
+                next[idx] = step;
+                return next;
               }
-            }
+              return [...prev, step];
+            });
+          }
 
-            if (data.clarifying_questions) {
-              // Agent asked for clarification before building
-              setActiveClarifySession({
-                originalPrompt: data.originalPrompt ?? userMessage,
-                questions: (data.clarifying_questions as Array<{ id: string; question: string; type?: string; options?: string[] }>).map((q) => ({
-                  id: q.id ?? `q-${Math.random()}`,
-                  question: q.question,
-                  type: (q.type as "text" | "choice") ?? "text",
-                  options: q.options,
-                  answer: q.options?.[0] ?? "",
-                })),
-              });
-              setStreamingWithCallback(false);
-              setStreamingContent("");
-              setStreamingFiles([]);
-              // Remove the optimistic user message so clarify cards appear instead
-              onMessagesUpdate(baseMessages);
-              return;
-            }
+          if (data.build_intent) {
+            const intent = data.build_intent as BuildIntent;
+            setBuildStatus(intent);
+            applyBuildSteps((prev) =>
+              prev.length > 0 ? applyBuildIntentLabel(prev, intent.statusLabel) : prev,
+            );
+          }
 
-            if (data.done) {
+          if (Array.isArray(data.skills_attached) && data.skills_attached.length > 0) {
+            setPendingSkills(
+              data.skills_attached.map((s: { id: string; name: string; reason?: string }) => ({
+                id: s.id,
+                name: s.name,
+                reason: s.reason,
+              })),
+            );
+          }
+
+          if (typeof data.streamedFile === "string") {
+            serverStreamedPathsRef.current.add(data.streamedFile);
+            applyBuildSteps((prev) => (prev.length > 0 ? onBuildFileProgress(prev) : prev));
+          }
+
+          if (typeof data.wiring_status === "string" || typeof data.verify_status === "string") {
+            setPostBuildStatus((data.wiring_status ?? data.verify_status) as string);
+          }
+
+          if (data.clarifying_questions) {
+            setActiveClarifySession({
+              originalPrompt: (typeof data.originalPrompt === "string" ? data.originalPrompt : userMessage),
+              questions: (data.clarifying_questions as Array<{ id: string; question: string; type?: string; options?: string[] }>).map((q) => ({
+                id: q.id ?? `q-${Math.random()}`,
+                question: q.question,
+                type: (q.type as "text" | "choice") ?? "text",
+                options: q.options,
+                answer: q.options?.[0] ?? "",
+              })),
+            });
+            setStreamingWithCallback(false);
+            setStreamingContent("");
+            setStreamingFiles([]);
+            onMessagesUpdate(baseMessages);
+            clarifyExited = true;
+            controller.abort();
+            return;
+          }
+
+          if (data.done) {
+              setPostBuildStatus(null);
               const assistantId =
                 (typeof data.assistantMessageId === "string" && data.assistantMessageId) ||
                 streamingAssistantId;
@@ -1978,7 +1991,7 @@ ${(f.content ?? "").slice(0, 8000)}
               }
               setBuildStatus(null);
               // Update credits
-              if (data.creditsUsed) {
+              if (typeof data.creditsUsed === "number") {
                 onCreditsUpdate(credits - data.creditsUsed);
                 setMessageCredits((prev) => ({ ...prev, [assistantId]: data.creditsUsed as number }));
               }
@@ -2005,8 +2018,12 @@ ${(f.content ?? "").slice(0, 8000)}
               // where parseAIResponse came back empty but the streaming
               // extractor (or Strategy 6 rescue inside parseAIResponse)
               // produced rows in project_files.
+              const reportedFileCount =
+                typeof data.fileCount === "number"
+                  ? data.fileCount
+                  : (data.files as unknown[] | undefined)?.length ?? 0;
               const haveStreamedFiles = serverStreamedPathsRef.current.size > 0;
-              if ((data.files && data.files.length > 0) || haveStreamedFiles) {
+              if ((data.files && (data.files as unknown[]).length > 0) || haveStreamedFiles || reportedFileCount > 0) {
                 const supabase = createClient();
                 const { data: updatedFiles } = await (supabase as any)
                   .from("project_files")
@@ -2045,7 +2062,7 @@ ${(f.content ?? "").slice(0, 8000)}
 
                   onFilesUpdate(updatedFiles);
 
-                  // ── npm auto-install + package.json auto-sync ──────────────────
+                  window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
                   if (effectiveMode === "build") {
                     // Same fallback as the diff source — use data.files when present,
                     // otherwise reconstruct from streamed paths + DB content.
@@ -2071,7 +2088,6 @@ ${(f.content ?? "").slice(0, 8000)}
                         const sync = syncPackageJsonDeps(updatedFiles as Array<{ path: string; content: string }>, pkgJsonFile.content);
                         if (sync) {
                           try {
-                            const { createClient } = await import("@/lib/supabase/client");
                             const supabase = createClient();
                             await (supabase as any).from("project_files").upsert({
                               project_id: project.id,
@@ -2100,17 +2116,17 @@ ${(f.content ?? "").slice(0, 8000)}
                 id: assistantId,
                 project_id: project.id,
                 role: "assistant",
-                // Prefer the server's human-readable summary — `accumulated` is
-                // the raw JSON blob in build mode.
                 content: (data.displayMessage as string | undefined) || accumulated,
-                tokens_used: data.tokensUsed ?? null,
+                tokens_used: typeof data.tokensUsed === "number" ? data.tokensUsed : null,
                 model: effectiveModel,
-                // Same narrowing as the user message above — collapse "patch"
-                // to "build" so the assistant row fits Message['mode'].
                 mode: (effectiveMode === "patch" ? "build" : effectiveMode) as "chat" | "plan" | "build" | "agent",
-                metadata: completedBuildActivity
-                  ? ({ build_activity: completedBuildActivity } as unknown as Json)
-                  : null,
+                metadata: (() => {
+                  const meta: Record<string, unknown> = {};
+                  if (completedBuildActivity) meta.build_activity = completedBuildActivity;
+                  if (data.verification) meta.verification = data.verification;
+                  if (data.backend_wired) meta.backend_wired = data.backend_wired;
+                  return Object.keys(meta).length > 0 ? (meta as unknown as Json) : null;
+                })(),
                 rating: null,
                 created_at: new Date().toISOString(),
               };
@@ -2135,7 +2151,25 @@ ${(f.content ?? "").slice(0, 8000)}
               );
               setSuggestions((prev) => ({ ...prev, [assistantId]: chips }));
 
-              if (shouldRunPreviewVerify(userMessage, effectiveMode)) {
+              if (data.verification) {
+                const v = data.verification as {
+                  passed?: boolean;
+                  engine?: string;
+                  fixesApplied?: number;
+                  errors?: string[];
+                };
+                setPreviewVerify({
+                  ok: v.passed !== false,
+                  checks: [
+                    {
+                      name: `Self-verify (${v.engine ?? "auto"})`,
+                      pass: v.passed !== false,
+                      detail: v.fixesApplied ? `${v.fixesApplied} fix(es) applied` : undefined,
+                    },
+                    ...(v.errors ?? []).map((e) => ({ name: e, pass: false, detail: undefined })),
+                  ],
+                });
+              } else if (shouldRunPreviewVerify(userMessage, effectiveMode)) {
                 void fetch(`/api/projects/${project.id}/preview-verify`, { method: "POST" })
                   .then((r) => r.json())
                   .then((result) => setPreviewVerify(result))
@@ -2150,11 +2184,45 @@ ${(f.content ?? "").slice(0, 8000)}
             }
 
             if (data.error) {
-              toast({ title: "AI Error", description: data.error, variant: "destructive" });
+              toast({ title: "AI Error", description: String(data.error), variant: "destructive" });
             }
           } catch {}
-        }
-      }
+        };
+
+      await consumeAIStream(res, {
+        signal: controller.signal,
+        onFileUpdate: (update) => {
+          const norm = update.path.replace(/\\/g, "/").replace(/^\//, "");
+          setStreamingFiles((prev) => (prev.includes(norm) ? prev : [...prev, norm]));
+          onStreamingChange?.(true, streamFileSync.pendingPaths.length + 1);
+          applyBuildSteps((prev) =>
+            prev.length > 0 ? onBuildFileProgress(prev) : prev,
+          );
+        },
+        handlers: {
+          onTextChunk: (piece) => {
+            accumulated += piece;
+            setStreamingContent(accumulated);
+            const pathMatches = [
+              ...accumulated.matchAll(/"path"\s*:\s*"([^"]+)"/g),
+              ...accumulated.matchAll(/"name"\s*:\s*"([^"/][^"]*)"/g),
+            ];
+            if (pathMatches.length > 0) {
+              const paths = pathMatches.map((m) => m[1]);
+              setStreamingFiles(paths);
+              onStreamingChange?.(true, paths.length);
+              if (paths.length > 0) {
+                applyBuildSteps((prev) =>
+                  prev.length > 0 ? onBuildFileProgress(prev) : prev,
+                );
+              }
+            }
+          },
+          onEvent: (data) => { void processChatStreamEvent(data); },
+        },
+      });
+
+      if (clarifyExited) return;
     } catch (err: unknown) {
       applyBuildSteps([]);
       toast({
@@ -2183,7 +2251,35 @@ ${(f.content ?? "").slice(0, 8000)}
       setInput("");
       return;
     }
-    void sendMessage(input.trim(), mode);
+    const text = input.trim();
+    if (
+      !skipDesignPreviewOnceRef.current &&
+      !attachedImage &&
+      shouldOfferDesignPreviews(text, files.length)
+    ) {
+      setPendingDesignPrompt(text);
+      setDesignPreviewOpen(true);
+      setInput("");
+      return;
+    }
+    skipDesignPreviewOnceRef.current = false;
+    void sendMessage(text, mode);
+  }
+
+  function handleDesignPreviewSelect(direction: DesignPreviewDirection) {
+    const base = pendingDesignPrompt;
+    setDesignPreviewOpen(false);
+    setPendingDesignPrompt(null);
+    if (!base) return;
+    void sendMessage(`${base}\n\n${buildDesignBrief(direction)}`, mode);
+  }
+
+  function handleDesignPreviewSkip() {
+    const base = pendingDesignPrompt;
+    setDesignPreviewOpen(false);
+    setPendingDesignPrompt(null);
+    skipDesignPreviewOnceRef.current = true;
+    if (base) void sendMessage(base, mode);
   }
 
   // Auto-drain the queue when streaming finishes (unless paused)
@@ -2930,38 +3026,41 @@ ${(f.content ?? "").slice(0, 8000)}
                       ? "px-3.5 py-2.5 rounded-2xl rounded-br-sm bg-muted text-foreground"
                       : "text-foreground py-0.5"
                   }`}>
-                    {/*
-                      Build-mode rendering: when this assistant message produced
-                      files (messageDiffs has entries) AND it's a build/agent/patch
-                      message, hide the raw prose+code dump and show only a
-                      Lovable-style one-line summary. The detailed diff card
-                      below still renders with the file chips. Code goes to the
-                      Code tab — chat stays conversational.
-                    */}
-                    {msg.role === "assistant" &&
-                      (msg.mode === "build" || msg.mode === "agent" || msg.mode === "patch") &&
-                      messageDiffs[msg.id] && messageDiffs[msg.id].length > 0 ? (
+                    {(() => {
+                      const analyzeMeta = msg.role === "assistant" ? parseAnalyzeMetadata(msg.metadata) : null;
+                      if (analyzeMeta) {
+                        return (
+                          <AnalyzeMessageCard
+                            meta={analyzeMeta}
+                            createdAt={new Date(msg.created_at).toLocaleTimeString()}
+                            onSaveToProject={saveGeneratedFileToProject}
+                          />
+                        );
+                      }
+                      if (
+                        msg.role === "assistant" &&
+                        (msg.mode === "build" || msg.mode === "agent" || msg.mode === "patch") &&
+                        messageDiffs[msg.id] &&
+                        messageDiffs[msg.id].length > 0
+                      ) {
+                        return (
                       <p className="text-sm text-foreground/90 leading-relaxed">
-                        {/* Use the first sentence of msg.content as the summary,
-                            stripped of any leading "I'll" / "Let's" filler.
-                            Falls back to a generic line when the content is
-                            empty or starts with a code fence. */}
                         {(() => {
                           const c = (msg.content ?? "").trim();
                           if (!c || c.startsWith("```") || c.startsWith("{")) {
                             const diffCount = messageDiffs[msg.id].length;
                             return `Updated ${diffCount} file${diffCount === 1 ? "" : "s"}. Open the Code tab or preview to see the result.`;
                           }
-                          // First sentence, max 220 chars; strip markdown emphasis.
                           const firstSentence = c.split(/(?<=[.!?])\s+/)[0]
                             .replace(/[*_`]/g, "")
                             .slice(0, 220);
                           return firstSentence;
                         })()}
                       </p>
-                    ) : (
-                      <MessageContent content={msg.content} mode={msg.mode ?? "chat"} />
-                    )}
+                        );
+                      }
+                      return <MessageContent content={msg.content} mode={msg.mode ?? "chat"} />;
+                    })()}
                   </div>
                 )}
 
@@ -2974,6 +3073,33 @@ ${(f.content ?? "").slice(0, 8000)}
                   return (
                     <div className="w-full mt-1">
                       <BuildActivityCard steps={steps} title="Complete" />
+                    </div>
+                  );
+                })()}
+
+                {/* Server self-verification result (persisted on message metadata) */}
+                {msg.role === "assistant" && (() => {
+                  const v = (msg.metadata as {
+                    verification?: { passed?: boolean; engine?: string; fixesApplied?: number; errors?: string[] };
+                  } | null)?.verification;
+                  if (!v) return null;
+                  const ok = v.passed !== false;
+                  return (
+                    <div className={`w-full mt-1 rounded-xl border overflow-hidden ${ok ? "border-green-500/30 bg-green-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
+                      <div className="px-3 py-2 text-xs font-semibold">
+                        {ok ? "Preview verified" : "Preview check — fixes applied"}
+                        {v.engine ? <span className="text-muted-foreground font-normal ml-1">({v.engine})</span> : null}
+                      </div>
+                      {(v.errors ?? []).length > 0 && (
+                        <div className="px-3 pb-2 space-y-0.5">
+                          {v.errors!.map((e) => (
+                            <div key={e} className="text-[10px] text-muted-foreground flex gap-1.5">
+                              <span className="text-amber-400">!</span>
+                              <span>{e}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -3403,74 +3529,7 @@ ${(f.content ?? "").slice(0, 8000)}
           );
         })}
 
-        {/* Analyze-data result cards — render each completed /api/ai/analyze run */}
-        {analyzeResults.map((r) => (
-          <motion.div
-            key={r.id}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex justify-start"
-          >
-            <div className="w-full max-w-full space-y-2 rounded-2xl border border-violet-500/20 bg-violet-500/5 p-3">
-              <div className="flex items-center gap-2 text-[11px]">
-                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-violet-400"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 5-5"/></svg>
-                <span className="font-medium text-violet-300">Data analysis</span>
-                <span className="text-muted-foreground">· {new Date(r.createdAt).toLocaleTimeString()}</span>
-                <button
-                  onClick={() => setAnalyzeResults((prev) => prev.filter((x) => x.id !== r.id))}
-                  className="ml-auto text-[10px] text-muted-foreground hover:text-foreground"
-                  title="Dismiss"
-                >
-                  Dismiss
-                </button>
-              </div>
-              <p className="text-xs text-foreground/90 italic">&ldquo;{r.instruction}&rdquo;</p>
-              {r.stdout && (
-                <pre className="text-[11px] font-mono whitespace-pre-wrap bg-background/60 border border-border/40 rounded-lg p-2 max-h-32 overflow-y-auto">
-                  {r.stdout}
-                </pre>
-              )}
-              {r.stderr && (
-                <details className="text-[10px]">
-                  <summary className="cursor-pointer text-red-400 hover:text-red-300">View errors</summary>
-                  <pre className="font-mono whitespace-pre-wrap bg-red-500/5 border border-red-500/20 rounded-lg p-2 mt-1 max-h-32 overflow-y-auto">
-                    {r.stderr}
-                  </pre>
-                </details>
-              )}
-              {r.files.length > 0 && (
-                <FileAttachmentList
-                  files={r.files}
-                  caption={`${r.files.length} file${r.files.length === 1 ? "" : "s"} generated`}
-                  onSaveToProject={async (file) => {
-                    try {
-                      const res = await fetch(`/api/projects/${project.id}/files`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          path: `generated/${file.name}`,
-                          // Binary files lose meaning as plain text; store base64 verbatim so
-                          // a future file-render layer can decode it. This keeps the existing
-                          // project_files schema (text-only) workable.
-                          content: file.base64,
-                          language: file.mimeType.startsWith("text/") || file.mimeType.includes("json") ? "json" : "binary",
-                        }),
-                      });
-                      if (!res.ok) throw new Error("Failed to save");
-                      toast({ title: `Saved generated/${file.name} to project` });
-                    } catch (err) {
-                      toast({
-                        title: "Save failed",
-                        description: err instanceof Error ? err.message : "Try again.",
-                        variant: "destructive",
-                      });
-                    }
-                  }}
-                />
-              )}
-            </div>
-          </motion.div>
-        ))}
+        {/* Analyze-data result cards — now persisted as assistant messages with metadata.kind=analyze */}
 
         {/* Streaming message — Lovable-style thought trace + prose + Working/Edited cards */}
         {streaming && (
@@ -3598,6 +3657,13 @@ ${(f.content ?? "").slice(0, 8000)}
                   </div>
                 )}
               </div>
+              {/* Backend wiring + self-verification progress (Lovable-style) */}
+              {postBuildStatus && (
+                <div className="flex items-center gap-1.5 py-1 text-[11px] text-violet-300">
+                  <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+                  <span>{postBuildStatus}</span>
+                </div>
+              )}
               {/* Real-time file generation progress (chat/agent modes) */}
               <AnimatePresence>
                 {streamingFiles.length > 0 && agentSteps.length === 0 && mode !== "build" && mode !== "patch" && !buildStatus && (
@@ -4528,6 +4594,7 @@ Please confirm the breakdown before implementing anything.`,
                             headers: { "Content-Type": "application/json" },
                             body: JSON.stringify({
                               instruction: analyzeInstruction.trim(),
+                              projectId: project.id,
                               inputFile: analyzeFile ?? undefined,
                             }),
                           });
@@ -4538,21 +4605,14 @@ Please confirm the breakdown before implementing anything.`,
                             stdout?: string;
                             stderr?: string;
                             files?: GeneratedFile[];
+                            messages?: Message[];
                           };
                           if (!res.ok || !data.ok) {
                             throw new Error(data.error ?? data.stderr ?? "Analysis failed");
                           }
-                          setAnalyzeResults((prev) => [
-                            ...prev,
-                            {
-                              id: `analyze-${Date.now()}`,
-                              instruction: analyzeInstruction.trim(),
-                              stdout: data.stdout ?? "",
-                              stderr: data.stderr ?? "",
-                              files: data.files ?? [],
-                              createdAt: Date.now(),
-                            },
-                          ]);
+                          if (data.messages?.length) {
+                            onMessagesUpdate([...messages, ...data.messages]);
+                          }
                           toast({
                             title: `Analysis complete · ${(data.files ?? []).length} file${(data.files ?? []).length === 1 ? "" : "s"}`,
                           });
@@ -5078,6 +5138,22 @@ Please confirm the breakdown before implementing anything.`,
             setAttachedImage(annotated);
             if (note?.trim()) setInput(note);
             setChatAnnotateOpen(false);
+          }}
+        />
+      )}
+
+      {designPreviewOpen && pendingDesignPrompt && (
+        <DesignPreviewPicker
+          open={designPreviewOpen}
+          prompt={pendingDesignPrompt}
+          projectId={project.id}
+          fileCount={files.length}
+          onSelect={handleDesignPreviewSelect}
+          onSkip={handleDesignPreviewSkip}
+          onClose={() => {
+            setDesignPreviewOpen(false);
+            setPendingDesignPrompt(null);
+            if (pendingDesignPrompt) setInput(pendingDesignPrompt);
           }}
         />
       )}

@@ -64,13 +64,24 @@ interface UsagePayload {
 // Values are [input_per_1M_usd, output_per_1M_usd]
 const TOKEN_COST_MAP: Record<string, [number, number]> = {
   // OpenAI
+  "gpt-5.2":             [1.75,  14.00],
   "gpt-4o":              [2.50,  10.00],
   "gpt-4o-mini":         [0.15,   0.60],
-  // Anthropic
-  "claude-opus-4-6":          [15.00,  75.00],
-  "claude-sonnet-4-6":        [3.00,   15.00],
-  "claude-haiku-4-5-20251001":[0.80,    4.00],
+  // Anthropic — native API IDs use hyphens, OpenRouter slugs use DOTS.
+  // Tiers route via OpenRouter (dot slugs); native keys kept for direct calls.
+  "claude-opus-4-8":            [5.00,  25.00],
+  "anthropic/claude-opus-4.8":  [5.00,  25.00],
+  "claude-opus-4-6":            [15.00, 75.00],
+  "claude-sonnet-4-6":          [3.00,  15.00],
+  "anthropic/claude-sonnet-4.6":[3.00,  15.00],
+  "claude-haiku-4-5-20251001":  [0.80,   4.00],
+  "claude-haiku-4-5":           [0.80,   4.00],
+  "anthropic/claude-haiku-4.5": [0.80,   4.00],
   // Google
+  "gemini-3.1-pro":      [2.00,  12.00],
+  "gemini-3-flash-preview":[0.50,  3.00],
+  "gemini-3.1-flash-lite":[0.25,   1.50],
+  "gemini-3.1-flash-image":[0.50,  3.00], // image output billed per-image upstream
   "gemini-2.0-flash":    [0.10,   0.40],
   "gemini-2.0-flash-lite":[0.075, 0.30],
   "gemini-1.5-pro":      [1.25,   5.00],
@@ -459,7 +470,7 @@ async function handleChat(request: Request, env: Env, ctx: ExecutionContext): Pr
     });
   }
 
-  const model = (body.model as string | undefined) ?? "claude-opus-4-6";
+  const model = (body.model as string | undefined) ?? "openai/gpt-4o";
   const isStreaming = body.stream === true;
   const projectId = request.headers.get("X-Lifemark-Project-Id") ?? "";
   const userId = request.headers.get("X-Lifemark-User-Id") ?? "";

@@ -70,8 +70,8 @@ const TOOLS = [
         message: { type: "string", description: "The instruction for the AI" },
         model: {
           type: "string",
-          description: "AI model to use. Defaults to claude-opus-4-6.",
-          enum: ["gpt-4o", "gpt-4o-mini", "claude-opus-4-6", "claude-sonnet-4-6", "gemini-2.0-flash"],
+          description: "AI model to use (OpenRouter slug). Defaults to openai/gpt-4o.",
+          enum: ["openai/gpt-4o", "openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet", "deepseek/deepseek-chat-v3-0324"],
         },
       },
       required: ["project_id", "message"],

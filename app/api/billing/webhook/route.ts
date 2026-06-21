@@ -99,6 +99,31 @@ export async function POST(req: NextRequest) {
       const customerId = sub.customer as string;
       const priceId    = sub.items.data[0]?.price.id ?? "";
 
+      // App subscriptions (paywall embeds on apps built with LifemarkAI) are
+      // tracked in app_subscriptions, not on the builder's profile.
+      if (sub.metadata?.kind === "app_subscription") {
+        const appProjectId = sub.metadata.lifemark_project_id;
+        const subscriberEmail = (sub.metadata.subscriber_email ?? "").toLowerCase();
+        if (appProjectId && subscriberEmail) {
+          const status =
+            sub.status === "trialing" ? "trialing"
+            : sub.status === "past_due" ? "past_due"
+            : ["canceled", "unpaid", "incomplete_expired"].includes(sub.status) ? "canceled"
+            : "active";
+          await (supabase as any).from("app_subscriptions").upsert({
+            project_id:         appProjectId,
+            subscriber_email:   subscriberEmail,
+            stripe_customer_id: customerId,
+            stripe_sub_id:      sub.id,
+            status,
+            trial_end:          sub.trial_end ? new Date(sub.trial_end * 1000).toISOString() : null,
+            current_period_end: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : null,
+            updated_at:         new Date().toISOString(),
+          }, { onConflict: "project_id,subscriber_email" });
+        }
+        break;
+      }
+
       const plan = getPlanByPriceId(priceId);
       if (!plan) break;
 
@@ -107,23 +132,91 @@ export async function POST(req: NextRequest) {
       const profile = await profileByCustomer(customerId);
       if (!profile) break;
 
+      const isNewSub     = event.type === "customer.subscription.created";
+      const planChanged  = profile.plan !== plan.id;
+
+      // `subscription.updated` fires for payment-method changes, renewals,
+      // cancellation scheduling, etc. — never reset the balance for those.
+      // Monthly renewals (with rollover) are handled in `invoice.paid` below.
+      if (!isNewSub && !planChanged) {
+        await (supabase as any).from("profiles").update({
+          stripe_subscription_id: sub.id,
+          updated_at:             new Date().toISOString(),
+        }).eq("id", profile.id);
+        break;
+      }
+
+      // New subscription → fresh allowance.
+      // Upgrade → top the balance up by the plan difference (Lovable behaviour:
+      // "upgrading from 100 to 200 gives you 100 more, not 200 more").
+      // Downgrade → keep the current balance; new allowance applies at renewal.
+      let newCredits: number | null = credits;
+      let logAmount  = credits;
+      let logDesc    = `${plan.name} plan activated`;
+
+      if (!isNewSub && planChanged) {
+        const oldPlan = PLANS.find((p) => p.id === profile.plan);
+        const oldCredits = oldPlan ? (oldPlan.credits === -1 ? 99999 : oldPlan.credits) : 0;
+        const diff = credits - oldCredits;
+        if (diff > 0) {
+          newCredits = (profile.credits ?? 0) + diff;
+          logAmount  = diff;
+          logDesc    = `Upgraded to ${plan.name}: +${diff} credits`;
+        } else {
+          newCredits = null; // downgrade — leave balance untouched
+          logAmount  = 0;
+          logDesc    = `Changed to ${plan.name} plan`;
+        }
+      }
+
       await (supabase as any).from("profiles").update({
         plan:                    plan.id,
-        credits:                 credits,
+        ...(newCredits !== null ? { credits: newCredits } : {}),
         stripe_subscription_id:  sub.id,
         updated_at:              new Date().toISOString(),
       }).eq("id", profile.id);
 
       await (supabase as any).from("credit_logs").insert({
         user_id:     profile.id,
-        amount:      credits,
+        amount:      logAmount,
         action:      "subscription",
-        description: `${plan.name} plan activated`,
+        description: logDesc,
       });
 
-      if (event.type === "customer.subscription.created" && profile.email) {
+      if (isNewSub && profile.email) {
         const price = plan.monthlyPrice > 0 ? `$${(plan.monthlyPrice / 100).toFixed(0)}/mo` : "Free";
         await sendCreditsPurchasedEmail(profile.email, credits, price).catch(console.error);
+      }
+      break;
+    }
+
+    // ── Monthly renewal → refill with rollover ─────────────────────────────
+    // Unused credits from the previous cycle carry over, capped at one month's
+    // plan allowance: new_balance = LEAST(current, plan) + plan (migration 063).
+    case "invoice.paid": {
+      const invoice = event.data.object as Stripe.Invoice;
+      if (invoice.billing_reason !== "subscription_cycle") break;
+
+      const customerId = invoice.customer as string;
+      const profile = await profileByCustomer(customerId);
+      if (!profile) break;
+
+      const plan = PLANS.find((p) => p.id === profile.plan);
+      if (!plan || plan.credits <= 0) break; // free/enterprise — nothing to refill
+
+      const { data: newBalance, error } = await (supabase as any).rpc("apply_plan_renewal" as never, {
+        p_user_id:      profile.id,
+        p_plan_credits: plan.credits,
+      } as never);
+
+      if (error) {
+        // Fallback (pre-063 DB): plain refill without rollover
+        await (supabase as any).from("profiles").update({
+          credits:    plan.credits,
+          updated_at: new Date().toISOString(),
+        }).eq("id", profile.id);
+      } else {
+        console.log(`Renewal applied for ${profile.id}: balance ${newBalance}`);
       }
       break;
     }
@@ -131,6 +224,16 @@ export async function POST(req: NextRequest) {
     // ── Subscription cancelled → downgrade to free ────────────────────────
     case "customer.subscription.deleted": {
       const sub = event.data.object as Stripe.Subscription;
+
+      // App subscription cancelled → mark the subscriber as canceled.
+      if (sub.metadata?.kind === "app_subscription") {
+        await (supabase as any)
+          .from("app_subscriptions")
+          .update({ status: "canceled", updated_at: new Date().toISOString() })
+          .eq("stripe_sub_id", sub.id);
+        break;
+      }
+
       const profile = await profileByCustomer(sub.customer as string);
       if (!profile) break;
 

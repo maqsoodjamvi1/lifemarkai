@@ -91,6 +91,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid GitHub URL" }, { status: 400 });
   }
 
+  // Grant today's daily free credits before the balance gate (migration 063)
+  await (await import("@/lib/credits")).claimDailyCredits(supabase, user.id);
+
   // Use user's GitHub token if available (allows private repos), fall back to anonymous
   const { data: profile } = await (supabase as any)
     .from("profiles")

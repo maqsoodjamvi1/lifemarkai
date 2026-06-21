@@ -78,7 +78,7 @@ const INDEX_CSS: TemplateFile = {
 const VITE_CONFIG: TemplateFile = {
   path: "vite.config.ts",
   language: "typescript",
-  content: `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\nexport default defineConfig({ plugins: [react()] })`,
+  content: `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\nexport default defineConfig({ plugins: [react({ babel: { plugins: [] } })] })`,
 };
 
 const INDEX_HTML: TemplateFile = {

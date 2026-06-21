@@ -1,28 +1,21 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Type, Palette, Maximize2, AlignLeft, AlignCenter,
-  AlignRight, Bold, Italic, X, Check, Wand2,
+  AlignLeft, AlignCenter, AlignRight, X, Check, Wand2, Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { applyVisualEdit, buildVisualEditPrompt, type VisualEditChange } from "@/lib/editor/apply-visual-edit";
 import type { ProjectFile } from "@/types/database";
 
-interface SelectedElement {
+export interface SelectedElement {
   tagName: string;
   textContent: string;
   classList: string[];
   xpath: string;
   rect: { top: number; left: number; width: number; height: number };
-}
-
-interface VisualEditOverlayProps {
-  iframeRef: React.RefObject<HTMLIFrameElement>;
-  files: ProjectFile[];
-  onFileChange: (path: string, content: string) => void;
-  enabled: boolean;
 }
 
 const TAILWIND_COLORS = [
@@ -40,12 +33,280 @@ const BG_COLORS = [
   "bg-purple-500", "bg-indigo-500", "bg-pink-500", "bg-gradient-brand",
 ];
 
-export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled }: VisualEditOverlayProps) {
+// ── Shared edit logic ─────────────────────────────────────────────────────────
+
+/**
+ * Apply a visual edit to source files (multi-file aware). When the
+ * deterministic matcher can't find a unique target, falls back to a precise
+ * AI edit prompt via onRequestAiEdit (when provided).
+ * Returns true when the edit was applied directly.
+ */
+function applyChangeToFiles(
+  files: ProjectFile[],
+  selected: SelectedElement,
+  change: VisualEditChange,
+  onFileChange: (path: string, content: string) => void,
+  onRequestAiEdit?: (prompt: string) => void
+): boolean {
+  const result = applyVisualEdit(files, selected, change);
+  if (result) {
+    onFileChange(result.path, result.content);
+    return true;
+  }
+  onRequestAiEdit?.(buildVisualEditPrompt(selected, change));
+  return false;
+}
+
+// ── Shared popover UI ─────────────────────────────────────────────────────────
+
+export function VebEditPopover({
+  selection,
+  position,
+  onApply,
+  onClose,
+  aiFallbackAvailable,
+}: {
+  selection: SelectedElement;
+  position: { x: number; y: number };
+  onApply: (change: VisualEditChange) => void;
+  onClose: () => void;
+  /** Show a hint that unmatched edits are sent to the AI */
+  aiFallbackAvailable?: boolean;
+}) {
+  const [activeTab, setActiveTab] = useState<"text" | "colors" | "spacing">("text");
+  const [editText, setEditText] = useState(selection.textContent);
+  const [editClasses, setEditClasses] = useState(selection.classList.join(" "));
+
+  // Reset edit fields when a different element is selected — React's
+  // "adjust state during render" pattern (no effect → no cascading render).
+  const [prevSelection, setPrevSelection] = useState(selection);
+  if (prevSelection !== selection) {
+    setPrevSelection(selection);
+    setEditText(selection.textContent);
+    setEditClasses(selection.classList.join(" "));
+  }
+
+  function addClass(cls: string) {
+    const updated = editClasses.includes(cls)
+      ? editClasses.split(" ").filter((c) => c !== cls).join(" ")
+      : (editClasses + " " + cls).trim();
+    setEditClasses(updated);
+    onApply({ classes: updated });
+  }
+
+  return (
+    <AnimatePresence>
+      <motion.div
+        initial={{ opacity: 0, y: -8, scale: 0.95 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="fixed z-50 bg-popover border border-border rounded-2xl shadow-2xl w-72"
+        style={{
+          left: Math.max(8, Math.min(position.x - 136, (typeof window !== "undefined" ? window.innerWidth : 1280) - 288)),
+          top: Math.max(8, Math.min(position.y, (typeof window !== "undefined" ? window.innerHeight : 800) - 400)),
+        }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-3 py-2 border-b border-border">
+          <div className="flex items-center gap-2">
+            <Wand2 className="w-4 h-4 text-violet-400" />
+            <span className="text-sm font-medium">
+              &lt;{selection.tagName}&gt;
+            </span>
+          </div>
+          <Button variant="ghost" size="icon" className="w-6 h-6" onClick={onClose}>
+            <X className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex border-b border-border">
+          {(["text", "colors", "spacing"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={`flex-1 py-2 text-xs font-medium capitalize transition-colors ${
+                activeTab === tab
+                  ? "text-foreground border-b-2 border-violet-500"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+
+        <div className="p-3 space-y-3">
+          {activeTab === "text" && (
+            <>
+              {/* Text content */}
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Content</label>
+                <div className="flex gap-1">
+                  <Input
+                    value={editText}
+                    onChange={(e) => setEditText(e.target.value)}
+                    className="h-8 text-xs"
+                    onKeyDown={(e) => e.key === "Enter" && onApply({ text: editText })}
+                  />
+                  <Button size="icon" className="w-8 h-8 shrink-0" onClick={() => onApply({ text: editText })}>
+                    <Check className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              </div>
+
+              {/* Text size */}
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Size</label>
+                <div className="flex flex-wrap gap-1">
+                  {TAILWIND_SIZES.map((cls) => (
+                    <button
+                      key={cls}
+                      onClick={() => addClass(cls)}
+                      className={`px-2 py-0.5 rounded text-xs border transition-colors ${
+                        editClasses.includes(cls)
+                          ? "bg-violet-500/20 border-violet-500/40 text-violet-300"
+                          : "bg-muted border-border hover:bg-accent"
+                      }`}
+                    >
+                      {cls.replace("text-", "")}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Text weight */}
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Weight</label>
+                <div className="flex flex-wrap gap-1">
+                  {TAILWIND_WEIGHTS.map((cls) => (
+                    <button
+                      key={cls}
+                      onClick={() => addClass(cls)}
+                      className={`px-2 py-0.5 rounded text-xs border transition-colors ${
+                        editClasses.includes(cls)
+                          ? "bg-violet-500/20 border-violet-500/40 text-violet-300"
+                          : "bg-muted border-border hover:bg-accent"
+                      }`}
+                    >
+                      {cls.replace("font-", "")}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Alignment */}
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Align</label>
+                <div className="flex gap-1">
+                  {[
+                    { cls: "text-left", Icon: AlignLeft },
+                    { cls: "text-center", Icon: AlignCenter },
+                    { cls: "text-right", Icon: AlignRight },
+                  ].map(({ cls, Icon }) => (
+                    <button
+                      key={cls}
+                      onClick={() => addClass(cls)}
+                      className={`flex-1 flex items-center justify-center py-1.5 rounded border transition-colors ${
+                        editClasses.includes(cls)
+                          ? "bg-violet-500/20 border-violet-500/40"
+                          : "bg-muted border-border hover:bg-accent"
+                      }`}
+                    >
+                      <Icon className="w-3.5 h-3.5" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          {activeTab === "colors" && (
+            <>
+              {/* Text color */}
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Text color</label>
+                <div className="flex flex-wrap gap-1">
+                  {TAILWIND_COLORS.map((cls) => (
+                    <button
+                      key={cls}
+                      onClick={() => addClass(cls)}
+                      className={`w-7 h-7 rounded border-2 transition-all ${cls} bg-gray-800 flex items-center justify-center ${
+                        editClasses.includes(cls) ? "border-violet-500 scale-110" : "border-border"
+                      }`}
+                      title={cls}
+                    >
+                      A
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Background color */}
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Background</label>
+                <div className="flex flex-wrap gap-1">
+                  {BG_COLORS.map((cls) => (
+                    <button
+                      key={cls}
+                      onClick={() => addClass(cls)}
+                      className={`w-7 h-7 rounded border-2 transition-all ${cls} ${
+                        editClasses.includes(cls) ? "border-violet-500 scale-110" : "border-border"
+                      }`}
+                      title={cls}
+                    />
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
+          {activeTab === "spacing" && (
+            <div>
+              <label className="text-xs text-muted-foreground mb-1 block">Tailwind classes</label>
+              <div className="flex gap-1">
+                <Input
+                  value={editClasses}
+                  onChange={(e) => setEditClasses(e.target.value)}
+                  className="h-8 text-xs font-mono"
+                  placeholder="e.g. p-4 m-2 rounded-xl"
+                />
+                <Button size="icon" className="w-8 h-8 shrink-0" onClick={() => onApply({ classes: editClasses })}>
+                  <Check className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Enter any Tailwind CSS classes directly.
+              </p>
+            </div>
+          )}
+
+          {aiFallbackAvailable && (
+            <p className="text-[10px] text-muted-foreground/60 flex items-center gap-1 pt-1 border-t border-border/60">
+              <Sparkles className="w-3 h-3 shrink-0" />
+              Edits that can&apos;t be matched in code are sent to the AI automatically.
+            </p>
+          )}
+        </div>
+      </motion.div>
+    </AnimatePresence>
+  );
+}
+
+// ── DOM mode (same-origin srcdoc fallback engine) ─────────────────────────────
+
+interface VisualEditOverlayProps {
+  iframeRef: React.RefObject<HTMLIFrameElement>;
+  files: ProjectFile[];
+  onFileChange: (path: string, content: string) => void;
+  enabled: boolean;
+  /** Optional: route unmatched edits to the AI chat as a precise prompt */
+  onRequestAiEdit?: (prompt: string) => void;
+}
+
+export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled, onRequestAiEdit }: VisualEditOverlayProps) {
   const [selected, setSelected] = useState<SelectedElement | null>(null);
   const [popoverPos, setPopoverPos] = useState({ x: 0, y: 0 });
-  const [activeTab, setActiveTab] = useState<"text" | "colors" | "spacing">("text");
-  const [editText, setEditText] = useState("");
-  const [editClasses, setEditClasses] = useState("");
 
   const injectOverlayScript = useCallback(() => {
     const iframe = iframeRef.current;
@@ -89,7 +350,7 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled }: V
       setSelected({
         tagName: el.tagName.toLowerCase(),
         textContent: el.textContent ?? "",
-        classList: Array.from(el.classList),
+        classList: Array.from(el.classList).filter((c) => !c.startsWith("lifemark-")),
         xpath: getXPath(el, doc),
         rect: {
           top: rect.top + iframeRect.top,
@@ -98,8 +359,6 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled }: V
           height: rect.height,
         },
       });
-      setEditText(el.textContent ?? "");
-      setEditClasses(Array.from(el.classList).join(" "));
       setPopoverPos({
         x: rect.left + iframeRect.left + rect.width / 2,
         y: rect.top + iframeRect.top + rect.height + 8,
@@ -120,65 +379,19 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled }: V
     };
   }, [enabled, iframeRef]);
 
+  // Clear the selection when the overlay is toggled off — adjust-state-during-
+  // render pattern keeps setState out of the effect body (react-hooks v7 rule).
+  const [prevEnabled, setPrevEnabled] = useState(enabled);
+  if (prevEnabled !== enabled) {
+    setPrevEnabled(enabled);
+    if (!enabled) setSelected(null);
+  }
+
   useEffect(() => {
-    if (!enabled) {
-      setSelected(null);
-      return;
-    }
+    if (!enabled) return;
     const cleanup = injectOverlayScript();
     return cleanup;
   }, [enabled, injectOverlayScript]);
-
-  function applyTextChange() {
-    if (!selected) return;
-    applyFileChange({ textContent: editText });
-  }
-
-  function applyClassChange(oldClass: string, newClass: string) {
-    if (!selected) return;
-    const updated = editClasses
-      .split(" ")
-      .filter((c) => c !== oldClass)
-      .concat(newClass ? [newClass] : [])
-      .join(" ");
-    setEditClasses(updated);
-    applyFileChange({ classes: updated });
-  }
-
-  function addClass(cls: string) {
-    const updated = editClasses.includes(cls)
-      ? editClasses.split(" ").filter((c) => c !== cls).join(" ")
-      : (editClasses + " " + cls).trim();
-    setEditClasses(updated);
-    applyFileChange({ classes: updated });
-  }
-
-  function applyFileChange({ textContent, classes }: { textContent?: string; classes?: string }) {
-    if (!selected) return;
-    // Find the file containing this element and update it
-    const appFile = files.find((f) => f.path.endsWith("App.tsx") || f.path.endsWith("App.jsx") || f.path.endsWith("index.tsx"));
-    if (!appFile) return;
-
-    let content = appFile.content;
-
-    if (textContent !== undefined && selected.textContent) {
-      content = content.replace(selected.textContent, textContent);
-    }
-
-    if (classes !== undefined) {
-      const classAttrRegex = /className="([^"]*)"/g;
-      let found = false;
-      content = content.replace(classAttrRegex, (match, existing: string) => {
-        if (!found && existing === selected.classList.join(" ")) {
-          found = true;
-          return `className="${classes}"`;
-        }
-        return match;
-      });
-    }
-
-    onFileChange(appFile.path, content);
-  }
 
   if (!enabled || !selected) return null;
 
@@ -195,195 +408,85 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled }: V
         }}
       />
 
-      {/* Edit Popover */}
-      <AnimatePresence>
-        <motion.div
-          initial={{ opacity: 0, y: -8, scale: 0.95 }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          className="fixed z-50 bg-popover border border-border rounded-2xl shadow-2xl w-72"
-          style={{
-            left: Math.min(popoverPos.x - 136, window.innerWidth - 288),
-            top: Math.min(popoverPos.y, window.innerHeight - 400),
-          }}
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-            <div className="flex items-center gap-2">
-              <Wand2 className="w-4 h-4 text-violet-400" />
-              <span className="text-sm font-medium">
-                &lt;{selected.tagName}&gt;
-              </span>
-            </div>
-            <Button variant="ghost" size="icon" className="w-6 h-6" onClick={() => setSelected(null)}>
-              <X className="w-3.5 h-3.5" />
-            </Button>
-          </div>
+      <VebEditPopover
+        selection={selected}
+        position={popoverPos}
+        onClose={() => setSelected(null)}
+        aiFallbackAvailable={!!onRequestAiEdit}
+        onApply={(change) => {
+          applyChangeToFiles(files, selected, change, onFileChange, onRequestAiEdit);
+          // Keep local selection state in sync so follow-up edits chain correctly
+          setSelected((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  textContent: change.text !== undefined ? change.text : prev.textContent,
+                  classList: change.classes !== undefined ? change.classes.split(" ").filter(Boolean) : prev.classList,
+                }
+              : prev
+          );
+        }}
+      />
+    </>
+  );
+}
 
-          {/* Tabs */}
-          <div className="flex border-b border-border">
-            {(["text", "colors", "spacing"] as const).map((tab) => (
-              <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`flex-1 py-2 text-xs font-medium capitalize transition-colors ${
-                  activeTab === tab
-                    ? "text-foreground border-b-2 border-violet-500"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {tab}
-              </button>
-            ))}
-          </div>
+// ── Bridge mode (cross-origin WebContainer engine) ────────────────────────────
 
-          <div className="p-3 space-y-3">
-            {activeTab === "text" && (
-              <>
-                {/* Text content */}
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Content</label>
-                  <div className="flex gap-1">
-                    <Input
-                      value={editText}
-                      onChange={(e) => setEditText(e.target.value)}
-                      className="h-8 text-xs"
-                      onKeyDown={(e) => e.key === "Enter" && applyTextChange()}
-                    />
-                    <Button size="icon" className="w-8 h-8 shrink-0" onClick={applyTextChange}>
-                      <Check className="w-3.5 h-3.5" />
-                    </Button>
-                  </div>
-                </div>
+interface VebBridgePopoverProps {
+  selection: SelectedElement;
+  files: ProjectFile[];
+  onFileChange: (path: string, content: string) => void;
+  /** Send a live-apply command to the preview iframe for instant feedback */
+  onLiveApply: (payload: { xpath: string; text?: string; classes?: string }) => void;
+  onRequestAiEdit?: (prompt: string) => void;
+  onClose: () => void;
+  onSelectionChange?: (next: SelectedElement) => void;
+}
 
-                {/* Text size */}
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Size</label>
-                  <div className="flex flex-wrap gap-1">
-                    {TAILWIND_SIZES.map((cls) => (
-                      <button
-                        key={cls}
-                        onClick={() => addClass(cls)}
-                        className={`px-2 py-0.5 rounded text-xs border transition-colors ${
-                          editClasses.includes(cls)
-                            ? "bg-violet-500/20 border-violet-500/40 text-violet-300"
-                            : "bg-muted border-border hover:bg-accent"
-                        }`}
-                      >
-                        {cls.replace("text-", "")}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+export function VebBridgePopover({
+  selection,
+  files,
+  onFileChange,
+  onLiveApply,
+  onRequestAiEdit,
+  onClose,
+  onSelectionChange,
+}: VebBridgePopoverProps) {
+  return (
+    <>
+      {/* Selection border */}
+      <div
+        className="fixed pointer-events-none z-40 border-2 border-blue-500 rounded"
+        style={{
+          top: selection.rect.top,
+          left: selection.rect.left,
+          width: selection.rect.width,
+          height: selection.rect.height,
+        }}
+      />
 
-                {/* Text weight */}
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Weight</label>
-                  <div className="flex flex-wrap gap-1">
-                    {TAILWIND_WEIGHTS.map((cls) => (
-                      <button
-                        key={cls}
-                        onClick={() => addClass(cls)}
-                        className={`px-2 py-0.5 rounded text-xs border transition-colors ${
-                          editClasses.includes(cls)
-                            ? "bg-violet-500/20 border-violet-500/40 text-violet-300"
-                            : "bg-muted border-border hover:bg-accent"
-                        }`}
-                      >
-                        {cls.replace("font-", "")}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Alignment */}
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Align</label>
-                  <div className="flex gap-1">
-                    {[
-                      { cls: "text-left", Icon: AlignLeft },
-                      { cls: "text-center", Icon: AlignCenter },
-                      { cls: "text-right", Icon: AlignRight },
-                    ].map(({ cls, Icon }) => (
-                      <button
-                        key={cls}
-                        onClick={() => addClass(cls)}
-                        className={`flex-1 flex items-center justify-center py-1.5 rounded border transition-colors ${
-                          editClasses.includes(cls)
-                            ? "bg-violet-500/20 border-violet-500/40"
-                            : "bg-muted border-border hover:bg-accent"
-                        }`}
-                      >
-                        <Icon className="w-3.5 h-3.5" />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-
-            {activeTab === "colors" && (
-              <>
-                {/* Text color */}
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Text color</label>
-                  <div className="flex flex-wrap gap-1">
-                    {TAILWIND_COLORS.map((cls) => (
-                      <button
-                        key={cls}
-                        onClick={() => addClass(cls)}
-                        className={`w-7 h-7 rounded border-2 transition-all ${cls} bg-gray-800 flex items-center justify-center ${
-                          editClasses.includes(cls) ? "border-violet-500 scale-110" : "border-border"
-                        }`}
-                        title={cls}
-                      >
-                        A
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Background color */}
-                <div>
-                  <label className="text-xs text-muted-foreground mb-1 block">Background</label>
-                  <div className="flex flex-wrap gap-1">
-                    {BG_COLORS.map((cls) => (
-                      <button
-                        key={cls}
-                        onClick={() => addClass(cls)}
-                        className={`w-7 h-7 rounded border-2 transition-all ${cls} ${
-                          editClasses.includes(cls) ? "border-violet-500 scale-110" : "border-border"
-                        }`}
-                        title={cls}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-
-            {activeTab === "spacing" && (
-              <div>
-                <label className="text-xs text-muted-foreground mb-1 block">Tailwind classes</label>
-                <div className="flex gap-1">
-                  <Input
-                    value={editClasses}
-                    onChange={(e) => setEditClasses(e.target.value)}
-                    className="h-8 text-xs font-mono"
-                    placeholder="e.g. p-4 m-2 rounded-xl"
-                  />
-                  <Button size="icon" className="w-8 h-8 shrink-0" onClick={() => applyFileChange({ classes: editClasses })}>
-                    <Check className="w-3.5 h-3.5" />
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground mt-2">
-                  Enter any Tailwind CSS classes directly.
-                </p>
-              </div>
-            )}
-          </div>
-        </motion.div>
-      </AnimatePresence>
+      <VebEditPopover
+        selection={selection}
+        position={{
+          x: selection.rect.left + selection.rect.width / 2,
+          y: selection.rect.top + selection.rect.height + 8,
+        }}
+        onClose={onClose}
+        aiFallbackAvailable={!!onRequestAiEdit}
+        onApply={(change) => {
+          // 1. Instant DOM feedback inside the (cross-origin) preview
+          onLiveApply({ xpath: selection.xpath, text: change.text, classes: change.classes });
+          // 2. Persist to source files (or AI fallback when not uniquely matchable)
+          applyChangeToFiles(files, selection, change, onFileChange, onRequestAiEdit);
+          // 3. Keep selection in sync for chained edits
+          onSelectionChange?.({
+            ...selection,
+            textContent: change.text !== undefined ? change.text : selection.textContent,
+            classList: change.classes !== undefined ? change.classes.split(" ").filter(Boolean) : selection.classList,
+          });
+        }}
+      />
     </>
   );
 }

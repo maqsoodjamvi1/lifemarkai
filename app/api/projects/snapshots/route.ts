@@ -186,8 +186,9 @@ export async function POST(req: NextRequest) {
       screenshot_url: screenshotUrl,
     });
 
+    let deltaPayload: Record<string, unknown> | undefined;
     try {
-      let previousFiles: SnapshotFile[];
+      let previousFiles: SnapshotFile[] | null = null;
 
       if (latest.is_baseline) {
         previousFiles = (latest.files ?? []) as SnapshotFile[];
@@ -195,39 +196,43 @@ export async function POST(req: NextRequest) {
         const { data: chain, error: chainErr } = await (supabase as any)
           .rpc("get_snapshot_chain", { p_snapshot_id: latest.id });
         if (chainErr || !chain?.length) {
-          throw new Error(chainErr?.message ?? "snapshot chain unavailable");
+          deltaPayload = baselinePayload();
+        } else {
+          previousFiles = reconstructFromChain(chain as SnapshotChainEntry[]);
         }
-        previousFiles = reconstructFromChain(chain as SnapshotChainEntry[]);
       }
 
-      const patches = computePatches(previousFiles, currentFiles as SnapshotFile[]);
-      const chainDepth = await getChainDepth(supabase, latest.id);
-      const forceBase = shouldStoreBaseline({
-        hasPrevious: true,
-        chainDepth,
-        patchBytes: patchesSize(patches),
-        fullBytes: filesSize(currentFiles as SnapshotFile[]),
-      });
+      if (!deltaPayload && previousFiles) {
+        const patches = computePatches(previousFiles, currentFiles as SnapshotFile[]);
+        const chainDepth = await getChainDepth(supabase, latest.id);
+        const forceBase = shouldStoreBaseline({
+          hasPrevious: true,
+          chainDepth,
+          patchBytes: patchesSize(patches),
+          fullBytes: filesSize(currentFiles as SnapshotFile[]),
+        });
 
-      if (forceBase || patches.length === 0) {
-        insertPayload = baselinePayload();
-      } else {
-        // files is NOT NULL in DB — deltas use [] and store changes in patches
-        insertPayload = {
-          project_id: projectId,
-          user_id: user.id,
-          label: snapshotLabel,
-          is_baseline: false,
-          files: [],
-          patches,
-          parent_id: latest.id,
-          screenshot_url: screenshotUrl,
-        };
+        if (forceBase || patches.length === 0) {
+          deltaPayload = baselinePayload();
+        } else {
+          deltaPayload = {
+            project_id: projectId,
+            user_id: user.id,
+            label: snapshotLabel,
+            is_baseline: false,
+            files: [],
+            patches,
+            parent_id: latest.id,
+            screenshot_url: screenshotUrl,
+          };
+        }
       }
     } catch (chainError) {
       console.warn("[snapshots] delta unavailable, storing baseline:", chainError);
-      insertPayload = baselinePayload();
+      deltaPayload = baselinePayload();
     }
+
+    insertPayload = deltaPayload ?? baselinePayload();
   }
 
   const { data: snapshot, error } = await (supabase as any)

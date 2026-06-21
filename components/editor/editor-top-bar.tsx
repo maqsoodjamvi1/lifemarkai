@@ -424,6 +424,11 @@ export function EditorTopBar({
 
   const creditsLow = credits <= 10;
   const creditsMed = credits <= 50;
+  // Credits are fractional (NUMERIC, migration 063) — render at most 2 dp,
+  // trimming float noise like 49.549999 → 49.55, 50.00 → 50.
+  const creditsDisplay = Number.isInteger(credits)
+    ? String(credits)
+    : String(Math.round(credits * 100) / 100);
 
   return (
     <TooltipProvider>
@@ -608,6 +613,7 @@ export function EditorTopBar({
             <DropdownMenuContent align="center" className="w-52 p-1">
               {([
                 { id: "analytics" as LeftPanel, label: "Analytics",        icon: BarChart2 },
+                { id: "company" as LeftPanel,   label: "AI Company",       icon: Brain     },
                 { id: "cloud" as LeftPanel,     label: "Cloud",            icon: Cloud     },
                 { id: "code" as LeftPanel,      label: "Code",             icon: Code2     },
                 { id: "search" as LeftPanel,    label: "Files",            icon: FolderOpen },
@@ -745,10 +751,10 @@ export function EditorTopBar({
                 : "text-muted-foreground/60"
               }`}>
                 <Zap className="h-3 w-3" />
-                {credits}
+                {creditsDisplay}
               </div>
             </TooltipTrigger>
-            <TooltipContent>{credits} credits remaining</TooltipContent>
+            <TooltipContent>{creditsDisplay} credits remaining — includes 5 free daily credits</TooltipContent>
           </Tooltip>
 
           <div className="h-4 w-px bg-border/60 mx-1 flex-shrink-0" />

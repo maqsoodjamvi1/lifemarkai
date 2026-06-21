@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { generateAI } from "@/lib/ai/provider";
+import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 
 export const runtime = "nodejs";
@@ -261,7 +262,7 @@ Scenario: ${scenario}
 Return the JSON test plan now.`;
 
         const planRes = await generateAI({
-          model: "claude-haiku-4-5-20251001",
+          model: FAST_CODING_MODEL,
           messages: [
             { role: "system", content: planSystem },
             { role: "user", content: planUser },
@@ -352,7 +353,7 @@ Return the JSON test plan now.`;
         let summary = `${passed} passed, ${failed} failed.`;
         try {
           const sumRes = await generateAI({
-            model: "claude-haiku-4-5-20251001",
+            model: FAST_CODING_MODEL,
             messages: [
               { role: "system", content: "You write very short test summaries — 2 to 3 sentences. State what worked, what didn't, and the most likely cause if anything failed. No headings." },
               { role: "user", content: `URL: ${target}

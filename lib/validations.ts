@@ -15,13 +15,10 @@ export const projectSchema = z.object({
 export const messageSchema = z.object({
   content: z.string().min(1, "Message cannot be empty").max(10000, "Message is too long"),
   mode: z.enum(["chat", "agent", "plan", "build"]),
-  model: z.enum([
-    "gpt-4o",
-    "moonshotai/kimi-k2-instruct-0905",
-    "claude-sonnet-4-6",
-    "claude-opus-4-6",
-    "claude-haiku-4-5-20251001",
-  ]).optional(),
+  // Any model id (incl. OpenRouter slugs like "openai/gpt-4o"). A hardcoded
+  // enum here silently rejected new models; the provider layer is the real
+  // gatekeeper and falls back gracefully for unknown ids.
+  model: z.string().min(1).max(100).optional(),
 });
 
 export const profileSchema = z.object({
