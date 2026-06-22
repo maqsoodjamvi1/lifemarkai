@@ -327,13 +327,33 @@ export async function POST(req: NextRequest) {
         systemPrompt = buildGenerationPrompt(message, files) + suffix;
       }
       // Anchor to a designer template baseline when one was chosen; otherwise
-      // pick a distinct, polished design direction from the prompt so each build
-      // looks intentional and different (avoids the "every app looks the same" issue).
-      // Only on the FIRST build (no existing files) so iterations stay consistent.
+      // pick a distinct, polished design direction from the prompt. Apply it on
+      // the FIRST build, OR on a later build when the user explicitly asks to
+      // change the look/template (so "restyle / change the template" actually works).
+      const isRestyleRequest =
+        /(re-?style|re-?design|change\s+(the\s+)?(theme|template|design|look|colou?rs?|style)|update\s+(the\s+)?(website\s+)?(theme|template|design|look|style)|new\s+(theme|template|design|look|style)|different\s+(theme|template|design|look)|make\s+it\s+(dark|light|modern|minimal|colou?rful|cleaner))/i.test(
+          message,
+        );
       if (templateId) {
         systemPrompt += buildTemplateRefinementBlock(templateId);
-      } else if (files.length === 0) {
+      } else if (files.length === 0 || isRestyleRequest) {
         systemPrompt += buildDesignDirectionBlock(message);
+      }
+
+      // ── Incremental edit safety (Lovable-style preservation) ────────────────
+      // On a follow-up build (project already has files), this is an EDIT, not a
+      // from-scratch rebuild. Without this, a full regeneration silently drops
+      // prior work — most painfully replacing real image URLs with placeholder
+      // icons. Instruct the model to preserve everything it isn't asked to change.
+      if (files.length > 0) {
+        systemPrompt +=
+          `\n\n---\n# INCREMENTAL EDIT — preserve existing work\n` +
+          `This is an edit to an EXISTING app, not a rebuild. Strict rules:\n` +
+          `- Change ONLY what the user asked for; return all other files and content exactly as they already are.\n` +
+          `- PRESERVE every real asset URL already in the project (img src, background-image, logos, og images, any https image URL). NEVER swap a real image for a placeholder, emoji, icon-font glyph, gradient, or solid color.\n` +
+          `- Keep existing copy, data, routes, and component structure unless the request specifically requires changing them.\n` +
+          `- If the request is a restyle, change colors / typography / spacing / layout / theme, but keep the SAME content and the SAME real images.\n` +
+          `---`;
       }
     } else if (mode === "patch") {
       // Patch mode: inject full codebase (40k budget) so AI can write precise find strings
