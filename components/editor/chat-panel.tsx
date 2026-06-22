@@ -304,7 +304,7 @@ function agentStepToTaskStep(step: AgentStep): AgentTaskStep | null {
 function mergeAgentStep(prev: AgentTaskStep[], step: AgentStep): AgentTaskStep[] {
   if (step.type === "thought" || step.type === "observation") {
     if (prev.length === 0) return prev;
-    return prev.map((s, i) => (i === prev.length - 1 ? { ...s, status: "done" } : s));
+    return prev.map((s, i) => (i === prev.length - 1 ? { ...s, status: "done" as const } : s));
   }
   const next = agentStepToTaskStep(step);
   if (!next) return prev;
