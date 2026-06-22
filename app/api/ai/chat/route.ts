@@ -354,6 +354,40 @@ export async function POST(req: NextRequest) {
           `- Keep existing copy, data, routes, and component structure unless the request specifically requires changing them.\n` +
           `- If the request is a restyle, change colors / typography / spacing / layout / theme, but keep the SAME content and the SAME real images.\n` +
           `---`;
+
+        // ── Asset manifest ────────────────────────────────────────────────────
+        // BM25 context selection can rank an asset-bearing file out of the 80k
+        // budget on a big app, so the model never sees the real image URLs and
+        // regenerates that file with icons. Extract every real asset URL and pin
+        // it into the prompt (URLs only — tiny) so they survive regardless of
+        // which files made it into context.
+        const assetRe =
+          /https?:\/\/[^\s"'`)]+?(?:\.(?:png|jpe?g|gif|webp|avif|svg)(?:\?[^\s"'`)]*)?|\/storage\/v1\/object\/public\/[^\s"'`)]+)/gi;
+        const assetMap = new Map<string, Set<string>>();
+        for (const f of files as Array<{ path: string; content: string }>) {
+          const found = (f.content || "").match(assetRe);
+          if (found && found.length) {
+            const set = assetMap.get(f.path) ?? new Set<string>();
+            found.forEach((u) => set.add(u));
+            assetMap.set(f.path, set);
+          }
+        }
+        if (assetMap.size > 0) {
+          let manifest =
+            `\n\n---\n# EXISTING ASSETS — keep these EXACT URLs\n` +
+            `These real asset URLs already exist in the project. If you output any of these files, the listed URLs MUST stay exactly as-is. Never replace them with placeholders, icons, emoji, or different URLs.\n`;
+          let count = 0;
+          for (const [p, urls] of assetMap) {
+            manifest += `- ${p}:\n`;
+            for (const u of urls) {
+              if (count++ >= 60) break;
+              manifest += `    ${u}\n`;
+            }
+            if (count >= 60) break;
+          }
+          manifest += `---`;
+          systemPrompt += manifest;
+        }
       }
     } else if (mode === "patch") {
       // Patch mode: inject full codebase (40k budget) so AI can write precise find strings
