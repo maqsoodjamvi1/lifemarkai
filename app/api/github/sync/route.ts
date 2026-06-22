@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
   const repo = project.github_repo as string;
 
   // Derive/restore branch name (upgrade old projects that only have "main")
-  let branch = (project.github_branch && project.github_branch !== "main")
+  const branch = (project.github_branch && project.github_branch !== "main")
     ? project.github_branch as string
     : projectBranchName(project.name, projectId);
 

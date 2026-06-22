@@ -36,7 +36,7 @@ let _npmInstalled: boolean = false;
 let _lastPackageJsonContent: string | null = null;
 let _wcDevServerReady = false;
 let _wcPreviewUrl: string | null = null;
-let _lastWrittenGlobal = new Map<string, string>();
+const _lastWrittenGlobal = new Map<string, string>();
 
 const MAX_WATCHDOG_ATTEMPTS = 3;
 const WATCHDOG_COUNTDOWN_SECS = 5;

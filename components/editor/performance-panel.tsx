@@ -481,7 +481,7 @@ export function PerformancePanel({ files, onFixWithAI }: PerformancePanelProps) 
   const results = useMemo(() => {
     void runCount; // dependency to allow re-run
     return runChecks(files);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [files, runCount]);
 
   const overallScore = Math.round(

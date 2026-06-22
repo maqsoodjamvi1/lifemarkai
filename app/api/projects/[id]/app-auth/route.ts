@@ -64,7 +64,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   // Provider-specific config validation
   const safeMode = mode ?? "managed";
-  let validatedConfig = config ?? {};
+  const validatedConfig = config ?? {};
 
   if (provider === "google" && safeMode === "byok") {
     const required = ["client_id", "client_secret"];

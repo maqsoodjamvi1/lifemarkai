@@ -1,6 +1,6 @@
 /** Ensure Vite dev server binds for WebContainer preview (server-ready iframe). */
 export function patchViteConfigForWebContainer(content: string): string {
-  let patched = patchReactPluginBabelConfig(content);
+  const patched = patchReactPluginBabelConfig(content);
   if (!patched.trim()) return patched;
   if (/host\s*:\s*(true|['"]0\.0\.0\.0['"])/.test(patched)) return patched;
 

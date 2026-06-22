@@ -183,7 +183,7 @@ async function generateOpenRouterSafe(
     return await generateOpenRouter({ ...options, model: model as AIModel });
   } catch (err) {
     if (isInvalidModelError(err) && model !== OPENROUTER_SAFE_MODEL) {
-      // eslint-disable-next-line no-console
+       
       console.warn(
         `[ai/provider] OpenRouter rejected "${model}" as an invalid model; ` +
           `retrying with ${OPENROUTER_SAFE_MODEL}.`,
@@ -240,7 +240,7 @@ export async function generateAI(options: GenerateOptions): Promise<GenerateResu
     const orKey = process.env.OPENROUTER_API_KEY;
     const orModel = toOpenRouterModel(model);
     if (provider !== "openrouter" && orKey && orModel && isFallbackableError(err)) {
-      // eslint-disable-next-line no-console
+       
       console.warn(
         `[ai/provider] ${provider} returned ${(err as { status?: number }).status ?? "error"} for "${model}"; ` +
           `falling back to OpenRouter (${orModel}).`,
@@ -257,7 +257,7 @@ export async function generateAI(options: GenerateOptions): Promise<GenerateResu
       process.env.ANTHROPIC_API_KEY &&
       isFallbackableError(err)
     ) {
-      // eslint-disable-next-line no-console
+       
       console.warn(
         `[ai/provider] ${provider} unavailable for "${model}"; degrading to Claude (claude-sonnet-4-6).`,
       );

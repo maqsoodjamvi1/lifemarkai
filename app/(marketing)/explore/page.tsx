@@ -52,7 +52,7 @@ export default async function ExplorePage({
   const { data: projects } = await projectsQuery;
 
   // For popular sort: also fetch 7-day view counts to display alongside star count
-  let viewCountMap: Record<string, number> = {};
+  const viewCountMap: Record<string, number> = {};
   if (sort === "popular") {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data: recentViews } = await (supabase as any)

@@ -154,7 +154,7 @@ async function deployToVercel(
 
   // Poll until ready (max 120s)
   const deadline = Date.now() + 120_000;
-  let deployId = deploy.id;
+  const deployId = deploy.id;
   let liveUrl = `https://${deploy.url}`;
 
   while (Date.now() < deadline) {

@@ -28,7 +28,7 @@ import type { Database } from "@/types/database";
  */
 
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __lifemark_supabase_browser_client: ReturnType<typeof createBrowserClient<Database>> | undefined;
 }
 

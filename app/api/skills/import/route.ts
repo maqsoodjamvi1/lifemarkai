@@ -32,7 +32,7 @@ interface SkillFrontMatter {
 
 function parseSkillMd(content: string): SkillFrontMatter | null {
   const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-  let frontmatter: Record<string, string> = {};
+  const frontmatter: Record<string, string> = {};
   let body = content;
   if (fmMatch) {
     body = fmMatch[2];

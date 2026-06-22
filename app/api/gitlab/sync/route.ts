@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
   }
   const glProjectId = rawRepo.replace("gitlab:", "");
 
-  let branch = (project.github_branch && project.github_branch !== "main")
+  const branch = (project.github_branch && project.github_branch !== "main")
     ? project.github_branch as string
     : projectBranchName(project.name, projectId);
 

@@ -719,7 +719,7 @@ export function ChatPanel({
         );
       })
       .catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [project.id]);
   // Emoji reactions: { [messageId]: Set<emoji> }
   const [reactions, setReactions] = useState<Record<string, Set<string>>>({});
@@ -879,7 +879,7 @@ export function ChatPanel({
     }
     window.addEventListener("lifemark-screenshot-ready", handleScreenshotReady);
     return () => window.removeEventListener("lifemark-screenshot-ready", handleScreenshotReady);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [project.id]);
 
   // Seed screenshots from freshly-loaded messages (e.g., on page reload)
@@ -1188,7 +1188,7 @@ export function ChatPanel({
     };
     window.addEventListener("monaco-ask-snippet", handler);
     return () => window.removeEventListener("monaco-ask-snippet", handler);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, []);
 
   // Insert "@filename " into input when user clicks "Ask AI" in code panel

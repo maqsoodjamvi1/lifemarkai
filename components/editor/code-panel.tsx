@@ -226,7 +226,7 @@ export function CodePanel({
       }
     }
     prevActiveTabIdRef.current = activeTabId;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [activeTabId]);
 
     // ── Outline reveal-line listener ──────────────────────────────────────────
@@ -678,7 +678,7 @@ export function CodePanel({
     } catch {
       // Ignore corrupt session data
     }
-  }, [sessionKey, files]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sessionKey, files]);  
 
   // Persist open tabs whenever they change
   useEffect(() => {

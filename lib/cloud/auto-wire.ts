@@ -133,7 +133,7 @@ export async function autoWireBackend(opts: {
   if (!project) return result;
 
   let cloudUrl: string | null = project.cloud_supabase_url ?? null;
-  let anonKey: string | null = project.cloud_anon_key ?? null;
+  const anonKey: string | null = project.cloud_anon_key ?? null;
   const serviceRef: string | null = project.cloud_project_ref ?? null;
 
   // ── 1. Auto-enable Cloud when the app needs a backend ──────────────────────
