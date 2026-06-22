@@ -4,6 +4,15 @@ import path from "path";
 
 // ESM-safe __dirname — works in .mjs without needing "type":"module" in package.json
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Wildcard host for built-app temporary URLs: {slug}-{projectId}.apps.lifemarkai.com
+// A host-based rewrite (see `rewrites()` below) maps these to the existing
+// /preview/[projectId] renderer so every built app is served from this server.
+// Override the base with LIFEMARK_APPS_DOMAIN.
+const APPS_DOMAIN = (process.env.LIFEMARK_APPS_DOMAIN ?? "apps.lifemarkai.com").replace(/\./g, "\\.");
+const UUID_RE =
+  "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+
 // WebContainers fetch assets from StackBlitz CDNs and serve preview iframes on webcontainer.io.
 const webContainerConnectSrc =
   " https://*.staticblitz.com https://*.webcontainer.io https://*.webcontainer-api.io https://*.stackblitz.io https://*.stackblitz.com https://stackblitz.io https://stackblitz.com wss://*.webcontainer.io wss://*.webcontainer-api.io";
@@ -21,6 +30,26 @@ const nextConfig = {
   // pick up d:\Projects\package-lock.json and emit the "multiple lockfiles" warning.
   turbopack: {
     root: __dirname,
+  },
+
+  // Serve each built app from its temporary subdomain. Requests to
+  // {slug}-{projectId}.apps.lifemarkai.com are rewritten to the existing
+  // /preview/[projectId] renderer (exact id lookup). The main site, www, and
+  // the sslip.io host don't match this rule and pass through untouched.
+  async rewrites() {
+    return {
+      beforeFiles: [
+        {
+          // Exclude paths the preview renderer already owns (its own assets) and
+          // framework paths, so they resolve directly instead of being re-prefixed.
+          source: "/:path((?!preview/|api/|_next/).*)",
+          has: [
+            { type: "host", value: `.*-(?<pid>${UUID_RE})\\.${APPS_DOMAIN}` },
+          ],
+          destination: "/preview/:pid/:path",
+        },
+      ],
+    };
   },
 
   async headers() {
