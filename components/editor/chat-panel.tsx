@@ -235,27 +235,103 @@ interface QueueItem {
 }
 
 /** A visible task step shown during Agent mode execution */
+type AgentStepKind =
+  | "edit" | "delete" | "read" | "search"
+  | "image" | "analyze" | "finalize" | "error" | "other";
+
 interface AgentTaskStep {
   label: string;
   status: "running" | "done";
-  detail?: string;
+  kind: AgentStepKind;
+  /** Dedupe key — repeated ops on the same target collapse into one row. */
+  key: string;
 }
 
-function agentStepToTaskStep(step: AgentStep): AgentTaskStep {
-  if (step.type === "thought") {
-    return { label: "Thinking…", status: "running", detail: step.content.slice(0, 120) || undefined };
+/** Pull a clean file name (basename) out of a step's args or content. */
+function agentStepFile(step: AgentStep): string | undefined {
+  const fromArgs = (step.args?.path ?? step.args?.file ?? step.args?.filename) as string | undefined;
+  const raw = fromArgs ?? step.content?.match(/"(?:path|file|filename)"\s*:\s*"([^"]+)"/)?.[1];
+  return raw ? (raw.split("/").pop() || raw) : undefined;
+}
+
+/**
+ * Map a raw ReAct step to a clean, human-readable activity row (Lovable-style).
+ * Returns null for steps that should NOT get their own row — thoughts and
+ * observations are folded into the previous row by `mergeAgentStep`.
+ */
+function agentStepToTaskStep(step: AgentStep): AgentTaskStep | null {
+  if (step.type === "thought" || step.type === "observation") return null;
+  if (step.type === "done") return { label: "Done", status: "done", kind: "finalize", key: "done" };
+  if (step.type === "error") return { label: "Recovering from an error", status: "done", kind: "error", key: `err:${step.timestamp}` };
+
+  const tool = step.tool ?? "";
+  const file = agentStepFile(step);
+  const fk = file ?? "";
+
+  switch (tool) {
+    case "write_file":
+    case "edit_file":
+      return { label: file ? `Editing ${file}` : "Editing files", status: "running", kind: "edit", key: `edit:${fk}` };
+    case "delete_file":
+      return { label: file ? `Removing ${file}` : "Removing files", status: "running", kind: "delete", key: `del:${fk}` };
+    case "read_file":
+      return { label: file ? `Reading ${file}` : "Reading files", status: "running", kind: "read", key: `read:${fk}` };
+    case "list_files":
+      return { label: "Exploring the project", status: "running", kind: "search", key: "list" };
+    case "glob_search":
+      return { label: "Searching files", status: "running", kind: "search", key: "glob" };
+    case "search_code":
+      return { label: "Searching the code", status: "running", kind: "search", key: "search" };
+    case "find_definition":
+      return { label: "Tracing definitions", status: "running", kind: "search", key: "find" };
+    case "analyze_code":
+      return { label: file ? `Checking ${file}` : "Checking the code", status: "running", kind: "analyze", key: `analyze:${fk}` };
+    case "generate_image":
+      return { label: "Generating an image", status: "running", kind: "image", key: `img:${step.timestamp}` };
+    case "finish":
+      return { label: "Wrapping up", status: "running", kind: "finalize", key: "finish" };
+    default:
+      return { label: tool ? `Running ${tool}` : "Working", status: "running", kind: "other", key: `other:${tool}` };
   }
-  if (step.type === "action") {
-    const tool = step.tool ?? "tool";
-    return { label: `Running ${tool}`, status: "running", detail: step.content.slice(0, 120) || undefined };
+}
+
+/**
+ * Fold a streamed step into the visible activity list (Lovable-style):
+ *  - thoughts / observations don't add rows — they just complete the active row,
+ *  - repeated ops on the same target collapse into a single row,
+ *  - only the newest actionable row stays "running".
+ */
+function mergeAgentStep(prev: AgentTaskStep[], step: AgentStep): AgentTaskStep[] {
+  if (step.type === "thought" || step.type === "observation") {
+    if (prev.length === 0) return prev;
+    return prev.map((s, i) => (i === prev.length - 1 ? { ...s, status: "done" } : s));
   }
-  if (step.type === "observation") {
-    return { label: "Observing result", status: "running", detail: step.content.slice(0, 120) || undefined };
+  const next = agentStepToTaskStep(step);
+  if (!next) return prev;
+  const settled = prev.map((s) => ({ ...s, status: "done" as const }));
+  const existing = settled.findIndex((s) => s.key === next.key);
+  if (existing >= 0) {
+    const updated = [...settled];
+    updated[existing] = next; // keep position, mark running again
+    return updated;
   }
-  if (step.type === "done") {
-    return { label: "Complete", status: "done", detail: step.content.slice(0, 120) || undefined };
+  return [...settled, next];
+}
+
+/** Small glyph that conveys what kind of work a step is doing. */
+function AgentStepGlyph({ kind }: { kind: AgentStepKind }) {
+  const cls = "w-3.5 h-3.5 shrink-0 text-muted-foreground/70";
+  switch (kind) {
+    case "edit": return <Pencil className={cls} />;
+    case "delete": return <Trash2 className={cls} />;
+    case "read": return <FileText className={cls} />;
+    case "search": return <Search className={cls} />;
+    case "image": return <Image className={cls} />;
+    case "analyze": return <ListChecks className={cls} />;
+    case "finalize": return <Sparkles className={cls} />;
+    case "error": return <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-400" />;
+    default: return <FileCode className={cls} />;
   }
-  return { label: step.type, status: "running", detail: step.content.slice(0, 120) || undefined };
 }
 
 const MAX_AUTO_FIX_ATTEMPTS = 3;
@@ -1739,10 +1815,7 @@ ${(f.content ?? "").slice(0, 8000)}
 
               if (data.step) {
                 const step = data.step as AgentStep;
-                setAgentSteps((prev) => {
-                  const donePrev = prev.map((s) => ({ ...s, status: "done" as const }));
-                  return [...donePrev, agentStepToTaskStep(step)];
-                });
+                setAgentSteps((prev) => mergeAgentStep(prev, step));
               }
 
               if (typeof data.fileUpdated?.path === "string") {
@@ -3564,28 +3637,28 @@ ${(f.content ?? "").slice(0, 8000)}
                     className="overflow-hidden"
                   >
                     <div className="rounded-xl border border-border/60 bg-muted/20 overflow-hidden mb-1">
-                      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border/40 bg-muted/30">
-                        <Loader2 className="w-3 h-3 animate-spin text-violet-400 shrink-0" />
-                        <span className="text-[11px] font-semibold text-foreground">Agent working…</span>
-                        <span className="ml-auto text-[10px] text-muted-foreground">
-                          {agentSteps.filter((s) => s.status === "done").length}/{agentSteps.length} steps
+                      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/40 bg-gradient-to-r from-violet-500/10 to-transparent">
+                        <Sparkles className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                        <span className="text-xs font-semibold text-foreground">Building your app</span>
+                        <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">
+                          {agentSteps.filter((s) => s.status === "done").length}/{agentSteps.length}
                         </span>
                       </div>
-                      <div className="px-3 py-2 space-y-1.5">
+                      <div className="px-2 py-1.5 space-y-0.5 max-h-64 overflow-y-auto">
                         {agentSteps.map((step, i) => (
-                          <div key={i} className="flex items-center gap-2 text-xs">
-                            {step.status === "done"
-                              ? <Check className="w-3 h-3 text-green-400 shrink-0" />
-                              : <Loader2 className="w-3 h-3 animate-spin text-violet-400 shrink-0" />
-                            }
-                            <span className={step.status === "done" ? "text-muted-foreground" : "text-foreground"}>
+                          <div
+                            key={step.key + i}
+                            className="flex items-center gap-2 px-1.5 py-1 rounded-lg text-xs"
+                          >
+                            <span className="shrink-0">
+                              {step.status === "done"
+                                ? <Check className="w-3.5 h-3.5 text-green-400" />
+                                : <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-400" />}
+                            </span>
+                            <AgentStepGlyph kind={step.kind} />
+                            <span className={step.status === "done" ? "text-muted-foreground truncate" : "text-foreground font-medium truncate"}>
                               {step.label}
                             </span>
-                            {step.detail && (
-                              <span className="ml-auto font-mono text-[10px] text-muted-foreground truncate max-w-[120px]">
-                                {step.detail}
-                              </span>
-                            )}
                           </div>
                         ))}
                       </div>

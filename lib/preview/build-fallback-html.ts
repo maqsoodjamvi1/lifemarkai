@@ -2,7 +2,7 @@ import type { ProjectFile } from "@/types/database";
 import { generateFallbackUtilityCss } from "@/lib/preview/generate-fallback-utilities";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "20";
+export const PREVIEW_ENGINE_REV = "21";
 
 /** Strip PostCSS-only directives — invalid in a raw <style> tag. */
 export function sanitizePreviewCss(css: string): string {
@@ -1017,12 +1017,18 @@ window.__reactRouterDom = (function() {
         // extension. Newer Babel standalone removed isTSX/allExtensions; the
         // supported path is ignoreExtensions + syntax-jsx.
         try {
-          var virtualFile = file.replace(/\.ts$/, '.tsx').replace(/\.js$/, '.jsx');
+          // Parse JSX everywhere EXCEPT plain .ts files (where `<T>` is a
+          // generic, not a JSX tag). allExtensions+isTSX is the supported way
+          // to drive this explicitly; ignoreExtensions silently disabled JSX
+          // and broke every component with "Unexpected token '<'".
+          var __isTSX = !/\\.ts$/.test(file);
           code = Babel.transform(el.textContent, {
-            plugins: ['syntax-jsx'],
-            presets: [['react', { runtime: 'classic' }], ['typescript', { ignoreExtensions: true }]],
+            presets: [
+              ['react', { runtime: 'classic' }],
+              ['typescript', { allExtensions: true, isTSX: __isTSX }],
+            ],
             sourceType: 'unambiguous',
-            filename: virtualFile,
+            filename: file,
           }).code;
         } catch (err) { showError(file, (err && err.message) || err); return; }
         // Execute in an isolated IIFE so per-file const/let can't collide; cross

@@ -16,6 +16,7 @@ import {
   buildRepairPrompt,
 } from "@/lib/ai/system-prompts";
 import { buildTemplateRefinementBlock } from "@/lib/ai/template-refine";
+import { pickStarterTemplate } from "@/lib/templates/starter-catalog";
 import { buildDesignDirectionBlock } from "@/lib/ai/design-directions";
 import { applyPatches, parsePatchResponse } from "@/lib/ai/patch-applier";
 import { parseAIResponse, validateGeneratedFiles, assessGenerationQuality, shouldAutoFix, needsBuildContinuation, type ParsedFile } from "@/lib/ai/code-parser";
@@ -334,8 +335,15 @@ export async function POST(req: NextRequest) {
         /(re-?style|re-?design|change\s+(the\s+)?(theme|template|design|look|colou?rs?|style)|update\s+(the\s+)?(website\s+)?(theme|template|design|look|style)|new\s+(theme|template|design|look|style)|different\s+(theme|template|design|look)|make\s+it\s+(dark|light|modern|minimal|colou?rful|cleaner))/i.test(
           message,
         );
-      if (templateId) {
-        systemPrompt += buildTemplateRefinementBlock(templateId);
+      // Template precedence (Lovable-style):
+      //  1. an explicitly chosen template always wins;
+      //  2. otherwise, on a first build, auto-detect the niche from the prompt
+      //     ("ecommerce store like Shopify" → storefront baseline);
+      //  3. if no niche matches (or it's a restyle), fall back to a design direction.
+      const autoTemplateId =
+        templateId ?? (files.length === 0 ? pickStarterTemplate(message) : null);
+      if (autoTemplateId) {
+        systemPrompt += buildTemplateRefinementBlock(autoTemplateId);
       } else if (files.length === 0 || isRestyleRequest) {
         systemPrompt += buildDesignDirectionBlock(message);
       }
