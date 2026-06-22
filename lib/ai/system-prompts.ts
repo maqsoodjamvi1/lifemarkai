@@ -1160,8 +1160,10 @@ The project already has these files:
 ${existingPaths}
 
 Rules for modification:
-1. Only regenerate files that need to change.
-2. Preserve the existing design system, palette, and component naming.
+1. Only regenerate files that need to change (for a restyle, that's most UI files).
+2. ${/(re-?style|re-?design|change\s+(the\s+)?(theme|template|design|look|colou?rs?|style)|new\s+(theme|template|design|look|style)|professional|different\s+(theme|template|look)|make\s+it\s+(light|dark|modern|minimal|clean|colou?rful))/i.test(userPrompt)
+  ? "RESTYLE REQUESTED — do NOT preserve the current palette. Apply a NEW, cohesive theme across ALL components: change background/surface colors, text colors, accent, typography and spacing so the look clearly changes (e.g. a light, professional theme means light backgrounds, dark text, restrained accent). Keep the SAME content, copy, data, routes, and the SAME real image URLs."
+  : "Preserve the existing design system, palette, and component naming."}
 3. When adding a new component, import it correctly from the right relative path.
 4. Do not duplicate files that already exist and don't need changing.
 

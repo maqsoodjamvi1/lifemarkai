@@ -155,7 +155,9 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
         files: initialFiles,
       });
     }
-    return inferProjectStage(initialFiles) === "app" ? "agent" : "build";
+    // Default to Build mode everywhere (incremental edits + restyle live here).
+    // Agent stays available as an explicit choice for autonomous multi-step runs.
+    return "build";
   });
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
   const [leftPanel, setLeftPanel] = useState<LeftPanel>("chat");
