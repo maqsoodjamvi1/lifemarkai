@@ -308,7 +308,7 @@ function mergeAgentStep(prev: AgentTaskStep[], step: AgentStep): AgentTaskStep[]
   }
   const next = agentStepToTaskStep(step);
   if (!next) return prev;
-  const settled = prev.map((s) => ({ ...s, status: "done" as const }));
+  const settled: AgentTaskStep[] = prev.map((s) => ({ ...s, status: "done" }));
   const existing = settled.findIndex((s) => s.key === next.key);
   if (existing >= 0) {
     const updated = [...settled];
