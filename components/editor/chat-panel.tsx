@@ -12,22 +12,17 @@ import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import {
-  Send, Loader2, Image, Sparkles,
-  RotateCcw, Copy, Check, ChevronDown, AlertCircle,
-  Wand2, XCircle, Undo2, ThumbsUp, ThumbsDown, Bookmark,
+  Loader2, Image, Sparkles,
+  Copy, Check, ChevronDown, AlertCircle,
+  Wand2, XCircle, ThumbsUp, ThumbsDown, Bookmark,
   CheckCheck, FileText, Pencil, Play, Pause, ChevronUp,
-  GripVertical, RefreshCw, Brain, Trash2, Grid3X3, Search, FileCode, CornerDownLeft, Download,
-  Paperclip, FileCode2, X, Pin, PinOff, Minimize2, Zap, ListChecks, Globe, Smartphone, Square,
+  RefreshCw, Brain, Trash2, Search, FileCode, Download,
+  Paperclip, FileCode2, X, Pin, PinOff, Minimize2, Zap, ListChecks, Globe, Square,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel,
-  AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
-  AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { createClient } from "@/lib/supabase/client";
 import { DiffViewer, computeFileDiff, type FileState } from "@/components/editor/diff-viewer";
 import {
@@ -37,7 +32,7 @@ import type { Project, ProjectFile, Message, Json } from "@/types/database";
 import type { EditorMode } from "./editor-layout";
 import { VoiceMode } from "./voice-mode";
 import { SnippetPicker } from "./snippet-picker";
-import { FileAttachmentList, type GeneratedFile } from "./file-attachment-card";
+import type { GeneratedFile } from "./file-attachment-card";
 import { AnalyzeMessageCard, parseAnalyzeMetadata } from "./analyze-message-card";
 import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { DesignPreviewPicker } from "./design-preview-picker";
@@ -45,7 +40,6 @@ import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { findMissingPackages, buildInstallCommand, syncPackageJsonDeps } from "@/lib/ai/npm-auto-install";
 import { classifyBuildIntent, type BuildIntent } from "@/lib/ai/build-intent";
 import { buildDesignBrief, shouldOfferDesignPreviews, type DesignPreviewDirection } from "@/lib/ai/design-previews";
-import { useAppStore } from "@/store/app-store";
 import type { AgentStep } from "@/lib/ai/agent";
 import {
   buildProjectContextBlock,
@@ -351,7 +345,6 @@ function MermaidBlock({ code }: { code: string }) {
       try {
         setLoading(true);
         setError(null);
-        // @ts-ignore
         const mermaid = (await import("mermaid")).default;
         mermaid.initialize({
           startOnLoad: false,
@@ -428,9 +421,6 @@ function ChatCodeBlock({ language, code }: { language: string; code: string }) {
   const lineCount = code.split("\n").length;
   const [isCollapsed, setIsCollapsed] = useState(lineCount > 8);
 
-  // Render Mermaid diagrams natively
-  if (language === "mermaid") return <MermaidBlock code={code} />;
-
   useEffect(() => {
     function handleSetAll(e: Event) {
       setIsCollapsed((e as CustomEvent<{ collapsed: boolean }>).detail.collapsed);
@@ -438,6 +428,9 @@ function ChatCodeBlock({ language, code }: { language: string; code: string }) {
     window.addEventListener("chat-codeblock-set-all", handleSetAll);
     return () => window.removeEventListener("chat-codeblock-set-all", handleSetAll);
   }, []);
+
+  // Render Mermaid diagrams natively
+  if (language === "mermaid") return <MermaidBlock code={code} />;
 
   function handleCopy() {
     navigator.clipboard.writeText(code).catch(() => {});
@@ -864,7 +857,6 @@ export function ChatPanel({
   const [showSnippets, setShowSnippets] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string>("");
-  const [showClearDialog, setShowClearDialog] = useState(false);
   // Save-as-skill draft state — opens when the user clicks the new ⚡+ button
   // on an assistant message. Pre-filled from that message's content.
   const [saveSkillDraft, setSaveSkillDraft] = useState<{
@@ -1649,7 +1641,7 @@ export function ChatPanel({
     // Agent mode: initialise task step visibility
     if (effectiveMode === "agent") {
       serverStreamedPathsRef.current = new Set<string>();
-      setAgentSteps([{ label: "Starting agent…", status: "running" }]);
+      setAgentSteps([{ label: "Starting agent...", status: "running", kind: "other", key: "start" }]);
       setBuildStatus(null);
     } else if (effectiveMode === "build" || effectiveMode === "patch") {
       setAgentSteps([]);
@@ -2491,9 +2483,6 @@ ${(f.content ?? "").slice(0, 8000)}
         ]
     : [];
 
-  // Keep backward-compat alias
-  const mentionFiles = mentionItems;
-
   function insertMention(item: MentionItem | string) {
     // Handle cross-project project node — load files and switch query
     if (typeof item !== "string" && item.kind === "xproject") {
@@ -2571,13 +2560,13 @@ ${(f.content ?? "").slice(0, 8000)}
   }
 
   async function handleClearChat() {
+    if (!window.confirm("Clear this conversation?")) return;
     try {
       await fetch(`/api/projects/${project.id}/messages`, { method: "DELETE" });
     } catch {
       // best-effort
     }
     onMessagesUpdate([]);
-    setShowClearDialog(false);
     toast({ title: "Conversation cleared" });
   }
 
@@ -2608,12 +2597,12 @@ ${(f.content ?? "").slice(0, 8000)}
     toast({ description: "Chat exported ✓" });
   }
 
-  // ⌘⇧K — open clear chat dialog
+  // ⌘⇧K — clear chat after confirmation
   useEffect(() => {
     function handler(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "K") {
         e.preventDefault();
-        setShowClearDialog(true);
+        void handleClearChat();
       }
     }
     window.addEventListener("keydown", handler);
@@ -2718,7 +2707,7 @@ ${(f.content ?? "").slice(0, 8000)}
         </button>
         {/* Clear chat button */}
         <button
-          onClick={() => setShowClearDialog(true)}
+          onClick={() => void handleClearChat()}
           disabled={messages.length === 0}
           className="mb-1 p-1 rounded text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
           title="Clear conversation (⌘⇧K)"
@@ -3798,7 +3787,7 @@ ${(f.content ?? "").slice(0, 8000)}
           <div className="flex items-start gap-2 mb-2">
             <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400" />
             <div className="flex-1">
-              <div className="font-semibold text-amber-200 mb-0.5">Looks like we're in a fix loop.</div>
+              <div className="font-semibold text-amber-200 mb-0.5">Looks like we are in a fix loop.</div>
               <div className="text-amber-200/70 leading-snug">
                 Switch to Plan mode, share the error, and ask the AI to investigate without breaking other features.
               </div>

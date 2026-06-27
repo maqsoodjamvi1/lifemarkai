@@ -2,9 +2,9 @@
 
 import { useState, useMemo, useRef } from "react";
 import {
-  FlaskConical, Sparkles, Play, Check, X, AlertCircle,
+  FlaskConical, Sparkles, Play, Check, X,
   FileCode, ChevronRight, ChevronDown, Loader2, Plus,
-  CircleDot, SkipForward, RefreshCw,
+  CircleDot, SkipForward,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -106,47 +106,6 @@ function fallbackSuites(testFiles: ProjectFile[], exitCode: number | null): Pars
   });
 }
 
-/** @deprecated kept to satisfy compiler — no longer called */
-function simulateRun(suite: { name: string; tests: string[]; file: ProjectFile }): ParsedSuite {
-  const tests: ParsedTest[] = suite.tests.map((name, i) => {
-    const hash = name.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
-    let status: TestStatus = "pass";
-    if (hash % 17 === 0) status = "skip";
-    else if (hash % 23 === 0) status = "fail";
-    return {
-      name,
-      status,
-      duration: 2 + (hash % 40),
-      error: status === "fail" ? `Expected value to equal mock result\n  at ${suite.file.path}:${10 + i}` : undefined,
-    };
-  });
-
-  const hasFail = tests.some((t) => t.status === "fail");
-  const allSkip = tests.every((t) => t.status === "skip");
-  return {
-    name: suite.name,
-    tests,
-    file: suite.file,
-    status: hasFail ? "fail" : allSkip ? "skip" : "pass",
-  };
-}
-
-// ── Status badge ─────────────────────────────────────────────────────────────
-function StatusBadge({ status, size = "sm" }: { status: TestStatus; size?: "sm" | "xs" }) {
-  const cfg: Record<TestStatus, { icon: React.ReactNode; color: string; label: string }> = {
-    pass:    { icon: <Check    className={size === "xs" ? "w-2.5 h-2.5" : "w-3 h-3"} />, color: "text-emerald-500", label: "PASS" },
-    fail:    { icon: <X        className={size === "xs" ? "w-2.5 h-2.5" : "w-3 h-3"} />, color: "text-red-500",     label: "FAIL" },
-    skip:    { icon: <SkipForward className={size === "xs" ? "w-2.5 h-2.5" : "w-3 h-3"} />, color: "text-yellow-500", label: "SKIP" },
-    pending: { icon: <CircleDot className={size === "xs" ? "w-2.5 h-2.5" : "w-3 h-3"} />, color: "text-muted-foreground", label: "IDLE" },
-  };
-  const { icon, color, label } = cfg[status];
-  return (
-    <span className={`flex items-center gap-1 font-mono font-bold ${color} ${size === "xs" ? "text-[9px]" : "text-[10px]"}`}>
-      {icon}{label}
-    </span>
-  );
-}
-
 // ── Main panel ───────────────────────────────────────────────────────────────
 export function TestingPanel({ projectId, files, onFilesUpdate, onOpenFile }: TestingPanelProps) {
   const { toast } = useToast();
@@ -179,7 +138,7 @@ export function TestingPanel({ projectId, files, onFilesUpdate, onOpenFile }: Te
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectId,
-          files: testFiles.map((f) => ({ path: f.path, content: f.content ?? "" })),
+          files: [...sourceFiles, ...testFiles].map((f) => ({ path: f.path, content: f.content ?? "" })),
           runner: "vitest",
         }),
       });
@@ -351,7 +310,7 @@ export function TestingPanel({ projectId, files, onFilesUpdate, onOpenFile }: Te
                 <div>
                   <p className="text-xs font-medium text-muted-foreground">No test files yet</p>
                   <p className="text-[10px] text-muted-foreground/60 mt-1">
-                    Use "Generate" to create Vitest tests from any source file
+                    Use Generate to create Vitest tests from any source file
                   </p>
                 </div>
                 <Button size="sm" variant="outline" onClick={() => setView("generate")} className="h-7 text-xs gap-1.5">
@@ -506,7 +465,7 @@ export function TestingPanel({ projectId, files, onFilesUpdate, onOpenFile }: Te
             {!running && !runResult && (
               <div className="flex flex-col items-center justify-center h-40 gap-3 text-center">
                 <Play className="w-8 h-8 text-muted-foreground/30" />
-                <p className="text-xs text-muted-foreground">No results yet — click "Run all" to execute tests</p>
+                <p className="text-xs text-muted-foreground">No results yet — click Run all to execute tests</p>
               </div>
             )}
 

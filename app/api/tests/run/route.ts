@@ -5,6 +5,9 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
+export const runtime = "nodejs";
+export const maxDuration = 120;
+
 // ── SSE helpers ───────────────────────────────────────────────────────────────
 
 function sseEvent(type: string, data: unknown): string {
@@ -20,8 +23,16 @@ interface TestFile {
 
 interface RunRequest {
   projectId: string;
-  files: TestFile[];   // test files to execute
+  files: TestFile[];   // project files needed by the tests
   runner?: "vitest" | "playwright"; // default: vitest
+}
+
+function safeProjectPath(rawPath: string): string | null {
+  const normalized = rawPath.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalized || normalized.includes("\0")) return null;
+  const parts = normalized.split("/");
+  if (parts.some((part) => !part || part === "." || part === "..")) return null;
+  return normalized;
 }
 
 // ── Route handler ─────────────────────────────────────────────────────────────
@@ -41,7 +52,7 @@ export async function POST(req: NextRequest) {
   }
 
   // Verify project ownership
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("id")
     .eq("id", projectId)
@@ -70,9 +81,16 @@ export async function POST(req: NextRequest) {
       try {
         send("status", { message: "Preparing test environment…" });
 
-        // Write all test files to the temp dir
+        // Write project files into the temp dir with their relative paths
+        // intact so tests can import source modules normally.
         for (const f of files) {
-          const filePath = path.join(tmpDir, path.basename(f.path));
+          const safePath = safeProjectPath(f.path);
+          if (!safePath) {
+            send("log", { line: `Skipping unsafe path: ${f.path}`, isError: true });
+            continue;
+          }
+          const filePath = path.join(tmpDir, safePath);
+          fs.mkdirSync(path.dirname(filePath), { recursive: true });
           fs.writeFileSync(filePath, f.content, "utf8");
           send("status", { message: `Writing ${f.path}…` });
         }
@@ -95,10 +113,14 @@ export default defineConfig({ testDir: ".", timeout: 30_000 });`
           fs.writeFileSync(
             path.join(tmpDir, "vitest.config.ts"),
             `import { defineConfig } from "vitest/config";
-export default defineConfig({ test: { include: ["**/*.{test,spec}.{ts,tsx,js,jsx}"], environment: "node" } });`
+import path from "node:path";
+export default defineConfig({
+  resolve: { alias: { "@": path.resolve(process.cwd(), "src") } },
+  test: { include: ["**/*.{test,spec}.{ts,tsx,js,jsx}"], environment: "node" },
+});`
           );
           cmd = "npx";
-          args = ["--yes", "vitest", "run", "--reporter=verbose", "--no-coverage", tmpDir];
+          args = ["--yes", "vitest", "run", "--config", "vitest.config.ts", "--reporter=verbose", "--no-coverage"];
         }
 
         send("status", { message: `Running tests with ${runner}…` });

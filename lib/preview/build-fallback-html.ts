@@ -2,7 +2,7 @@ import type { ProjectFile } from "@/types/database";
 import { generateFallbackUtilityCss } from "@/lib/preview/generate-fallback-utilities";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "21";
+export const PREVIEW_ENGINE_REV = "22";
 
 /** Strip PostCSS-only directives — invalid in a raw <style> tag. */
 export function sanitizePreviewCss(css: string): string {
@@ -260,6 +260,9 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
         .replace(/\\"/g, '"')
         .replace(/\\u0000/g, "\\\\");
     }
+    let importTempCounter = 0;
+    const tempModuleVar = (prefix: string, key: string) =>
+      `${prefix}_${key.replace(/[^a-zA-Z0-9]/g, "_")}_${importTempCounter++}`;
 
     // Strip comments (string-aware) BEFORE any import rewriting, so import-like
     // text or backticks inside comments can't be mangled into broken code.
@@ -423,9 +426,9 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
       /import\s+(\w+)\s*,\s*\{([^}]+)\}\s+from\s+['"](\.\.?\/[^'"]+)['"]\s*;?\n?/g,
       (_, def: string, named: string, path: string) => {
         const resolved = resolveProjectImport(file.path, path);
-        const v = `__mod_${resolved.replace(/[^a-zA-Z0-9]/g, "_")}`;
+        const v = tempModuleVar("__mod", resolved);
         return [
-          `const ${v} = window.__Mrequire('${resolved}');`,
+          `var ${v} = window.__Mrequire('${resolved}');`,
           defaultImportExpr(v, def.trim()),
           `const { ${destructure(named)} } = ${v};`,
         ].join("\n") + "\n";
@@ -436,9 +439,9 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
       /import\s+\{([^}]+)\}\s+from\s+['"](\.\.?\/[^'"]+)['"]\s*;?\n?/g,
       (_, named: string, path: string) => {
         const resolved = resolveProjectImport(file.path, path);
-        const v = `__mod_${resolved.replace(/[^a-zA-Z0-9]/g, "_")}`;
+        const v = tempModuleVar("__mod", resolved);
         return [
-          `const ${v} = window.__Mrequire('${resolved}');`,
+          `var ${v} = window.__Mrequire('${resolved}');`,
           `const { ${destructure(named)} } = ${v};`,
         ].join("\n") + "\n";
       }
@@ -448,8 +451,8 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
       /import\s+(\w+)\s+from\s+['"](\.\.?\/[^'"]+)['"]\s*;?\n?/g,
       (_, name: string, path: string) => {
         const resolved = resolveProjectImport(file.path, path);
-        const v = `__mod_${resolved.replace(/[^a-zA-Z0-9]/g, "_")}`;
-        return `const ${v} = window.__Mrequire('${resolved}'); ${defaultImportExpr(v, name)}\n`;
+        const v = tempModuleVar("__mod", resolved);
+        return `var ${v} = window.__Mrequire('${resolved}'); ${defaultImportExpr(v, name)}\n`;
       }
     );
 
@@ -469,7 +472,7 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     src = src.replace(
       /import\s+([\w$]+)\s*,\s*\{([\s\S]*?)\}\s*from\s+['"]([^'"]+)['"]\s*;?\n?/g,
       (_, def: string, named: string, spec: string) => {
-        const v = `__gmod_${spec.replace(/[^a-zA-Z0-9]/g, "_")}`;
+        const v = tempModuleVar("__gmod", spec);
         return `var ${v} = ${genericRequire(spec)};\n${defaultImportExpr(v, def)}\nconst { ${destructure(named)} } = ${v};\n`;
       }
     );
@@ -482,8 +485,8 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     src = src.replace(
       /import\s+([\w$]+)\s+from\s+['"]([^'"]+)['"]\s*;?\n?/g,
       (_, def: string, spec: string) => {
-        const v = `__gmod_${spec.replace(/[^a-zA-Z0-9]/g, "_")}`;
-        return `const ${v} = ${genericRequire(spec)};\n${defaultImportExpr(v, def)}\n`;
+        const v = tempModuleVar("__gmod", spec);
+        return `var ${v} = ${genericRequire(spec)};\n${defaultImportExpr(v, def)}\n`;
       }
     );
     // Side-effect imports: import 'x'
@@ -546,7 +549,7 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
       /export\s+\{([\s\S]*?)\}\s*from\s+['"]([^'"]+)['"]\s*;?\n?/g,
       (_, names: string, spec: string) => {
         const resolved = resolveRuntimeSpec(spec);
-        const v = `__re_${spec.replace(/[^a-zA-Z0-9]/g, "_")}`;
+        const v = tempModuleVar("__re", spec);
         const entries = names
           .split(",")
           .map((n) => n.trim())
@@ -556,16 +559,14 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
             return `${alias ?? orig}: ${v}['${orig}']`;
           })
           .join(", ");
-        // `var` (not const) — barrel files often re-export from the same path
-        // twice, and a duplicate const declaration is itself a SyntaxError.
-        return `var ${v} = window.__Mrequire('${resolved}');\ntry { var __re_exports = Object.assign(window.__M['${file.path}'] || {}, { ${entries} }); window.__Mdefine('${file.path}', __re_exports); window.__Mdefine('${fileShortPath}', __re_exports); } catch(e) {}\n`;
+        return `var ${v} = window.__Mrequire('${resolved}');\ntry { const __re_exports = Object.assign(window.__M['${file.path}'] || {}, { ${entries} }); window.__Mdefine('${file.path}', __re_exports); window.__Mdefine('${fileShortPath}', __re_exports); } catch(e) {}\n`;
       }
     );
     // export * from './path'
     src = src.replace(
       /export\s+\*\s+from\s+['"]([^'"]+)['"]\s*;?\n?/g,
       (_, spec: string) =>
-        `try { var __star_exports = Object.assign(window.__M['${file.path}'] || {}, window.__Mrequire('${resolveRuntimeSpec(spec)}')); window.__Mdefine('${file.path}', __star_exports); window.__Mdefine('${fileShortPath}', __star_exports); } catch(e) {}\n`
+        `try { const __star_exports = Object.assign(window.__M['${file.path}'] || {}, window.__Mrequire('${resolveRuntimeSpec(spec)}')); window.__Mdefine('${file.path}', __star_exports); window.__Mdefine('${fileShortPath}', __star_exports); } catch(e) {}\n`
     );
 
     // export { A, B as C }
@@ -713,6 +714,13 @@ window.__twMerge = function() { return Array.from(arguments).filter(Boolean).joi
 window.__cva = function(base, config) { return function(opts) { var out = base || ''; if (config && config.variants && opts) { Object.keys(opts).forEach(function(k) { var v = config.variants[k]; if (v && opts[k] != null && v[String(opts[k])]) out += ' ' + v[String(opts[k])]; }); } if (config && config.defaultVariants && !opts) { Object.keys(config.defaultVariants).forEach(function(k) { var v = config.variants && config.variants[k]; if (v && v[config.defaultVariants[k]]) out += ' ' + v[config.defaultVariants[k]]; }); } return out.trim(); }; };
 window.__sonner = { toast: Object.assign(function(msg){console.log('[toast]',msg);return '';}, { success:function(m){console.log('[toast:ok]',m);}, error:function(m){console.log('[toast:err]',m);}, info:function(m){console.log('[toast:info]',m);} }), Toaster: function(){ return null; } };
 window.__reactHotToast = { default: Object.assign(function(m){console.log('[toast]',m);}, { success:function(m){console.log('[toast:ok]',m);}, error:function(m){console.log('[toast:err]',m);} }), toast: function(m){console.log('[toast]',m);}, Toaster: function(){return null;} };
+window.__reactQuery = (function() {
+  function QueryClient() {}
+  function QueryClientProvider(props) { return React.createElement(React.Fragment, null, props.children); }
+  function useQuery() { return { data: undefined, error: null, isLoading: false, isFetching: false, isError: false, isSuccess: true, refetch: function(){ return Promise.resolve({ data: undefined }); } }; }
+  function useMutation() { return { mutate: function(){}, mutateAsync: function(){ return Promise.resolve(); }, data: undefined, error: null, isPending: false, isLoading: false, isError: false, isSuccess: false }; }
+  return { QueryClient: QueryClient, QueryClientProvider: QueryClientProvider, useQuery: useQuery, useMutation: useMutation, useQueryClient: function(){ return new QueryClient(); } };
+})();
 // react-hook-form — stub so Contact/Login forms render without CDN
 window.__reactHookForm = (function() {
   function useForm() {
@@ -938,32 +946,25 @@ window.__reactRouterDom = (function() {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Preview</title>
   ${tailwindScripts}
-  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <!-- crossorigin on all CDN scripts: without it, runtime errors that surface
        through cross-origin code (notably Babel-executed output) are masked as
        the useless "Script error." — with it, real messages reach the console
        bridge. unpkg + jsdelivr both send Access-Control-Allow-Origin: *. -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
-  <script src="https://unpkg.com/lucide-react@latest/dist/umd/lucide-react.js" crossorigin
-    onload="(function(){var s=window.LucideReact||window.lucideReact||window.lucide;if(s&&window.__lucideReact)Object.assign(window.__lucideReact,s);})();"
-    onerror="console.warn('[preview] lucide-react CDN failed — using icon stubs');"></script>
-  <script src="https://cdn.jsdelivr.net/npm/recharts@2/umd/Recharts.js" crossorigin
-    onload="window.__recharts=window.Recharts||{};"
-    onerror="window.__recharts={};"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js" crossorigin></script>
+  <!-- lucide-react and recharts use inline stubs below; their browser bundles
+       are optional and have caused preview-blocking CDN/runtime errors. -->
   <!-- react-router-dom UMD requires react-router + @remix-run/router peers — loading it
        without those deps overwrote our function stubs with broken module objects
        ("Element type is invalid: got: object"). In-preview routing uses __reactRouterDom stubs. -->
-  <script src="https://cdn.jsdelivr.net/npm/@tanstack/react-query@5/build/umd/index.development.js" crossorigin
-    onload="window.__reactQuery=window.ReactQuery||{};"
-    onerror="window.__reactQuery={};"></script>
-  <script src="https://cdn.jsdelivr.net/npm/react-hook-form@7/dist/index.umd.js" crossorigin
+  <script async src="https://cdn.jsdelivr.net/npm/react-hook-form@7/dist/index.umd.js" crossorigin
     onload="if(window.ReactHookForm)Object.assign(window.__reactHookForm,window.ReactHookForm);"
     onerror="console.warn('[preview] react-hook-form CDN failed — using stubs');"></script>
-  <script src="https://cdn.jsdelivr.net/npm/zod@3/lib/index.umd.js" crossorigin
+  <script async src="https://cdn.jsdelivr.net/npm/zod@3/lib/index.umd.js" crossorigin
     onload="if(window.Zod)window.__zod=window.Zod;"
     onerror="console.warn('[preview] zod CDN failed — using stubs');"></script>
-  <script src="https://cdn.jsdelivr.net/npm/date-fns@3/cdn.min.js" crossorigin
+  <script async src="https://cdn.jsdelivr.net/npm/date-fns@3/cdn.min.js" crossorigin
     onload="window.__dateFns=window.dateFns||{};"
     onerror="window.__dateFns={};"></script>
   <style${styleTypeAttr}>
@@ -1013,20 +1014,19 @@ window.__reactRouterDom = (function() {
         var el = mods[i];
         var file = el.getAttribute('data-file') || ('module ' + i);
         var code;
-        // Compile generated files as TypeScript with JSX syntax regardless of
-        // extension. Newer Babel standalone removed isTSX/allExtensions; the
-        // supported path is ignoreExtensions + syntax-jsx.
+        // Compile generated files as TypeScript, enabling JSX only for files
+        // that can actually contain JSX. Babel standalone removed the older
+        // allExtensions/isTSX switches; ignoreExtensions keeps parsing stable.
         try {
-          // Parse JSX everywhere EXCEPT plain .ts files (where `<T>` is a
-          // generic, not a JSX tag). allExtensions+isTSX is the supported way
-          // to drive this explicitly; ignoreExtensions silently disabled JSX
-          // and broke every component with "Unexpected token '<'".
+          // Plain .ts files must not get syntax-jsx because generic arrows
+          // like <T,>(x:T)=>x would be parsed as JSX.
           var __isTSX = !/\\.ts$/.test(file);
           code = Babel.transform(el.textContent, {
             presets: [
               ['react', { runtime: 'classic' }],
-              ['typescript', { allExtensions: true, isTSX: __isTSX }],
+              ['typescript', { ignoreExtensions: true }],
             ],
+            plugins: __isTSX ? ['syntax-jsx'] : [],
             sourceType: 'unambiguous',
             filename: file,
           }).code;
@@ -1120,7 +1120,7 @@ window.__reactRouterDom = (function() {
       var next = e.data.pathname || '/';
       try {
         // Strip any scheme/host (preview://… or http://…) and existing hash.
-        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(next)) {
+        if (/^[a-z][a-z0-9+.-]*:\\/\\//i.test(next)) {
           try { next = new URL(next).pathname; } catch (e2) {}
         }
         if (next.indexOf('#') >= 0) next = next.slice(next.indexOf('#') + 1);
