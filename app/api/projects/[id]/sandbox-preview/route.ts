@@ -79,11 +79,18 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ enabled: true, ok: false, error: result.error, logs: result.logs });
   }
 
-  // Persist the live preview URL + sandbox id for reconnects.
-  await (supabase as any)
+  // Persist the live preview URL for reconnects. Use the dedicated `preview_url`
+  // column — NOT `deployed_url`, which holds the real production deploy URL and
+  // must not be clobbered by an ephemeral sandbox link (it dies on teardown,
+  // leaving "Visit site" pointing at a dead sandbox). The URL is also returned
+  // below and kept in client state for the session.
+  const { error: previewUrlErr } = await (supabase as any)
     .from("projects")
-    .update({ deployed_url: result.previewUrl })
+    .update({ preview_url: result.previewUrl })
     .eq("id", projectId);
+  if (previewUrlErr) {
+    console.warn("[sandbox-preview] failed to persist preview_url:", previewUrlErr.message);
+  }
 
   return NextResponse.json({
     enabled: true,

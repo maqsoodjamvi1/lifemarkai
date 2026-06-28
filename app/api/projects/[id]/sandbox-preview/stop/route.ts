@@ -46,6 +46,21 @@ export async function POST(req: NextRequest, { params }: Params) {
     return NextResponse.json({ error: "sandboxId required" }, { status: 400 });
   }
 
-  await getSandboxProvider().kill(sandboxId);
+  // Teardown is best-effort — a provider hiccup must not block the rest of cleanup.
+  try {
+    await getSandboxProvider().kill(sandboxId);
+  } catch (e) {
+    console.warn("[sandbox-preview/stop] kill failed:", e instanceof Error ? e.message : e);
+  }
+
+  // Clear the stale ephemeral preview URL so nothing points at the dead sandbox.
+  const { error: clearErr } = await (supabase as any)
+    .from("projects")
+    .update({ preview_url: null })
+    .eq("id", projectId);
+  if (clearErr) {
+    console.warn("[sandbox-preview/stop] failed to clear preview_url:", clearErr.message);
+  }
+
   return NextResponse.json({ ok: true });
 }

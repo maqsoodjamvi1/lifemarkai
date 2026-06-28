@@ -238,6 +238,16 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
   /** Transform one source file into a self-contained Babel script block */
   function wrapFile(file: ProjectFile): string {
     let src = file.content ?? "";
+
+    // `import.meta.env` / `import.meta` are valid only in real ES modules; in the
+    // eval'd preview script they'd be a SyntaxError that crashes the ENTIRE
+    // preview — which breaks every Vite app that reads env (e.g. a Supabase URL/
+    // anon key). Rewrite them to a runtime global seeded from the project's .env
+    // (window.__VITE_ENV, injected below). Only matches files that use them.
+    src = src.replace(/import\.meta\.env\.([A-Za-z_$][\w$]*)/g, "(window.__VITE_ENV||{}).$1");
+    src = src.replace(/import\.meta\.env\b/g, "(window.__VITE_ENV||{})");
+    src = src.replace(/import\.meta\.url\b/g, "(location.href)");
+    src = src.replace(/import\.meta\b/g, "({ env: (window.__VITE_ENV||{}), url: location.href })");
     const fileShortPath = file.path.replace(/\.(tsx?|jsx?)$/, "");
 
     // Defensive: strip markdown code fences if the AI response parser ever
@@ -622,6 +632,19 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
 
   const fileScripts = sorted.map(wrapFile).join("\n\n");
 
+  // Seed Vite-style public env (VITE_*) from the project's .env so apps that read
+  // import.meta.env (e.g. Supabase URL + anon key) work in the live preview, not
+  // just after deploy. VITE_* values are public by design — no secret exposed.
+  const viteEnv: Record<string, string> = { MODE: "development", DEV: "true", PROD: "false", BASE_URL: "/" };
+  {
+    const envFile = files.find((f) => f.path === ".env.local" || f.path === ".env");
+    for (const line of (envFile?.content ?? "").split("\n")) {
+      const m = line.match(/^\s*(VITE_[A-Z0-9_]+)\s*=\s*(.*)$/);
+      if (m) viteEnv[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
+    }
+  }
+  const viteEnvScript = `<script>window.__VITE_ENV = ${JSON.stringify(viteEnv)};</script>`;
+
   const consoleBridge = `<script>
 (function() {
   var _log = console.log, _warn = console.warn, _err = console.error;
@@ -976,6 +999,7 @@ window.__reactRouterDom = (function() {
 </head>
 <body>
   <div id="root"></div>
+  ${viteEnvScript}
   ${consoleBridge}
   ${moduleRegistry}
   ${fileScripts}

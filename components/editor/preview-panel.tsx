@@ -22,6 +22,7 @@ import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
 import dynamic from "next/dynamic";
 import { buildFallbackHtml, PREVIEW_ENGINE_REV } from "@/lib/preview/build-fallback-html";
+import { buildEsbuildHtml } from "@/lib/preview/esbuild-engine";
 import { filesContentSignature } from "@/lib/preview/files-signature";
 import { resolvePreviewEngine, WC_UNAVAILABLE_KEY, type PreviewEngine } from "@/lib/preview/resolve-preview-engine";
 import { useSandboxPreview } from "@/lib/preview/use-sandbox-preview";
@@ -593,6 +594,43 @@ export function PreviewPanel({
     () => (previewEngine === "fallback" ? buildFallbackHtml(files) : ""),
     [files, previewEngine]
   );
+  // ── esbuild preview engine (flagged) ────────────────────────────────────────
+  // When NEXT_PUBLIC_PREVIEW_ESBUILD is on, compile the fallback preview with the
+  // real esbuild-wasm bundler instead of the regex transpiler. It's async, so it
+  // lands in state; until it's ready (or if it errors) we keep showing the regex
+  // result — so this is never worse than today. See lib/preview/esbuild-engine.ts.
+  const [esbuildHtml, setEsbuildHtml] = useState("");
+  useEffect(() => {
+    const on =
+      process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "1" ||
+      process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "true";
+    if (!on || previewEngine !== "fallback" || files.length === 0) {
+      setEsbuildHtml("");
+      return;
+    }
+    let cancelled = false;
+    void buildEsbuildHtml(files)
+      .then((res) => {
+        if (cancelled) return;
+        if (res.html) {
+          setEsbuildHtml(res.html);
+        } else {
+          console.warn("[preview/esbuild] build failed; using fallback engine:", res.errors);
+          setEsbuildHtml("");
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          console.warn("[preview/esbuild] error; using fallback engine:", e);
+          setEsbuildHtml("");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [files, previewEngine]);
+  /** Rendered HTML: the esbuild bundle when ready, else the regex-engine result. */
+  const effectivePreviewHtml = esbuildHtml || fallbackHtml;
   const filesSignature = useMemo(() => filesContentSignature(files), [files]);
 
   useEffect(() => {
@@ -1070,7 +1108,7 @@ export function PreviewPanel({
                     <iframe
                       key={`${refreshKey}-${filesSignature}-${PREVIEW_ENGINE_REV}`}
                       ref={iframeRef}
-                      srcDoc={fallbackHtml}
+                      srcDoc={effectivePreviewHtml}
                       className={
                         iframeVisible
                           ? "w-full h-full border-0"

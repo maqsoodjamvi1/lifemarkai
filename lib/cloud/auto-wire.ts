@@ -114,7 +114,14 @@ export async function autoWireBackend(opts: {
     notes: [],
   };
 
-  if (!detectBackendIntent(prompt, generatedFiles)) return null;
+  // Default-on backend (Lovable Cloud parity): when LIFEMARK_CLOUD_DEFAULT_ON is
+  // set, every new app gets a managed backend automatically — not only when the
+  // prompt/output mentions one. Off by default (keyword detection) so it stays
+  // opt-in: provisioning a backend per app costs resources, and the "database"
+  // tool permission below can still force-skip it.
+  const cloudDefaultOn =
+    process.env.LIFEMARK_CLOUD_DEFAULT_ON === "true" || process.env.LIFEMARK_CLOUD_DEFAULT_ON === "1";
+  if (!cloudDefaultOn && !detectBackendIntent(prompt, generatedFiles)) return null;
   result.intentDetected = true;
 
   const perms = parseCloudToolPermissions(opts.cloudToolPermissionsRaw);

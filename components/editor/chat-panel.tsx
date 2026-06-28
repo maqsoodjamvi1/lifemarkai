@@ -3109,25 +3109,32 @@ ${(f.content ?? "").slice(0, 8000)}
                       }
                       if (
                         msg.role === "assistant" &&
-                        (msg.mode === "build" || msg.mode === "agent" || msg.mode === "patch") &&
-                        messageDiffs[msg.id] &&
-                        messageDiffs[msg.id].length > 0
+                        (msg.mode === "build" || msg.mode === "agent" || msg.mode === "patch")
                       ) {
-                        return (
-                      <p className="text-sm text-foreground/90 leading-relaxed">
-                        {(() => {
-                          const c = (msg.content ?? "").trim();
-                          if (!c || c.startsWith("```") || c.startsWith("{")) {
-                            const diffCount = messageDiffs[msg.id].length;
-                            return `Updated ${diffCount} file${diffCount === 1 ? "" : "s"}. Open the Code tab or preview to see the result.`;
-                          }
-                          const firstSentence = c.split(/(?<=[.!?])\s+/)[0]
-                            .replace(/[*_`]/g, "")
-                            .slice(0, 220);
-                          return firstSentence;
-                        })()}
-                      </p>
-                        );
+                        // Never render raw JSON/code in the chat panel — show a short,
+                        // Cowork/Codex-style description; the Code tab + preview hold the
+                        // actual result, and the "Edited …" cards below list the files.
+                        const diffCount = messageDiffs[msg.id]?.length ?? 0;
+                        const c = (msg.content ?? "").trim();
+                        const looksRaw =
+                          !c || c.startsWith("```") || c.startsWith("{") || c.startsWith("[");
+                        let summary: string;
+                        if (looksRaw) {
+                          summary = diffCount > 0
+                            ? `Updated ${diffCount} file${diffCount === 1 ? "" : "s"}. Open the Code tab or preview to see the result.`
+                            : "Changes applied. Open the Code tab or preview to see the result.";
+                        } else {
+                          const prose = c.split("```")[0].trim(); // drop any trailing code block
+                          summary =
+                            prose
+                              .split(/(?<=[.!?])\s+/)
+                              .slice(0, 2)
+                              .join(" ")
+                              .replace(/[*_`]/g, "")
+                              .slice(0, 240) ||
+                            (diffCount > 0 ? `Updated ${diffCount} file${diffCount === 1 ? "" : "s"}.` : "Done.");
+                        }
+                        return <p className="text-sm text-foreground/90 leading-relaxed">{summary}</p>;
                       }
                       return <MessageContent content={msg.content} mode={msg.mode ?? "chat"} />;
                     })()}
@@ -3717,7 +3724,7 @@ ${(f.content ?? "").slice(0, 8000)}
 
               {/* Hide raw JSON stream in build mode — chat stays conversational like Lovable */}
               <div className="text-sm leading-relaxed py-0.5">
-                {(mode === "build" || mode === "patch" || buildStatus) ? null : streamingContent ? (
+                {(mode === "build" || mode === "patch" || mode === "agent" || buildStatus) ? null : streamingContent ? (
                   <MessageContent content={streamingContent} mode={mode} />
                 ) : (
                   <div className="flex items-center gap-1.5 py-1">

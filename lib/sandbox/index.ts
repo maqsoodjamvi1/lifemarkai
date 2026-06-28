@@ -40,6 +40,27 @@ export interface CommandResult {
   exitCode?: number;
 }
 
+/** A streamed Claude Code event (stream-json JSONL line). */
+export interface ClaudeCodeEvent {
+  type: string; // "assistant" | "result" | "tool_use" | …
+  [k: string]: unknown;
+}
+
+export interface ClaudeCodeResult {
+  ok: boolean;
+  sandboxId?: string;
+  /** Claude Code session id — pass to a follow-up run via `resumeSessionId`. */
+  sessionId?: string;
+  /** Final assistant summary text, when available. */
+  summary?: string;
+  /** Files created/modified by the run (captured via git diff). */
+  changedFiles?: SandboxFile[];
+  /** Unified diff of all changes. */
+  diff?: string;
+  logs?: string;
+  error?: string;
+}
+
 export interface SandboxProvider {
   readonly id: "e2b" | "docker" | "firecracker";
   /** True when credentials/SDK are present. */
@@ -59,6 +80,26 @@ export interface SandboxProvider {
     /** Max sandbox lifetime in ms. */
     timeoutMs?: number;
   }): Promise<SandboxRunResult>;
+  /**
+   * Run Claude Code agentically inside the sandbox (E2B `claude` template).
+   * Writes the project, runs `claude -p <task>` with streaming JSON, and returns
+   * the changed files + diff. The highest-fidelity agent: real filesystem,
+   * terminal, and git — beyond the in-app OpenRouter ReAct loop.
+   */
+  runClaudeCode(opts: {
+    task: string;
+    files?: SandboxFile[];
+    /** Optional: clone a repo instead of writing files. */
+    repoUrl?: string;
+    githubToken?: string;
+    /** Project context written to CLAUDE.md before the run. */
+    systemPrompt?: string;
+    /** Resume a previous Claude Code session for a follow-up task. */
+    resumeSessionId?: string;
+    /** Stream events (assistant/tool_use/result) for live UI. */
+    onEvent?: (event: ClaudeCodeEvent) => void;
+    timeoutMs?: number;
+  }): Promise<ClaudeCodeResult>;
   /** Run a shell command in an existing sandbox. */
   exec(sandboxId: string, command: string): Promise<CommandResult>;
   /** Write/update files in an existing sandbox (incremental edits). */
@@ -89,6 +130,27 @@ async function loadE2B(): Promise<{ Sandbox: any } | null> {
 
 function trunc(s: string, n = 4000): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
+}
+
+/**
+ * Poll a URL until the dev server inside the sandbox actually responds.
+ * `getHost(port)` only maps the port — it returns instantly, before `next dev` /
+ * `vite` has started listening. Returning the URL too early makes the preview
+ * iframe load a dead URL (blank / connection refused). Any HTTP response — even
+ * a 404 — means the server is up.
+ */
+async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(5000) });
+      if (res.status > 0) return true;
+    } catch {
+      /* dev server not listening yet — retry */
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  return false;
 }
 
 class E2BSandboxProvider implements SandboxProvider {
@@ -139,14 +201,129 @@ class E2BSandboxProvider implements SandboxProvider {
       void sandbox.commands.run(start, { background: true }).catch(() => {});
 
       const host = await sandbox.getHost(port);
+      const previewUrl = `https://${host}`;
+      // Don't hand back the URL until the dev server is actually responding —
+      // getHost() returns before the server is up, so without this the preview
+      // iframe loads a dead URL and shows a blank / connection-refused page.
+      const ready = await waitForServer(previewUrl, 120_000);
       return {
         ok: true,
         sandboxId: sandbox.sandboxId,
-        previewUrl: `https://${host}`,
-        logs: trunc(logs),
+        previewUrl,
+        logs: trunc(
+          logs + (ready ? "" : "\n[preview] dev server was slow to start — give the preview a moment to load."),
+        ),
       };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async runClaudeCode(opts: {
+    task: string;
+    files?: SandboxFile[];
+    repoUrl?: string;
+    githubToken?: string;
+    systemPrompt?: string;
+    resumeSessionId?: string;
+    onEvent?: (event: ClaudeCodeEvent) => void;
+    timeoutMs?: number;
+  }): Promise<ClaudeCodeResult> {
+    if (!this.isEnabled()) return { ok: false, error: "E2B not configured (set E2B_API_KEY)." };
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return { ok: false, error: "Claude Code needs ANTHROPIC_API_KEY (a direct Anthropic key, separate from OpenRouter)." };
+    }
+    const e2b = await loadE2B();
+    if (!e2b) return { ok: false, error: "E2B SDK not installed (npm i @e2b/code-interpreter)." };
+
+    const template = process.env.E2B_CLAUDE_TEMPLATE || "claude";
+    const timeoutMs = opts.timeoutMs ?? 10 * 60 * 1000;
+    const dir = "/home/user/app";
+    const sh = (s: string) => `'${s.replace(/'/g, "'\\''")}'`; // single-quote shell escape
+    let logs = "";
+    const append = (d: string) => { logs += d; };
+
+    try {
+      const sandbox = await e2b.Sandbox.create(template, {
+        envs: { ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY as string },
+        timeoutMs,
+      });
+      await sandbox.setTimeout(timeoutMs);
+
+      // Stage the project. Either clone a repo or write the provided files.
+      if (opts.repoUrl) {
+        if (opts.githubToken && (sandbox as any).git?.clone) {
+          await (sandbox as any).git.clone(opts.repoUrl, {
+            path: dir, username: "x-access-token", password: opts.githubToken, depth: 1,
+          });
+        } else {
+          await sandbox.commands.run(`git clone --depth 1 ${sh(opts.repoUrl)} ${dir}`, { onStderr: append });
+        }
+      } else {
+        await sandbox.commands.run(`mkdir -p ${dir}`);
+        for (const f of opts.files ?? []) await sandbox.files.write(`${dir}/${f.path}`, f.content);
+      }
+
+      // Baseline commit so a post-run `git diff` captures exactly what Claude changed.
+      await sandbox.commands.run(
+        `cd ${dir} && (git rev-parse --git-dir >/dev/null 2>&1 || git init -q) && ` +
+          `git config user.email lifemark@local && git config user.name lifemark && ` +
+          `git add -A && git commit -q -m baseline || true`,
+        { onStderr: append },
+      );
+
+      if (opts.systemPrompt) await sandbox.files.write(`${dir}/CLAUDE.md`, opts.systemPrompt);
+
+      // Run Claude Code with a streaming JSONL event feed.
+      let sessionId: string | undefined;
+      let summary: string | undefined;
+      const resume = opts.resumeSessionId ? `--resume ${sh(opts.resumeSessionId)} ` : "";
+      const cmd =
+        `cd ${dir} && claude --dangerously-skip-permissions --output-format stream-json ` +
+        `${resume}-p ${sh(opts.task)}`;
+      await sandbox.commands.run(cmd, {
+        onStdout: (d: string) => {
+          append(d);
+          for (const line of d.split("\n")) {
+            const t = line.trim();
+            if (!t) continue;
+            try {
+              const ev = JSON.parse(t) as ClaudeCodeEvent;
+              const sid = (ev as Record<string, unknown>).session_id;
+              if (typeof sid === "string") sessionId = sid;
+              const r = (ev as Record<string, unknown>).result;
+              if (ev.type === "result" && typeof r === "string") summary = r;
+              opts.onEvent?.(ev);
+            } catch { /* non-JSON log line — ignore */ }
+          }
+        },
+        onStderr: append,
+      });
+
+      // Capture changes vs the baseline commit.
+      await sandbox.commands.run(`cd ${dir} && git add -A`, { onStderr: append });
+      const nameRes = await sandbox.commands.run(`cd ${dir} && git diff --cached --name-only`);
+      const diffRes = await sandbox.commands.run(`cd ${dir} && git diff --cached`);
+      const names = (nameRes?.stdout ?? "").split("\n").map((s: string) => s.trim()).filter(Boolean);
+      const changedFiles: SandboxFile[] = [];
+      for (const name of names) {
+        try {
+          const content = await sandbox.files.read(`${dir}/${name}`);
+          changedFiles.push({ path: name, content: typeof content === "string" ? content : String(content) });
+        } catch { /* deleted file — skip */ }
+      }
+
+      return {
+        ok: true,
+        sandboxId: sandbox.sandboxId,
+        sessionId,
+        summary,
+        changedFiles,
+        diff: trunc(diffRes?.stdout ?? "", 60000),
+        logs: trunc(logs),
+      };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err), logs: trunc(logs) };
     }
   }
 
