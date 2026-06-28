@@ -419,6 +419,184 @@ const KNOWN_PACKAGES = new Set([
   "typescript", "eslint",
 ]);
 
+const REACT_HOOKS = [
+  "useState",
+  "useEffect",
+  "useMemo",
+  "useCallback",
+  "useRef",
+  "useReducer",
+  "useContext",
+  "useId",
+  "useTransition",
+  "useDeferredValue",
+] as const;
+
+function addPathVariants(set: Set<string>, path: string) {
+  set.add(path);
+  set.add(path.replace(/^\.\//, ""));
+  set.add(path.replace(/^src\//, ""));
+  set.add(path.replace(/\.(tsx?|jsx?)$/, ""));
+  set.add(path.replace(/^src\//, "").replace(/\.(tsx?|jsx?)$/, ""));
+}
+
+function normalizePath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function buildPathIndex(files: ParsedFile[]): Map<string, ParsedFile> {
+  const index = new Map<string, ParsedFile>();
+  for (const file of files) {
+    const path = normalizePath(file.path);
+    const variants = [
+      path,
+      path.replace(/\.(tsx?|jsx?)$/, ""),
+      path.replace(/^src\//, ""),
+      path.replace(/^src\//, "").replace(/\.(tsx?|jsx?)$/, ""),
+    ];
+    for (const variant of variants) index.set(variant, file);
+  }
+  return index;
+}
+
+function resolveImportFile(pathIndex: Map<string, ParsedFile>, resolved: string): ParsedFile | null {
+  const clean = normalizePath(resolved);
+  const candidates = [
+    clean,
+    clean.replace(/\.(tsx?|jsx?)$/, ""),
+    `${clean}.ts`,
+    `${clean}.tsx`,
+    `${clean}.js`,
+    `${clean}.jsx`,
+    `${clean}/index.ts`,
+    `${clean}/index.tsx`,
+    `${clean}/index.js`,
+    `${clean}/index.jsx`,
+  ];
+  for (const candidate of candidates) {
+    const file = pathIndex.get(candidate) ?? pathIndex.get(candidate.replace(/\.(tsx?|jsx?)$/, ""));
+    if (file) return file;
+  }
+  return null;
+}
+
+function importedReactNames(content: string): Set<string> {
+  const names = new Set<string>();
+  for (const match of content.matchAll(/import\s+(?:React\s*,\s*)?\{([^}]+)\}\s+from\s+['"]react['"]/g)) {
+    for (const raw of match[1].split(",")) {
+      const name = raw.trim().split(/\s+as\s+/i)[0]?.trim();
+      if (name) names.add(name);
+    }
+  }
+  return names;
+}
+
+function findDuplicateDeclarations(content: string): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  let depth = 0;
+
+  for (const line of content.split("\n")) {
+    const beforeDepth = depth;
+    const match = line.match(/^\s*(?:export\s+)?(?:const|let|var|function|class|interface|type)\s+([A-Za-z_$][\w$]*)\b/);
+    if (beforeDepth === 0 && match) {
+      const name = match[1];
+      if (seen.has(name)) duplicates.add(name);
+      else seen.add(name);
+    }
+
+    const stripped = line
+      .replace(/(['"`])(?:\\.|(?!\1).)*\1/g, "")
+      .replace(/\/\/.*$/, "");
+    for (const ch of stripped) {
+      if (ch === "{") depth++;
+      else if (ch === "}") depth = Math.max(0, depth - 1);
+    }
+  }
+  return [...duplicates];
+}
+
+function exportedNames(content: string): Set<string> {
+  const names = new Set<string>();
+  for (const match of content.matchAll(/\bexport\s+(?:const|let|var|function|class|interface|type)\s+([A-Za-z_$][\w$]*)\b/g)) {
+    names.add(match[1]);
+  }
+  for (const match of content.matchAll(/\bexport\s*\{([^}]+)\}/g)) {
+    for (const raw of match[1].split(",")) {
+      const name = raw.trim().split(/\s+as\s+/i).pop()?.trim();
+      if (name && name !== "default") names.add(name);
+    }
+  }
+  return names;
+}
+
+function hasDefaultExport(content: string): boolean {
+  return /\bexport\s+default\b/.test(content) || /\bexport\s*\{[^}]*\bas\s+default\b[^}]*\}/.test(content);
+}
+
+function parseImportClause(content: string, source: string): string | null {
+  const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = content.match(new RegExp(`import\\s+([\\s\\S]*?)\\s+from\\s+['"]${escaped}['"]`));
+  return match?.[1]?.trim() ?? null;
+}
+
+function parseNamedImports(clause: string): string[] {
+  const match = clause.match(/\{([^}]+)\}/);
+  if (!match) return [];
+  return match[1]
+    .split(",")
+    .map((raw) => raw.trim().split(/\s+as\s+/i)[0]?.trim())
+    .filter((name): name is string => !!name);
+}
+
+function hasDefaultImport(clause: string): boolean {
+  const withoutNamed = clause.replace(/\{[^}]*\}/g, "").trim();
+  return !!withoutNamed && !withoutNamed.startsWith("*") && withoutNamed !== ",";
+}
+
+function isNextServerComponent(path: string, content: string): boolean {
+  if (!/(^|\/)app\/.+\.(tsx|jsx)$/.test(path)) return false;
+  return !/^\s*["']use client["'];?/m.test(content);
+}
+
+function effectiveContent(files: Map<string, ParsedFile>, path: string): string {
+  return files.get(path)?.content ?? "";
+}
+
+function hasRouterProvider(content: string): boolean {
+  return /<\s*(BrowserRouter|HashRouter|RouterProvider)\b/.test(content) ||
+    /\bcreateBrowserRouter\s*\(/.test(content);
+}
+
+function parseJsonObject(content: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(content);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasRootMountTarget(html: string): boolean {
+  return /<[^>]+\bid\s*=\s*["']root["'][^>]*>/i.test(html);
+}
+
+function hasMainScript(html: string): boolean {
+  return /<script\b[^>]+\bsrc\s*=\s*["']\/src\/main\.(tsx|jsx|ts|js)["'][^>]*>/i.test(html);
+}
+
+function mountsReactRoot(content: string): boolean {
+  return /\bcreateRoot\s*\([\s\S]*?document\.getElementById\(['"]root['"]\)[\s\S]*?\)\.render\s*\(/.test(content) ||
+    /\bReactDOM\.createRoot\s*\([\s\S]*?document\.getElementById\(['"]root['"]\)[\s\S]*?\)\.render\s*\(/.test(content) ||
+    /\bReactDOM\.render\s*\(/.test(content);
+}
+
 /**
  * Validate a set of generated files for common errors.
  * Returns a list of issues — empty means clean.
@@ -432,35 +610,110 @@ export function validateGeneratedFiles(
     ...files.map((f) => f.path),
     ...existingFiles.map((f) => f.path),
   ]);
+  const generatedPaths = new Set<string>();
+  for (const file of files) {
+    if (generatedPaths.has(file.path)) {
+      errors.push({
+        type: "duplicate_file",
+        file: file.path,
+        message: `Generated '${file.path}' more than once. Return one final version of each file only.`,
+        severity: "error",
+      });
+    }
+    generatedPaths.add(file.path);
+  }
 
   // Build a set of normalised paths for import resolution
   const normPaths = new Set<string>();
   for (const p of allPaths) {
-    // strip leading ./ or src/
-    normPaths.add(p);
-    normPaths.add(p.replace(/^\.\//, ""));
-    // also without extension
-    normPaths.add(p.replace(/\.(tsx?|jsx?)$/, ""));
+    addPathVariants(normPaths, p);
   }
+  const effectiveFiles = new Map<string, ParsedFile>(existingFiles.map((f) => [f.path, f]));
+  for (const file of files) effectiveFiles.set(file.path, file);
+  const pathIndex = buildPathIndex([...effectiveFiles.values()]);
 
   // Parse package.json for listed dependencies
-  const pkgFile = files.find((f) => f.path === "package.json");
+  const pkgFile = files.find((f) => f.path === "package.json") ??
+    existingFiles.find((f) => f.path === "package.json");
   let listedDeps = new Set<string>();
   if (pkgFile) {
     try {
-      const pkg = JSON.parse(pkgFile.content) as {
+      const parsedPkg = JSON.parse(pkgFile.content);
+      if (!isPlainObject(parsedPkg)) {
+        errors.push({
+          type: "invalid_package_json",
+          file: "package.json",
+          message: "package.json must be a JSON object.",
+          severity: "error",
+        });
+      }
+      const pkg = (isPlainObject(parsedPkg) ? parsedPkg : {}) as {
+        scripts?: Record<string, string>;
         dependencies?: Record<string, string>;
         devDependencies?: Record<string, string>;
       };
+      if (pkg.dependencies && !isPlainObject(pkg.dependencies)) {
+        errors.push({
+          type: "invalid_package_json",
+          file: "package.json",
+          message: "package.json dependencies must be an object.",
+          severity: "error",
+        });
+      }
+      if (pkg.devDependencies && !isPlainObject(pkg.devDependencies)) {
+        errors.push({
+          type: "invalid_package_json",
+          file: "package.json",
+          message: "package.json devDependencies must be an object.",
+          severity: "error",
+        });
+      }
+      if (pkg.scripts && !isPlainObject(pkg.scripts)) {
+        errors.push({
+          type: "invalid_package_json",
+          file: "package.json",
+          message: "package.json scripts must be an object.",
+          severity: "error",
+        });
+      }
+      if (existingFiles.length === 0 && (!pkg.scripts || typeof pkg.scripts.dev !== "string")) {
+        errors.push({
+          type: "missing_dev_script",
+          file: "package.json",
+          message: "New Vite/React projects need a package.json scripts.dev command so the preview can start.",
+          severity: "error",
+        });
+      }
       listedDeps = new Set([
         ...Object.keys(pkg.dependencies ?? {}),
         ...Object.keys(pkg.devDependencies ?? {}),
       ]);
     } catch {
       errors.push({
-        type: "syntax_hint",
+        type: "invalid_package_json",
         file: "package.json",
         message: "package.json contains invalid JSON",
+        severity: "error",
+      });
+    }
+  }
+
+  const tsconfigFile = files.find((f) => f.path === "tsconfig.json") ??
+    existingFiles.find((f) => f.path === "tsconfig.json");
+  if (tsconfigFile) {
+    const parsed = parseJsonObject(tsconfigFile.content);
+    if (!parsed) {
+      errors.push({
+        type: "invalid_tsconfig",
+        file: "tsconfig.json",
+        message: "tsconfig.json must be valid JSON object syntax.",
+        severity: "error",
+      });
+    } else if (parsed.compilerOptions !== undefined && !isPlainObject(parsed.compilerOptions)) {
+      errors.push({
+        type: "invalid_tsconfig",
+        file: "tsconfig.json",
+        message: "tsconfig.json compilerOptions must be an object.",
         severity: "error",
       });
     }
@@ -470,6 +723,34 @@ export function validateGeneratedFiles(
     const { path: filePath, content } = file;
     const isScript = /\.(tsx?|jsx?)$/.test(filePath);
     if (!isScript) continue;
+
+    if (!content.trim()) {
+      errors.push({
+        type: "empty_file",
+        file: filePath,
+        message: `${filePath} is empty. Return complete file content or remove the file from the response.`,
+        severity: "error",
+      });
+      continue;
+    }
+
+    if (/^(<<<<<<<|=======|>>>>>>>)\s/m.test(content)) {
+      errors.push({
+        type: "merge_conflict_marker",
+        file: filePath,
+        message: `${filePath} contains merge-conflict markers. Resolve them before returning the file.`,
+        severity: "error",
+      });
+    }
+
+    if (/\.ts$/.test(filePath) && /<[A-Z][A-Za-z0-9]*(\s|>|\/>)/.test(content)) {
+      errors.push({
+        type: "jsx_in_ts_file",
+        file: filePath,
+        message: `${filePath} contains JSX but has a .ts extension. Rename it to .tsx or remove JSX.`,
+        severity: "error",
+      });
+    }
 
     // ── Check local imports ─────────────────────────────────────────────────
     const localImports = [
@@ -501,6 +782,78 @@ export function validateGeneratedFiles(
           message: `Imports '${importPath}' but no matching file found in generated output (resolved: ${resolved})`,
           severity: "error",
         });
+      } else {
+        const target = resolveImportFile(pathIndex, resolved);
+        const clause = parseImportClause(content, importPath);
+        if (target && clause) {
+          const names = exportedNames(target.content);
+          const missingNames = parseNamedImports(clause).filter((name) => !names.has(name));
+          if (missingNames.length > 0) {
+            errors.push({
+              type: "missing_named_export",
+              file: filePath,
+              message: `Imports { ${missingNames.join(", ")} } from '${importPath}', but ${target.path} does not export those name(s).`,
+              severity: "error",
+            });
+          }
+          if (hasDefaultImport(clause) && !hasDefaultExport(target.content)) {
+            errors.push({
+              type: "missing_default_export",
+              file: filePath,
+              message: `Imports a default export from '${importPath}', but ${target.path} has no default export.`,
+              severity: "error",
+            });
+          }
+        }
+      }
+    }
+
+    const aliasImports = [
+      ...content.matchAll(/from\s+['"](@\/[^'"]+)['"]/g),
+      ...content.matchAll(/import\s+['"](@\/[^'"]+)['"]/g),
+    ];
+    for (const match of aliasImports) {
+      const importPath = match[1];
+      const resolved = importPath.replace(/^@\//, "src/");
+      const found =
+        normPaths.has(resolved) ||
+        normPaths.has(resolved + ".ts") ||
+        normPaths.has(resolved + ".tsx") ||
+        normPaths.has(resolved + ".js") ||
+        normPaths.has(resolved + ".jsx") ||
+        normPaths.has(resolved + "/index.ts") ||
+        normPaths.has(resolved + "/index.tsx");
+
+      if (!found) {
+        errors.push({
+          type: "broken_alias_import",
+          file: filePath,
+          message: `Imports '${importPath}' but no matching file exists under ${resolved}`,
+          severity: "error",
+        });
+      } else {
+        const target = resolveImportFile(pathIndex, resolved);
+        const clause = parseImportClause(content, importPath);
+        if (target && clause) {
+          const names = exportedNames(target.content);
+          const missingNames = parseNamedImports(clause).filter((name) => !names.has(name));
+          if (missingNames.length > 0) {
+            errors.push({
+              type: "missing_named_export",
+              file: filePath,
+              message: `Imports { ${missingNames.join(", ")} } from '${importPath}', but ${target.path} does not export those name(s).`,
+              severity: "error",
+            });
+          }
+          if (hasDefaultImport(clause) && !hasDefaultExport(target.content)) {
+            errors.push({
+              type: "missing_default_export",
+              file: filePath,
+              message: `Imports a default export from '${importPath}', but ${target.path} has no default export.`,
+              severity: "error",
+            });
+          }
+        }
       }
     }
 
@@ -511,6 +864,7 @@ export function validateGeneratedFiles(
     ];
 
     for (const match of pkgImports) {
+      if (match[1].startsWith("@/")) continue;
       const pkg = match[1].split("/").slice(0, match[1].startsWith("@") ? 2 : 1).join("/");
       if (
         pkg === "react" || pkg === "react-dom" || // always available
@@ -526,18 +880,59 @@ export function validateGeneratedFiles(
       });
     }
 
+    const namedReactImports = importedReactNames(content);
+    const missingHooks = REACT_HOOKS.filter((hook) => {
+      const usesBareHook = new RegExp(`\\b${hook}\\s*\\(`).test(content);
+      const usesNamespacedHook = new RegExp(`\\bReact\\.${hook}\\s*\\(`).test(content);
+      return usesBareHook && !usesNamespacedHook && !namedReactImports.has(hook);
+    });
+    if (missingHooks.length > 0) {
+      errors.push({
+        type: "missing_react_hook_import",
+        file: filePath,
+        message: `Uses ${missingHooks.join(", ")} but does not import them from react.`,
+        severity: "error",
+      });
+    }
+
+    const duplicateDeclarations = findDuplicateDeclarations(content);
+    if (duplicateDeclarations.length > 0) {
+      errors.push({
+        type: "duplicate_declaration",
+        file: filePath,
+        message: `Duplicate declaration(s) in ${filePath}: ${duplicateDeclarations.slice(0, 6).join(", ")}. Keep one definition or rename scoped values.`,
+        severity: "error",
+      });
+    }
+
+    if (isNextServerComponent(filePath, content)) {
+      const usesClientOnlyReact = REACT_HOOKS.some((hook) => new RegExp(`\\b(?:React\\.)?${hook}\\s*\\(`).test(content));
+      const usesBrowserGlobals = /\b(window|document|localStorage|sessionStorage|navigator)\b/.test(content);
+      const usesEventHandlers = /\bon[A-Z][A-Za-z]*=/.test(content);
+      if (usesClientOnlyReact || usesBrowserGlobals || usesEventHandlers) {
+        errors.push({
+          type: "missing_use_client",
+          file: filePath,
+          message: `${filePath} uses client-only React/browser features but is a Next.js server component. Add "use client" or move the interactive code into a client component.`,
+          severity: "error",
+        });
+      }
+    }
+
     // ── Detect truncated content ────────────────────────────────────────────
     if (
       content.includes("// ... rest") ||
       content.includes("// ...rest") ||
       content.includes("// TODO: implement") ||
+      content.includes("TODO: wire") ||
+      content.includes("throw new Error(\"Not implemented") ||
       content.includes("/* ... */")
     ) {
       errors.push({
         type: "syntax_hint",
         file: filePath,
-        message: "File appears truncated (contains placeholder comment)",
-        severity: "warning",
+        message: "File appears unfinished (contains TODO, placeholder, or truncated implementation)",
+        severity: "error",
       });
     }
   }
@@ -563,6 +958,43 @@ export function validateGeneratedFiles(
       });
     }
 
+    const effectiveIndex = effectiveContent(effectiveFiles, "index.html");
+    if (effectiveIndex) {
+      if (!hasRootMountTarget(effectiveIndex)) {
+        errors.push({
+          type: "missing_root_mount",
+          file: "index.html",
+          message: "index.html is missing <div id=\"root\"></div>, so React has nowhere to mount.",
+          severity: "error",
+        });
+      }
+      if (!hasMainScript(effectiveIndex)) {
+        errors.push({
+          type: "missing_main_script",
+          file: "index.html",
+          message: "index.html must load the app entry with <script type=\"module\" src=\"/src/main.tsx\"></script>.",
+          severity: "error",
+        });
+      }
+    }
+
+    const effectiveMainForMount =
+      effectiveContent(effectiveFiles, "src/main.tsx") ||
+      effectiveContent(effectiveFiles, "src/main.jsx") ||
+      effectiveContent(effectiveFiles, "main.tsx");
+    if (
+      effectiveMainForMount &&
+      /from\s+['"]react-dom\/client['"]|ReactDOM/.test(effectiveMainForMount) &&
+      !mountsReactRoot(effectiveMainForMount)
+    ) {
+      errors.push({
+        type: "missing_react_mount",
+        file: "src/main.tsx",
+        message: "React entry imports ReactDOM/createRoot but never renders into #root.",
+        severity: "error",
+      });
+    }
+
     // Catch a generation that "succeeded" structurally but left the entry as the
     // default scaffold placeholder — i.e. the real UI was never produced (often
     // because the response was truncated and App.tsx dropped). The effective App
@@ -579,6 +1011,23 @@ export function validateGeneratedFiles(
         file: effectiveApp.path,
         message:
           "App entry is still the starter placeholder — the requested UI was not generated (the response may have been truncated). Generate the real App component and its imported pages/components.",
+        severity: "error",
+      });
+    }
+
+    const effectiveMain =
+      effectiveContent(effectiveFiles, "src/main.tsx") ||
+      effectiveContent(effectiveFiles, "src/main.jsx") ||
+      effectiveContent(effectiveFiles, "main.tsx");
+    const effectiveContents = [...effectiveFiles.values()].map((f) => f.content).join("\n");
+    const usesReactRouter =
+      /from\s+['"]react-router-dom['"]/.test(effectiveContents) &&
+      /\b(Routes|Route|Link|NavLink|Navigate|Outlet|useNavigate|useLocation|useParams)\b/.test(effectiveContents);
+    if (usesReactRouter && !hasRouterProvider(effectiveMain) && !(effectiveApp && hasRouterProvider(effectiveApp.content))) {
+      errors.push({
+        type: "missing_router_provider",
+        file: effectiveMain ? "src/main.tsx" : effectiveApp?.path,
+        message: "react-router-dom components/hooks are used, but no BrowserRouter/RouterProvider wraps the app. Add the router provider at the entry point.",
         severity: "error",
       });
     }
@@ -619,7 +1068,7 @@ export function validateGeneratedFiles(
 export function assessGenerationQuality(
   files: ParsedFile[],
   existingFiles: ParsedFile[] = [],
-  opts: { minFiles?: number } = {}
+  opts: { minFiles?: number; appType?: string } = {}
 ): ValidationError[] {
   const errors: ValidationError[] = [];
   const minFiles = opts.minFiles ?? 10;
@@ -628,6 +1077,8 @@ export function assessGenerationQuality(
   const byPath = new Map<string, ParsedFile>(existingFiles.map((f) => [f.path, f]));
   for (const f of files) byPath.set(f.path, f);
   const all = [...byPath.values()];
+  const paths = new Set(all.map((f) => f.path));
+  const appType = opts.appType;
 
   // 1. Too few files overall — likely only the scaffold landed.
   if (all.length < minFiles) {
@@ -674,6 +1125,72 @@ export function assessGenerationQuality(
         type: "sparse_main_page",
         file: main.path,
         message: `${main.path} is too sparse — a landing/home/storefront page must have 5+ content-rich sections (hero, grids of 8+ items, value props, footer), not a heading and a sentence.`,
+        severity: "error",
+      });
+    }
+  }
+
+  const pageCount = all.filter((f) => /(^|\/)src\/pages\/.+\.(tsx|jsx)$/.test(f.path)).length;
+  const hasSupabaseMigration = all.some((f) => /^supabase\/migrations\/.+\.sql$/.test(f.path));
+  const hasSupabaseClient = paths.has("src/lib/supabase.ts") || paths.has("src/lib/supabase.tsx");
+  const hasDataLayer = all.some((f) =>
+    /^src\/(lib|hooks)\//.test(f.path) &&
+    /(api|data-source|repository|service|store-api|erp-api|use[A-Z])/.test(f.path) &&
+    /(supabase|fallback|seed|local)/i.test(f.content)
+  );
+
+  if (appType === "marketing-website") {
+    if (pageCount < 5) {
+      errors.push({
+        type: "too_few_website_pages",
+        message: `Only ${pageCount} routed page file(s) found. A complete website needs 5-10 linked pages such as Home, Services, About, Portfolio/Case Studies, Blog/Resources, and Contact.`,
+        severity: "error",
+      });
+    }
+    if (!hasSupabaseMigration || !hasSupabaseClient || !hasDataLayer) {
+      errors.push({
+        type: "missing_website_data_backing",
+        message: "Website builds must include Supabase migration SQL, src/lib/supabase.ts, and a data-access layer/hooks with local fallback data for leads/contact/newsletter/content.",
+        severity: "error",
+      });
+    }
+  }
+
+  if (appType === "ecommerce") {
+    if (pageCount < 8) {
+      errors.push({
+        type: "too_few_ecommerce_pages",
+        message: `Only ${pageCount} routed page file(s) found. E-commerce builds need storefront, shop, product detail, cart, checkout, account/orders, admin products, and admin orders pages.`,
+        severity: "error",
+      });
+    }
+    const schemaText = all.filter((f) => /^supabase\/migrations\/.+\.sql$/.test(f.path)).map((f) => f.content).join("\n").toLowerCase();
+    const requiredTables = ["products", "categories", "customers", "orders", "order_items"];
+    const missingTables = requiredTables.filter((table) => !schemaText.includes(table));
+    if (!hasSupabaseMigration || !hasSupabaseClient || !hasDataLayer || missingTables.length > 0) {
+      errors.push({
+        type: "missing_ecommerce_data_backing",
+        message: `E-commerce builds must include Supabase schema/client/data layer for catalog, customers, orders, and inventory. Missing evidence for: ${missingTables.length ? missingTables.join(", ") : "data layer or migration files"}.`,
+        severity: "error",
+      });
+    }
+  }
+
+  if (appType === "erp") {
+    if (pageCount < 8) {
+      errors.push({
+        type: "too_few_erp_modules",
+        message: `Only ${pageCount} routed page file(s) found. ERP builds need 8-10 operations modules such as dashboard, inventory, sales/orders, purchasing, customers, HR, reports, finance, audit log, and settings.`,
+        severity: "error",
+      });
+    }
+    const schemaText = all.filter((f) => /^supabase\/migrations\/.+\.sql$/.test(f.path)).map((f) => f.content).join("\n").toLowerCase();
+    const requiredTables = ["companies", "products", "inventory", "suppliers", "purchase_orders", "customers", "sales_orders", "invoices", "employees", "audit_logs"];
+    const missingTables = requiredTables.filter((table) => !schemaText.includes(table));
+    if (!hasSupabaseMigration || !hasSupabaseClient || !hasDataLayer || missingTables.length > 0) {
+      errors.push({
+        type: "missing_erp_data_backing",
+        message: `ERP builds must include Supabase schema/client/data layer for company-scoped operations, roles, inventory, orders, invoices, employees, and audit logs. Missing evidence for: ${missingTables.length ? missingTables.join(", ") : "data layer or migration files"}.`,
         severity: "error",
       });
     }

@@ -952,6 +952,7 @@ export function ChatPanel({
 
   // Seed screenshots from freshly-loaded messages (e.g., on page reload)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate screenshot cache from persisted message metadata
     setMessageScreenshots((prev) => {
       const next = { ...prev };
       let changed = false;
@@ -983,6 +984,7 @@ export function ChatPanel({
   // Handle file-to-app drop: pre-fill input (and image) then consume
   useEffect(() => {
     if (!pendingBuildFromFile) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- consume external drop payload into composer state
     setInput(pendingBuildFromFile.prompt);
     if (pendingBuildFromFile.imageBase64) {
       setAttachedImage(pendingBuildFromFile.imageBase64);
@@ -1009,6 +1011,7 @@ export function ChatPanel({
 
   useEffect(() => {
     if (!streaming) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset elapsed timer when the stream stops
       setThoughtSeconds(0);
       return;
     }
@@ -1205,6 +1208,7 @@ export function ChatPanel({
       if (m.role === "assistant" && typeof c === "number") fromMeta[m.id] = c;
     });
     if (Object.keys(fromMeta).length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate per-message credit metadata from loaded messages
       setMessageCredits((prev) => ({ ...fromMeta, ...prev }));
     }
   }, [messages]);
@@ -1215,6 +1219,7 @@ export function ChatPanel({
     if (!starterPrompt || starterFired || messages.length > 0 || streaming) return;
     if (credits <= 0) return;
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot URL starter prompt bootstrap
     setStarterFired(true);
     setInput(starterPrompt);
     const starterMode = resolvePromptMode(starterPrompt, intelCtx);
@@ -1233,6 +1238,7 @@ export function ChatPanel({
       if (pendingFixPrompt && credits <= 0) onPendingFixConsumed?.();
       return;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- consume preview fix request into composer state
     setInput(`Fix this runtime error:\n\n${pendingFixPrompt}`);
     onPendingFixConsumed?.();
     setTimeout(() => textareaRef.current?.focus(), 50);
@@ -1263,6 +1269,7 @@ export function ChatPanel({
   useEffect(() => {
     if (!pendingFileRef) return;
     const mention = `@${pendingFileRef.path} `;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- consume file reference action into composer state
     setInput((prev) => (prev ? `${prev} ${mention}` : mention));
     onPendingFileRefConsumed?.();
     setTimeout(() => {
@@ -1298,6 +1305,7 @@ export function ChatPanel({
   useEffect(() => {
     const threads = groupIntoThreads(messages);
     if (threads.length <= 2) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- derive collapsed thread defaults when new threads appear
     setCollapsedThreads((prev) => {
       const next = new Set(prev);
       for (let i = 0; i < threads.length - 2; i++) {

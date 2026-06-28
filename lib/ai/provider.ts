@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
-import { getDefaultAiModel, useOpenRouterForAll, resolveOpenRouterModelId } from "./model-defaults";
+import { getDefaultAiModel, shouldRouteAllAiViaOpenRouter, resolveOpenRouterModelId } from "./model-defaults";
 
 export type AIModel =
   | "gpt-5.2"
@@ -88,7 +88,7 @@ function isOpenRouterModel(model: string): boolean {
 }
 
 function getProvider(model: AIModel): AIProvider {
-  if (useOpenRouterForAll()) return "openrouter";
+  if (shouldRouteAllAiViaOpenRouter()) return "openrouter";
   if (model.startsWith("gpt-")) return "openai";
   // Prefer native Anthropic SDK (supports prompt caching) when key is present
   if (model.startsWith("claude-")) {
@@ -201,7 +201,7 @@ export async function generateAI(options: GenerateOptions): Promise<GenerateResu
   // request degrades safely (e.g. to 16K) if the slug falls back to gpt-4o.
   options = { ...options, maxTokens: clampMaxTokens(model, options.maxTokens) };
 
-  if (useOpenRouterForAll()) {
+  if (shouldRouteAllAiViaOpenRouter()) {
     if (!process.env.OPENROUTER_API_KEY) {
       throw new Error(
         'OpenRouter is enabled (AI_VIA_OPENROUTER) but OPENROUTER_API_KEY is missing. Set it in .env.local.',
@@ -273,7 +273,7 @@ function isGroqModel(model: AIModel) {
 
 function createOpenAIClient(model: AIModel) {
   const isGroq = isGroqModel(model);
-  const forceOR = useOpenRouterForAll();
+  const forceOR = shouldRouteAllAiViaOpenRouter();
   // OpenRouter: forced for all models, explicit OR model IDs, or Claude fallback when no Anthropic key
   const isOR =
     forceOR ||

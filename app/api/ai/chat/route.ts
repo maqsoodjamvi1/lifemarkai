@@ -823,6 +823,7 @@ The user has expressed frustration. Do the following:
               const correctnessErrors = validateGeneratedFiles(finalFiles, existingFiles);
               const richnessErrors = assessGenerationQuality(finalFiles, existingFiles, {
                 minFiles: buildIntent?.minFiles,
+                appType: buildIntent?.appType,
               });
               const validationErrors = [...correctnessErrors, ...richnessErrors];
               const needsEnrichment = richnessErrors.length > 0;

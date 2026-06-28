@@ -27,9 +27,9 @@ export interface BuildIntent {
  * Keep in sync with each blueprint's stated "Minimum N files".
  */
 export const MIN_FILES_BY_TYPE: Record<BuildAppType, number> = {
-  "marketing-website": 12,
-  ecommerce: 14,
-  erp: 15,
+  "marketing-website": 18,
+  ecommerce: 22,
+  erp: 24,
   pos: 12,
   crm: 12,
   "admin-dashboard": 12,
@@ -41,7 +41,7 @@ export const MIN_FILES_BY_TYPE: Record<BuildAppType, number> = {
   "general-app": 10,
 };
 
-const ECOMMERCE_KEYWORDS = /\b(e-?commerce|online store|online shop|web ?shop|storefront|shopping cart|add to cart|product catalog|product listing|stripe checkout|sell products?|store with cart|shop with cart|clothing store|shoe store|fashion store|electronics store|grocery store)\b/i;
+const ECOMMERCE_KEYWORDS = /\b(e-?commerce|ecomerce|ecoomerce|online store|online shop|web ?shop|storefront|shopping cart|add to cart|product catalog|product listing|stripe checkout|sell products?|store with cart|shop with cart|clothing store|shoe store|fashion store|electronics store|grocery store)\b/i;
 const ERP_KEYWORDS = /\b(erp|enterprise resource|inventory management|supply chain|procurement|warehouse|purchase order|bill of materials|bom)\b/i;
 // POS = in-person retail terminal. Note: bare "checkout"/"cart" are intentionally
 // NOT here — those belong to e-commerce. POS needs explicit point-of-sale terms.
@@ -79,34 +79,45 @@ function titleCase(s: string): string {
 }
 
 const BLUEPRINTS: Record<BuildAppType, (niche: string | null) => string> = {
-  "marketing-website": (niche) => `## Autonomous Marketing Website Blueprint
-You are building a complete niche website${niche ? ` for **${titleCase(niche)}**` : ""}. Act like Lovable — infer everything yourself. Do NOT ask questions.
+  "marketing-website": (niche) => `## Autonomous Complete Website Blueprint
+You are building a complete, production-style niche website${niche ? ` for **${titleCase(niche)}**` : ""}. Act like Lovable — infer everything yourself. Do NOT ask questions. A "website" is never a single landing page unless the user explicitly says one-page.
 
-Required pages & sections:
-- Header: logo wordmark, nav (Services, About, Contact), CTA button
-- Hero: headline + subhead tailored to the niche, primary + secondary CTA
-- Services/Features: 3–6 cards with realistic niche-specific copy (not lorem ipsum)
-- About: company story, trust signals, stats
-- Testimonials or social proof
-- Contact: form (name, email, message) + footer with links
-- Responsive mobile layout, dark or light theme matching the niche
+Required site map (5–10 linked pages):
+1. **Home** — hero, trust indicators, 3–6 services/features, featured work/products, testimonials, CTA, footer.
+2. **Services / Solutions** — detailed service cards, process timeline, pricing/plan teaser or consultation CTA.
+3. **About** — company story, mission, team/leadership cards, stats, certifications/partners.
+4. **Portfolio / Case Studies / Gallery** — 6–9 realistic items with detail links/cards, outcomes, industry tags.
+5. **Blog / Resources / News** — article list with categories and 3+ seeded posts.
+6. **Contact / Lead Capture** — validated form, office/contact details, FAQ, map-style info card.
+Optional extra pages when the niche fits: Pricing, Careers, FAQ, Industries, Product Catalog.
+
+Each page must be reachable through React Router nav and footer links; App.tsx wires routes only. Home and Services must each have 5+ rich sections.
+
+Database-backed behavior:
+- Include Supabase-ready persistence even for websites: lead/contact submissions, newsletter subscribers, blog/resources, case studies/portfolio items, testimonials, and optional service inquiries.
+- Generate \`supabase/migrations/001_website_schema.sql\` with tables, indexes, RLS enabled, owner/public-safe policies where appropriate.
+- Generate \`src/lib/supabase.ts\` (env-based client) and \`src/lib/data-source.ts\` or hooks that read from Supabase when env vars exist, with seeded local fallback data so preview still works without credentials.
+- Contact/newsletter forms must call the data layer and show loading/success/error states, not be dead buttons.
 
 Brand & design (infer from niche):
 - Pick a professional brand name if none given
 - Choose accent colors that fit the industry (logistics=cargo red/navy, healthcare=teal, finance=navy/gold)
 - Use realistic business copy — company names, service descriptions, phone placeholders
 
-Minimum files: index.html, vite.config.ts, package.json, tailwind.config.js, postcss.config.js, src/main.tsx, src/index.css, src/App.tsx, src/pages/Home.tsx, src/components/Header.tsx, src/components/Hero.tsx, src/components/Footer.tsx, src/data/content.ts`,
+Minimum 18+ files: scaffold + layout + UI primitives + 5–10 page files + data/hooks + Supabase migration. A website with only Home/About/Contact sections in one file is a failed build.`,
 
-  ecommerce: (niche) => `## Autonomous E-Commerce Storefront Blueprint
-Build a complete, polished online store${niche ? ` for **${titleCase(niche)}**` : ""} — a customer-facing storefront, NOT a POS terminal or admin panel. This must look like a real shop with lots of products and multiple rich sections, never a thin one-page placeholder.
+  ecommerce: (niche) => `## Autonomous Database-Backed E-Commerce Store Blueprint
+Build a complete, polished online store${niche ? ` for **${titleCase(niche)}**` : ""} — a customer-facing storefront with commerce data models, NOT a POS terminal or admin panel. This must look and behave like a real shop with lots of products and multiple rich sections, never a thin one-page placeholder.
 
-Required pages & sections:
+Required storefront pages:
 1. **Home / Storefront** — sticky header (logo, nav, search, cart icon with item count), hero banner with a promo headline + CTA, "Shop by category" tiles, a FEATURED PRODUCTS grid (at least 8 products), a value-props row (free shipping · easy returns · secure checkout), a newsletter signup, and a rich multi-column footer.
 2. **Shop / Category listing** — filter sidebar (category, price range, rating), a sort dropdown, and a responsive product-card grid (image placeholder, name, price, star rating, Add-to-cart button).
 3. **Product detail** — large image placeholder + thumbnails, title, price, star rating + review count, quantity selector, Add-to-cart, a description, and a "You may also like" related row.
 4. **Cart** — line items with quantity steppers and remove, plus an order summary (subtotal, shipping, tax, total) and a "Proceed to checkout" button.
 5. **Checkout** — contact + shipping form, an order summary, a mock Stripe payment step, and a success/confirmation screen with an order number.
+6. **Orders / Account** — customer order history/status lookup using email/order number.
+7. **Admin Products** — product/inventory table, create/edit product modal, stock/status badges.
+8. **Admin Orders** — orders table with status workflow (pending/paid/fulfilled/cancelled), order detail drawer.
 
 Architecture:
 - React Router for all pages above; cart state in \`src/hooks/useCart.ts\` (add / remove / updateQty / total) — interactions must actually work, not dead buttons.
@@ -115,10 +126,16 @@ Architecture:
 - Money via \`formatCurrency\`; ratings as star rows.
 - Mock Stripe checkout: a styled, validated payment form that shows a success screen — no real Stripe key, clearly labelled as a demo charge.
 
-Minimum 14+ files. Every page navigable; the home page must be visually full (hero + categories + 8+ products + value props + footer), not two lines of text.`,
+Database-backed behavior:
+- Generate \`supabase/migrations/001_ecommerce_schema.sql\` with products, categories, customers, carts/cart_items, orders/order_items, payments, reviews, inventory_events, newsletter_subscribers.
+- Enable RLS on every table and add safe public read policies for catalog tables plus user/order ownership policies.
+- Generate \`src/lib/supabase.ts\`, \`src/lib/store-api.ts\`, and hooks that read/write through Supabase when env vars exist, with seeded local fallback data so preview remains usable.
+- Checkout must create a pending order through the data layer, reduce local inventory in preview mode, and show success/error states.
 
-  erp: (niche) => `## Autonomous ERP System Blueprint
-Build a full ERP-style management application${niche ? ` for **${titleCase(niche)}**` : ""}. This is a business operations system, NOT a marketing site.
+Minimum 22+ files. Every storefront/admin page navigable; the home page must be visually full (hero + categories + 8+ products + value props + footer), not two lines of text.`,
+
+  erp: (niche) => `## Autonomous Database-Backed ERP System Blueprint
+Build a full ERP-style management application${niche ? ` for **${titleCase(niche)}**` : ""}. This is a business operations system with persistent data models, NOT a marketing site.
 
 Required modules (each = page + components + mock data):
 1. **Dashboard** — KPI cards (revenue, orders, inventory, employees), charts, recent activity feed
@@ -129,6 +146,8 @@ Required modules (each = page + components + mock data):
 6. **Employees / HR** — employee directory, departments, roles
 7. **Reports** — export buttons, date range filter, summary tables
 8. **Settings** — company profile, users & roles, preferences
+9. **Finance / Invoices** — invoice table, payment status, aging summary
+10. **Audit Log** — timeline of inventory/order/user changes
 
 Architecture:
 - React Router with sidebar layout (collapsible on mobile)
@@ -138,7 +157,13 @@ Architecture:
 - Tables: sortable columns, search, pagination UI, empty/loading states
 - Use the shared src/components/ui kit: cards, tables, badges, dialogs, dropdowns
 
-Minimum 15+ files. Every module must be navigable and populated with realistic ${niche ?? "industry"} data.`,
+Database-backed behavior:
+- Generate \`supabase/migrations/001_erp_schema.sql\` with companies, users/profiles, roles, products, warehouses, inventory_items, inventory_movements, suppliers, purchase_orders, purchase_order_items, customers, sales_orders, sales_order_items, invoices, employees, audit_logs.
+- Enable RLS on every table and include owner/company-scoped policies. Never use a \`role\` column on profiles; use membership/roles tables.
+- Generate \`src/lib/supabase.ts\`, \`src/lib/erp-api.ts\`, and domain hooks that read/write through Supabase when env vars exist, with seeded local fallback data so preview remains usable.
+- CRUD forms must update the data layer and show optimistic loading/success/error states. Tables must support search/filter/sort locally at minimum.
+
+Minimum 24+ files. Every module must be navigable, data-dense, and populated with realistic ${niche ?? "industry"} data.`,
 
   pos: (niche) => `## Autonomous POS System Blueprint
 Build a Point-of-Sale application${niche ? ` for **${titleCase(niche)}**` : ""}.

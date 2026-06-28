@@ -262,6 +262,30 @@ const CODE_QUALITY_RULES = `
 - Sufficient color contrast (text-slate-300 minimum on dark backgrounds).
 `.trim();
 
+const BUG_FREE_GENERATION_CONTRACT = `
+## Bug-Free Generation Contract
+- Before output, simulate the compiler: every local import, @/ alias import, named export, hook, prop, and package reference must resolve.
+- Match import style to exports: use \`import X\` only for default exports, and \`import { X }\` only for named exports that the target file actually exports.
+- Do not emit duplicate files or duplicate top-level declarations. Keep one final definition for each component, helper, type, and constant.
+- React hooks must be imported from react or called as React.useX. Next.js App Router files that use hooks, browser globals, or event handlers must start with "use client" or delegate that logic to a client component.
+- If using react-router-dom, wrap the app once with BrowserRouter or RouterProvider at the entry point before using Routes, Link, Navigate, or router hooks.
+- New Vite apps must include valid package.json scripts, especially "dev", and dependency/devDependency objects.
+- index.html must include <div id="root"></div> and a module script for /src/main.tsx; src/main.tsx must render the React app into #root.
+- tsconfig.json must be valid JSON with object-shaped compilerOptions when present.
+- File extensions must match content: JSX belongs in .tsx/.jsx, not .ts.
+- Remove scaffolding leftovers: no empty files, merge-conflict markers, TODO implementation notes, "Not implemented" throws, placeholder comments, or partial files.
+- For fixes, repair the root cause and then check for the next likely failure in the same file before returning.
+`.trim();
+
+const PRODUCT_MATURITY_CONTRACT = `
+## Product Maturity Contract
+- "Create a website" means a complete 5-10 page routed website by default: Home, Services/Solutions, About, Portfolio/Case Studies/Gallery, Blog/Resources, Contact, plus optional Pricing/FAQ/Careers/Industries when useful.
+- Websites, stores, ERP, CRM, booking, marketplace, and admin systems must be data-backed by default. Generate Supabase migration SQL under supabase/migrations/, an env-based Supabase client, and a data-access layer/hooks. Keep seeded local fallback data so preview works before credentials are connected.
+- E-commerce stores must include storefront pages, cart/checkout, account/orders, admin products, admin orders, products/categories/customers/orders/order_items/inventory schema, and working data-layer actions.
+- ERP systems must include sidebar navigation, 8-10 operations modules, CRUD-style forms, dense tables, roles/company-aware schema, audit logs, and working data-layer actions.
+- Do not satisfy product requests with static mock screens only. Mock data is allowed as fallback/seed data, but the architecture must be ready to persist and query real records.
+`.trim();
+
 // ─── FILE STRUCTURE TEMPLATE ──────────────────────────────────────────────────
 const FILE_STRUCTURE = `
 ## Required File Structure
@@ -665,6 +689,14 @@ ${CODE_QUALITY_RULES}
 
 ---
 
+${BUG_FREE_GENERATION_CONTRACT}
+
+---
+
+${PRODUCT_MATURITY_CONTRACT}
+
+---
+
 ${LOVABLE_PATTERNS}
 
 ---
@@ -717,9 +749,10 @@ When the user asks to create a website, app, ERP, POS, CRM, or management system
 1. **Infer everything yourself** — brand name, color palette, pages, modules, mock data, copy.
 2. **Never ask clarifying questions** — make reasonable assumptions and ship a complete product.
 3. **Match the niche** — cargo/logistics, restaurant, healthcare, finance, etc. each get appropriate copy, icons, and color schemes.
-4. **Complex apps (ERP, POS, CRM, admin)** — build functional multi-page apps with sidebar nav, data tables, forms, and realistic mock data — NOT single-page marketing sites.
-5. **Marketing websites** — include hero, services, about, contact, and professional footer with niche-specific content.
-6. The \`message\` field must be a friendly one-line summary (like Lovable): "Your cargo logistics website is live with a navy hero, red accents, and sections for Services, Fleet, and Contact."
+4. **Marketing websites** — build 5-10 routed pages, not a one-page brochure. Include a database-backed lead/contact/newsletter/content architecture.
+5. **E-commerce stores** — build customer storefront + cart/checkout + order/account + admin product/order management, with Supabase schema and data layer.
+6. **Complex apps (ERP, POS, CRM, admin)** — build functional multi-page apps with sidebar nav, data tables, forms, realistic seed data, Supabase schema, and data-layer hooks — NOT single-page marketing sites.
+7. The \`message\` field must be a friendly one-line summary (like Lovable): "Your cargo logistics website is live with a navy hero, red accents, database-ready lead capture, and pages for Services, Fleet, Case Studies, Blog, and Contact."
 
 ## Output efficiency (fewer tokens, same quality)
 - Put ALL mock/list data in ONE \`src/data/<domain>.ts\` file — import it everywhere. Never duplicate long arrays across files.
@@ -727,7 +760,7 @@ When the user asks to create a website, app, ERP, POS, CRM, or management system
 - Keep individual files focused: one component per file, no mega-files. Prefer concise implementations over verbose comments.
 
 ## Non-negotiable rules
-1. Minimum 10 files for any non-trivial app (config files + at least 4 components + pages). Match the blueprint's file count — most real apps are 14–20+ files.
+1. Minimum 10 files for any non-trivial app (config files + at least 4 components + pages). Match the blueprint's file count — mature websites are usually 18+ files, e-commerce 22+ files, ERP 24+ files.
 2. COMPLETE file content only — never \`// ... rest of implementation\`, never truncated.
 3. Every local import resolves to a file in your output. No dangling imports.
 4. package.json includes ALL npm packages you import.
@@ -778,6 +811,8 @@ export const OPERATING_DISCIPLINE = `## Operating discipline
 export const CHAT_SYSTEM_PROMPT = `${VIBE_PERSONA}
 
 ${ENGINEERING_INTELLIGENCE}
+
+${BUG_FREE_GENERATION_CONTRACT}
 
 ${OPERATING_DISCIPLINE}
 
@@ -843,6 +878,8 @@ You complete tasks end-to-end without hand-holding.
 ${PACKAGE_ALLOWLIST}
 
 ${CODE_QUALITY_RULES}
+
+${BUG_FREE_GENERATION_CONTRACT}
 
 ${LOVABLE_PATTERNS}
 
@@ -986,6 +1023,8 @@ export const AUTO_FIX_SYSTEM_PROMPT = `You are LifemarkAI AutoFix — an expert 
 Given an error and the affected files, diagnose and fix the issue.
 
 ${PACKAGE_ALLOWLIST}
+
+${BUG_FREE_GENERATION_CONTRACT}
 
 ## Common Error Patterns and Fixes
 
@@ -1198,9 +1237,18 @@ ${userPrompt}
 ## Final Self-Check (do this before writing the JSON)
 Before outputting, verify:
 - Every \`import X from './path'\` in your files → that path exists in your output or in the existing files list above.
+- Every \`@/...\` alias import resolves to a real file under \`src/\`.
+- Every named/default import matches the target file's actual exports.
 - package.json lists every npm package you import.
+- package.json has valid scripts/dependencies objects and a dev script for new apps.
+- React Router components/hooks are wrapped by a BrowserRouter or RouterProvider.
+- index.html has the root mount node and /src/main.tsx script, and the entry file calls createRoot(...).render(...).
+- Product builds that imply persistence include Supabase migration SQL, src/lib/supabase.ts, and a data-access layer with local fallback seed data.
+- Website requests have 5-10 linked pages; e-commerce and ERP requests include both user-facing/admin or operations modules required by the blueprint.
+- React hooks are imported from \`react\`, duplicate top-level declarations are removed, and JSX files use \`.tsx\`/\`.jsx\`.
+- Next.js App Router files using hooks, browser globals, or event handlers include \`"use client"\` or move that logic into a client component.
 - src/main.tsx, index.html, vite.config.ts, tsconfig.json are included (new project) or already exist (existing project).
-- No file content is truncated or contains placeholder comments like \`// TODO\` or \`// ... rest\`.`;
+- No file content is truncated or contains placeholder comments like \`// TODO\`, \`Not implemented\`, or \`// ... rest\`.`;
 }
 
 /**

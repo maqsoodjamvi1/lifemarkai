@@ -76,7 +76,7 @@ export async function POST(req: NextRequest) {
       };
 
       // Create a temp directory with the test files
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `lifemark-tests-`));
+      const tmpDir = fs.mkdtempSync(path.join(/*turbopackIgnore: true*/ os.tmpdir(), `lifemark-tests-`));
 
       try {
         send("status", { message: "Preparing test environment…" });
@@ -89,7 +89,7 @@ export async function POST(req: NextRequest) {
             send("log", { line: `Skipping unsafe path: ${f.path}`, isError: true });
             continue;
           }
-          const filePath = path.join(tmpDir, safePath);
+          const filePath = path.join(/*turbopackIgnore: true*/ tmpDir, safePath);
           fs.mkdirSync(path.dirname(filePath), { recursive: true });
           fs.writeFileSync(filePath, f.content, "utf8");
           send("status", { message: `Writing ${f.path}…` });
@@ -102,7 +102,7 @@ export async function POST(req: NextRequest) {
         if (runner === "playwright") {
           // Write a minimal playwright.config.ts
           fs.writeFileSync(
-            path.join(tmpDir, "playwright.config.ts"),
+            path.join(/*turbopackIgnore: true*/ tmpDir, "playwright.config.ts"),
             `import { defineConfig } from "@playwright/test";
 export default defineConfig({ testDir: ".", timeout: 30_000 });`
           );
@@ -111,7 +111,7 @@ export default defineConfig({ testDir: ".", timeout: 30_000 });`
         } else {
           // Write a minimal vitest.config.ts
           fs.writeFileSync(
-            path.join(tmpDir, "vitest.config.ts"),
+            path.join(/*turbopackIgnore: true*/ tmpDir, "vitest.config.ts"),
             `import { defineConfig } from "vitest/config";
 import path from "node:path";
 export default defineConfig({

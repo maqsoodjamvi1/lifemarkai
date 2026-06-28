@@ -79,7 +79,7 @@ export const IMAGE_MODEL = process.env.OPENROUTER_API_KEY ? "openai/dall-e-3" : 
  * When true, all AI calls route through OpenRouter (single API key for every model).
  * Defaults to true when OPENROUTER_API_KEY is set; set AI_VIA_OPENROUTER=false to disable.
  */
-export function useOpenRouterForAll(): boolean {
+export function shouldRouteAllAiViaOpenRouter(): boolean {
   const flag = process.env.AI_VIA_OPENROUTER?.toLowerCase();
   if (flag === "false" || flag === "0") return false;
   if (flag === "true" || flag === "1") return true;
