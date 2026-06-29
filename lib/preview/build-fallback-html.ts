@@ -2,7 +2,7 @@ import type { ProjectFile } from "@/types/database";
 import { generateFallbackUtilityCss } from "@/lib/preview/generate-fallback-utilities";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "22";
+export const PREVIEW_ENGINE_REV = "23";
 
 /** Strip PostCSS-only directives — invalid in a raw <style> tag. */
 export function sanitizePreviewCss(css: string): string {
@@ -373,6 +373,16 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
       (_, named: string) => `const { ${destructure(named)} } = window.__reactQuery || {};\n`
     );
 
+    // import { createClient } / import * as Supabase from '@supabase/supabase-js'
+    src = src.replace(
+      /import\s+\{([^}]+)\}\s+from\s+['"]@supabase\/supabase-js['"]\s*;?\n?/g,
+      (_, named: string) => `const { ${destructure(named)} } = window.__supabaseJs || {};\n`
+    );
+    src = src.replace(
+      /import\s+\*\s+as\s+(\w+)\s+from\s+['"]@supabase\/supabase-js['"]\s*;?\n?/g,
+      (_, name: string) => `const ${name} = window.__supabaseJs || {};\n`
+    );
+
     // import { ... } from 'react-hook-form'
     src = src.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"]react-hook-form['"]\s*;?\n?/g,
@@ -710,6 +720,7 @@ window.__Mrequire = function(path) {
   if (path === 'react-router-dom' || path === 'react-router') return window.__reactRouterDom || {};
   // Data fetching
   if (path === '@tanstack/react-query' || path === 'react-query') return window.__reactQuery || {};
+  if (path === '@supabase/supabase-js') return window.__supabaseJs || {};
   // Forms
   if (path === 'react-hook-form') return window.__reactHookForm || {};
   if (path === '@hookform/resolvers/zod' || path.startsWith('@hookform/')) {
@@ -743,6 +754,80 @@ window.__reactQuery = (function() {
   function useQuery() { return { data: undefined, error: null, isLoading: false, isFetching: false, isError: false, isSuccess: true, refetch: function(){ return Promise.resolve({ data: undefined }); } }; }
   function useMutation() { return { mutate: function(){}, mutateAsync: function(){ return Promise.resolve(); }, data: undefined, error: null, isPending: false, isLoading: false, isError: false, isSuccess: false }; }
   return { QueryClient: QueryClient, QueryClientProvider: QueryClientProvider, useQuery: useQuery, useMutation: useMutation, useQueryClient: function(){ return new QueryClient(); } };
+})();
+// Supabase browser client stub for generated apps previewed before a real
+// Lifemark Cloud backend is available.
+window.__supabaseJs = (function() {
+  function ok(data) { return Promise.resolve({ data: data == null ? null : data, error: null }); }
+  function makeBuilder(rows) {
+    var state = { rows: Array.isArray(rows) ? rows : [] };
+    var builder = {
+      select: function() { return builder; },
+      insert: function(value) { state.rows = state.rows.concat(Array.isArray(value) ? value : [value]); return builder; },
+      upsert: function(value) { state.rows = state.rows.concat(Array.isArray(value) ? value : [value]); return builder; },
+      update: function() { return builder; },
+      delete: function() { state.rows = []; return builder; },
+      eq: function() { return builder; },
+      neq: function() { return builder; },
+      gt: function() { return builder; },
+      gte: function() { return builder; },
+      lt: function() { return builder; },
+      lte: function() { return builder; },
+      like: function() { return builder; },
+      ilike: function() { return builder; },
+      in: function() { return builder; },
+      contains: function() { return builder; },
+      order: function() { return builder; },
+      limit: function() { return builder; },
+      range: function() { return builder; },
+      maybeSingle: function() { return ok(state.rows[0] || null); },
+      single: function() { return ok(state.rows[0] || null); },
+      then: function(resolve, reject) { return ok(state.rows).then(resolve, reject); },
+      catch: function(reject) { return ok(state.rows).catch(reject); },
+      finally: function(done) { return ok(state.rows).finally(done); },
+    };
+    return builder;
+  }
+  function createClient() {
+    var tables = {};
+    return {
+      auth: {
+        getUser: function() { return ok({ user: null }); },
+        getSession: function() { return ok({ session: null }); },
+        onAuthStateChange: function() { return { data: { subscription: { unsubscribe: function() {} } } }; },
+        signUp: function() { return ok({ user: null, session: null }); },
+        signInWithPassword: function() { return ok({ user: null, session: null }); },
+        signInWithOAuth: function() { return ok({ provider: null, url: null }); },
+        signOut: function() { return Promise.resolve({ error: null }); },
+        resetPasswordForEmail: function() { return Promise.resolve({ data: {}, error: null }); },
+      },
+      from: function(table) {
+        tables[table] = tables[table] || [];
+        return makeBuilder(tables[table]);
+      },
+      rpc: function() { return ok(null); },
+      storage: {
+        from: function(bucket) {
+          return {
+            upload: function(path, file) { return ok({ path: path, fullPath: bucket + '/' + path, file: file }); },
+            remove: function(paths) { return ok(paths || []); },
+            list: function() { return ok([]); },
+            getPublicUrl: function(path) { return { data: { publicUrl: 'https://example.supabase.local/storage/v1/object/public/' + bucket + '/' + path } }; },
+            createSignedUrl: function(path) { return ok({ signedUrl: 'https://example.supabase.local/storage/v1/object/sign/' + bucket + '/' + path }); },
+          };
+        },
+      },
+      channel: function() {
+        return {
+          on: function() { return this; },
+          subscribe: function(callback) { if (callback) setTimeout(function(){ callback('SUBSCRIBED'); }, 0); return this; },
+          unsubscribe: function() { return Promise.resolve('ok'); },
+        };
+      },
+      removeChannel: function() { return Promise.resolve('ok'); },
+    };
+  }
+  return { createClient: createClient };
 })();
 // react-hook-form — stub so Contact/Login forms render without CDN
 window.__reactHookForm = (function() {
