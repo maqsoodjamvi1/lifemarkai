@@ -1,6 +1,6 @@
 /**
  * Domain registrar abstraction (Lovable-parity in-product domain purchase).
- * See docs/titan/09-domains-hosting.md.
+ * Part of the Lovable-parity domains and hosting flow.
  *
  * One interface, swappable drivers. Cloudflare Registrar is the default
  * (at-cost pricing, clean API); IONOS is provided for parity with Lovable.

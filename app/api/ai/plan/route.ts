@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { REASONING_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { buildEditorIntelligencePromptBlock } from "@/lib/ai/editor-lenses/persistence";
 
 export async function POST(request: NextRequest) {
   try {
@@ -41,6 +42,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
     }
 
+    const editorIntelligenceContext = await buildEditorIntelligencePromptBlock(supabase, projectId);
+
     const systemPrompt = `You are a senior software architect. Given a project idea, create a detailed, structured implementation plan.
 
 Return ONLY valid JSON in this exact format:
@@ -61,7 +64,7 @@ Return ONLY valid JSON in this exact format:
 }
 
 Use exactly 5-7 steps. Categories must be one of: ui, api, database, auth, deployment.
-Think strategically: order steps by dependency, call out architectural trade-offs in each description, and surface risks/edge cases the build should handle.`;
+Think strategically: order steps by dependency, call out architectural trade-offs in each description, and surface risks/edge cases the build should handle.${editorIntelligenceContext}`;
 
     const aiResult = await generateAI({
       // Route planning through the strong reasoning tier (Claude Opus) for

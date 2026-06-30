@@ -1,6 +1,6 @@
 /**
  * Hosting-target abstraction + target-aware domain verification.
- * See docs/titan/09-domains-hosting.md §3 and §6.
+ * Part of the Lovable-parity domains and hosting flow.
  *
  * Replaces the naive "does it resolve to anything" check in
  * app/api/domains/verify/route.ts with a check that the domain actually points

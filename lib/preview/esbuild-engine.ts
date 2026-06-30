@@ -43,6 +43,8 @@ async function ensureEsbuild(): Promise<Esbuild> {
 }
 
 const CODE_EXT = ["", ".tsx", ".ts", ".jsx", ".js", ".mjs", ".cjs", ".json"];
+const APP_ENTRY = "__lifemark_entry.tsx";
+
 function loaderFor(path: string): "tsx" | "ts" | "jsx" | "js" | "json" | "css" | "text" {
   if (path.endsWith(".tsx")) return "tsx";
   if (path.endsWith(".ts")) return "ts";
@@ -51,6 +53,17 @@ function loaderFor(path: string): "tsx" | "ts" | "jsx" | "js" | "json" | "css" |
   if (path.endsWith(".css")) return "css";
   if (/\.(js|mjs|cjs)$/.test(path)) return "js";
   return "text";
+}
+
+function findProjectPath(candidate: string, byPath: Map<string, string>): string | null {
+  const clean = candidate.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/^\/+/, "");
+  for (const ext of CODE_EXT) {
+    if (byPath.has(clean + ext)) return clean + ext;
+  }
+  for (const idx of ["/index.tsx", "/index.ts", "/index.jsx", "/index.js"]) {
+    if (byPath.has(clean + idx)) return clean + idx;
+  }
+  return null;
 }
 
 /** Normalize a project path and pick the entry (main.tsx → App.tsx fallbacks). */
@@ -64,6 +77,9 @@ function pickEntry(byPath: Map<string, string>): string | null {
 }
 
 function resolveRelative(importer: string, spec: string, byPath: Map<string, string>): string | null {
+  if (importer === APP_ENTRY) {
+    return findProjectPath(spec, byPath);
+  }
   const base = importer.includes("/") ? importer.slice(0, importer.lastIndexOf("/")) : "";
   const parts = (base ? base + "/" + spec : spec).split("/");
   const stack: string[] = [];
@@ -72,14 +88,42 @@ function resolveRelative(importer: string, spec: string, byPath: Map<string, str
     if (part === "..") stack.pop();
     else stack.push(part);
   }
-  const joined = stack.join("/");
-  for (const ext of CODE_EXT) {
-    if (byPath.has(joined + ext)) return joined + ext;
+  return findProjectPath(stack.join("/"), byPath);
+}
+
+function resolveProjectSpecifier(spec: string, importer: string, byPath: Map<string, string>): string | null {
+  if (spec.startsWith("@/")) {
+    return findProjectPath(`src/${spec.slice(2)}`, byPath) ?? findProjectPath(spec.slice(2), byPath);
   }
-  for (const idx of ["/index.tsx", "/index.ts", "/index.jsx", "/index.js"]) {
-    if (byPath.has(joined + idx)) return joined + idx;
+  if (spec.startsWith("~/")) {
+    return findProjectPath(`src/${spec.slice(2)}`, byPath) ?? findProjectPath(spec.slice(2), byPath);
   }
-  return null;
+  if (spec.startsWith("/")) {
+    return findProjectPath(spec.slice(1), byPath);
+  }
+  if (spec.startsWith("src/") || spec.startsWith("components/") || spec.startsWith("lib/") || spec.startsWith("app/")) {
+    return findProjectPath(spec, byPath) ?? findProjectPath(`src/${spec}`, byPath);
+  }
+  return resolveRelative(importer, spec, byPath);
+}
+
+function shouldWrapAppEntry(entry: string): boolean {
+  return /(^|\/)App\.(tsx|jsx)$/.test(entry);
+}
+
+function buildAppEntry(entry: string): string {
+  const importPath = entry.startsWith("/") ? `.${entry}` : `./${entry.replace(/\.(tsx|ts|jsx|js)$/, "")}`;
+  return `
+import * as React from "react";
+import { createRoot } from "react-dom/client";
+import * as AppModule from "${importPath}";
+
+const App = AppModule.default || AppModule.App;
+const root = document.getElementById("root");
+if (!root) throw new Error("Preview root element was not found.");
+if (!App) throw new Error("${entry} must export a default App component or named App component.");
+createRoot(root).render(React.createElement(App));
+`;
 }
 
 export interface EsbuildResult {
@@ -97,6 +141,7 @@ export async function buildEsbuildHtml(files: ProjectFile[]): Promise<EsbuildRes
   const byPath = new Map(files.map((f) => [f.path.replace(/\\/g, "/"), f.content ?? ""]));
   const entry = pickEntry(byPath);
   if (!entry) return { html: null, errors: ["No entry file (expected src/main.tsx or src/App.tsx)."] };
+  const bundleEntry = shouldWrapAppEntry(entry) ? APP_ENTRY : entry;
 
   let esbuild: Esbuild;
   try {
@@ -116,6 +161,9 @@ export async function buildEsbuildHtml(files: ProjectFile[]): Promise<EsbuildRes
         return { errors: [{ text: `Cannot resolve "${args.path}" from "${args.importer}"` }] };
       });
       build.onLoad({ filter: /.*/, namespace: "vfs" }, (args) => {
+        if (args.path === APP_ENTRY) {
+          return { contents: buildAppEntry(entry), loader: "tsx" };
+        }
         const contents = byPath.get(args.path) ?? "";
         if (args.path.endsWith(".css")) {
           return { contents: "", loader: "js" }; // CSS handled separately, not bundled into JS
@@ -130,7 +178,7 @@ export async function buildEsbuildHtml(files: ProjectFile[]): Promise<EsbuildRes
         if (args.kind === "entry-point" || byPath.has(args.path)) {
           return { path: args.path, namespace: "vfs" };
         }
-        const resolved = resolveRelative(args.importer, args.path, byPath);
+        const resolved = resolveProjectSpecifier(args.path, args.importer, byPath);
         if (resolved) return { path: resolved, namespace: "vfs" };
         return { path: new URL(`/${args.path}`, CDN).href, namespace: "http" };
       });
@@ -161,7 +209,7 @@ export async function buildEsbuildHtml(files: ProjectFile[]): Promise<EsbuildRes
   let code = "";
   try {
     const result = await esbuild.build({
-      entryPoints: [entry],
+      entryPoints: [bundleEntry],
       bundle: true,
       write: false,
       format: "iife",

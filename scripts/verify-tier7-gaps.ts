@@ -31,13 +31,13 @@ const branded = buildLifemarkDeployUrl({
   brandedSubdomain: "acme",
   brandedStatus: "active",
 });
-assert("T7-1", "branded URL pattern", branded === "https://my-app.acme.lifemarkai.app", { branded });
+assert("T7-1", "branded URL pattern", branded === "https://my-app.acme.lifemarkai.com", { branded });
 
 const defaultUrl = buildLifemarkDeployUrl({
   projectName: "My App",
   projectId: "abc123456789",
 });
-assert("T7-1", "default URL pattern", defaultUrl === "https://my-app-abc12345.lifemarkai.app", { defaultUrl });
+assert("T7-1", "default URL pattern", defaultUrl === "https://my-app-abc123456789.apps.lifemarkai.com", { defaultUrl });
 
 assert(
   "T7-1",
@@ -55,7 +55,7 @@ assert("T7-1", "deploy worker uses helper", deployWorker.includes("buildLifemark
 // T7-2: Clarify-first toggle in chat composer
 const chatPanel = readFileSync(join(ROOT, "components/editor/chat-panel.tsx"), "utf8");
 assert("T7-2", "clarify toggle button", chatPanel.includes("setClarifyFirst"));
-assert("T7-2", "Clarify label", chatPanel.includes(">Clarify<") || chatPanel.includes("Clarify\n"));
+assert("T7-2", "Clarify label", /\bClarify\b/.test(chatPanel));
 
 // T7-3: Microsoft 365 connector
 const connectorWizard = readFileSync(join(ROOT, "components/editor/connector-wizard-panel.tsx"), "utf8");

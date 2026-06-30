@@ -8,6 +8,7 @@ import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 import { ensureDevCredits } from "@/lib/dev-credits";
 import { claimDailyCredits } from "@/lib/credits";
 import { autoWireBackend } from "@/lib/cloud/auto-wire";
+import { autoWireAi } from "@/lib/ai/auto-wire-ai";
 import { runSelfVerification } from "@/lib/ai/self-verify";
 import {
   parseCloudToolPermissions,
@@ -16,6 +17,10 @@ import {
 } from "@/lib/cloud/permissions";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { attachSkillsToPrompt } from "@/lib/ai/attach-skills";
+import {
+  buildEditorIntelligencePromptBlock,
+  recordEditorIntelligenceBuild,
+} from "@/lib/ai/editor-lenses/persistence";
 
 export const runtime = "nodejs";
 // Agent run + backend wiring + browser verification (Lovable budgets 15 min).
@@ -63,7 +68,7 @@ export async function POST(req: NextRequest) {
 
   const { data: projectRow } = await (supabase as any)
     .from("projects")
-    .select("knowledge, cloud_enabled, environment, disabled_skill_ids")
+    .select("name, knowledge, cloud_enabled, environment, disabled_skill_ids")
     .eq("id", projectId)
     .single();
 
@@ -89,6 +94,8 @@ export async function POST(req: NextRequest) {
   const knowledgeParts: string[] = [];
   if (workspaceKnowledge) knowledgeParts.push(`# Workspace Standards (always follow)\n${workspaceKnowledge}`);
   if (projectKnowledge) knowledgeParts.push(`# Project Instructions (takes precedence)\n${projectKnowledge}`);
+  const editorIntelligenceContext = await buildEditorIntelligencePromptBlock(supabase, projectId);
+  if (editorIntelligenceContext) knowledgeParts.push(editorIntelligenceContext.trim());
   knowledgeParts.push(buildCloudPermissionsPromptBlock(cloudPermissions, !!projectRow?.cloud_enabled));
 
   const { block: skillBlock } = await attachSkillsToPrompt(
@@ -170,6 +177,16 @@ export async function POST(req: NextRequest) {
               cloudToolPermissionsRaw: profile?.cloud_tool_permissions,
               emit: (status) => send({ wiring_status: status }),
             });
+            // In-app AI connector auto-wiring (managed AI for the generated app)
+            try {
+              await autoWireAi({
+                supabase,
+                projectId,
+                prompt: task,
+                generatedFiles: (changedRows ?? []) as Array<{ path: string; content: string }>,
+                emit: (status) => send({ wiring_status: status }),
+              });
+            } catch { /* never fail the build */ }
           } catch { backendWiring = null; }
 
           try {
@@ -179,6 +196,18 @@ export async function POST(req: NextRequest) {
               emit: (status) => send({ verify_status: status }),
             });
           } catch { verification = null; }
+
+          await recordEditorIntelligenceBuild({
+            supabase,
+            projectId,
+            projectName: (projectRow as { name?: string | null } | null)?.name ?? null,
+            source: "agent",
+            mode: "agent",
+            prompt: task,
+            filesChanged: result.filesChanged,
+            backendWiring,
+            verification,
+          });
         }
 
         send({

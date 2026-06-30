@@ -1,7 +1,7 @@
 /**
  * Sandbox execution provider — run a generated app in a real isolated
  * environment and get a LIVE preview URL (Lovable-parity real execution).
- * See docs/titan/05-platform-business-layer.md §7.
+ * Part of the Lovable-parity sandbox preview flow.
  *
  * Pattern adapted from the Lovable-Clone reference (E2B cloud sandboxes):
  * create a sandbox, write the project files, start the dev server, and return

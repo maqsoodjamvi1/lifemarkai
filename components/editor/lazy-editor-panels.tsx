@@ -86,7 +86,7 @@ import { VisualEditsPanel } from "./visual-edits-panel";
 import { PublishPanel } from "./publish-panel";
 import { PaymentsPanel } from "./payments-panel";
 import { PaymentCheckoutPanel } from "./payment-checkout-panel";
-import { AiCompanyPanel } from "./ai-company-panel";
+import { EditorIntelligencePanel } from "./editor-intelligence-panel";
 
 export interface LazyPanelContext {
   rightPanel: LeftPanel;
@@ -318,7 +318,7 @@ export function SecondaryPanelContent(ctx: LazyPanelContext) {
   }
   if (rightPanel === "timelapse") return <TimeLapsePanel projectId={project.id} />;
   if (rightPanel === "aiintegration") return <AiIntegrationPanel project={currentProject} onProjectUpdate={handleProjectUpdate} />;
-  if (rightPanel === "company") return <AiCompanyPanel projectId={project.id} onSendPromptToChat={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />;
+  if (rightPanel === "intelligence") return <EditorIntelligencePanel projectId={project.id} onSendPromptToChat={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />;
   if (rightPanel === "plan") {
     return (
       <PlanPanel

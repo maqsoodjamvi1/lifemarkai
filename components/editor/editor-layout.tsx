@@ -117,7 +117,7 @@ const PreviewPanel = dynamic(
 
 export type EditorMode = "chat" | "plan" | "build" | "agent" | "patch";
 export type ViewMode = "preview" | "code" | "both";
-export type LeftPanel = "chat" | "plan" | "agent" | "company" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "code";
+export type LeftPanel = "chat" | "plan" | "agent" | "intelligence" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "code";
 
 interface EditorLayoutProps {
   project: Project;
@@ -517,7 +517,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     { id: "chat",      label: "Chat",     emoji: "💬" },
     { id: "plan",      label: "Plan",     emoji: "🗺️" },
     { id: "agent",     label: "Agent",    emoji: "🤖" },
-    { id: "company",   label: "Company",  emoji: "AI" },
+    { id: "intelligence", label: "Intelligence", emoji: "AI" },
     { id: "knowledge", label: "Knowledge",emoji: "🧠" },
     { id: "activity",  label: "Activity", emoji: "📋" },
     { id: "github",    label: "Git",      emoji: "🐙" },

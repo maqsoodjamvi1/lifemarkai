@@ -32,6 +32,58 @@ const nextConfig = {
     root: __dirname,
   },
 
+  // These dynamic Node routes create or build app files at runtime. Without
+  // route-scoped excludes, Turbopack's file tracer conservatively pulls the
+  // whole repository into their .nft traces and warns during production builds.
+  outputFileTracingExcludes: {
+    "/api/tests/run": [
+      "./app/**/*",
+      "./components/**/*",
+      "./docs/**/*",
+      "./lib/**/*",
+      "./scripts/**/*",
+      "./supabase/**/*",
+      "./outputs/**/*",
+      "./public/**/*",
+      "./gateway/**/*",
+      "./electron/**/*",
+      "./*.md",
+      "./*.docx",
+      "./*.txt",
+      "./*.mjs",
+      "./*.json",
+      "./*.ts",
+      "./*.tsx",
+      "./*.js",
+      "./*.ps1",
+      "./Docker*",
+      "./vercel.json",
+    ],
+    "/api/deploy": [
+      "./app/**/*",
+      "./components/**/*",
+      "./docs/**/*",
+      "./lib/**/*",
+      "./scripts/**/*",
+      "./supabase/**/*",
+      "./outputs/**/*",
+      "./public/**/*",
+      "./gateway/**/*",
+      "./electron/**/*",
+      "./*.md",
+      "./*.docx",
+      "./*.txt",
+      "./*.mjs",
+      "./*.json",
+      "./*.ts",
+      "./*.tsx",
+      "./*.js",
+      "./*.ps1",
+      "./Docker*",
+      "./vercel.json",
+    ],
+  },
+
   // Serve each built app from its temporary subdomain. Requests to
   // {slug}-{projectId}.apps.lifemarkai.com are rewritten to the existing
   // /preview/[projectId] renderer (exact id lookup). The main site, www, and

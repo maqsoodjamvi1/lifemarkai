@@ -600,29 +600,50 @@ export function PreviewPanel({
   // lands in state; until it's ready (or if it errors) we keep showing the regex
   // result — so this is never worse than today. See lib/preview/esbuild-engine.ts.
   const [esbuildHtml, setEsbuildHtml] = useState("");
+  const [esbuildBuilding, setEsbuildBuilding] = useState(false);
   useEffect(() => {
     const on =
       process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "1" ||
       process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "true";
     if (!on || previewEngine !== "fallback" || files.length === 0) {
       setEsbuildHtml("");
+      setEsbuildBuilding(false);
       return;
     }
     let cancelled = false;
+    setEsbuildHtml("");
+    setEsbuildBuilding(true);
     void buildEsbuildHtml(files)
       .then((res) => {
         if (cancelled) return;
         if (res.html) {
           setEsbuildHtml(res.html);
+          setEsbuildBuilding(false);
         } else {
           console.warn("[preview/esbuild] build failed; using fallback engine:", res.errors);
+          setConsoleLines((prev) => [
+            ...prev.slice(-99),
+            {
+              type: "warn",
+              text: `esbuild preview fell back: ${res.errors.slice(0, 2).join("; ")}`,
+            },
+          ]);
           setEsbuildHtml("");
+          setEsbuildBuilding(false);
         }
       })
       .catch((e) => {
         if (!cancelled) {
           console.warn("[preview/esbuild] error; using fallback engine:", e);
+          setConsoleLines((prev) => [
+            ...prev.slice(-99),
+            {
+              type: "warn",
+              text: `esbuild preview fell back: ${e instanceof Error ? e.message : String(e)}`,
+            },
+          ]);
           setEsbuildHtml("");
+          setEsbuildBuilding(false);
         }
       });
     return () => {
@@ -650,6 +671,12 @@ export function PreviewPanel({
     outOfCredits && !!deployedUrl && previewCompileFailed && !previewCompileOk;
   const iframeVisible = !outOfCredits || previewCompileOk;
   const showPausedOverlay = outOfCredits && !previewCompileOk && !showDeployedPreview;
+  const showEsbuildBadge =
+    (process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "1" ||
+      process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "true") &&
+    previewEngine === "fallback" &&
+    !showDeployedPreview &&
+    (esbuildBuilding || !!esbuildHtml);
 
   async function submitElementComment() {
     if (!projectId || !pendingComment || !commentDraft.trim()) return;
@@ -1224,6 +1251,13 @@ export function PreviewPanel({
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/15 border border-violet-500/25 text-[10px] text-violet-300">
             <Globe className="w-3 h-3" />
             Live deployment
+          </div>
+        )}
+
+        {showEsbuildBadge && (
+          <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[10px] text-emerald-300">
+            {esbuildBuilding ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+            {esbuildBuilding ? "Bundling" : "esbuild preview"}
           </div>
         )}
 

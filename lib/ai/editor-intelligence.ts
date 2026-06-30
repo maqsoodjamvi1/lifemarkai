@@ -12,22 +12,26 @@ import {
   CONTENT_MODEL,
   IMAGE_MODEL,
 } from "./model-defaults";
+import { selectModelChain, type ModelStrength } from "./model-catalog";
 
 export { DEFAULT_CODING_MODEL, BALANCED_CODING_MODEL, FAST_CODING_MODEL, DEFAULT_CHAT_MODEL, REASONING_MODEL };
 
-export const CLAUDE_MODELS = {
+export const DEFAULT_MODEL_ALIASES = {
   opus: DEFAULT_CODING_MODEL,
   sonnet: BALANCED_CODING_MODEL,
   haiku: FAST_CODING_MODEL,
 } as const;
 
+/** @deprecated Use DEFAULT_MODEL_ALIASES. Kept for older imports. */
+export const CLAUDE_MODELS = DEFAULT_MODEL_ALIASES;
+
 /**
- * Per-task model tiers — the best model for each kind of work (Lovable-style
- * orchestration). All resolve to OpenRouter slugs in model-defaults.ts so they
- * route through the single OPENROUTER_API_KEY; override any tier via env
- * (OPENROUTER_CODING_MODEL, OPENROUTER_DESIGN_MODEL, OPENROUTER_CONTENT_MODEL, …).
- * Defaults: code/design/content/reasoning → Claude Sonnet (quality), chat/fast →
- * a cheap fast model (cost), image → the native image model.
+ * Per-task model tiers for Lovable-style orchestration. Text models resolve to
+ * OpenRouter slugs in model-defaults.ts and route through the single
+ * OPENROUTER_API_KEY by default; override any tier via env
+ * (OPENROUTER_CODING_MODEL, OPENROUTER_DESIGN_MODEL, OPENROUTER_CONTENT_MODEL, ...).
+ * Defaults: code -> Pareto Code router, balanced/reasoning/chat -> Fusion,
+ * fast -> DeepSeek V4 Flash, image -> the native image model.
  */
 export const MODEL_TIERS = {
   /** Code generation, agent runs, error fixing — best coder. */
@@ -144,49 +148,85 @@ export function inferProjectStage(files: Pick<ProjectFile, "path">[]): ProjectSt
 
 /**
  * Pick the best model for a prompt given editor mode and project context.
- * Multi-provider per-task selection (Lovable-style orchestration):
- *   coding/fixing  → Claude Opus 4.8 (best coder)
- *   planning       → GPT-5.2 (strong general reasoning), Opus for long specs
- *   quick patches  → Gemini 3 Flash (fast + cheap), Sonnet when non-trivial
- *   chat           → Gemini 3 Flash, escalating to Sonnet/Opus with length
- * The provider layer degrades gracefully (OpenRouter, then Claude) when a
- * provider's API key isn't configured — see lib/ai/provider.ts.
+ * OpenRouter-first per-task selection (Lovable-style orchestration):
+ *   coding/fixing -> Pareto Code router, with diverse fallback families
+ *   planning      -> Fusion / frontier reasoning models
+ *   quick patches -> fast, cheap specialist models
+ *   chat          -> Fusion for quality, with cheap fallback when appropriate
+ * The provider layer still supports direct-provider fallback when OpenRouter is
+ * disabled — see lib/ai/provider.ts.
  */
 export function resolveSmartModel(
   mode: EditorMode,
   ctx: Pick<EditorIntelContext, "fileCount" | "hasPreviewError">,
   prompt?: string,
 ): AIModel {
+  return resolveModelChain(mode, ctx, prompt)[0];
+}
+
+/**
+ * Prompt-aware model cascade for the hybrid solve. Returns an ordered list of
+ * models — chain[0] is the best fit; later entries are strong, family-diverse
+ * fallbacks used for cross-model verification when an attempt fails (see
+ * lib/ai/self-verify.ts). Seeds capability hints + a guaranteed-valid anchor
+ * (the proven per-mode tier) from the editor mode, then lets the curated
+ * catalog (lib/ai/model-catalog.ts) pick across all OpenRouter models.
+ */
+export function resolveModelChain(
+  mode: EditorMode,
+  ctx: Pick<EditorIntelContext, "fileCount" | "hasPreviewError">,
+  prompt?: string,
+): AIModel[] {
   const trimmed = prompt?.trim() ?? "";
+  const require: ModelStrength[] = [];
+  let preferCheap = false;
+  let anchor: AIModel = MODEL_TIERS.coding;
 
   if (ctx.hasPreviewError && /\b(fix|debug|resolve|repair|error|bug)\b/i.test(trimmed)) {
-    return MODEL_TIERS.coding;
-  }
-
-  if (mode === "agent" || mode === "build") {
-    return MODEL_TIERS.coding;
-  }
-
-  if (mode === "plan") {
-    return trimmed.length > 200 ? MODEL_TIERS.coding : MODEL_TIERS.reasoning;
-  }
-
-  if (mode === "patch") {
+    require.push("fixes", "code");
+    anchor = MODEL_TIERS.coding;
+  } else if (mode === "agent" || mode === "build") {
+    require.push("code");
+    anchor = MODEL_TIERS.coding;
+  } else if (mode === "plan") {
+    require.push("reasoning");
+    anchor = trimmed.length > 200 ? MODEL_TIERS.coding : MODEL_TIERS.reasoning;
+  } else if (mode === "patch") {
     const task = detectTaskType(trimmed);
-    if (task === "design") return MODEL_TIERS.design as AIModel;
-    if (task === "content") return MODEL_TIERS.content as AIModel;
-    return trimmed.length < 100 ? MODEL_TIERS.chat : MODEL_TIERS.balanced;
+    if (task === "design") {
+      require.push("design");
+      anchor = MODEL_TIERS.design as AIModel;
+    } else if (task === "content") {
+      require.push("content");
+      anchor = MODEL_TIERS.content as AIModel;
+    } else {
+      preferCheap = trimmed.length < 100;
+      anchor = preferCheap ? MODEL_TIERS.chat : MODEL_TIERS.balanced;
+    }
+  } else {
+    // chat / default — route by task type first, then length-based escalation.
+    const task = detectTaskType(trimmed);
+    if (task === "design") {
+      require.push("design");
+      anchor = MODEL_TIERS.design as AIModel;
+    } else if (task === "content") {
+      require.push("content");
+      anchor = MODEL_TIERS.content as AIModel;
+    } else if (task === "reasoning") {
+      require.push("reasoning");
+      anchor = MODEL_TIERS.reasoning;
+    } else {
+      preferCheap = trimmed.length < 120;
+      anchor =
+        trimmed.length < 120
+          ? MODEL_TIERS.chat
+          : trimmed.length < 300
+            ? MODEL_TIERS.balanced
+            : MODEL_TIERS.coding;
+    }
   }
 
-  // chat / default — route by task type first (design/content/reasoning get the
-  // best tier), then fall back to length-based escalation for general Q&A.
-  const task = detectTaskType(trimmed);
-  if (task === "design") return MODEL_TIERS.design as AIModel;
-  if (task === "content") return MODEL_TIERS.content as AIModel;
-  if (task === "reasoning") return MODEL_TIERS.reasoning;
-  if (trimmed.length < 120) return MODEL_TIERS.chat;
-  if (trimmed.length < 300) return MODEL_TIERS.balanced;
-  return MODEL_TIERS.coding;
+  return selectModelChain(trimmed, { require, preferCheap, anchor });
 }
 
 function isCodeChangeIntent(prompt: string): boolean {

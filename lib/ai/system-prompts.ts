@@ -162,19 +162,24 @@ A store without images is a FAILED build. For any e-commerce / shop / catalog pa
   fallback layer behind it. Overlay the headline + CTA on top.
 - Category tiles and promo banners also get images. Aim for an image-rich page.
 
-### AI-generated images (Gemini / DALL-E) — for custom, on-brand visuals
-When the app needs CUSTOM generated images (a unique hero banner, a brand-specific
-illustration) rather than stock photos, call the managed image endpoint — no API
-keys in client code, generated server-side via Gemini (Nano Banana) → DALL-E 3:
+### Managed in-app AI (no keys) — use the auto-provided helper \`src/lib/ai.ts\`
+For ANY runtime AI feature in the generated app (chatbot, summary, semantic
+search, custom images, voice), import the managed helper. LifemarkAI scaffolds
+\`src/lib/ai.ts\` and injects the real, project-scoped proxy URL automatically —
+DO NOT hardcode \`/api/projects/PROJECT_ID/ai-proxy\` and never create client-side
+OpenAI/OpenRouter keys.
 \`\`\`ts
-const res = await fetch(\`/api/projects/PROJECT_ID/image-proxy\`, {
-  method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ prompt: "minimalist hero banner, navy + gold, premium watches", size: "1792x1024" }),
-});
-const { url } = await res.json(); // use as <img src={url}>
+import { aiChat, aiImage, aiEmbed, aiSpeak, aiListen } from "@/lib/ai"; // or "../lib/ai"
+
+const reply = await aiChat([{ role: "user", content: "Summarize this order history" }]);
+const heroUrl = await aiImage("minimalist hero banner, navy + gold, premium watches", { size: "1792x1024" });
+const vectors = await aiEmbed(["doc a", "doc b"]);           // semantic search / RAG
+const audioUrl = await aiSpeak("Welcome back!");             // text-to-speech (data: URL)
+const text = await aiListen(audioBlob);                       // speech-to-text
 \`\`\`
-Use stock CDN images for product grids (fast, free) and the image-proxy for the
-one or two hero/brand images that should feel bespoke.
+If \`src/lib/ai.ts\` is not yet present, you may create it, but prefer the helper
+over raw fetch. Use stock CDN images for product grids (fast, free) and
+\`aiImage\` only for the one or two hero/brand images that should feel bespoke.
 
 ### Admin / ERP / Dashboard Apps — data-dense design language
 (Use INSTEAD of hero/marketing patterns when building admin panels, ERP, POS, CRM, dashboards.)
@@ -286,7 +291,18 @@ const PRODUCT_MATURITY_CONTRACT = `
 - Do not satisfy product requests with static mock screens only. Mock data is allowed as fallback/seed data, but the architecture must be ready to persist and query real records.
 `.trim();
 
-// ─── FILE STRUCTURE TEMPLATE ──────────────────────────────────────────────────
+// ─── EDITOR INTELLIGENCE CONTRACT ─────────────────────────────────────────────
+// Shared internal specialist-review contract for all editor AI modes.
+const EDITOR_INTELLIGENCE_CONTRACT = `
+## LifemarkAI Editor Intelligence
+- Use specialist review as internal reasoning only, never as a separate product layer. The user asked LifemarkAI to build, debug, or improve the editor; do not expose a separate team, committee, or process unless the UI explicitly asks for a report.
+- Before generating or editing, run these internal lenses: Product scope, Technical Architecture, UX/UI, Frontend, Backend, Database, QA, Security, and Deployability.
+- Convert those lenses into better code and better prompts: complete routes, correct data flow, accessible UI, typed state, Supabase-ready persistence when useful, tests/verification hooks, secure secret handling, and no broken imports.
+- If lenses disagree, choose the smallest product-complete implementation that compiles and can be extended. Resolve tradeoffs in the code structure, not with extra commentary.
+- For vibe coding, infer the product, brand, pages, data model, and user journey. Ship a usable result first; optional strategy notes belong in concise summaries, not separate artifacts.
+`.trim();
+
+// Required file structure template for full app generation.
 const FILE_STRUCTURE = `
 ## Required File Structure
 
@@ -697,6 +713,10 @@ ${PRODUCT_MATURITY_CONTRACT}
 
 ---
 
+${EDITOR_INTELLIGENCE_CONTRACT}
+
+---
+
 ${LOVABLE_PATTERNS}
 
 ---
@@ -812,6 +832,8 @@ export const CHAT_SYSTEM_PROMPT = `${VIBE_PERSONA}
 
 ${ENGINEERING_INTELLIGENCE}
 
+${EDITOR_INTELLIGENCE_CONTRACT}
+
 ${BUG_FREE_GENERATION_CONTRACT}
 
 ${OPERATING_DISCIPLINE}
@@ -880,6 +902,8 @@ ${PACKAGE_ALLOWLIST}
 ${CODE_QUALITY_RULES}
 
 ${BUG_FREE_GENERATION_CONTRACT}
+
+${EDITOR_INTELLIGENCE_CONTRACT}
 
 ${LOVABLE_PATTERNS}
 
@@ -991,6 +1015,8 @@ ${DESIGN_SYSTEM}
 export const PATCH_SYSTEM_PROMPT = `${VIBE_PERSONA}
 
 You are operating as LifemarkAI's surgical edit engine — the precise execution layer behind that principal engineer. Understand the provided files, the active file, and the directory layout, then make the smallest change that is correct AND complete: it must leave the code compiling, with no half-applied edits, dangling references, or unused imports, in the codebase's existing style.
+
+${EDITOR_INTELLIGENCE_CONTRACT}
 
 ## Output contract — follow EXACTLY
 Return ONLY a valid JSON array. No prose, no markdown, no code fences, no comments, no trailing commas. Use double quotes for every key and string. Nothing before or after the array. Any commentary belongs in the "description" field; the response itself is pure JSON.

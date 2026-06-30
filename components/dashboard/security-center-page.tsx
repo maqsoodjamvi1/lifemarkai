@@ -19,14 +19,29 @@ interface Project {
   name: string;
   deployed_url: string | null;
   updated_at: string;
-  security_score?: number | null;
 }
 
 interface Finding {
-  severity: "critical" | "warning" | "info";
+  severity: "critical" | "high" | "medium" | "low";
+  kind?: "secret" | "risky" | "pii";
   title: string;
   file?: string;
+  line?: number;
   description: string;
+  recommendation?: string;
+}
+
+interface ProjectScanResult {
+  scannedAt: string;
+  fileCount: number;
+  findings: Finding[];
+  summary: {
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+    total: number;
+  };
 }
 
 const AUTH_METHODS = [
@@ -62,6 +77,7 @@ function severityBadge(sev: string): string {
 export function SecurityCenterPage({ userId }: { userId: string }) {
   const [activeTab, setActiveTab]   = useState<Tab>("code");
   const [projects, setProjects]     = useState<Project[]>([]);
+  const [scanResults, setScanResults] = useState<Record<string, ProjectScanResult>>({});
   const [loading, setLoading]       = useState(true);
   const [search, setSearch]         = useState("");
   const [scanningId, setScanningId] = useState<string | null>(null);
@@ -74,7 +90,7 @@ export function SecurityCenterPage({ userId }: { userId: string }) {
     const supabase = createClient();
     const { data } = await (supabase as any)
       .from("projects")
-      .select("id, name, deployed_url, updated_at, security_score")
+      .select("id, name, deployed_url, updated_at")
       .eq("user_id", userId)
       .order("updated_at", { ascending: false })
       .limit(50);
@@ -87,11 +103,20 @@ export function SecurityCenterPage({ userId }: { userId: string }) {
   const handleScan = async (projectId: string) => {
     setScanningId(projectId);
     try {
-      await fetch(`/api/projects/${projectId}/security`, { method: "POST" });
-      toast({ title: "Scan started", description: "Security scan queued." });
-      setTimeout(fetchProjects, 3000);
-    } catch {
-      toast({ title: "Scan failed", variant: "destructive" });
+      const res = await fetch(`/api/projects/${projectId}/security-scan`, { method: "GET" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Security scan failed");
+      setScanResults((prev) => ({ ...prev, [projectId]: data as ProjectScanResult }));
+      toast({
+        title: "Security scan complete",
+        description: `${data.summary?.total ?? 0} finding${data.summary?.total === 1 ? "" : "s"} across ${data.fileCount ?? 0} files.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Scan failed",
+        description: err instanceof Error ? err.message : "Try again.",
+        variant: "destructive",
+      });
     } finally {
       setScanningId(null);
     }
@@ -102,9 +127,17 @@ export function SecurityCenterPage({ userId }: { userId: string }) {
   );
 
   /* ── Aggregated stats ── */
-  const totalCritical = projects.filter((p) => (p.security_score ?? 100) < 50).length;
-  const totalWarning  = projects.filter((p) => { const s = p.security_score ?? 100; return s >= 50 && s < 80; }).length;
-  const totalPassing  = projects.filter((p) => (p.security_score ?? 100) >= 80).length;
+  const scoreFor = (result: ProjectScanResult | undefined): number | null => {
+    if (!result) return null;
+    const { critical, high, medium, low } = result.summary;
+    return Math.max(0, 100 - critical * 25 - high * 15 - medium * 7 - low * 2);
+  };
+
+  const scores = Object.values(scanResults).map(scoreFor).filter((s): s is number => s !== null);
+  const totalCritical = scores.filter((s) => s < 50).length;
+  const totalWarning  = scores.filter((s) => s >= 50 && s < 80).length;
+  const totalPassing  = scores.filter((s) => s >= 80).length;
+  const totalUnscanned = Math.max(0, projects.length - scores.length);
 
   const scoreIcon = (score: number | null | undefined) => {
     const s = score ?? 100;
@@ -139,6 +172,7 @@ export function SecurityCenterPage({ userId }: { userId: string }) {
               { label: "Passing",   count: totalPassing,  color: "bg-green-500/20 text-green-400" },
               { label: "Warnings",  count: totalWarning,  color: "bg-amber-500/20 text-amber-400" },
               { label: "Critical",  count: totalCritical, color: "bg-red-500/20 text-red-400" },
+              { label: "Unscanned",  count: totalUnscanned, color: "bg-muted text-muted-foreground" },
             ].map((s) => (
               <div key={s.label} className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${s.color}`}>
                 {s.count} {s.label}
@@ -201,9 +235,13 @@ export function SecurityCenterPage({ userId }: { userId: string }) {
                   ) : filteredProjects.length === 0 ? (
                     <tr><td colSpan={4} className="py-10 text-center text-muted-foreground">No projects found</td></tr>
                   ) : filteredProjects.map((p) => {
-                    const score = p.security_score ?? null;
+                    const scan = scanResults[p.id];
+                    const score = scoreFor(scan);
                     const isScanning = scanningId === p.id;
-                    return (
+                    const statusText = scan
+                      ? `${scan.summary.total} finding${scan.summary.total === 1 ? "" : "s"}`
+                      : "Not scanned";
+                    return [
                       <tr key={p.id} className="border-b border-border last:border-0 hover:bg-muted/20 transition">
                         <td className="py-3 px-4">
                           <span className="font-medium text-foreground">{p.name}</span>
@@ -221,11 +259,11 @@ export function SecurityCenterPage({ userId }: { userId: string }) {
                           {score === null ? (
                             <span className="text-[10px] text-muted-foreground">Not scanned</span>
                           ) : score >= 80 ? (
-                            <span className="text-[10px] text-green-400 flex items-center gap-1"><CheckCircle2 size={9} /> Passing</span>
+                            <span className="text-[10px] text-green-400 flex items-center gap-1"><CheckCircle2 size={9} /> Passing - {statusText}</span>
                           ) : score >= 50 ? (
-                            <span className="text-[10px] text-amber-400 flex items-center gap-1"><AlertTriangle size={9} /> Warnings</span>
+                            <span className="text-[10px] text-amber-400 flex items-center gap-1"><AlertTriangle size={9} /> Review - {statusText}</span>
                           ) : (
-                            <span className="text-[10px] text-red-400 flex items-center gap-1"><XCircle size={9} /> Critical</span>
+                            <span className="text-[10px] text-red-400 flex items-center gap-1"><XCircle size={9} /> Critical - {statusText}</span>
                           )}
                         </td>
                         <td className="py-3 px-4 text-right">
@@ -238,8 +276,48 @@ export function SecurityCenterPage({ userId }: { userId: string }) {
                             {isScanning ? "Scanning…" : "Scan"}
                           </button>
                         </td>
-                      </tr>
-                    );
+                      </tr>,
+                      scan && (
+                        <tr key={`${p.id}-findings`} className="border-b border-border bg-muted/10">
+                          <td colSpan={4} className="px-4 py-3">
+                            {scan.findings.length === 0 ? (
+                              <p className="text-xs text-green-400">No secrets, risky exposure, or PII patterns found across {scan.fileCount} files.</p>
+                            ) : (
+                              <div className="space-y-2">
+                                <div className="flex flex-wrap gap-2 text-[10px]">
+                                  {(["critical", "high", "medium", "low"] as const).map((severity) => (
+                                    <span key={severity} className={`px-2 py-0.5 rounded-full ${severityBadge(severity === "critical" ? "critical" : severity === "high" ? "warning" : "info")}`}>
+                                      {scan.summary[severity]} {severity}
+                                    </span>
+                                  ))}
+                                  <span className="px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                                    {scan.fileCount} files
+                                  </span>
+                                </div>
+                                {scan.findings.slice(0, 3).map((finding, index) => (
+                                  <div key={`${finding.file}-${finding.line}-${index}`} className="rounded-lg border border-border bg-background p-2.5">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div className="min-w-0">
+                                        <p className="text-xs font-medium text-foreground">{finding.title}</p>
+                                        <p className="text-[10px] text-muted-foreground font-mono truncate">
+                                          {finding.file}{finding.line ? `:${finding.line}` : ""} - {finding.kind ?? "security"}
+                                        </p>
+                                      </div>
+                                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium shrink-0 ${severityBadge(finding.severity === "critical" ? "critical" : finding.severity === "high" ? "warning" : "info")}`}>
+                                        {finding.severity}
+                                      </span>
+                                    </div>
+                                    <p className="text-[11px] text-muted-foreground mt-2 leading-relaxed">
+                                      {finding.recommendation ?? finding.description}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    ];
                   })}
                 </tbody>
               </table>

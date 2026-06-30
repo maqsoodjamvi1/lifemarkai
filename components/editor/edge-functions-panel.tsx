@@ -145,7 +145,7 @@ serve(async (req: Request) => {
   {
     id: "ai-proxy",
     name: "AI Proxy",
-    description: "Secure OpenAI calls server-side",
+    description: "Secure OpenRouter calls server-side",
     code: `import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 
 const corsHeaders = {
@@ -156,13 +156,15 @@ const corsHeaders = {
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
-  const { prompt, model = "gpt-4o-mini" } = await req.json();
+  const { prompt, model = "openrouter/fusion" } = await req.json();
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
-      "Authorization": \`Bearer \${Deno.env.get("OPENAI_API_KEY")}\`,
+      "Authorization": \`Bearer \${Deno.env.get("OPENROUTER_API_KEY")}\`,
       "Content-Type": "application/json",
+      "HTTP-Referer": Deno.env.get("APP_URL") ?? "",
+      "X-Title": "LifemarkAI App",
     },
     body: JSON.stringify({
       model,

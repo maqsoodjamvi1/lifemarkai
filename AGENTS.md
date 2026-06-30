@@ -9,7 +9,7 @@ A full-stack AI-powered app builder (Lovable.dev clone) built with Next.js 14, S
 | Framework | Next.js 14 App Router (TypeScript) |
 | Database | Supabase (PostgreSQL + RLS + Realtime) |
 | Auth | Supabase Auth (Email + GitHub OAuth) |
-| AI | Multi-provider per-task tiers (streaming SSE): Codex Opus 4.8 (coding), GPT-5.2 (planning), Gemini 3 Flash (chat) — `MODEL_TIERS` in `lib/ai/editor-intelligence.ts`; Nano Banana 2 → DALL-E 3 for images |
+| AI | OpenRouter-first per-task tiers (streaming SSE): Pareto Code router (coding), Fusion (planning/chat/reasoning), DeepSeek V4 Flash (fast) — `MODEL_TIERS` in `lib/ai/editor-intelligence.ts`; Nano Banana 2 → DALL-E 3 for images |
 | Styling | Tailwind CSS + shadcn/ui (Radix primitives) |
 | Editor | Monaco Editor (dynamic import, SSR-safe) |
 | Payments | Stripe (subscriptions + webhooks) |

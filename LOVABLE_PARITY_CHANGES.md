@@ -10,7 +10,8 @@ Consolidated record of the Lovable.dev parity push. Use as a PR description / re
 ## New env vars (all optional — graceful fallback without them)
 | Var | Enables |
 |-----|---------|
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Gemini 3 Flash chat tier + Nano Banana 2 image gen |
+| `OPENROUTER_API_KEY` | Primary editor/agent/chat routing across the shared model catalog |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Optional direct Gemini/image fallback |
 | `PLAYWRIGHT_ENABLED=true` | Real-browser self-verification (needs `playwright` installed) |
 | `CRON_SECRET` | Daily backup + Cloud-billing crons |
 | `SUPABASE_MANAGEMENT_TOKEN` + `SUPABASE_ORG_ID` | Dedicated per-app Supabase provisioning |
@@ -23,8 +24,8 @@ Consolidated record of the Lovable.dev parity push. Use as a PR description / re
 ## What changed, by area
 
 ### AI model stack (`lib/ai/model-defaults.ts`, `editor-intelligence.ts`, `provider.ts`, `gateway/src/index.ts`)
-- Per-task model tiers (`MODEL_TIERS`): coding → Claude Opus 4.8, planning → GPT-5.2, chat/patch → Gemini 3 Flash, balanced → Sonnet 4.6.
-- `resolveSmartModel` routes by mode + prompt length; provider layer degrades OpenRouter → Claude when a key is absent.
+- Per-task model tiers (`MODEL_TIERS`): coding → `openrouter/pareto-code`, planning/chat/reasoning → `openrouter/fusion`, fast → `deepseek/deepseek-v4-flash`.
+- `resolveSmartModel` routes by mode + prompt length; provider layer routes through OpenRouter by default and still supports direct-provider fallback when disabled.
 - GPT-5 family uses `max_completion_tokens` (would have errored on `max_tokens`).
 - Gateway `TOKEN_COST_MAP` updated with real 2026 prices for the new models.
 

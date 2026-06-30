@@ -613,7 +613,7 @@ export function EditorTopBar({
             <DropdownMenuContent align="center" className="w-52 p-1">
               {([
                 { id: "analytics" as LeftPanel, label: "Analytics",        icon: BarChart2 },
-                { id: "company" as LeftPanel,   label: "AI Company",       icon: Brain     },
+                { id: "intelligence" as LeftPanel, label: "Intelligence",  icon: Brain     },
                 { id: "cloud" as LeftPanel,     label: "Cloud",            icon: Cloud     },
                 { id: "code" as LeftPanel,      label: "Code",             icon: Code2     },
                 { id: "search" as LeftPanel,    label: "Files",            icon: FolderOpen },

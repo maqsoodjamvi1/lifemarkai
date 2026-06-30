@@ -392,6 +392,7 @@ export function buildUserDirective(intent: BuildIntent): string {
     "---",
     `Autonomous build: ${intent.statusLabel}`,
     `App type: ${intent.appType}${intent.niche ? ` | Niche: ${intent.niche}` : ""}`,
+    "Use LifemarkAI's internal editor intelligence lenses (product, architecture, UX, frontend, backend, database, QA, security, deployability) to improve the build, but do not expose them as a separate module or workflow.",
     "Infer brand, pages, modules, and realistic mock data yourself. Do not ask clarifying questions — ship a complete working app.",
   ].join("\n");
 }

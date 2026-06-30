@@ -25,7 +25,7 @@ LifemarkAI covers ~85% of Lovable's core surface (AI modes, GitHub two-way sync,
 | Browser testing | ⚠️ Panel stub only | ✅ Clicks buttons, fills forms, tests flows, responsive checks |
 | Frontend tests + edge function verification | ❌ | ✅ |
 
-**Models:** LifemarkAI is stronger — 13+ models (Claude Opus/Sonnet/Haiku, GPT-4o, Gemini, DeepSeek, Llama, Grok, Kimi via OpenRouter) with auto-fallback on quota/billing errors. Lovable abstracts model choice (default Gemini 3 Flash for in-app AI).
+**Models:** LifemarkAI is stronger — 50+ curated OpenRouter models exposed in the editor, with router defaults (`openrouter/pareto-code`, `openrouter/fusion`), smart per-task routing, and auto-fallback on quota/billing errors. Lovable abstracts model choice more tightly.
 
 ## 2. Code, Preview, Editing
 
@@ -115,7 +115,7 @@ Both have secret scanning, RLS analysis, dependency checks, and security dashboa
 
 ## 9. What LifemarkAI has that Lovable doesn't
 
-- Multi-model choice: 13+ models, OpenRouter auto-fallback, per-model token cost map in the gateway
+- Multi-model choice: 50+ curated OpenRouter models, OpenRouter auto-fallback, per-model token cost map in the gateway
 - Native app output: Capacitor (iOS/Android), Electron (desktop), PWA scaffolding
 - Multiple frameworks (Vue, Svelte, Next) vs Lovable's React/Vite only
 - Voice input transcription in the builder

@@ -3,7 +3,7 @@ const path = require('path');
 const { Client } = require('pg');
 
 const MIGRATIONS = [
-  'supabase/migrations/068_titan_ai_company.sql',
+  'supabase/migrations/068_editor_intelligence_lenses.sql',
   'supabase/migrations/069_domain_registrations.sql',
   'supabase/migrations/070_seed_initial_data.sql',
   'supabase/migrations/071_seed_starter_templates.sql'

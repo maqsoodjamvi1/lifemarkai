@@ -18,6 +18,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { BUILT_IN_TEMPLATES } from "@/lib/templates/built-in";
 import { enqueueDeployJob, getDeployQueue } from "@/lib/queue/client";
 import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
+import { OPENROUTER_MODEL_IDS } from "@/lib/ai/openrouter-models";
 
 // ── MCP Protocol constants ───────────────────────────────────────────────────
 const MCP_VERSION = "2024-11-05";
@@ -70,8 +71,8 @@ const TOOLS = [
         message: { type: "string", description: "The instruction for the AI" },
         model: {
           type: "string",
-          description: "AI model to use (OpenRouter slug). Defaults to openai/gpt-4o.",
-          enum: ["openai/gpt-4o", "openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet", "deepseek/deepseek-chat-v3-0324"],
+          description: `AI model to use (OpenRouter slug). Defaults to ${DEFAULT_CODING_MODEL}.`,
+          enum: OPENROUTER_MODEL_IDS,
         },
       },
       required: ["project_id", "message"],

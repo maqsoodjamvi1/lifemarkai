@@ -8,6 +8,7 @@ import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/system-prompts";
 import { claimDailyCredits } from "@/lib/credits";
 import { parseAIResponse } from "@/lib/ai/code-parser";
+import { recordEditorIntelligenceBuild } from "@/lib/ai/editor-lenses/persistence";
 
 function parseFixResponse(raw: string): {
   files: Array<{ path: string; content: string }>;
@@ -121,6 +122,27 @@ Return the fixed files as JSON.`;
       action: "auto_fix",
       project_id: projectId,
       description: `Auto-fixed: ${buildError.slice(0, 80)}`,
+    });
+
+    await recordEditorIntelligenceBuild({
+      supabase,
+      projectId,
+      source: "chat",
+      mode: "auto_fix",
+      prompt: `Auto-fix: ${buildError}`,
+      filesChanged: parsed.files.map((file) => file.path),
+      verification: {
+        engine: "static",
+        passed: false,
+        rounds: 1,
+        fixesApplied: 1,
+        fixedFiles: parsed.files.map((file) => ({
+          path: file.path,
+          content: file.content,
+          language: file.path.endsWith(".tsx") ? "typescriptreact" : file.path.endsWith(".ts") ? "typescript" : "javascript",
+        })),
+        errors: [`Auto-fix generated for: ${String(buildError).slice(0, 180)}. Re-open preview to verify.`],
+      },
     });
 
     import("@/lib/stripe/auto-topup")

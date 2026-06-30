@@ -18,6 +18,7 @@ import { buildFallbackHtml } from "@/lib/preview/build-fallback-html";
 import { verifyPreviewHtml } from "@/lib/ai/preview-verify";
 import { generateAI } from "@/lib/ai/provider";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
+import { selectModelChain, applyModelAdapter } from "@/lib/ai/model-catalog";
 import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/system-prompts";
 import type { ProjectFile } from "@/types/database";
 
@@ -161,6 +162,15 @@ export async function runSelfVerification(opts: {
     result.engine = playwright ? "browser" : "static";
     emit(playwright ? "Testing your app in a real browser…" : "Verifying your app…");
 
+    // Hybrid cross-model verify: each fix round uses a different, family-diverse
+    // model so a stuck error gets a fresh perspective instead of the same model
+    // failing the same way. Final entry anchors to the proven coding tier.
+    const fixChain = selectModelChain("fix runtime and build errors in the app", {
+      require: ["fixes", "code"],
+      maxChain: maxRounds + 1,
+      anchor: getDefaultAiModel(),
+    });
+
     for (let round = 0; round <= maxRounds; round++) {
       result.rounds = round + 1;
       const html = buildFallbackHtml(files);
@@ -188,10 +198,12 @@ export async function runSelfVerification(opts: {
         .map((f) => `=== ${f.path} ===\n${(f.content ?? "").slice(0, 6_000)}`)
         .join("\n\n");
 
+      const fixModel = fixChain[Math.min(round, fixChain.length - 1)] ?? getDefaultAiModel();
+      if (round > 0) emit("Retrying the fix with a different model…");
       const fix = await generateAI({
-        model: getDefaultAiModel(),
+        model: fixModel,
         messages: [
-          { role: "system", content: AUTO_FIX_SYSTEM_PROMPT },
+          { role: "system", content: applyModelAdapter(AUTO_FIX_SYSTEM_PROMPT, fixModel) },
           {
             role: "user",
             content: `Fix these runtime errors found while rendering the app in a browser:\n\n${errors

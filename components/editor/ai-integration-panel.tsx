@@ -4,10 +4,12 @@ import { useState, useEffect } from "react";
 import {
   Sparkles, Copy, Check, Loader2, ChevronDown, ChevronUp,
   AlertTriangle, ToggleLeft, ToggleRight, Zap, Shield,
-  RefreshCw, Code2, Info,
+  RefreshCw, Code2, Info, MessageSquare, ImageIcon, Database, Mic, Volume2,
+  Activity, CheckCircle2, XCircle,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { createClient } from "@/lib/supabase/client";
+import { AI_INTEGRATION_MODEL_OPTIONS } from "@/lib/ai/openrouter-models";
 import type { Project } from "@/types/database";
 
 interface AiIntegrationPanelProps {
@@ -15,40 +17,84 @@ interface AiIntegrationPanelProps {
   onProjectUpdate: (updated: Partial<Project>) => void;
 }
 
-// OpenRouter slugs — the managed AI proxy routes these via OPENROUTER_API_KEY.
-const MODELS = [
-  { value: "openai/gpt-4o",                label: "GPT-4o",            cost: "2 credits/call",  desc: "Strong general reasoning — recommended default" },
-  { value: "openai/gpt-4o-mini",           label: "GPT-4o Mini",       cost: "0.5 credit/call", desc: "Fast, affordable — best for chatbots" },
-  { value: "anthropic/claude-3.5-sonnet",  label: "Claude 3.5 Sonnet", cost: "1 credit/call",   desc: "Balanced quality and speed" },
-  { value: "deepseek/deepseek-chat-v3-0324", label: "DeepSeek V3",     cost: "0.5 credit/call", desc: "Fast, great for text + code" },
+const DEFAULT_AI_INTEGRATION_MODEL = "openrouter/fusion";
+
+const CAPABILITIES = [
+  { label: "Chat", desc: "OpenRouter model routing", Icon: MessageSquare },
+  { label: "Images", desc: "Generated app visuals", Icon: ImageIcon },
+  { label: "Embeddings", desc: "Search and RAG", Icon: Database },
+  { label: "STT", desc: "Voice to text", Icon: Mic },
+  { label: "TTS", desc: "Text to speech", Icon: Volume2 },
 ];
 
-const CODE_SNIPPET = (projectId: string, model: string) => `// In your app — call the LifemarkAI managed AI proxy
-// No API key needed — LifemarkAI handles authentication
+const MODELS = AI_INTEGRATION_MODEL_OPTIONS.map((model) => ({
+  value: model.id,
+  label: model.label,
+  cost: model.free
+    ? "free tier"
+    : model.creditMultiplier && model.creditMultiplier > 1
+      ? `${model.creditMultiplier} credits/call`
+      : model.fast
+        ? "0.5 credit/call"
+        : "1 credit/call",
+  desc: model.description ?? `${model.provider} ${model.category} model via OpenRouter`,
+}));
 
-async function askAI(userMessage: string, history = []) {
-  const res = await fetch(
-    "https://lifemarkai.app/api/projects/${projectId}/ai-proxy",
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: [...history, { role: "user", content: userMessage }],
-        systemPrompt: "You are a helpful assistant.", // optional
-        maxTokens: 500,
-      }),
-    }
-  );
+const CODE_SNIPPET = (projectId: string) => `// In your app — call the LifemarkAI managed AI proxy
+// No API key needed — LifemarkAI handles provider keys and model routing.
+
+const AI_PROXY = "https://lifemarkai.app/api/projects/${projectId}/ai-proxy";
+
+async function lifemarkAI(body) {
+  const res = await fetch(AI_PROXY, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   const data = await res.json();
-  return data.content; // the AI's response string
+  if (!res.ok) throw new Error(data.error || "AI request failed");
+  return data;
 }
 
-// Example usage in a React component:
-const [reply, setReply] = useState("");
-const handleSend = async () => {
-  const answer = await askAI("What is the capital of France?");
-  setReply(answer); // "Paris"
-};`;
+async function askAI(userMessage: string, history = []) {
+  const data = await lifemarkAI({
+    capability: "chat",
+    messages: [...history, { role: "user", content: userMessage }],
+    systemPrompt: "You are a helpful assistant.",
+    maxTokens: 500,
+  });
+  return data.content;
+}
+
+async function createImage(prompt: string) {
+  const data = await lifemarkAI({
+    capability: "image",
+    prompt,
+    size: "1024x1024",
+  });
+  return data.url;
+}
+
+async function embedText(input: string | string[]) {
+  const data = await lifemarkAI({ capability: "embedding", input });
+  return data.embeddings;
+}
+
+async function speak(text: string) {
+  const data = await lifemarkAI({ capability: "tts", text, voice: "alloy" });
+  const audio = new Audio(data.audio);
+  await audio.play();
+}
+
+async function transcribeAudio(file: File) {
+  const form = new FormData();
+  form.append("capability", "stt");
+  form.append("file", file);
+  const res = await fetch(AI_PROXY, { method: "POST", body: form });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Transcription failed");
+  return data.text;
+}`;
 
 export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPanelProps) {
   const { toast } = useToast();
@@ -58,7 +104,7 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
     (project as any).ai_integration_enabled ?? false
   );
   const [model, setModel] = useState<string>(
-    (project as any).ai_integration_model ?? "openai/gpt-4o"
+    (project as any).ai_integration_model ?? DEFAULT_AI_INTEGRATION_MODEL
   );
   const [creditLimit, setCreditLimit] = useState<number>(
     (project as any).ai_credit_limit ?? 100
@@ -69,6 +115,9 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
   const [saving, setSaving] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showCode, setShowCode] = useState(false);
+  const [logs, setLogs] = useState<
+    Array<{ capability: string; model: string | null; status: string; cost: number; duration_ms: number; created_at: string }>
+  >([]);
 
   useEffect(() => {
     // Refresh usage count from Supabase
@@ -80,12 +129,25 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
         .single();
       if (data) {
         setEnabled(data.ai_integration_enabled ?? false);
-        setModel(data.ai_integration_model ?? "openai/gpt-4o");
+        setModel(data.ai_integration_model ?? DEFAULT_AI_INTEGRATION_MODEL);
         setCreditLimit(data.ai_credit_limit ?? 100);
         setCreditsUsed(data.ai_credits_used ?? 0);
       }
     })();
   }, [project.id]);
+
+  useEffect(() => {
+    // Recent in-app AI activity (RLS-gated to owner/collaborator)
+    void (async () => {
+      const { data } = await (supabase as any)
+        .from("ai_request_logs")
+        .select("capability, model, status, cost, duration_ms, created_at")
+        .eq("project_id", project.id)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (data) setLogs(data);
+    })();
+  }, [project.id, creditsUsed]);
 
   async function save() {
     setSaving(true);
@@ -118,12 +180,15 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
   }
 
   function copyCode() {
-    void navigator.clipboard.writeText(CODE_SNIPPET(project.id, model));
+    void navigator.clipboard.writeText(CODE_SNIPPET(project.id));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
   const usagePct = Math.min(100, Math.round((creditsUsed / creditLimit) * 100));
+  const logTotal = logs.length;
+  const logSuccessRate = logTotal ? Math.round((logs.filter((l) => l.status === "success").length / logTotal) * 100) : 0;
+  const logAvgMs = logTotal ? Math.round(logs.reduce((a, l) => a + (l.duration_ms || 0), 0) / logTotal) : 0;
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
@@ -134,8 +199,8 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
             <Sparkles className="w-4 h-4 text-violet-400" />
           </div>
           <div>
-            <p className="text-sm font-semibold">AI for Your App</p>
-            <p className="text-[11px] text-muted-foreground">Add AI to apps you build — no API keys needed</p>
+            <p className="text-sm font-semibold">Built-App AI Connector</p>
+            <p className="text-[11px] text-muted-foreground">Chat, images, embeddings, speech — no user API keys</p>
           </div>
         </div>
 
@@ -144,8 +209,21 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
           <Info className="w-3.5 h-3.5 text-blue-400 mt-0.5 shrink-0" />
           <p className="text-[11px] text-blue-300 leading-relaxed">
             Enable this to expose a managed AI endpoint at <code className="font-mono">/api/projects/{project.id.slice(0,8)}…/ai-proxy</code>.
-            Your deployed app calls it and LifemarkAI handles the OpenAI/Claude keys — users never see credentials.
+            Your deployed app calls it and LifemarkAI routes the selected OpenRouter model server-side — users never see credentials.
           </p>
+        </div>
+
+        {/* Capabilities */}
+        <div className="grid grid-cols-2 gap-2">
+          {CAPABILITIES.map(({ label, desc, Icon }) => (
+            <div key={label} className="flex items-start gap-2 p-2.5 rounded-lg border border-border bg-muted/10">
+              <Icon className="w-3.5 h-3.5 text-violet-400 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-[11px] font-medium text-foreground">{label}</p>
+                <p className="text-[10px] text-muted-foreground truncate">{desc}</p>
+              </div>
+            </div>
+          ))}
         </div>
 
         {/* Enable toggle */}
@@ -246,12 +324,49 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
           )}
         </div>
 
+        {/* Recent activity */}
+        {logs.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <Activity className="w-3 h-3 text-violet-400" />
+              <span className="text-xs font-medium">Recent AI activity</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="p-2 rounded-lg border border-border bg-muted/10 text-center">
+                <p className="text-sm font-semibold">{logSuccessRate}%</p>
+                <p className="text-[10px] text-muted-foreground">success</p>
+              </div>
+              <div className="p-2 rounded-lg border border-border bg-muted/10 text-center">
+                <p className="text-sm font-semibold">{logAvgMs}ms</p>
+                <p className="text-[10px] text-muted-foreground">avg</p>
+              </div>
+              <div className="p-2 rounded-lg border border-border bg-muted/10 text-center">
+                <p className="text-sm font-semibold">{logTotal}</p>
+                <p className="text-[10px] text-muted-foreground">requests</p>
+              </div>
+            </div>
+            <div className="space-y-1 max-h-44 overflow-y-auto">
+              {logs.map((l, i) => (
+                <div key={i} className="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-border bg-muted/5 text-[10px]">
+                  {l.status === "success"
+                    ? <CheckCircle2 className="w-3 h-3 text-green-400 shrink-0" />
+                    : <XCircle className="w-3 h-3 text-red-400 shrink-0" />}
+                  <span className="font-medium capitalize">{l.capability}</span>
+                  <span className="text-muted-foreground/70 truncate flex-1">{l.model ?? "—"}</span>
+                  <span className="text-muted-foreground/60 shrink-0">{l.duration_ms}ms</span>
+                  <span className="text-muted-foreground shrink-0">{l.cost} cr</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Security note */}
         <div className="flex gap-2 text-[11px] text-muted-foreground p-2.5 rounded-lg border border-border bg-muted/10">
           <Shield className="w-3.5 h-3.5 shrink-0 mt-0.5 text-green-400" />
           <span>
-            Your OpenAI/Anthropic API keys are never exposed to users of your app.
-            All requests are proxied through LifemarkAI's servers with server-side authentication.
+            LifemarkAI keeps OpenRouter and provider credentials server-side. Generated apps call only the project proxy,
+            with per-project usage limits and rate limits enforced before upstream calls.
           </span>
         </div>
 
@@ -291,7 +406,7 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
                 </button>
               </div>
               <pre className="p-3 text-[10px] font-mono overflow-x-auto leading-relaxed text-muted-foreground bg-background">
-                {CODE_SNIPPET(project.id, model)}
+                {CODE_SNIPPET(project.id)}
               </pre>
             </div>
           )}

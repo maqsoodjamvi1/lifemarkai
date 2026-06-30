@@ -3,6 +3,7 @@ import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
+import { applyModelAdapter } from "@/lib/ai/model-catalog";
 import { sendLowCreditsEmail } from "@/lib/email/resend";
 import {
   CHAT_SYSTEM_PROMPT,
@@ -31,6 +32,7 @@ import { shouldUseSubagents, runSubagentInvestigation, type SubagentStep } from 
 import { computeCreditCost } from "@/lib/ai/credit-cost";
 import { claimDailyCredits } from "@/lib/credits";
 import { autoWireBackend, type AutoWireResult } from "@/lib/cloud/auto-wire";
+import { autoWireAi } from "@/lib/ai/auto-wire-ai";
 import { runSelfVerification, type SelfVerifyResult } from "@/lib/ai/self-verify";
 import { buildCompletedBuildActivity } from "@/lib/ai/build-activity";
 import {
@@ -41,6 +43,10 @@ import {
 import { ensureDevCredits, getDevProfile } from "@/lib/dev-credits";
 import { buildMcpContextBlock } from "@/lib/ai/mcp-context";
 import { ENV_FILE_PATH, parseEnvFile } from "@/lib/project/env-file";
+import {
+  buildEditorIntelligencePromptBlock,
+  recordEditorIntelligenceBuild,
+} from "@/lib/ai/editor-lenses/persistence";
 
 export const runtime = "nodejs";
 // Generation + backend wiring + self-verification can exceed a minute on
@@ -193,7 +199,7 @@ export async function POST(req: NextRequest) {
     ).data?.cloud_tool_permissions;
 
     // Fetch project knowledge + recent messages + DB schema in parallel
-    const [projectRes, recentMessagesRes, schemaContext] = await Promise.all([
+    const [projectRes, recentMessagesRes, schemaContext, editorIntelligenceContext] = await Promise.all([
       // select("*") — NOT an explicit column list: cloud_* columns arrive with
       // migration 064 and an explicit list would make this query fail (and
       // degrade chat) on databases that haven't run it yet.
@@ -202,6 +208,7 @@ export async function POST(req: NextRequest) {
         .order("created_at", { ascending: false }).limit(40),
       // Schema reading is best-effort — never blocks the response
       getProjectSchemaContext(projectSupabaseUrl, projectServiceKey).catch(() => ""),
+      buildEditorIntelligencePromptBlock(supabase, projectId).catch(() => ""),
     ]);
 
     // Cloud-managed backend (migration 064): when the project has a dedicated
@@ -318,7 +325,7 @@ export async function POST(req: NextRequest) {
     let systemPrompt: string;
     if (mode === "build") {
       // Route to the right generator based on target framework
-      const suffix = schemaBlock + summaryBlock + fileChangesBlock + workspaceKnowledgeBlock + knowledgeBlock;
+      const suffix = schemaBlock + summaryBlock + fileChangesBlock + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
       if (framework === "react-native") {
         systemPrompt = buildReactNativePrompt(message, files) + suffix;
       } else if (framework === "nextjs") {
@@ -399,12 +406,12 @@ export async function POST(req: NextRequest) {
       }
     } else if (mode === "patch") {
       // Patch mode: inject full codebase (40k budget) so AI can write precise find strings
-      systemPrompt = PATCH_SYSTEM_PROMPT + workspaceKnowledgeBlock + knowledgeBlock;
+      systemPrompt = PATCH_SYSTEM_PROMPT + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
       const patchContext = buildProjectContext(files, 40000, message);
       if (patchContext) systemPrompt += `\n\n${patchContext}`;
       systemPrompt += schemaBlock;
     } else if (mode === "plan") {
-      systemPrompt = PLAN_SYSTEM_PROMPT + summaryBlock + fileChangesBlock + workspaceKnowledgeBlock + knowledgeBlock;
+      systemPrompt = PLAN_SYSTEM_PROMPT + summaryBlock + fileChangesBlock + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
       // Inject a compact codebase snapshot for plan mode so AI knows what already exists
       const planContext = buildProjectContext(files, 30000, message);
       if (planContext) systemPrompt += `\n\n${planContext}`;
@@ -414,7 +421,7 @@ export async function POST(req: NextRequest) {
       // Full codebase injection for chat mode — 60k char budget; BM25-rank by user message
       const projectContext = buildProjectContext(files, 60000, message);
       if (projectContext) systemPrompt += `\n\n${projectContext}`;
-      systemPrompt += schemaBlock + summaryBlock + fileChangesBlock + workspaceKnowledgeBlock + knowledgeBlock;
+      systemPrompt += schemaBlock + summaryBlock + fileChangesBlock + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
     }
 
     systemPrompt += cloudPermissionsBlock;
@@ -603,6 +610,10 @@ The user has expressed frustration. Do the following:
           { type: "image_url" as const, image_url: { url: imageBase64 } },
         ]
       : userMessage;
+
+    // Model-aware prompting: tune the system prompt to the selected model
+    // (fast → minimal change, frontier → plan+verify, non-Claude → strict contract).
+    systemPrompt = applyModelAdapter(systemPrompt, model ?? getDefaultAiModel());
 
     const messages: import("@/lib/ai/provider").AIMessage[] = [
       { role: "system", content: systemPrompt },
@@ -998,6 +1009,16 @@ The user has expressed frustration. Do the following:
                 cloudToolPermissionsRaw: cloudPermissionsRaw,
                 emit: emitStatus("wiring_status"),
               });
+              // In-app AI connector auto-wiring (managed AI for the generated app)
+              try {
+                await autoWireAi({
+                  supabase,
+                  projectId,
+                  prompt: message,
+                  generatedFiles: parsedFiles,
+                  emit: emitStatus("wiring_status"),
+                });
+              } catch { /* never fail the build */ }
             } catch { backendWiring = null; }
 
             // 2. Self-verification — render the app, auto-fix runtime errors
@@ -1073,6 +1094,21 @@ The user has expressed frustration. Do the following:
           const assistantMessageId = (insertedMessages as Array<{ id: string; role: string }> | null)?.find(
             (row) => row.role === "assistant",
           )?.id;
+
+          if ((mode === "build" || mode === "patch") && (parsedFiles.length > 0 || streamedFilePaths.size > 0)) {
+            await recordEditorIntelligenceBuild({
+              supabase,
+              projectId,
+              projectName: projectData?.name ?? null,
+              source: "chat",
+              mode,
+              prompt: message,
+              filesChanged: parsedFiles.length > 0 ? parsedFiles.map((f) => f.path) : Array.from(streamedFilePaths),
+              assistantMessageId,
+              backendWiring,
+              verification,
+            });
+          }
 
           await (supabase as any).rpc("deduct_credits", {
             user_id: userId,

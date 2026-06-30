@@ -15,7 +15,7 @@ Describe the app in chat → LifemarkAI generates it, shows a **live preview**, 
 
 ## Why it's different (the defensible core)
 1. **True full‑stack, not just UI.** Most AI builders generate a React page. LifemarkAI auto‑wires a real **Supabase backend + auth + database migrations**, can provision a **dedicated backend per app**, and ships with **one‑click deploy** and **in‑app Stripe**. Idea → working product, in one flow.
-2. **Multi‑model intelligence.** Routes each task to the right model — Claude Opus 4.8, Sonnet 4.6, Haiku 4.5 — instead of betting the whole experience on one model.
+2. **Model‑flexible, not vendor‑locked.** Every model call routes through OpenRouter slugs with env overrides, so LifemarkAI is best‑model‑per‑task infrastructure — not a wrapper bet on one provider. Claude‑first where it wins (coding, reasoning), cheaper/faster models where "good enough" is good enough (a real margin lever), automatic reroute when a provider is down or rate‑limiting (competitors hard‑wired to one model just break), and a natural **bring‑your‑own‑model** path for power users and enterprises. The advantage is optionality and no lock‑in — not "more models for their own sake."
 3. **You own the stack.** Self‑hosted infrastructure, an in‑house AI gateway, and a connector gateway for third‑party APIs — portable and not locked to a single vendor.
 4. **Designed output, not generic.** A curated library of niche templates (e‑commerce sub‑types, admin/ERP, SaaS, more) with prompt‑based auto‑selection, so apps start from a professional baseline — not a blank box or a clone.
 
@@ -34,4 +34,4 @@ In 2026 the feature list is table stakes. The moat is **"it just works the first
 _[fill in: raising $X to harden reliability, scale managed backends, and reach Y founders]_
 
 ---
-*Strongest, true story: full‑stack + multi‑model + own‑infra. Lead with that; prove it with reliability.*
+*Strongest, true story: full‑stack + model‑flexible (OpenRouter, no lock‑in) + own‑infra. Lead with that; prove it with reliability.*

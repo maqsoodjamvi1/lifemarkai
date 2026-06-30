@@ -257,22 +257,20 @@ const CONNECTORS: Connector[] = [
   },
   {
     id: "openai",
-    name: "OpenAI",
-    description: "GPT-4o, embeddings, image generation, and speech",
+    name: "Managed AI",
+    description: "No-key chat, images, embeddings, speech-to-text, and text-to-speech",
     category: "devtools",
     icon: "🤖",
     color: "bg-[#10A37F]/10 border-[#10A37F]/20",
-    docsUrl: "https://platform.openai.com/docs",
-    npm: ["openai"],
-    envVars: [
-      { key: "OPENAI_API_KEY", description: "OpenAI API key", example: "sk-..." },
-    ],
+    docsUrl: "/docs",
+    npm: [],
+    envVars: [],
     setupSteps: [
-      "Sign up at platform.openai.com",
-      "Go to API Keys and create a new secret key",
-      "Click 'Apply to project' to add OpenAI integration",
+      "Open the AI for Your App panel",
+      "Enable the project AI proxy and choose the model",
+      "Click 'Apply to project' to add the managed AI integration",
     ],
-    integrationPrompt: "Integrate OpenAI into this app. Install the openai package. Use the OPENAI_API_KEY env var. Create a lib/openai.ts client. Add a POST /api/ai/chat route that accepts { messages } and streams a GPT-4o response using Server-Sent Events. Add a POST /api/ai/embed route for text embeddings (for semantic search). Add an AI chat UI component with a message list, streaming text, and a textarea input. Handle errors gracefully with user-friendly messages.",
+    integrationPrompt: "Integrate LifemarkAI Managed AI into this app. Do not install the openai package and do not add provider API keys. Create a lib/lifemark-ai.ts helper that calls `/api/projects/PROJECT_ID/ai-proxy` with { capability: 'chat' | 'image' | 'embedding' | 'tts' } JSON bodies and multipart FormData for { capability: 'stt', file }. Add an AI chat UI component with messages and loading/error states, an image generation action, an embeddings helper for semantic search, and speech-to-text/text-to-speech helpers. Handle proxy errors gracefully and show user-friendly messages.",
   },
   {
     id: "notion",
@@ -862,23 +860,29 @@ function ConnectorDetail({ connector, onApply, onBack }: {
         )}
 
         {/* Environment variables */}
-        <div className="space-y-2">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Required env vars</p>
+        {connector.envVars.length > 0 ? (
           <div className="space-y-2">
-            {connector.envVars.map((v) => (
-              <div key={v.key} className="rounded-lg border border-border bg-muted/20 p-2.5 space-y-1">
-                <div className="flex items-center gap-2">
-                  <code className="text-[11px] font-mono font-semibold text-violet-400 flex-1">{v.key}</code>
-                  <CopyButton text={v.key} />
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Required env vars</p>
+            <div className="space-y-2">
+              {connector.envVars.map((v) => (
+                <div key={v.key} className="rounded-lg border border-border bg-muted/20 p-2.5 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <code className="text-[11px] font-mono font-semibold text-violet-400 flex-1">{v.key}</code>
+                    <CopyButton text={v.key} />
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">{v.description}</p>
+                  {v.example && (
+                    <p className="text-[10px] text-muted-foreground/50 font-mono">{v.example}</p>
+                  )}
                 </div>
-                <p className="text-[10px] text-muted-foreground">{v.description}</p>
-                {v.example && (
-                  <p className="text-[10px] text-muted-foreground/50 font-mono">{v.example}</p>
-                )}
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-[11px] text-emerald-300">
+            No app-level API keys required. LifemarkAI keeps provider credentials server-side.
+          </div>
+        )}
 
         {/* Setup steps */}
         <div className="space-y-2">

@@ -71,8 +71,10 @@ STRIPE_WEBHOOK_SECRET=...
 NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=...   # build var
 # Email (if using Resend)
 RESEND_API_KEY=...
-# Feature flags (default off = prior behavior)
-LIFEMARK_CLAUDE_DEFAULTS=true            # use the Claude lineup
+# Optional model pins; leave unset to use OpenRouter routers
+OPENROUTER_CODING_MODEL=openrouter/pareto-code
+OPENROUTER_BALANCED_MODEL=openrouter/fusion
+OPENROUTER_FAST_MODEL=deepseek/deepseek-v4-flash
 BUILD_MAX_TOKENS=64000                   # optional, single-pass app builds
 ```
 
@@ -93,10 +95,10 @@ each push to the branch redeploys.
 ## 6. Database migrations (run once, separately)
 
 Coolify doesn't run your Supabase migrations. Apply them to your Supabase project
-in order — `001 … 071` (or at minimum the new ones if the base is already live):
+in order — `001 … 072` (or at minimum the new ones if the base is already live):
 
 - Supabase Dashboard → SQL Editor → paste each `supabase/migrations/0XX_*.sql` in
-  order, **including 068 → 071**; or
+  order, **including 068 → 072**; or
 - `supabase db push` from your machine if you use the Supabase CLI linked to the
   project.
 

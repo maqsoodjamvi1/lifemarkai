@@ -2,31 +2,9 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { getDefaultAiModel, shouldRouteAllAiViaOpenRouter, resolveOpenRouterModelId } from "./model-defaults";
 
-export type AIModel =
-  | "gpt-5.2"
-  | "gpt-4o"
-  | "gpt-4o-mini"
-  | "moonshotai/kimi-k2-instruct-0905"
-  | "claude-opus-4-8"
-  | "claude-opus-4-6"
-  | "claude-sonnet-4-6"
-  | "claude-haiku-4-5-20251001"
-  | "gemini-3.1-pro"
-  | "gemini-3-flash-preview"
-  | "gemini-3.1-flash-lite"
-  | "gemini-2.0-flash"
-  | "gemini-2.0-flash-lite"
-  | "gemini-1.5-pro"
-  // OpenRouter models
-  | "meta-llama/llama-3.3-70b-instruct"
-  | "meta-llama/llama-4-maverick"
-  | "deepseek/deepseek-r1"
-  | "deepseek/deepseek-chat-v3-0324"
-  | "mistralai/mistral-large"
-  | "mistralai/devstral-small"
-  | "qwen/qwen3-235b-a22b"
-  | "x-ai/grok-2-1212"
-  | "google/gemma-3-27b-it";
+// OpenRouter has a large and fast-moving catalog. Keep this as string so users
+// can select any valid provider/model slug without waiting for a type update.
+export type AIModel = string;
 
 export type AIProvider = "openai" | "openrouter" | "anthropic" | "google";
 
@@ -111,7 +89,7 @@ function toOpenRouterModel(model: AIModel): string | null {
   // OpenAI native → openai/* on OR
   if (model.startsWith("gpt-")) return `openai/${model}`;
   // Anthropic native → anthropic/* on OR
-  if (model.startsWith("claude-")) return `anthropic/${model}`;
+  if (model.startsWith("claude-")) return resolveOpenRouterModelId(model);
   // Google native → google/* on OR (OR uses gemini-* directly too, but we
   // prefix for clarity)
   if (model.startsWith("gemini-")) return `google/${model}`;
@@ -120,13 +98,19 @@ function toOpenRouterModel(model: AIModel): string | null {
 
 /** Lifemark config uses `openrouter/gpt-4o-mini`; OpenRouter expects `openai/gpt-4o-mini`. */
 function normalizeOpenRouterModel(model: string): string {
+  if (model.startsWith("anthropic/claude-") || model.startsWith("claude-")) {
+    return resolveOpenRouterModelId(model);
+  }
   if (!model.startsWith("openrouter/")) return model;
   const rest = model.slice("openrouter/".length);
+  if (rest.startsWith("anthropic/claude-") || rest.startsWith("claude-")) {
+    return resolveOpenRouterModelId(rest);
+  }
   if (rest.includes("/")) return rest;
   if (rest.startsWith("gpt-")) return `openai/${rest}`;
-  if (rest.startsWith("claude-")) return `anthropic/${rest}`;
+  if (rest.startsWith("claude-")) return resolveOpenRouterModelId(rest);
   if (rest.startsWith("gemini-")) return `google/${rest}`;
-  return rest;
+  return model;
 }
 
 /**
@@ -220,7 +204,7 @@ export async function generateAI(options: GenerateOptions): Promise<GenerateResu
     } else if (provider === "openrouter") {
       // A native id (e.g. claude-sonnet-4-6) routed here because its own
       // provider key is absent. OpenRouter needs the slash-prefixed slug
-      // (anthropic/claude-sonnet-4-6) — sending the bare id 400s with
+      // (anthropic/claude-sonnet-4.6) - sending the bare id 400s with
       // "not a valid model ID". Remap when there's no slash yet.
       const orModel = normalizeOpenRouterModel(
         model.includes("/") ? model : (toOpenRouterModel(model) ?? model),

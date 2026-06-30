@@ -2,12 +2,12 @@
 
 A full-stack AI-powered app builder (Lovable.dev clone) built with Next.js 14, Supabase, and multi-model AI.
 
-> **Project Titan AI v2.0** (next-gen, multi-agent "AI software company") — design
-> source of truth in **`docs/titan/00-overview.md`** … `08-roadmap.md`. Foundation
-> in repo: migration `068_titan_ai_company.sql` (15 tables + RLS) and the
-> orchestrator `lib/ai/titan/{types,roles,orchestrator}.ts` (10 roles + AI CTO,
+> **LifemarkAI Editor Intelligence** (next-gen, multi-agent "editor intelligence") — design
+> source of truth in **`docs/editor-intelligence/00-overview.md`** … `08-roadmap.md`. Foundation
+> in repo: migration `068_editor_intelligence_lenses.sql` (5 internal lens/run tables + RLS) and the
+> orchestrator `lib/ai/editor-lenses/{types,roles,orchestrator}.ts` (10 roles + AI CTO,
 > debate protocol, wave scheduler) — additive, built on `generateAI()` +
-> `MODEL_TIERS`. See `docs/titan/08-roadmap.md` for built vs. specified.
+> `MODEL_TIERS`. See `docs/editor-intelligence/08-roadmap.md` for built vs. specified.
 
 ## Stack
 
@@ -16,7 +16,7 @@ A full-stack AI-powered app builder (Lovable.dev clone) built with Next.js 14, S
 | Framework | Next.js 14 App Router (TypeScript) |
 | Database | Supabase (PostgreSQL + RLS + Realtime) |
 | Auth | Supabase Auth (Email + GitHub OAuth) |
-| AI | Claude-first per-task tiers (streaming SSE): Claude Opus 4.8 (coding/design/reasoning/content), Sonnet 4.6 (balanced), Haiku 4.5 (chat/fast) — defaults in `lib/ai/model-defaults.ts`, tiers in `lib/ai/editor-intelligence.ts`; all route via OpenRouter slugs with env overrides + invalid-slug safety net. DALL-E 3 for images |
+| AI | OpenRouter-first per-task tiers (streaming SSE): Pareto Code router (coding), Fusion (planning/chat/reasoning), DeepSeek V4 Flash (fast) — defaults in `lib/ai/model-defaults.ts`, tiers in `lib/ai/editor-intelligence.ts`; all route via OpenRouter slugs with env overrides + invalid-slug safety net. DALL-E 3 for images |
 | Styling | Tailwind CSS + shadcn/ui (Radix primitives) |
 | Editor | Monaco Editor (dynamic import, SSR-safe) |
 | Payments | Stripe (subscriptions + webhooks) |

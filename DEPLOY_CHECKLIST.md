@@ -16,9 +16,10 @@
 | `SUPABASE_MANAGEMENT_TOKEN` | Optional | Real per-app backend provisioning (Management API) |
 | `SUPABASE_ORG_ID` | Optional | Org for provisioned projects |
 | `STRIPE_WEBHOOK_SECRET` | Already set | Webhook now also handles `invoice.paid` + app subscriptions |
-| `GOOGLE_GENERATIVE_AI_API_KEY` | Recommended | Gemini 3 Flash chat tier + Nano Banana 2 image generation |
+| `OPENROUTER_API_KEY` | Recommended | Primary AI routing for editor, agent, chat, and model catalog |
+| `GOOGLE_GENERATIVE_AI_API_KEY` | Optional | Direct Gemini/image generation fallback |
 | `PLAYWRIGHT_ENABLED=true` | Recommended | Real-browser self-verification after builds (`playwright` must be installed) |
-| OpenAI key w/ GPT-5.2 access | Recommended | Planning tier (degrades to Claude/OpenRouter without it) |
+| Direct provider keys | Optional | Fallback/self-hosted mode when not routing through OpenRouter |
 
 Without the two Management vars, Cloud falls back to local mode (previous behaviour) — nothing breaks.
 

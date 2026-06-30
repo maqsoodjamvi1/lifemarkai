@@ -1,5 +1,5 @@
 -- Migration 069: in-product domain purchase + target-aware verification
--- Backs the Lovable-parity domain flow (docs/titan/09-domains-hosting.md):
+-- Backs the Lovable-parity domain flow (docs/editor-intelligence/09-domains-hosting.md):
 -- search -> pay (Stripe) -> register (registrar) -> wire DNS -> verify -> live.
 -- Owner-scoped RLS mirroring the project_ai_* tables in migration 068.
 

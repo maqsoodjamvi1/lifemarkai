@@ -86,16 +86,19 @@ const TOKEN_COST_MAP: Record<string, [number, number]> = {
   "gemini-2.0-flash-lite":[0.075, 0.30],
   "gemini-1.5-pro":      [1.25,   5.00],
   // OpenRouter models — rough estimates
+  "openrouter/fusion":                    [2.00, 10.00],
+  "openrouter/pareto-code":               [2.00, 10.00],
+  "deepseek/deepseek-v4-pro":             [0.55, 2.19],
+  "deepseek/deepseek-v4-flash":           [0.10, 0.40],
   "meta-llama/llama-3.3-70b-instruct": [0.59, 0.79],
   "meta-llama/llama-4-maverick":        [0.18, 0.59],
   "deepseek/deepseek-r1":               [0.55, 2.19],
   "deepseek/deepseek-chat-v3-0324":     [0.27, 1.10],
   "mistralai/mistral-large":            [2.00, 6.00],
-  "mistralai/devstral-small":           [0.10, 0.30],
+  "mistralai/devstral-2512":            [0.10, 0.30],
   "qwen/qwen3-235b-a22b":               [0.50, 1.50],
-  "x-ai/grok-2-1212":                   [2.00, 10.00],
   "google/gemma-3-27b-it":              [0.10, 0.20],
-  "moonshotai/kimi-k2-instruct-0905":   [0.60, 2.50],
+  "moonshotai/kimi-k2.5":               [0.60, 2.50],
 };
 
 // Fallback cost when model is unknown
@@ -161,11 +164,41 @@ function resolveRoute(model: string, env: Env): RouteInfo {
  * form so we can retry there when the primary provider is rate-limited / out of
  * quota. Returns null for models that are already OpenRouter IDs (have a slash).
  */
+const CLAUDE_OPENROUTER_SLUGS: Record<string, string> = {
+  "claude-opus-4-8": "anthropic/claude-opus-4.8",
+  "claude-opus-4-6": "anthropic/claude-opus-4.6",
+  "claude-sonnet-4-6": "anthropic/claude-sonnet-4.6",
+  "claude-haiku-4-5": "anthropic/claude-haiku-4.5",
+  "claude-haiku-4-5-20251001": "anthropic/claude-haiku-4.5",
+};
+
+function resolveOpenRouterModelId(model: string): string {
+  if (model.startsWith("openrouter/")) {
+    const rest = model.slice("openrouter/".length);
+    const claudeRest = rest.startsWith("anthropic/") ? rest.slice("anthropic/".length) : rest;
+    const claude = CLAUDE_OPENROUTER_SLUGS[claudeRest];
+    if (claude) return claude;
+    if (rest.startsWith("gpt-")) return `openai/${rest}`;
+    if (rest.startsWith("claude-")) return `anthropic/${rest}`;
+    if (rest.startsWith("gemini-")) return `google/${rest}`;
+    if (rest.includes("/")) return rest;
+    return model;
+  }
+  const bare = model;
+  const claudeBare = bare.startsWith("anthropic/") ? bare.slice("anthropic/".length) : bare;
+  const claude = CLAUDE_OPENROUTER_SLUGS[claudeBare];
+  if (claude) return claude;
+  if (bare.includes("/")) return bare;
+  if (bare.startsWith("gpt-")) return `openai/${bare}`;
+  if (bare.startsWith("claude-")) return `anthropic/${bare}`;
+  if (bare.startsWith("gemini-")) return `google/${bare}`;
+  return bare;
+}
+
 function toOpenRouterModel(model: string): string | null {
+  const resolved = resolveOpenRouterModelId(model);
+  if (resolved !== model) return resolved;
   if (model.includes("/")) return null; // already an OpenRouter ID
-  if (model.startsWith("gpt-")) return `openai/${model}`;
-  if (model.startsWith("claude-")) return `anthropic/${model}`;
-  if (model.startsWith("gemini-")) return `google/${model}`;
   return null;
 }
 
@@ -470,13 +503,13 @@ async function handleChat(request: Request, env: Env, ctx: ExecutionContext): Pr
     });
   }
 
-  const model = (body.model as string | undefined) ?? "openai/gpt-4o";
+  const model = (body.model as string | undefined) ?? "openrouter/fusion";
   const isStreaming = body.stream === true;
   const projectId = request.headers.get("X-Lifemark-Project-Id") ?? "";
   const userId = request.headers.get("X-Lifemark-User-Id") ?? "";
 
   if (shouldUseOpenRouter(env)) {
-    const orModel = toOpenRouterModel(model) ?? (model.includes("/") ? model : model);
+    const orModel = resolveOpenRouterModelId(model);
     if (orModel !== model) body = { ...body, model: orModel };
   }
 

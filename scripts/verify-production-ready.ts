@@ -57,12 +57,38 @@ runScript("scripts/verify-tier7-gaps.ts", "P3d");
 runScript("scripts/verify-tier8-gaps.ts", "P3e");
 runScript("scripts/verify-editor-intelligence.ts", "P4");
 runScript("scripts/verify-openrouter-routing.ts", "P4b");
+runScript("scripts/verify-openrouter-catalog.ts", "P4c");
+
+// ── Product moat checks ─────────────────────────────────────────────────────
+const aiProxyPath = join(ROOT, "app/api/projects/[id]/ai-proxy/route.ts");
+const aiProxy = existsSync(aiProxyPath) ? readFileSync(aiProxyPath, "utf8") : "";
+assert("P4d", "built-app AI proxy is multimodal", ["chat", "image", "embedding", "stt", "tts"].every((cap) => aiProxy.includes(`"${cap}"`)), {
+  hint: "Keep /api/projects/:id/ai-proxy as the no-key generated-app AI connector",
+});
+assert("P4d", "built-app AI proxy uses gateway-aware generateAI", aiProxy.includes("@/lib/ai/generate"));
+
+const chatPanelPath = join(ROOT, "components/editor/chat-panel.tsx");
+const chatPanel = existsSync(chatPanelPath) ? readFileSync(chatPanelPath, "utf8") : "";
+assert("P4e", "Auto model route is visible in chat panel", chatPanel.includes("activeModelLabel") && chatPanel.includes("Auto"));
+
+const aiPanelPath = join(ROOT, "components/editor/ai-integration-panel.tsx");
+const aiPanel = existsSync(aiPanelPath) ? readFileSync(aiPanelPath, "utf8") : "";
+assert("P4f", "AI Integration panel exposes connector capabilities", ["Built-App AI Connector", "Embeddings", "STT", "TTS"].every((text) => aiPanel.includes(text)));
+
+const securityCenterPath = join(ROOT, "components/dashboard/security-center-page.tsx");
+const securityCenter = existsSync(securityCenterPath) ? readFileSync(securityCenterPath, "utf8") : "";
+assert("P4g", "Security Center calls project static/PII scan", securityCenter.includes("/security-scan") && securityCenter.includes("scanResults"));
+
+const securityScanPath = join(ROOT, "app/api/projects/[id]/security-scan/route.ts");
+const securityScan = existsSync(securityScanPath) ? readFileSync(securityScanPath, "utf8") : "";
+assert("P4g", "Project security scan includes PII scanner", securityScan.includes("scanProject") && readFileSync(join(ROOT, "lib/security/scan.ts"), "utf8").includes("pii-credit-card"));
 
 // ── Required migrations for parity features ─────────────────────────────────
 const REQUIRED_MIGRATIONS = [
   "058_element_comments.sql",
   "061_cloud_tool_permissions.sql",
   "062_nested_project_groups.sql",
+  "072_ai_integration_openrouter_default.sql",
 ];
 for (const m of REQUIRED_MIGRATIONS) {
   assert("P5", `migration ${m}`, existsSync(join(ROOT, "supabase/migrations", m)));

@@ -6,7 +6,7 @@
  * (no E2B_API_KEY / SDK), responds with { enabled: false } so the client falls
  * back to the in-browser WebContainer / srcdoc preview.
  *
- * See lib/sandbox/index.ts and docs/titan/05-platform-business-layer.md §7.
+ * See lib/sandbox/index.ts for the sandbox preview flow.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";

@@ -1,71 +1,47 @@
 import type { AIModel } from "./provider";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Claude-first model lineup (June 2026). All tiers default to the current Claude
-// family, expressed as OpenRouter slugs so they route through OPENROUTER_API_KEY
-// with no per-provider keys. The invalid-slug safety net in provider.ts degrades
-// to gpt-4o if a slug is rejected by the catalog, so these are safe defaults.
-//
-//   Opus 4.8   → heavy coding, design, reasoning, content (highest quality)
-//   Sonnet 4.6 → balanced / medium-complexity work (quality vs. cost)
-//   Haiku 4.5  → fast + cheap conversational / lightweight tasks
-//
-// Override any tier via env (OPENROUTER_CODING_MODEL, _BALANCED_, _FAST_, …).
+// OpenRouter-first model lineup. Router slugs keep LifemarkAI from being pinned
+// to one lab while still letting operators override any tier with exact
+// OPENROUTER_*_MODEL env vars.
 // ─────────────────────────────────────────────────────────────────────────────
-
-// ── Feature flag: opt into the upgraded Claude-first lineup ───────────────────
-// OFF by default → preserves the prior models (Sonnet for heavy tiers, gpt-4o-mini
-// for fast/chat) so this rolls out with zero behavior change. Set
-// LIFEMARK_CLAUDE_DEFAULTS=true (or 1) to switch heavy tiers to Opus 4.8 and
-// fast/chat to Haiku 4.5. Per-tier OPENROUTER_*_MODEL env vars still override either way.
-function claudeDefaultsOn(): boolean {
-  const f = process.env.LIFEMARK_CLAUDE_DEFAULTS?.toLowerCase();
-  return f === "true" || f === "1";
-}
-const CLAUDE = claudeDefaultsOn();
 
 // NOTE: OpenRouter slugs use DOT version notation (anthropic/claude-opus-4.8),
 // unlike the native Anthropic API ids which use hyphens (claude-opus-4-8).
 // Since we route through OpenRouter, these MUST be the dot form — verified
 // against openrouter.ai (2026): opus-4.8, sonnet-4.6, haiku-4.5 all resolve.
-/** Top Claude coder. */
-const CLAUDE_OPUS = "anthropic/claude-opus-4.8";
-/** Balanced Claude — medium-complexity work. */
-const CLAUDE_SONNET = "anthropic/claude-sonnet-4.6";
-/** Fast + cheap Claude. */
-const CLAUDE_HAIKU = "anthropic/claude-haiku-4.5";
 
-// Prior (pre-upgrade) defaults — used when the flag is OFF.
-const LEGACY_HEAVY = "anthropic/claude-sonnet-4.6"; // coding/design/content/reasoning/balanced
-const LEGACY_FAST = "openai/gpt-4o-mini"; // fast/chat
+const ROUTER_FRONTIER = "openrouter/fusion";
+const ROUTER_CODING = "openrouter/pareto-code";
+const ROUTER_FAST = "deepseek/deepseek-v4-flash";
 
 /** Primary model for coding. */
 export const DEFAULT_CODING_MODEL: AIModel =
-  (process.env.OPENROUTER_CODING_MODEL || (CLAUDE ? CLAUDE_OPUS : LEGACY_HEAVY)) as AIModel;
+  (process.env.OPENROUTER_CODING_MODEL || ROUTER_CODING) as AIModel;
 
 /** Fast/cheap model for lightweight tasks (reviews, autocomplete, etc.). */
 export const FAST_CODING_MODEL: AIModel =
-  (process.env.OPENROUTER_FAST_MODEL || (CLAUDE ? CLAUDE_HAIKU : LEGACY_FAST)) as AIModel;
+  (process.env.OPENROUTER_FAST_MODEL || ROUTER_FAST) as AIModel;
 
 /** Balanced model for planning and medium-complexity chat. */
 export const BALANCED_CODING_MODEL: AIModel =
-  (process.env.OPENROUTER_BALANCED_MODEL || (CLAUDE ? CLAUDE_SONNET : LEGACY_HEAVY)) as AIModel;
+  (process.env.OPENROUTER_BALANCED_MODEL || ROUTER_FRONTIER) as AIModel;
 
 /** UI / design-heavy work. */
 export const DESIGN_MODEL: AIModel =
-  (process.env.OPENROUTER_DESIGN_MODEL || (CLAUDE ? CLAUDE_OPUS : LEGACY_HEAVY)) as AIModel;
+  (process.env.OPENROUTER_DESIGN_MODEL || ROUTER_FRONTIER) as AIModel;
 
 /** Copywriting / marketing content. */
 export const CONTENT_MODEL: AIModel =
-  (process.env.OPENROUTER_CONTENT_MODEL || (CLAUDE ? CLAUDE_OPUS : LEGACY_HEAVY)) as AIModel;
+  (process.env.OPENROUTER_CONTENT_MODEL || ROUTER_FRONTIER) as AIModel;
 
-/** Default conversational model — fast + cheap. */
+/** Default conversational model. */
 export const DEFAULT_CHAT_MODEL: AIModel =
-  (process.env.OPENROUTER_CHAT_MODEL || (CLAUDE ? CLAUDE_HAIKU : LEGACY_FAST)) as AIModel;
+  (process.env.OPENROUTER_CHAT_MODEL || ROUTER_FRONTIER) as AIModel;
 
 /** Strong general-reasoning model for planning. */
 export const REASONING_MODEL: AIModel =
-  (process.env.OPENROUTER_REASONING_MODEL || (CLAUDE ? CLAUDE_OPUS : LEGACY_HEAVY)) as AIModel;
+  (process.env.OPENROUTER_REASONING_MODEL || ROUTER_FRONTIER) as AIModel;
 
 /**
  * Native image generation.
@@ -86,9 +62,36 @@ export function shouldRouteAllAiViaOpenRouter(): boolean {
   return !!process.env.OPENROUTER_API_KEY;
 }
 
+const CLAUDE_OPENROUTER_SLUGS: Record<string, string> = {
+  "claude-opus-4-8": "anthropic/claude-opus-4.8",
+  "claude-opus-4-6": "anthropic/claude-opus-4.6",
+  "claude-sonnet-4-6": "anthropic/claude-sonnet-4.6",
+  "claude-haiku-4-5": "anthropic/claude-haiku-4.5",
+  "claude-haiku-4-5-20251001": "anthropic/claude-haiku-4.5",
+};
+
+function normalizeClaudeOpenRouterSlug(model: string): string | null {
+  const bare = model.startsWith("anthropic/") ? model.slice("anthropic/".length) : model;
+  const mapped = CLAUDE_OPENROUTER_SLUGS[bare];
+  if (mapped) return mapped;
+  return null;
+}
+
 /** Map native model IDs (gpt-4o, claude-opus-4-8) to OpenRouter slugs (openai/gpt-4o, …). */
 export function resolveOpenRouterModelId(model: string): AIModel {
-  const bare = model.startsWith("openrouter/") ? model.slice("openrouter/".length) : model;
+  if (model.startsWith("openrouter/")) {
+    const rest = model.slice("openrouter/".length);
+    const claude = normalizeClaudeOpenRouterSlug(rest);
+    if (claude) return claude as AIModel;
+    if (rest.startsWith("gpt-")) return `openai/${rest}` as AIModel;
+    if (rest.startsWith("claude-")) return `anthropic/${rest}` as AIModel;
+    if (rest.startsWith("gemini-")) return `google/${rest}` as AIModel;
+    if (rest.includes("/")) return rest as AIModel;
+    return model as AIModel;
+  }
+  const bare = model;
+  const claude = normalizeClaudeOpenRouterSlug(bare);
+  if (claude) return claude as AIModel;
   if (bare.includes("/")) return bare as AIModel;
   if (bare.startsWith("gpt-")) return `openai/${bare}` as AIModel;
   if (bare.startsWith("claude-")) return `anthropic/${bare}` as AIModel;

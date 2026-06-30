@@ -5,6 +5,7 @@ import { Layers, Play, Loader2, Copy, Check, ChevronRight, Clock, Zap, Send } fr
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
+import { MODEL_COMPARE_OPTIONS } from "@/lib/ai/openrouter-models";
 
 interface ModelComparePanelProps {
   projectId: string;
@@ -21,12 +22,11 @@ interface ModelResult {
   error?: string;
 }
 
-// OpenRouter slugs — route through the single OPENROUTER_API_KEY.
-const MODELS: { id: string; label: string; color: string }[] = [
-  { id: "openai/gpt-4o",                       label: "GPT-4o",        color: "text-emerald-400 border-emerald-500/30" },
-  { id: "anthropic/claude-3.5-sonnet",         label: "Claude 3.5 Sonnet", color: "text-violet-400 border-violet-500/30" },
-  { id: "deepseek/deepseek-chat-v3-0324",      label: "DeepSeek V3",   color: "text-blue-400 border-blue-500/30" },
-];
+const MODELS: { id: string; label: string; color: string }[] = MODEL_COMPARE_OPTIONS.map((model) => ({
+  id: model.id,
+  label: model.label,
+  color: model.color ?? "text-muted-foreground border-border",
+}));
 
 const SAMPLE_PROMPTS = [
   "Build a responsive navbar with a hamburger menu for mobile",
@@ -157,7 +157,7 @@ export function ModelComparePanel({ projectId, onSendToChat }: ModelComparePanel
             {MODELS.length} models
           </Badge>
         </div>
-        <p className="text-xs text-muted-foreground">Run the same prompt through GPT-4o and Claude side-by-side</p>
+        <p className="text-xs text-muted-foreground">Run the same prompt through a curated OpenRouter model set</p>
       </div>
 
       {/* Prompt input */}

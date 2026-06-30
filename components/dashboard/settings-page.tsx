@@ -432,20 +432,9 @@ const SECTIONS = [
   { id: "danger", label: "Danger Zone", icon: Trash2 },
 ];
 
-// OpenRouter slugs — route through the single OPENROUTER_API_KEY.
-const AI_MODELS = [
-  { id: "openai/gpt-4o", label: "GPT-4o (Recommended)", provider: "OpenAI" },
-  { id: "openai/gpt-4o-mini", label: "GPT-4o mini (Fast)", provider: "OpenAI" },
-  { id: "anthropic/claude-3.5-sonnet", label: "Claude 3.5 Sonnet", provider: "Anthropic" },
-  { id: "google/gemini-flash-1.5", label: "Gemini 1.5 Flash (Fast)", provider: "Google" },
-  { id: "deepseek/deepseek-chat-v3-0324", label: "DeepSeek V3", provider: "DeepSeek" },
-  { id: "meta-llama/llama-3.3-70b-instruct", label: "Llama 3.3 70B", provider: "Meta" },
-];
-
 export function SettingsPage({ user, profile }: SettingsPageProps) {
   const [active, setActive] = useState("profile");
   const [name, setName] = useState(profile?.full_name ?? "");
-  const [defaultModel, setDefaultModel] = useState("openai/gpt-4o");
   const [saving, setSaving] = useState(false);
   const [isPublic, setIsPublic] = useState<boolean>(profile?.is_public ?? false);
   const [privacySaving, setPrivacySaving] = useState(false);

@@ -1,6 +1,6 @@
 /**
  * Lightweight TS/JS/JSX structural analyzer for the agent toolset.
- * See docs/titan/01-ai-software-company.md (architect/QA roles) — gives the
+ * Used by editor-intelligence architecture/QA lenses; gives the
  * agent structural understanding of a file (imports, exports, functions, React
  * components, classes, hooks) and lets it locate a symbol's definition across
  * the project WITHOUT reading whole files.

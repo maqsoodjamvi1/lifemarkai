@@ -8,6 +8,7 @@ import { fileURLToPath } from "url";
 import {
   resolvePromptMode,
   resolveSmartModel,
+  resolveModelChain,
   inferProjectStage,
   getSmartPlaceholder,
   pickActiveFileAfterUpdate,
@@ -197,24 +198,28 @@ log({
   data: { count: emptyPrompts.length, first: emptyPrompts[0], ok: emptyPrompts.length >= 3 },
 });
 
+// Multi-model selection (catalog + cascade). resolveSmartModel now returns the
+// best-fit primary, which may differ from the fixed tier — so we assert the
+// cascade still INCLUDES the proven per-mode tier (the guaranteed anchor) and
+// that a non-empty primary is chosen. This stays valid as catalog slugs change.
 const modelCases = [
-  // Multi-provider per-task orchestration (Lovable parity)
-  { name: "build → opus (coding)", mode: "build" as const, prompt: "Build a todo app", expect: MODEL_TIERS.coding },
-  { name: "agent → opus (coding)", mode: "agent" as const, prompt: "Add auth", expect: MODEL_TIERS.coding },
-  { name: "short patch → gemini flash", mode: "patch" as const, prompt: "Make header blue", expect: MODEL_TIERS.chat },
-  { name: "short chat → gemini flash", mode: "chat" as const, prompt: "What is React?", expect: MODEL_TIERS.chat },
-  { name: "plan → gpt-5.2 (reasoning)", mode: "plan" as const, prompt: "Plan a SaaS dashboard", expect: MODEL_TIERS.reasoning },
+  { name: "build → coding tier anchored", mode: "build" as const, prompt: "Build a todo app", anchor: MODEL_TIERS.coding },
+  { name: "agent → coding tier anchored", mode: "agent" as const, prompt: "Add auth", anchor: MODEL_TIERS.coding },
+  { name: "short patch → chat tier anchored", mode: "patch" as const, prompt: "Make header blue", anchor: MODEL_TIERS.chat },
+  { name: "short chat → chat tier anchored", mode: "chat" as const, prompt: "What is React?", anchor: MODEL_TIERS.chat },
+  { name: "plan → reasoning tier anchored", mode: "plan" as const, prompt: "Plan a SaaS dashboard", anchor: MODEL_TIERS.reasoning },
 ];
 for (const mc of modelCases) {
-  const got = resolveSmartModel(mc.mode, { fileCount: 5, hasPreviewError: false }, mc.prompt);
-  const ok = got === mc.expect;
+  const chain = resolveModelChain(mc.mode, { fileCount: 5, hasPreviewError: false }, mc.prompt);
+  const primary = resolveSmartModel(mc.mode, { fileCount: 5, hasPreviewError: false }, mc.prompt);
+  const ok = chain.length >= 1 && !!primary && primary === chain[0] && chain.includes(mc.anchor);
   if (ok) passed++;
   else failed++;
   log({
     hypothesisId: "H5",
     location: "verify-editor-intelligence.ts",
-    message: `resolveSmartModel: ${mc.name}`,
-    data: { mode: mc.mode, expect: mc.expect, got, ok },
+    message: `resolveModelChain: ${mc.name}`,
+    data: { mode: mc.mode, primary, anchor: mc.anchor, chain, ok },
   });
 }
 
