@@ -44,12 +44,32 @@ export const REASONING_MODEL: AIModel =
   (process.env.OPENROUTER_REASONING_MODEL || ROUTER_FRONTIER) as AIModel;
 
 /**
- * Native image generation.
- * When OpenRouter is enabled (OPENROUTER_API_KEY present) prefer OpenAI's
- * DALL·E 3 via OpenRouter (`openai/dall-e-3`) so image calls route through
- * the single OpenRouter key. Otherwise default to Google's Gemini image model.
+ * Cross-vendor REVIEW model (CTO reviews, debate adjudication). Intentionally
+ * a DIFFERENT model family than the coding tier (Claude): a same-family
+ * reviewer shares the builder's blind spots, so reviews become an echo
+ * chamber. GPT-5.2 slug verified against the live OpenRouter catalog (2026).
  */
-export const IMAGE_MODEL = process.env.OPENROUTER_API_KEY ? "openai/dall-e-3" : "gemini-3.1-flash-image";
+export const REVIEW_MODEL: AIModel =
+  (process.env.OPENROUTER_REVIEW_MODEL || "openai/gpt-5.2") as AIModel;
+
+/**
+ * ESCALATION model — strongest available, used only on retry after a task
+ * failed with the normal tier (cost-bounded: one escalated attempt per task).
+ * Opus 4.8 slug verified against the live OpenRouter catalog (2026).
+ */
+export const ESCALATION_MODEL: AIModel =
+  (process.env.OPENROUTER_ESCALATION_MODEL || "anthropic/claude-opus-4.8") as AIModel;
+
+/**
+ * Native image generation.
+ * When OpenRouter is enabled (OPENROUTER_API_KEY present) use Gemini's image
+ * model via OpenRouter (`google/gemini-3.1-flash-image`, served through
+ * /chat/completions with image modalities) so image calls route through the
+ * single OpenRouter key. NOTE: `openai/dall-e-3` is DELISTED from OpenRouter
+ * (verified against the live catalog, July 2026) — do not use it here.
+ * Without OpenRouter, default to Google's native Gemini image model.
+ */
+export const IMAGE_MODEL = process.env.OPENROUTER_API_KEY ? "google/gemini-3.1-flash-image" : "gemini-3.1-flash-image";
 
 /**
  * When true, all AI calls route through OpenRouter (single API key for every model).

@@ -117,7 +117,7 @@ const PreviewPanel = dynamic(
 
 export type EditorMode = "chat" | "plan" | "build" | "agent" | "patch";
 export type ViewMode = "preview" | "code" | "both";
-export type LeftPanel = "chat" | "plan" | "agent" | "intelligence" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "code";
+export type LeftPanel = "chat" | "plan" | "agent" | "intelligence" | "healing" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "code";
 
 interface EditorLayoutProps {
   project: Project;
@@ -466,24 +466,91 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     [files, project.id, handleFileUpdate, handleFileCreate]
   );
 
-  const handleCodeChange = useCallback(
-    async (content: string) => {
-      if (!activeFile) return;
-      const updated = { ...activeFile, content };
-      setActiveFile(updated);
-      setFiles((prev) => prev.map((f) => (f.id === activeFile.id ? updated : f)));
+  // ── Code editing ──────────────────────────────────────────────────────────
+  // Live keystrokes are debounced: one state sync + one PATCH per idle period,
+  // instead of a whole-shell re-render + API call on EVERY Monaco keystroke.
+  // Explicit saves (⌘S in CodePanel) remain immediate via handleCodeSave.
+  const persistFileContent = useCallback(
+    async (fileId: string, content: string) => {
       try {
         const res = await fetch(`/api/projects/${project.id}/files`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fileId: activeFile.id, content }),
+          body: JSON.stringify({ fileId, content }),
         });
         if (res.ok) setLastSaved(new Date());
       } catch (e) {
         console.error("Save failed:", e);
       }
     },
-    [activeFile, project.id]
+    [project.id]
+  );
+
+  const pendingCodeChangeRef = useRef<{
+    fileId: string;
+    content: string;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+
+  const commitCodeChange = useCallback(
+    (fileId: string, content: string) => {
+      setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, content } : f)));
+      setActiveFile((prev) => (prev?.id === fileId ? { ...prev, content } : prev));
+      void persistFileContent(fileId, content);
+    },
+    [persistFileContent]
+  );
+
+  // Flush a pending debounced edit on unmount so typed content isn't lost.
+  useEffect(() => {
+    return () => {
+      const pending = pendingCodeChangeRef.current;
+      if (pending) {
+        clearTimeout(pending.timer);
+        pendingCodeChangeRef.current = null;
+        void persistFileContent(pending.fileId, pending.content);
+      }
+    };
+  }, [persistFileContent]);
+
+  const handleCodeChange = useCallback(
+    (content: string) => {
+      if (!activeFile) return;
+      const fileId = activeFile.id;
+      const pending = pendingCodeChangeRef.current;
+      if (pending) {
+        clearTimeout(pending.timer);
+        // Switched files mid-debounce — flush the other file's edit first so
+        // it is never dropped or attributed to the wrong file.
+        if (pending.fileId !== fileId) commitCodeChange(pending.fileId, pending.content);
+      }
+      pendingCodeChangeRef.current = {
+        fileId,
+        content,
+        timer: setTimeout(() => {
+          pendingCodeChangeRef.current = null;
+          commitCodeChange(fileId, content);
+        }, 500),
+      };
+    },
+    [activeFile, commitCodeChange]
+  );
+
+  // Immediate save — used by CodePanel's explicit ⌘S / Save button.
+  const handleCodeSave = useCallback(
+    async (content: string) => {
+      if (!activeFile) return;
+      const fileId = activeFile.id;
+      const pending = pendingCodeChangeRef.current;
+      if (pending?.fileId === fileId) {
+        clearTimeout(pending.timer);
+        pendingCodeChangeRef.current = null;
+      }
+      setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, content } : f)));
+      setActiveFile((prev) => (prev?.id === fileId ? { ...prev, content } : prev));
+      await persistFileContent(fileId, content);
+    },
+    [activeFile, persistFileContent]
   );
 
   const pid = currentProject.id;
@@ -518,6 +585,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     { id: "plan",      label: "Plan",     emoji: "🗺️" },
     { id: "agent",     label: "Agent",    emoji: "🤖" },
     { id: "intelligence", label: "Intelligence", emoji: "AI" },
+    { id: "healing",   label: "Self-Heal", emoji: "🩹" },
     { id: "knowledge", label: "Knowledge",emoji: "🧠" },
     { id: "activity",  label: "Activity", emoji: "📋" },
     { id: "github",    label: "Git",      emoji: "🐙" },
@@ -750,7 +818,8 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
             <div className={`absolute inset-0 ${mobilePaneActive === "code" ? "" : "hidden"}`}>
               <CodePanel
                 file={activeFile} files={files} projectId={project.id}
-                onSave={handleCodeChange} onChange={handleCodeChange}
+                onSave={handleCodeSave} onChange={handleCodeChange}
+                onFileChange={setActiveFile}
                 collabUser={collabUser}
                 onCollaboratorsChange={setYjsCollaborators}
                 onReferenceInChat={(f) => { setPendingFileRef(f); setMobilePaneActive("left"); setLeftPanel("chat"); }}
@@ -1080,8 +1149,9 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                           file={activeFile}
                           files={files}
                           projectId={project.id}
-                          onSave={handleCodeChange}
+                          onSave={handleCodeSave}
                           onChange={handleCodeChange}
+                          onFileChange={setActiveFile}
                           collabUser={collabUser}
                           onCollaboratorsChange={setYjsCollaborators}
                         />
@@ -1097,8 +1167,9 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                       file={activeFile}
                       files={files}
                       projectId={project.id}
-                      onSave={handleCodeChange}
+                      onSave={handleCodeSave}
                       onChange={handleCodeChange}
+                      onFileChange={setActiveFile}
                       collabUser={collabUser}
                       onCollaboratorsChange={setYjsCollaborators}
                     />

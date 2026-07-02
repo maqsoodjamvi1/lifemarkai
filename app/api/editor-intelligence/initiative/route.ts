@@ -21,7 +21,9 @@ import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInitiative } from "@/lib/ai/editor-lenses/orchestrator";
 import { getRole } from "@/lib/ai/editor-lenses/roles";
 import { runAgent } from "@/lib/ai/agent";
-import type { AgentRoleId, EditorIntelligenceEvent } from "@/lib/ai/editor-lenses/types";
+import { runSelfVerification, type SelfVerifyResult } from "@/lib/ai/self-verify";
+import { recordVerificationFindings } from "@/lib/ai/self-healing";
+import type { AgentRoleId, AutonomyGates, EditorIntelligenceEvent } from "@/lib/ai/editor-lenses/types";
 import {
   appendEditorInitiativeEvent,
   createEditorInitiativeRun,
@@ -29,11 +31,15 @@ import {
   failEditorInitiativeRun,
   loadEditorInitiativeRun,
   PERSISTED_ROLE_BY_LENS,
+  recordEditorIntelligenceBuild,
   updateEditorInitiativeCheckpoint,
 } from "@/lib/ai/editor-lenses/persistence";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
+
+/** Skip the QA self-verify loop when fewer than ~60s of the route budget remain. */
+const VERIFY_TIME_CUTOFF_MS = (maxDuration - 60) * 1000;
 
 interface Body {
   projectId: string;
@@ -43,6 +49,28 @@ interface Body {
   /** Skip seeding the orchestrator's role rows (set false when the editor
    *  intelligence panel already bootstrapped the canonical lens roster). */
   seedAgents?: boolean;
+  /** Autonomy gate overrides — sent by the console's gate Approve button when
+   *  resuming a paused run (e.g. { database: "allow" } or { spend: "unlimited" }).
+   *  Sanitized below; `liveEnv` can never be overridden (migration 046). */
+  autonomy?: Partial<AutonomyGates>;
+}
+
+/** Whitelist autonomy override values; drop anything unknown or unsafe. */
+function sanitizeAutonomy(raw: unknown): Partial<AutonomyGates> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const input = raw as Record<string, unknown>;
+  const out: Partial<AutonomyGates> = {};
+  if (input.database === "never" || input.database === "ask" || input.database === "allow") {
+    out.database = input.database;
+  }
+  if (input.deploy === "never" || input.deploy === "ask" || input.deploy === "allow") {
+    out.deploy = input.deploy;
+  }
+  if (input.spend === "budget" || input.spend === "unlimited") {
+    out.spend = input.spend;
+  }
+  // liveEnv is intentionally NOT overridable — always "block".
+  return Object.keys(out).length ? out : undefined;
 }
 
 interface DbError {
@@ -88,12 +116,14 @@ interface AgentIdRow {
 }
 
 export async function POST(req: NextRequest) {
+  const routeStartedAt = Date.now();
   const supabase = await createClient();
   const db = supabase as unknown as LooseSupabase;
   const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { projectId, goal, runId, budgetCredits, seedAgents = true } = (await req.json()) as Body;
+  const { projectId, goal, runId, budgetCredits, seedAgents = true, autonomy: rawAutonomy } = (await req.json()) as Body;
+  const autonomy = sanitizeAutonomy(rawAutonomy);
   const requestedGoal = goal?.trim() ?? "";
   if (!projectId || (!runId && !requestedGoal)) {
     return NextResponse.json({ error: "projectId and goal are required for new runs" }, { status: 400 });
@@ -220,6 +250,95 @@ export async function POST(req: NextRequest) {
         }
       };
 
+      // Real QA step (roadmap P1): after the run's file changes are persisted,
+      // verify the build with the same lib/ai/self-verify.ts loop the chat and
+      // agent routes use (headless Chromium when available, static smoke checks
+      // otherwise, plus up to 2 auto-fix rounds). Progress streams as QA lens
+      // agent_message events; the outcome streams as a verify_status event and
+      // is persisted via recordEditorIntelligenceBuild. Verification is
+      // best-effort and must NEVER fail the initiative (same stance as chat).
+      const runQaVerification = async (filesChanged: string[]): Promise<SelfVerifyResult | null> => {
+        if (filesChanged.length === 0) return null;
+
+        // Respect the route's maxDuration budget — skip when <~60s remain.
+        if (Date.now() - routeStartedAt > VERIFY_TIME_CUTOFF_MS) {
+          const skipped: EditorIntelligenceEvent = {
+            type: "agent_message",
+            from: "qa",
+            channel: "verification",
+            content: "Skipping browser verification — not enough time left in this run.",
+          };
+          send(skipped);
+          await appendEditorInitiativeEvent({
+            supabase,
+            initiativeId: initiativeRun.id,
+            projectId,
+            event: skipped,
+          }).catch(() => {});
+          return null;
+        }
+
+        try {
+          const verification = await runSelfVerification({
+            supabase,
+            projectId,
+            emit: (status) => {
+              const progress: EditorIntelligenceEvent = {
+                type: "agent_message",
+                from: "qa",
+                channel: "verification",
+                content: status,
+              };
+              send(progress);
+              void appendEditorInitiativeEvent({
+                supabase,
+                initiativeId: initiativeRun.id,
+                projectId,
+                event: progress,
+              }).catch(() => {});
+              void persistMessage("qa", undefined, "verification", status);
+            },
+          });
+          if (!verification) return null;
+
+          const verifyEvent: EditorIntelligenceEvent = { type: "verify_status", ok: verification.passed };
+          send(verifyEvent);
+          await appendEditorInitiativeEvent({
+            supabase,
+            initiativeId: initiativeRun.id,
+            projectId,
+            event: verifyEvent,
+          }).catch(() => {});
+
+          // QA lens memory + decision trail (persistence.ts `verification` field).
+          await recordEditorIntelligenceBuild({
+            supabase,
+            projectId,
+            projectName: project?.name ?? null,
+            source: "editor-intelligence",
+            mode: "initiative",
+            prompt: initiativeRun.goal ?? requestedGoal,
+            filesChanged,
+            verification,
+          });
+
+          // Errors that survived the auto-fix rounds become 'runtime' health
+          // findings so the Self-Heal tab tracks them (best-effort).
+          if (!verification.passed) {
+            await recordVerificationFindings({
+              supabase,
+              projectId,
+              userId: user.id,
+              verification,
+            });
+          }
+
+          return verification;
+        } catch {
+          return null;
+        }
+      };
+
       let creditsUsed = 0;
       try {
         const runStartEvent = {
@@ -242,6 +361,7 @@ export async function POST(req: NextRequest) {
           userId: user.id,
           goal: initiativeRun.goal ?? requestedGoal,
           files,
+          autonomy,
           budgetCredits: Number(initiativeRun.budget_credits ?? budgetCredits ?? 0) || undefined,
           checkpoint: initiativeRun.checkpoint ?? null,
           onCheckpoint: (checkpoint) => updateEditorInitiativeCheckpoint({
@@ -277,6 +397,33 @@ export async function POST(req: NextRequest) {
             return { files: changedFiles, summary: result.summary };
           },
         })) {
+          // Intercept the final `done` event: run the real QA self-verify loop
+          // first, then forward `done` with the verification attached so
+          // appendEditorInitiativeEvent stores it on the run's `result` column.
+          if (event.type === "done") {
+            creditsUsed = event.creditsUsed;
+            const verification = await runQaVerification(event.filesChanged);
+            const doneEvent: EditorIntelligenceEvent = verification
+              ? {
+                  ...event,
+                  // Include files rewritten by auto-fix rounds (already
+                  // persisted to project_files by the self-verify loop).
+                  filesChanged: [
+                    ...new Set([...event.filesChanged, ...verification.fixedFiles.map((f) => f.path)]),
+                  ],
+                  verification,
+                }
+              : event;
+            send(doneEvent);
+            await appendEditorInitiativeEvent({
+              supabase,
+              initiativeId: initiativeRun.id,
+              projectId,
+              event: doneEvent,
+            });
+            continue;
+          }
+
           send(event);
           await appendEditorInitiativeEvent({
             supabase,
@@ -288,8 +435,6 @@ export async function POST(req: NextRequest) {
             await persistMessage(event.from, event.to, event.channel, event.content);
           } else if (event.type === "decision") {
             await persistDecision(event.topic, event.decision, event.decidedBy);
-          } else if (event.type === "done") {
-            creditsUsed = event.creditsUsed;
           }
         }
       } catch (err) {

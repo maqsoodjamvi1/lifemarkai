@@ -128,6 +128,7 @@ export function CodePanel({
   const [editorSettings, setEditorSettings] = useState<EditorSettings>(loadEditorSettings);
   const themesRegisteredRef = useRef(false);
   const completionsRegisteredRef = useRef(false);
+  const completionsDisposableRef = useRef<{ dispose(): void } | null>(null);
   const [aiCompletions, setAiCompletions] = useState(true);
   const aiCompletionsRef = useRef(true);
   const activeTabRef = useRef<ProjectFile | null>(null);
@@ -200,6 +201,17 @@ export function CodePanel({
     onCollaboratorsChange?.(yjsCollaborators);
   }, [yjsCollaborators, onCollaboratorsChange]);
 
+  // Dispose the globally-registered inline completions provider when this
+  // panel unmounts. Monaco is a singleton (CDN loader), so without this every
+  // CodePanel remount (e.g. toggling preview ↔ code view) stacked another
+  // live provider, firing duplicate /api/ai/complete requests per pause.
+  useEffect(() => {
+    return () => {
+      completionsDisposableRef.current?.dispose();
+      completionsDisposableRef.current = null;
+    };
+  }, []);
+
   useEffect(() => {
     if (!collabUser || !projectId || !activeTabId) return;
     const editor = editorInstancesRef.current.get(activeTabId);
@@ -226,7 +238,18 @@ export function CodePanel({
       }
     }
     prevActiveTabIdRef.current = activeTabId;
-   
+
+  }, [activeTabId]);
+
+  // ── Parent activeFile sync ────────────────────────────────────────────────
+  // When the user switches tabs INSIDE the panel (tab bar, quick open, recents,
+  // ⌘⇧[/]), the parent's activeFile would otherwise go stale — its onChange/
+  // onSave handlers then attribute edits to the previously selected file and
+  // persist this tab's content under the wrong fileId. Notify the parent.
+  useEffect(() => {
+    const tab = openTabs.find((t) => t.id === activeTabId);
+    if (tab && tab.id !== file?.id) onFileChange?.(tab);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTabId]);
 
     // ── Outline reveal-line listener ──────────────────────────────────────────
@@ -778,6 +801,10 @@ export function CodePanel({
     if (closingTab) closedTabsStack.current.push(closingTab);
     dirtyRef.current.delete(id);
     contentRef.current.delete(id);
+    // Drop references to the (now disposed) Monaco editor + its view state so
+    // the maps don't grow unboundedly across many open/close cycles.
+    editorInstancesRef.current.delete(id);
+    viewStateRef.current.delete(id);
     setOpenTabs((prev) => {
       const next = prev.filter((t) => t.id !== id);
       if (activeTabId === id) {
@@ -1880,7 +1907,7 @@ export function CodePanel({
                   if (!completionsRegisteredRef.current && projectId) {
                     completionsRegisteredRef.current = true;
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    (monaco as any).languages.registerInlineCompletionsProvider(
+                    completionsDisposableRef.current = (monaco as any).languages.registerInlineCompletionsProvider(
                       { pattern: "**" },
                       {
                         provideInlineCompletions: async (

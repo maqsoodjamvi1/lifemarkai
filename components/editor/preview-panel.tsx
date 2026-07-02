@@ -160,6 +160,41 @@ const DEVICE_WIDTHS: Record<DeviceSize, string> = {
   desktop: "100%",
 };
 
+// ── WebContainer availability flag with TTL ──────────────────────────────────
+// WC_UNAVAILABLE_KEY used to be set once and never cleared, so a single
+// transient boot failure (network blip loading @webcontainer/api, one slow
+// boot) locked the user into the fallback engine for the entire tab session.
+// The flag now expires after 10 minutes; a companion timestamp key tracks age.
+const WC_UNAVAILABLE_AT_KEY = `${WC_UNAVAILABLE_KEY}-at`;
+const WC_UNAVAILABLE_TTL_MS = 10 * 60 * 1000;
+
+function isWcBlocked(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if (sessionStorage.getItem(WC_UNAVAILABLE_KEY) !== "1") return false;
+    const at = Number(sessionStorage.getItem(WC_UNAVAILABLE_AT_KEY) ?? 0);
+    if (at > 0 && Date.now() - at > WC_UNAVAILABLE_TTL_MS) {
+      sessionStorage.removeItem(WC_UNAVAILABLE_KEY);
+      sessionStorage.removeItem(WC_UNAVAILABLE_AT_KEY);
+      return false;
+    }
+    // Legacy flag without a timestamp — start the TTL clock now.
+    if (!at) sessionStorage.setItem(WC_UNAVAILABLE_AT_KEY, String(Date.now()));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function markWcUnavailable(): void {
+  try {
+    sessionStorage.setItem(WC_UNAVAILABLE_KEY, "1");
+    sessionStorage.setItem(WC_UNAVAILABLE_AT_KEY, String(Date.now()));
+  } catch {
+    /* storage unavailable — engine choice just won't persist */
+  }
+}
+
 const TAILWIND_SIZES = ["text-xs","text-sm","text-base","text-lg","text-xl","text-2xl","text-3xl","text-4xl"];
 const TAILWIND_WEIGHTS = ["font-normal","font-medium","font-semibold","font-bold","font-extrabold"];
 const TAILWIND_COLORS = [
@@ -364,7 +399,7 @@ export function PreviewPanel({
   const { toast } = useToast();
   const [previewEngine, setPreviewEngine] = useState<PreviewEngine>(() => {
     if (typeof window === "undefined") return "detecting";
-    if (sessionStorage.getItem(WC_UNAVAILABLE_KEY) === "1") return "fallback";
+    if (isWcBlocked()) return "fallback";
     return "detecting";
   });
   const [consoleLines, setConsoleLines] = useState<{ type: string; text: string }[]>([]);
@@ -432,9 +467,9 @@ export function PreviewPanel({
       return;
     }
 
-    const wcBlocked =
-      typeof window !== "undefined" &&
-      sessionStorage.getItem(WC_UNAVAILABLE_KEY) === "1";
+    // isWcBlocked() also CLEARS an expired flag from sessionStorage before
+    // resolvePreviewEngine() independently re-reads it below.
+    const wcBlocked = isWcBlocked();
 
     if (wcBlocked) {
       setPreviewEngine("fallback");
@@ -449,6 +484,15 @@ export function PreviewPanel({
     });
     setPreviewEngine(engine);
   }, [files, useWebContainers, projectId, sandboxUrl]);
+
+  // The engines report different location shapes (srcdoc: virtual hash path;
+  // WebContainer: real URL path). Reset the shared address-bar state on engine
+  // switch so a stale path from the previous engine doesn't linger.
+  useEffect(() => {
+    setPreviewPath("/");
+    setUrlInput("/");
+    setUrlEditing(false);
+  }, [previewEngine]);
 
   // Attempt a real sandbox preview once files are present. Gated behind an env
   // flag (default OFF) so there's no extra request unless E2B preview is enabled.
@@ -468,17 +512,41 @@ export function PreviewPanel({
   }, []);
 
   useEffect(() => {
+    // The srcdoc iframe's origin is opaque ("null"), so e.origin can't be
+    // trusted for filtering — strictly validate the SHAPE of every message
+    // instead. A malformed/hostile payload (e.g. text as an object) used to
+    // flow straight into React state and crash the editor when rendered.
+    function isRect(r: unknown): r is VebElement["rect"] {
+      if (!r || typeof r !== "object") return false;
+      const o = r as Record<string, unknown>;
+      return (
+        typeof o.top === "number" && typeof o.left === "number" &&
+        typeof o.width === "number" && typeof o.height === "number"
+      );
+    }
+    function asVebElement(d: Record<string, unknown>): VebElement | null {
+      if (typeof d.tagName !== "string" || typeof d.xpath !== "string" || !isRect(d.rect)) return null;
+      return {
+        tagName: d.tagName,
+        textContent: typeof d.textContent === "string" ? d.textContent : "",
+        classList: Array.isArray(d.classList)
+          ? d.classList.filter((c): c is string => typeof c === "string")
+          : [],
+        xpath: d.xpath,
+        rect: d.rect,
+      };
+    }
     function handler(e: MessageEvent) {
-      if (e.data?.source === "lifemark-veb" && visualEdit) {
-        const data = e.data as VebElement & { source: string };
+      const d = e.data as Record<string, unknown> | null;
+      if (!d || typeof d !== "object") return;
+      if (d.source === "lifemark-veb" && visualEdit) {
+        const data = asVebElement(d);
+        if (!data) return;
         // Get the sandpack iframe's position to offset the rect
         const iframe = sandpackContainerRef.current?.querySelector("iframe");
         const iframeRect = iframe?.getBoundingClientRect();
         setVebSelected({
-          tagName: data.tagName,
-          textContent: data.textContent,
-          classList: data.classList,
-          xpath: data.xpath,
+          ...data,
           rect: {
             top: data.rect.top + (iframeRect?.top ?? 0),
             left: data.rect.left + (iframeRect?.left ?? 0),
@@ -489,17 +557,20 @@ export function PreviewPanel({
       }
       // WC bridge announces readiness (initial load + HMR reloads) — push the
       // current visual-edit mode so the picker stays in sync.
-      if (e.data?.type === "lifemark-veb-ready") {
+      if (d.type === "lifemark-veb-ready") {
         const iframe = sandpackContainerRef.current?.querySelector("iframe");
         iframe?.contentWindow?.postMessage({ type: "lifemark-veb-mode", enabled: visualEdit }, "*");
       }
-      if (e.data?.source === "lifemark-comment-pin" && commentPinMode) {
-        const data = e.data as VebElement & { source: string };
-        setPendingComment(data);
-        setCommentDraft("");
+      if (d.source === "lifemark-comment-pin" && commentPinMode) {
+        const data = asVebElement(d);
+        if (data) {
+          setPendingComment(data);
+          setCommentDraft("");
+        }
       }
-      if (e.data?.source === "lifemark-preview") {
-        const { type, text } = e.data as { source: string; type: string; text: string };
+      if (d.source === "lifemark-preview" && typeof d.type === "string") {
+        const type = d.type;
+        const text = typeof d.text === "string" ? d.text : String(d.text ?? "");
         setConsoleLines((prev) => [...prev.slice(-99), { type, text }]);
         if (type === "success") {
           errorGuard.clearErrors();
@@ -518,8 +589,9 @@ export function PreviewPanel({
           setErrorDismissed(false);
         }
       }
-      if (e.data?.type === "lifemark-screenshot") {
-        const { messageId, dataUrl } = e.data as { type: string; messageId: string; dataUrl: string | null };
+      if (d.type === "lifemark-screenshot") {
+        const messageId = typeof d.messageId === "string" ? d.messageId : "";
+        const dataUrl = typeof d.dataUrl === "string" ? d.dataUrl : null;
         if (messageId && dataUrl) {
           window.dispatchEvent(new CustomEvent("lifemark-screenshot-ready", { detail: { messageId, dataUrl } }));
         }
@@ -527,8 +599,8 @@ export function PreviewPanel({
       // URL sync — the iframe boot script reports its current path on initial
       // mount and on every history change so the address bar stays in sync
       // with react-router navigations inside the running app.
-      if (e.data?.type === "lifemark-preview-location") {
-        const { pathname } = e.data as { type: string; pathname: string };
+      if (d.type === "lifemark-preview-location") {
+        const pathname = d.pathname;
         if (typeof pathname === "string" && pathname.length > 0) {
           setPreviewPath(pathname);
           // Don't clobber whatever the user is typing into the address bar.
@@ -538,7 +610,9 @@ export function PreviewPanel({
     }
     window.addEventListener("message", handler);
     return () => window.removeEventListener("message", handler);
-  }, [onError, visualEdit, commentPinMode, outOfCredits, errorGuard]);
+    // urlEditing MUST be a dep: without it the listener kept a stale
+    // urlEditing=false and location reports overwrote the user's typing.
+  }, [onError, visualEdit, commentPinMode, outOfCredits, errorGuard, urlEditing]);
 
   useEffect(() => {
     if (outOfCredits) {
@@ -585,14 +659,40 @@ export function PreviewPanel({
     setTimeout(() => window.removeEventListener("lifemark-screenshot-ready", handleReady), 5000);
   }, []);
 
+  // ── Debounced files for preview builds ──────────────────────────────────────
+  // Every keystroke / AI stream chunk produces a new `files` array, and each one
+  // used to rebuild the srcdoc HTML AND remount the iframe (key includes the
+  // files signature), forcing a full in-iframe Babel recompile of every file —
+  // the single biggest preview perf cost. Debounce content changes ~500ms;
+  // the first non-empty set applies immediately so project open isn't delayed.
+  // Raw `files` still flow to the visual-edit overlays and engine resolution,
+  // which need the latest content and are cheap.
+  const [previewFiles, setPreviewFiles] = useState<ProjectFile[]>(files);
+  const previewFilesSigRef = useRef<string>(filesContentSignature(files));
+  useEffect(() => {
+    const sig = filesContentSignature(files);
+    if (sig === previewFilesSigRef.current) return; // identity churn, same content
+    if (previewFilesSigRef.current === "") {
+      // Leading edge: empty → first real content renders without delay.
+      previewFilesSigRef.current = sig;
+      setPreviewFiles(files);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      previewFilesSigRef.current = sig;
+      setPreviewFiles(files);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [files]);
+
   const template = useMemo(() => detectTemplate(files), [files]);
   const sandpackFiles = useMemo(() => {
     const base = toSandpackFiles(files);
     return visualEdit ? addVebBridge(base) : base;
   }, [files, visualEdit]);
   const fallbackHtml = useMemo(
-    () => (previewEngine === "fallback" ? buildFallbackHtml(files) : ""),
-    [files, previewEngine]
+    () => (previewEngine === "fallback" ? buildFallbackHtml(previewFiles) : ""),
+    [previewFiles, previewEngine]
   );
   // ── esbuild preview engine (flagged) ────────────────────────────────────────
   // When NEXT_PUBLIC_PREVIEW_ESBUILD is on, compile the fallback preview with the
@@ -605,7 +705,7 @@ export function PreviewPanel({
     const on =
       process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "1" ||
       process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "true";
-    if (!on || previewEngine !== "fallback" || files.length === 0) {
+    if (!on || previewEngine !== "fallback" || previewFiles.length === 0) {
       setEsbuildHtml("");
       setEsbuildBuilding(false);
       return;
@@ -613,7 +713,7 @@ export function PreviewPanel({
     let cancelled = false;
     setEsbuildHtml("");
     setEsbuildBuilding(true);
-    void buildEsbuildHtml(files)
+    void buildEsbuildHtml(previewFiles)
       .then((res) => {
         if (cancelled) return;
         if (res.html) {
@@ -649,10 +749,10 @@ export function PreviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [files, previewEngine]);
+  }, [previewFiles, previewEngine]);
   /** Rendered HTML: the esbuild bundle when ready, else the regex-engine result. */
   const effectivePreviewHtml = esbuildHtml || fallbackHtml;
-  const filesSignature = useMemo(() => filesContentSignature(files), [files]);
+  const filesSignature = useMemo(() => filesContentSignature(previewFiles), [previewFiles]);
 
   useEffect(() => {
     unifiedIframeRef.current =
@@ -664,7 +764,7 @@ export function PreviewPanel({
   useEffect(() => {
     setPreviewCompileFailed(false);
     setPreviewCompileOk(false);
-  }, [files, fallbackHtml]);
+  }, [previewFiles, fallbackHtml]);
 
   // At 0 credits: probe local preview first; fall back to deployment only if compile fails
   const showDeployedPreview =
@@ -730,10 +830,12 @@ export function PreviewPanel({
   }, [commentPinMode, fallbackHtml, refreshKey]);
 
   // New iframe srcDoc — drop stale errors until the fresh preview reports status.
+  // Keyed on the RENDERED html string, not fallbackHtml.length: two different
+  // builds of identical length (or an esbuild swap) kept a stale error banner up.
   useEffect(() => {
     setActiveError(null);
     setErrorDismissed(false);
-  }, [fallbackHtml.length, refreshKey]);
+  }, [effectivePreviewHtml, refreshKey]);
 
   const hasFiles = files.length > 0;
   const useFallback = previewEngine === "fallback";
@@ -764,7 +866,11 @@ export function PreviewPanel({
       window.open(`/preview/${projectId}`, "_blank", "noopener,noreferrer");
     } else if (useFallback && fallbackHtml) {
       const blob = new Blob([fallbackHtml], { type: "text/html" });
-      window.open(URL.createObjectURL(blob), "_blank", "noopener,noreferrer");
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      // Blob URLs are never GC'd while this document lives — each click leaked
+      // the full preview HTML. Revoke once the new tab has had time to load.
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
     }
   }
 
@@ -875,11 +981,15 @@ export function PreviewPanel({
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       const target = urlInput.startsWith("/") ? urlInput : `/${urlInput}`;
-                      // Tell the iframe to navigate. The iframe's URL-sync
-                      // script (injected into fallbackHtml) listens for this
-                      // and calls history.pushState + dispatches popstate so
-                      // react-router picks it up.
-                      iframeRef.current?.contentWindow?.postMessage(
+                      // Tell the ACTIVE engine's iframe to navigate. Both
+                      // engines carry a navigate handler (fallbackHtml URL-sync
+                      // script / veb-bridge PREVIEW_RUNTIME_SCRIPT). Posting
+                      // only to iframeRef silently no-oped on WebContainer.
+                      const targetWin =
+                        previewEngine === "webcontainer"
+                          ? sandpackContainerRef.current?.querySelector("iframe")?.contentWindow
+                          : iframeRef.current?.contentWindow;
+                      targetWin?.postMessage(
                         { type: "lifemark-preview-navigate", pathname: target },
                         "*",
                       );
@@ -1075,11 +1185,12 @@ export function PreviewPanel({
             {withDeviceFrame(
               <WebContainerPreview
                 key={refreshKey}
-                files={files}
+                files={previewFiles}
+                projectId={projectId}
                 embedded
                 onError={(msg) => {
                   if (typeof window !== "undefined") {
-                    sessionStorage.setItem(WC_UNAVAILABLE_KEY, "1");
+                    markWcUnavailable();
                   }
                   queueMicrotask(() => {
                     toast({

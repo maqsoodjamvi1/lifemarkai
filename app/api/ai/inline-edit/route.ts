@@ -8,6 +8,14 @@ import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+/**
+ * Free daily inline-edit quota (Lovable parity): the first N inline edits per
+ * user per UTC day cost 0 credits. Usage is still logged to credit_logs (via
+ * `deduct_credits` with amount 0, action "inline_edit") so the count survives
+ * restarts and is enforceable server-side. Edit #101+ costs 1 credit as before.
+ */
+const FREE_INLINE_EDITS_PER_DAY = 100;
+
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -20,10 +28,25 @@ export async function POST(req: NextRequest) {
 
   // Grant today's daily free credits before the balance gate (migration 063)
   await (await import("@/lib/credits")).claimDailyCredits(supabase, user.id);
-  const { data: profile } = await (supabase as any)
-    .from("profiles").select("credits").eq("id", user.id).single();
-  if (!profile || profile.credits <= 0) {
-    return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
+
+  // Count today's (UTC) inline edits — under the free quota, the edit is free
+  // and the zero-credit balance gate is skipped entirely.
+  const utcDayStart = new Date();
+  utcDayStart.setUTCHours(0, 0, 0, 0);
+  const { count: usedToday } = await (supabase as any)
+    .from("credit_logs")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id)
+    .eq("action", "inline_edit")
+    .gte("created_at", utcDayStart.toISOString());
+  const isFreeEdit = (usedToday ?? 0) < FREE_INLINE_EDITS_PER_DAY;
+
+  if (!isFreeEdit) {
+    const { data: profile } = await (supabase as any)
+      .from("profiles").select("credits").eq("id", user.id).single();
+    if (!profile || profile.credits <= 0) {
+      return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
+    }
   }
 
   const body = await req.json();
@@ -89,19 +112,30 @@ Return ONLY the replacement code for lines ${startLine}-${endLine}:`;
       stream: false,
     });
 
-    // Deduct 1 credit
+    // First FREE_INLINE_EDITS_PER_DAY edits/day are free: log usage at cost 0
+    // (deduct_credits inserts the credit_logs row we count against the quota,
+    // bypassing RLS via SECURITY DEFINER). Beyond the quota, deduct 1 credit.
     await (supabase as any).rpc("deduct_credits", {
       user_id: user.id,
-      amount: 1,
+      amount: isFreeEdit ? 0 : 1,
       action: "inline_edit",
       project_id: null,
     });
 
-    import("@/lib/stripe/auto-topup")
-      .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
-      .catch(() => {});
+    if (!isFreeEdit) {
+      import("@/lib/stripe/auto-topup")
+        .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
+        .catch(() => {});
+    }
 
-    return NextResponse.json({ replacement: result.content.trim() });
+    return NextResponse.json({
+      replacement: result.content.trim(),
+      free: isFreeEdit,
+      freeEditsRemainingToday: Math.max(
+        0,
+        FREE_INLINE_EDITS_PER_DAY - (usedToday ?? 0) - 1
+      ),
+    });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "AI failed" },

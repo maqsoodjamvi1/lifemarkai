@@ -93,6 +93,21 @@ export default function App(){ return <List/>; }`),
       return errs;
     },
   },
+  {
+    name: "undefined-component guard present (React #130 must not freeze the preview)",
+    files: [
+      f("src/App.tsx", `export default function App(){ return <div>ok</div>; }`),
+      f("src/main.tsx", `import App from "./App"; export default App;`),
+    ],
+    assert: (html) => {
+      const errs: string[] = [];
+      // The runtime must patch React.createElement so an undefined component
+      // renders a placeholder instead of throwing (which freezes the whole app).
+      if (!/__lmGuarded/.test(html)) errs.push("React.createElement undefined-component guard is missing");
+      if (!/missing component/i.test(html)) errs.push("missing-component placeholder text not found");
+      return errs;
+    },
+  },
 ];
 
 let passed = 0;

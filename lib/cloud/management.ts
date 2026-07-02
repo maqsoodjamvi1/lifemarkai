@@ -139,6 +139,36 @@ export async function runManagedSql(
 }
 
 /**
+ * Run SQL on a managed project's Postgres and return the result rows.
+ * Same Management API endpoint as runManagedSql, but parses the JSON row
+ * payload — used by the slow-query finder and the Jobs (pg_cron) panel.
+ */
+export async function queryManagedSql<T = Record<string, unknown>>(
+  ref: string,
+  query: string
+): Promise<{ ok: boolean; rows: T[]; error?: string }> {
+  try {
+    const res = await mgmtFetch(`/projects/${ref}/database/query`, {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { ok: false, rows: [], error: `HTTP ${res.status}: ${body.slice(0, 300)}` };
+    }
+    const data = (await res.json().catch(() => null)) as unknown;
+    const rows = Array.isArray(data)
+      ? data
+      : Array.isArray((data as { result?: unknown[] } | null)?.result)
+        ? (data as { result: unknown[] }).result
+        : [];
+    return { ok: true, rows: rows as T[] };
+  } catch (err) {
+    return { ok: false, rows: [], error: err instanceof Error ? err.message : "request failed" };
+  }
+}
+
+/**
  * Configure auth redirect URLs on a managed project so login flows work on
  * the published app without manual setup (Lovable parity).
  */

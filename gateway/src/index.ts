@@ -250,15 +250,19 @@ async function dispatchWithFallback(
 }
 
 // ── Balance enforcement ───────────────────────────────────────────────────────
-// debit_ai_balance clamps at -10000 cents; once a workspace hits that floor we
-// stop dispatching new inference instead of letting it run unbounded.
+// Unified billing (migration 074): AI usage debits the single credit balance
+// (profiles.credits) at 4 cents/credit. debit_ai_balance clamps at -2500
+// credits (= -10000 cents); once a workspace hits that floor we stop
+// dispatching new inference instead of letting it run unbounded.
 const AI_BALANCE_FLOOR_CENTS = -10000;
+/** 1 credit = 4 cents — must match migration 074 and lib/credits.ts. */
+const CENTS_PER_CREDIT = 4;
 
-/** Read the workspace AI wallet balance (cents). Returns null if unknown. */
+/** Read the workspace credit balance as cents-equivalent (credits × 4). Returns null if unknown. */
 async function checkAiBalance(userId: string, env: Env): Promise<number | null> {
   try {
     const res = await fetch(
-      `${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=cloud_ai_balance_cents`,
+      `${env.SUPABASE_URL}/rest/v1/profiles?id=eq.${userId}&select=credits`,
       {
         headers: {
           "apikey": env.SUPABASE_SERVICE_ROLE_KEY,
@@ -267,8 +271,12 @@ async function checkAiBalance(userId: string, env: Env): Promise<number | null> 
       }
     );
     if (!res.ok) return null;
-    const rows = (await res.json()) as Array<{ cloud_ai_balance_cents?: number }>;
-    return rows[0]?.cloud_ai_balance_cents ?? null;
+    const rows = (await res.json()) as Array<{ credits?: number | string }>;
+    const credits = rows[0]?.credits;
+    if (credits === undefined || credits === null) return null;
+    const n = typeof credits === "string" ? parseFloat(credits) : credits;
+    if (!Number.isFinite(n)) return null;
+    return Math.round(n * CENTS_PER_CREDIT);
   } catch {
     return null; // fail-open: never block inference on a balance-lookup error
   }
@@ -379,7 +387,7 @@ async function logUsage(usage: UsagePayload, env: Env): Promise<void> {
       console.error("[gateway] usage insert failed:", await insertRes.text());
     }
 
-    // Debit the workspace AI balance
+    // Debit the unified credit balance (4¢/credit — migration 074)
     await fetch(
       `${env.SUPABASE_URL}/rest/v1/rpc/debit_ai_balance`,
       {
@@ -524,13 +532,13 @@ async function handleChat(request: Request, env: Env, ctx: ExecutionContext): Pr
   }
 
   // ── Enforce the AI spend ceiling before dispatching (Cloud-attributed only) ─
-  // Without this the wallet is only debited *after* the response, so a workspace
+  // Without this, credits are only debited *after* the response, so a workspace
   // could run unbounded inference while already past its balance floor.
   if (projectId && userId) {
     const balance = await checkAiBalance(userId, env);
     if (balance !== null && balance <= AI_BALANCE_FLOOR_CENTS) {
       return new Response(
-        JSON.stringify({ error: "AI balance exhausted. Top up your workspace AI wallet to continue." }),
+        JSON.stringify({ error: "Credit balance exhausted. Top up your LifemarkAI credits to continue." }),
         { status: 402, headers: { "Content-Type": "application/json", ...corsHeaders(origin) } }
       );
     }

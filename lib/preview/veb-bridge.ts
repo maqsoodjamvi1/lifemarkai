@@ -142,6 +142,19 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
   history.replaceState = function(){ var r = _replace.apply(this, arguments); loc(); return r; };
   window.addEventListener('popstate', loc);
   window.addEventListener('hashchange', loc);
+  // Inbound: parent address-bar navigation (lifemark-preview-navigate). The WC
+  // engine runs a REAL router on real URLs, so push the path and fire popstate
+  // so react-router re-renders. Mirrors the srcdoc engine's navigate handler.
+  window.addEventListener('message', function(e){
+    var d = e.data || {};
+    if (d.type !== 'lifemark-preview-navigate' || typeof d.pathname !== 'string') return;
+    var next = d.pathname || '/';
+    if (next.charAt(0) !== '/') next = '/' + next;
+    try {
+      history.pushState({}, '', next);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    } catch(err) {}
+  });
 })();`;
 
 /** Inject both bridges into an index.html document (idempotent). */

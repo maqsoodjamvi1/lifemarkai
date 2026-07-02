@@ -593,6 +593,18 @@ The user has expressed frustration. Do the following:
       const { classifyBuildIntent, buildUserDirective } = await import("@/lib/ai/build-intent");
       buildIntent = classifyBuildIntent(message);
       userMessage = `${message}\n\n${buildUserDirective(buildIntent)}`;
+      // Style seeding: when the user picked no design direction (skipped or
+      // never saw the 3-preview picker) and expressed no style themselves,
+      // inject a deterministic per-project archetype so every app gets a
+      // distinct look instead of the model's default dark template. New
+      // builds only — incremental edits must keep the existing design.
+      if (files.length <= 8) {
+        try {
+          const { buildAutoStyleBrief } = await import("@/lib/ai/design-previews");
+          const autoStyle = buildAutoStyleBrief(message, projectId);
+          if (autoStyle) userMessage += `\n\n${autoStyle}`;
+        } catch { /* non-fatal */ }
+      }
     }
 
     // ── Subagents: read-only parallel investigation (Lovable-style) ─────────
@@ -1037,6 +1049,18 @@ The user has expressed frustration. Do the following:
                   if (idx >= 0) parsedFiles[idx] = { ...parsedFiles[idx], content: fixed.content };
                   else parsedFiles.push({ path: fixed.path, content: fixed.content, language: fixed.language });
                 }
+              }
+              // Errors that survived the auto-fix rounds become 'runtime'
+              // health findings so the Self-Heal tab tracks them (best-effort,
+              // never fails the build — see lib/ai/self-healing.ts).
+              if (verification && !verification.passed) {
+                const { recordVerificationFindings } = await import("@/lib/ai/self-healing");
+                await recordVerificationFindings({
+                  supabase,
+                  projectId,
+                  userId,
+                  verification,
+                }).catch(() => {});
               }
             } catch { verification = null; }
           }

@@ -286,6 +286,120 @@ export type Database = {
         };
         Update: Partial<Database["public"]["Tables"]["project_snapshots"]["Insert"]>;
       };
+      // Editor Intelligence lens/run tables (migration 068)
+      project_ai_agents: {
+        Row: {
+          id: string;
+          project_id: string;
+          role: string;
+          name: string;
+          title: string;
+          responsibilities: string[];
+          memory: Json;
+          status: "idle" | "thinking" | "blocked" | "reviewing" | "done";
+          last_active_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          project_id: string;
+          role: string;
+          name: string;
+          title: string;
+          responsibilities?: string[];
+          memory?: Json;
+          status?: "idle" | "thinking" | "blocked" | "reviewing" | "done";
+          last_active_at?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_ai_agents"]["Insert"]>;
+      };
+      project_ai_agent_messages: {
+        Row: {
+          id: string;
+          project_id: string;
+          agent_id: string | null;
+          phase: string;
+          content: string;
+          metadata: Json;
+          created_at: string;
+        };
+        Insert: {
+          project_id: string;
+          agent_id?: string | null;
+          phase?: string;
+          content: string;
+          metadata?: Json;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_ai_agent_messages"]["Insert"]>;
+      };
+      project_ai_agent_decisions: {
+        Row: {
+          id: string;
+          project_id: string;
+          title: string;
+          summary: string;
+          decided_by: string | null;
+          status: "proposed" | "accepted" | "rejected" | "superseded";
+          metadata: Json;
+          created_at: string;
+        };
+        Insert: {
+          project_id: string;
+          title: string;
+          summary: string;
+          decided_by?: string | null;
+          status?: "proposed" | "accepted" | "rejected" | "superseded";
+          metadata?: Json;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_ai_agent_decisions"]["Insert"]>;
+      };
+      project_ai_initiatives: {
+        Row: {
+          id: string;
+          project_id: string;
+          user_id: string | null;
+          goal: string;
+          status: "queued" | "planning" | "debating" | "executing" | "verifying" | "paused" | "done" | "failed";
+          budget_credits: number | null;
+          credits_used: number;
+          checkpoint: Json;
+          result: Json | null;
+          error: string | null;
+          last_event_at: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          project_id: string;
+          user_id?: string | null;
+          goal: string;
+          status?: "queued" | "planning" | "debating" | "executing" | "verifying" | "paused" | "done" | "failed";
+          budget_credits?: number | null;
+          credits_used?: number;
+          checkpoint?: Json;
+          result?: Json | null;
+          error?: string | null;
+          last_event_at?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_ai_initiatives"]["Insert"]>;
+      };
+      project_ai_initiative_events: {
+        Row: {
+          id: string;
+          initiative_id: string;
+          project_id: string;
+          type: string;
+          payload: Json;
+          created_at: string;
+        };
+        Insert: {
+          initiative_id: string;
+          project_id: string;
+          type: string;
+          payload?: Json;
+        };
+        Update: Partial<Database["public"]["Tables"]["project_ai_initiative_events"]["Insert"]>;
+      };
     },
     Views: Record<string, never>;
     Functions: {
@@ -354,3 +468,8 @@ export type Deployment = Database["public"]["Tables"]["deployments"]["Row"];
 export type Collaborator = Database["public"]["Tables"]["collaborators"]["Row"];
 export type Template = Database["public"]["Tables"]["templates"]["Row"];
 export type CreditLog = Database["public"]["Tables"]["credit_logs"]["Row"];
+export type ProjectAiAgent = Database["public"]["Tables"]["project_ai_agents"]["Row"];
+export type ProjectAiAgentMessage = Database["public"]["Tables"]["project_ai_agent_messages"]["Row"];
+export type ProjectAiAgentDecision = Database["public"]["Tables"]["project_ai_agent_decisions"]["Row"];
+export type ProjectAiInitiative = Database["public"]["Tables"]["project_ai_initiatives"]["Row"];
+export type ProjectAiInitiativeEvent = Database["public"]["Tables"]["project_ai_initiative_events"]["Row"];

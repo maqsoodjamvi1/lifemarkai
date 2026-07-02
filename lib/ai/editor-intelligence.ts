@@ -11,6 +11,8 @@ import {
   DESIGN_MODEL,
   CONTENT_MODEL,
   IMAGE_MODEL,
+  REVIEW_MODEL,
+  ESCALATION_MODEL,
 } from "./model-defaults";
 import { selectModelChain, type ModelStrength } from "./model-catalog";
 
@@ -48,6 +50,11 @@ export const MODEL_TIERS = {
   balanced: BALANCED_CODING_MODEL,
   /** Trivial/lightweight tasks — fastest + cheapest. */
   fast: FAST_CODING_MODEL,
+  /** Cross-vendor reviewer (CTO reviews, debate adjudication) — deliberately a
+   *  different model family than `coding` so reviews aren't an echo chamber. */
+  review: REVIEW_MODEL,
+  /** Strongest model, used ONLY on retry after a task failed its normal tier. */
+  escalation: ESCALATION_MODEL,
   /** Image generation — handled by /api/ai/image, not the text providers. */
   image: IMAGE_MODEL,
 } as const;

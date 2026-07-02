@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { CENTS_PER_CREDIT } from "@/lib/credits";
 
 /**
  * POST /api/cloud/bill-usage
@@ -11,10 +12,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
  *      lifemark_cloud_usage (60% compute / 40% db-server split) — idempotent
  *      per project per day.
  *   2. Bills each owner via bill_cloud_usage(): the $25/month free allowance
- *      is consumed first, the Cloud wallet after (migration 065).
+ *      is consumed first, then the unified credit balance (profiles.credits)
+ *      is debited at 4¢/credit (migration 074 — replaces the old Cloud wallet).
  *   3. Pauses a workspace's Cloud projects (cloud_status = 'paused') when the
- *      wallet is exhausted, and resumes them when funds are available again —
- *      mirroring Lovable Cloud's pause/resume behaviour.
+ *      credit balance is exhausted, and resumes them when credits are available
+ *      again — mirroring Lovable Cloud's pause/resume behaviour.
  *
  * The `tiny` tier is free ($0/mo) and never pauses.
  */
@@ -97,7 +99,9 @@ export async function POST(req: NextRequest) {
     results.push({ project: project.name, status: "billed", cents: dailyCents });
   }
 
-  // Debit wallets and pause/resume per workspace
+  // Debit credit balances and pause/resume per workspace.
+  // `balance` is the cents-equivalent of the remaining credit balance
+  // (credits × 4, returned by bill_cloud_usage since migration 074).
   const walletResults: Array<{ user: string; balance: number; action: string }> = [];
   for (const [userId, projectIds] of userProjects.entries()) {
     const cents = perUserCents.get(userId) ?? 0;
@@ -117,13 +121,13 @@ export async function POST(req: NextRequest) {
     if (balance === null) {
       const { data: profile } = await supabase
         .from("profiles")
-        .select("cloud_balance_cents")
+        .select("credits")
         .eq("id", userId)
         .single();
-      balance = profile?.cloud_balance_cents ?? 0;
+      balance = Math.round(Number(profile?.credits ?? 0) * CENTS_PER_CREDIT);
     }
 
-    // Pause when the wallet is exhausted; resume when refunded/topped up.
+    // Pause when credits are exhausted; resume when credits are topped up.
     // Only paid tiers pause — tiny stays up (free allowance covers $0).
     if (balance <= 0 && cents > 0) {
       await supabase

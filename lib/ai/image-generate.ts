@@ -49,22 +49,58 @@ async function generateWithGemini(prompt: string, size: ImageSize): Promise<Imag
   }
 }
 
+const OPENROUTER_IMAGE_MODEL = "google/gemini-3.1-flash-image";
+
+/**
+ * OpenRouter image generation. Image-output models on OpenRouter (Gemini
+ * image family, GPT image family) are served via /chat/completions with
+ * `modalities: ["image","text"]` — NOT the OpenAI /images endpoint, and
+ * `openai/dall-e-3` is no longer listed there (verified against the live
+ * catalog, July 2026). The generated image arrives as a data: URL in
+ * message.images[0].image_url.url.
+ */
+async function generateWithOpenRouterImage(prompt: string, size: ImageSize): Promise<ImageResult | null> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) return null;
+  const aspect = size === "1792x1024" ? "16:9" : size === "1024x1792" ? "9:16" : "1:1";
+  try {
+    const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "https://lifemarkai.com",
+        "X-Title": "LifemarkAI",
+      },
+      body: JSON.stringify({
+        model: OPENROUTER_IMAGE_MODEL,
+        modalities: ["image", "text"],
+        messages: [{ role: "user", content: `${prompt}\n\nAspect ratio: ${aspect}.` }],
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      choices?: Array<{
+        message?: { images?: Array<{ image_url?: { url?: string } }> };
+      }>;
+    };
+    const url = json?.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+    if (!url) return null;
+    return { url, model: OPENROUTER_IMAGE_MODEL };
+  } catch {
+    return null;
+  }
+}
+
 async function generateWithDallE(prompt: string, size: ImageSize, style: "vivid" | "natural"): Promise<ImageResult | null> {
-  if (!process.env.OPENAI_API_KEY && !process.env.OPENROUTER_API_KEY) return null;
-  const useOpenRouter = !!process.env.OPENROUTER_API_KEY;
-  const openai = useOpenRouter
-    ? new OpenAI({
-        apiKey: process.env.OPENROUTER_API_KEY,
-        baseURL: "https://openrouter.ai/api/v1",
-        defaultHeaders: {
-          "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "https://lifemarkai.com",
-          "X-Title": "LifemarkAI",
-        },
-      })
-    : new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  // Native OpenAI key only — dall-e-3 is delisted from OpenRouter, so the
+  // OpenRouter path lives in generateWithOpenRouterImage instead.
+  if (!process.env.OPENAI_API_KEY) return null;
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   try {
     const response = await openai.images.generate({
-      model: useOpenRouter ? "openai/dall-e-3" : "dall-e-3",
+      model: "dall-e-3",
       prompt,
       size,
       style,
@@ -80,8 +116,9 @@ async function generateWithDallE(prompt: string, size: ImageSize, style: "vivid"
 }
 
 /**
- * Generate an image. Tries Gemini, then DALL-E. Returns null only when no
- * provider is configured / both fail.
+ * Generate an image. Tries native Gemini, then OpenRouter (Gemini image via
+ * the single OpenRouter key), then native DALL-E. Returns null only when no
+ * provider is configured / all fail.
  */
 export async function generateImage(opts: {
   prompt: string;
@@ -90,7 +127,11 @@ export async function generateImage(opts: {
 }): Promise<ImageResult | null> {
   const size = opts.size ?? "1024x1024";
   const style = opts.style ?? "vivid";
-  return (await generateWithGemini(opts.prompt, size)) ?? (await generateWithDallE(opts.prompt, size, style));
+  return (
+    (await generateWithGemini(opts.prompt, size)) ??
+    (await generateWithOpenRouterImage(opts.prompt, size)) ??
+    (await generateWithDallE(opts.prompt, size, style))
+  );
 }
 
 /** True when at least one image provider is configured. */

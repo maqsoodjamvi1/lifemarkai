@@ -30,7 +30,9 @@ export type ModelTierName =
   | "reasoning"
   | "chat"
   | "balanced"
-  | "fast";
+  | "fast"
+  | "review"
+  | "escalation";
 
 /** Domains a role is allowed to block a decision on, during a debate. */
 export type VetoDomain =

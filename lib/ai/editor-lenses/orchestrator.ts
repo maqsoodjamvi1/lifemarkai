@@ -71,7 +71,7 @@ async function callRole(
   ctx: RunCtx,
   role: AgentRoleId,
   userPrompt: string,
-  opts: { jsonMode?: boolean } = {},
+  opts: { jsonMode?: boolean; escalate?: boolean } = {},
 ): Promise<string> {
   const def = getRole(role);
   const messages: AIMessage[] = [
@@ -80,7 +80,9 @@ async function callRole(
   ];
   const res = await generateAI(
     {
-      model: resolveTier(def.tier),
+      // Escalated retries use the strongest tier regardless of the role's
+      // normal tier (cost-bounded: at most one escalated attempt per call site).
+      model: opts.escalate ? resolveTier("escalation") : resolveTier(def.tier),
       messages,
       jsonMode: opts.jsonMode,
       maxTokens: 4000,
@@ -222,7 +224,21 @@ ${writes
     ? `Produce the file(s) for this task. Return JSON {"files":[{"path":"...","content":"..."}]}.`
     : `Produce your deliverable as markdown.`}`;
 
-  const raw = await callRole(ctx, task.role, prompt, { jsonMode: writes });
+  // Escalation ladder: one retry with the strongest model when the role's
+  // normal tier fails — smarter than adding more models: the same task gets
+  // a genuinely stronger brain only when it's actually needed.
+  let raw: string;
+  try {
+    raw = await callRole(ctx, task.role, prompt, { jsonMode: writes });
+  } catch (firstErr) {
+    yield {
+      type: "agent_message",
+      from: task.role,
+      channel: "escalation",
+      content: `Task "${task.title}" failed on the normal tier (${firstErr instanceof Error ? firstErr.message.slice(0, 120) : "error"}) — retrying with the escalation model.`,
+    };
+    raw = await callRole(ctx, task.role, prompt, { jsonMode: writes, escalate: true });
+  }
 
   if (writes) {
     const parsed = safeJson<{ files: Array<{ path: string; content: string }> }>(raw, { files: [] });

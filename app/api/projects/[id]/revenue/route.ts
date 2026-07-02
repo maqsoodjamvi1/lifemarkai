@@ -1,0 +1,129 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+// ─── GET /api/projects/[id]/revenue ──────────────────────────────────────────
+// Revenue analytics for in-app payments (paywall subscriptions, migration 025).
+//
+// app_subscriptions has no per-row amount column — every subscriber of an app
+// pays the single monthly price configured in app_monetization.price_cents,
+// so MRR = (active + trialing subscribers) × price_cents.
+//
+// Response:
+// {
+//   currency, priceCents,
+//   activeSubscribers, mrrCents,
+//   newLast30, churnedLast30,
+//   series: [{ key: "2026-02", label: "Feb", newSubs, churned, activeAtEnd, mrrCents }]
+// }
+
+interface Params { params: Promise<{ id: string }> }
+
+interface SubRow {
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+const MONTHS = 6;
+
+export async function GET(_req: NextRequest, { params }: Params) {
+  const { id } = await params;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // Verify ownership (revenue data is owner-only)
+  const { data: project } = await (supabase as any)
+    .from("projects")
+    .select("user_id")
+    .eq("id", id)
+    .single();
+  if (!project || project.user_id !== user.id) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const [{ data: config }, { data: subs }] = await Promise.all([
+    (supabase as any)
+      .from("app_monetization")
+      .select("price_cents, currency")
+      .eq("project_id", id)
+      .maybeSingle(),
+    (supabase as any)
+      .from("app_subscriptions")
+      .select("status, created_at, updated_at")
+      .eq("project_id", id),
+  ]);
+
+  const priceCents: number = config?.price_cents ?? 0;
+  const currency: string = config?.currency ?? "usd";
+  const rows: SubRow[] = (subs ?? []) as SubRow[];
+
+  const now = Date.now();
+  const cutoff30 = now - 30 * 24 * 60 * 60 * 1000;
+
+  const isActive = (s: SubRow) => s.status === "active" || s.status === "trialing";
+  const activeSubscribers = rows.filter(isActive).length;
+  const mrrCents = activeSubscribers * priceCents;
+  const newLast30 = rows.filter((s) => new Date(s.created_at).getTime() >= cutoff30).length;
+  // No canceled_at column — updated_at is set when the webhook marks a sub canceled.
+  const churnedLast30 = rows.filter(
+    (s) => s.status === "canceled" && new Date(s.updated_at).getTime() >= cutoff30
+  ).length;
+
+  // ── 6-month monthly series ─────────────────────────────────────────────────
+  const series: Array<{
+    key: string;
+    label: string;
+    newSubs: number;
+    churned: number;
+    activeAtEnd: number;
+    mrrCents: number;
+  }> = [];
+
+  for (let i = MONTHS - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setUTCDate(1);
+    d.setUTCHours(0, 0, 0, 0);
+    d.setUTCMonth(d.getUTCMonth() - i);
+    const monthStart = d.getTime();
+    const monthEndExclusive = new Date(d);
+    monthEndExclusive.setUTCMonth(monthEndExclusive.getUTCMonth() + 1);
+    const monthEnd = monthEndExclusive.getTime();
+
+    const newSubs = rows.filter((s) => {
+      const t = new Date(s.created_at).getTime();
+      return t >= monthStart && t < monthEnd;
+    }).length;
+    const churned = rows.filter((s) => {
+      if (s.status !== "canceled") return false;
+      const t = new Date(s.updated_at).getTime();
+      return t >= monthStart && t < monthEnd;
+    }).length;
+    // Active at month end ≈ created before the month ended, and not canceled
+    // (or canceled after the month ended — approximated via updated_at).
+    const activeAtEnd = rows.filter((s) => {
+      if (new Date(s.created_at).getTime() >= monthEnd) return false;
+      if (s.status !== "canceled") return true;
+      return new Date(s.updated_at).getTime() >= monthEnd;
+    }).length;
+
+    series.push({
+      key: `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`,
+      label: d.toLocaleString("en-US", { month: "short", timeZone: "UTC" }),
+      newSubs,
+      churned,
+      activeAtEnd,
+      mrrCents: activeAtEnd * priceCents,
+    });
+  }
+
+  return NextResponse.json({
+    currency,
+    priceCents,
+    activeSubscribers,
+    mrrCents,
+    newLast30,
+    churnedLast30,
+    series,
+  });
+}

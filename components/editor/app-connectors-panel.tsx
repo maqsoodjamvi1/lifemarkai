@@ -2,7 +2,7 @@
 
 /**
  * AppConnectorsPanel
- * 20 real app integrations with OAuth / API-key connection flows.
+ * 40+ real app integrations with OAuth / API-key connection flows.
  * Credentials are saved to project env vars via /api/projects/[id]/env.
  * Groups: Communication, Data, AI, Commerce, Productivity
  */
@@ -137,13 +137,10 @@ const CONNECTORS: Connector[] = [
     emoji: "❄️",
     color: "bg-sky-400/20 text-sky-300",
     fields: [
-      { key: "SNOWFLAKE_ACCOUNT", label: "Account Identifier", placeholder: "xy12345.us-east-1", secret: false },
-      { key: "SNOWFLAKE_USERNAME", label: "Username", placeholder: "MY_USER", secret: false },
-      { key: "SNOWFLAKE_PASSWORD", label: "Password", placeholder: "••••••••", secret: true },
-      { key: "SNOWFLAKE_DATABASE", label: "Database", placeholder: "MY_DB", secret: false },
-      { key: "SNOWFLAKE_WAREHOUSE", label: "Warehouse", placeholder: "COMPUTE_WH", secret: false },
+      { key: "SNOWFLAKE_ACCOUNT_URL", label: "Account URL", placeholder: "https://xy12345.us-east-1.snowflakecomputing.com", secret: false },
+      { key: "SNOWFLAKE_TOKEN", label: "OAuth / PAT Token", placeholder: "••••••••", secret: true, helpUrl: "https://docs.snowflake.com/en/developer-guide/sql-api/authenticating" },
     ],
-    docsUrl: "https://docs.snowflake.com/",
+    docsUrl: "https://docs.snowflake.com/en/developer-guide/sql-api/index",
   },
   {
     id: "bigquery",
@@ -153,10 +150,9 @@ const CONNECTORS: Connector[] = [
     emoji: "📊",
     color: "bg-blue-500/20 text-blue-400",
     fields: [
-      { key: "BIGQUERY_PROJECT_ID", label: "Project ID", placeholder: "my-gcp-project", secret: false },
-      { key: "BIGQUERY_SERVICE_ACCOUNT_JSON", label: "Service Account JSON", placeholder: '{"type":"service_account"…}', secret: true, helpUrl: "https://console.cloud.google.com/iam-admin/serviceaccounts" },
+      { key: "GOOGLE_OAUTH_TOKEN", label: "OAuth Access Token", placeholder: "ya29.…", secret: true, helpUrl: "https://cloud.google.com/bigquery/docs/authentication" },
     ],
-    docsUrl: "https://cloud.google.com/bigquery/docs",
+    docsUrl: "https://cloud.google.com/bigquery/docs/reference/rest",
   },
   {
     id: "aws_s3",
@@ -486,8 +482,7 @@ const CONNECTORS: Connector[] = [
     emoji: "🎵",
     color: "bg-rose-500/20 text-rose-300",
     fields: [
-      { key: "TIKTOK_CLIENT_KEY", label: "Client Key", placeholder: "awxxx…", secret: false },
-      { key: "TIKTOK_CLIENT_SECRET", label: "Client Secret", placeholder: "…", secret: true, helpUrl: "https://developers.tiktok.com/" },
+      { key: "TIKTOK_ACCESS_TOKEN", label: "Access Token", placeholder: "act.…", secret: true, helpUrl: "https://developers.tiktok.com/doc/oauth-user-access-token-management" },
     ],
     docsUrl: "https://developers.tiktok.com/doc/login-kit-web/",
     oauthFlow: true,
@@ -500,8 +495,8 @@ const CONNECTORS: Connector[] = [
     emoji: "🟣",
     color: "bg-purple-500/20 text-purple-300",
     fields: [
-      { key: "TWITCH_CLIENT_ID", label: "Client ID", placeholder: "…", secret: false },
-      { key: "TWITCH_CLIENT_SECRET", label: "Client Secret", placeholder: "…", secret: true, helpUrl: "https://dev.twitch.tv/console/apps" },
+      { key: "TWITCH_CLIENT_ID", label: "Client ID", placeholder: "…", secret: false, helpUrl: "https://dev.twitch.tv/console/apps" },
+      { key: "TWITCH_ACCESS_TOKEN", label: "Access Token", placeholder: "…", secret: true, helpUrl: "https://dev.twitch.tv/docs/authentication/" },
     ],
     docsUrl: "https://dev.twitch.tv/docs/api/",
     oauthFlow: true,
@@ -519,6 +514,94 @@ const CONNECTORS: Connector[] = [
     ],
     docsUrl: "https://developer.wordpress.com/docs/api/",
     oauthFlow: true,
+  },
+
+  // ── Growth + analytics connectors (added 2026-07) ───────────────────────────
+  {
+    id: "salesforce",
+    name: "Salesforce",
+    description: "CRM records, leads, opportunities via the REST API",
+    category: "Productivity",
+    emoji: "☁️",
+    color: "bg-sky-500/20 text-sky-300",
+    fields: [
+      { key: "SALESFORCE_INSTANCE_URL", label: "Instance URL", placeholder: "https://mydomain.my.salesforce.com", secret: false },
+      { key: "SALESFORCE_ACCESS_TOKEN", label: "Access Token", placeholder: "00D…", secret: true, helpUrl: "https://help.salesforce.com/s/articleView?id=sf.remoteaccess_oauth_tokens_scopes.htm" },
+    ],
+    docsUrl: "https://developer.salesforce.com/docs/apis",
+    oauthFlow: true,
+  },
+  {
+    id: "algolia",
+    name: "Algolia",
+    description: "Hosted search — index records and query with instant results",
+    category: "Data",
+    emoji: "🔷",
+    color: "bg-blue-500/20 text-blue-300",
+    fields: [
+      { key: "ALGOLIA_APP_ID", label: "Application ID", placeholder: "ABC123XYZ", secret: false },
+      { key: "ALGOLIA_API_KEY", label: "Admin API Key", placeholder: "…", secret: true, helpUrl: "https://dashboard.algolia.com/account/api-keys" },
+    ],
+    docsUrl: "https://www.algolia.com/doc/rest-api/search/",
+    oauthFlow: false,
+  },
+  {
+    id: "sentry",
+    name: "Sentry",
+    description: "Error tracking — read issues, events, and release health",
+    category: "Infrastructure",
+    emoji: "🛡️",
+    color: "bg-purple-600/20 text-purple-300",
+    fields: [{ key: "SENTRY_AUTH_TOKEN", label: "Auth Token", placeholder: "sntrys_…", secret: true, helpUrl: "https://sentry.io/settings/account/api/auth-tokens/" }],
+    docsUrl: "https://docs.sentry.io/api/",
+    oauthFlow: false,
+  },
+  {
+    id: "posthog",
+    name: "PostHog",
+    description: "Product analytics — events, insights, feature flags, session data",
+    category: "Data",
+    emoji: "🦔",
+    color: "bg-orange-500/20 text-orange-300",
+    fields: [
+      { key: "POSTHOG_API_KEY", label: "Personal API Key", placeholder: "phx_…", secret: true, helpUrl: "https://us.posthog.com/settings/user-api-keys" },
+      { key: "POSTHOG_HOST", label: "Host (optional region)", placeholder: "https://us.posthog.com", secret: false },
+    ],
+    docsUrl: "https://posthog.com/docs/api",
+    oauthFlow: false,
+  },
+  {
+    id: "semrush",
+    name: "Semrush",
+    description: "SEO analytics — keyword research, domain rankings, backlinks",
+    category: "Data",
+    emoji: "📈",
+    color: "bg-amber-500/20 text-amber-300",
+    fields: [{ key: "SEMRUSH_API_KEY", label: "API Key", placeholder: "…", secret: true, helpUrl: "https://www.semrush.com/api-analytics/" }],
+    docsUrl: "https://developer.semrush.com/api/",
+    oauthFlow: false,
+  },
+  {
+    id: "linkedin",
+    name: "LinkedIn",
+    description: "Share posts, read profile and organization data",
+    category: "Communication",
+    emoji: "💼",
+    color: "bg-blue-600/20 text-blue-300",
+    fields: [{ key: "LINKEDIN_ACCESS_TOKEN", label: "OAuth Access Token", placeholder: "AQV…", secret: true, helpUrl: "https://www.linkedin.com/developers/apps" }],
+    docsUrl: "https://learn.microsoft.com/en-us/linkedin/",
+    oauthFlow: true,
+  },
+  {
+    id: "granola",
+    name: "Granola",
+    description: "AI meeting notes — transcripts, summaries, and action items",
+    category: "Productivity",
+    emoji: "🥣",
+    color: "bg-lime-500/20 text-lime-300",
+    fields: [{ key: "GRANOLA_API_KEY", label: "API Key", placeholder: "grn_…", secret: true, helpUrl: "https://www.granola.ai/" }],
+    docsUrl: "https://www.granola.ai/docs",
+    oauthFlow: false,
   },
 ];
 

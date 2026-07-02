@@ -191,6 +191,77 @@ export const CONNECTOR_REGISTRY: Record<string, ConnectorSpec> = {
     requiredEnv: ["GOOGLE_MAPS_API_KEY"],
     headers: () => ({}),
   },
+  snowflake: {
+    // Account-scoped SQL API, e.g. https://<account>.snowflakecomputing.com
+    baseUrl: (env) => env.SNOWFLAKE_ACCOUNT_URL.replace(/\/$/, ""),
+    requiredEnv: ["SNOWFLAKE_ACCOUNT_URL", "SNOWFLAKE_TOKEN"],
+    headers: (env) => ({
+      Authorization: `Bearer ${env.SNOWFLAKE_TOKEN}`,
+      "X-Snowflake-Authorization-Token-Type": "OAUTH",
+    }),
+  },
+  bigquery: {
+    baseUrl: "https://bigquery.googleapis.com/bigquery/v2",
+    requiredEnv: ["GOOGLE_OAUTH_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.GOOGLE_OAUTH_TOKEN}` }),
+  },
+  salesforce: {
+    // Instance-scoped REST API, e.g. https://mydomain.my.salesforce.com
+    baseUrl: (env) => env.SALESFORCE_INSTANCE_URL.replace(/\/$/, ""),
+    requiredEnv: ["SALESFORCE_INSTANCE_URL", "SALESFORCE_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.SALESFORCE_ACCESS_TOKEN}` }),
+  },
+  algolia: {
+    baseUrl: (env) => `https://${env.ALGOLIA_APP_ID}.algolia.net`,
+    requiredEnv: ["ALGOLIA_APP_ID", "ALGOLIA_API_KEY"],
+    headers: (env) => ({
+      "X-Algolia-Application-Id": env.ALGOLIA_APP_ID,
+      "X-Algolia-API-Key": env.ALGOLIA_API_KEY,
+    }),
+  },
+  sentry: {
+    baseUrl: "https://sentry.io/api/0",
+    requiredEnv: ["SENTRY_AUTH_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.SENTRY_AUTH_TOKEN}` }),
+  },
+  posthog: {
+    // Self-hosted / EU instances override via POSTHOG_HOST
+    baseUrl: (env) => (env.POSTHOG_HOST || "https://us.posthog.com").replace(/\/$/, ""),
+    requiredEnv: ["POSTHOG_API_KEY"],
+    headers: (env) => ({ Authorization: `Bearer ${env.POSTHOG_API_KEY}` }),
+  },
+  semrush: {
+    // SEMrush authenticates with a `key` query parameter, not headers.
+    // The proxy only injects headers, so we pass the key as X-Api-Key too;
+    // generated apps should still append `?key=` (via body.query) for the
+    // classic analytics endpoints that ignore headers.
+    baseUrl: "https://api.semrush.com",
+    requiredEnv: ["SEMRUSH_API_KEY"],
+    headers: (env) => ({ "X-Api-Key": env.SEMRUSH_API_KEY }),
+  },
+  linkedin: {
+    baseUrl: "https://api.linkedin.com/v2",
+    requiredEnv: ["LINKEDIN_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.LINKEDIN_ACCESS_TOKEN}` }),
+  },
+  tiktok: {
+    baseUrl: "https://open.tiktokapis.com/v2",
+    requiredEnv: ["TIKTOK_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.TIKTOK_ACCESS_TOKEN}` }),
+  },
+  twitch: {
+    baseUrl: "https://api.twitch.tv/helix",
+    requiredEnv: ["TWITCH_ACCESS_TOKEN", "TWITCH_CLIENT_ID"],
+    headers: (env) => ({
+      Authorization: `Bearer ${env.TWITCH_ACCESS_TOKEN}`,
+      "Client-Id": env.TWITCH_CLIENT_ID,
+    }),
+  },
+  granola: {
+    baseUrl: "https://api.granola.ai/v1",
+    requiredEnv: ["GRANOLA_API_KEY"],
+    headers: (env) => ({ Authorization: `Bearer ${env.GRANOLA_API_KEY}` }),
+  },
 };
 
 export function resolveConnectorBaseUrl(spec: ConnectorSpec, env: Record<string, string>): string {

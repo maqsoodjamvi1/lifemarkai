@@ -18,6 +18,7 @@ import {
   CheckCheck, FileText, Pencil, Play, Pause, ChevronUp,
   RefreshCw, Brain, Trash2, Search, FileCode, Download,
   Paperclip, FileCode2, X, Pin, PinOff, Minimize2, Zap, ListChecks, Globe, Square,
+  FileDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -518,7 +519,7 @@ function ChatCodeBlock({ language, code }: { language: string; code: string }) {
   );
 }
 
-function MessageContent({ content, mode }: { content: string; mode: string }) {
+const MessageContent = React.memo(function MessageContent({ content, mode }: { content: string; mode: string }) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -554,6 +555,54 @@ function MessageContent({ content, mode }: { content: string; mode: string }) {
       {content}
     </ReactMarkdown>
   );
+});
+
+/**
+ * Plain-text renderer with <mark>-style highlights for chat-history search.
+ * Used in place of MessageContent while a search query is active so matched
+ * substrings are visibly highlighted (Lovable parity, Apr 2026).
+ */
+const HighlightedText = React.memo(function HighlightedText({ text, query }: { text: string; query: string }) {
+  const q = query.trim();
+  if (!q) return <p className="whitespace-pre-wrap leading-relaxed">{text}</p>;
+  const lower = text.toLowerCase();
+  const needle = q.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let i = 0;
+  let idx = lower.indexOf(needle);
+  let key = 0;
+  while (idx >= 0) {
+    if (idx > i) parts.push(text.slice(i, idx));
+    parts.push(
+      <mark key={key++} className="bg-amber-400/40 text-inherit rounded-[2px] px-0.5">
+        {text.slice(idx, idx + needle.length)}
+      </mark>
+    );
+    i = idx + needle.length;
+    idx = lower.indexOf(needle, i);
+  }
+  if (i < text.length) parts.push(text.slice(i));
+  return <p className="whitespace-pre-wrap leading-relaxed break-words">{parts}</p>;
+});
+
+/** Formats offered by the "Generate as file" affordance (→ /api/ai/generate-file). */
+const FILE_GEN_FORMATS: Array<{
+  id: "md" | "csv" | "json" | "txt" | "html";
+  label: string;
+}> = [
+  { id: "md",   label: "Markdown document" },
+  { id: "csv",  label: "CSV spreadsheet" },
+  { id: "json", label: "JSON data" },
+  { id: "txt",  label: "Plain text" },
+  { id: "html", label: "HTML page" },
+];
+
+/** Human-readable size of a generated file's content. */
+function genFileSize(content: string): string {
+  const bytes = new TextEncoder().encode(content).length;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 /** Format a message timestamp for the hover tooltip */
@@ -782,6 +831,22 @@ export function ChatPanel({
     messages.forEach((m) => { if (m.rating) initial[m.id] = m.rating as 1 | -1; });
     return initial;
   });
+  // Hydrate persisted ratings when messages load asynchronously — the
+  // useState initializer above only sees the first-render (often empty) list.
+  // Only fills ids we haven't seen, and rateMessage keeps the messages prop
+  // in sync, so a rating the user toggled off is never resurrected.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate rating cache from loaded messages
+    setRatings((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      messages.forEach((m) => {
+        const r = m.rating as 1 | -1 | null;
+        if (r && next[m.id] === undefined) { next[m.id] = r; changed = true; }
+      });
+      return changed ? next : prev;
+    });
+  }, [messages]);
   // Clarify-first mode
   const [clarifyFirst, setClarifyFirst] = useState(false);
   const [showSkillPicker, setShowSkillPicker] = useState(false);
@@ -846,6 +911,13 @@ export function ChatPanel({
   const [analyzeInstruction, setAnalyzeInstruction] = useState("");
   const [analyzeFile, setAnalyzeFile] = useState<{ name: string; base64: string; mimeType: string } | null>(null);
   const [analyzeRunning, setAnalyzeRunning] = useState(false);
+  // "Generate as file" — standalone downloadable documents via /api/ai/generate-file.
+  // Results render as download cards above the composer; they never touch project files.
+  const [showFileGenPicker, setShowFileGenPicker] = useState(false);
+  const [fileGenBusy, setFileGenBusy] = useState<string | null>(null);
+  const [fileGenResults, setFileGenResults] = useState<
+    Array<{ id: string; prompt: string; filename: string; content: string; mimeType: string }>
+  >([]);
   const saveGeneratedFileToProject = useCallback(async (file: GeneratedFile) => {
     try {
       const res = await fetch(`/api/projects/${project.id}/files`, {
@@ -952,6 +1024,17 @@ export function ChatPanel({
 
   const [isAtBottom, setIsAtBottom] = useState(true);
   const abortControllerRef = useRef<AbortController | null>(null);
+  /**
+   * True while sendMessage is executing. `streaming` is React state, so two
+   * sends triggered in the same frame (queue-drain effect + a click) can both
+   * read the stale `false` and start concurrent streams. A ref flips
+   * synchronously and closes that race.
+   */
+  const sendingRef = useRef(false);
+  // Abort any in-flight stream when the panel unmounts so the response
+  // reader is cancelled/released and no further work runs against an
+  // unmounted component.
+  useEffect(() => () => { abortControllerRef.current?.abort(); }, []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1011,7 +1094,9 @@ export function ChatPanel({
       if (next === undefined) delete n[messageId]; else n[messageId] = next;
       return n;
     });
-    const supabase = createClient();
+    // Keep the messages prop in sync so the ratings hydration effect never
+    // re-adds a rating the user just toggled off.
+    onMessagesUpdate(messages.map((m) => (m.id === messageId ? { ...m, rating: next ?? null } : m)));
     // Supabase generated types have a known drift on the messages table update; suppress safely
     const db = createClient();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1303,6 +1388,14 @@ export function ChatPanel({
     return () => el.removeEventListener("scroll", handleScroll);
   }, []);
 
+  // Follow new content (messages + streamed chunks), but ONLY while the user
+  // is already at the bottom — isAtBottom flips false the moment they scroll
+  // up, so streaming never fights their reading position.
+  useEffect(() => {
+    if (!isAtBottom) return;
+    messagesEndRef.current?.scrollIntoView({ block: "end" });
+  }, [messages, streamingContent, streamingFiles, agentSteps, isAtBottom]);
+
   async function triggerAutoFix(error: string) {
     setAutoFixing(true);
     setLastFixedError(error);
@@ -1562,7 +1655,7 @@ export function ChatPanel({
   }
 
   async function sendMessage(userMessage: string, overrideMode?: EditorMode, historyOverride?: Message[]) {
-    if (!userMessage.trim() || streaming) return;
+    if (!userMessage.trim() || streaming || sendingRef.current) return;
 
     const effectiveMode = resolvePromptMode(userMessage, intelCtx, overrideMode);
     const effectiveModel = modelManuallySelectedRef.current
@@ -1595,6 +1688,7 @@ export function ChatPanel({
     if (!overrideMode && effectiveMode !== mode && mode !== "chat") {
       onModeChange?.(effectiveMode);
     }
+    sendingRef.current = true;
     setInput("");
     // Request desktop notification permission on first build (non-blocking)
     if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
@@ -1640,6 +1734,9 @@ export function ChatPanel({
     // Set up AbortController for stop generation
     const controller = new AbortController();
     abortControllerRef.current = controller;
+    // Throttle timer for streaming UI updates (declared here so `finally`
+    // can clear it on any exit path).
+    let streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
     // Auto-snapshot before AI modifies files (Build / Agent / Patch modes)
     if ((effectiveMode === "build" || effectiveMode === "agent" || effectiveMode === "patch") && files.length > 0) {
@@ -1778,12 +1875,19 @@ ${(f.content ?? "").slice(0, 8000)}
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         const changedPaths = new Set<string>();
+        // SSE lines routinely split across network chunks (and multi-byte
+        // UTF-8 can split across reads). Buffer the trailing partial line so
+        // JSON.parse never sees a truncated payload and silently drops it.
+        let sseTail = "";
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          for (const line of decoder.decode(value).split("\n")) {
+          const text = sseTail + decoder.decode(value, { stream: true });
+          const lines = text.split("\n");
+          sseTail = lines.pop() ?? "";
+          for (const line of lines) {
             if (!line.startsWith("data: ")) continue;
             try {
               const data = JSON.parse(line.slice(6));
@@ -1936,6 +2040,10 @@ ${(f.content ?? "").slice(0, 8000)}
       let accumulated = "";
       const streamingAssistantId = `assistant-${Date.now()}`;
       let clarifyExited = false;
+      // Local mirror of pendingSkills — the async stream handlers below close
+      // over the pre-send render, so reading `pendingSkills` state on data.done
+      // would always be stale (empty, or worse, the PREVIOUS message's skills).
+      let attachedSkills: Array<{ id: string; name: string; reason?: string }> = [];
 
       const processChatStreamEvent = async (data: Record<string, unknown>) => {
         try {
@@ -1975,13 +2083,12 @@ ${(f.content ?? "").slice(0, 8000)}
           }
 
           if (Array.isArray(data.skills_attached) && data.skills_attached.length > 0) {
-            setPendingSkills(
-              data.skills_attached.map((s: { id: string; name: string; reason?: string }) => ({
-                id: s.id,
-                name: s.name,
-                reason: s.reason,
-              })),
-            );
+            attachedSkills = data.skills_attached.map((s: { id: string; name: string; reason?: string }) => ({
+              id: s.id,
+              name: s.name,
+              reason: s.reason,
+            }));
+            setPendingSkills(attachedSkills);
           }
 
           if (typeof data.streamedFile === "string") {
@@ -2047,10 +2154,10 @@ ${(f.content ?? "").slice(0, 8000)}
               // Persist any auto-matched skills onto the final assistant message
               // and clear the pending state so the chip doesn't flash onto the
               // next stream's placeholder.
-              if (pendingSkills.length > 0) {
-                setMessageSkills((prev) => ({ ...prev, [assistantId]: pendingSkills }));
-                setPendingSkills([]);
+              if (attachedSkills.length > 0) {
+                setMessageSkills((prev) => ({ ...prev, [assistantId]: attachedSkills }));
               }
+              setPendingSkills([]);
 
               // Move any pending patch count from "__pending" to the real
               // assistant id so the badge renders on the right message.
@@ -2248,22 +2355,32 @@ ${(f.content ?? "").slice(0, 8000)}
           );
         },
         handlers: {
+          // Throttled: SSE delivers dozens of chunks/sec and each setState
+          // re-renders the whole panel, while the path scan below regex-walks
+          // the ENTIRE accumulated text (O(n²) if run per chunk). Flush at
+          // most every 66ms; the pending timer guarantees the final chunk
+          // still renders.
           onTextChunk: (piece) => {
             accumulated += piece;
-            setStreamingContent(accumulated);
-            const pathMatches = [
-              ...accumulated.matchAll(/"path"\s*:\s*"([^"]+)"/g),
-              ...accumulated.matchAll(/"name"\s*:\s*"([^"/][^"]*)"/g),
-            ];
-            if (pathMatches.length > 0) {
-              const paths = pathMatches.map((m) => m[1]);
-              setStreamingFiles(paths);
-              onStreamingChange?.(true, paths.length);
-              if (paths.length > 0) {
-                applyBuildSteps((prev) =>
-                  prev.length > 0 ? onBuildFileProgress(prev) : prev,
-                );
-              }
+            if (streamFlushTimer === null) {
+              streamFlushTimer = setTimeout(() => {
+                streamFlushTimer = null;
+                setStreamingContent(accumulated);
+                const pathMatches = [
+                  ...accumulated.matchAll(/"path"\s*:\s*"([^"]+)"/g),
+                  ...accumulated.matchAll(/"name"\s*:\s*"([^"/][^"]*)"/g),
+                ];
+                if (pathMatches.length > 0) {
+                  const paths = pathMatches.map((m) => m[1]);
+                  // Paths only ever grow — skip the state update (and the
+                  // re-render it causes) when nothing new appeared.
+                  setStreamingFiles((prev) => (prev.length === paths.length ? prev : paths));
+                  onStreamingChange?.(true, paths.length);
+                  applyBuildSteps((prev) =>
+                    prev.length > 0 ? onBuildFileProgress(prev) : prev,
+                  );
+                }
+              }, 66);
             }
           },
           onEvent: (data) => { void processChatStreamEvent(data); },
@@ -2273,12 +2390,24 @@ ${(f.content ?? "").slice(0, 8000)}
       if (clarifyExited) return;
     } catch (err: unknown) {
       applyBuildSteps([]);
-      toast({
-        title: "Request failed",
-        description: err instanceof Error ? err.message : "Unknown error",
-        variant: "destructive",
-      });
+      // A user-initiated Stop (or unmount) aborts the controller — that's
+      // not a failure, so don't scare the user with a destructive toast.
+      const isAbort =
+        controller.signal.aborted ||
+        (err instanceof DOMException && err.name === "AbortError");
+      if (!isAbort) {
+        toast({
+          title: "Request failed",
+          description: err instanceof Error ? err.message : "Unknown error",
+          variant: "destructive",
+        });
+      }
     } finally {
+      sendingRef.current = false;
+      if (streamFlushTimer !== null) {
+        clearTimeout(streamFlushTimer);
+        streamFlushTimer = null;
+      }
       setStreamingWithCallback(false);
       setStreamingContent("");
       setStreamingFiles([]);
@@ -2314,6 +2443,68 @@ ${(f.content ?? "").slice(0, 8000)}
     void sendMessage(text, mode);
   }
 
+  /** Feature: file generation in chat — POST the current prompt to /api/ai/generate-file. */
+  async function handleGenerateFile(format: "md" | "csv" | "json" | "txt" | "html") {
+    const prompt = input.trim();
+    if (!prompt || fileGenBusy) return;
+    setShowFileGenPicker(false);
+    setFileGenBusy(format);
+    try {
+      const res = await fetch("/api/ai/generate-file", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: project.id, prompt, format }),
+      });
+      const data = (await res.json()) as {
+        filename?: string; content?: string; mimeType?: string; error?: string;
+      };
+      if (!res.ok || !data.filename || data.content == null) {
+        throw new Error(data.error ?? `Generation failed (${res.status})`);
+      }
+      setFileGenResults((prev) => [
+        ...prev,
+        {
+          id: `gen-${Date.now()}`,
+          prompt,
+          filename: data.filename!,
+          content: data.content!,
+          mimeType: data.mimeType ?? "text/plain",
+        },
+      ]);
+      setInput("");
+      // Route deducts 1 credit server-side — refresh the balance badge
+      try {
+        const cr = await fetch("/api/billing/credits");
+        if (cr.ok) {
+          const { credits: fresh } = (await cr.json()) as { credits?: number };
+          if (typeof fresh === "number") onCreditsUpdate(fresh);
+        }
+      } catch {}
+      toast({ title: `Generated ${data.filename}`, description: "Ready to download below." });
+    } catch (err) {
+      toast({
+        title: "File generation failed",
+        description: err instanceof Error ? err.message : "Try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setFileGenBusy(null);
+    }
+  }
+
+  /** Download a generated standalone file via a blob URL + download attribute. */
+  function downloadGeneratedFile(f: { filename: string; content: string; mimeType: string }) {
+    const blob = new Blob([f.content], { type: f.mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = f.filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   function handleDesignPreviewSelect(direction: DesignPreviewDirection) {
     const base = pendingDesignPrompt;
     setDesignPreviewOpen(false);
@@ -2335,6 +2526,10 @@ ${(f.content ?? "").slice(0, 8000)}
     if (streaming) return;
     const q = promptQueueRef.current;
     if (queuePausedRef.current || q.length === 0) return;
+    // Don't dequeue when the send would be refused — sendMessage no-ops while
+    // a previous send is tearing down or when credits are exhausted, and the
+    // item would be silently lost (it was already popped from the queue).
+    if (sendingRef.current || credits < 1) return;
     const [next, ...rest] = q;
     const newRemaining = next.remaining - 1;
     if (newRemaining > 0) {
@@ -2624,6 +2819,16 @@ ${(f.content ?? "").slice(0, 8000)}
 
   const noCredits = credits <= 0;
 
+  // Hoisted out of the message map — the previous inline
+  // `[...messages].filter().pop()` ran once per assistant row per render
+  // (O(n²) over the conversation).
+  const lastAssistantMsgId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant") return messages[i].id;
+    }
+    return null;
+  }, [messages]);
+
   // Mode tab config
   const MODE_TABS: { id: EditorMode; label: string; shortLabel: string }[] = [
     { id: "chat",  label: "Chat",       shortLabel: "Chat"  },
@@ -2764,20 +2969,30 @@ ${(f.content ?? "").slice(0, 8000)}
               <input
                 ref={searchInputRef}
                 value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  // Filtered matches render from the top — jump there so the
+                  // first match is immediately visible.
+                  if (e.target.value.trim()) {
+                    scrollContainerRef.current?.scrollTo({ top: 0 });
+                  }
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Escape") { setShowSearch(false); setSearchQuery(""); }
                 }}
                 placeholder="Search messages…"
                 className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/50 text-foreground"
               />
-              {searchQuery && (
-                <span className="text-[10px] text-muted-foreground/60 shrink-0">
-                  {messages.filter((m) =>
-                    m.content.toLowerCase().includes(searchQuery.toLowerCase())
-                  ).length} match
-                </span>
-              )}
+              {searchQuery && (() => {
+                const matchCount = messages.filter((m) =>
+                  m.content.toLowerCase().includes(searchQuery.toLowerCase())
+                ).length;
+                return (
+                  <span className="text-[10px] text-muted-foreground/60 shrink-0">
+                    {matchCount} match{matchCount === 1 ? "" : "es"}
+                  </span>
+                );
+              })()}
               <button
                 onClick={() => { setShowSearch(false); setSearchQuery(""); }}
                 className="text-muted-foreground/50 hover:text-foreground transition-colors"
@@ -3110,6 +3325,11 @@ ${(f.content ?? "").slice(0, 8000)}
                             (diffCount > 0 ? `Updated ${diffCount} file${diffCount === 1 ? "" : "s"}.` : "Done.");
                         }
                         return <p className="text-sm text-foreground/90 leading-relaxed">{summary}</p>;
+                      }
+                      // While searching, render plain text with the matched
+                      // substrings highlighted instead of markdown.
+                      if (searchQuery.trim()) {
+                        return <HighlightedText text={msg.content} query={searchQuery} />;
                       }
                       return <MessageContent content={msg.content} mode={msg.mode ?? "chat"} />;
                     })()}
@@ -3490,10 +3710,7 @@ ${(f.content ?? "").slice(0, 8000)}
                   </div>
                 )}
                 {/* Regenerate button — only on the last assistant message */}
-                {msg.role === "assistant" && (() => {
-                  const lastAsstId = [...messages].filter((m) => m.role === "assistant").pop()?.id;
-                  return lastAsstId === msg.id && !streaming && !showBookmarks && !searchQuery;
-                })() && (
+                {msg.role === "assistant" && lastAssistantMsgId === msg.id && !streaming && !showBookmarks && !searchQuery && (
                   <button
                     onClick={() => void handleRegenerate()}
                     className="flex items-center gap-1.5 mt-1 px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground border border-border/40 hover:border-border rounded-full bg-muted/20 hover:bg-muted/40 transition-colors"
@@ -3826,6 +4043,49 @@ ${(f.content ?? "").slice(0, 8000)}
         <div className="mx-3 mb-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20 flex items-center gap-2 text-xs text-destructive">
           <AlertCircle className="w-3.5 h-3.5 shrink-0" />
           No credits remaining. Upgrade your plan or wait until tomorrow.
+        </div>
+      )}
+
+      {/* Generated standalone files — download cards (styling mirrors file-attachment-card.tsx) */}
+      {fileGenResults.length > 0 && (
+        <div className="mx-3 mb-2 space-y-1.5">
+          {fileGenResults.map((f) => (
+            <motion.div
+              key={f.id}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="flex items-stretch gap-3 rounded-xl border border-border/60 bg-muted/20 p-3 max-w-full"
+            >
+              <div className="w-10 h-10 rounded-lg bg-background border border-border/60 flex items-center justify-center flex-shrink-0">
+                <FileDown className="w-4 h-4 text-violet-400" />
+              </div>
+              <div className="flex-1 min-w-0 flex flex-col justify-center">
+                <p className="text-xs font-medium text-foreground truncate" title={f.filename}>
+                  {f.filename}
+                </p>
+                <p className="text-[10px] text-muted-foreground truncate" title={f.prompt}>
+                  {genFileSize(f.content)} · {f.prompt}
+                </p>
+              </div>
+              <div className="flex items-center gap-1 flex-shrink-0">
+                <button
+                  onClick={() => downloadGeneratedFile(f)}
+                  className="h-7 px-2 inline-flex items-center gap-1 text-[11px] rounded-lg border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                  title="Download file"
+                >
+                  <Download className="w-3 h-3" />
+                  Download
+                </button>
+                <button
+                  onClick={() => setFileGenResults((prev) => prev.filter((g) => g.id !== f.id))}
+                  className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-muted-foreground/50 hover:text-foreground hover:bg-muted/60 transition-colors"
+                  title="Dismiss"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+            </motion.div>
+          ))}
         </div>
       )}
 
@@ -5180,6 +5440,53 @@ Please confirm the breakdown before implementing anything.`,
 
             {/* Mic / voice mode */}
             <VoiceMode onTranscript={(t) => setInput((prev) => prev + (prev ? " " : "") + t)} />
+
+            {/* Generate-as-file — turns the prompt into a standalone downloadable document */}
+            <div className="relative flex-shrink-0">
+              <AnimatePresence>
+                {showFileGenPicker && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 4 }}
+                    className="absolute bottom-full right-0 mb-2 z-50 w-48 bg-popover border border-border rounded-xl shadow-xl overflow-hidden"
+                  >
+                    <div className="px-3 py-1.5 border-b border-border">
+                      <span className="text-[10px] font-semibold text-muted-foreground">
+                        Generate prompt as file
+                      </span>
+                    </div>
+                    {FILE_GEN_FORMATS.map((fmt) => (
+                      <button
+                        key={fmt.id}
+                        onMouseDown={(e) => { e.preventDefault(); void handleGenerateFile(fmt.id); }}
+                        className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-muted transition-colors"
+                      >
+                        <span className="font-mono text-[10px] text-violet-400 w-9 shrink-0">.{fmt.id}</span>
+                        <span className="text-muted-foreground">{fmt.label}</span>
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+              <button
+                type="button"
+                onClick={() => setShowFileGenPicker((v) => !v)}
+                disabled={!input.trim() || !!fileGenBusy || noCredits || isLocked || streaming}
+                className={`flex items-center justify-center w-7 h-7 rounded-lg border transition-colors ${
+                  showFileGenPicker || fileGenBusy
+                    ? "border-violet-500/50 bg-violet-500/15 text-violet-300"
+                    : /\b(as a file|\.md|\.csv|\.json|\.txt|\.html|csv|json|markdown|download|export|report|document)\b/i.test(input)
+                    ? "border-violet-500/40 text-violet-300 hover:bg-violet-500/10"
+                    : "border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                } disabled:opacity-40 disabled:cursor-not-allowed`}
+                title="Generate as file — creates a downloadable .md / .csv / .json / .txt / .html from this prompt (1 credit)"
+              >
+                {fileGenBusy
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : <FileDown className="w-3.5 h-3.5" />}
+              </button>
+            </div>
 
             {/* Send / Stop — Lovable uses square stop while generating */}
             {streaming ? (

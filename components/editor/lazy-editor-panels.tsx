@@ -1,6 +1,8 @@
 "use client";
 
 import type { Dispatch, SetStateAction } from "react";
+import dynamic from "next/dynamic";
+import { importWithRetry } from "@/lib/import-with-retry";
 import type { LeftPanel, EditorMode } from "./editor-layout";
 import type { Project, ProjectFile, Profile } from "@/types/database";
 import type { Collaborator } from "@/hooks/use-yjs-editor";
@@ -18,8 +20,6 @@ import { KnowledgePanel } from "./knowledge-panel";
 import { ProjectSettingsPanel } from "./project-settings-panel";
 import { SecurityPanel } from "./security-panel";
 import { DeployHistoryPanel } from "./deploy-history-panel";
-import { ProjectAnalyticsPanel } from "./project-analytics-panel";
-import { ProjectSiteAnalyticsPanel } from "./project-site-analytics-panel";
 import { AppAuthPanel } from "./app-auth-panel";
 import { DesignSystemsPanel } from "./design-systems-panel";
 import { SearchPanel } from "./search-panel";
@@ -30,26 +30,18 @@ import { CrossReferencePanel } from "./cross-reference-panel";
 import { EmailPanel } from "./email-panel";
 import { TestingPanel } from "./testing-panel";
 import { DesignGuidancePanel } from "./design-guidance-panel";
-import { BrowserTestingPanel } from "./browser-testing-panel";
 import { CodeReviewPanel } from "./code-review-panel";
-import { McpPanel } from "./mcp-panel";
-import { SeoPanel } from "./seo-panel";
 import { ProblemsPanel } from "./problems-panel";
-import { ConnectorWizardPanel } from "./connector-wizard-panel";
 import { AccessibilityPanel } from "./accessibility-panel";
 import { SchemaPanel } from "./schema-panel";
 import { WebhookPanel } from "./webhook-panel";
 import { PerformancePanel } from "./performance-panel";
 import { I18nPanel } from "./i18n-panel";
 import { ApiDocsPanel } from "./api-docs-panel";
-import { LifemarkCloudPanel } from "./lifemark-cloud-panel";
 import { StoragePanel } from "./storage-panel";
-import { AppConnectorsPanel } from "./app-connectors-panel";
 import { McpContextPanel } from "./mcp-context-panel";
 import { AeoPanel } from "./aeo-panel";
-import { VulnerabilityPanel } from "./vulnerability-panel";
 import { DbSeedingPanel } from "./db-seeding-panel";
-import { MonetizationPanel } from "./monetization-panel";
 import { CopyGenPanel } from "./copy-gen-panel";
 import { FeedbackWidgetPanel } from "./feedback-widget-panel";
 import { GoLiveChecklistPanel } from "./golive-checklist-panel";
@@ -87,6 +79,60 @@ import { PublishPanel } from "./publish-panel";
 import { PaymentsPanel } from "./payments-panel";
 import { PaymentCheckoutPanel } from "./payment-checkout-panel";
 import { EditorIntelligencePanel } from "./editor-intelligence-panel";
+import { SelfHealingPanel } from "./self-healing-panel";
+
+// ── Code-split heavy panels ───────────────────────────────────────────────────
+// This module is itself loaded lazily by editor-layout, but its static imports
+// were bundled into ONE chunk — opening any tool panel downloaded all ~85
+// panels. The heaviest (recharts-based analytics + the largest modules) are
+// split into their own chunks here, following the same
+// dynamic(importWithRetry(...), { ssr: false }) pattern used in editor-layout.
+const panelLoading = () => (
+  <div className="h-full flex items-center justify-center text-xs text-muted-foreground">
+    Loading panel…
+  </div>
+);
+
+const ProjectAnalyticsPanel = dynamic(
+  importWithRetry(() => import("./project-analytics-panel").then((m) => m.ProjectAnalyticsPanel)),
+  { ssr: false, loading: panelLoading }
+);
+const ProjectSiteAnalyticsPanel = dynamic(
+  importWithRetry(() => import("./project-site-analytics-panel").then((m) => m.ProjectSiteAnalyticsPanel)),
+  { ssr: false, loading: panelLoading }
+);
+const MonetizationPanel = dynamic(
+  importWithRetry(() => import("./monetization-panel").then((m) => m.MonetizationPanel)),
+  { ssr: false, loading: panelLoading }
+);
+const ConnectorWizardPanel = dynamic(
+  importWithRetry(() => import("./connector-wizard-panel").then((m) => m.ConnectorWizardPanel)),
+  { ssr: false, loading: panelLoading }
+);
+const McpPanel = dynamic(
+  importWithRetry(() => import("./mcp-panel").then((m) => m.McpPanel)),
+  { ssr: false, loading: panelLoading }
+);
+const AppConnectorsPanel = dynamic(
+  importWithRetry(() => import("./app-connectors-panel").then((m) => m.AppConnectorsPanel)),
+  { ssr: false, loading: panelLoading }
+);
+const SeoPanel = dynamic(
+  importWithRetry(() => import("./seo-panel").then((m) => m.SeoPanel)),
+  { ssr: false, loading: panelLoading }
+);
+const BrowserTestingPanel = dynamic(
+  importWithRetry(() => import("./browser-testing-panel").then((m) => m.BrowserTestingPanel)),
+  { ssr: false, loading: panelLoading }
+);
+const VulnerabilityPanel = dynamic(
+  importWithRetry(() => import("./vulnerability-panel").then((m) => m.VulnerabilityPanel)),
+  { ssr: false, loading: panelLoading }
+);
+const LifemarkCloudPanel = dynamic(
+  importWithRetry(() => import("./lifemark-cloud-panel").then((m) => m.LifemarkCloudPanel)),
+  { ssr: false, loading: panelLoading }
+);
 
 export interface LazyPanelContext {
   rightPanel: LeftPanel;
@@ -319,6 +365,18 @@ export function SecondaryPanelContent(ctx: LazyPanelContext) {
   if (rightPanel === "timelapse") return <TimeLapsePanel projectId={project.id} />;
   if (rightPanel === "aiintegration") return <AiIntegrationPanel project={currentProject} onProjectUpdate={handleProjectUpdate} />;
   if (rightPanel === "intelligence") return <EditorIntelligencePanel projectId={project.id} onSendPromptToChat={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />;
+  if (rightPanel === "healing") {
+    return (
+      <SelfHealingPanel
+        projectId={pid}
+        isLocked={isLiveLocked}
+        onFilesRefresh={async () => {
+          const res = await fetch(`/api/projects/${pid}/files`);
+          if (res.ok) setFiles(await res.json());
+        }}
+      />
+    );
+  }
   if (rightPanel === "plan") {
     return (
       <PlanPanel

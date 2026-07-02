@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   ChevronRight, ChevronDown, FolderOpen, Folder,
@@ -368,7 +368,10 @@ export function FileTreePanel({
     ? files.filter((f) => f.path.toLowerCase().includes(searchQuery.toLowerCase()))
     : null;
 
-  const tree = buildTree(files);
+  // buildTree sorts the whole file list + recursively re-sorts every folder —
+  // memoize so it only recomputes when files actually change, not on every
+  // parent re-render (search keystrokes, active-file changes, etc.).
+  const tree = useMemo(() => buildTree(files), [files]);
 
   const apiBase = `/api/projects/${projectId}/files`;
 

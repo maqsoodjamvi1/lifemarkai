@@ -28,7 +28,7 @@ A full-stack AI-powered app builder (Lovable.dev clone) built with Next.js 14, S
 ### Lifemark Cloud (managed backend — migrations 048/061/064/065)
 - `lib/cloud/management.ts` wraps the Supabase Management API. With `SUPABASE_MANAGEMENT_TOKEN` + `SUPABASE_ORG_ID` set, `/api/cloud/provision` creates a REAL dedicated Supabase project per app (ref/keys stored on `projects.cloud_*` columns, migration 064); `/api/cloud/status` polls until healthy. Without those env vars, Cloud runs in "local mode" (flags only).
 - Instance tiers map to real compute add-ons via `setManagedComputeTier` (tiny = default nano).
-- **Billing:** `/api/cloud/bill-usage` (daily cron, vercel.json) records instance cost into `lifemark_cloud_usage` and calls `bill_cloud_usage` RPC — $25/mo free allowance first, then debits `profiles.cloud_balance_cents`; pauses paid-tier projects when the wallet is empty, resumes after top-up.
+- **Billing (unified — migration 074):** `/api/cloud/bill-usage` (daily cron, vercel.json) records instance cost into `lifemark_cloud_usage` and calls `bill_cloud_usage` RPC — $25/mo free allowance first, then debits `profiles.credits` at 4¢/credit (`CENTS_PER_CREDIT` in `lib/credits.ts`); pauses paid-tier projects when credits hit 0, resumes after top-up. `debit_ai_balance` (gateway) also debits credits. `cloud_balance_cents`/`cloud_ai_balance_cents` are deprecated (always 0).
 - Daily backups: `/api/cloud/daily-backups` cron; restore via Cloud panel → `/api/projects/snapshots/restore` (dry-run for schema warnings first).
 
 ### Backend auto-wiring (Lovable Cloud parity)

@@ -436,6 +436,9 @@ export function BillingPage({ profile, creditLogs, teams }: BillingPageProps) {
                     </div>
                   ))}
                 </div>
+                <p className="mt-3 text-[11px] text-slate-500">
+                  Free actions: &ldquo;Try to fix&rdquo; errors, security scans, and inline text edits (first 100/day) never cost credits.
+                </p>
               </div>
 
               {plan !== "free" && (

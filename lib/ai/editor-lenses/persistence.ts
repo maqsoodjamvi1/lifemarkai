@@ -373,13 +373,46 @@ export async function buildEditorIntelligencePromptBlock(
       agent?: { role?: string | null; name?: string | null } | null;
     }>).slice(0, 12);
 
-    if (decisions.length === 0 && messages.length === 0) return "";
+    // Open health findings (migration 075) — make the everyday editor aware of
+    // known problems so edits fix them opportunistically instead of repeating
+    // them. Critical/error first, small cap to protect the context budget.
+    let findings: Array<{ severity?: string; category?: string; title?: string; file_path?: string | null }> = [];
+    try {
+      const { data: findingRows } = await supabase
+        .from("health_findings")
+        .select("severity, category, title, file_path")
+        .eq("project_id", projectId)
+        .in("status", ["open", "fix_proposed"])
+        .in("severity", ["critical", "error", "warning"])
+        .order("created_at", { ascending: false })
+        .limit(24);
+      const rows = (findingRows ?? []) as typeof findings;
+      const rank: Record<string, number> = { critical: 0, error: 1, warning: 2 };
+      findings = rows
+        .sort((a, b) => (rank[a.severity ?? "warning"] ?? 3) - (rank[b.severity ?? "warning"] ?? 3))
+        .slice(0, 8);
+    } catch {
+      /* table optional (pre-075 DB) — non-fatal */
+    }
+
+    if (decisions.length === 0 && messages.length === 0 && findings.length === 0) return "";
 
     const lines = [
       "---",
       "# Editor Intelligence Memory",
       "Internal project memory from LifemarkAI specialist lenses. Use it to preserve decisions, avoid repeated mistakes, and improve the next edit. Do not describe it as a separate workflow to the user.",
     ];
+
+    if (findings.length > 0) {
+      lines.push(
+        "",
+        "Known health issues (fix opportunistically when touching related code; never reintroduce them):",
+      );
+      for (const f of findings) {
+        const where = f.file_path ? ` [${f.file_path}]` : "";
+        lines.push(`- (${f.severity ?? "warning"}/${f.category ?? "general"}) ${short(f.title ?? "", 140)}${where}`);
+      }
+    }
 
     if (decisions.length > 0) {
       lines.push("", "Recent decisions:");

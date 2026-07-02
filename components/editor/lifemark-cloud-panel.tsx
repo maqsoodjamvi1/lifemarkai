@@ -23,8 +23,10 @@ import {
   Cloud, Database, Lock, FolderOpen, Zap, Sparkles, KeyRound,
   Activity, BarChart3, Settings, Loader2, MapPin, Cpu,
   AlertCircle, Check, ArrowUpRight, RefreshCw, Server,
-  HeartPulse, ShieldCheck,
+  HeartPulse, ShieldCheck, Gauge, CalendarClock,
 } from "lucide-react";
+import { CloudSlowQueries } from "./cloud-slow-queries";
+import { CloudJobsPanel } from "./cloud-jobs-panel";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import type { Project } from "@/types/database";
@@ -97,9 +99,11 @@ const TABS = [
   { id: "auth",      label: "Users & Auth",   icon: Lock },
   { id: "storage",   label: "Storage",        icon: FolderOpen },
   { id: "edge",      label: "Edge Functions", icon: Zap },
+  { id: "jobs",      label: "Jobs",           icon: CalendarClock },
   { id: "ai",        label: "AI",             icon: Sparkles },
   { id: "secrets",   label: "Secrets",        icon: KeyRound },
   { id: "logs",      label: "Logs",           icon: Activity },
+  { id: "performance", label: "Performance",  icon: Gauge },
   { id: "usage",     label: "Usage",          icon: BarChart3 },
   { id: "advanced",  label: "Advanced",       icon: Settings },
 ] as const;
@@ -481,6 +485,10 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
             onOpen={(p) => onOpenSubPanel?.(p)}
           />
         )}
+
+        {active === "jobs" && <CloudJobsPanel projectId={project.id} />}
+
+        {active === "performance" && <CloudSlowQueries projectId={project.id} />}
 
         {active === "ai" && (
           <SubPanelCard

@@ -2,7 +2,7 @@ import type { ProjectFile } from "@/types/database";
 import { generateFallbackUtilityCss } from "@/lib/preview/generate-fallback-utilities";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "23";
+export const PREVIEW_ENGINE_REV = "25";
 
 /** Strip PostCSS-only directives — invalid in a raw <style> tag. */
 export function sanitizePreviewCss(css: string): string {
@@ -131,6 +131,12 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
       /\/(lib|utils?|types?|constants?|data|hooks?|context|contexts|store|stores|config|services?|api|helpers?)\//.test(s) ||
       /(^|\/)(types?|utils?|constants?|helpers?)\.(t|j)sx?$/.test(s)
     ) return 1; // leaf/dependency modules first
+    // Page-level composition dirs (sections, features, layouts, …) compose
+    // components — they must load AFTER components/ (3) but before pages/ (4).
+    // Without this they ranked 2 and eagerly required components that weren't
+    // registered yet ("X is not a function"). Note: the leaf check above wins
+    // for e.g. src/features/cart/hooks/, which is correct — hooks stay early.
+    if (/\/(sections?|features?|blocks?|widgets?|layouts?|views?|screens?|modules?|containers?)\//.test(s)) return 3.5;
     return 2; // everything else between leaves and components
   };
   const sorted = [...codeFiles].sort((a, b) => {
@@ -280,7 +286,15 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
 
     // Strip CSS / asset imports
     src = src.replace(/import\s+['"][^'"]+\.css['"]\s*;?\n?/g, "");
-    // Strip import type
+    // Strip `import type` — including MULTI-LINE named forms
+    // (`import type {\n  Foo,\n  Bar,\n} from './types'`). The old single-line
+    // regex missed those; the final safety net then commented out only the
+    // first line, leaving dangling `} from '…'` — a SyntaxError that killed
+    // the whole preview.
+    src = src.replace(
+      /import\s+type\s+(?:\{[\s\S]*?\}|[\w$*][\w$\s,*]*?)\s*from\s+['"][^'"]+['"]\s*;?\n?/g,
+      "",
+    );
     src = src.replace(/import\s+type\s+[^\n;]+;?\n?/g, "");
 
     // `import { A as B }` → `{ A: B }`; strip TypeScript `type` imports (no runtime binding)
@@ -1151,6 +1165,25 @@ window.__reactRouterDom = (function() {
         var _entry = mod && (mod.default !== undefined ? mod.default : mod);
         var AppComp = typeof _entry === 'function' ? _entry : null;
         if (!AppComp) { showError('${mainFile.path}', 'No default export (App component) found.'); return; }
+        // Reliability guard: a single undefined component (bad import or a
+        // default/named export mismatch, or a member of an unshimmed dep) must
+        // NOT throw React #130 and freeze the whole preview. Render a visible
+        // placeholder + warn instead, so the rest of the app still shows.
+        if (window.React && !React.__lmGuarded) {
+          var __lmOrigCreate = React.createElement;
+          function __LmMissing() {
+            return __lmOrigCreate('span', { style: { display: 'inline-block', padding: '1px 6px', margin: '2px', border: '1px dashed #f59e0b', borderRadius: '4px', color: '#b45309', background: '#fffbeb', font: '11px ui-monospace, monospace' } }, '\\u26A0 missing component');
+          }
+          React.createElement = function(type) {
+            if (type === undefined || type === null) {
+              try { console.warn('[preview] Rendered an undefined component — likely a bad import or a default/named export mismatch.'); } catch (e) {}
+              var rest = Array.prototype.slice.call(arguments, 1);
+              return __lmOrigCreate.apply(React, [__LmMissing].concat(rest));
+            }
+            return __lmOrigCreate.apply(React, arguments);
+          };
+          React.__lmGuarded = true;
+        }
         var root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(React.createElement(React.StrictMode, null, React.createElement(AppComp)));
         function refreshTailwind() {
@@ -1198,9 +1231,19 @@ window.__reactRouterDom = (function() {
   (function() {
     function reportLocation() {
       try {
+        // This document is a srcdoc iframe (about:srcdoc → pathname "srcdoc")
+        // and the in-preview router routes off a VIRTUAL hash path (#/route).
+        // Report that virtual path — reporting window.location.pathname put a
+        // literal "srcdoc" in the editor's address bar.
+        var h = window.location.hash || '';
+        var path = '/';
+        if (h.length > 1) {
+          var raw = h.slice(1);
+          path = raw.charAt(0) === '/' ? raw : '/' + raw;
+        }
         window.parent.postMessage({
           type: 'lifemark-preview-location',
-          pathname: window.location.pathname + window.location.search + window.location.hash,
+          pathname: path,
         }, '*');
       } catch (e) {}
     }

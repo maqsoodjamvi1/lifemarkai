@@ -18,6 +18,9 @@ interface WebContainerPreviewProps {
   /** Hide the internal toolbar when embedded inside PreviewPanel */
   embedded?: boolean;
   className?: string;
+  /** Owning project — the WC singleton is torn down when this changes so
+   *  files from a previous project can't bleed into the new preview. */
+  projectId?: string;
 }
 
 type DeviceMode = "desktop" | "tablet" | "mobile";
@@ -36,6 +39,11 @@ let _npmInstalled: boolean = false;
 let _lastPackageJsonContent: string | null = null;
 let _wcDevServerReady = false;
 let _wcPreviewUrl: string | null = null;
+/** Project the singleton container currently holds files for. */
+let _wcProjectId: string | null = null;
+/** Guards against stacking concurrent `npm install` runs during streamed
+ *  package.json writes (each chunk used to spawn another install). */
+let _depsInstallRunning = false;
 const _lastWrittenGlobal = new Map<string, string>();
 
 const MAX_WATCHDOG_ATTEMPTS = 3;
@@ -60,7 +68,7 @@ function resetWebContainerSingleton() {
   _lastWrittenGlobal.clear();
 }
 
-const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onError, embedded = false, className = "" }) => {
+const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onError, embedded = false, className = "", projectId }) => {
   const [status, setStatus] = useState<Status>("idle");
   const [logs, setLogs] = useState<string[]>([]);
   // Watchdog state
@@ -157,7 +165,12 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
     const pkg = filesToLoad.find((f) => f.path.replace(/\\/g, "/").endsWith("package.json"));
     const content = pkg?.content ?? null;
     if (!content || content === _lastPackageJsonContent) return false;
+    // An install is already running — do NOT update _lastPackageJsonContent,
+    // so the next sync after it finishes re-detects the change and installs
+    // once, instead of spawning overlapping npm processes per stream chunk.
+    if (_depsInstallRunning) return false;
     _lastPackageJsonContent = content;
+    _depsInstallRunning = true;
     addLog("package.json changed — installing new dependencies…");
     try {
       const install = await wc.spawn("npm", ["install", "--legacy-peer-deps"]);
@@ -167,12 +180,27 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
       else addLog(`⚠ npm install exited with code ${code}`);
     } catch (e) {
       addLog(`⚠ Dependency install failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      _depsInstallRunning = false;
     }
     return true;
   }, [addLog]);
 
   const boot = useCallback(async (filesToLoad: ProjectFile[]) => {
     if (bootingRef.current || _bootInProgress) return;
+
+    // Project switch: the singleton container still holds the PREVIOUS
+    // project's files (mount/sync only ever add or overwrite — nothing is
+    // deleted), so hot-syncing a different project would serve a mix of both.
+    // Tear the container down and boot fresh.
+    if (_wcInstance && projectId && _wcProjectId && _wcProjectId !== projectId) {
+      try { _wcInstance.teardown(); } catch { /* already torn down */ }
+      resetWebContainerSingleton();
+      _npmInstalled = false;
+      _lastPackageJsonContent = null;
+      bootedRef.current = false;
+    }
+    if (projectId) _wcProjectId = projectId;
 
     // Dev server already running — hot-sync changed files (Vite HMR picks these up)
     if (_wcInstance && _wcDevServerReady) {
@@ -397,16 +425,21 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
     } finally {
       _bootInProgress = false;
     }
-  }, [addLog, mountFiles, onError, syncFiles, reinstallIfDepsChanged]);
+  }, [addLog, mountFiles, onError, syncFiles, reinstallIfDepsChanged, projectId]);
 
   const filesSignature = React.useMemo(() => filesContentSignature(files), [files]);
 
   useEffect(() => {
+    // Restore the running singleton's state on remount — but only when it
+    // belongs to THIS project, otherwise we'd flash the previous project's
+    // preview URL before boot() tears the container down.
+    if (projectId && _wcProjectId && _wcProjectId !== projectId) return;
     if (_wcPreviewUrl) setPreviewUrl(_wcPreviewUrl);
     if (_wcDevServerReady) {
       bootedRef.current = true;
       setStatus("ready");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

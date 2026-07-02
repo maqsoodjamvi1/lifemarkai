@@ -143,7 +143,10 @@ APIs; propose fixes. Keep secrets server-side. You may veto on security grounds.
   cto: {
     id: "cto",
     title: "AI CTO",
-    tier: "reasoning",
+    // Cross-vendor `review` tier on purpose: the CTO adjudicates work produced
+    // by the Claude coding tier, so a different model family catches blind
+    // spots a same-family reviewer would share (echo-chamber prevention).
+    tier: "review",
     systemPrompt: `${SHARED_PREAMBLE}
 ROLE: AI CTO (review persona, not a standing team member). Review architecture,
 scalability, security, code quality, and cloud cost. Provide prioritized,

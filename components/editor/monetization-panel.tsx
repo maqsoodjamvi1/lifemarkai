@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { DollarSign, Loader2, Check, ExternalLink, Users, TrendingUp, Lock, Unlock, CreditCard, Calendar, Copy } from "lucide-react";
+import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { DollarSign, Loader2, Check, ExternalLink, Users, TrendingUp, Lock, Unlock, CreditCard, Copy, UserPlus, UserMinus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +31,23 @@ interface Subscriber {
   created_at: string;
 }
 
+interface RevenueData {
+  currency: string;
+  priceCents: number;
+  activeSubscribers: number;
+  mrrCents: number;
+  newLast30: number;
+  churnedLast30: number;
+  series: Array<{
+    key: string;
+    label: string;
+    newSubs: number;
+    churned: number;
+    activeAtEnd: number;
+    mrrCents: number;
+  }>;
+}
+
 const CURRENCY_SYMBOLS: Record<string, string> = { usd: "$", eur: "€", gbp: "£", cad: "CA$" };
 
 export function MonetizationPanel({ projectId, projectSlug }: MonetizationPanelProps) {
@@ -40,6 +58,7 @@ export function MonetizationPanel({ projectId, projectSlug }: MonetizationPanelP
     trial_days: 7,
   });
   const [subscribers, setSubscribers] = useState<Subscriber[]>([]);
+  const [revenue, setRevenue] = useState<RevenueData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<"settings" | "subscribers">("settings");
@@ -59,7 +78,14 @@ export function MonetizationPanel({ projectId, projectSlug }: MonetizationPanelP
       } catch { /* use defaults */ }
       finally { setLoading(false); }
     }
+    async function loadRevenue() {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/revenue`);
+        if (res.ok) setRevenue(await res.json() as RevenueData);
+      } catch { /* revenue section falls back to local estimate */ }
+    }
     load();
+    loadRevenue();
   }, [projectId]);
 
   async function save() {
@@ -111,21 +137,41 @@ export function MonetizationPanel({ projectId, projectSlug }: MonetizationPanelP
         <p className="text-xs text-muted-foreground">Add a Stripe paywall to your published app</p>
       </div>
 
-      {/* Stats bar */}
-      <div className="grid grid-cols-3 divide-x divide-border border-b border-border">
-        {[
-          { label: "Subscribers", value: subscribers.length, icon: Users },
-          { label: "MRR", value: `${sym}${mrr.toFixed(0)}`, icon: TrendingUp },
-          { label: "Trial Days", value: config.trial_days, icon: Calendar },
-        ].map(({ label, value, icon: Icon }) => (
-          <div key={label} className="p-3 text-center">
-            <div className="flex items-center justify-center gap-1 mb-0.5">
-              <Icon className="w-3 h-3 text-muted-foreground" />
-              <p className="text-[10px] text-muted-foreground">{label}</p>
+      {/* Revenue */}
+      <div className="border-b border-border">
+        <div className="grid grid-cols-4 divide-x divide-border">
+          {[
+            { label: "MRR", value: `${sym}${((revenue?.mrrCents ?? mrr * 100) / 100).toFixed(0)}`, icon: TrendingUp },
+            { label: "Active", value: revenue?.activeSubscribers ?? subscribers.filter((s) => s.status === "active" || s.status === "trialing").length, icon: Users },
+            { label: "New 30d", value: revenue?.newLast30 ?? 0, icon: UserPlus },
+            { label: "Churned 30d", value: revenue?.churnedLast30 ?? 0, icon: UserMinus },
+          ].map(({ label, value, icon: Icon }) => (
+            <div key={label} className="p-3 text-center">
+              <div className="flex items-center justify-center gap-1 mb-0.5">
+                <Icon className="w-3 h-3 text-muted-foreground" />
+                <p className="text-[10px] text-muted-foreground">{label}</p>
+              </div>
+              <p className="text-lg font-bold text-foreground">{value}</p>
             </div>
-            <p className="text-lg font-bold text-foreground">{value}</p>
+          ))}
+        </div>
+        {revenue && revenue.series.some((m) => m.mrrCents > 0 || m.newSubs > 0) && (
+          <div className="px-3 pb-2">
+            <ResponsiveContainer width="100%" height={72}>
+              <BarChart data={revenue.series} margin={{ top: 4, right: 0, left: 0, bottom: 0 }} barSize={14}>
+                <XAxis dataKey="label" tick={{ fontSize: 9 }} axisLine={false} tickLine={false} />
+                <Tooltip
+                  cursor={{ fill: "rgba(255,255,255,0.04)" }}
+                  contentStyle={{ background: "hsl(var(--popover))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 11 }}
+                  formatter={(v: number, name: string) =>
+                    name === "MRR" ? [`${sym}${(v / 100).toFixed(2)}`, "MRR"] : [v, name]}
+                />
+                <Bar dataKey="mrrCents" name="MRR" fill="#10b981" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+            <p className="text-[9px] text-muted-foreground text-center">Monthly recurring revenue — last 6 months</p>
           </div>
-        ))}
+        )}
       </div>
 
       {/* Tabs */}
