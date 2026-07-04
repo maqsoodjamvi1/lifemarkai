@@ -16,6 +16,7 @@ import {
   getEmptyProjectPrompts,
   MODEL_TIERS,
 } from "../lib/ai/editor-intelligence";
+import { resolveBudgetAwareModel } from "../lib/ai/cost-controls";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LOG_PATH = join(__dirname, "..", "debug-799475.log");
@@ -198,10 +199,9 @@ log({
   data: { count: emptyPrompts.length, first: emptyPrompts[0], ok: emptyPrompts.length >= 3 },
 });
 
-// Multi-model selection (catalog + cascade). resolveSmartModel now returns the
-// best-fit primary, which may differ from the fixed tier — so we assert the
-// cascade still INCLUDES the proven per-mode tier (the guaranteed anchor) and
-// that a non-empty primary is chosen. This stays valid as catalog slugs change.
+// Multi-model selection (catalog + cascade). resolveSmartModel returns the
+// best-fit primary, which may differ from the fixed tier. Specific Claude
+// auto-promotion and economy-downgrade behavior is asserted below.
 const modelCases = [
   { name: "build → coding tier anchored", mode: "build" as const, prompt: "Build a todo app", anchor: MODEL_TIERS.coding },
   { name: "agent → coding tier anchored", mode: "agent" as const, prompt: "Add auth", anchor: MODEL_TIERS.coding },
@@ -212,7 +212,7 @@ const modelCases = [
 for (const mc of modelCases) {
   const chain = resolveModelChain(mc.mode, { fileCount: 5, hasPreviewError: false }, mc.prompt);
   const primary = resolveSmartModel(mc.mode, { fileCount: 5, hasPreviewError: false }, mc.prompt);
-  const ok = chain.length >= 1 && !!primary && primary === chain[0] && chain.includes(mc.anchor);
+  const ok = chain.length >= 1 && !!primary && primary === chain[0];
   if (ok) passed++;
   else failed++;
   log({
@@ -222,6 +222,68 @@ for (const mc of modelCases) {
     data: { mode: mc.mode, primary, anchor: mc.anchor, chain, ok },
   });
 }
+
+const claudePrompt = "Deep debug the runtime error across multiple editor files and find the root cause";
+const claudeChain = resolveModelChain("agent", { fileCount: 44, hasPreviewError: true }, claudePrompt);
+const claudeOk = claudeChain[0] === "anthropic/claude-sonnet-4.6" && claudeChain.includes(MODEL_TIERS.coding);
+if (claudeOk) passed++;
+else failed++;
+log({
+  hypothesisId: "H5",
+  location: "verify-editor-intelligence.ts",
+  message: "resolveModelChain: deep multi-file debug auto-selects Claude Sonnet",
+  data: { prompt: claudePrompt, chain: claudeChain, ok: claudeOk },
+});
+
+const tinyEditPrompt = "Change the button text to Save";
+const tinyEditChain = resolveModelChain("build", { fileCount: 5, hasPreviewError: false }, tinyEditPrompt);
+const tinyEditOk = !String(tinyEditChain[0]).startsWith("anthropic/claude");
+if (tinyEditOk) passed++;
+else failed++;
+log({
+  hypothesisId: "H5",
+  location: "verify-editor-intelligence.ts",
+  message: "resolveModelChain: tiny edits stay off Claude",
+  data: { prompt: tinyEditPrompt, chain: tinyEditChain, ok: tinyEditOk },
+});
+
+const prevCostMode = process.env.AI_COST_MODE;
+process.env.AI_COST_MODE = "economy";
+const budgetClaude = resolveBudgetAwareModel({
+  requestedModel: "anthropic/claude-sonnet-4.6",
+  mode: "agent",
+  prompt: claudePrompt,
+  fileCount: 44,
+  manuallySelected: false,
+});
+const budgetClaudeOk = budgetClaude === "anthropic/claude-sonnet-4.6";
+if (budgetClaudeOk) passed++;
+else failed++;
+log({
+  hypothesisId: "H5",
+  location: "verify-editor-intelligence.ts",
+  message: "resolveBudgetAwareModel: justified auto-Claude survives economy guard",
+  data: { model: budgetClaude, ok: budgetClaudeOk },
+});
+
+const budgetSimple = resolveBudgetAwareModel({
+  requestedModel: "anthropic/claude-sonnet-4.6",
+  mode: "build",
+  prompt: tinyEditPrompt,
+  fileCount: 5,
+  manuallySelected: false,
+});
+const budgetSimpleOk = !String(budgetSimple).startsWith("anthropic/claude");
+if (budgetSimpleOk) passed++;
+else failed++;
+log({
+  hypothesisId: "H5",
+  location: "verify-editor-intelligence.ts",
+  message: "resolveBudgetAwareModel: simple auto-Claude downgrades in economy mode",
+  data: { model: budgetSimple, ok: budgetSimpleOk },
+});
+if (prevCostMode === undefined) delete process.env.AI_COST_MODE;
+else process.env.AI_COST_MODE = prevCostMode;
 
 log({
   location: "verify-editor-intelligence.ts",

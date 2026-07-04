@@ -133,6 +133,10 @@ const LifemarkCloudPanel = dynamic(
   importWithRetry(() => import("./lifemark-cloud-panel").then((m) => m.LifemarkCloudPanel)),
   { ssr: false, loading: panelLoading }
 );
+const DatabaseManagerPanel = dynamic(
+  importWithRetry(() => import("./database-manager-panel").then((m) => m.DatabaseManagerPanel)),
+  { ssr: false, loading: panelLoading }
+);
 
 export interface LazyPanelContext {
   rightPanel: LeftPanel;
@@ -313,6 +317,7 @@ export function SecondaryPanelContent(ctx: LazyPanelContext) {
     return <ChangelogPanel projectId={project.id} onInsertChangelog={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />;
   }
   if (rightPanel === "dbquery") return <DbQueryPanel projectId={project.id} />;
+  if (rightPanel === "dbmanager") return <DatabaseManagerPanel projectId={pid} isLocked={isLiveLocked} />;
   if (rightPanel === "routerwiz") {
     return <RouterWizardPanel projectId={project.id} files={files} onInsertCode={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }} />;
   }

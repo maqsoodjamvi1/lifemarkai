@@ -24,7 +24,7 @@ Consolidated record of the Lovable.dev parity push. Use as a PR description / re
 ## What changed, by area
 
 ### AI model stack (`lib/ai/model-defaults.ts`, `editor-intelligence.ts`, `provider.ts`, `gateway/src/index.ts`)
-- Per-task model tiers (`MODEL_TIERS`): coding → `openrouter/pareto-code`, planning/chat/reasoning → `openrouter/fusion`, fast → `deepseek/deepseek-v4-flash`.
+- Per-task model tiers (`MODEL_TIERS`): coding -> `qwen/qwen3-coder`, planning/chat/reasoning -> `deepseek/deepseek-v4-pro`, fast -> `deepseek/deepseek-v4-flash`; premium/manual choices are limited to the compact approved catalog.
 - `resolveSmartModel` routes by mode + prompt length; provider layer routes through OpenRouter by default and still supports direct-provider fallback when disabled.
 - GPT-5 family uses `max_completion_tokens` (would have errored on `max_tokens`).
 - Gateway `TOKEN_COST_MAP` updated with real 2026 prices for the new models.

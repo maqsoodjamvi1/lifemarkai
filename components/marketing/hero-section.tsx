@@ -200,7 +200,7 @@ export function HeroSection() {
           className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-400 text-sm font-medium mb-8"
         >
           <Sparkles className="w-4 h-4" />
-          Powered by GPT-4o + Claude — Choose your AI
+          Powered by Claude Fable + Opus + Codex + GPT-5 — Choose your AI
         </motion.div>
 
         {/* Headline */}

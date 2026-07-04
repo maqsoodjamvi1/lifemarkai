@@ -23,10 +23,10 @@ const mappingCases = [
   { in: "claude-opus-4-6", out: "anthropic/claude-opus-4.6" },
   { in: "claude-sonnet-4-6", out: "anthropic/claude-sonnet-4.6" },
   { in: "claude-haiku-4-5-20251001", out: "anthropic/claude-haiku-4.5" },
-  { in: "gpt-4o", out: "openai/gpt-4o" },
-  { in: "gemini-2.0-flash", out: "google/gemini-2.0-flash" },
-  { in: "deepseek/deepseek-chat-v3-0324", out: "deepseek/deepseek-chat-v3-0324" },
-  { in: "openrouter/gpt-4o-mini", out: "openai/gpt-4o-mini" },
+  { in: "gpt-5.2", out: "openai/gpt-5.2" },
+  { in: "gpt-5.2-codex", out: "openai/gpt-5.2-codex" },
+  { in: "gemini-3.5-flash", out: "google/gemini-3.5-flash" },
+  { in: "deepseek/deepseek-v4-flash", out: "deepseek/deepseek-v4-flash" },
 ];
 
 for (const c of mappingCases) {
@@ -34,13 +34,13 @@ for (const c of mappingCases) {
   check(`resolveOpenRouterModelId: ${c.in}`, got === c.out, { expect: c.out, got });
 }
 
-check("DEFAULT_CODING_MODEL maps to Pareto code router", resolveOpenRouterModelId(DEFAULT_CODING_MODEL) === "openrouter/pareto-code", {
+check("DEFAULT_CODING_MODEL maps to Qwen coder", resolveOpenRouterModelId(DEFAULT_CODING_MODEL) === "qwen/qwen3-coder", {
   got: resolveOpenRouterModelId(DEFAULT_CODING_MODEL),
 });
 check("FAST_CODING_MODEL maps to DeepSeek flash", resolveOpenRouterModelId(FAST_CODING_MODEL) === "deepseek/deepseek-v4-flash", {
   got: resolveOpenRouterModelId(FAST_CODING_MODEL),
 });
-check("BALANCED maps to OpenRouter Fusion", resolveOpenRouterModelId(BALANCED_CODING_MODEL) === "openrouter/fusion", {
+check("BALANCED maps to DeepSeek pro", resolveOpenRouterModelId(BALANCED_CODING_MODEL) === "deepseek/deepseek-v4-pro", {
   got: resolveOpenRouterModelId(BALANCED_CODING_MODEL),
 });
 

@@ -9,6 +9,7 @@
 import { generateAI as generateDirect, clampMaxTokens } from "./provider";
 import { generateViaGateway, isGatewayAvailable } from "./gateway-client";
 import { getDefaultAiModel } from "./model-defaults";
+import { assertOpenRouterCredit, routesViaOpenRouter } from "./openrouter-credits";
 export type { GenerateOptions, GenerateResult, AIMessage, AIModel } from "./provider";
 
 export { generateDirect as generateDirectAI };
@@ -22,6 +23,13 @@ export async function generateAI(
   // model only supports less.
   const model = options.model ?? getDefaultAiModel();
   options = { ...options, maxTokens: clampMaxTokens(model, options.maxTokens) };
+
+  // Pre-flight guard: never overdraw the OpenRouter account. Blocks only when the
+  // balance is CONFIRMED depleted (fail-open otherwise); cached ~60s so it adds
+  // at most one balance check per minute across all requests.
+  if (routesViaOpenRouter(model)) {
+    await assertOpenRouterCredit();
+  }
 
   if (isGatewayAvailable()) {
     return generateViaGateway(options, ctx);

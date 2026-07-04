@@ -110,7 +110,7 @@ function Hero() {
         <div className="flex justify-center mb-6">
           <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground border border-border/60 rounded-full px-3 py-1 bg-card/40">
             <Sparkles className="w-3 h-3" />
-            Powered by GPT-4o, Claude &amp; Gemini
+            Powered by Claude Fable, Opus &amp; Sonnet, Codex &amp; GPT-5
           </span>
         </div>
 

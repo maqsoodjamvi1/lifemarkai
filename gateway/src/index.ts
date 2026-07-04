@@ -64,9 +64,10 @@ interface UsagePayload {
 // Values are [input_per_1M_usd, output_per_1M_usd]
 const TOKEN_COST_MAP: Record<string, [number, number]> = {
   // OpenAI
-  "gpt-5.2":             [1.75,  14.00],
-  "gpt-4o":              [2.50,  10.00],
-  "gpt-4o-mini":         [0.15,   0.60],
+  "gpt-5.2":                  [1.75,  14.00],
+  "openai/gpt-5.2":           [1.75,  14.00],
+  "openai/gpt-5.2-codex":     [1.75,  14.00],
+  "openai/gpt-5.5":           [5.00,  30.00],
   // Anthropic — native API IDs use hyphens, OpenRouter slugs use DOTS.
   // Tiers route via OpenRouter (dot slugs); native keys kept for direct calls.
   "claude-opus-4-8":            [5.00,  25.00],
@@ -79,6 +80,8 @@ const TOKEN_COST_MAP: Record<string, [number, number]> = {
   "anthropic/claude-haiku-4.5": [0.80,   4.00],
   // Google
   "gemini-3.1-pro":      [2.00,  12.00],
+  "google/gemini-3.5-flash":[0.50, 3.00],
+  "google/gemini-3.1-flash-lite":[0.25, 1.50],
   "gemini-3-flash-preview":[0.50,  3.00],
   "gemini-3.1-flash-lite":[0.25,   1.50],
   "gemini-3.1-flash-image":[0.50,  3.00], // image output billed per-image upstream
@@ -86,19 +89,14 @@ const TOKEN_COST_MAP: Record<string, [number, number]> = {
   "gemini-2.0-flash-lite":[0.075, 0.30],
   "gemini-1.5-pro":      [1.25,   5.00],
   // OpenRouter models — rough estimates
-  "openrouter/fusion":                    [2.00, 10.00],
-  "openrouter/pareto-code":               [2.00, 10.00],
   "deepseek/deepseek-v4-pro":             [0.55, 2.19],
   "deepseek/deepseek-v4-flash":           [0.10, 0.40],
-  "meta-llama/llama-3.3-70b-instruct": [0.59, 0.79],
-  "meta-llama/llama-4-maverick":        [0.18, 0.59],
-  "deepseek/deepseek-r1":               [0.55, 2.19],
-  "deepseek/deepseek-chat-v3-0324":     [0.27, 1.10],
-  "mistralai/mistral-large":            [2.00, 6.00],
+  "qwen/qwen3-coder":                     [0.20, 0.80],
+  "qwen/qwen3-coder:free":                [0.00, 0.00],
+  "meta-llama/llama-3.3-70b-instruct:free": [0.00, 0.00],
   "mistralai/devstral-2512":            [0.10, 0.30],
-  "qwen/qwen3-235b-a22b":               [0.50, 1.50],
-  "google/gemma-3-27b-it":              [0.10, 0.20],
-  "moonshotai/kimi-k2.5":               [0.60, 2.50],
+  "z-ai/glm-5-turbo":                   [0.20, 0.80],
+  "moonshotai/kimi-k2.7-code":          [0.60, 2.50],
 };
 
 // Fallback cost when model is unknown
@@ -511,7 +509,7 @@ async function handleChat(request: Request, env: Env, ctx: ExecutionContext): Pr
     });
   }
 
-  const model = (body.model as string | undefined) ?? "openrouter/fusion";
+  const model = (body.model as string | undefined) ?? "qwen/qwen3-coder";
   const isStreaming = body.stream === true;
   const projectId = request.headers.get("X-Lifemark-Project-Id") ?? "";
   const userId = request.headers.get("X-Lifemark-User-Id") ?? "";

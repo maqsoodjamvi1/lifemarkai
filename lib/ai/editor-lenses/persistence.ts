@@ -395,7 +395,40 @@ export async function buildEditorIntelligencePromptBlock(
       /* table optional (pre-075 DB) — non-fatal */
     }
 
-    if (decisions.length === 0 && messages.length === 0 && findings.length === 0) return "";
+    // Project instruction files (Lovable parity — Lovable reads AGENTS.md /
+    // CLAUDE.md from the repo): first found wins, capped to protect the
+    // context budget.
+    let instructionPath: string | null = null;
+    let instructionContent = "";
+    try {
+      const INSTRUCTION_PATHS = ["AGENTS.md", "CLAUDE.md", ".lifemark/instructions.md"];
+      const { data: instructionRows } = await supabase
+        .from("project_files")
+        .select("path, content")
+        .eq("project_id", projectId)
+        .in("path", INSTRUCTION_PATHS);
+      const rows = (instructionRows ?? []) as Array<{ path?: string; content?: string | null }>;
+      for (const candidate of INSTRUCTION_PATHS) {
+        const row = rows.find((r) => r.path === candidate && (r.content ?? "").trim().length > 0);
+        if (row) {
+          instructionPath = candidate;
+          instructionContent = (row.content ?? "").trim();
+          break;
+        }
+      }
+      if (instructionContent.length > 4000) {
+        instructionContent = `${instructionContent.slice(0, 4000)}\n[...instructions truncated at 4000 characters — full file in the repo]`;
+      }
+    } catch {
+      /* project instructions optional — non-fatal */
+    }
+
+    if (
+      decisions.length === 0 &&
+      messages.length === 0 &&
+      findings.length === 0 &&
+      !instructionPath
+    ) return "";
 
     const lines = [
       "---",
@@ -412,6 +445,14 @@ export async function buildEditorIntelligencePromptBlock(
         const where = f.file_path ? ` [${f.file_path}]` : "";
         lines.push(`- (${f.severity ?? "warning"}/${f.category ?? "general"}) ${short(f.title ?? "", 140)}${where}`);
       }
+    }
+
+    if (instructionPath && instructionContent) {
+      lines.push(
+        "",
+        `Project instructions (from ${instructionPath} in the repo — follow these when generating code):`,
+        instructionContent,
+      );
     }
 
     if (decisions.length > 0) {

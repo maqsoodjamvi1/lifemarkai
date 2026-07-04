@@ -96,7 +96,7 @@ function toOpenRouterModel(model: AIModel): string | null {
   return null;
 }
 
-/** Lifemark config uses `openrouter/gpt-4o-mini`; OpenRouter expects `openai/gpt-4o-mini`. */
+/** Lifemark config may use `openrouter/<provider-model>`; OpenRouter expects `provider/model`. */
 function normalizeOpenRouterModel(model: string): string {
   if (model.startsWith("anthropic/claude-") || model.startsWith("claude-")) {
     return resolveOpenRouterModelId(model);
@@ -133,7 +133,7 @@ function isFallbackableError(err: unknown): boolean {
  * ID is rejected. Env-overridable. gpt-4o is broadly available and cheap.
  */
 const OPENROUTER_SAFE_MODEL: string =
-  process.env.OPENROUTER_SAFE_FALLBACK_MODEL || "openai/gpt-4o";
+  process.env.OPENROUTER_SAFE_FALLBACK_MODEL || "deepseek/deepseek-v4-flash";
 
 /**
  * True when OpenRouter rejected the request because the model slug itself is
@@ -154,10 +154,29 @@ function isInvalidModelError(err: unknown): boolean {
 }
 
 /**
- * Call OpenRouter, but if the slug is rejected as invalid, retry ONCE with a
- * known-good model so a stale or mistyped model ID degrades instead of
- * hard-failing a build/chat. (Reliability-at-scale: model slugs drift as
- * OpenRouter renames/retires them; a generation must never die on that.)
+ * True when a `:free` model variant failed for capacity reasons (free pools
+ * are shared: 20 req/min, congested endpoints, provider overload). The right
+ * recovery is a paid retry — NOT a retry on the same free endpoint. NOTE:
+ * OpenRouter 402s (negative balance) are deliberately excluded — a paid
+ * retry would 402 too, so that error should surface to the user.
+ */
+function isFreeCapacityError(model: string, err: unknown): boolean {
+  if (!model.endsWith(":free")) return false;
+  const status = (err as { status?: number; response?: { status?: number } }).status
+    ?? (err as { response?: { status?: number } }).response?.status;
+  const msg = (err as { message?: string }).message ?? "";
+  if (status === 402 || /insufficient credits/i.test(msg)) return false;
+  return (
+    status === 429 || status === 502 || status === 503 ||
+    /rate.?limit|overloaded|capacity|temporarily|no instances|try again/i.test(msg)
+  );
+}
+
+/**
+ * Call OpenRouter, but degrade instead of hard-failing:
+ *  - invalid/stale slug → retry ONCE with the known-good safe model;
+ *  - `:free` variant hit its rate limit / congestion → retry ONCE with the
+ *    paid safe model (free tiers are best-effort by design).
  */
 async function generateOpenRouterSafe(
   options: GenerateOptions,
@@ -167,10 +186,18 @@ async function generateOpenRouterSafe(
     return await generateOpenRouter({ ...options, model: model as AIModel });
   } catch (err) {
     if (isInvalidModelError(err) && model !== OPENROUTER_SAFE_MODEL) {
-       
+
       console.warn(
         `[ai/provider] OpenRouter rejected "${model}" as an invalid model; ` +
           `retrying with ${OPENROUTER_SAFE_MODEL}.`,
+      );
+      return generateOpenRouter({ ...options, model: OPENROUTER_SAFE_MODEL as AIModel });
+    }
+    if (isFreeCapacityError(model, err) && model !== OPENROUTER_SAFE_MODEL) {
+
+      console.warn(
+        `[ai/provider] Free model "${model}" is rate-limited/congested; ` +
+          `retrying with paid ${OPENROUTER_SAFE_MODEL}.`,
       );
       return generateOpenRouter({ ...options, model: OPENROUTER_SAFE_MODEL as AIModel });
     }
@@ -376,6 +403,7 @@ async function generateOpenAI(options: GenerateOptions & { model: AIModel }): Pr
       ...openAiTokenArg(options.model, options.maxTokens ?? 8000),
       temperature: options.temperature ?? 0.7,
       stream: true,
+      stream_options: { include_usage: true },
       ...(options.jsonMode ? { response_format: { type: "json_object" as const } } : {}),
     });
 
@@ -465,6 +493,7 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
       ...openAiTokenArg(options.model, options.maxTokens ?? 8000),
       temperature: options.temperature ?? 0.7,
       stream: true,
+      stream_options: { include_usage: true },
       // OpenRouter forwards response_format to the underlying provider.
       // Models that don't support json_object (some open-weight models)
       // silently ignore the flag — no downside to always sending it in

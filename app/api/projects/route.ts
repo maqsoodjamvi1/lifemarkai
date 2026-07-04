@@ -23,7 +23,11 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
-  const { name, description, framework = "react", templateId, forkFiles } = body;
+  const { name, description, templateId, forkFiles } = body;
+  // SSR-first default: Next.js App Router unless the client picked a framework
+  // or the deployment overrides it (DEFAULT_NEW_PROJECT_FRAMEWORK=react to revert).
+  const framework: string =
+    body.framework ?? process.env.DEFAULT_NEW_PROJECT_FRAMEWORK ?? "next";
 
   if (!name) return NextResponse.json({ error: "Name is required" }, { status: 400 });
 
@@ -103,6 +107,133 @@ export async function POST(req: NextRequest) {
 
 function getStarterFiles(name: string, framework: string) {
   const safeName = name.replace(/[^a-zA-Z0-9]/g, "");
+
+  // Next.js App Router starter — minimal SSR-first scaffold. The AI's first
+  // build replaces app/page.tsx (the placeholder text is what the validator's
+  // placeholder_entry check looks for).
+  if (framework === "next" || framework === "nextjs") {
+    return [
+      {
+        path: "app/layout.tsx",
+        language: "typescriptreact",
+        content: `import type { Metadata } from "next";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: ${JSON.stringify(name)},
+  description: "Built with LifemarkAI",
+};
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
+  );
+}`,
+      },
+      {
+        path: "app/page.tsx",
+        language: "typescriptreact",
+        content: `export default function Home() {
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 to-slate-800 flex items-center justify-center">
+      <div className="text-center">
+        <h1 className="text-4xl font-bold text-white mb-4">${name}</h1>
+        <p className="text-slate-400 text-lg">Your app is ready. Start chatting with AI to build it!</p>
+      </div>
+    </div>
+  );
+}`,
+      },
+      {
+        path: "app/globals.css",
+        language: "css",
+        content: `@tailwind base;\n@tailwind components;\n@tailwind utilities;`,
+      },
+      {
+        path: "next.config.mjs",
+        language: "javascript",
+        content: `/** @type {import('next').NextConfig} */\nconst nextConfig = { reactStrictMode: true };\nexport default nextConfig;`,
+      },
+      {
+        path: "tailwind.config.ts",
+        language: "typescript",
+        content: `import type { Config } from "tailwindcss";
+
+const config: Config = {
+  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],
+  theme: { extend: {} },
+  plugins: [],
+};
+export default config;`,
+      },
+      {
+        path: "postcss.config.mjs",
+        language: "javascript",
+        content: `export default {\n  plugins: { tailwindcss: {}, autoprefixer: {} },\n};`,
+      },
+      {
+        path: "tsconfig.json",
+        language: "json",
+        content: JSON.stringify({
+          compilerOptions: {
+            target: "ES2020",
+            lib: ["dom", "dom.iterable", "esnext"],
+            allowJs: true,
+            skipLibCheck: true,
+            strict: true,
+            noEmit: true,
+            esModuleInterop: true,
+            module: "esnext",
+            moduleResolution: "bundler",
+            resolveJsonModule: true,
+            isolatedModules: true,
+            jsx: "preserve",
+            incremental: true,
+            plugins: [{ name: "next" }],
+            paths: { "@/*": ["./*"] },
+          },
+          include: ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+          exclude: ["node_modules"],
+        }, null, 2),
+      },
+      {
+        path: "package.json",
+        language: "json",
+        content: JSON.stringify({
+          name: safeName.toLowerCase() || "app",
+          private: true,
+          version: "0.1.0",
+          scripts: {
+            dev: "next dev",
+            build: "next build",
+            start: "next start",
+          },
+          dependencies: {
+            next: "^14.2.15",
+            react: "^18.3.1",
+            "react-dom": "^18.3.1",
+            "lucide-react": "^0.414.0",
+          },
+          devDependencies: {
+            "@types/node": "^20",
+            "@types/react": "^18.3.5",
+            "@types/react-dom": "^18.3.0",
+            autoprefixer: "^10.4.20",
+            postcss: "^8.4.45",
+            tailwindcss: "^3.4.11",
+            typescript: "^5.5.3",
+          },
+        }, null, 2),
+      },
+      {
+        path: "README.md",
+        language: "markdown",
+        content: `# ${name}\n\nBuilt with LifemarkAI 🚀 — Next.js 14 App Router (SSR-first)\n\n## Getting Started\n\nDescribe what you want to build in the chat panel and let the AI do the work.`,
+      },
+    ];
+  }
 
   return [
     {

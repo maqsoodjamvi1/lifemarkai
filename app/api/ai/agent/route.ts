@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { runAgent, type AgentStep } from "@/lib/ai/agent";
+import { mcpInitialize, mcpListTools, mcpCallTool } from "@/lib/ai/mcp-client";
 import { detectLanguage } from "@/lib/ai/code-parser";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
@@ -21,6 +22,7 @@ import {
   buildEditorIntelligencePromptBlock,
   recordEditorIntelligenceBuild,
 } from "@/lib/ai/editor-lenses/persistence";
+import { maxOutputTokensForRequest, resolveBudgetAwareModel } from "@/lib/ai/cost-controls";
 
 export const runtime = "nodejs";
 // Agent run + backend wiring + browser verification (Lovable budgets 15 min).
@@ -40,7 +42,8 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { projectId, task, model } = body;
+  const { projectId, task, rawTask, model, modelManuallySelected = false } = body;
+  const costTask = typeof rawTask === "string" && rawTask.trim() ? rawTask : task;
   if (!projectId || typeof projectId !== "string") {
     return NextResponse.json({ error: "projectId is required" }, { status: 400 });
   }
@@ -110,6 +113,69 @@ export async function POST(req: NextRequest) {
 
   const { data: files } = await (supabase as any)
     .from("project_files").select("path, content").eq("project_id", projectId);
+  const effectiveModel = resolveBudgetAwareModel({
+    requestedModel: model,
+    mode: "agent",
+    prompt: costTask,
+    fileCount: Array.isArray(files) ? files.length : 0,
+    manuallySelected: modelManuallySelected === true,
+  });
+
+  // ── User MCP chat connectors (migration 076) ─────────────────────────────
+  // Load the user's enabled remote MCP servers (cap 5), list their tools, and
+  // expose them to the agent as namespaced "mcp_{server}_{tool}" extra tools.
+  // Failures are skipped silently (logged) — a dead connector never blocks a run.
+  type ExtraTool = {
+    name: string;
+    description: string;
+    inputSchema?: unknown;
+    execute: (args: Record<string, unknown>) => Promise<string>;
+  };
+  const MAX_MCP_SERVERS = 5;
+  const MAX_MCP_TOOLS = 25;
+  const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "server";
+  const extraTools: ExtraTool[] = [];
+  try {
+    const { data: mcpServers } = await (supabase as any)
+      .from("user_mcp_servers")
+      .select("id, name, url, auth_header, enabled")
+      .eq("user_id", user.id)
+      .eq("enabled", true)
+      .order("created_at", { ascending: true })
+      .limit(MAX_MCP_SERVERS);
+
+    if (Array.isArray(mcpServers) && mcpServers.length > 0) {
+      const settled = await Promise.allSettled(
+        mcpServers.map(async (srv: { id: string; name: string; url: string; auth_header: string | null }) => {
+          const init = await mcpInitialize(srv.url, srv.auth_header);
+          const tools = await mcpListTools(srv.url, srv.auth_header, init.sessionId);
+          return { srv, sessionId: init.sessionId, tools };
+        })
+      );
+      for (const outcome of settled) {
+        if (outcome.status === "rejected") {
+          console.warn("[agent] MCP connector skipped:", outcome.reason instanceof Error ? outcome.reason.message : outcome.reason);
+          continue;
+        }
+        const { srv, sessionId, tools } = outcome.value;
+        const serverSlug = slugify(srv.name);
+        for (const tool of tools) {
+          if (extraTools.length >= MAX_MCP_TOOLS) break;
+          const toolName = `mcp_${serverSlug}_${slugify(tool.name)}`;
+          if (extraTools.some((t) => t.name === toolName)) continue;
+          extraTools.push({
+            name: toolName,
+            description: `[${srv.name} connector] ${tool.description || tool.name}`.slice(0, 400),
+            inputSchema: tool.inputSchema,
+            execute: (args: Record<string, unknown>) =>
+              mcpCallTool(srv.url, { name: tool.name, args, authHeader: srv.auth_header, sessionId }),
+          });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[agent] MCP connector loading failed:", err instanceof Error ? err.message : err);
+  }
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -122,8 +188,16 @@ export async function POST(req: NextRequest) {
           task,
           projectId,
           files: files ?? [],
-          model,
+          model: effectiveModel,
+          maxOutputTokens: maxOutputTokensForRequest({
+            mode: "agent",
+            prompt: costTask,
+            fileCount: Array.isArray(files) ? files.length : 0,
+            defaultBuildMax: 8000,
+            defaultChatMax: 4000,
+          }),
           knowledge,
+          extraTools: extraTools.length > 0 ? extraTools : undefined,
           onStep: (step: AgentStep) => send({ step }),
           onFileChange: async (path: string, content: string) => {
             send({ fileUpdated: { path, content: content.slice(0, 100) + "..." } });
@@ -142,7 +216,7 @@ export async function POST(req: NextRequest) {
           {
             project_id: projectId, role: "assistant",
             content: result.summary, tokens_used: result.tokensUsed,
-            model: model ?? getDefaultAiModel(), mode: "agent",
+            model: effectiveModel ?? getDefaultAiModel(), mode: "agent",
             metadata: { steps: result.steps.length, files_changed: result.filesChanged },
           },
         ]);

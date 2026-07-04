@@ -10,6 +10,15 @@ import { claimDailyCredits } from "@/lib/credits";
 import { parseAIResponse } from "@/lib/ai/code-parser";
 import { recordEditorIntelligenceBuild } from "@/lib/ai/editor-lenses/persistence";
 
+/**
+ * Free daily "Try to fix" quota (Lovable parity — error fixes are Lovable's
+ * flagship free action): the first N auto-fix runs per user per UTC day cost
+ * 0 credits. Usage is still logged to credit_logs (via `deduct_credits` with
+ * amount 0, action "auto_fix") so the count survives restarts and is
+ * enforceable server-side. Fix #21+ costs 1 credit as before.
+ */
+const FREE_FIXES_PER_DAY = 20;
+
 function parseFixResponse(raw: string): {
   files: Array<{ path: string; content: string }>;
   explanation: string;
@@ -42,14 +51,29 @@ export async function POST(req: NextRequest) {
   }
 
   await claimDailyCredits(supabase, user.id);
-  const { data: profile } = await (supabase as any)
-    .from("profiles")
-    .select("credits")
-    .eq("id", user.id)
-    .single();
 
-  if (!profile || profile.credits < 0.5) {
-    return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
+  // Count today's (UTC) auto-fix runs — under the free quota, the fix is free
+  // and the balance gate is skipped entirely (same pattern as inline-edit).
+  const utcDayStart = new Date();
+  utcDayStart.setUTCHours(0, 0, 0, 0);
+  const { count: fixesUsedToday } = await (supabase as any)
+    .from("credit_logs")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id)
+    .eq("action", "auto_fix")
+    .gte("created_at", utcDayStart.toISOString());
+  const isFreeFix = (fixesUsedToday ?? 0) < FREE_FIXES_PER_DAY;
+
+  if (!isFreeFix) {
+    const { data: profile } = await (supabase as any)
+      .from("profiles")
+      .select("credits")
+      .eq("id", user.id)
+      .single();
+
+    if (!profile || profile.credits < 0.5) {
+      return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
+    }
   }
 
   const fileList = Array.isArray(files) ? files : [];
@@ -116,9 +140,12 @@ Return the fixed files as JSON.`;
       }
     }
 
+    // First FREE_FIXES_PER_DAY fixes/day are free: log usage at cost 0
+    // (deduct_credits inserts the credit_logs row we count against the quota,
+    // bypassing RLS via SECURITY DEFINER). Beyond the quota, deduct 1 credit.
     await (supabase as any).rpc("deduct_credits" as never, {
       user_id: user.id,
-      amount: 1,
+      amount: isFreeFix ? 0 : 1,
       action: "auto_fix",
       project_id: projectId,
       description: `Auto-fixed: ${buildError.slice(0, 80)}`,
@@ -145,14 +172,21 @@ Return the fixed files as JSON.`;
       },
     });
 
-    import("@/lib/stripe/auto-topup")
-      .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
-      .catch(() => {});
+    if (!isFreeFix) {
+      import("@/lib/stripe/auto-topup")
+        .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
+        .catch(() => {});
+    }
 
     return NextResponse.json({
       files: parsed.files,
       explanation: parsed.explanation,
       tokensUsed: result.tokensUsed ?? 0,
+      free: isFreeFix,
+      freeFixesRemainingToday: Math.max(
+        0,
+        FREE_FIXES_PER_DAY - (fixesUsedToday ?? 0) - 1
+      ),
     });
   } catch (err) {
     console.error("Auto-fix error:", err);

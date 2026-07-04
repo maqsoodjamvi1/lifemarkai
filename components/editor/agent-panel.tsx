@@ -1,11 +1,15 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Bot, Zap, ChevronDown, ChevronRight, Square,
   CheckCircle, AlertCircle, Eye, Code2, Loader2, Send,
+  FileText, FilePlus2, Pencil, Trash2, List, Search, FolderSearch,
+  Crosshair, Image as ImageIcon, Wrench, ShieldCheck, Lightbulb,
+  Clock, Files, Terminal,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentStep } from "@/lib/ai/agent";
@@ -29,6 +33,10 @@ interface AgentRun {
   status: "running" | "done" | "error";
   summary?: string;
   creditsUsed?: number;
+  /** Epoch ms — set when the run is created; used for the elapsed-time readout */
+  startedAt: number;
+  /** Epoch ms — set on done/error/stop so elapsed freezes */
+  finishedAt?: number;
 }
 
 const STEP_ICONS = {
@@ -38,6 +46,140 @@ const STEP_ICONS = {
   done: { icon: "✅", color: "text-green-400", bg: "bg-green-500/10 border-green-500/20" },
   error: { icon: "❌", color: "text-red-400", bg: "bg-red-500/10 border-red-500/20" },
 };
+
+// ── Lovable-style structured Tasks view ─────────────────────────────────────
+// Consecutive steps are grouped into phases by the tool the agent used.
+// (Tool roster lives in lib/ai/agent.ts — buildTools().)
+
+type Phase = "exploring" | "editing" | "verifying" | "other";
+
+const EXPLORE_TOOLS = /^(read_file|list_files|search_code|glob_search|analyze_code|find_definition)$/;
+const EDIT_TOOLS = /^(write_file|edit_file|delete_file|generate_image)$/;
+// No verify tools exist yet in agent.ts — future-proof by name pattern.
+const VERIFY_TOOLS = /(test|verify|lint|check)/i;
+
+const PHASE_META: Record<Phase, { label: string; icon: LucideIcon; color: string }> = {
+  exploring: { label: "Exploring", icon: Eye, color: "text-blue-400" },
+  editing: { label: "Editing", icon: Pencil, color: "text-yellow-400" },
+  verifying: { label: "Verifying", icon: ShieldCheck, color: "text-green-400" },
+  other: { label: "Working", icon: Wrench, color: "text-muted-foreground" },
+};
+
+const TOOL_ICONS: Record<string, LucideIcon> = {
+  read_file: FileText,
+  write_file: FilePlus2,
+  edit_file: Pencil,
+  delete_file: Trash2,
+  list_files: List,
+  search_code: Search,
+  glob_search: FolderSearch,
+  analyze_code: Code2,
+  find_definition: Crosshair,
+  generate_image: ImageIcon,
+  finish: CheckCircle,
+};
+
+const STEP_TYPE_ICONS: Record<AgentStep["type"], LucideIcon> = {
+  thought: Lightbulb,
+  action: Wrench,
+  observation: Eye,
+  done: CheckCircle,
+  error: AlertCircle,
+};
+
+function phaseForTool(tool?: string): Phase {
+  if (!tool) return "other";
+  if (EXPLORE_TOOLS.test(tool)) return "exploring";
+  if (EDIT_TOOLS.test(tool)) return "editing";
+  if (VERIFY_TOOLS.test(tool)) return "verifying";
+  return "other";
+}
+
+function stepFilePath(step: AgentStep): string | null {
+  const p = step.args?.path;
+  return typeof p === "string" ? p : null;
+}
+
+/** One-line summary: tool + its primary argument (file path / pattern / query). */
+function stepSummary(step: AgentStep): string {
+  if (step.tool) {
+    const primary =
+      stepFilePath(step) ??
+      (typeof step.args?.pattern === "string" ? (step.args.pattern as string)
+        : typeof step.args?.query === "string" ? (step.args.query as string)
+        : typeof step.args?.symbol === "string" ? (step.args.symbol as string)
+        : "");
+    return primary ? `${step.tool} · ${primary}` : step.tool;
+  }
+  return step.content.split("\n")[0];
+}
+
+interface StepItem {
+  step: AgentStep;
+  /** Index into run.steps — shared with the raw log so expandedSteps works for both */
+  index: number;
+  /** Observation emitted right after this action, folded into its expanded detail */
+  observation?: AgentStep;
+}
+
+interface StepGroup {
+  phase: Phase;
+  items: StepItem[];
+  /** Unique file paths touched by this phase's steps */
+  files: string[];
+  /** Raw step count incl. folded observations */
+  stepCount: number;
+}
+
+function groupSteps(steps: AgentStep[]): StepGroup[] {
+  const groups: StepGroup[] = [];
+  let pendingThoughts: StepItem[] = [];
+
+  const push = (phase: Phase, item: StepItem) => {
+    let target = groups[groups.length - 1];
+    if (!target || target.phase !== phase) {
+      target = { phase, items: [], files: [], stepCount: 0 };
+      groups.push(target);
+    }
+    target.items.push(item);
+    target.stepCount += item.observation ? 2 : 1;
+    const p = stepFilePath(item.step);
+    if (p && !target.files.includes(p)) target.files.push(p);
+  };
+
+  steps.forEach((step, index) => {
+    if (step.type === "thought") {
+      // Thoughts lead into the next action — attach them to its phase.
+      pendingThoughts.push({ step, index });
+      return;
+    }
+    if (step.type === "observation") {
+      const last = groups[groups.length - 1];
+      const lastItem = last?.items[last.items.length - 1];
+      if (lastItem && lastItem.step.type === "action" && !lastItem.observation) {
+        lastItem.observation = step;
+        last.stepCount += 1;
+        return;
+      }
+      push(last?.phase ?? "other", { step, index });
+      return;
+    }
+    const phase =
+      step.type === "action"
+        ? phaseForTool(step.tool)
+        : groups[groups.length - 1]?.phase ?? "other"; // done/error join the current phase
+    for (const t of pendingThoughts) push(phase, t);
+    pendingThoughts = [];
+    push(phase, { step, index });
+  });
+  for (const t of pendingThoughts) push(groups[groups.length - 1]?.phase ?? "other", t);
+  return groups;
+}
+
+function formatElapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}
 
 const SUGGESTED_TASKS = [
   "Add user authentication with login and signup pages",
@@ -53,16 +195,43 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
+  // Structured Tasks view: section open/closed overrides (key: `${runId}:${groupIdx}`)
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  const [showRawLog, setShowRawLog] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const abortRef = useRef<AbortController | null>(null);
 
   const activeRun = runs.find((r) => r.id === activeRunId);
   const isRunning = activeRun?.status === "running";
 
+  // Tick the elapsed-time readout while a run is in flight
+  useEffect(() => {
+    if (!isRunning) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [isRunning]);
+
+  const groups = useMemo(
+    () => (activeRun ? groupSteps(activeRun.steps) : []),
+    [activeRun]
+  );
+
+  const changedFiles = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of activeRun?.steps ?? []) {
+      if (s.type === "action" && s.tool && EDIT_TOOLS.test(s.tool)) {
+        const p = stepFilePath(s);
+        if (p) set.add(p);
+      }
+    }
+    return set;
+  }, [activeRun]);
+
   async function startAgent() {
     if (isLocked || !task.trim() || isRunning || credits < 5) return;
 
     const runId = `run-${Date.now()}`;
-    const newRun: AgentRun = { id: runId, task, steps: [], status: "running" };
+    const newRun: AgentRun = { id: runId, task, steps: [], status: "running", startedAt: Date.now() };
     setRuns((prev) => [newRun, ...prev]);
     setActiveRunId(runId);
     setTask("");
@@ -77,6 +246,20 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
         signal: abortRef.current.signal,
       });
 
+      // Surface non-stream rejections explicitly — without this a 423
+      // (Live-environment lock, migration 046) or 402 produced a silent
+      // no-op run and the user had no idea why nothing changed.
+      if (!res.ok) {
+        if (res.status === 423) {
+          throw new Error(
+            "Project is in Live mode — edits are locked. Switch the environment to Test (top bar) to run the agent, then promote to Live when ready."
+          );
+        }
+        if (res.status === 402) {
+          throw new Error("Insufficient credits — agent runs cost 5 credits.");
+        }
+        throw new Error(`Agent API error: ${res.status}`);
+      }
       if (!res.body) throw new Error("No response body");
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -102,7 +285,7 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
             if (data.done) {
               setRuns((prev) => prev.map((r) =>
                 r.id === runId
-                  ? { ...r, status: "done", summary: data.result?.summary, creditsUsed: data.creditsUsed }
+                  ? { ...r, status: "done", summary: data.result?.summary, creditsUsed: data.creditsUsed, finishedAt: Date.now() }
                   : r
               ));
               if (data.creditsUsed) onCreditsChange(credits - data.creditsUsed);
@@ -117,7 +300,7 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
 
             if (data.error) {
               setRuns((prev) => prev.map((r) =>
-                r.id === runId ? { ...r, status: "error", summary: data.error } : r
+                r.id === runId ? { ...r, status: "error", summary: data.error, finishedAt: Date.now() } : r
               ));
             }
           } catch {}
@@ -126,7 +309,7 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
     } catch (err: unknown) {
       if ((err as Error).name !== "AbortError") {
         setRuns((prev) => prev.map((r) =>
-          r.id === runId ? { ...r, status: "error", summary: String(err) } : r
+          r.id === runId ? { ...r, status: "error", summary: String(err), finishedAt: Date.now() } : r
         ));
       }
     }
@@ -136,7 +319,7 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
     abortRef.current?.abort();
     if (activeRunId) {
       setRuns((prev) => prev.map((r) =>
-        r.id === activeRunId ? { ...r, status: "error", summary: "Stopped by user" } : r
+        r.id === activeRunId ? { ...r, status: "error", summary: "Stopped by user", finishedAt: Date.now() } : r
       ));
     }
   }
@@ -147,6 +330,10 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
       next.has(i) ? next.delete(i) : next.add(i);
       return next;
     });
+  }
+
+  function toggleSection(key: string, defaultOpen: boolean) {
+    setOpenSections((prev) => ({ ...prev, [key]: !(prev[key] ?? defaultOpen) }));
   }
 
   return (
@@ -201,14 +388,128 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
 
         {activeRun && (
           <div className="p-4 space-y-3">
+            {/* Run header — status pill, files changed, elapsed, raw-log toggle */}
+            <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-muted/30 text-xs">
+              {activeRun.status === "running" ? (
+                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-300 font-medium">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Running
+                </span>
+              ) : activeRun.status === "done" ? (
+                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-green-500/10 border border-green-500/20 text-green-400 font-medium">
+                  <CheckCircle className="w-3 h-3" /> Complete
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-red-500/10 border border-red-500/20 text-red-400 font-medium">
+                  <AlertCircle className="w-3 h-3" /> Failed
+                </span>
+              )}
+              <span className="flex items-center gap-1 text-muted-foreground">
+                <Files className="w-3 h-3" />
+                {changedFiles.size} file{changedFiles.size === 1 ? "" : "s"} changed
+              </span>
+              <span className="flex items-center gap-1 text-muted-foreground">
+                <Clock className="w-3 h-3" />
+                {formatElapsed((activeRun.finishedAt ?? now) - activeRun.startedAt)}
+              </span>
+              <button
+                onClick={() => setShowRawLog((v) => !v)}
+                className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded-md border transition-colors ${
+                  showRawLog
+                    ? "bg-accent border-border text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground hover:bg-accent/50"
+                }`}
+                title="Toggle raw step log"
+              >
+                <Terminal className="w-3 h-3" /> Raw log
+              </button>
+            </div>
+
             {/* Task */}
             <div className="px-3 py-2 rounded-xl bg-muted text-sm">
               <span className="text-xs text-muted-foreground block mb-1">Task</span>
               {activeRun.task}
             </div>
 
-            {/* Steps */}
-            {activeRun.steps.map((step, i) => {
+            {/* Structured Tasks view — steps grouped into collapsible phases */}
+            {!showRawLog && groups.map((group, gi) => {
+              const meta = PHASE_META[group.phase];
+              const PhaseIcon = meta.icon;
+              const sectionKey = `${activeRun.id}:${gi}:${group.phase}`;
+              const isLastGroup = gi === groups.length - 1;
+              const defaultOpen = isRunning && isLastGroup;
+              const open = openSections[sectionKey] ?? defaultOpen;
+
+              return (
+                <motion.div
+                  key={sectionKey}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="rounded-xl border border-border bg-muted/30 overflow-hidden"
+                >
+                  <button
+                    onClick={() => toggleSection(sectionKey, defaultOpen)}
+                    className="w-full flex items-center gap-2 px-3 py-2 hover:bg-accent/50 transition-colors"
+                  >
+                    {open
+                      ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" />
+                      : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
+                    <PhaseIcon className={`w-3.5 h-3.5 shrink-0 ${meta.color}`} />
+                    <span className="text-xs font-semibold">{meta.label}</span>
+                    {isRunning && isLastGroup && (
+                      <Loader2 className="w-3 h-3 animate-spin text-violet-400 shrink-0" />
+                    )}
+                    <span className="ml-auto text-[10px] text-muted-foreground shrink-0">
+                      {group.stepCount} step{group.stepCount === 1 ? "" : "s"}
+                      {group.files.length > 0 &&
+                        ` · ${group.files.length} file${group.files.length === 1 ? "" : "s"}`}
+                    </span>
+                  </button>
+
+                  {open && (
+                    <div className="border-t border-border/50 divide-y divide-border/40">
+                      {group.items.map(({ step, index, observation }) => {
+                        const RowIcon = step.tool
+                          ? TOOL_ICONS[step.tool] ?? Wrench
+                          : STEP_TYPE_ICONS[step.type] ?? Wrench;
+                        const expanded = expandedSteps.has(index);
+                        const detail = observation
+                          ? `${step.content}\n\n${observation.content}`
+                          : step.content;
+
+                        return (
+                          <div key={index} className="px-3 py-2">
+                            <div
+                              className="flex items-start gap-2 cursor-pointer"
+                              onClick={() => toggleStep(index)}
+                            >
+                              <RowIcon className="w-3.5 h-3.5 shrink-0 mt-0.5 text-muted-foreground" />
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs text-foreground/90 font-mono truncate">
+                                  {stepSummary(step)}
+                                </div>
+                                {expanded && (
+                                  <div className="mt-1.5 text-xs text-foreground/70 font-mono leading-relaxed whitespace-pre-wrap break-words">
+                                    {detail}
+                                  </div>
+                                )}
+                              </div>
+                              <button className="shrink-0 mt-0.5">
+                                {expanded
+                                  ? <ChevronDown className="w-3 h-3 text-muted-foreground" />
+                                  : <ChevronRight className="w-3 h-3 text-muted-foreground" />}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </motion.div>
+              );
+            })}
+
+            {/* Raw log — original flat step list, kept for debugging */}
+            {showRawLog && activeRun.steps.map((step, i) => {
               const config = STEP_ICONS[step.type];
               const expanded = expandedSteps.has(i);
               const isLong = step.content.length > 100;

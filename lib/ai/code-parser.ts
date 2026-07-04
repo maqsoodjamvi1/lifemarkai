@@ -610,6 +610,15 @@ export function validateGeneratedFiles(
     ...files.map((f) => f.path),
     ...existingFiles.map((f) => f.path),
   ]);
+  // Next.js App Router project — app/layout.tsx / app/page.tsx / next.config.*
+  // present in the effective file set. Skips Vite-specific checks (index.html,
+  // src/main.tsx, App.tsx) and requires the Next entry files instead.
+  const isNextProject = [...allPaths].some(
+    (p) =>
+      p === "app/layout.tsx" ||
+      p === "app/page.tsx" ||
+      /^next\.config\.(js|mjs|ts)$/.test(p)
+  );
   const generatedPaths = new Set<string>();
   for (const file of files) {
     if (generatedPaths.has(file.path)) {
@@ -814,15 +823,26 @@ export function validateGeneratedFiles(
     ];
     for (const match of aliasImports) {
       const importPath = match[1];
-      const resolved = importPath.replace(/^@\//, "src/");
-      const found =
-        normPaths.has(resolved) ||
-        normPaths.has(resolved + ".ts") ||
-        normPaths.has(resolved + ".tsx") ||
-        normPaths.has(resolved + ".js") ||
-        normPaths.has(resolved + ".jsx") ||
-        normPaths.has(resolved + "/index.ts") ||
-        normPaths.has(resolved + "/index.tsx");
+      // "@/x" maps to src/x in Vite apps but to ./x (project root) in Next.js
+      // App Router apps (tsconfig paths "@/*": ["./*"]) — accept whichever resolves.
+      const aliasResolves = (base: string) =>
+        normPaths.has(base) ||
+        normPaths.has(base + ".ts") ||
+        normPaths.has(base + ".tsx") ||
+        normPaths.has(base + ".js") ||
+        normPaths.has(base + ".jsx") ||
+        normPaths.has(base + "/index.ts") ||
+        normPaths.has(base + "/index.tsx");
+      const srcResolved = importPath.replace(/^@\//, "src/");
+      const rootResolved = importPath.replace(/^@\//, "");
+      const resolved = aliasResolves(srcResolved)
+        ? srcResolved
+        : aliasResolves(rootResolved)
+          ? rootResolved
+          : isNextProject
+            ? rootResolved
+            : srcResolved;
+      const found = aliasResolves(resolved);
 
       if (!found) {
         errors.push({
@@ -942,23 +962,28 @@ export function validateGeneratedFiles(
     (f) => /\.(tsx|jsx)$/.test(f.path) && !/(^|\/)[\w.-]*\.config\.(t|j)sx?$/.test(f.path)
   );
   if (hasReactCode) {
-    const hasEntry = [...allPaths].some(
-      (p) =>
-        /(^|\/)App\.(tsx|jsx)$/.test(p) ||
-        p === "src/main.tsx" ||
-        p === "src/main.jsx" ||
-        p === "main.tsx"
-    );
+    const hasEntry = isNextProject
+      ? allPaths.has("app/layout.tsx") && allPaths.has("app/page.tsx")
+      : [...allPaths].some(
+          (p) =>
+            /(^|\/)App\.(tsx|jsx)$/.test(p) ||
+            p === "src/main.tsx" ||
+            p === "src/main.jsx" ||
+            p === "main.tsx"
+        );
     if (!hasEntry) {
       errors.push({
         type: "missing_entry",
-        message:
-          "No App.tsx or src/main.tsx entry file — preview will be blank. Include a default-exported App component.",
+        message: isNextProject
+          ? "Next.js App Router project is missing app/layout.tsx and/or app/page.tsx — the app cannot render. Include both."
+          : "No App.tsx or src/main.tsx entry file — preview will be blank. Include a default-exported App component.",
         severity: "error",
       });
     }
 
-    const effectiveIndex = effectiveContent(effectiveFiles, "index.html");
+    // index.html / src/main.tsx mount checks are Vite-only — Next.js owns the
+    // document via app/layout.tsx and has no index.html.
+    const effectiveIndex = isNextProject ? "" : effectiveContent(effectiveFiles, "index.html");
     if (effectiveIndex) {
       if (!hasRootMountTarget(effectiveIndex)) {
         errors.push({
@@ -999,9 +1024,11 @@ export function validateGeneratedFiles(
     // default scaffold placeholder — i.e. the real UI was never produced (often
     // because the response was truncated and App.tsx dropped). The effective App
     // is the newly-generated one if present, else the existing file.
+    const isMainEntry = (p: string) =>
+      isNextProject ? p === "app/page.tsx" : /(^|\/)App\.(tsx|jsx)$/.test(p);
     const effectiveApp =
-      files.find((f) => /(^|\/)App\.(tsx|jsx)$/.test(f.path)) ??
-      existingFiles.find((f) => /(^|\/)App\.(tsx|jsx)$/.test(f.path));
+      files.find((f) => isMainEntry(f.path)) ??
+      existingFiles.find((f) => isMainEntry(f.path));
     if (
       effectiveApp &&
       /Start chatting with AI to build it|Your app is ready\./i.test(effectiveApp.content)
@@ -1036,10 +1063,12 @@ export function validateGeneratedFiles(
   // ── Check for required config files (new project) ─────────────────────────
   const isNewProject = existingFiles.length === 0;
   if (isNewProject) {
-    const required = [
-      "index.html", "vite.config.ts", "tsconfig.json",
-      "package.json", "src/main.tsx", "src/App.tsx",
-    ];
+    const required = isNextProject
+      ? ["package.json", "tsconfig.json", "app/layout.tsx", "app/page.tsx"]
+      : [
+          "index.html", "vite.config.ts", "tsconfig.json",
+          "package.json", "src/main.tsx", "src/App.tsx",
+        ];
     for (const req of required) {
       if (!allPaths.has(req)) {
         errors.push({
@@ -1079,6 +1108,14 @@ export function assessGenerationQuality(
   const all = [...byPath.values()];
   const paths = new Set(all.map((f) => f.path));
   const appType = opts.appType;
+  // Next.js App Router project — pages are app/**/page.tsx and the main page is
+  // app/page.tsx; components/lib live at the project root instead of src/.
+  const isNextProject = all.some(
+    (f) =>
+      f.path === "app/layout.tsx" ||
+      f.path === "app/page.tsx" ||
+      /^next\.config\.(js|mjs|ts)$/.test(f.path)
+  );
 
   // 1. Too few files overall — likely only the scaffold landed.
   if (all.length < minFiles) {
@@ -1090,8 +1127,9 @@ export function assessGenerationQuality(
   }
 
   // 2. Too few feature components (excluding the ui/ primitive kit).
+  // Vite apps: src/components/ · Next.js apps: components/ at project root.
   const featureComponents = all.filter(
-    (f) => /(^|\/)src\/components\//.test("/" + f.path) && !/\/components\/ui\//.test("/" + f.path)
+    (f) => /(^|\/)(src\/)?components\//.test("/" + f.path) && !/\/components\/ui\//.test("/" + f.path)
   );
   if (minFiles >= 12 && featureComponents.length < 3) {
     errors.push({
@@ -1105,8 +1143,12 @@ export function assessGenerationQuality(
   // Prefer a real Home page; else the largest page file; fall back to App.tsx
   // ONLY when there are no page files (i.e. App.tsx truly is the whole app).
   // A short App.tsx that just wires a router to real pages is correct, not sparse.
-  const pageFiles = all.filter((f) => /(^|\/)src\/pages\//.test("/" + f.path));
-  const homePage = all.find((f) => /(^|\/)pages\/Home\.(tsx|jsx)$/.test(f.path));
+  const pageFiles = isNextProject
+    ? all.filter((f) => /^app(\/.+)?\/page\.(tsx|jsx)$/.test(f.path))
+    : all.filter((f) => /(^|\/)src\/pages\//.test("/" + f.path));
+  const homePage = isNextProject
+    ? all.find((f) => f.path === "app/page.tsx")
+    : all.find((f) => /(^|\/)pages\/Home\.(tsx|jsx)$/.test(f.path));
   const appFile = all.find((f) => /(^|\/)App\.(tsx|jsx)$/.test(f.path));
   const main =
     homePage ??
@@ -1130,11 +1172,15 @@ export function assessGenerationQuality(
     }
   }
 
-  const pageCount = all.filter((f) => /(^|\/)src\/pages\/.+\.(tsx|jsx)$/.test(f.path)).length;
+  const pageCount = isNextProject
+    ? pageFiles.length
+    : all.filter((f) => /(^|\/)src\/pages\/.+\.(tsx|jsx)$/.test(f.path)).length;
   const hasSupabaseMigration = all.some((f) => /^supabase\/migrations\/.+\.sql$/.test(f.path));
-  const hasSupabaseClient = paths.has("src/lib/supabase.ts") || paths.has("src/lib/supabase.tsx");
+  const hasSupabaseClient =
+    paths.has("src/lib/supabase.ts") || paths.has("src/lib/supabase.tsx") ||
+    paths.has("lib/supabase.ts") || paths.has("lib/supabase.tsx");
   const hasDataLayer = all.some((f) =>
-    /^src\/(lib|hooks)\//.test(f.path) &&
+    /^(src\/)?(lib|hooks)\//.test(f.path) &&
     /(api|data-source|repository|service|store-api|erp-api|use[A-Z])/.test(f.path) &&
     /(supabase|fallback|seed|local)/i.test(f.content)
   );

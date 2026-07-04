@@ -40,7 +40,7 @@ const testimonials = [
     stars: 5,
   },
   {
-    quote: "I used Lovable before but switched to LifemarkAI for the multi-model AI support. Being able to use Claude for complex logic and GPT-4o for UI is 🤌",
+    quote: "I used Lovable before but switched to LifemarkAI for the multi-model AI support. Being able to use Claude Fable for complex logic and Codex for quick edits is 🤌",
     name: "Leo Zhang",
     role: "AI product builder",
     avatar: "LZ",

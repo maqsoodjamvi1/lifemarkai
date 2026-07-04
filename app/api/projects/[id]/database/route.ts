@@ -1,0 +1,410 @@
+// @ts-nocheck
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { queryManagedSql, runManagedSql } from "@/lib/cloud/management";
+import { ENV_FILE_PATH, parseEnvFile } from "@/lib/project/env-file";
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
+interface Params { params: Promise<{ id: string }> }
+
+/**
+ * Database Manager for the APP BEING BUILT (per-project backend) — NOT the
+ * platform database. Lovable-Cloud-style table browser / editor / SQL runner.
+ *
+ * Backend resolution (per project):
+ *  1. cloud_enabled + cloud_ref  → managed Lifemark Cloud backend (Management API SQL)
+ *  2. VITE_SUPABASE_URL in the app's .env.local → the app's own Supabase over
+ *     PostgREST (service key preferred; anon key works but RLS applies)
+ *  3. neither → { backend: "none" } so the panel shows a CTA.
+ */
+
+const IDENT_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+const BLOCKED_SQL_RE = /^\s*(drop\s+database|truncate\s+auth|delete\s+from\s+auth)/i;
+
+// ── SQL literal encoder (same pattern as lib/import/lovable-db.ts) ──────────
+function sqlLiteral(value: unknown): string {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "NULL";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "object") {
+    // json / jsonb / arrays — serialize and cast
+    return `'${JSON.stringify(value).replace(/'/g, "''")}'::jsonb`;
+  }
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function badIdent(name: string): boolean {
+  return typeof name !== "string" || !IDENT_RE.test(name);
+}
+
+// ── Backend resolution ───────────────────────────────────────────────────────
+type Backend =
+  | { kind: "cloud"; ref: string }
+  | { kind: "supabase"; url: string; key: string; rls: boolean }
+  | { kind: "none" };
+
+async function resolveBackend(supabase, project): Promise<Backend> {
+  if (project.cloud_enabled && project.cloud_ref) {
+    return { kind: "cloud", ref: project.cloud_ref };
+  }
+  // The app's own Supabase — creds live in the project's .env.local file
+  // (same storage the Env panel uses: project_files at ENV_FILE_PATH).
+  const { data: envRow } = await (supabase as any)
+    .from("project_files")
+    .select("content")
+    .eq("project_id", project.id)
+    .eq("path", ENV_FILE_PATH)
+    .maybeSingle();
+  const vars = parseEnvFile(envRow?.content ?? "");
+  const url = (vars.VITE_SUPABASE_URL ?? vars.NEXT_PUBLIC_SUPABASE_URL ?? "").trim().replace(/\/+$/, "");
+  const serviceKey = (vars.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
+  const anonKey = (vars.VITE_SUPABASE_ANON_KEY ?? vars.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
+  const key = serviceKey || anonKey;
+  if (/^https:\/\/[\w.-]+/.test(url) && key) {
+    return { kind: "supabase", url, key, rls: !serviceKey };
+  }
+  return { kind: "none" };
+}
+
+function restHeaders(key: string): Record<string, string> {
+  return {
+    apikey: key,
+    Authorization: `Bearer ${key}`,
+    "Content-Type": "application/json",
+  };
+}
+
+/** Owner-only project load shared by GET/POST. Returns a NextResponse on failure. */
+async function loadOwnedProject(supabase, projectId: string, userId: string) {
+  const { data: project } = await (supabase as any)
+    .from("projects")
+    .select("id, user_id, environment, cloud_enabled, cloud_ref")
+    .eq("id", projectId)
+    .single();
+  if (!project || project.user_id !== userId) {
+    return { project: null, error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
+  }
+  return { project, error: null };
+}
+
+// ── GET — ?action=tables | ?action=rows&table=X&limit=50&offset=0 ────────────
+export async function GET(req: NextRequest, { params }: Params) {
+  const { id: projectId } = await params;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const rl = await rateLimitAsync(`db-manager:${user.id}`, RATE_LIMITS.api);
+  if (!rl.success) return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
+
+  const { project, error } = await loadOwnedProject(supabase, projectId, user.id);
+  if (error) return error;
+
+  const backend = await resolveBackend(supabase, project);
+  const action = req.nextUrl.searchParams.get("action") ?? "tables";
+
+  try {
+    if (action === "tables") {
+      if (backend.kind === "none") {
+        return NextResponse.json({ backend: "none", tables: [] });
+      }
+      if (backend.kind === "cloud") {
+        const tables = await listCloudTables(backend.ref);
+        return NextResponse.json({ backend: "cloud", tables });
+      }
+      const tables = await listRestTables(backend.url, backend.key);
+      return NextResponse.json({
+        backend: "supabase",
+        tables,
+        ...(backend.rls
+          ? { note: "Connected with the anon key — Row Level Security policies apply to reads and writes." }
+          : {}),
+      });
+    }
+
+    if (action === "rows") {
+      const table = req.nextUrl.searchParams.get("table") ?? "";
+      if (badIdent(table)) {
+        return NextResponse.json({ error: "Invalid table name" }, { status: 400 });
+      }
+      const limit = Math.min(Math.max(parseInt(req.nextUrl.searchParams.get("limit") ?? "50", 10) || 50, 1), 200);
+      const offset = Math.max(parseInt(req.nextUrl.searchParams.get("offset") ?? "0", 10) || 0, 0);
+
+      if (backend.kind === "none") {
+        return NextResponse.json({ backend: "none", rows: [] });
+      }
+      if (backend.kind === "cloud") {
+        const dataRes = await queryManagedSql(
+          backend.ref,
+          `SELECT * FROM "public"."${table}" LIMIT ${limit} OFFSET ${offset}`,
+        );
+        if (!dataRes.ok) return NextResponse.json({ error: dataRes.error }, { status: 502 });
+        const countRes = await queryManagedSql(
+          backend.ref,
+          `SELECT count(*)::bigint AS total FROM "public"."${table}"`,
+        );
+        const total = countRes.ok ? Number(countRes.rows?.[0]?.total ?? 0) : undefined;
+        return NextResponse.json({ backend: "cloud", rows: dataRes.rows, total });
+      }
+      // PostgREST — ranged GET with exact count
+      const res = await fetch(
+        `${backend.url}/rest/v1/${table}?select=*&limit=${limit}&offset=${offset}`,
+        { headers: { ...restHeaders(backend.key), Prefer: "count=exact" } },
+      );
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        return NextResponse.json({ error: `PostgREST ${res.status}: ${body.slice(0, 300)}` }, { status: 502 });
+      }
+      const rows = await res.json();
+      const totalPart = res.headers.get("content-range")?.split("/")[1];
+      const total = totalPart && totalPart !== "*" ? Number(totalPart) : undefined;
+      return NextResponse.json({ backend: "supabase", rows, total, ...(backend.rls ? { rls: true } : {}) });
+    }
+
+    return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: "Database request failed: " + message }, { status: 502 });
+  }
+}
+
+// ── POST — insert / update / delete / sql ────────────────────────────────────
+export async function POST(req: NextRequest, { params }: Params) {
+  const { id: projectId } = await params;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const rl = await rateLimitAsync(`db-manager:${user.id}`, RATE_LIMITS.api);
+  if (!rl.success) return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
+
+  const { project, error } = await loadOwnedProject(supabase, projectId, user.id);
+  if (error) return error;
+
+  // Live lock (migration 046): all writes blocked on Live; reads stay allowed.
+  if (project.environment === "live") {
+    return NextResponse.json(
+      { environment_locked: true, error: "Project is Live — switch to Test to modify data." },
+      { status: 423 },
+    );
+  }
+
+  const body = await req.json().catch(() => ({}));
+  const action = body?.action as string;
+  const backend = await resolveBackend(supabase, project);
+  if (backend.kind === "none") {
+    return NextResponse.json({ backend: "none", error: "No backend connected" }, { status: 400 });
+  }
+
+  try {
+    // ── SQL runner (managed Cloud only — Management API executes raw SQL) ──
+    if (action === "sql") {
+      if (backend.kind !== "cloud") {
+        return NextResponse.json(
+          { error: "The SQL editor is only available on managed Lifemark Cloud backends." },
+          { status: 400 },
+        );
+      }
+      const sql = String(body?.sql ?? "").trim();
+      if (!sql) return NextResponse.json({ error: "sql is required" }, { status: 400 });
+      if (BLOCKED_SQL_RE.test(sql)) {
+        return NextResponse.json({ error: "This statement is blocked for safety." }, { status: 400 });
+      }
+      const res = await queryManagedSql(backend.ref, sql);
+      if (!res.ok) return NextResponse.json({ error: res.error }, { status: 502 });
+      return NextResponse.json({ ok: true, rows: res.rows ?? [] });
+    }
+
+    // ── Row mutations — validate every identifier before touching SQL ──────
+    const table = body?.table as string;
+    if (badIdent(table)) return NextResponse.json({ error: "Invalid table name" }, { status: 400 });
+
+    if (action === "insert" || action === "update") {
+      const values = body?.values;
+      if (!values || typeof values !== "object" || Array.isArray(values) || Object.keys(values).length === 0) {
+        return NextResponse.json({ error: "values object is required" }, { status: 400 });
+      }
+      for (const col of Object.keys(values)) {
+        if (badIdent(col)) return NextResponse.json({ error: `Invalid column name: ${col}` }, { status: 400 });
+      }
+    }
+    if (action === "update" || action === "delete") {
+      if (badIdent(body?.pk)) return NextResponse.json({ error: "Invalid primary key column" }, { status: 400 });
+      if (body?.pkValue === undefined || body?.pkValue === null) {
+        return NextResponse.json({ error: "pkValue is required" }, { status: 400 });
+      }
+    }
+
+    if (backend.kind === "cloud") {
+      if (action === "insert") {
+        const cols = Object.keys(body.values);
+        const sql =
+          `INSERT INTO "public"."${table}" (${cols.map((c) => `"${c}"`).join(", ")}) ` +
+          `VALUES (${cols.map((c) => sqlLiteral(body.values[c])).join(", ")}) RETURNING *`;
+        const res = await queryManagedSql(backend.ref, sql);
+        if (!res.ok) return NextResponse.json({ error: res.error }, { status: 502 });
+        return NextResponse.json({ ok: true, rows: res.rows ?? [] });
+      }
+      if (action === "update") {
+        const sets = Object.entries(body.values)
+          .map(([c, v]) => `"${c}" = ${sqlLiteral(v)}`)
+          .join(", ");
+        const sql =
+          `UPDATE "public"."${table}" SET ${sets} ` +
+          `WHERE "${body.pk}" = ${sqlLiteral(body.pkValue)} RETURNING *`;
+        const res = await queryManagedSql(backend.ref, sql);
+        if (!res.ok) return NextResponse.json({ error: res.error }, { status: 502 });
+        return NextResponse.json({ ok: true, rows: res.rows ?? [] });
+      }
+      if (action === "delete") {
+        const sql = `DELETE FROM "public"."${table}" WHERE "${body.pk}" = ${sqlLiteral(body.pkValue)}`;
+        const res = await runManagedSql(backend.ref, sql);
+        if (!res.ok) return NextResponse.json({ error: res.error }, { status: 502 });
+        return NextResponse.json({ ok: true });
+      }
+      return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+    }
+
+    // ── PostgREST verbs (the app's own Supabase) ────────────────────────────
+    const h = restHeaders(backend.key);
+    const filter = action !== "insert" ? `?${body.pk}=eq.${encodeURIComponent(String(body.pkValue))}` : "";
+
+    let res: Response;
+    if (action === "insert") {
+      res = await fetch(`${backend.url}/rest/v1/${table}`, {
+        method: "POST",
+        headers: { ...h, Prefer: "return=representation" },
+        body: JSON.stringify(body.values),
+      });
+    } else if (action === "update") {
+      res = await fetch(`${backend.url}/rest/v1/${table}${filter}`, {
+        method: "PATCH",
+        headers: { ...h, Prefer: "return=representation" },
+        body: JSON.stringify(body.values),
+      });
+    } else if (action === "delete") {
+      res = await fetch(`${backend.url}/rest/v1/${table}${filter}`, { method: "DELETE", headers: h });
+    } else {
+      return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+    }
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      return NextResponse.json({ error: `PostgREST ${res.status}: ${errBody.slice(0, 300)}` }, { status: 502 });
+    }
+    const rows = res.status === 204 ? [] : await res.json().catch(() => []);
+    return NextResponse.json({
+      ok: true,
+      rows,
+      ...(backend.rls ? { rls: true, note: "Anon key — RLS policies applied to this write." } : {}),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: "Database request failed: " + message }, { status: 502 });
+  }
+}
+
+// ── Table listing helpers ─────────────────────────────────────────────────────
+
+/** Managed Cloud: information_schema + pg_class reltuples row estimates. */
+async function listCloudTables(ref: string) {
+  const [tablesRes, colsRes, pksRes, estRes] = await Promise.all([
+    queryManagedSql(ref, `
+      SELECT table_name FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+      ORDER BY table_name`),
+    queryManagedSql(ref, `
+      SELECT table_name, column_name, data_type FROM information_schema.columns
+      WHERE table_schema = 'public'
+      ORDER BY table_name, ordinal_position`),
+    queryManagedSql(ref, `
+      SELECT tc.table_name, kcu.column_name
+      FROM information_schema.table_constraints tc
+      JOIN information_schema.key_column_usage kcu
+        ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema
+      WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = 'public'`),
+    queryManagedSql(ref, `
+      SELECT c.relname AS table_name, GREATEST(c.reltuples, 0)::bigint AS estimate
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind = 'r'`),
+  ]);
+  if (!tablesRes.ok) throw new Error(tablesRes.error ?? "Failed to list tables");
+
+  const pkSet = new Set(
+    (pksRes.rows ?? []).map((r) => `${r.table_name}.${r.column_name}`),
+  );
+  const estimates = new Map(
+    (estRes.rows ?? []).map((r) => [r.table_name, Number(r.estimate) || 0]),
+  );
+  const colsByTable = new Map<string, Array<{ name: string; type: string; isPk: boolean }>>();
+  for (const r of colsRes.rows ?? []) {
+    const list = colsByTable.get(r.table_name) ?? [];
+    list.push({
+      name: r.column_name,
+      type: r.data_type,
+      isPk: pkSet.has(`${r.table_name}.${r.column_name}`),
+    });
+    colsByTable.set(r.table_name, list);
+  }
+  return (tablesRes.rows ?? [])
+    .map((r) => r.table_name)
+    .filter((name) => IDENT_RE.test(name))
+    .map((name) => ({
+      name,
+      rowCount: estimates.get(name) ?? 0,
+      columns: colsByTable.get(name) ?? [],
+    }));
+}
+
+/** PostgREST: tables + columns from the OpenAPI root; counts via ranged HEAD. */
+async function listRestTables(url: string, key: string) {
+  const res = await fetch(`${url}/rest/v1/`, { headers: restHeaders(key) });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`PostgREST ${res.status}: ${body.slice(0, 300)}`);
+  }
+  const spec = await res.json().catch(() => null);
+  const defs = spec?.definitions ?? {};
+
+  const tables = Object.entries(defs)
+    .filter(([name]) => IDENT_RE.test(name))
+    .map(([name, def]) => {
+      const props = (def as any)?.properties ?? {};
+      const colNames = Object.keys(props).filter((c) => IDENT_RE.test(c));
+      // PostgREST marks PK columns with "<pk/>" in the description; if absent,
+      // fall back to assuming "id" is the primary key when present.
+      const described = colNames.filter(
+        (c) => typeof props[c]?.description === "string" && props[c].description.includes("<pk/>"),
+      );
+      const pkSet = new Set(described.length ? described : colNames.includes("id") ? ["id"] : []);
+      return {
+        name,
+        rowCount: 0,
+        columns: colNames.map((c) => ({
+          name: c,
+          type: props[c]?.format?.split(" ")[0] ?? props[c]?.type ?? "unknown",
+          isPk: pkSet.has(c),
+        })),
+      };
+    });
+
+  // Estimated row counts — one cheap ranged HEAD per table.
+  await Promise.all(
+    tables.map(async (t) => {
+      try {
+        const r = await fetch(`${url}/rest/v1/${t.name}?select=*`, {
+          method: "HEAD",
+          headers: { ...restHeaders(key), Prefer: "count=estimated", Range: "0-0", "Range-Unit": "items" },
+        });
+        const totalPart = r.headers.get("content-range")?.split("/")[1];
+        t.rowCount = totalPart && totalPart !== "*" ? Number(totalPart) : 0;
+      } catch {
+        t.rowCount = 0;
+      }
+    }),
+  );
+  return tables;
+}

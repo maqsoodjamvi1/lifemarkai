@@ -5,6 +5,7 @@ import { generateAI } from "@/lib/ai/generate";
 import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { generateImage, isImageGenConfigured, type ImageSize } from "@/lib/ai/image-generate";
 import { rateLimit } from "@/lib/rate-limit";
+import { isApprovedModel } from "@/lib/ai/cost-controls";
 
 // POST /api/projects/[id]/ai-proxy
 // Managed, no-key AI connector for apps built with LifemarkAI.
@@ -407,7 +408,8 @@ export async function POST(
       return json(origin, { error: "messages array required" }, 400);
     }
 
-    const selectedModel = body.model ?? project.ai_integration_model ?? DEFAULT_CODING_MODEL;
+    const requestedModel = body.model ?? project.ai_integration_model ?? DEFAULT_CODING_MODEL;
+    const selectedModel = isApprovedModel(requestedModel) ? requestedModel : DEFAULT_CODING_MODEL;
     const result = await generateAI(
       {
         model: selectedModel,

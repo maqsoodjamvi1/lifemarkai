@@ -11,9 +11,17 @@ import type { AIModel } from "./provider";
 // Since we route through OpenRouter, these MUST be the dot form — verified
 // against openrouter.ai (2026): opus-4.8, sonnet-4.6, haiku-4.5 all resolve.
 
-const ROUTER_FRONTIER = "openrouter/fusion";
-const ROUTER_CODING = "openrouter/pareto-code";
+// Default to economy-safe approved models. Keep OpenRouter routers out of the
+// default path; Auto mode should choose from the product-approved model set.
+const ROUTER_FRONTIER = "deepseek/deepseek-v4-pro";
+const ROUTER_CODING = "qwen/qwen3-coder";
 const ROUTER_FAST = "deepseek/deepseek-v4-flash";
+
+export const PREMIUM_CODING_MODEL: AIModel =
+  (process.env.OPENROUTER_PREMIUM_CODING_MODEL || "openai/gpt-5.2-codex") as AIModel;
+
+export const PREMIUM_REASONING_MODEL: AIModel =
+  (process.env.OPENROUTER_PREMIUM_REASONING_MODEL || "openai/gpt-5.2") as AIModel;
 
 /** Primary model for coding. */
 export const DEFAULT_CODING_MODEL: AIModel =
@@ -44,13 +52,31 @@ export const REASONING_MODEL: AIModel =
   (process.env.OPENROUTER_REASONING_MODEL || ROUTER_FRONTIER) as AIModel;
 
 /**
+ * FREE coding model for work that doesn't need a paid coder: simple
+ * content-only websites and tiny lightweight edits. `:free` variants cost $0
+ * (20 req/min, capped daily); provider.ts auto-falls back to the paid safe
+ * model when the free pool is rate-limited/congested, so routing here is
+ * best-effort-free rather than free-or-fail.
+ */
+export const FREE_CODING_MODEL: AIModel =
+  (process.env.OPENROUTER_FREE_CODING_MODEL || "qwen/qwen3-coder:free") as AIModel;
+
+/** Cheap paid fallback when a free pool is busy or a small Auto request needs reliability. */
+export const ECONOMY_CODING_MODEL: AIModel =
+  (process.env.OPENROUTER_ECONOMY_CODING_MODEL || ROUTER_CODING) as AIModel;
+
+/** Cheap model for simple chat/patch turns. */
+export const ECONOMY_CHAT_MODEL: AIModel =
+  (process.env.OPENROUTER_ECONOMY_CHAT_MODEL || ROUTER_FAST) as AIModel;
+
+/**
  * Cross-vendor REVIEW model (CTO reviews, debate adjudication). Intentionally
  * a DIFFERENT model family than the coding tier (Claude): a same-family
  * reviewer shares the builder's blind spots, so reviews become an echo
  * chamber. GPT-5.2 slug verified against the live OpenRouter catalog (2026).
  */
 export const REVIEW_MODEL: AIModel =
-  (process.env.OPENROUTER_REVIEW_MODEL || "openai/gpt-5.2") as AIModel;
+  (process.env.OPENROUTER_REVIEW_MODEL || ROUTER_CODING) as AIModel;
 
 /**
  * ESCALATION model — strongest available, used only on retry after a task

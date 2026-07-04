@@ -156,7 +156,7 @@ const corsHeaders = {
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
-  const { prompt, model = "openrouter/fusion" } = await req.json();
+  const { prompt, model = "qwen/qwen3-coder" } = await req.json();
 
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",

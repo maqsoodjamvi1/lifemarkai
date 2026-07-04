@@ -41,12 +41,19 @@ import {
   shouldBlockCloudAction,
 } from "@/lib/cloud/permissions";
 import { ensureDevCredits, getDevProfile } from "@/lib/dev-credits";
+import { detectDeployIntent } from "@/lib/ai/deploy-intent";
 import { buildMcpContextBlock } from "@/lib/ai/mcp-context";
 import { ENV_FILE_PATH, parseEnvFile } from "@/lib/project/env-file";
 import {
   buildEditorIntelligencePromptBlock,
   recordEditorIntelligenceBuild,
 } from "@/lib/ai/editor-lenses/persistence";
+import {
+  contextBudgetForRequest,
+  isSimpleEditorRequest,
+  maxOutputTokensForRequest,
+  resolveBudgetAwareModel,
+} from "@/lib/ai/cost-controls";
 
 export const runtime = "nodejs";
 // Generation + backend wiring + self-verification can exceed a minute on
@@ -153,7 +160,10 @@ export async function POST(req: NextRequest) {
       // Optional: project-level Supabase overrides for schema reading
       projectSupabaseUrl,
       projectServiceKey,
+      modelManuallySelected = false,
+      rawMessage,
     } = body;
+    const costPrompt = typeof rawMessage === "string" && rawMessage.trim() ? rawMessage : message;
 
     // Input validation
     if (!message || typeof message !== "string") {
@@ -167,6 +177,104 @@ export async function POST(req: NextRequest) {
     }
     if (imageBase64 && typeof imageBase64 === "string" && imageBase64.length > 5 * 1024 * 1024) {
       return NextResponse.json({ error: "Image too large (max 5MB)" }, { status: 413 });
+    }
+
+    // ── Publish from chat — "ship it" (Lovable parity) ──────────────────────
+    // When the message is PRIMARILY a publish request ("ship it", "publish",
+    // "deploy", "go live"…) and the project has files, skip the AI entirely
+    // (zero model cost, zero credits) and run the deploy pipeline, streaming
+    // progress over the same SSE channel. Runs BEFORE the credit gate
+    // (publishing is free) and BEFORE the Live-environment lock (publishing
+    // is allowed on Live — it's not a code write).
+    if (
+      (mode === "chat" || mode === "build") &&
+      Array.isArray(files) &&
+      files.length > 0 &&
+      detectDeployIntent(message)
+    ) {
+      const { publishProjectFromChat } = await import("@/lib/deploy/publish-from-chat");
+      const deployEncoder = new TextEncoder();
+      const deployStream = new ReadableStream({
+        async start(controller) {
+          const { safeEnqueue: deployEnqueue, safeClose: deployClose } = createStreamSink(
+            controller,
+            deployEncoder,
+            req.signal,
+          );
+          const send = (payload: Record<string, unknown>) =>
+            deployEnqueue(deployEncoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+          // Progress events: `status: "deploy_status"` for consumers that read
+          // generic status events, plus `wiring_status` (same string) so the
+          // existing chat panel renders it on its post-build status line —
+          // exactly how backend wiring / self-verification stream progress.
+          const emitDeployStatus = (status: string) =>
+            send({ status: "deploy_status", message: status, wiring_status: status });
+
+          let assistantContent: string;
+          let deployOk = false;
+          let deployUrl: string | undefined;
+          try {
+            emitDeployStatus("Publishing your app…");
+            const result = await publishProjectFromChat({
+              supabase,
+              projectId,
+              userId,
+              emit: emitDeployStatus,
+            });
+            deployOk = result.ok;
+            deployUrl = result.url;
+            assistantContent = result.ok
+              ? `Your app is live! 🚀\n\n**${result.url}**\n\nPublished ${result.fileCount} file${result.fileCount === 1 ? "" : "s"} via ${result.provider === "netlify" ? "Netlify" : "LifemarkAI hosting"}. Publishing is free — no credits were used. Say "publish" any time to ship your latest changes.`
+              : `Publish failed: ${result.error ?? "Unknown error"}. Your app wasn't changed — you can try again, or publish from the Deploy panel.`;
+          } catch (err) {
+            assistantContent = `Publish failed: ${err instanceof Error ? err.message : String(err)}. Your app wasn't changed — you can try again, or publish from the Deploy panel.`;
+          }
+
+          // Persist the turn exactly like the normal flow (user + assistant rows).
+          let assistantMessageId: string | undefined;
+          try {
+            const { data: insertedMessages } = await (supabase as any)
+              .from("messages")
+              .insert([
+                { project_id: projectId, role: "user", content: message, mode },
+                {
+                  project_id: projectId,
+                  role: "assistant",
+                  content: assistantContent,
+                  tokens_used: 0,
+                  mode,
+                  metadata: {
+                    credits_used: 0,
+                    deploy_requested: true,
+                    ...(deployUrl ? { deploy_url: deployUrl } : {}),
+                  },
+                },
+              ])
+              .select("id, role");
+            assistantMessageId = (insertedMessages as Array<{ id: string; role: string }> | null)?.find(
+              (row) => row.role === "assistant",
+            )?.id;
+          } catch {
+            /* message persistence is best-effort — the deploy already happened */
+          }
+
+          send({ chunk: assistantContent });
+          send({
+            done: true,
+            tokensUsed: 0,
+            creditsUsed: 0,
+            fileCount: 0,
+            assistantMessageId,
+            deployed: deployOk,
+            deploy_url: deployUrl,
+            displayMessage: assistantContent,
+          });
+          deployClose();
+        },
+      });
+      return new Response(deployStream, {
+        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" },
+      });
     }
 
     // Check credits (dev: auto-grant if empty so local builds are testable)
@@ -320,19 +428,54 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    const effectiveModel = resolveBudgetAwareModel({
+      requestedModel: model,
+      mode,
+      prompt: costPrompt,
+      fileCount: Array.isArray(files) ? files.length : 0,
+      manuallySelected: modelManuallySelected === true,
+      hasImage: !!imageBase64,
+    });
+    const outputMaxTokens = maxOutputTokensForRequest({
+      mode,
+      prompt: costPrompt,
+      fileCount: Array.isArray(files) ? files.length : 0,
+      defaultBuildMax: BUILD_MAX_TOKENS,
+      defaultChatMax: CHAT_MAX_TOKENS,
+      hasImage: !!imageBase64,
+    });
+    const simpleEconomyRequest = isSimpleEditorRequest({
+      mode,
+      prompt: costPrompt,
+      fileCount: Array.isArray(files) ? files.length : 0,
+      hasImage: !!imageBase64,
+    });
+
     // Build system prompt based on mode + framework
     // Chat/plan modes get full codebase context (up to 60k chars); build mode embeds up to 80k.
     let systemPrompt: string;
     if (mode === "build") {
       // Route to the right generator based on target framework
       const suffix = schemaBlock + summaryBlock + fileChangesBlock + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
+      const buildContextBudget = contextBudgetForRequest({
+        mode,
+        prompt: costPrompt,
+        fileCount: Array.isArray(files) ? files.length : 0,
+        defaultBudget: 80000,
+        hasImage: !!imageBase64,
+      });
       if (framework === "react-native") {
-        systemPrompt = buildReactNativePrompt(message, files) + suffix;
-      } else if (framework === "nextjs") {
-        // SSR-first Next.js App Router — proper generateMetadata, Server Components
-        systemPrompt = buildNextJSPrompt(message, files) + suffix;
+        systemPrompt = buildReactNativePrompt(message, files, buildContextBudget) + suffix;
+      } else if (framework === "nextjs" || framework === "next") {
+        // SSR-first Next.js App Router — proper generateMetadata, Server Components.
+        // Projects store "next" (FRAMEWORKS picker) while GitHub import detection
+        // returns "nextjs" — accept both.
+        systemPrompt = buildNextJSPrompt(message, files, buildContextBudget) + suffix;
       } else {
-        systemPrompt = buildGenerationPrompt(message, files) + suffix;
+        systemPrompt = buildGenerationPrompt(message, files, buildContextBudget) + suffix;
+      }
+      if (simpleEconomyRequest) {
+        systemPrompt += `\n\n---\n# Economy Small Edit Mode\nThis is a small edit/debug turn on an existing project. Keep the response minimal:\n- Return ONLY files that must change.\n- Prefer surgical changes over rewriting whole files.\n- Do not regenerate the whole app, create new pages, restyle unrelated UI, or expand product scope.\n- Keep existing imports, data, assets, and routes unless the user explicitly asked to change them.\n---`;
       }
       // Anchor to a designer template baseline when one was chosen; otherwise
       // pick a distinct, polished design direction from the prompt. Apply it on
@@ -407,19 +550,49 @@ export async function POST(req: NextRequest) {
     } else if (mode === "patch") {
       // Patch mode: inject full codebase (40k budget) so AI can write precise find strings
       systemPrompt = PATCH_SYSTEM_PROMPT + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
-      const patchContext = buildProjectContext(files, 40000, message);
+      const patchContext = buildProjectContext(
+        files,
+        contextBudgetForRequest({
+          mode,
+          prompt: costPrompt,
+          fileCount: Array.isArray(files) ? files.length : 0,
+          defaultBudget: 40000,
+          hasImage: !!imageBase64,
+        }),
+        message,
+      );
       if (patchContext) systemPrompt += `\n\n${patchContext}`;
       systemPrompt += schemaBlock;
     } else if (mode === "plan") {
       systemPrompt = PLAN_SYSTEM_PROMPT + summaryBlock + fileChangesBlock + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
       // Inject a compact codebase snapshot for plan mode so AI knows what already exists
-      const planContext = buildProjectContext(files, 30000, message);
+      const planContext = buildProjectContext(
+        files,
+        contextBudgetForRequest({
+          mode,
+          prompt: costPrompt,
+          fileCount: Array.isArray(files) ? files.length : 0,
+          defaultBudget: 30000,
+          hasImage: !!imageBase64,
+        }),
+        message,
+      );
       if (planContext) systemPrompt += `\n\n${planContext}`;
       systemPrompt += schemaBlock;
     } else {
       systemPrompt = CHAT_SYSTEM_PROMPT;
       // Full codebase injection for chat mode — 60k char budget; BM25-rank by user message
-      const projectContext = buildProjectContext(files, 60000, message);
+      const projectContext = buildProjectContext(
+        files,
+        contextBudgetForRequest({
+          mode,
+          prompt: costPrompt,
+          fileCount: Array.isArray(files) ? files.length : 0,
+          defaultBudget: 60000,
+          hasImage: !!imageBase64,
+        }),
+        message,
+      );
       if (projectContext) systemPrompt += `\n\n${projectContext}`;
       systemPrompt += schemaBlock + summaryBlock + fileChangesBlock + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
     }
@@ -625,7 +798,7 @@ The user has expressed frustration. Do the following:
 
     // Model-aware prompting: tune the system prompt to the selected model
     // (fast → minimal change, frontier → plan+verify, non-Claude → strict contract).
-    systemPrompt = applyModelAdapter(systemPrompt, model ?? getDefaultAiModel());
+    systemPrompt = applyModelAdapter(systemPrompt, effectiveModel);
 
     const messages: import("@/lib/ai/provider").AIMessage[] = [
       { role: "system", content: systemPrompt },
@@ -655,7 +828,7 @@ The user has expressed frustration. Do the following:
           try {
             let questionsJson = "";
             await generateAI({
-              model: model ?? getDefaultAiModel(),
+              model: effectiveModel,
               messages: [
                 { role: "system", content: clarifySystemPrompt },
                 { role: "user", content: "Build request: " + message + "\n\nProject has " + files.length + " existing files." },
@@ -749,9 +922,9 @@ The user has expressed frustration. Do the following:
 
         try {
           const result = await generateAI({
-            model: model ?? getDefaultAiModel(),
+            model: effectiveModel,
             messages,
-            maxTokens: mode === "build" ? BUILD_MAX_TOKENS : CHAT_MAX_TOKENS,
+            maxTokens: outputMaxTokens,
             stream: true,
             // Force structured JSON output in build mode so parseAIResponse
             // reliably gets a complete JSON object rather than prose + code fence.
@@ -784,7 +957,7 @@ The user has expressed frustration. Do the following:
               let contChunk = "";
               try {
                 await generateAI({
-                  model: model ?? getDefaultAiModel(),
+                  model: effectiveModel,
                   messages: [
                     ...messages,
                     { role: "assistant" as const, content: fullContent },
@@ -794,7 +967,7 @@ The user has expressed frustration. Do the following:
                         "Your previous JSON response was cut off before it finished. Continue from EXACTLY where it stopped and output ONLY the remaining raw characters needed to complete the JSON object. Do not repeat any earlier content, do not restart, no code fences, no commentary.",
                     },
                   ],
-                  maxTokens: BUILD_MAX_TOKENS,
+                  maxTokens: outputMaxTokens,
                   stream: true,
                   jsonMode: false, // raw continuation of the existing object, not a new one
                   onChunk: (chunk) => {
@@ -872,7 +1045,7 @@ The user has expressed frustration. Do the following:
                   );
                   let repairContent = "";
                   await generateAI({
-                    model: model ?? getDefaultAiModel(),
+                    model: effectiveModel,
                     messages: [
                       {
                         role: "system" as const,
@@ -885,7 +1058,7 @@ The user has expressed frustration. Do the following:
                       },
                       { role: "user" as const, content: repairPrompt },
                     ],
-                    maxTokens: BUILD_MAX_TOKENS,
+                    maxTokens: outputMaxTokens,
                     stream: true,
                     jsonMode: true,
                     onChunk: (chunk) => { repairContent += chunk; },
@@ -920,11 +1093,11 @@ The user has expressed frustration. Do the following:
               safeEnqueue(
                 encoder.encode(`data: ${JSON.stringify({ status: "fixing", message: "Model returned prose instead of files — requesting proper file output…" })}\n\n`)
               );
-              logger.warn("ai.chat.no_files_parsed", { projectId, model: model ?? process.env.DEFAULT_AI_MODEL });
+                  logger.warn("ai.chat.no_files_parsed", { projectId, model: effectiveModel });
               try {
                 let retryContent = "";
                 await generateAI({
-                  model: model ?? getDefaultAiModel(),
+                  model: effectiveModel,
                   messages: [
                     ...messages,
                     { role: "assistant" as const, content: fullContent },
@@ -936,7 +1109,7 @@ The user has expressed frustration. Do the following:
                         "no explanations, no installation steps, no markdown fences.",
                     },
                   ],
-                  maxTokens: BUILD_MAX_TOKENS,
+                  maxTokens: outputMaxTokens,
                   stream: true,
                   jsonMode: true,
                   onChunk: (chunk) => { retryContent += chunk; },
@@ -1107,7 +1280,7 @@ The user has expressed frustration. Do the following:
                 role: "assistant",
                 content: persistedContent,
                 tokens_used: tokensUsed,
-                model: model ?? getDefaultAiModel(),
+                model: effectiveModel,
                 mode,
                 metadata: assistantMetadata
                   ? { ...assistantMetadata, credits_used: creditCost }
@@ -1125,8 +1298,8 @@ The user has expressed frustration. Do the following:
               projectId,
               projectName: projectData?.name ?? null,
               source: "chat",
-              mode,
-              prompt: message,
+          mode,
+          prompt: costPrompt,
               filesChanged: parsedFiles.length > 0 ? parsedFiles.map((f) => f.path) : Array.from(streamedFilePaths),
               assistantMessageId,
               backendWiring,

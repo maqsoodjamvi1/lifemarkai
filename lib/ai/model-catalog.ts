@@ -1,9 +1,9 @@
 /**
- * Curated OpenRouter model catalog + prompt-aware selection.
+ * Approved OpenRouter model catalog + prompt-aware selection.
  *
- * "Add all OpenRouter models" — pragmatically. Rather than pin LifemarkAI to a
- * couple of tiers, this maintains a curated, family-diverse set of the strongest
- * OpenRouter models, each tagged by capability. `selectModelChain()` reads a
+ * LifemarkAI intentionally exposes a compact, cost-controlled set of models
+ * across Qwen, Kimi, DeepSeek, Claude, GPT/Codex, Gemini, and a few extra
+ * families. `selectModelChain()` reads a
  * prompt, infers what it needs, and returns an ORDERED cascade:
  *
  *   chain[0]   = best-fit model for the task
@@ -15,12 +15,12 @@
  * routing degrades gracefully even if a catalog slug is unknown to OpenRouter
  * (the provider layer also has an invalid-slug safety net).
  *
- * Every entry is env-overridable (OPENROUTER_MODEL__<KEY>) so operators can
- * correct slugs without a code change. All ids are OpenRouter slugs and route
- * through the single OPENROUTER_API_KEY.
+ * Every entry has an env override hook (OPENROUTER_MODEL__<KEY>), but overrides
+ * are still filtered through the approved set below. All ids are OpenRouter
+ * slugs and route through the single OPENROUTER_API_KEY.
  */
 import type { AIModel } from "./provider";
-import { DEFAULT_CODING_MODEL } from "./model-defaults";
+import { DEFAULT_CODING_MODEL, ECONOMY_CODING_MODEL, ECONOMY_CHAT_MODEL, FREE_CODING_MODEL } from "./model-defaults";
 
 export type ModelStrength =
   | "code"
@@ -60,24 +60,33 @@ function envSlug(envKey: string, fallback: string): AIModel {
  * (matching model-defaults.ts). Keep this list small and strong — breadth of
  * FAMILIES (for diversity) matters more than count.
  */
-export const MODEL_CATALOG: CatalogModel[] = [
+const RAW_MODEL_CATALOG: CatalogModel[] = [
   {
-    id: envSlug("OPENROUTER_FUSION", "openrouter/fusion"),
-    label: "OpenRouter Fusion",
-    family: "router",
-    strengths: ["reasoning", "code", "content", "design", "longContext"],
-    tier: "frontier",
-    cost: 4,
-    envKey: "OPENROUTER_FUSION",
+    id: envSlug("FREE_CODER", FREE_CODING_MODEL),
+    label: "Qwen3 Coder Free",
+    family: "qwen-free",
+    strengths: ["code", "fixes", "cheap", "fast", "longContext"],
+    tier: "fast",
+    cost: 0,
+    envKey: "FREE_CODER",
   },
   {
-    id: envSlug("PARETO_CODE", "openrouter/pareto-code"),
-    label: "Pareto Code Router",
-    family: "router-code",
-    strengths: ["code", "fixes", "reasoning", "longContext"],
-    tier: "frontier",
-    cost: 4,
-    envKey: "PARETO_CODE",
+    id: envSlug("ECONOMY_CODER", ECONOMY_CODING_MODEL),
+    label: "Economy Coder",
+    family: "economy-code",
+    strengths: ["code", "fixes", "cheap", "fast", "longContext"],
+    tier: "balanced",
+    cost: 1,
+    envKey: "ECONOMY_CODER",
+  },
+  {
+    id: envSlug("ECONOMY_CHAT", ECONOMY_CHAT_MODEL),
+    label: "Economy Chat",
+    family: "economy-chat",
+    strengths: ["fast", "cheap", "content", "reasoning"],
+    tier: "fast",
+    cost: 1,
+    envKey: "ECONOMY_CHAT",
   },
   {
     id: envSlug("CLAUDE_OPUS", "anthropic/claude-opus-4.8"),
@@ -116,13 +125,22 @@ export const MODEL_CATALOG: CatalogModel[] = [
     envKey: "GPT",
   },
   {
-    id: envSlug("GPT_MINI", "openai/gpt-5.4-mini"),
-    label: "GPT-5.4 Mini",
-    family: "openai",
-    strengths: ["fast", "cheap", "code", "reasoning"],
-    tier: "fast",
-    cost: 2,
-    envKey: "GPT_MINI",
+    id: envSlug("GPT_5_2", "openai/gpt-5.2"),
+    label: "GPT-5.2",
+    family: "openai-gpt52",
+    strengths: ["reasoning", "code", "content", "vision", "longContext"],
+    tier: "frontier",
+    cost: 4,
+    envKey: "GPT_5_2",
+  },
+  {
+    id: envSlug("GPT_5_2_CODEX", "openai/gpt-5.2-codex"),
+    label: "GPT-5.2 Codex",
+    family: "openai-codex",
+    strengths: ["code", "fixes", "reasoning", "longContext", "vision"],
+    tier: "frontier",
+    cost: 4,
+    envKey: "GPT_5_2_CODEX",
   },
   {
     id: envSlug("GEMINI_PRO", "google/gemini-3.5-flash"),
@@ -170,24 +188,6 @@ export const MODEL_CATALOG: CatalogModel[] = [
     envKey: "QWEN_CODER",
   },
   {
-    id: envSlug("GROK", "x-ai/grok-4.3"),
-    label: "Grok 4.3",
-    family: "x-ai",
-    strengths: ["reasoning", "code", "content"],
-    tier: "frontier",
-    cost: 4,
-    envKey: "GROK",
-  },
-  {
-    id: envSlug("MISTRAL", "mistralai/mistral-large-2512"),
-    label: "Mistral Large 3",
-    family: "mistralai",
-    strengths: ["code", "content", "cheap"],
-    tier: "balanced",
-    cost: 2,
-    envKey: "MISTRAL",
-  },
-  {
     id: envSlug("KIMI_CODE", "moonshotai/kimi-k2.7-code"),
     label: "Kimi K2.7 Code",
     family: "moonshotai",
@@ -196,7 +196,47 @@ export const MODEL_CATALOG: CatalogModel[] = [
     cost: 2,
     envKey: "KIMI_CODE",
   },
+  {
+    id: envSlug("DEVSTRAL", "mistralai/devstral-2512"),
+    label: "Devstral 2",
+    family: "mistralai",
+    strengths: ["fast", "cheap", "code", "fixes"],
+    tier: "fast",
+    cost: 1,
+    envKey: "DEVSTRAL",
+  },
+  {
+    id: envSlug("GLM_TURBO", "z-ai/glm-5-turbo"),
+    label: "GLM 5 Turbo",
+    family: "z-ai",
+    strengths: ["fast", "cheap", "content", "reasoning"],
+    tier: "fast",
+    cost: 1,
+    envKey: "GLM_TURBO",
+  },
 ];
+
+const APPROVED_SMART_MODEL_IDS = new Set<string>([
+  "qwen/qwen3-coder:free",
+  "qwen/qwen3-coder",
+  "moonshotai/kimi-k2.7-code",
+  "deepseek/deepseek-v4-flash",
+  "deepseek/deepseek-v4-pro",
+  "anthropic/claude-haiku-4.5",
+  "anthropic/claude-sonnet-4.6",
+  "anthropic/claude-opus-4.8",
+  "openai/gpt-5.2",
+  "openai/gpt-5.2-codex",
+  "openai/gpt-5.5",
+  "google/gemini-3.1-flash-lite",
+  "google/gemini-3.5-flash",
+  "mistralai/devstral-2512",
+  "z-ai/glm-5-turbo",
+]);
+
+export const MODEL_CATALOG: CatalogModel[] = RAW_MODEL_CATALOG.filter((model) =>
+  APPROVED_SMART_MODEL_IDS.has(model.id),
+);
 
 // ── Prompt → strength scoring ────────────────────────────────────────────────
 // Local regexes (kept here to avoid a circular import with editor-intelligence,
@@ -214,6 +254,50 @@ const RE = {
   longContext:
     /\b(entire (app|codebase|project)|whole (app|codebase|project)|across (the )?(app|files|codebase)|every (file|page|component)|refactor|migrate|large file)\b/i,
 } as const;
+
+const CLAUDE_EXPLICIT_RE =
+  /\b(?:use|select|choose|route|run|try|switch to|with|via)\s+(?:anthropic\/)?claude\b|\bclaude\s+(?:sonnet|opus|haiku)\b/i;
+
+const CLAUDE_REQUIRED_SIGNAL_RE =
+  /\b(deep|complete|hard|complex|critical|production|enterprise|security|audit|architecture|architectural|root cause|race condition|hydration|memory leak|performance|slow query|build fail|type errors?|regression|multi[- ]?file|cross[- ]?file|whole app|full app|entire app|codebase|refactor|rewrite|migration|data model|rls|payment|auth|permissions?|editor intelligence|agent loop|self[- ]?verify|vibe coding|lovable parity)\b/i;
+
+const CLAUDE_REQUIRED_ACTION_RE =
+  /\b(fix|debug|diagnose|investigate|analy[sz]e|architect|plan|review|refactor|rewrite|stabilize|harden|secure|optimi[sz]e|improve|complete|wire|integrate)\b/i;
+
+const CLAUDE_OPUS_RE =
+  /\b(claude\s+opus|opus|security audit|production outage|critical outage|whole codebase|entire codebase|architecture review|root cause across)\b/i;
+
+function asStrengthArray(strengths?: Iterable<ModelStrength>): ModelStrength[] {
+  return strengths ? Array.from(strengths) : [];
+}
+
+export function shouldAutoSelectClaude(
+  prompt: string,
+  opts: { desired?: Iterable<ModelStrength>; mode?: string; fileCount?: number } = {},
+): boolean {
+  const p = (prompt ?? "").trim();
+  if (!p) return false;
+  if (CLAUDE_EXPLICIT_RE.test(p)) return true;
+
+  const desired = asStrengthArray(opts.desired);
+  const heavyDesired = desired.some((s) => s === "reasoning" || s === "fixes" || s === "longContext");
+  const largeContext = (opts.fileCount ?? 0) >= 20 || p.length >= 320;
+  const complexMode = opts.mode === "agent" || opts.mode === "build" || opts.mode === "plan";
+
+  return (
+    CLAUDE_REQUIRED_SIGNAL_RE.test(p) &&
+    CLAUDE_REQUIRED_ACTION_RE.test(p) &&
+    (heavyDesired || largeContext || complexMode)
+  );
+}
+
+function selectClaudeAutoModel(prompt: string, desired: Iterable<ModelStrength>): AIModel | null {
+  if (!shouldAutoSelectClaude(prompt, { desired })) return null;
+  const preferred = CLAUDE_OPUS_RE.test(prompt)
+    ? "anthropic/claude-opus-4.8"
+    : "anthropic/claude-sonnet-4.6";
+  return MODEL_CATALOG.some((model) => model.id === preferred) ? (preferred as AIModel) : null;
+}
 
 /** Infer which capabilities a prompt needs. */
 export function scorePromptStrengths(prompt: string): Set<ModelStrength> {
@@ -259,6 +343,10 @@ function scoreModel(model: CatalogModel, desired: Set<ModelStrength>, preferChea
   let score = 0;
   for (const s of desired) if (model.strengths.includes(s)) score += 3;
 
+  const heavyDesired = ["design", "fixes", "reasoning", "longContext", "vision"].some((s) =>
+    desired.has(s as ModelStrength),
+  );
+
   // Tier preference: heavy work wants frontier, lightweight wants fast.
   if (preferCheap) {
     if (model.tier === "fast") score += 3;
@@ -267,6 +355,8 @@ function scoreModel(model: CatalogModel, desired: Set<ModelStrength>, preferChea
   } else {
     if (model.tier === "frontier") score += 3;
     if (model.tier === "balanced") score += 1;
+    if (heavyDesired && model.tier === "fast") score -= 2;
+    if (heavyDesired && model.cost === 0) score -= 2;
     score -= Math.max(0, model.cost - 3); // mild penalty only for premium
   }
   return score;
@@ -290,17 +380,27 @@ export function selectModelChain(prompt: string, opts: SelectOpts = {}): AIModel
   const HEAVY: ModelStrength[] = ["design", "fixes", "reasoning", "longContext", "vision"];
   const hasHeavy = HEAVY.some((s) => desired.has(s));
   const preferCheap = opts.preferCheap ?? (isLightweight(prompt) && !hasHeavy);
+  const claudeAutoModel = selectClaudeAutoModel(prompt, desired);
+  const effectivePreferCheap = claudeAutoModel ? false : preferCheap;
 
   const ranked: Scored[] = MODEL_CATALOG.map((model) => ({
     model,
-    score: scoreModel(model, desired, preferCheap),
+    score: scoreModel(model, desired, effectivePreferCheap),
   })).sort((a, b) => b.score - a.score || a.model.cost - b.model.cost);
 
   // Build the chain, preferring family diversity so escalation hits a different lab.
   const chain: AIModel[] = [];
   const seenFamilies = new Set<string>();
+  if (claudeAutoModel) {
+    const model = MODEL_CATALOG.find((entry) => entry.id === claudeAutoModel);
+    if (model) {
+      chain.push(model.id);
+      seenFamilies.add(model.family);
+    }
+  }
   for (const { model } of ranked) {
     if (chain.length >= maxChain) break;
+    if (chain.includes(model.id)) continue;
     if (seenFamilies.has(model.family)) continue;
     chain.push(model.id);
     seenFamilies.add(model.family);
@@ -340,7 +440,6 @@ function familyFromSlug(id: string): string {
   if (s.includes("gemini") || s.startsWith("google/")) return "google";
   if (s.includes("deepseek")) return "deepseek";
   if (s.includes("qwen")) return "qwen";
-  if (s.includes("grok") || s.startsWith("x-ai/")) return "x-ai";
   if (s.includes("mistral")) return "mistralai";
   return "router";
 }

@@ -83,7 +83,7 @@ async function liveChatSmoke() {
       projectId,
       message: "Build a simple hello world page",
       mode: "build",
-      model: "openai/gpt-4o-mini",
+      model: "qwen/qwen3-coder",
       files: [],
       history: [],
     }),

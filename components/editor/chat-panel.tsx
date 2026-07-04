@@ -85,7 +85,17 @@ function extractStreamingProse(content: string): string | null {
 // UI discovery list only. The provider accepts any valid OpenRouter slug.
 type AIModel = OpenRouterModelId;
 
-const AI_MODELS = CHAT_MODEL_OPTIONS;
+function modelPickerRank(model: (typeof CHAT_MODEL_OPTIONS)[number]): number {
+  if (model.free) return 0;
+  if (model.fast && !model.creditMultiplier) return 1;
+  if (model.category === "coding" && !model.creditMultiplier) return 2;
+  if (model.creditMultiplier && model.creditMultiplier >= 2) return 5;
+  return 3;
+}
+
+const AI_MODELS = [...CHAT_MODEL_OPTIONS].sort(
+  (a, b) => modelPickerRank(a) - modelPickerRank(b) || a.label.localeCompare(b.label),
+);
 
 interface ChatPanelProps {
   project: Project;
@@ -1848,7 +1858,9 @@ ${(f.content ?? "").slice(0, 8000)}
           body: JSON.stringify({
             projectId: project.id,
             task: agentTask,
+            rawTask: userMessage,
             model: effectiveModel,
+            modelManuallySelected: modelManuallySelectedRef.current,
           }),
         });
 
@@ -1983,8 +1995,25 @@ ${(f.content ?? "").slice(0, 8000)}
               }
 
               if (data.error) {
-                toast({ title: "Agent Error", description: data.error, variant: "destructive" });
-                onMessagesUpdate(baseMessages);
+                // Persist the failure in-chat (a toast alone vanishes in 5s and
+                // the thread looks silently ignored — see the chat-flow handler).
+                const rawErr = String(data.error);
+                const agentErrMsg: Message = {
+                  id: `agent-error-${Date.now()}`,
+                  project_id: project.id,
+                  role: "assistant",
+                  content: /402|insufficient credits/i.test(rawErr)
+                    ? "⚠️ **The AI provider account is out of credits** — the agent run failed before making changes. Top up at https://openrouter.ai/settings/credits and retry."
+                    : `⚠️ **Agent run failed** — no changes were made:\n\n\`\`\`\n${rawErr.slice(0, 400)}\n\`\`\``,
+                  tokens_used: null,
+                  model: null,
+                  mode: effectiveMode,
+                  metadata: null,
+                  rating: null,
+                  created_at: new Date().toISOString(),
+                };
+                onMessagesUpdate([...baseMessages, agentErrMsg]);
+                toast({ title: "Agent Error", description: rawErr.slice(0, 200), variant: "destructive" });
               }
             } catch {}
           }
@@ -2003,9 +2032,11 @@ ${(f.content ?? "").slice(0, 8000)}
         body: JSON.stringify({
           projectId: project.id,
           message: messageWithContext + crossProjectContext,
+          rawMessage: userMessage,
           mode: effectiveMode,
           model: effectiveModel,
-          framework: mobileMode ? "react-native" : "web",
+          modelManuallySelected: modelManuallySelectedRef.current,
+          framework: mobileMode ? "react-native" : (project.framework ?? "web"),
           clarifyFirst: effectiveMode === "build" && clarifyFirst && files.length === 0,
           ...(effectiveMode === "build" && designTemplateId ? { templateId: designTemplateId } : {}),
           // If @mentions present, only send those files for context (saves tokens + focuses AI)
@@ -2033,6 +2064,34 @@ ${(f.content ?? "").slice(0, 8000)}
           });
           onCreditsUpdate(0);
           onMessagesUpdate(baseMessages);
+        }
+        // Live-environment lock (migration 046): the route refuses code writes
+        // on Live. Without THIS branch the user only saw a cryptic
+        // "API error: 423" toast and kept re-asking ("nothing is changed").
+        // Surface it as a persistent in-chat message with the fix.
+        if (res.status === 423) {
+          const lockedMsg: Message = {
+            id: `env-locked-${Date.now()}`,
+            project_id: project.id,
+            role: "assistant",
+            content:
+              "🔒 **This project is in Live mode — edits are locked.**\n\n" +
+              "Live protects your published app from accidental changes, so Build/Agent requests are rejected (nothing was changed and no credits were spent).\n\n" +
+              "**To make changes:** switch the environment to **Test** (the Test / Live toggle in the top bar), build and preview there, then promote back to Live when you're happy.",
+            tokens_used: null,
+            model: null,
+            mode: effectiveMode,
+            metadata: null,
+            rating: null,
+            created_at: new Date().toISOString(),
+          };
+          onMessagesUpdate([...baseMessages, lockedMsg]);
+          toast({
+            title: "Project is Live — changes locked",
+            description: "Switch to the Test environment (top bar) to edit.",
+            variant: "destructive",
+          });
+          return;
         }
         throw new Error(`API error: ${res.status}`);
       }
@@ -2339,7 +2398,30 @@ ${(f.content ?? "").slice(0, 8000)}
             }
 
             if (data.error) {
-              toast({ title: "AI Error", description: String(data.error), variant: "destructive" });
+              // A 5s toast alone is easy to miss — the thread then looks like
+              // the AI silently ignored the request (this hid a drained
+              // OpenRouter balance for days: every build 402'd invisibly).
+              // Persist a readable in-chat error with the actual cause.
+              const raw = String(data.error);
+              const friendly = /402|insufficient credits/i.test(raw)
+                ? "**The AI provider account is out of credits.** Every model call is failing, so no changes can be generated.\n\nFix: top up the OpenRouter balance at https://openrouter.ai/settings/credits — then resend your request."
+                : /429|rate limit/i.test(raw)
+                  ? "**The AI provider is rate-limiting requests.** Wait a minute and resend."
+                  : `**The AI provider returned an error**, so no changes were made:\n\n\`\`\`\n${raw.slice(0, 400)}\n\`\`\``;
+              const errMsg: Message = {
+                id: `ai-error-${Date.now()}`,
+                project_id: project.id,
+                role: "assistant",
+                content: `⚠️ ${friendly}`,
+                tokens_used: null,
+                model: null,
+                mode: effectiveMode,
+                metadata: null,
+                rating: null,
+                created_at: new Date().toISOString(),
+              };
+              onMessagesUpdate([...baseMessages, errMsg]);
+              toast({ title: "AI Error", description: raw.slice(0, 200), variant: "destructive" });
             }
           } catch {}
         };
@@ -5332,24 +5414,24 @@ Please confirm the breakdown before implementing anything.`,
               </button>
             )}
 
-            {/* More modes + model — Lovable style */}
+            {/* Advanced: extra modes + model, folded into ONE compact control.
+                Lovable-simple rule for this row: [+] [@ Visual edits] [Plan|Build] [⋯] [send].
+                The old row also showed a cyan "Auto <model>" badge AND a second
+                mode label ("Build ▾") next to the Plan/Build toggle — three
+                controls saying overlapping things. The badge's info now lives
+                inside this menu; the trigger is icon-only, with a dot when a
+                non-primary mode (Chat/Agent/Quick Edit) or manual model is active. */}
             <div className="flex items-center gap-1.5 min-w-0">
-              <span
-                className="hidden sm:inline-flex items-center gap-1 h-7 max-w-[170px] px-2 rounded-lg border border-cyan-500/20 bg-cyan-500/5 text-[10px] text-cyan-200 flex-shrink min-w-0"
-                title={`${modelManuallySelectedRef.current ? "Manual model" : "Auto model routing"}: ${activeModelLabel}`}
-              >
-                <Sparkles className="w-3 h-3 shrink-0 text-cyan-300" />
-                <span className="shrink-0">{modelManuallySelectedRef.current ? "Model" : "Auto"}</span>
-                <span className="truncate font-medium">{activeModelLabel}</span>
-              </span>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <button className="flex items-center gap-1 h-7 px-2.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors flex-shrink-0 border border-border/70">
-                    {/* Label must reflect the REAL mode — the old fallback showed
-                        "Build" even in chat mode, so users believed they were
-                        building while their messages went out as conversation. */}
-                    {mode === "plan" ? "Plan" : mode === "agent" ? "Agent" : mode === "build" ? "Build" : mode === "patch" ? "Quick Edit" : mode === "chat" ? "Chat" : "Build"}
-                    <ChevronDown className="w-3 h-3 opacity-60" />
+                  <button
+                    className="relative flex items-center justify-center h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors flex-shrink-0 border border-border/70"
+                    title={`Modes & model — ${mode === "patch" ? "Quick Edit" : mode.charAt(0).toUpperCase() + mode.slice(1)} · ${modelManuallySelectedRef.current ? "" : "Auto: "}${activeModelLabel}`}
+                  >
+                    <ChevronDown className="w-3.5 h-3.5" />
+                    {(mode === "chat" || mode === "agent" || mode === "patch" || modelManuallySelectedRef.current) && (
+                      <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-cyan-400" />
+                    )}
                   </button>
                 </DropdownMenuTrigger>
               <DropdownMenuContent align="end" side="top" className="w-52 p-1">
@@ -5429,8 +5511,10 @@ Please confirm the breakdown before implementing anything.`,
                     </div>
                     <span className="flex-1 font-medium">{model.label}</span>
                     <span className="text-[10px] text-muted-foreground/70 flex-shrink-0">{model.badge}</span>
+                    {model.free && <span className="text-[9px] px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 flex-shrink-0">Free</span>}
                     {model.best && <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 flex-shrink-0">Best</span>}
-                    {model.fast && !model.best && <span className="text-[9px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/25 flex-shrink-0">Fast</span>}
+                    {model.fast && !model.best && !model.free && <span className="text-[9px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/25 flex-shrink-0">Fast</span>}
+                    {model.creditMultiplier && model.creditMultiplier >= 2 && <span className="text-[9px] px-1 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/25 flex-shrink-0">Premium</span>}
                     {model.new && <span className="text-[9px] px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 flex-shrink-0">New</span>}
                   </DropdownMenuItem>
                 ))}

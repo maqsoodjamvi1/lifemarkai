@@ -23,7 +23,7 @@
 | `069_domain_registrations.sql` | `domain_registrations` table + RLS; backfills `projects.custom_domain_verified` / `custom_domain_token` (`ADD COLUMN IF NOT EXISTS`) | Additive (also fixes a column the existing domain-verify route already referenced) |
 | `070_seed_initial_data.sql` | (pre-existing) feature flags + starter app seed | Idempotent |
 | `071_seed_starter_templates.sql` | Seeds the 6 curated design templates into the gallery (featured, public) | Idempotent |
-| `072_ai_integration_openrouter_default.sql` | Sets built-app AI proxy default to `openrouter/fusion` and updates column docs | Safe default change |
+| `072_ai_integration_openrouter_default.sql` | Sets built-app AI proxy default to the approved Qwen/DeepSeek model set and updates column docs | Safe default change |
 
 ## 3. What changed, by feature
 
@@ -38,7 +38,7 @@
 - **Prompt enhancer:** `app/api/ai/enhance/route.ts`, `lib/hooks/use-enhance-prompt.ts`.
 
 ### Changed existing files (hot paths — behavior gated by flags)
-- `lib/ai/model-defaults.ts` — OpenRouter-first tiers: `openrouter/pareto-code` for coding, `openrouter/fusion` for balanced/reasoning/chat, and `deepseek/deepseek-v4-flash` for fast work. Any tier can be pinned with `OPENROUTER_*_MODEL`; native Claude/GPT/Gemini aliases still normalize to valid OpenRouter slugs.
+- `lib/ai/model-defaults.ts` — compact approved OpenRouter tiers: `qwen/qwen3-coder` for coding, `deepseek/deepseek-v4-pro` for balanced/reasoning/chat, and `deepseek/deepseek-v4-flash` for fast work. Premium/manual picks stay limited to the approved catalog (Qwen, Kimi, DeepSeek, Claude, GPT-5.5/5.2/Codex, Gemini, plus a few explicit fallback models).
 - `lib/ai/system-prompts.ts` — (1) design system no longer forces dark; theme chosen per app. (2) E-commerce images mandatory + image-proxy usage taught. (3) agent prompt lists the new tools incl. `generate_image`.
 - `components/editor/editor-intelligence-panel.tsx` — added "Build with Intelligence" (runs the orchestrator, live SSE log, real file writes) alongside the existing discussion features.
 - `app/api/editor-intelligence/initiative/route.ts` — `seedAgents` flag (skip roster seeding when called from the existing panel).

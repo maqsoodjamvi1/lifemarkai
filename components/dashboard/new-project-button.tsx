@@ -4,9 +4,10 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Plus, Loader2, Sparkles, Zap, Code2, Box, Wind,
-  ArrowRight, Wand2, Github,
+  ArrowRight, Wand2, Github, Heart,
 } from "lucide-react";
 import { GitHubImportModal } from "./github-import-modal";
+import { LovableImportModal } from "./lovable-import-modal";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -17,11 +18,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 
 const FRAMEWORKS = [
+  { id: "next", label: "Next.js", sub: "SSR · App Router", icon: Zap, color: "text-slate-300 border-slate-500/30 bg-slate-500/5" },
   { id: "react", label: "React", sub: "Vite", icon: Code2, color: "text-cyan-400 border-cyan-500/30 bg-cyan-500/5" },
-  { id: "next", label: "Next.js", sub: "App Router", icon: Zap, color: "text-slate-300 border-slate-500/30 bg-slate-500/5" },
   { id: "vue", label: "Vue 3", sub: "Vite", icon: Box, color: "text-green-400 border-green-500/30 bg-green-500/5" },
   { id: "svelte", label: "SvelteKit", sub: "Kit", icon: Wind, color: "text-orange-400 border-orange-500/30 bg-orange-500/5" },
 ] as const;
+
+type FrameworkId = (typeof FRAMEWORKS)[number]["id"];
+
+// SSR-first default. NEXT_PUBLIC_DEFAULT_FRAMEWORK is inlined at build time —
+// set it to "react" to revert to the Vite SPA default.
+const DEFAULT_FRAMEWORK: FrameworkId =
+  (process.env.NEXT_PUBLIC_DEFAULT_FRAMEWORK as FrameworkId) || "next";
 
 const QUICK_PROMPTS = [
   "SaaS dashboard with analytics and user management",
@@ -34,7 +42,7 @@ export function NewProjectButton() {
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState("");
   const [prompt, setPrompt] = useState("");
-  const [framework, setFramework] = useState<"react" | "next" | "vue" | "svelte">("react");
+  const [framework, setFramework] = useState<FrameworkId>(DEFAULT_FRAMEWORK);
   const router = useRouter();
   const { toast } = useToast();
 
@@ -43,7 +51,7 @@ export function NewProjectButton() {
     setOpen(false);
     setName("");
     setPrompt("");
-    setFramework("react");
+    setFramework(DEFAULT_FRAMEWORK);
   }
 
   async function handleCreate(e: React.FormEvent) {
@@ -195,14 +203,24 @@ export function NewProjectButton() {
 }
 
 /**
- * Combined project action buttons: New Project + Import from GitHub.
- * Drop-in replacement for <NewProjectButton /> where both actions are wanted.
+ * Combined project action buttons: New Project + Import from GitHub +
+ * Import from Lovable. Drop-in replacement for <NewProjectButton />.
  */
 export function ProjectActions() {
   const [importOpen, setImportOpen] = useState(false);
+  const [lovableOpen, setLovableOpen] = useState(false);
 
   return (
     <div className="flex items-center gap-2">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => setLovableOpen(true)}
+        className="gap-2 text-sm"
+      >
+        <Heart className="w-4 h-4 text-pink-400" />
+        From Lovable
+      </Button>
       <Button
         variant="outline"
         size="sm"
@@ -214,6 +232,7 @@ export function ProjectActions() {
       </Button>
       <NewProjectButton />
       <GitHubImportModal open={importOpen} onOpenChange={setImportOpen} />
+      <LovableImportModal open={lovableOpen} onOpenChange={setLovableOpen} />
     </div>
   );
 }

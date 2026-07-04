@@ -117,7 +117,7 @@ const PreviewPanel = dynamic(
 
 export type EditorMode = "chat" | "plan" | "build" | "agent" | "patch";
 export type ViewMode = "preview" | "code" | "both";
-export type LeftPanel = "chat" | "plan" | "agent" | "intelligence" | "healing" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "code";
+export type LeftPanel = "chat" | "plan" | "agent" | "intelligence" | "healing" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "dbmanager" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "code";
 
 interface EditorLayoutProps {
   project: Project;
@@ -629,6 +629,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     { id: "i18n",          label: "i18n",     emoji: "🌍" },
     { id: "apidocs",       label: "API Docs",  emoji: "📄" },
     { id: "cloud",         label: "Cloud",     emoji: "☁️" },
+    { id: "dbmanager",     label: "Data",      emoji: "🗃️" },
     { id: "storage",       label: "Storage",   emoji: "🗄️" },
     { id: "appconnectors", label: "Connectors", emoji: "🔌" },
     { id: "mcpcontext",    label: "Context",    emoji: "🧠" },

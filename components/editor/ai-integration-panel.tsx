@@ -17,7 +17,7 @@ interface AiIntegrationPanelProps {
   onProjectUpdate: (updated: Partial<Project>) => void;
 }
 
-const DEFAULT_AI_INTEGRATION_MODEL = "openrouter/fusion";
+const DEFAULT_AI_INTEGRATION_MODEL = "qwen/qwen3-coder";
 
 const CAPABILITIES = [
   { label: "Chat", desc: "OpenRouter model routing", Icon: MessageSquare },

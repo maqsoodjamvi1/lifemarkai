@@ -71,9 +71,9 @@ STRIPE_WEBHOOK_SECRET=...
 NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=...   # build var
 # Email (if using Resend)
 RESEND_API_KEY=...
-# Optional model pins; leave unset to use OpenRouter routers
-OPENROUTER_CODING_MODEL=openrouter/pareto-code
-OPENROUTER_BALANCED_MODEL=openrouter/fusion
+# Optional model pins; leave unset to use approved Qwen/DeepSeek defaults
+OPENROUTER_CODING_MODEL=qwen/qwen3-coder
+OPENROUTER_BALANCED_MODEL=deepseek/deepseek-v4-pro
 OPENROUTER_FAST_MODEL=deepseek/deepseek-v4-flash
 BUILD_MAX_TOKENS=64000                   # optional, single-pass app builds
 ```

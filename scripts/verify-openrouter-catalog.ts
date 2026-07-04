@@ -20,6 +20,27 @@ import { get } from "node:https";
 let passed = 0;
 let failed = 0;
 
+const APPROVED_OPENROUTER_MODEL_IDS = [
+  "qwen/qwen3-coder:free",
+  "qwen/qwen3-coder",
+  "moonshotai/kimi-k2.7-code",
+  "deepseek/deepseek-v4-flash",
+  "deepseek/deepseek-v4-pro",
+  "anthropic/claude-haiku-4.5",
+  "anthropic/claude-sonnet-4.6",
+  "anthropic/claude-opus-4.8",
+  "openai/gpt-5.2",
+  "openai/gpt-5.2-codex",
+  "openai/gpt-5.5",
+  "google/gemini-3.1-flash-lite",
+  "google/gemini-3.5-flash",
+  "mistralai/devstral-2512",
+  "z-ai/glm-5-turbo",
+  "meta-llama/llama-3.3-70b-instruct:free",
+] as const;
+
+const APPROVED_OPENROUTER_MODEL_ID_SET = new Set<string>(APPROVED_OPENROUTER_MODEL_IDS);
+
 function check(name: string, ok: boolean, data: Record<string, unknown> = {}) {
   if (ok) passed++;
   else failed++;
@@ -80,8 +101,17 @@ async function main() {
   check("UI OpenRouter catalog has no duplicate ids", uiDupes.length === 0, {
     duplicates: uiDupes,
   });
-  check("UI OpenRouter catalog exposes 40+ models", OPENROUTER_MODEL_IDS.length >= 40, {
+  check("UI OpenRouter catalog stays compact (approved set only)", OPENROUTER_MODEL_IDS.length >= 10 && OPENROUTER_MODEL_IDS.length <= 20, {
     count: OPENROUTER_MODEL_IDS.length,
+  });
+
+  const disallowedUiIds = OPENROUTER_MODEL_IDS.filter((id) => !APPROVED_OPENROUTER_MODEL_ID_SET.has(id));
+  check("UI OpenRouter catalog uses only exact approved models", disallowedUiIds.length === 0, {
+    disallowed: disallowedUiIds,
+  });
+  const missingApprovedUiIds = APPROVED_OPENROUTER_MODEL_IDS.filter((id) => !OPENROUTER_MODEL_IDS.includes(id));
+  check("UI OpenRouter catalog includes the approved model set", missingApprovedUiIds.length === 0, {
+    missing: missingApprovedUiIds,
   });
 
   const smartIds = MODEL_CATALOG.map((model) => model.id);
@@ -94,6 +124,18 @@ async function main() {
     hasSmartEnvOverrides || smartMissingFromUi.length === 0,
     { missing: smartMissingFromUi, envOverrides: hasSmartEnvOverrides },
   );
+
+  const defaultIds = [
+    DEFAULT_CODING_MODEL,
+    FAST_CODING_MODEL,
+    BALANCED_CODING_MODEL,
+    DEFAULT_CHAT_MODEL,
+    REASONING_MODEL,
+  ];
+  const disallowedDefaultIds = defaultIds.filter((id) => !APPROVED_OPENROUTER_MODEL_ID_SET.has(id));
+  check("Default model env/config values stay in approved set", disallowedDefaultIds.length === 0, {
+    disallowed: disallowedDefaultIds,
+  });
 
   const payload = await fetchOpenRouterModels();
   const liveIds = new Set((payload.data ?? []).map((model) => model.id).filter(Boolean));
@@ -124,7 +166,7 @@ async function main() {
   });
 
   console.log(JSON.stringify({ message: "summary", passed, failed }));
-  process.exit(failed > 0 ? 1 : 0);
+  process.exitCode = failed > 0 ? 1 : 0;
 }
 
 main().catch((error) => {
@@ -132,5 +174,5 @@ main().catch((error) => {
     error: error instanceof Error ? error.message : String(error),
   });
   console.log(JSON.stringify({ message: "summary", passed, failed }));
-  process.exit(1);
+  process.exitCode = 1;
 });

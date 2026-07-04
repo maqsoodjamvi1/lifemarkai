@@ -1,8 +1,18 @@
 import type { ProjectFile } from "@/types/database";
 import { generateFallbackUtilityCss } from "@/lib/preview/generate-fallback-utilities";
+import {
+  isNextAppProject,
+  nextAppDirName,
+  buildNextRouteTable,
+  findNextNotFound,
+  buildNextVirtualEntrySource,
+  transformNextSourceForPreview,
+  NEXT_RUNTIME_SHIMS,
+  NEXT_VIRTUAL_ENTRY_PATH,
+} from "@/lib/preview/next-app-preview";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "25";
+export const PREVIEW_ENGINE_REV = "26";
 
 /** Strip PostCSS-only directives — invalid in a raw <style> tag. */
 export function sanitizePreviewCss(css: string): string {
@@ -92,6 +102,13 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     return indexHtml.content;
   }
 
+  // ── Next.js App Router detection (client-side SPA approximation) ─────────
+  // Generated Next apps have NO App.tsx — the entry is synthesized below from
+  // app/**/page.* wrapped in ancestor layout.* files. Supports app/ and
+  // src/app/. When an App.tsx exists, the battle-tested path stays in charge.
+  const isNextApp = isNextAppProject(files);
+  const nextDir = isNextApp ? nextAppDirName(files.map((f) => f.path)) : null;
+
   const cssFiles  = files.filter((f) => f.path.endsWith(".css"));
   const codeFiles = files.filter((f) => {
     if (!/\.(tsx|ts|jsx|js)$/.test(f.path)) return false;
@@ -102,6 +119,14 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     if (/(^|\/)[\w.-]*\.config\.(t|j)sx?$/.test(f.path)) return false;
     // Vite entry mounts the app — preview bootstrap handles rendering separately.
     if (f.path === "src/main.tsx" || f.path === "src/index.tsx") return false;
+    // Next.js server-only files must never execute in the browser preview:
+    // route handlers (app/**/route.ts) and middleware touch next/server APIs
+    // at module load, and app/api/** is backend-only by definition.
+    if (isNextApp && nextDir) {
+      if (/^(src\/)?middleware\.(ts|js)$/.test(f.path)) return false;
+      if (f.path.startsWith(`${nextDir}/api/`)) return false;
+      if (f.path.startsWith(`${nextDir}/`) && /(^|\/)route\.(ts|js)$/.test(f.path)) return false;
+    }
     return true;
   });
 
@@ -124,6 +149,18 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
   // function") because lib/ sorts after components/ alphabetically.
   const loadRank = (p: string): number => {
     const s = p.toLowerCase();
+    // Next App Router: pages rank like pages (4) with layouts just before
+    // them (3.9) — both import from components/ (3) so they must load after
+    // it. Other app/ files (loading/error/not-found/template) sit at 3.8.
+    // Checked FIRST so "app/..." paths never fall through to generic ranks.
+    if (isNextApp && nextDir) {
+      const dir = nextDir.toLowerCase() + "/";
+      if (s.startsWith(dir)) {
+        if (/(^|\/)page\.(tsx|jsx|js)$/.test(s)) return 4;
+        if (/(^|\/)layout\.(tsx|jsx|js)$/.test(s)) return 3.9;
+        return 3.8;
+      }
+    }
     if (/(^|\/)app\.(tsx|jsx)$/.test(s)) return 5; // entry — render root, last
     if (/\/pages?\//.test(s)) return 4;
     if (/\/components?\//.test(s)) return 3;
@@ -155,6 +192,27 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
       "No entry file found",
       `Found ${codeFiles.length} code file${codeFiles.length === 1 ? "" : "s"} but no App.tsx / App.jsx / src/App.tsx as the entry point. Available code files: ${codeFiles.slice(0, 5).map((f) => f.path).join(", ")}${codeFiles.length > 5 ? "…" : ""}`,
     );
+  }
+
+  // ── Next.js virtual entry synthesis ───────────────────────────────────────
+  // Instead of rendering App.tsx (absent in Next projects), synthesize a
+  // virtual root: a route table from app/**/page.*, each page wrapped in its
+  // ancestor layouts, driven by the SAME virtual hash router as react-router.
+  // Pages/layouts are __Mrequire'd lazily at render time, so the entry can
+  // never race their registration.
+  let entryPath = mainFile.path;
+  let nextVirtualEntryScript = "";
+  if (isNextApp && nextDir) {
+    const allPaths = files.map((f) => f.path);
+    const entrySource = buildNextVirtualEntrySource(
+      buildNextRouteTable(allPaths),
+      findNextNotFound(allPaths),
+    );
+    nextVirtualEntryScript =
+      `\n\n<script type="text/lifemark-module" data-file="${NEXT_VIRTUAL_ENTRY_PATH}">\n` +
+      entrySource.replace(/<\/script>/gi, "<\\/script>") +
+      `\n</script>`;
+    entryPath = NEXT_VIRTUAL_ENTRY_PATH;
   }
 
   const usesTailwindV4 = projectUsesTailwindV4(files);
@@ -276,6 +334,14 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
         .replace(/\\"/g, '"')
         .replace(/\\u0000/g, "\\\\");
     }
+
+    // Next.js source normalization: strip "use client"/"use server" directives
+    // and, for files under app/, swap <html>/<body>/<head> intrinsics for divs
+    // — a nested <html> rendered inside #root breaks the iframe DOM. See
+    // transformNextSourceForPreview for the full decision log (metadata and
+    // async default exports are intentionally left alone).
+    if (isNextApp && nextDir) src = transformNextSourceForPreview(src, file.path, nextDir);
+
     let importTempCounter = 0;
     const tempModuleVar = (prefix: string, key: string) =>
       `${prefix}_${key.replace(/[^a-zA-Z0-9]/g, "_")}_${importTempCounter++}`;
@@ -654,7 +720,10 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     return `<script type="text/lifemark-module" data-file="${file.path}">\n${safeSrc}\n</script>`;
   }
 
-  const fileScripts = sorted.map(wrapFile).join("\n\n");
+  // Virtual Next entry appended LAST — it only defines the root component and
+  // requires pages lazily, so ordering relative to real modules is irrelevant,
+  // but keeping it last mirrors the App-entry-last convention.
+  const fileScripts = sorted.map(wrapFile).join("\n\n") + nextVirtualEntryScript;
 
   // Seed Vite-style public env (VITE_*) from the project's .env so apps that read
   // import.meta.env (e.g. Supabase URL + anon key) work in the live preview, not
@@ -668,6 +737,21 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     }
   }
   const viteEnvScript = `<script>window.__VITE_ENV = ${JSON.stringify(viteEnv)};</script>`;
+
+  // Next.js client code reads process.env.NEXT_PUBLIC_* — `process` is
+  // undefined in the browser, so a bare reference would ReferenceError-crash
+  // whichever module touches it. Seed a minimal window.process (public
+  // NEXT_PUBLIC_* vars only — same exposure rules as VITE_*). Next-mode only.
+  let nextEnvScript = "";
+  if (isNextApp) {
+    const nextEnv: Record<string, string> = { NODE_ENV: "development" };
+    const envFile = files.find((f) => f.path === ".env.local" || f.path === ".env");
+    for (const line of (envFile?.content ?? "").split("\n")) {
+      const m = line.match(/^\s*(NEXT_PUBLIC_[A-Z0-9_]+)\s*=\s*(.*)$/);
+      if (m) nextEnv[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
+    }
+    nextEnvScript = `<script>window.process = window.process || { env: ${JSON.stringify(nextEnv)} };</script>`;
+  }
 
   const consoleBridge = `<script>
 (function() {
@@ -719,6 +803,13 @@ window.__Mrequire = function(path) {
   }
   var norm = normPreviewPath(path);
   var candidates = [path, norm, 'src/' + norm.replace(/^src\\//, ''), norm + '.tsx', norm + '.jsx'];
+  // Next-style "@/*" → "./*" alias (project root, NO src/): normPreviewPath
+  // mapped '@/components/x' to 'src/components/x', so ALSO try the root-level
+  // path (+ index files). Appended AFTER the original candidates so
+  // src/-rooted projects keep winning when both exist.
+  var rootAlt = norm.replace(/^src\\//, '');
+  if (rootAlt !== norm) candidates.push(rootAlt, rootAlt + '.tsx', rootAlt + '.jsx');
+  candidates.push(norm + '/index', rootAlt + '/index');
   for (var i = 0; i < candidates.length; i++) {
     if (window.__M[candidates[i]]) return window.__M[candidates[i]];
   }
@@ -732,6 +823,10 @@ window.__Mrequire = function(path) {
   if (path === 'recharts') return window.__recharts || {};
   // Routing
   if (path === 'react-router-dom' || path === 'react-router') return window.__reactRouterDom || {};
+  // Next.js runtime (App Router preview) — shims injected below in next mode
+  // only. 'next/' prefix check keeps 'next-themes' etc. off this branch; when
+  // __nextShims is absent (non-Next project) we fall through to the warn+{}.
+  if ((path === 'next' || path.indexOf('next/') === 0) && window.__nextShims) return window.__nextShims.resolve(path);
   // Data fetching
   if (path === '@tanstack/react-query' || path === 'react-query') return window.__reactQuery || {};
   if (path === '@supabase/supabase-js') return window.__supabaseJs || {};
@@ -1059,6 +1154,7 @@ window.__reactRouterDom = (function() {
     useSearchParams: function() { return [new URLSearchParams(), function() {}]; },
   };
 })();
+${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
 </script>`;
 
   return `<!DOCTYPE html>
@@ -1099,6 +1195,7 @@ window.__reactRouterDom = (function() {
 <body>
   <div id="root"></div>
   ${viteEnvScript}
+  ${nextEnvScript}
   ${consoleBridge}
   ${moduleRegistry}
   ${fileScripts}
@@ -1161,10 +1258,10 @@ window.__reactRouterDom = (function() {
         } catch (err) { showError(file, (err && err.message) || err); return; }
       }
       try {
-        var mod = window.__Mrequire('${mainFile.path}');
+        var mod = window.__Mrequire('${entryPath}');
         var _entry = mod && (mod.default !== undefined ? mod.default : mod);
         var AppComp = typeof _entry === 'function' ? _entry : null;
-        if (!AppComp) { showError('${mainFile.path}', 'No default export (App component) found.'); return; }
+        if (!AppComp) { showError('${entryPath}', 'No default export (App component) found.'); return; }
         // Reliability guard: a single undefined component (bad import or a
         // default/named export mismatch, or a member of an unshimmed dep) must
         // NOT throw React #130 and freeze the whole preview. Render a visible
@@ -1199,7 +1296,7 @@ window.__reactRouterDom = (function() {
         setTimeout(refreshTailwind, 100);
         setTimeout(refreshTailwind, 400);
         try { window.parent.postMessage({ source: 'lifemark-preview', type: 'success', text: 'render ok' }, '*'); } catch (e) {}
-      } catch (err) { showError('${mainFile.path}', (err && err.message) || err); }
+      } catch (err) { showError('${entryPath}', (err && err.message) || err); }
     }
     function tailwindRuntimeReady() {
       if (window.__twBrowserV4 && window.__twLoaded) return true;

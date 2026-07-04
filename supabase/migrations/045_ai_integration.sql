@@ -4,14 +4,14 @@
 
 ALTER TABLE projects
   ADD COLUMN IF NOT EXISTS ai_integration_enabled  BOOLEAN NOT NULL DEFAULT FALSE,
-  ADD COLUMN IF NOT EXISTS ai_integration_model    TEXT NOT NULL DEFAULT 'openrouter/fusion',
+  ADD COLUMN IF NOT EXISTS ai_integration_model    TEXT NOT NULL DEFAULT 'qwen/qwen3-coder',
   ADD COLUMN IF NOT EXISTS ai_credits_used         INT NOT NULL DEFAULT 0,
   ADD COLUMN IF NOT EXISTS ai_credit_limit         INT NOT NULL DEFAULT 100;
 
 COMMENT ON COLUMN projects.ai_integration_enabled IS
   'When true, the project can call /api/projects/[id]/ai-proxy with LifemarkAI managed keys';
 COMMENT ON COLUMN projects.ai_integration_model IS
-  'OpenRouter model slug to use for AI proxy calls (default openrouter/fusion; can be any valid provider/model slug)';
+  'Approved OpenRouter model slug to use for AI proxy calls (default qwen/qwen3-coder)';
 COMMENT ON COLUMN projects.ai_credits_used IS
   'Running total of AI proxy credits consumed by this project';
 COMMENT ON COLUMN projects.ai_credit_limit IS

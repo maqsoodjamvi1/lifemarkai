@@ -454,6 +454,233 @@ function CopyBtn({ text }: { text: string }) {
   );
 }
 
+// ─── Chat Connectors (remote MCP) ────────────────────────────────────────────
+// Server-persisted user connectors (user_mcp_servers, migration 076). The AI
+// agent initializes these Streamable-HTTP servers per run and can call their
+// tools as namespaced "mcp_*" tools. CRUD via /api/mcp/servers.
+
+interface RemoteConnector {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  hasAuth: boolean;
+  last_status: string | null;
+  last_tools: Array<{ name: string; description?: string }> | null;
+}
+
+function connectorDot(status: string | null): string {
+  if (!status) return "bg-muted-foreground/30";
+  if (status.startsWith("ok")) return "bg-emerald-500";
+  return "bg-red-500";
+}
+
+function ChatConnectorsSection() {
+  const [connectors, setConnectors] = useState<RemoteConnector[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newUrl, setNewUrl] = useState("");
+  const [newAuth, setNewAuth] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testTools, setTestTools] = useState<Record<string, string[]>>({});
+
+  const refresh = async () => {
+    try {
+      const r = await fetch("/api/mcp/servers");
+      const d = await r.json();
+      if (Array.isArray(d.servers)) setConnectors(d.servers);
+    } catch { /* panel stays empty */ }
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { void refresh(); }, []);
+
+  const handleAdd = async () => {
+    if (!newName.trim() || !newUrl.trim()) {
+      toast({ title: "Name and URL are required", variant: "destructive" });
+      return;
+    }
+    setSaving(true);
+    try {
+      const r = await fetch("/api/mcp/servers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName.trim(), url: newUrl.trim(), authHeader: newAuth.trim() || undefined }),
+      });
+      const d = await r.json();
+      if (!r.ok) { toast({ title: d.error ?? "Failed to add connector", variant: "destructive" }); return; }
+      setConnectors((prev) => [...prev, d.server]);
+      setNewName(""); setNewUrl(""); setNewAuth(""); setShowAdd(false);
+      toast({ title: "Connector added", description: "Click Test to verify it and load its tools." });
+    } catch {
+      toast({ title: "Failed to add connector", variant: "destructive" });
+    } finally { setSaving(false); }
+  };
+
+  const handleToggle = async (c: RemoteConnector) => {
+    setConnectors((prev) => prev.map((s) => (s.id === c.id ? { ...s, enabled: !c.enabled } : s)));
+    const r = await fetch("/api/mcp/servers", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: c.id, enabled: !c.enabled }),
+    }).catch(() => null);
+    if (!r?.ok) {
+      setConnectors((prev) => prev.map((s) => (s.id === c.id ? { ...s, enabled: c.enabled } : s)));
+      toast({ title: "Failed to update connector", variant: "destructive" });
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    const r = await fetch(`/api/mcp/servers?id=${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => null);
+    if (r?.ok) {
+      setConnectors((prev) => prev.filter((s) => s.id !== id));
+      toast({ title: "Connector removed" });
+    } else {
+      toast({ title: "Failed to remove connector", variant: "destructive" });
+    }
+  };
+
+  const handleTest = async (id: string) => {
+    setTestingId(id);
+    try {
+      const r = await fetch("/api/mcp/servers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "test", id }),
+      });
+      const d = await r.json();
+      const tools: Array<{ name: string }> = Array.isArray(d.tools) ? d.tools : [];
+      setTestTools((prev) => ({ ...prev, [id]: tools.map((t) => t.name) }));
+      setConnectors((prev) => prev.map((s) =>
+        s.id === id ? { ...s, last_status: d.status ?? s.last_status, last_tools: tools } : s
+      ));
+      if (d.ok) toast({ title: `Connected — ${tools.length} tool${tools.length === 1 ? "" : "s"} found` });
+      else toast({ title: "Connection failed", description: String(d.status ?? "").slice(0, 140), variant: "destructive" });
+    } catch {
+      toast({ title: "Test failed", variant: "destructive" });
+    } finally { setTestingId(null); }
+  };
+
+  return (
+    <div className="p-3 pb-0 space-y-2">
+      <div className="flex items-center gap-1.5">
+        <Zap className="w-3.5 h-3.5 text-violet-400" />
+        <span className="text-xs font-semibold flex-1">Chat Connectors (remote MCP)</span>
+        {connectors.length > 0 && (
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">
+            {connectors.filter((c) => c.enabled).length}/{connectors.length} on
+          </Badge>
+        )}
+      </div>
+
+      {loading && <p className="text-[11px] text-muted-foreground py-1">Loading connectors…</p>}
+
+      {!loading && connectors.map((c) => {
+        const toolCount = Array.isArray(c.last_tools) ? c.last_tools.length : 0;
+        const chips = testTools[c.id];
+        return (
+          <div key={c.id} className="rounded-lg border border-border bg-card overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-2.5">
+              <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", connectorDot(c.last_status))} title={c.last_status ?? "Untested"} />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{c.name}</p>
+                <p className="text-[10px] font-mono text-muted-foreground truncate">{c.url}</p>
+              </div>
+              {toolCount > 0 && (
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4 shrink-0">
+                  {toolCount} tool{toolCount === 1 ? "" : "s"}
+                </Badge>
+              )}
+              <button
+                onClick={() => void handleTest(c.id)}
+                disabled={testingId === c.id}
+                className="p-1 rounded hover:bg-muted transition-colors"
+                title="Test connection"
+              >
+                <RefreshCw className={cn("w-3 h-3 text-muted-foreground", testingId === c.id && "animate-spin")} />
+              </button>
+              <button
+                onClick={() => void handleToggle(c)}
+                title={c.enabled ? "Enabled for Agent runs — click to disable" : "Disabled — click to enable"}
+                className={cn(
+                  "relative w-7 h-4 rounded-full transition-colors shrink-0",
+                  c.enabled ? "bg-primary" : "bg-muted-foreground/30"
+                )}
+              >
+                <span className={cn(
+                  "absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all",
+                  c.enabled ? "left-3.5" : "left-0.5"
+                )} />
+              </button>
+              <button
+                onClick={() => void handleDelete(c.id)}
+                className="p-1 rounded hover:bg-red-50 text-muted-foreground hover:text-red-500 transition-colors"
+                title="Remove connector"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            </div>
+            {(chips?.length || c.last_status) && (
+              <div className="border-t border-border px-3 py-2 bg-muted/30 space-y-1.5">
+                {c.last_status && (
+                  <p className={cn(
+                    "text-[10px] font-mono truncate",
+                    c.last_status.startsWith("ok") ? "text-emerald-600" : "text-red-500"
+                  )}>
+                    {c.last_status}
+                  </p>
+                )}
+                {chips && chips.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {chips.map((t) => (
+                      <span key={t} className="px-1.5 py-0.5 rounded bg-muted border border-border font-mono text-[10px]">{t}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {showAdd ? (
+        <div className="rounded-lg border border-dashed border-border p-3 space-y-2">
+          <p className="text-xs font-medium">New chat connector</p>
+          <Input placeholder="Name (e.g. Internal CRM)" value={newName} onChange={(e) => setNewName(e.target.value)} className="h-8 text-xs" />
+          <Input placeholder="https://your-mcp-server.example.com/mcp" value={newUrl} onChange={(e) => setNewUrl(e.target.value)} className="h-8 text-xs font-mono" />
+          <Input
+            type="password"
+            placeholder="Auth header value, e.g. Bearer xyz (optional)"
+            value={newAuth}
+            onChange={(e) => setNewAuth(e.target.value)}
+            className="h-8 text-xs font-mono"
+          />
+          <div className="flex gap-2 pt-1">
+            <Button size="sm" className="h-7 text-xs flex-1" disabled={saving} onClick={() => void handleAdd()}>
+              {saving ? "Adding…" : "Add connector"}
+            </Button>
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setShowAdd(false)}>Cancel</Button>
+          </div>
+        </div>
+      ) : (
+        <Button variant="outline" size="sm" className="w-full h-8 text-xs gap-1.5 border-dashed" onClick={() => setShowAdd(true)}>
+          <Plus className="w-3.5 h-3.5" /> Add chat connector
+        </Button>
+      )}
+
+      <p className="text-[10px] text-muted-foreground">
+        The AI agent can call these tools during Agent runs. Streamable-HTTP MCP servers only.
+      </p>
+
+      <div className="border-t border-border pt-2 mt-1">
+        <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">Local servers (this browser)</p>
+      </div>
+    </div>
+  );
+}
+
 // ─── My Servers Tab ───────────────────────────────────────────────────────────
 
 function MyServersTab({ servers, setServers }: { servers: McpServer[]; setServers: React.Dispatch<React.SetStateAction<McpServer[]>> }) {
@@ -863,7 +1090,12 @@ export function McpPanel() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        {tab === "servers" && <MyServersTab servers={servers} setServers={setServers} />}
+        {tab === "servers" && (
+          <>
+            <ChatConnectorsSection />
+            <MyServersTab servers={servers} setServers={setServers} />
+          </>
+        )}
         {tab === "marketplace" && <MarketplaceTab servers={servers} setServers={setServers} />}
         {tab === "connect" && (
           <div className="p-4 space-y-4">

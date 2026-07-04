@@ -58,7 +58,7 @@ const features = [
   {
     icon: MousePointer,
     title: "Multi-Model AI",
-    description: "Choose between GPT-4o, Claude Opus, Claude Sonnet, or Gemini Pro per request. Always use the best model for the job with full cost transparency.",
+    description: "Claude Fable 5, Opus 4.8, Sonnet 4.6, GPT-5 Codex, and GPT-5.x — auto-routed per task, with escalation on hard problems and full cost transparency.",
     color: "text-pink-400",
     bg: "bg-pink-500/10 border-pink-500/20",
     badge: "Advanced",
@@ -74,10 +74,10 @@ const features = [
   {
     icon: Image,
     title: "Built-in Image Generation",
-    description: "Generate app icons, hero images, product photos, and UI assets with DALL-E 3 — right inside the editor. With transparent background support.",
+    description: "Generate app icons, hero images, product photos, and UI assets with Gemini Image (Nano Banana) — right inside the editor. With transparent background support.",
     color: "text-teal-400",
     bg: "bg-teal-500/10 border-teal-500/20",
-    badge: "DALL-E 3",
+    badge: "Image AI",
   },
   {
     icon: Code2,

@@ -13,6 +13,9 @@ import {
   IMAGE_MODEL,
   REVIEW_MODEL,
   ESCALATION_MODEL,
+  FREE_CODING_MODEL,
+  ECONOMY_CODING_MODEL,
+  ECONOMY_CHAT_MODEL,
 } from "./model-defaults";
 import { selectModelChain, type ModelStrength } from "./model-catalog";
 
@@ -32,8 +35,9 @@ export const CLAUDE_MODELS = DEFAULT_MODEL_ALIASES;
  * OpenRouter slugs in model-defaults.ts and route through the single
  * OPENROUTER_API_KEY by default; override any tier via env
  * (OPENROUTER_CODING_MODEL, OPENROUTER_DESIGN_MODEL, OPENROUTER_CONTENT_MODEL, ...).
- * Defaults: code -> Pareto Code router, balanced/reasoning/chat -> Fusion,
- * fast -> DeepSeek V4 Flash, image -> the native image model.
+ * Defaults: code -> Qwen, balanced/reasoning/chat -> DeepSeek, fast ->
+ * DeepSeek V4 Flash, image -> the native image model. The prompt-aware catalog
+ * can auto-promote to Claude when a request needs deeper reasoning/debugging.
  */
 export const MODEL_TIERS = {
   /** Code generation, agent runs, error fixing — best coder. */
@@ -156,10 +160,10 @@ export function inferProjectStage(files: Pick<ProjectFile, "path">[]): ProjectSt
 /**
  * Pick the best model for a prompt given editor mode and project context.
  * OpenRouter-first per-task selection (Lovable-style orchestration):
- *   coding/fixing -> Pareto Code router, with diverse fallback families
- *   planning      -> Fusion / frontier reasoning models
+ *   coding/fixing -> approved code models, with diverse fallback families
+ *   planning      -> approved reasoning models
  *   quick patches -> fast, cheap specialist models
- *   chat          -> Fusion for quality, with cheap fallback when appropriate
+ *   chat          -> approved reasoning/chat models, with cheap fallback when appropriate
  * The provider layer still supports direct-provider fallback when OpenRouter is
  * disabled — see lib/ai/provider.ts.
  */
@@ -177,8 +181,52 @@ export function resolveSmartModel(
  * fallbacks used for cross-model verification when an attempt fails (see
  * lib/ai/self-verify.ts). Seeds capability hints + a guaranteed-valid anchor
  * (the proven per-mode tier) from the editor mode, then lets the curated
- * catalog (lib/ai/model-catalog.ts) pick across all OpenRouter models.
+ * catalog (lib/ai/model-catalog.ts) pick across the approved OpenRouter set.
  */
+/** Features that make a build too complex for a free-tier coder. */
+const COMPLEX_FEATURE_RE =
+  /\b(auth|login|sign[- ]?up|database|supabase|postgres|payment|stripe|paddle|checkout|cart|subscription|api|backend|edge function|server|realtime|websocket|admin|dashboard|integration|webhook|oauth|upload|multi[- ]?tenant|role|permission|analytics|cms|ai|chatbot|llm)\b/i;
+
+/** App types that are content/presentation-first (no app logic to get wrong). */
+const CONTENT_APP_TYPES = new Set<string>(["marketing-website"]);
+
+/**
+ * True when a build/agent request is safe to route to the FREE coding model:
+ *  - a NEW simple content-only website (landing/marketing/portfolio-style,
+ *    no complex features), or
+ *  - a tiny lightweight edit to an existing app (short prompt, no complex
+ *    features, not an error fix).
+ * Quality safety nets still apply: provider.ts falls back to a paid model on
+ * free-pool congestion, self-verify catches broken output, and the richness
+ * gate triggers a (paid) enrichment pass if the result is thin.
+ */
+export function isFreeEligibleBuild(prompt: string, fileCount: number): boolean {
+  const trimmed = prompt.trim();
+  if (!trimmed || COMPLEX_FEATURE_RE.test(trimmed)) return false;
+  // Tiny incremental edit on an existing app ("make the header sticky").
+  if (fileCount > 0 && trimmed.length < 90) return true;
+  // New content-first site: classify only for new/near-empty projects.
+  if (fileCount <= 8) {
+    try {
+      const { appType } = classifyBuildIntent(trimmed);
+      return CONTENT_APP_TYPES.has(appType);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function isSmallExistingEdit(prompt: string, fileCount: number): boolean {
+  const trimmed = prompt.trim();
+  if (fileCount <= 0 || !trimmed || trimmed.length > 220) return false;
+  if (COMPLEX_FEATURE_RE.test(trimmed) && !FIX_KEYWORDS.test(trimmed)) return false;
+  if (/\b(entire|whole|all pages|every page|all files|codebase|from scratch|rebuild|rewrite|refactor|migrate|redesign|restyle)\b/i.test(trimmed)) {
+    return false;
+  }
+  return true;
+}
+
 export function resolveModelChain(
   mode: EditorMode,
   ctx: Pick<EditorIntelContext, "fileCount" | "hasPreviewError">,
@@ -189,12 +237,22 @@ export function resolveModelChain(
   let preferCheap = false;
   let anchor: AIModel = MODEL_TIERS.coding;
 
+  const smallExistingEdit = isSmallExistingEdit(trimmed, ctx.fileCount);
+
   if (ctx.hasPreviewError && /\b(fix|debug|resolve|repair|error|bug)\b/i.test(trimmed)) {
     require.push("fixes", "code");
-    anchor = MODEL_TIERS.coding;
+    preferCheap = smallExistingEdit;
+    anchor = smallExistingEdit ? ECONOMY_CODING_MODEL : MODEL_TIERS.coding;
   } else if (mode === "agent" || mode === "build") {
     require.push("code");
-    anchor = MODEL_TIERS.coding;
+    // Cost-aware routing: simple content sites + tiny edits go FREE first
+    // (paid fallback on congestion; error fixes above never come here).
+    anchor = isFreeEligibleBuild(trimmed, ctx.fileCount)
+      ? FREE_CODING_MODEL
+      : smallExistingEdit
+        ? ECONOMY_CODING_MODEL
+        : MODEL_TIERS.coding;
+    preferCheap = isFreeEligibleBuild(trimmed, ctx.fileCount) || smallExistingEdit;
   } else if (mode === "plan") {
     require.push("reasoning");
     anchor = trimmed.length > 200 ? MODEL_TIERS.coding : MODEL_TIERS.reasoning;
@@ -207,8 +265,8 @@ export function resolveModelChain(
       require.push("content");
       anchor = MODEL_TIERS.content as AIModel;
     } else {
-      preferCheap = trimmed.length < 100;
-      anchor = preferCheap ? MODEL_TIERS.chat : MODEL_TIERS.balanced;
+      preferCheap = trimmed.length < 160 || smallExistingEdit;
+      anchor = preferCheap ? ECONOMY_CHAT_MODEL : MODEL_TIERS.balanced;
     }
   } else {
     // chat / default — route by task type first, then length-based escalation.
@@ -223,10 +281,10 @@ export function resolveModelChain(
       require.push("reasoning");
       anchor = MODEL_TIERS.reasoning;
     } else {
-      preferCheap = trimmed.length < 120;
+      preferCheap = trimmed.length < 160 || smallExistingEdit;
       anchor =
-        trimmed.length < 120
-          ? MODEL_TIERS.chat
+        trimmed.length < 160
+          ? ECONOMY_CHAT_MODEL
           : trimmed.length < 300
             ? MODEL_TIERS.balanced
             : MODEL_TIERS.coding;
