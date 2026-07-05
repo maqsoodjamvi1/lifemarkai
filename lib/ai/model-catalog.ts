@@ -358,6 +358,10 @@ function scoreModel(model: CatalogModel, desired: Set<ModelStrength>, preferChea
     if (heavyDesired && model.tier === "fast") score -= 2;
     if (heavyDesired && model.cost === 0) score -= 2;
     score -= Math.max(0, model.cost - 3); // mild penalty only for premium
+    // Quality tier = OpenAI + Claude (Lovable-style). On real work (non-cheap),
+    // prefer these two families so they lead and are the escalation targets;
+    // trivial tasks stay on the free tier (the preferCheap branch above).
+    if (model.family === "anthropic" || model.family.startsWith("openai")) score += 2;
   }
   return score;
 }
@@ -411,6 +415,24 @@ export function selectModelChain(prompt: string, opts: SelectOpts = {}): AIModel
       if (chain.length >= maxChain) break;
       if (!chain.includes(model.id)) chain.push(model.id);
     }
+  }
+
+  // Cost-smart free→heavy cascade: when we lead with a free/cheap model (to
+  // maximise free-tier usage on the first try), guarantee a HEAVY frontier model
+  // is later in the chain so a stuck task escalates UP — not sideways to another
+  // weak model. This is the "use the free model AND the heavy model, smartly"
+  // pattern: cheap first, strong safety net on retry.
+  const hasFrontier = chain.some((id) => getCatalogModel(id)?.tier === "frontier");
+  const primaryCheap = (getCatalogModel(chain[0])?.cost ?? 5) <= 1;
+  if (primaryCheap && !hasFrontier) {
+    const heavy = MODEL_CATALOG.filter((m) => m.tier === "frontier" && !chain.includes(m.id)).sort(
+      (a, b) => {
+        const am = [...desired].filter((s) => a.strengths.includes(s)).length;
+        const bm = [...desired].filter((s) => b.strengths.includes(s)).length;
+        return bm - am || b.cost - a.cost; // best strength match, then strongest
+      },
+    )[0];
+    if (heavy) chain.push(heavy.id);
   }
 
   // Guarantee a known-good anchor as the final fallback.

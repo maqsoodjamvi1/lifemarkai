@@ -33,6 +33,7 @@ import { computeCreditCost } from "@/lib/ai/credit-cost";
 import { claimDailyCredits } from "@/lib/credits";
 import { autoWireBackend, type AutoWireResult } from "@/lib/cloud/auto-wire";
 import { autoWireAi } from "@/lib/ai/auto-wire-ai";
+import { selectRelevantFiles } from "@/lib/ai/file-selector";
 import { runSelfVerification, type SelfVerifyResult } from "@/lib/ai/self-verify";
 import { buildCompletedBuildActivity } from "@/lib/ai/build-activity";
 import {
@@ -457,22 +458,38 @@ export async function POST(req: NextRequest) {
     if (mode === "build") {
       // Route to the right generator based on target framework
       const suffix = schemaBlock + summaryBlock + fileChangesBlock + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
+      // Intelligent file selection ("hydration"): give the builder only the files
+      // relevant to this request instead of the whole project — cuts token cost
+      // (a full-project turn can be ~157k tokens ≈ $2) and improves output quality.
+      // Small projects / small total context pass through unchanged; on any error
+      // it falls back to all files, so this can never fail the build.
+      let contextFiles = files;
+      try {
+        contextFiles = await selectRelevantFiles({
+          prompt: message,
+          files: files as Array<{ path: string; content: string }>,
+          activeFile: null,
+        });
+      } catch {
+        contextFiles = files;
+      }
+
       const buildContextBudget = contextBudgetForRequest({
         mode,
         prompt: costPrompt,
-        fileCount: Array.isArray(files) ? files.length : 0,
+        fileCount: Array.isArray(contextFiles) ? contextFiles.length : 0,
         defaultBudget: 80000,
         hasImage: !!imageBase64,
       });
       if (framework === "react-native") {
-        systemPrompt = buildReactNativePrompt(message, files, buildContextBudget) + suffix;
+        systemPrompt = buildReactNativePrompt(message, contextFiles, buildContextBudget) + suffix;
       } else if (framework === "nextjs" || framework === "next") {
         // SSR-first Next.js App Router — proper generateMetadata, Server Components.
         // Projects store "next" (FRAMEWORKS picker) while GitHub import detection
         // returns "nextjs" — accept both.
-        systemPrompt = buildNextJSPrompt(message, files, buildContextBudget) + suffix;
+        systemPrompt = buildNextJSPrompt(message, contextFiles, buildContextBudget) + suffix;
       } else {
-        systemPrompt = buildGenerationPrompt(message, files, buildContextBudget) + suffix;
+        systemPrompt = buildGenerationPrompt(message, contextFiles, buildContextBudget) + suffix;
       }
       if (simpleEconomyRequest) {
         systemPrompt += `\n\n---\n# Economy Small Edit Mode\nThis is a small edit/debug turn on an existing project. Keep the response minimal:\n- Return ONLY files that must change.\n- Prefer surgical changes over rewriting whole files.\n- Do not regenerate the whole app, create new pages, restyle unrelated UI, or expand product scope.\n- Keep existing imports, data, assets, and routes unless the user explicitly asked to change them.\n---`;
