@@ -41,7 +41,10 @@ const RENDER_SETTLE_MS = 3_500;
 /** Dynamically load Playwright without letting bundlers resolve it at build time. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function tryLoadPlaywright(): Promise<{ chromium: any } | null> {
-  if (process.env.PLAYWRIGHT_ENABLED !== "true") return null;
+  // Default ON: attempt a real browser render unless explicitly disabled. If
+  // `playwright` isn't installed (optional dep), the import throws and we fall
+  // back to the (now much stronger) static checks — so this is always safe.
+  if (process.env.PLAYWRIGHT_ENABLED === "false" || process.env.PLAYWRIGHT_ENABLED === "0") return null;
   try {
     const modName = "playwright";
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -77,13 +80,27 @@ async function renderAndCollectErrors(
     await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15_000 });
     await page.waitForTimeout(RENDER_SETTLE_MS);
 
-    // The app must actually mount something
-    const rootEmpty = await page.evaluate(() => {
+    // Deeper blank-screen / undefined-component detection: not just "is #root
+    // empty" but "did anything meaningful actually render".
+    const diag = await page.evaluate(() => {
       const root = document.getElementById("root");
-      return !root || root.children.length === 0;
-    }).catch(() => false);
-    if (rootEmpty && errors.length === 0) {
-      errors.push("App rendered an empty page — #root has no children after mount.");
+      const childCount = root ? root.children.length : 0;
+      const text = ((document.body && document.body.innerText) || "").trim();
+      const missing = (((document.body && document.body.innerText) || "").match(/missing component/gi) || []).length;
+      return { hasRoot: !!root, childCount, textLen: text.length, missing };
+    }).catch(() => ({ hasRoot: true, childCount: 1, textLen: 999, missing: 0 }));
+
+    if (errors.length === 0) {
+      if (!diag.hasRoot || diag.childCount === 0) {
+        errors.push("App rendered an empty page — #root has no children after mount.");
+      } else if (diag.textLen < 3 && diag.childCount <= 1) {
+        errors.push("App appears to render a blank screen — no visible content after mount.");
+      }
+    }
+    // Undefined components (rendered as guarded "missing component" placeholders)
+    // usually mean a bad import/export or a component file that wasn't created.
+    if (diag.missing > 0) {
+      errors.push(`${diag.missing} component(s) failed to resolve (shown as "missing component" placeholders) — check imports/exports or create the missing file.`);
     }
 
     return [...new Set(errors)].slice(0, 4);

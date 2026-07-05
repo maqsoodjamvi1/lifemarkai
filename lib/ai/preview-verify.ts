@@ -12,40 +12,73 @@ export interface PreviewVerifyResult {
   checks: Array<{ name: string; pass: boolean; detail?: string }>;
 }
 
-/** Lightweight checks on bundled preview HTML (no headless browser required). */
+/**
+ * Static checks on the bundled preview HTML — no headless browser required.
+ *
+ * These catch the exact "blank screen" fatals we've hit in production, purely
+ * from the generated HTML string, so verification is robust even when a test
+ * suite (and Playwright) isn't available:
+ *   - unguarded `tailwind.config` → "tailwind is not defined" blanks the preview
+ *   - surviving `import.meta.env` → "Cannot use import.meta outside a module"
+ *   - leftover ES `import … from` → SyntaxError in eval
+ *   - `const` module handles → duplicate-declaration crash
+ *   - missing #root / render bootstrap → nothing mounts
+ *
+ * Any failed check is a fixable, surfaced problem instead of a silent white page.
+ */
 export function verifyPreviewHtml(html: string): PreviewVerifyResult {
   const checks: PreviewVerifyResult["checks"] = [];
-  const lower = html.toLowerCase();
   const trimmed = html.trim();
+  const lower = html.toLowerCase();
 
-  const hasStructure =
-    lower.includes("<body") || lower.includes("<!doctype") || lower.includes("<html");
-  const hasMount =
-    lower.includes('id="root"') ||
-    lower.includes("id='root'") ||
-    lower.includes("createelement") ||
-    lower.includes("reactdom");
-
+  const hasStructure = lower.includes("<body") || lower.includes("<!doctype") || lower.includes("<html");
   checks.push({
     name: "Preview HTML generated",
     pass: trimmed.length > 0 && hasStructure,
-    detail:
-      trimmed.length > 0
-        ? `${Math.round(trimmed.length / 1024)}KB · ${trimmed.length} chars`
-        : "Empty bundle",
+    detail: trimmed.length > 0 ? `${Math.round(trimmed.length / 1024)}KB` : "Empty bundle",
   });
 
+  const hasMount = /id=["']root["']/.test(html);
   checks.push({
     name: "Root mount present",
-    pass: hasMount || hasStructure,
+    pass: hasMount,
+    detail: hasMount ? undefined : 'no <div id="root"> — nothing to mount into',
   });
 
-  const errorHints = ["syntaxerror", "referenceerror", "module not found", "cannot find module"];
-  const foundError = errorHints.find((e) => lower.includes(e));
+  const hasRender = /ReactDOM|createRoot|__Mrequire\(/.test(html);
   checks.push({
-    name: "No obvious bundle errors",
-    pass: !foundError,
-    detail: foundError ? `Found: ${foundError}` : undefined,
+    name: "Render bootstrap present",
+    pass: hasRender,
+    detail: hasRender ? undefined : "no ReactDOM/createRoot/__Mrequire — app never renders",
+  });
+
+  // ── Known blank-screen fatals (static, deterministic) ──────────────────────
+  const unguardedTailwind = /<script>\s*tailwind\.config\s*=/.test(html);
+  checks.push({
+    name: "Tailwind config guarded",
+    pass: !unguardedTailwind,
+    detail: unguardedTailwind ? "unguarded `tailwind.config` → 'tailwind is not defined' blanks the preview" : undefined,
+  });
+
+  const rawImportMeta = /import\.meta\.env\./.test(html);
+  checks.push({
+    name: "import.meta rewritten",
+    pass: !rawImportMeta,
+    detail: rawImportMeta ? "`import.meta.env.` survived → 'Cannot use import.meta outside a module'" : undefined,
+  });
+
+  const leftoverImport = /^\s*import\s+[\w{}*,\s]+\s+from\s+["']/m.test(html);
+  checks.push({
+    name: "No leftover ES imports",
+    pass: !leftoverImport,
+    detail: leftoverImport ? "leftover `import … from` statement → SyntaxError in eval" : undefined,
+  });
+
+  const constHandle = /const\s+__mod_\w+\s*=\s*window\.__Mrequire/.test(html);
+  checks.push({
+    name: "Module handles use var",
+    pass: !constHandle,
+    detail: constHandle ? "`const` module handle → 'already declared' duplicate crash" : undefined,
   });
 
   return { ok: checks.every((c) => c.pass), checks };
