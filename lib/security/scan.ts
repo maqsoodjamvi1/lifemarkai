@@ -18,7 +18,7 @@ export type Severity = "critical" | "high" | "medium" | "low";
 export interface SecurityFinding {
   rule: string;
   severity: Severity;
-  kind: "secret" | "risky" | "pii";
+  kind: "secret" | "risky" | "pii" | "dependency";
   title: string;
   file: string;
   line: number;

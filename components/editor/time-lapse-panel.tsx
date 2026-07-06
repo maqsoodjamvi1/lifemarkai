@@ -59,9 +59,7 @@ export function TimeLapsePanel({ projectId }: TimeLapsePanelProps) {
   const [showFileDropdown, setShowFileDropdown] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => { loadSnapshots(); }, [projectId]);
-
-  async function loadSnapshots() {
+  const loadSnapshots = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/projects/${projectId}/snapshots?limit=30`);
@@ -81,7 +79,12 @@ export function TimeLapsePanel({ projectId }: TimeLapsePanelProps) {
       setCursor(0);
     } catch { /* ignore */ }
     finally { setLoading(false); }
-  }
+  }, [projectId]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void loadSnapshots(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [loadSnapshots]);
 
   // Play/pause loop
   useEffect(() => {
@@ -106,8 +109,6 @@ export function TimeLapsePanel({ projectId }: TimeLapsePanelProps) {
 
   const beforeContent = prev?.files_snapshot?.find((f) => f.path === selectedFile)?.content ?? "";
   const afterContent = current?.files_snapshot?.find((f) => f.path === selectedFile)?.content ?? "";
-
-  const progress = snapshots.length > 1 ? cursor / (snapshots.length - 1) : 0;
 
   function handleScrub(e: React.ChangeEvent<HTMLInputElement>) {
     setPlaying(false);
@@ -216,7 +217,7 @@ export function TimeLapsePanel({ projectId }: TimeLapsePanelProps) {
           <Clock className="w-3 h-3 text-muted-foreground shrink-0" />
           <span className="text-[10px] text-muted-foreground">{timeAgo(current.created_at)}</span>
           {current.prompt && (
-            <span className="text-[10px] text-foreground/70 truncate flex-1">"{current.prompt.slice(0, 60)}{current.prompt.length > 60 ? "…" : ""}"</span>
+            <span className="text-[10px] text-foreground/70 truncate flex-1">&quot;{current.prompt.slice(0, 60)}{current.prompt.length > 60 ? "…" : ""}&quot;</span>
           )}
           <span className="text-[10px] text-muted-foreground shrink-0">{cursor + 1}/{snapshots.length}</span>
         </div>

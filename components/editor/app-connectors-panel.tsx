@@ -2,7 +2,7 @@
 
 /**
  * AppConnectorsPanel
- * 40+ real app integrations with OAuth / API-key connection flows.
+ * 50+ real app integrations with OAuth / API-key connection flows.
  * Credentials are saved to project env vars via /api/projects/[id]/env.
  * Groups: Communication, Data, AI, Commerce, Productivity
  */
@@ -601,6 +601,104 @@ const CONNECTORS: Connector[] = [
     color: "bg-lime-500/20 text-lime-300",
     fields: [{ key: "GRANOLA_API_KEY", label: "API Key", placeholder: "grn_…", secret: true, helpUrl: "https://www.granola.ai/" }],
     docsUrl: "https://www.granola.ai/docs",
+    oauthFlow: false,
+  },
+
+  // ── Batch added 2026-07 (registry-backed, gateway-routable) ─────────────────
+  {
+    id: "gitlab",
+    name: "GitLab",
+    description: "Repos, merge requests, issues, and CI pipelines",
+    category: "Infrastructure",
+    emoji: "🦊",
+    color: "bg-orange-500/20 text-orange-300",
+    fields: [{ key: "GITLAB_TOKEN", label: "Personal Access Token", placeholder: "glpat-…", secret: true, helpUrl: "https://gitlab.com/-/user_settings/personal_access_tokens" }],
+    docsUrl: "https://docs.gitlab.com/ee/api/",
+    oauthFlow: true,
+  },
+  {
+    id: "discord",
+    name: "Discord",
+    description: "Post messages, manage channels, and run bots",
+    category: "Communication",
+    emoji: "🎮",
+    color: "bg-indigo-500/20 text-indigo-300",
+    fields: [{ key: "DISCORD_BOT_TOKEN", label: "Bot Token", placeholder: "MToX…", secret: true, helpUrl: "https://discord.com/developers/applications" }],
+    docsUrl: "https://discord.com/developers/docs/reference",
+    oauthFlow: false,
+  },
+  {
+    id: "jira",
+    name: "Jira",
+    description: "Create and track issues, sprints, and boards",
+    category: "Productivity",
+    emoji: "🧭",
+    color: "bg-blue-500/20 text-blue-300",
+    fields: [
+      { key: "JIRA_DOMAIN", label: "Site", placeholder: "mycompany.atlassian.net", secret: false },
+      { key: "JIRA_EMAIL", label: "Account Email", placeholder: "you@company.com", secret: false },
+      { key: "JIRA_API_TOKEN", label: "API Token", placeholder: "…", secret: true, helpUrl: "https://id.atlassian.com/manage-profile/security/api-tokens" },
+    ],
+    docsUrl: "https://developer.atlassian.com/cloud/jira/platform/rest/v3/",
+    oauthFlow: false,
+  },
+  {
+    id: "zendesk",
+    name: "Zendesk",
+    description: "Support tickets, users, and help-center content",
+    category: "Productivity",
+    emoji: "🎫",
+    color: "bg-emerald-600/20 text-emerald-300",
+    fields: [
+      { key: "ZENDESK_SUBDOMAIN", label: "Subdomain", placeholder: "mycompany", secret: false },
+      { key: "ZENDESK_EMAIL", label: "Agent Email", placeholder: "you@company.com", secret: false },
+      { key: "ZENDESK_API_TOKEN", label: "API Token", placeholder: "…", secret: true, helpUrl: "https://support.zendesk.com/hc/en-us/articles/4408889192858" },
+    ],
+    docsUrl: "https://developer.zendesk.com/api-reference/",
+    oauthFlow: false,
+  },
+  {
+    id: "intercom",
+    name: "Intercom",
+    description: "Conversations, contacts, and support automation",
+    category: "Communication",
+    emoji: "💬",
+    color: "bg-sky-500/20 text-sky-300",
+    fields: [{ key: "INTERCOM_ACCESS_TOKEN", label: "Access Token", placeholder: "dG9r…", secret: true, helpUrl: "https://developers.intercom.com/building-apps/docs/authentication-types" }],
+    docsUrl: "https://developers.intercom.com/intercom-api-reference/",
+    oauthFlow: true,
+  },
+  {
+    id: "calendly",
+    name: "Calendly",
+    description: "Scheduled events, invitees, and availability",
+    category: "Productivity",
+    emoji: "📆",
+    color: "bg-blue-600/20 text-blue-300",
+    fields: [{ key: "CALENDLY_TOKEN", label: "Personal Access Token", placeholder: "eyJ…", secret: true, helpUrl: "https://calendly.com/integrations/api_webhooks" }],
+    docsUrl: "https://developer.calendly.com/api-docs",
+    oauthFlow: true,
+  },
+  {
+    id: "sendgrid",
+    name: "SendGrid",
+    description: "Transactional and marketing email delivery",
+    category: "Communication",
+    emoji: "📨",
+    color: "bg-blue-500/20 text-blue-300",
+    fields: [{ key: "SENDGRID_API_KEY", label: "API Key", placeholder: "SG.…", secret: true, helpUrl: "https://app.sendgrid.com/settings/api_keys" }],
+    docsUrl: "https://docs.sendgrid.com/api-reference",
+    oauthFlow: false,
+  },
+  {
+    id: "aikido",
+    name: "Aikido Security",
+    description: "Code, cloud, and dependency security findings",
+    category: "Infrastructure",
+    emoji: "🥋",
+    color: "bg-purple-500/20 text-purple-300",
+    fields: [{ key: "AIKIDO_API_KEY", label: "API Key", placeholder: "…", secret: true, helpUrl: "https://app.aikido.dev/settings/integrations/api" }],
+    docsUrl: "https://apidocs.aikido.dev/",
     oauthFlow: false,
   },
 ];

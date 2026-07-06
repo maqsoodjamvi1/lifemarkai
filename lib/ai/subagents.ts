@@ -51,8 +51,7 @@ function scoreFile(
   return score;
 }
 
-function buildTasks(message: string, files: Array<{ path: string; content?: string | null }>): SubagentStep[] {
-  const keywords = tokenize(message).slice(0, 12);
+function buildTasks(message: string): SubagentStep[] {
   const tasks: SubagentStep[] = [];
 
   if (/\bauth|login|signup|session|oauth\b/i.test(message)) {
@@ -104,7 +103,7 @@ export function runSubagentInvestigation(
 
   const inspected = (ranked.length > 0 ? ranked.map((r) => r.path) : fallback).slice(0, 6);
 
-  const tasks = buildTasks(message, files).map((task) => {
+  const tasks = buildTasks(message).map((task) => {
     const taskKeywords = task.id.includes("auth")
       ? ["auth", "login", "session", "user"]
       : task.id.includes("layout")

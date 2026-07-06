@@ -2,7 +2,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
-import { getDefaultAiModel } from "@/lib/ai/model-defaults";
+import { getDefaultAiModel, ESCALATION_MODEL } from "@/lib/ai/model-defaults";
 import { applyModelAdapter } from "@/lib/ai/model-catalog";
 import { sendLowCreditsEmail } from "@/lib/email/resend";
 import {
@@ -1062,7 +1062,13 @@ The user has expressed frustration. Do the following:
                   );
                   let repairContent = "";
                   await generateAI({
-                    model: effectiveModel,
+                    // Escalation ladder (mirrors the lens system): repair with
+                    // the STRONGEST tier, not the model that just produced the
+                    // flawed output — the same brain asked to fix its own
+                    // systematic mistake mostly reproduces it. Fires at most
+                    // once per build and only after validation failed, so the
+                    // premium model's cost lands exactly where it pays.
+                    model: ESCALATION_MODEL,
                     messages: [
                       {
                         role: "system" as const,

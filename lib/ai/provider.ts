@@ -182,9 +182,35 @@ async function generateOpenRouterSafe(
   options: GenerateOptions,
   model: string,
 ): Promise<GenerateResult> {
+  // Track whether any streamed chunks reached the caller — a transient retry
+  // after partial output would REPLAY the response and duplicate text in the
+  // client, so mid-stream failures must bubble instead of retrying.
+  let chunksEmitted = false;
+  const trackedOptions: GenerateOptions = options.onChunk
+    ? {
+        ...options,
+        onChunk: (delta: string) => {
+          chunksEmitted = true;
+          options.onChunk!(delta);
+        },
+      }
+    : options;
   try {
-    return await generateOpenRouter({ ...options, model: model as AIModel });
+    return await generateOpenRouter({ ...trackedOptions, model: model as AIModel });
   } catch (err) {
+    // Provider said the account is out of credits → poison the balance cache
+    // so every call for the next TTL fails fast with the guard's clear
+    // message instead of re-hitting OpenRouter (and so no retry below can
+    // push the balance further negative).
+    {
+      const status = (err as { status?: number }).status;
+      const msg = (err as { message?: string }).message ?? "";
+      if (status === 402 || /insufficient credits/i.test(msg)) {
+        const { markOpenRouterDepleted } = await import("./openrouter-balance");
+        markOpenRouterDepleted();
+        throw err;
+      }
+    }
     if (isInvalidModelError(err) && model !== OPENROUTER_SAFE_MODEL) {
 
       console.warn(
@@ -200,6 +226,22 @@ async function generateOpenRouterSafe(
           `retrying with paid ${OPENROUTER_SAFE_MODEL}.`,
       );
       return generateOpenRouter({ ...options, model: OPENROUTER_SAFE_MODEL as AIModel });
+    }
+    // Transient provider failure (5xx / "Internal Server Error" — exactly what
+    // killed production builds on July 2): retry ONCE on the SAME model after
+    // a short backoff. Distinct from the free-capacity path above (that one
+    // switches models) and from 402s (poisoned earlier, never retried).
+    {
+      const status = (err as { status?: number }).status;
+      const msg = (err as { message?: string }).message ?? "";
+      const transient =
+        status === 500 || status === 502 || status === 503 || status === 529 ||
+        /internal server error|bad gateway|service unavailable|overloaded/i.test(msg);
+      if (transient && !chunksEmitted) {
+        console.warn(`[ai/provider] Transient provider error on "${model}" (${status ?? msg.slice(0, 60)}); retrying once in 800ms.`);
+        await new Promise((r) => setTimeout(r, 800));
+        return generateOpenRouter({ ...options, model: model as AIModel });
+      }
     }
     throw err;
   }
@@ -445,9 +487,100 @@ async function generateOpenAI(options: GenerateOptions & { model: AIModel }): Pr
   };
 }
 
+/**
+ * Anthropic prompt caching over OpenRouter. The native Anthropic path has had
+ * cache_control for months, but ALL traffic routes through OpenRouter — which
+ * passes cache_control through to Anthropic untouched — so the ~20k-token
+ * build system prompt (+ injected project context) was re-billed at FULL
+ * input price on every message (verified July 2). Cached reads bill at ~10%
+ * of input price; blocks under Anthropic's cache minimum (1024/2048 tokens)
+ * are ignored harmlessly, so this is pure savings.
+ *  - last system block  → caches system prompt + project context
+ *  - second-to-last msg → caches conversation history across turns
+ * Only plain-string contents are transformed (vision arrays left untouched);
+ * non-Anthropic models are returned as-is (OpenAI/Gemini cache implicitly).
+ */
+/** Points where per-turn DYNAMIC content begins inside a composed system
+ *  prompt. Everything BEFORE the earliest marker is the static contract
+ *  (byte-identical across turns) — that's the part worth caching. Caching
+ *  the whole block would key the cache on dynamic content (file lists, the
+ *  user message, health findings) and never hit. */
+const CACHE_SPLIT_MARKERS = [
+  "\n## Detected Build Intent", // build: APP_GENERATION prompt ends before this
+  "\n<project_context>",        // chat/plan/patch context block
+  "\n## Current Project Files",
+  "\n## Existing Files",
+  "\n# Editor Intelligence Memory",
+];
+
+function withOpenRouterCacheControl(model: string, messages: AIMessage[]): AIMessage[] {
+  if (!model.startsWith("anthropic/")) return messages;
+  const out = messages.map((m) => ({ ...m }));
+
+  // System prompt: split static head from dynamic tail and breakpoint ONLY
+  // the head. (Prefix caching keys on everything up to the breakpoint — a
+  // breakpoint after dynamic content is a guaranteed miss.)
+  for (let i = out.length - 1; i >= 0; i--) {
+    const m = out[i];
+    if (m.role !== "system") continue;
+    if (typeof m.content === "string" && m.content.length >= 2000) {
+      let splitAt = -1;
+      for (const marker of CACHE_SPLIT_MARKERS) {
+        const idx = m.content.indexOf(marker);
+        if (idx > 0 && (splitAt === -1 || idx < splitAt)) splitAt = idx;
+      }
+      const head = splitAt >= 2000 ? m.content.slice(0, splitAt) : splitAt === -1 ? m.content : "";
+      const tail = splitAt >= 2000 ? m.content.slice(splitAt) : splitAt === -1 ? "" : m.content;
+      if (head.length >= 2000) {
+        (m as { content: unknown }).content = [
+          { type: "text", text: head, cache_control: { type: "ephemeral" } },
+          ...(tail ? [{ type: "text", text: tail }] : []),
+        ];
+      }
+    }
+    break;
+  }
+
+  // Conversation history: breakpoint on the second-to-last message so prior
+  // turns cache across the session (history is append-only → prefix stable).
+  if (out.length >= 3) {
+    const m = out[out.length - 2];
+    if (typeof m.content === "string" && m.content.length >= 2000) {
+      (m as { content: unknown }).content = [
+        { type: "text", text: m.content, cache_control: { type: "ephemeral" } },
+      ];
+    }
+  }
+  return out;
+}
+
 async function generateOpenRouter(options: GenerateOptions & { model: AIModel }): Promise<GenerateResult> {
   const model = normalizeOpenRouterModel(options.model) as AIModel;
+
+  // Balance guard (single choke point — ALL OpenRouter calls pass through
+  // here, including safe-fallback retries): refuse paid calls when the
+  // remaining balance is below the floor so a streamed response can't drive
+  // the account negative (negative balance blocks even :free models and once
+  // hid days of silent 402s). Cached ~60s; fail-open when balance unknown.
+  {
+    const { assertOpenRouterFunds } = await import("./openrouter-balance");
+    await assertOpenRouterFunds(model);
+  }
+
+  const orMessages = withOpenRouterCacheControl(model, options.messages);
   const openrouter = createOpenAIClient(model);
+
+  // One structured line per call: model, tokens in/out, CACHED tokens (proves
+  // the cache_control work is hitting in production — watch for cached>0 from
+  // turn 2 of a session), and wall time. OpenRouter surfaces Anthropic cache
+  // reads in usage.prompt_tokens_details.cached_tokens.
+  const startedAt = Date.now();
+  const logUsage = (usage: unknown, label: string) => {
+    const u = usage as { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } | undefined;
+    console.info(
+      `[ai/or] ${model} ${label} in=${u?.prompt_tokens ?? 0} cached=${u?.prompt_tokens_details?.cached_tokens ?? 0} out=${u?.completion_tokens ?? 0} ${Date.now() - startedAt}ms`,
+    );
+  };
 
   if (options.tools && options.tools.length > 0) {
     const oaiTools: OpenAI.Chat.Completions.ChatCompletionTool[] = options.tools.map((t) => ({
@@ -461,7 +594,7 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
 
     const response = await openrouter.chat.completions.create({
       model,
-      messages: options.messages,
+      messages: orMessages as typeof options.messages,
       ...openAiTokenArg(options.model, options.maxTokens ?? 4000),
       temperature: options.temperature ?? 0.3,
       tools: oaiTools,
@@ -478,6 +611,7 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
       })(),
     }));
 
+    logUsage(response.usage, "tools");
     return {
       content: msg?.content ?? "",
       tokensUsed: response.usage?.total_tokens ?? 0,
@@ -489,7 +623,7 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
   if (options.stream && options.onChunk) {
     const stream = await openrouter.chat.completions.create({
       model: model,
-      messages: options.messages,
+      messages: orMessages as typeof options.messages,
       ...openAiTokenArg(options.model, options.maxTokens ?? 8000),
       temperature: options.temperature ?? 0.7,
       stream: true,
@@ -514,6 +648,7 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
       if (chunk.usage) {
         promptTokens = chunk.usage.prompt_tokens;
         completionTokens = chunk.usage.completion_tokens;
+        logUsage(chunk.usage, "stream");
       }
     }
 
@@ -526,12 +661,13 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
 
   const response = await openrouter.chat.completions.create({
     model: model,
-    messages: options.messages,
+    messages: orMessages as typeof options.messages,
     max_tokens: options.maxTokens ?? 8000,
     temperature: options.temperature ?? 0.7,
     ...(options.jsonMode ? { response_format: { type: "json_object" as const } } : {}),
   });
 
+  logUsage(response.usage, "plain");
   return {
     content: response.choices[0]?.message?.content ?? "",
     tokensUsed: response.usage?.total_tokens ?? 0,

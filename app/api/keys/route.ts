@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { randomBytes, createHash } from "crypto";
+
+// Canonical validator now lives in lib/api/api-key.ts. Re-exported here so
+// existing importers (`@/app/api/keys/route`) keep working unchanged.
+export { validateApiKey } from "@/lib/api/api-key";
+import { logAuditFromRequest } from "@/lib/audit/log";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -77,6 +82,13 @@ export async function POST(req: NextRequest) {
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  void logAuditFromRequest(req, {
+    userId: user.id,
+    action: "auth.apikey.create",
+    resourceType: "api_key",
+    resourceId: inserted?.id ?? null,
+    metadata: { name, scopes, keyPrefix: prefix },
+  });
   // Return the plaintext key ONCE — never stored
   return NextResponse.json({ key: inserted, plaintext: key }, { status: 201 });
 }
@@ -120,33 +132,12 @@ export async function DELETE(req: NextRequest) {
     .eq("user_id", user.id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  void logAuditFromRequest(req, {
+    userId: user.id,
+    action: "auth.apikey.revoke",
+    resourceType: "api_key",
+    resourceId: id,
+  });
   return NextResponse.json({ success: true });
-}
-
-// ── Exported validator (used by other API routes) ─────────────────────────────
-export async function validateApiKey(
-  key: string
-): Promise<{ userId: string; scopes: string[] } | null> {
-  if (!key.startsWith("lmk_")) return null;
-
-  const hash = createHash("sha256").update(key).digest("hex");
-  const supabase = await createAdminClient();
-
-  const { data } = await (supabase as any)
-    .from("api_keys")
-    .select("user_id, scopes, expires_at, is_active")
-    .eq("key_hash", hash)
-    .eq("is_active", true)
-    .single();
-
-  if (!data) return null;
-  if (data.expires_at && new Date(data.expires_at as string) < new Date()) return null;
-
-  // Update last_used_at (fire and forget)
-  void (supabase as any)
-    .from("api_keys")
-    .update({ last_used_at: new Date().toISOString() })
-    .eq("key_hash", hash);
-
-  return { userId: data.user_id as string, scopes: (data.scopes as string[]) ?? [] };
 }

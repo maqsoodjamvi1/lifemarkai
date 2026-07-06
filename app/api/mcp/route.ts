@@ -19,6 +19,22 @@ import { BUILT_IN_TEMPLATES } from "@/lib/templates/built-in";
 import { enqueueDeployJob, getDeployQueue } from "@/lib/queue/client";
 import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { OPENROUTER_MODEL_IDS } from "@/lib/ai/openrouter-models";
+import { validateApiKey, hasScope, type ApiScope } from "@/lib/api/api-key";
+
+// Per-tool scope requirements. Legacy mcp_api_token identities carry an empty
+// scope list, which hasScope() treats as full access (no breakage). Scoped
+// lmk_ keys are enforced tool-by-tool.
+const TOOL_SCOPES: Record<string, ApiScope> = {
+  list_projects: "projects:read",
+  get_project_files: "projects:read",
+  get_project_info: "projects:read",
+  get_deploy_status: "projects:read",
+  list_templates: "projects:read",
+  update_project_file: "projects:write",
+  create_project: "projects:write",
+  send_chat_message: "ai:build",
+  deploy_project: "deploy",
+};
 
 // ── MCP Protocol constants ───────────────────────────────────────────────────
 const MCP_VERSION = "2024-11-05";
@@ -141,22 +157,29 @@ const TOOLS = [
 ] as const;
 
 // ── Auth helper — supports Bearer token or ?token= query param ───────────────
-async function authenticateRequest(req: NextRequest): Promise<string | null> {
-  const adminClient = await createAdminClient();
-  // Try Authorization: Bearer <token>
+// Accepts either a scoped `lmk_…` API key (preferred — revocable + scoped via
+// the api_keys table) or the legacy per-user profiles.mcp_api_token.
+async function authenticateRequest(req: NextRequest): Promise<{ userId: string; scopes: string[] } | null> {
   const authHeader = req.headers.get("authorization") ?? "";
   const queryToken = req.nextUrl.searchParams.get("token") ?? "";
   const rawToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : queryToken;
   if (!rawToken) return null;
 
-  // Look up the API token in profiles.mcp_api_token column
+  // Preferred path: scoped API key.
+  if (rawToken.startsWith("lmk_")) {
+    const identity = await validateApiKey(rawToken);
+    return identity ? { userId: identity.userId, scopes: identity.scopes } : null;
+  }
+
+  // Legacy path: single per-user MCP token (full access, empty scope list).
+  const adminClient = await createAdminClient();
   const { data } = await (adminClient as any)
     .from("profiles")
     .select("id")
     .eq("mcp_api_token", rawToken)
     .single();
 
-  return data?.id ?? null;
+  return data?.id ? { userId: data.id as string, scopes: [] } : null;
 }
 
 // ── Tool handlers ─────────────────────────────────────────────────────────────
@@ -361,13 +384,14 @@ function rpcErr(id: string | number | null, code: number, message: string) {
 // ── Request handler ───────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
   // Auth
-  const userId = await authenticateRequest(req);
-  if (!userId) {
+  const identity = await authenticateRequest(req);
+  if (!identity) {
     return NextResponse.json(
       rpcErr(null, -32001, "Unauthorized — provide a valid MCP API token"),
       { status: 401 }
     );
   }
+  const { userId, scopes } = identity;
 
   let body: unknown;
   try {
@@ -399,6 +423,10 @@ export async function POST(req: NextRequest) {
 
       case "tools/call": {
         const { name, arguments: toolArgs = {} } = params as { name: string; arguments?: Record<string, unknown> };
+        const required = TOOL_SCOPES[name];
+        if (required && !hasScope(scopes, required)) {
+          return NextResponse.json(rpcErr(id, -32002, `API key is missing the '${required}' scope for tool '${name}'`), { status: 403 });
+        }
         const result = await callTool(name, toolArgs as Record<string, string>, userId);
         return NextResponse.json(rpcOk(id, {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],

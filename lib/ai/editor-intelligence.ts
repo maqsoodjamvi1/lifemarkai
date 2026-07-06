@@ -83,10 +83,24 @@ export function detectImageIntent(prompt: string): boolean {
 }
 
 /** Classify the dominant task type of a prompt for best-model routing. */
+/** Deep-thinking signals PLAN_KEYWORDS misses: `\barchitect\b` doesn't match
+ *  "architecture", and comparison/decision questions carried no keyword at
+ *  all — so "compare architecture tradeoffs" was routed to the CHEAP chat
+ *  tier (verified July 2). Kept separate from PLAN_KEYWORDS because that
+ *  regex also drives mode resolution; this one only affects model choice. */
+const REASONING_HINTS =
+  /\b(architectur\w*|trade-?offs?|pros and cons|scalab\w*|should we (use|choose|pick|go with)|which (approach|option|database|stack|framework)|compare|versus|\bvs\.?\b)\b/i;
+
 export function detectTaskType(prompt: string): TaskType {
   const p = prompt ?? "";
   if (detectImageIntent(p)) return "image";
   if (PLAN_KEYWORDS.test(p)) return "reasoning";
+  if (REASONING_HINTS.test(p)) return "reasoning";
+  // Explicit WRITING requests win over design even when they mention a UI
+  // area ("write marketing copy for the hero section" is copywriting, not
+  // layout — verified July 2: it routed to the design tier because
+  // "hero section" tripped DESIGN_KEYWORDS first).
+  if (/\b(write|rewrite|draft|compose)\b/i.test(p) && CONTENT_KEYWORDS.test(p)) return "content";
   // Design vs content can co-occur with code; prefer design when both styling and
   // copy are mentioned, since layout quality dominates perceived quality.
   if (DESIGN_KEYWORDS.test(p)) return "design";
@@ -291,7 +305,15 @@ export function resolveModelChain(
     }
   }
 
-  return selectModelChain(trimmed, { require, preferCheap, anchor });
+  // HONOR THE ANCHOR. selectModelChain ranks its own curated catalog for
+  // fallback diversity but does NOT place the anchor first (verified July 2:
+  // every tier choice — Kimi design, Opus reasoning, Sonnet coding, free-tier
+  // routing — was silently discarded, error fixes even landed on :free
+  // models, and env-configured models outside the catalog could never be
+  // selected). chain[0] must be the tier the branches above chose; the
+  // catalog ranking supplies the retry/escalation tail.
+  const fallback = selectModelChain(trimmed, { require, preferCheap, anchor });
+  return [anchor, ...fallback.filter((m) => m !== anchor)];
 }
 
 function isCodeChangeIntent(prompt: string): boolean {
@@ -382,16 +404,6 @@ export function resolvePromptMode(
   }
 
   return ctx.currentMode;
-}
-
-/** Multi-step / cross-cutting prompts that benefit from the agentic loop. */
-function isComplexEdit(prompt: string): boolean {
-  if (/\b(refactor|restructure|migrate|reorganize|rename across|all (the )?(pages|components|files)|every page|entire app|whole app|across the (app|codebase|project))\b/i.test(prompt)) {
-    return true;
-  }
-  // Two or more coordinated steps ("add X and then Y, also Z")
-  const coordinators = prompt.match(/\b(and|then|also|plus|after that)\b/gi)?.length ?? 0;
-  return coordinators >= 2 && prompt.length > 120;
 }
 
 function stageFromCtx(ctx: EditorIntelContext): ProjectStage {

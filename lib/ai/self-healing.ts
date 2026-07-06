@@ -283,6 +283,75 @@ function performanceChecks(files: ParsedFile[]): DetectedFinding[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// (e) Accessibility — static checks over JSX/HTML (fills the reserved
+// 'accessibility' category; Lovable's SEO/AEO review covers the same ground)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function accessibilityChecks(files: ParsedFile[]): DetectedFinding[] {
+  const findings: DetectedFinding[] = [];
+
+  for (const file of files) {
+    if (isExcludedPath(file.path)) continue;
+    if (!/\.(tsx|jsx|html?)$/.test(file.path)) continue;
+    const content = file.content ?? "";
+    if (!content) continue;
+
+    // <img> without alt — the most common a11y failure and an SEO hit.
+    const imgs = content.match(/<img\b[^>]*>/gi) ?? [];
+    const missingAlt = imgs.filter((tag) => !/\balt\s*=/.test(tag)).length;
+    if (missingAlt > 0) {
+      findings.push({
+        category: "accessibility",
+        severity: "warning",
+        title: `${missingAlt} image(s) missing alt text`,
+        detail:
+          `${file.path}: ${missingAlt} of ${imgs.length} <img> tags have no alt attribute. Screen readers announce these as unlabeled; search engines can't index them. Add alt="…" (or alt="" for purely decorative images).`,
+        file_path: file.path,
+      });
+    }
+
+    // Icon-only <button> with no accessible name.
+    const buttons = content.match(/<button\b[^>]*>[\s\S]{0,80}?<\/button>/gi) ?? [];
+    const unnamed = buttons.filter(
+      (b) =>
+        !/aria-label\s*=/.test(b) &&
+        // no visible text content: strip tags, check remaining text
+        b.replace(/<[^>]+>/g, "").trim().length === 0,
+    ).length;
+    if (unnamed > 0) {
+      findings.push({
+        category: "accessibility",
+        severity: "warning",
+        title: `${unnamed} icon-only button(s) without aria-label`,
+        detail:
+          `${file.path}: buttons containing only icons need aria-label="…" so screen-reader users know what they do.`,
+        file_path: file.path,
+      });
+    }
+
+    // Inputs without an associated label mechanism (heuristic).
+    const inputs = content.match(/<input\b[^>]*>/gi) ?? [];
+    const unlabeled = inputs.filter(
+      (i) =>
+        !/type\s*=\s*["'](hidden|submit|button|checkbox|radio)["']/.test(i) &&
+        !/aria-label\s*=|aria-labelledby\s*=|placeholder\s*=|id\s*=/.test(i),
+    ).length;
+    if (unlabeled > 0) {
+      findings.push({
+        category: "accessibility",
+        severity: "info",
+        title: `${unlabeled} input(s) without label/aria-label/placeholder`,
+        detail:
+          `${file.path}: text inputs need an accessible name — a <label htmlFor>, aria-label, or at minimum a placeholder.`,
+        file_path: file.path,
+      });
+    }
+  }
+
+  return findings;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Scan orchestration + persistence
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -297,6 +366,7 @@ export function detectFindings(files: ParsedFile[]): DetectedFinding[] {
     ...dependencyChecks(files),
     ...securityChecks(files),
     ...performanceChecks(files),
+    ...accessibilityChecks(files),
   ];
 
   // De-dupe within the scan itself, then cap.

@@ -13,12 +13,13 @@ import { createClient } from "@/lib/supabase/client";
 interface AuditLog {
   id: string;
   action: string;
-  resource: string | null;
-  actor_name: string | null;
+  resource_type: string | null;
+  resource_id: string | null;
   user_id: string | null;
+  team_id: string | null;
   ip_address: string | null;
   user_agent: string | null;
-  details: Record<string, unknown> | null;
+  metadata: Record<string, unknown> | null;
   created_at: string;
 }
 
@@ -31,6 +32,22 @@ const TIME_RANGES = [
   { key: "90d",        label: "Last 90 days" },
   { key: "this_month", label: "This month" },
 ];
+
+// Coarse event categories, derived from the `action` prefix
+// (e.g. "project.create" → project). Keep in sync with lib/audit/log.ts.
+const CATEGORIES = ["all", "auth", "member", "project", "billing", "config", "security"] as const;
+type Category = typeof CATEGORIES[number];
+
+function categoryOf(action: string): Exclude<Category, "all"> | "other" {
+  const head = (action.split(".")[0] || "").toLowerCase();
+  if (["auth", "sso", "scim", "session"].includes(head)) return "auth";
+  if (["member", "invite", "collaborator", "team"].includes(head)) return "member";
+  if (["project", "file", "deploy", "build"].includes(head)) return "project";
+  if (["billing", "subscription", "credit", "plan"].includes(head)) return "billing";
+  if (["config", "settings", "flag", "env"].includes(head)) return "config";
+  if (["security", "scan"].includes(head)) return "security";
+  return "other";
+}
 
 const FAQ = [
   { q: "Who can access audit logs?",            a: "Audit logs are visible to workspace owners and admins on Enterprise plans." },
@@ -67,6 +84,7 @@ export function AuditLogsPage({ userId }: { userId: string }) {
   const [logs, setLogs]             = useState<AuditLog[]>([]);
   const [loading, setLoading]       = useState(true);
   const [actionFilter, setActionFilter] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState<Category>("all");
   const [timeRange, setTimeRange]   = useState("all");
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [copiedJson, setCopiedJson] = useState(false);
@@ -104,12 +122,25 @@ export function AuditLogsPage({ userId }: { userId: string }) {
 
   useEffect(() => { fetchLogs(); }, [fetchLogs]);
 
-  const handleCopyJson = (details: Record<string, unknown> | null, log: AuditLog) => {
-    const payload = details ?? { action: log.action, resource: log.resource, actor: log.actor_name, timestamp: log.created_at };
+  const resourceLabel = (log: AuditLog): string | null => {
+    if (!log.resource_type && !log.resource_id) return null;
+    return [log.resource_type, log.resource_id].filter(Boolean).join(":");
+  };
+
+  const handleCopyJson = (log: AuditLog) => {
+    const payload = log.metadata ?? {
+      action: log.action,
+      resource: resourceLabel(log),
+      timestamp: log.created_at,
+    };
     navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
     setCopiedJson(true);
     setTimeout(() => setCopiedJson(false), 2000);
   };
+
+  const visibleLogs = categoryFilter === "all"
+    ? logs
+    : logs.filter((l) => categoryOf(l.action) === categoryFilter);
 
   const uniqueActions = Array.from(new Set(logs.map((l) => l.action))).sort();
 
@@ -136,6 +167,26 @@ export function AuditLogsPage({ userId }: { userId: string }) {
             Logs are retained for <strong>90 days</strong>. Events older than that are automatically removed.
             Showing <strong>{logs.length}</strong> events.
           </p>
+        </div>
+
+        {/* Category chips */}
+        <div className="flex gap-1.5 flex-wrap">
+          {CATEGORIES.map((cat) => {
+            const count = cat === "all" ? logs.length : logs.filter((l) => categoryOf(l.action) === cat).length;
+            return (
+              <button
+                key={cat}
+                onClick={() => setCategoryFilter(cat)}
+                className={`px-2.5 py-1 rounded-full text-[10px] font-medium capitalize transition ${
+                  categoryFilter === cat
+                    ? "bg-foreground text-background"
+                    : "bg-muted text-muted-foreground hover:bg-muted/80"
+                }`}
+              >
+                {cat}{cat !== "all" && count > 0 ? ` ${count}` : ""}
+              </button>
+            );
+          })}
         </div>
 
         {/* Filters */}
@@ -165,9 +216,9 @@ export function AuditLogsPage({ userId }: { userId: string }) {
             <ChevronDown size={10} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           </div>
 
-          {(actionFilter || timeRange !== "all") && (
+          {(actionFilter || timeRange !== "all" || categoryFilter !== "all") && (
             <button
-              onClick={() => { setActionFilter(""); setTimeRange("all"); }}
+              onClick={() => { setActionFilter(""); setTimeRange("all"); setCategoryFilter("all"); }}
               className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition"
             >
               <X size={10} /> Clear filters
@@ -175,7 +226,7 @@ export function AuditLogsPage({ userId }: { userId: string }) {
           )}
 
           <div className="ml-auto text-[10px] text-muted-foreground">
-            {logs.length} {logs.length === 1 ? "log" : "logs"}
+            {visibleLogs.length} {visibleLogs.length === 1 ? "log" : "logs"}
           </div>
         </div>
 
@@ -195,15 +246,15 @@ export function AuditLogsPage({ userId }: { userId: string }) {
                 <tr><td colSpan={4} className="py-12 text-center">
                   <Loader2 size={20} className="text-muted-foreground animate-spin mx-auto" />
                 </td></tr>
-              ) : logs.length === 0 ? (
+              ) : visibleLogs.length === 0 ? (
                 <tr><td colSpan={4} className="py-12 text-center text-muted-foreground">
                   <ClipboardList size={28} className="mx-auto mb-2 text-muted-foreground/30" />
                   <p>No audit logs found</p>
                   <p className="text-[10px] text-muted-foreground/60 mt-1">
-                    {actionFilter || timeRange !== "all" ? "Try adjusting your filters" : "Activity will appear here as you use the app"}
+                    {actionFilter || timeRange !== "all" || categoryFilter !== "all" ? "Try adjusting your filters" : "Activity will appear here as you use the app"}
                   </p>
                 </td></tr>
-              ) : logs.map((log) => {
+              ) : visibleLogs.map((log) => {
                 const isExpanded = expandedRow === log.id;
                 return [
                   <tr
@@ -222,7 +273,7 @@ export function AuditLogsPage({ userId }: { userId: string }) {
                         {log.action}
                       </span>
                     </td>
-                    <td className="py-3 px-4 text-muted-foreground">{log.resource ?? "—"}</td>
+                    <td className="py-3 px-4 text-muted-foreground font-mono text-[11px]">{resourceLabel(log) ?? "—"}</td>
                     <td className="py-3 px-2">
                       {isExpanded
                         ? <ChevronUp size={12} className="text-muted-foreground" />
@@ -240,14 +291,14 @@ export function AuditLogsPage({ userId }: { userId: string }) {
                               <FileJson size={10} /> Event Details
                             </span>
                             <button
-                              onClick={(e) => { e.stopPropagation(); handleCopyJson(log.details, log); }}
+                              onClick={(e) => { e.stopPropagation(); handleCopyJson(log); }}
                               className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition"
                             >
                               {copiedJson ? <><Check size={10} className="text-green-400" /> Copied</> : <><Copy size={10} /> Copy JSON</>}
                             </button>
                           </div>
                           <pre className="text-[10px] text-foreground bg-background p-3 rounded-lg border border-border overflow-x-auto font-mono leading-relaxed">
-                            {JSON.stringify(log.details ?? { action: log.action, resource: log.resource, timestamp: log.created_at }, null, 2)}
+                            {JSON.stringify(log.metadata ?? { action: log.action, resource: resourceLabel(log), timestamp: log.created_at }, null, 2)}
                           </pre>
                           <div className="flex gap-4 text-[9px] text-muted-foreground">
                             {log.ip_address  && <span className="flex items-center gap-1"><Globe size={8} /> {log.ip_address}</span>}

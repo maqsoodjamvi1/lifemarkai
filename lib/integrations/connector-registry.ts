@@ -262,6 +262,57 @@ export const CONNECTOR_REGISTRY: Record<string, ConnectorSpec> = {
     requiredEnv: ["GRANOLA_API_KEY"],
     headers: (env) => ({ Authorization: `Bearer ${env.GRANOLA_API_KEY}` }),
   },
+  gitlab: {
+    baseUrl: "https://gitlab.com/api/v4",
+    requiredEnv: ["GITLAB_TOKEN"],
+    headers: (env) => ({ "PRIVATE-TOKEN": env.GITLAB_TOKEN }),
+  },
+  google_search_console: {
+    baseUrl: "https://searchconsole.googleapis.com",
+    requiredEnv: ["GOOGLE_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.GOOGLE_ACCESS_TOKEN}` }),
+  },
+  gemini_enterprise: {
+    baseUrl: "https://discoveryengine.googleapis.com/v1",
+    requiredEnv: ["GOOGLE_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.GOOGLE_ACCESS_TOKEN}` }),
+  },
+  aikido: {
+    baseUrl: "https://app.aikido.dev/api",
+    requiredEnv: ["AIKIDO_API_KEY"],
+    headers: (env) => ({ Authorization: `Bearer ${env.AIKIDO_API_KEY}` }),
+  },
+  discord: {
+    baseUrl: "https://discord.com/api/v10",
+    requiredEnv: ["DISCORD_BOT_TOKEN"],
+    headers: (env) => ({ Authorization: `Bot ${env.DISCORD_BOT_TOKEN}` }),
+  },
+  jira: {
+    // Cloud instance, e.g. https://mycompany.atlassian.net
+    baseUrl: (env) => `https://${env.JIRA_DOMAIN.replace(/\.atlassian\.net$/i, "")}.atlassian.net`,
+    requiredEnv: ["JIRA_DOMAIN", "JIRA_EMAIL", "JIRA_API_TOKEN"],
+    headers: (env) => ({ Authorization: basic(env.JIRA_EMAIL, env.JIRA_API_TOKEN), Accept: "application/json" }),
+  },
+  zendesk: {
+    baseUrl: (env) => `https://${env.ZENDESK_SUBDOMAIN}.zendesk.com/api/v2`,
+    requiredEnv: ["ZENDESK_SUBDOMAIN", "ZENDESK_EMAIL", "ZENDESK_API_TOKEN"],
+    headers: (env) => ({ Authorization: basic(`${env.ZENDESK_EMAIL}/token`, env.ZENDESK_API_TOKEN) }),
+  },
+  intercom: {
+    baseUrl: "https://api.intercom.io",
+    requiredEnv: ["INTERCOM_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.INTERCOM_ACCESS_TOKEN}`, Accept: "application/json" }),
+  },
+  calendly: {
+    baseUrl: "https://api.calendly.com",
+    requiredEnv: ["CALENDLY_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.CALENDLY_TOKEN}` }),
+  },
+  sendgrid: {
+    baseUrl: "https://api.sendgrid.com/v3",
+    requiredEnv: ["SENDGRID_API_KEY"],
+    headers: (env) => ({ Authorization: `Bearer ${env.SENDGRID_API_KEY}` }),
+  },
 };
 
 export function resolveConnectorBaseUrl(spec: ConnectorSpec, env: Record<string, string>): string {

@@ -66,7 +66,7 @@ function emit(level: LogLevel, event: string, ctx: LogContext): void {
     const col  = COLOUR[level];
     const tag  = `${col}[${level.toUpperCase().padEnd(5)}]${RESET}`;
     const rest = Object.keys(ctx).length ? "  " + JSON.stringify(ctx) : "";
-    console.log(`${ts.slice(11, 23)} ${tag} ${event}${rest}`);
+    console.warn(`${ts.slice(11, 23)} ${tag} ${event}${rest}`);
   }
 }
 

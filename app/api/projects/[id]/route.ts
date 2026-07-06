@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
+import { logAuditFromRequest } from "@/lib/audit/log";
 
 interface Params { params: Promise<{ id: string }> }
 
@@ -50,7 +51,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   return NextResponse.json(data);
 }
 
-export async function DELETE(_: NextRequest, { params }: Params) {
+export async function DELETE(req: NextRequest, { params }: Params) {
   const { id } = await params;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -63,5 +64,12 @@ export async function DELETE(_: NextRequest, { params }: Params) {
     .eq("user_id", user.id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  void logAuditFromRequest(req, {
+    userId: user.id,
+    action: "project.delete",
+    resourceType: "project",
+    resourceId: id,
+  });
   return NextResponse.json({ success: true });
 }

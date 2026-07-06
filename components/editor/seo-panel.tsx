@@ -258,7 +258,7 @@ const RESEARCH_QUESTIONS = [
   "Generate an llms.txt for my project.",
 ];
 
-export function SeoPanel({ onSendToChat }: SeoPanelProps) {
+export function SeoPanel({ projectId, onSendToChat }: SeoPanelProps) {
   const [panelView, setPanelView] = useState<PanelView>("audit");
   const [findings, setFindings] = useState<SeoFinding[]>([]);
   const [isScanning, setIsScanning] = useState(false);
@@ -281,9 +281,25 @@ export function SeoPanel({ onSendToChat }: SeoPanelProps) {
 
   const handleScan = async () => {
     setIsScanning(true);
-    await new Promise((r) => setTimeout(r, 1800));
 
-    const newFindings: SeoFinding[] = SIMULATED_FINDINGS.map((f, i) => ({
+    // Real static audit over the project's files. Falls back to the built-in
+    // reference checklist when there's no project context or the request fails.
+    let raw: Omit<SeoFinding, "id" | "status">[] = SIMULATED_FINDINGS;
+    let usedFallback = true;
+    if (projectId) {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/seo-audit`);
+        const data = await res.json();
+        if (res.ok && Array.isArray(data.findings)) {
+          raw = data.findings as Omit<SeoFinding, "id" | "status">[];
+          usedFallback = false;
+        }
+      } catch {
+        /* keep fallback */
+      }
+    }
+
+    const newFindings: SeoFinding[] = raw.map((f, i) => ({
       ...f,
       id: i + 1,
       status: "active" as const,
@@ -299,7 +315,7 @@ export function SeoPanel({ onSendToChat }: SeoPanelProps) {
     setScanSummary(summary);
     setIsScanning(false);
     toast({
-      title: `SEO scan complete`,
+      title: usedFallback ? "SEO reference checklist" : "SEO scan complete",
       description: `${summary.critical} critical, ${summary.warning} warnings, ${summary.info} suggestions`,
     });
   };

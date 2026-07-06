@@ -7,6 +7,7 @@ import {
   getProjectAccess,
 } from "@/lib/project/access";
 import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "@/lib/project/env-file";
+import { logAuditFromRequest } from "@/lib/audit/log";
 
 interface Params { params: Promise<{ id: string }> }
 
@@ -69,5 +70,13 @@ export async function POST(req: NextRequest, { params }: Params) {
       .insert({ project_id: projectId, path: ENV_FILE_PATH, content, language: "plaintext" });
   }
 
+  // Log the key name only — never the secret value.
+  void logAuditFromRequest(req, {
+    userId: user.id,
+    action: "config.env.update",
+    resourceType: "project",
+    resourceId: projectId,
+    metadata: { key: key.trim() },
+  });
   return NextResponse.json({ ok: true, key: key.trim() });
 }

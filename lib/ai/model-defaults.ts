@@ -154,3 +154,14 @@ export function getDefaultAiModel(): AIModel {
 export function getFastAiModel(): AIModel {
   return (process.env.FAST_AI_MODEL as AIModel) ?? FAST_CODING_MODEL;
 }
+
+/**
+ * LATENCY-CRITICAL model for inline autocomplete (/api/ai/complete fires on
+ * typing pauses). Deliberately NOT the fast tier: that tier is a `:free`
+ * variant (20 req/min shared pool, congestion latency) — fine for
+ * click-triggered helpers, unusable at keystroke frequency. Codex Mini is
+ * $0.25/$2 per M — a few hundred tokens per completion costs fractions of a
+ * cent, and consistent sub-second latency is what makes autocomplete usable.
+ */
+export const AUTOCOMPLETE_MODEL: AIModel =
+  (process.env.OPENROUTER_AUTOCOMPLETE_MODEL || "openai/gpt-5.1-codex-mini") as AIModel;

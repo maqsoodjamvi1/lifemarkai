@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { sendCollaborationInviteEmail } from "@/lib/email/resend";
+import { logAuditFromRequest } from "@/lib/audit/log";
 
 export async function POST(request: NextRequest) {
   try {
@@ -79,6 +80,13 @@ export async function POST(request: NextRequest) {
         console.error("Failed to send invite email:", e);
       }
 
+      void logAuditFromRequest(request, {
+        userId: user.id,
+        action: "member.invite",
+        resourceType: "project",
+        resourceId: projectId,
+        metadata: { email, role, status: "pending" },
+      });
       return NextResponse.json({
         status: "pending",
         message: `Invitation sent to ${email}. They will be added when they sign up.`,
@@ -147,6 +155,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    void logAuditFromRequest(request, {
+      userId: user.id,
+      action: "member.invite",
+      resourceType: "project",
+      resourceId: projectId,
+      metadata: { invitedUserId: invitedProfile.id, email, role, status: "added" },
+    });
     return NextResponse.json({
       collaborator: {
         ...newCollab,
@@ -197,6 +212,13 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
+    void logAuditFromRequest(request, {
+      userId: user.id,
+      action: "member.remove",
+      resourceType: "project",
+      resourceId: projectId,
+      metadata: { collaboratorId },
+    });
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Remove collaborator error:", error);

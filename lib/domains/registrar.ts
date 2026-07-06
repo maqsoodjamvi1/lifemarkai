@@ -12,7 +12,7 @@
  * the existing Netlify domain path no-ops when NETLIFY_AUTH_TOKEN is absent.
  */
 
-export type RegistrarId = "cloudflare" | "ionos";
+export type RegistrarId = "cloudflare" | "ionos" | "namecom";
 
 export interface DomainSuggestion {
   domain: string;
@@ -282,25 +282,165 @@ class IonosRegistrar implements DomainRegistrar {
   }
 }
 
+// ─── Name.com Registrar (Lovable's registrar of record) ───────────────────────
+// Lovable registers domains through Name.com (see docs/domain-registrar-research).
+// Name.com API v4 — Basic auth (username:token). Test host api.dev.name.com.
+// Requires: NAMECOM_USERNAME, NAMECOM_API_TOKEN (+ optional NAMECOM_API_HOST).
+
+class NameComRegistrar implements DomainRegistrar {
+  readonly id = "namecom" as const;
+  private user = process.env.NAMECOM_USERNAME;
+  private token = process.env.NAMECOM_API_TOKEN;
+  private base = (process.env.NAMECOM_API_HOST || "https://api.name.com") + "/v4";
+
+  isConfigured(): boolean {
+    return Boolean(this.user && this.token);
+  }
+
+  private headers(): HeadersInit {
+    const auth = Buffer.from(`${this.user}:${this.token}`).toString("base64");
+    return { Authorization: `Basic ${auth}`, "Content-Type": "application/json" };
+  }
+
+  async search(query: string, years = 1): Promise<DomainSuggestion[]> {
+    if (!this.isConfigured()) return [];
+    // checkAvailability takes exact domain(s); if a bare keyword is passed we
+    // check the .com. Name.com's separate "search" endpoint returns suggestions.
+    const domainNames = query.includes(".") ? [query] : [`${query}.com`];
+    type NCResult = {
+      results?: Array<{ domainName: string; purchasable?: boolean; premium?: boolean; purchasePrice?: number }>;
+    };
+    const data = await httpJson<NCResult>(
+      `${this.base}/domains:checkAvailability`,
+      { method: "POST", headers: this.headers(), body: JSON.stringify({ domainNames }) },
+      this.id,
+    ).catch(() => ({ results: [] }) as NCResult);
+
+    return (data.results ?? []).map((r) => ({
+      domain: r.domainName,
+      available: Boolean(r.purchasable),
+      priceCents: Math.round((r.purchasePrice ?? 0) * 100) * years,
+      currency: "USD" as const,
+      years,
+      premium: r.premium,
+    }));
+  }
+
+  async register(domain: string, contact: RegistrantContact, years: number): Promise<RegisterResult> {
+    if (!this.isConfigured()) {
+      return { ok: false, domain, registrar: this.id, error: "Name.com registrar not configured" };
+    }
+    try {
+      // Confirm the current purchase price (Name.com requires it on register).
+      const [avail] = await this.search(domain, 1);
+      const purchasePrice = avail && avail.available ? avail.priceCents / 100 : undefined;
+      const nc = toNameComContact(contact);
+      type NCReg = { domain?: { domainName?: string; expireDate?: string }; order?: number };
+      const data = await httpJson<NCReg>(
+        `${this.base}/domains`,
+        {
+          method: "POST",
+          headers: this.headers(),
+          body: JSON.stringify({
+            domain: { domainName: domain, contacts: { registrant: nc, admin: nc, tech: nc, billing: nc } },
+            purchasePrice,
+            years,
+          }),
+        },
+        this.id,
+      );
+      return {
+        ok: true,
+        domain,
+        registrar: this.id,
+        registrationRef: data.order != null ? String(data.order) : undefined,
+        expiresAt: data.domain?.expireDate,
+      };
+    } catch (err) {
+      return { ok: false, domain, registrar: this.id, error: errMsg(err) };
+    }
+  }
+
+  async configureDns(domain: string, records: DnsRecord[]): Promise<void> {
+    if (!this.isConfigured()) throw new RegistrarError(this.id, "not configured");
+    for (const rec of records) {
+      await httpJson(
+        `${this.base}/domains/${encodeURIComponent(domain)}/records`,
+        {
+          method: "POST",
+          headers: this.headers(),
+          body: JSON.stringify({
+            host: rec.name === "@" ? "" : rec.name,
+            type: rec.type,
+            answer: rec.value,
+            ttl: rec.ttl ?? 3600,
+            priority: rec.priority,
+          }),
+        },
+        this.id,
+      );
+    }
+  }
+
+  async renew(domain: string, years: number): Promise<void> {
+    if (!this.isConfigured()) throw new RegistrarError(this.id, "not configured");
+    await httpJson(
+      `${this.base}/domains/${encodeURIComponent(domain)}:renew`,
+      { method: "POST", headers: this.headers(), body: JSON.stringify({ years }) },
+      this.id,
+    );
+  }
+}
+
+function toNameComContact(c: RegistrantContact): Record<string, unknown> {
+  return {
+    firstName: c.firstName,
+    lastName: c.lastName,
+    companyName: c.organization ?? "",
+    address1: c.address1,
+    city: c.city,
+    state: c.state,
+    zip: c.postalCode,
+    country: c.country,
+    phone: c.phone,
+    email: c.email,
+  };
+}
+
 // ─── factory ──────────────────────────────────────────────────────────────────
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** Default registrar from env, falling back to Cloudflare. */
+/**
+ * Default registrar. Honors an explicit id or the DOMAIN_REGISTRAR env var;
+ * otherwise auto-selects the first configured driver (Name.com preferred — it's
+ * the registrar of record we mirror from Lovable), then Cloudflare, then IONOS.
+ */
 export function getRegistrar(id?: RegistrarId): DomainRegistrar {
-  const choice = id ?? (process.env.DOMAIN_REGISTRAR as RegistrarId | undefined) ?? "cloudflare";
-  switch (choice) {
-    case "ionos":
-      return new IonosRegistrar();
-    case "cloudflare":
-    default:
-      return new CloudflareRegistrar();
+  const explicit = id ?? (process.env.DOMAIN_REGISTRAR as RegistrarId | undefined);
+  if (explicit) {
+    switch (explicit) {
+      case "namecom": return new NameComRegistrar();
+      case "ionos": return new IonosRegistrar();
+      case "cloudflare": return new CloudflareRegistrar();
+    }
   }
+  const namecom = new NameComRegistrar();
+  if (namecom.isConfigured()) return namecom;
+  const cloudflare = new CloudflareRegistrar();
+  if (cloudflare.isConfigured()) return cloudflare;
+  const ionos = new IonosRegistrar();
+  if (ionos.isConfigured()) return ionos;
+  return namecom; // returns a not-configured driver that degrades gracefully
 }
 
 /** True when at least one registrar driver has credentials configured. */
 export function isPurchaseEnabled(): boolean {
-  return new CloudflareRegistrar().isConfigured() || new IonosRegistrar().isConfigured();
+  return (
+    new NameComRegistrar().isConfigured() ||
+    new CloudflareRegistrar().isConfigured() ||
+    new IonosRegistrar().isConfigured()
+  );
 }

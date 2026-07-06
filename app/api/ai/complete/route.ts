@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
-import { getFastAiModel } from "@/lib/ai/model-defaults";
+import { AUTOCOMPLETE_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
 // POST /api/ai/complete
@@ -54,7 +54,9 @@ Framework: ${project.framework ?? "react"}
 
   try {
     const response = await generateAI({
-      model: getFastAiModel(),
+      // Latency-critical: dedicated fast PAID model, not the (free) fast tier —
+      // autocomplete at keystroke frequency can't ride a 20 req/min shared pool.
+      model: AUTOCOMPLETE_MODEL,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },

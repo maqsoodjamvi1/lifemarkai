@@ -62,6 +62,13 @@ const OPENROUTER_IMAGE_MODEL = "google/gemini-3.1-flash-image";
 async function generateWithOpenRouterImage(prompt: string, size: ImageSize): Promise<ImageResult | null> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) return null;
+  // Balance guard: image gen is a paid call outside provider.ts's choke point.
+  try {
+    const { assertOpenRouterFunds } = await import("./openrouter-balance");
+    await assertOpenRouterFunds(OPENROUTER_IMAGE_MODEL);
+  } catch {
+    return null; // chain falls through to the next provider / clear route error
+  }
   const aspect = size === "1792x1024" ? "16:9" : size === "1024x1792" ? "9:16" : "1:1";
   try {
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {

@@ -33,7 +33,8 @@ interface Finding {
 
 interface ProjectScanResult {
   scannedAt: string;
-  fileCount: number;
+  fileCount?: number;
+  persisted?: boolean;   // came from the scheduled scan (health_findings), not a live run
   findings: Finding[];
   summary: {
     critical: number;
@@ -62,7 +63,7 @@ const SUPPLY_CHAIN_BEST_PRACTICES = [
 
 const FAQ = [
   { q: "Who can access the Security center?",               a: "Workspace admins and owners on Business and Enterprise plans." },
-  { q: "Does the Security center run scans automatically?", a: "No. It displays the most recent scan results. You can trigger a scan from the Code Analysis tab." },
+  { q: "Does the Security center run scans automatically?", a: "Yes. A nightly scheduled scan checks every recently-updated project and records findings here (shown as “nightly scan”). You can also trigger an on-demand scan any time from the Code Analysis tab." },
   { q: "Can I see actual secret values?",                   a: "No. Only secret names are shown. Values are never exposed here." },
 ];
 
@@ -99,6 +100,28 @@ export function SecurityCenterPage({ userId }: { userId: string }) {
   }, [userId]);
 
   useEffect(() => { fetchProjects(); }, [fetchProjects]);
+
+  // Load persisted findings from the scheduled scan so the roll-up reflects the
+  // latest nightly scan without the user manually triggering one.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/security/findings")
+      .then((r) => (r.ok ? r.json() : { results: {} }))
+      .then((data: { results?: Record<string, ProjectScanResult> }) => {
+        const results = data.results;
+        if (cancelled || !results) return;
+        setScanResults((prev) => {
+          const next = { ...prev };
+          // Only seed projects the user hasn't manually scanned this session.
+          for (const [pid, result] of Object.entries(results)) {
+            if (!next[pid]) next[pid] = result;
+          }
+          return next;
+        });
+      })
+      .catch(() => null);
+    return () => { cancelled = true; };
+  }, []);
 
   const handleScan = async (projectId: string) => {
     setScanningId(projectId);
@@ -281,7 +304,7 @@ export function SecurityCenterPage({ userId }: { userId: string }) {
                         <tr key={`${p.id}-findings`} className="border-b border-border bg-muted/10">
                           <td colSpan={4} className="px-4 py-3">
                             {scan.findings.length === 0 ? (
-                              <p className="text-xs text-green-400">No secrets, risky exposure, or PII patterns found across {scan.fileCount} files.</p>
+                              <p className="text-xs text-green-400">No secrets, risky exposure, or PII patterns found across {scan.fileCount ?? 0} files.</p>
                             ) : (
                               <div className="space-y-2">
                                 <div className="flex flex-wrap gap-2 text-[10px]">
@@ -291,7 +314,7 @@ export function SecurityCenterPage({ userId }: { userId: string }) {
                                     </span>
                                   ))}
                                   <span className="px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
-                                    {scan.fileCount} files
+                                    {scan.persisted ? "nightly scan" : `${scan.fileCount ?? 0} files`}
                                   </span>
                                 </div>
                                 {scan.findings.slice(0, 3).map((finding, index) => (

@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { scanProject, type Severity } from "@/lib/security/scan";
-import { auditDependencies } from "@/lib/security/deps";
+import { auditProject } from "@/lib/seo/audit";
 
-// GET /api/projects/[id]/security-scan
-// Static security + PII scan over the project's files. Read-only; owner or
-// collaborator access required (findings can reveal sensitive data).
+// GET /api/projects/[id]/seo-audit
+// Static on-page SEO audit over the project's files. Owner or collaborator only.
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
@@ -43,21 +41,10 @@ export async function GET(
     .select("path, content")
     .eq("project_id", projectId);
 
-  const list = (files ?? []) as Array<{ path: string; content: string }>;
-  const result = scanProject(list);
-
-  // Merge in the real dependency / supply-chain audit (was a hardcoded list).
-  const depFindings = auditDependencies(list);
-  const findings = [...result.findings, ...depFindings];
-  const summary = { critical: 0, high: 0, medium: 0, low: 0, total: findings.length } as Record<Severity, number> & { total: number };
-  for (const f of findings) summary[f.severity]++;
-  const order: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-  findings.sort((a, b) => order[a.severity] - order[b.severity] || a.file.localeCompare(b.file) || a.line - b.line);
-
+  const result = auditProject((files ?? []) as Array<{ path: string; content: string }>);
   return NextResponse.json({
     scannedAt: new Date().toISOString(),
-    fileCount: list.length,
-    findings,
-    summary,
+    fileCount: (files ?? []).length,
+    ...result,
   });
 }
