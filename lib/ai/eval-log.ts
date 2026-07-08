@@ -30,7 +30,7 @@ export function recordAiEval(entry: AiEvalEntry): void {
   void (async () => {
     try {
       const supabase = await createAdminClient();
-      await supabase.from("ai_eval_log").insert({
+      await (supabase.from("ai_eval_log") as any).insert({
         model: entry.model,
         task: entry.task ?? null,
         project_id: entry.projectId ?? null,

@@ -119,7 +119,15 @@ export const DESIGN_DIRECTIONS: DesignDirection[] = [
   },
 ];
 
-const TECH_RE = /\b(ai|ml|dev|developer|code|coding|saas|crypto|web3|blockchain|gaming|game|terminal|infra|analytics|dashboard|api|llm|agent|music|nightlife|luxury|premium)\b/i;
+// Broad "technical" match — used only to pick a clean LIGHT professional look
+// (NOT to force dark). SaaS/dashboards/AI apps default to light.
+const TECH_RE = /\b(ai|ml|dev|developer|code|coding|saas|infra|analytics|dashboard|api|llm|agent|platform|tool|app)\b/i;
+
+// Dark is OPT-IN. Only go dark when the domain is inherently dark, or the user
+// explicitly asks for it — otherwise every technical build came out black, which
+// is the #1 complaint. Keep this list tight and genuinely dark-native.
+const DARK_DOMAIN_RE = /\b(crypto|web3|blockchain|nft|defi|gaming|game|terminal|dev ?tool|devtools?|hacker|cyber|nightlife|club|rave|dj|luxury|streaming|esports)\b/i;
+const EXPLICIT_DARK_RE = /\b(dark ?mode|dark ?theme|black background|black bg|midnight|neon|cyberpunk|go dark)\b/i;
 
 function hashString(s: string): number {
   let h = 2166136261;
@@ -156,17 +164,27 @@ export function pickDesignDirection(prompt: string): DesignDirection {
   const seed = hashString(prompt.trim().toLowerCase());
   const byId = (ids: string[]) => DESIGN_DIRECTIONS.filter((d) => ids.includes(d.id));
 
-  if (TECH_RE.test(prompt)) {
+  // 1) Dark is OPT-IN: only for inherently-dark domains or an explicit request.
+  //    (Previously ANY tech/SaaS/dashboard/AI prompt was forced dark → "black
+  //    every time". Now those default to a clean light look, see step 3.)
+  if (EXPLICIT_DARK_RE.test(prompt) || DARK_DOMAIN_RE.test(prompt)) {
     const dark = DESIGN_DIRECTIONS.filter((d) => d.techy);
     return dark[seed % dark.length];
   }
+  // 2) Domain-biased light subsets (law → corporate, food → warm, …).
   for (const bias of LIGHT_DOMAIN_BIAS) {
     if (bias.re.test(prompt)) {
       const subset = byId(bias.ids);
       if (subset.length) return subset[seed % subset.length];
     }
   }
-  // No domain match → any light direction (still varied by hash).
+  // 3) Technical / SaaS / dashboard / AI → a clean, professional LIGHT design
+  //    (varied by hash), never black-by-default.
+  if (TECH_RE.test(prompt)) {
+    const lightTech = byId(["corporate-clean", "editorial-minimal", "vibrant-bold"]);
+    if (lightTech.length) return lightTech[seed % lightTech.length];
+  }
+  // 4) No domain match → any light direction (still varied by hash).
   const light = DESIGN_DIRECTIONS.filter((d) => d.theme === "light");
   return light[seed % light.length];
 }
@@ -189,5 +207,11 @@ Use this specific, cohesive aesthetic so the result looks intentional and distin
 - ${d.notes}
 Keep the domain-appropriate accent from the palette table, apply the theme
 consistently (don't mix light and dark), and make spacing/typography polished.
+
+REQUIRED LAYOUT CHROME (do not omit): every landing / marketing / home page MUST
+render a real site **header/nav bar at the top** and a real **footer at the
+bottom**, and BOTH must be mounted in App.tsx (e.g. <Header/> … <Footer/>). A page
+with no header or no footer is an incomplete build. Use the "${d.theme}" theme —
+${d.theme === "light" ? "light surfaces with dark text; do NOT ship a black/near-black page background unless the direction above is explicitly dark" : "commit to the dark surfaces described above"}.
 ---`;
 }
