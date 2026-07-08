@@ -24,6 +24,8 @@ export interface UseAIStreamChatOptions extends Omit<PreviewFileSyncOptions, "on
 
 export interface ConsumeStreamOptions {
   signal?: AbortSignal;
+  /** Per-request override — use effectiveMode from sendMessage, not UI tab mode */
+  applyFileUpdates?: boolean;
   handlers?: Omit<AIStreamHandlers, "onFileUpdate">;
   /** Called for each parsed <file_update> before apply */
   onFileUpdate?: (update: ParsedFileUpdate) => void;
@@ -39,9 +41,10 @@ export function useAIStreamChat(options: UseAIStreamChatOptions) {
 
   const consume = useCallback(
     async (response: Response, opts?: ConsumeStreamOptions): Promise<HandleAIStreamResult> => {
+      const shouldApply = opts?.applyFileUpdates ?? applyFileUpdates;
       const handlers: AIStreamHandlers = {
         ...opts?.handlers,
-        onFileUpdate: applyFileUpdates
+        onFileUpdate: shouldApply
           ? async (update) => {
               opts?.onFileUpdate?.(update);
               fileSync.apply(update);

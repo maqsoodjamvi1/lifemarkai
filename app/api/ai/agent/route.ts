@@ -8,6 +8,8 @@ import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 import { ensureDevCredits } from "@/lib/dev-credits";
 import { claimDailyCredits } from "@/lib/credits";
+import { AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
+import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { autoWireBackend } from "@/lib/cloud/auto-wire";
 import { autoWireAi } from "@/lib/ai/auto-wire-ai";
 import { runSelfVerification } from "@/lib/ai/self-verify";
@@ -63,8 +65,11 @@ export async function POST(req: NextRequest) {
   let creditsBalance = profile?.credits ?? 0;
   const granted = await ensureDevCredits(user.id);
   if (granted !== null) creditsBalance = granted;
-  if (creditsBalance < 1) {
-    return NextResponse.json({ error: "Need at least 1 credit for Agent Mode" }, { status: 402 });
+  if (creditsBalance < AGENT_MIN_CREDITS) {
+    return NextResponse.json(
+      { error: `Need at least ${AGENT_MIN_CREDITS} credits for Agent Mode` },
+      { status: 402 },
+    );
   }
 
   const cloudPermissions = parseCloudToolPermissions(profile?.cloud_tool_permissions);
@@ -184,6 +189,13 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
 
       try {
+        const projectFileMap = new Map<string, { path: string; content: string; language?: string }>();
+        for (const file of Array.isArray(files) ? files : []) {
+          const path = String(file.path ?? "").replace(/\\/g, "/").replace(/^\/+/, "");
+          if (!path) continue;
+          projectFileMap.set(path, { path, content: String(file.content ?? ""), language: detectLanguage(path) });
+        }
+
         const result = await runAgent({
           task,
           projectId,
@@ -200,15 +212,39 @@ export async function POST(req: NextRequest) {
           extraTools: extraTools.length > 0 ? extraTools : undefined,
           onStep: (step: AgentStep) => send({ step }),
           onFileChange: async (path: string, content: string) => {
-            send({ fileUpdated: { path, content: content.slice(0, 100) + "..." } });
+            const cleanPath = path.replace(/\\/g, "/").replace(/^\/+/, "");
+            projectFileMap.set(cleanPath, { path: cleanPath, content, language: detectLanguage(cleanPath) });
+            send({ fileUpdated: { path: cleanPath, content: content.slice(0, 100) + "..." } });
 
             // Persist to DB
             await (supabase as any).from("project_files").upsert(
-              { project_id: projectId, path, content, language: detectLanguage(path) },
+              { project_id: projectId, path: cleanPath, content, language: detectLanguage(cleanPath) },
               { onConflict: "project_id,path" }
             );
           },
         });
+
+        const supportFiles = ensureCommonGeneratedSupportFiles(Array.from(projectFileMap.values())).filter(
+          (file) => !projectFileMap.has(file.path.replace(/\\/g, "/").replace(/^\/+/, "")),
+        );
+        if (supportFiles.length > 0) {
+          await (supabase as any).from("project_files").upsert(
+            supportFiles.map((file) => ({
+              project_id: projectId,
+              path: file.path,
+              content: file.content,
+              language: file.language ?? detectLanguage(file.path),
+            })),
+            { onConflict: "project_id,path" },
+          );
+          for (const file of supportFiles) {
+            projectFileMap.set(file.path, { path: file.path, content: file.content, language: file.language });
+            send({ fileUpdated: { path: file.path, content: file.content.slice(0, 100) + "..." } });
+          }
+        }
+        const filesChanged = Array.from(
+          new Set([...(Array.isArray(result.filesChanged) ? result.filesChanged : []), ...supportFiles.map((file) => file.path)]),
+        );
 
         // Save agent task as messages
         await (supabase as any).from("messages").insert([
@@ -217,7 +253,7 @@ export async function POST(req: NextRequest) {
             project_id: projectId, role: "assistant",
             content: result.summary, tokens_used: result.tokensUsed,
             model: effectiveModel ?? getDefaultAiModel(), mode: "agent",
-            metadata: { steps: result.steps.length, files_changed: result.filesChanged },
+            metadata: { steps: result.steps.length, files_changed: filesChanged },
           },
         ]);
 
@@ -235,13 +271,13 @@ export async function POST(req: NextRequest) {
         // ── Lovable parity: backend auto-wiring + self-verification ──────────
         let backendWiring = null;
         let verification = null;
-        if (Array.isArray(result.filesChanged) && result.filesChanged.length > 0) {
+        if (filesChanged.length > 0) {
           try {
             const { data: changedRows } = await (supabase as any)
               .from("project_files")
               .select("path, content, language")
               .eq("project_id", projectId)
-              .in("path", result.filesChanged);
+              .in("path", filesChanged);
             backendWiring = await autoWireBackend({
               supabase,
               projectId,
@@ -278,7 +314,7 @@ export async function POST(req: NextRequest) {
             source: "agent",
             mode: "agent",
             prompt: task,
-            filesChanged: result.filesChanged,
+            filesChanged,
             backendWiring,
             verification,
           });
@@ -287,7 +323,7 @@ export async function POST(req: NextRequest) {
         send({
           done: true,
           summary: result.summary,
-          filesChanged: result.filesChanged,
+          filesChanged,
           backend_wired: backendWiring ?? undefined,
           verification: verification
             ? { engine: verification.engine, passed: verification.passed, fixesApplied: verification.fixesApplied, errors: verification.errors }

@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { ChatTiptapInput, type ChatInputHandle } from "./chat-tiptap-input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { createClient } from "@/lib/supabase/client";
@@ -38,6 +39,7 @@ import { AnalyzeMessageCard, parseAnalyzeMetadata } from "./analyze-message-card
 import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { DesignPreviewPicker } from "./design-preview-picker";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
+import { AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
 import { findMissingPackages, buildInstallCommand, syncPackageJsonDeps } from "@/lib/ai/npm-auto-install";
 import { classifyBuildIntent, type BuildIntent } from "@/lib/ai/build-intent";
 import { buildDesignBrief, shouldOfferDesignPreviews, type DesignPreviewDirection } from "@/lib/ai/design-previews";
@@ -54,6 +56,8 @@ import {
   resolveSmartModel,
   DEFAULT_CODING_MODEL,
 } from "@/lib/ai/editor-intelligence";
+import { isNoisePreviewError } from "@/lib/preview/preview-error-bridge";
+import { appendImportDiagnosis } from "@/lib/preview/diagnose-imports";
 import {
   CHAT_MODEL_OPTIONS,
   getOpenRouterModelLabel,
@@ -128,6 +132,8 @@ interface ChatPanelProps {
   isLocked?: boolean;
   /** Open a secondary panel on the right (History, Knowledge, GitHub, etc.) */
   onOpenPanel?: (panel: string) => void;
+  /** Static security-finding count — drives the "Try to fix all" bar above the input. */
+  securityIssueCount?: number;
   /** Focus the preview pane (Lovable Details/Preview card) */
   onFocusPreview?: () => void;
   /** Show skeleton shimmer while messages are being fetched from the server */
@@ -308,6 +314,24 @@ function AgentStepGlyph({ kind }: { kind: AgentStepKind }) {
 }
 
 const MAX_AUTO_FIX_ATTEMPTS = 3;
+
+function waitForPreviewSuccess(timeoutMs = 10_000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      window.removeEventListener("message", onMsg);
+      resolve(false);
+    }, timeoutMs);
+    function onMsg(e: MessageEvent) {
+      const d = e.data as { source?: string; type?: string };
+      if (d?.source === "lifemark-preview" && d?.type === "success") {
+        window.clearTimeout(timer);
+        window.removeEventListener("message", onMsg);
+        resolve(true);
+      }
+    }
+    window.addEventListener("message", onMsg);
+  });
+}
 
 
 /** Stateful wrapper for code blocks in chat — adds Copy + Insert + Collapse buttons */
@@ -675,6 +699,7 @@ export function ChatPanel({
   onStreamingChange, onModeChange, onApprovePlan,
   pendingBuildFromFile, onPendingBuildFromFileConsumed,
   isLocked = false, onOpenPanel, onFocusPreview, isMessagesLoading = false,
+  securityIssueCount = 0,
 }: ChatPanelProps) {
   const intelCtx = useMemo(
     () => ({
@@ -693,7 +718,7 @@ export function ChatPanel({
     projectId: project.id,
     files,
     onFilesChange: onFilesUpdate,
-    applyFileUpdates: mode === "build" || mode === "agent" || mode === "patch",
+    applyFileUpdates: false,
   });
 
   const { toast } = useToast();
@@ -705,6 +730,10 @@ export function ChatPanel({
   }, [files, previewError, credits, project.framework]);
 
   const [input, setInput] = useState("");
+  // "Team" toggle: when on, Agent-mode sends run the full multi-agent Editor
+  // Intelligence orchestrator (in the Intelligence panel) instead of the
+  // single-model /api/ai/agent route. Only affects Agent mode.
+  const [multiAgent, setMultiAgent] = useState(false);
   const [streaming, setStreaming] = useState(false);
 
   const smartPlaceholder = useMemo(
@@ -783,6 +812,8 @@ export function ChatPanel({
   const [designPreviewOpen, setDesignPreviewOpen] = useState(false);
   const [pendingDesignPrompt, setPendingDesignPrompt] = useState<string | null>(null);
   const skipDesignPreviewOnceRef = useRef(false);
+  /** True while overlay/manual heal is running — blocks competing auto-fix. */
+  const healActiveRef = useRef(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editInput, setEditInput] = useState("");
   // Per-message per-file accept/revert state
@@ -1302,15 +1333,38 @@ export function ChatPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [starterPrompt, credits]);
 
+  // Coordinate heal overlay ↔ auto-fix loop
+  useEffect(() => {
+    function onHealStart() {
+      healActiveRef.current = true;
+    }
+    function onHealDone() {
+      healActiveRef.current = false;
+    }
+    window.addEventListener("lifemark-preview-heal-start", onHealStart);
+    window.addEventListener("lifemark-preview-heal-done", onHealDone);
+    return () => {
+      window.removeEventListener("lifemark-preview-heal-start", onHealStart);
+      window.removeEventListener("lifemark-preview-heal-done", onHealDone);
+    };
+  }, []);
+
   // Populate input when user clicks "Fix with AI" on the error banner in preview panel
   useEffect(() => {
     if (!pendingFixPrompt || credits <= 0) {
       if (pendingFixPrompt && credits <= 0) onPendingFixConsumed?.();
       return;
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- consume preview fix request into composer state
-    setInput(`Fix this runtime error:\n\n${pendingFixPrompt}`);
+    const prompt = pendingFixPrompt;
     onPendingFixConsumed?.();
+    // Healing overlay sends structured prompt — one-click send (Lovable self-repair)
+    if (prompt.startsWith("Fix the preview/runtime errors")) {
+      healActiveRef.current = true;
+      void sendMessage(appendImportDiagnosis(prompt, files), "build");
+      return;
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- consume preview fix request into composer state
+    setInput(`Fix this runtime error:\n\n${prompt}`);
     setTimeout(() => textareaRef.current?.focus(), 50);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingFixPrompt, credits]);
@@ -1355,9 +1409,11 @@ export function ChatPanel({
   useEffect(() => {
     if (
       !previewError ||
+      isNoisePreviewError(previewError) ||
       previewError === lastFixedError ||
       autoFixing ||
       streaming ||
+      healActiveRef.current ||
       autoFixAttempts >= MAX_AUTO_FIX_ATTEMPTS ||
       credits < 1
     )
@@ -1411,12 +1467,16 @@ export function ChatPanel({
     setLastFixedError(error);
     setAutoFixAttempts((n) => n + 1);
 
+    const fixPayload = /missing component|failed to resolve/i.test(error)
+      ? appendImportDiagnosis(error, files)
+      : error;
+
     // Show an in-chat notification
     const fixingMsg: Message = {
       id: `autofix-${Date.now()}`,
       project_id: project.id,
       role: "assistant",
-      content: `🔧 **Auto-fixing error** (attempt ${autoFixAttempts + 1}/${MAX_AUTO_FIX_ATTEMPTS})\n\n\`\`\`\n${error.slice(0, 300)}\n\`\`\``,
+      content: `🔧 **Auto-fixing error** (attempt ${autoFixAttempts + 1}/${MAX_AUTO_FIX_ATTEMPTS})\n\n\`\`\`\n${fixPayload.slice(0, 400)}\n\`\`\``,
       tokens_used: null,
       model: null,
       mode: "build",
@@ -1424,7 +1484,8 @@ export function ChatPanel({
       rating: null,
       created_at: new Date().toISOString(),
     };
-    onMessagesUpdate([...messages, fixingMsg]);
+    const messagesWithFixing = [...messages, fixingMsg];
+    onMessagesUpdate(messagesWithFixing);
 
     try {
       const res = await fetch("/api/ai/fix", {
@@ -1432,21 +1493,42 @@ export function ChatPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           projectId: project.id,
-          error,
+          error: fixPayload,
           files: files.map((f) => ({ path: f.path, content: f.content })),
         }),
       });
 
-      if (!res.ok) throw new Error(`Fix API ${res.status}`);
+      if (!res.ok) {
+        if (res.status === 423) {
+          toast({
+            title: "Project is Live — auto-fix blocked",
+            description: "Switch to Test environment to apply fixes.",
+            variant: "destructive",
+          });
+          onMessagesUpdate(messages);
+          return;
+        }
+        throw new Error(`Fix API ${res.status}`);
+      }
 
       const data = (await res.json()) as {
         files: Array<{ path: string; content: string }>;
         explanation: string;
         tokensUsed: number;
+        free?: boolean;
       };
 
-      // Update credits
-      onCreditsUpdate(credits - 1);
+      if (!data.free) {
+        try {
+          const cr = await fetch("/api/billing/credits");
+          if (cr.ok) {
+            const { credits: newCredits } = (await cr.json()) as { credits?: number };
+            if (typeof newCredits === "number") onCreditsUpdate(newCredits);
+          }
+        } catch {
+          onCreditsUpdate(Math.max(0, credits - 1));
+        }
+      }
 
       // Refresh files from DB
       const supabase = createClient();
@@ -1470,9 +1552,16 @@ export function ChatPanel({
         rating: null,
         created_at: new Date().toISOString(),
       };
-      onMessagesUpdate([...messages, fixingMsg, successMsg]);
-      onAutoFixComplete?.();
+      onMessagesUpdate([...messagesWithFixing, successMsg]);
       window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
+      const previewOk = await waitForPreviewSuccess(12_000);
+      healActiveRef.current = false;
+      if (previewOk) {
+        onAutoFixComplete?.();
+        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-done"));
+      } else {
+        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+      }
     } catch {
       const errMsg: Message = {
         id: `autofix-fail-${Date.now()}`,
@@ -1486,7 +1575,7 @@ export function ChatPanel({
         rating: null,
         created_at: new Date().toISOString(),
       };
-      onMessagesUpdate([...messages, fixingMsg, errMsg]);
+      onMessagesUpdate([...messagesWithFixing, errMsg]);
     } finally {
       setAutoFixing(false);
     }
@@ -1671,8 +1760,22 @@ export function ChatPanel({
     const effectiveModel = modelManuallySelectedRef.current
       ? selectedModel
       : resolveSmartModel(effectiveMode, intelCtx, userMessage);
+
+    // Multi-agent team mode: in Agent mode with the Team toggle on, run the full
+    // Editor Intelligence orchestrator (lens debate + waves + durable run) in the
+    // Intelligence panel instead of the single-model agent route. Bail before any
+    // streaming setup so normal chat/plan/build/patch are untouched.
+    if (effectiveMode === "agent" && multiAgent) {
+      setInput("");
+      onOpenPanel?.("intelligence");
+      window.dispatchEvent(new CustomEvent("lifemark-intelligence-run", {
+        detail: { goal: userMessage },
+      }));
+      return;
+    }
+
     let availableCredits = credits;
-    if (effectiveMode === "agent" && availableCredits < 5) {
+    if (effectiveMode === "agent" && availableCredits < AGENT_MIN_CREDITS) {
       try {
         const cr = await fetch("/api/billing/credits");
         if (cr.ok) {
@@ -1684,18 +1787,19 @@ export function ChatPanel({
         }
       } catch {}
     }
-    const minCredits = effectiveMode === "agent" ? 5 : 1;
+    const minCredits = effectiveMode === "agent" ? AGENT_MIN_CREDITS : 1;
     if (availableCredits < minCredits) {
       if (effectiveMode === "agent") {
         toast({
           title: "Insufficient credits",
-          description: "Agent mode needs at least 5 credits.",
+          description: `Agent mode needs at least ${AGENT_MIN_CREDITS} credits.`,
           variant: "destructive",
         });
       }
       return;
     }
-    if (!overrideMode && effectiveMode !== mode && mode !== "chat") {
+    const slashRouted = /^\/(build|agent|plan)\b/i.test(userMessage.trim());
+    if (!overrideMode && effectiveMode !== mode && (mode !== "chat" || slashRouted)) {
       onModeChange?.(effectiveMode);
     }
     sendingRef.current = true;
@@ -1953,6 +2057,19 @@ ${(f.content ?? "").slice(0, 8000)}
                     setCanUndo(true);
                   }
                   onFilesUpdate(updatedFiles);
+                  window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
+                  if (healActiveRef.current) {
+                    void (async () => {
+                      const previewOk = await waitForPreviewSuccess(12_000);
+                      healActiveRef.current = false;
+                      if (previewOk) {
+                        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-done"));
+                        onAutoFixComplete?.();
+                      } else {
+                        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+                      }
+                    })();
+                  }
 
                   const missingPkgs = findMissingPackages(diffSource, updatedFiles.find((f: { path: string }) => f.path === "package.json")?.content ?? null);
                   if (missingPkgs.length > 0) {
@@ -2275,8 +2392,20 @@ ${(f.content ?? "").slice(0, 8000)}
                   }
 
                   onFilesUpdate(updatedFiles);
-
                   window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
+                  if (healActiveRef.current) {
+                    void (async () => {
+                      const previewOk = await waitForPreviewSuccess(12_000);
+                      healActiveRef.current = false;
+                      if (previewOk) {
+                        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-done"));
+                        onAutoFixComplete?.();
+                      } else {
+                        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+                      }
+                    })();
+                  }
+
                   if (effectiveMode === "build") {
                     // Same fallback as the diff source — use data.files when present,
                     // otherwise reconstruct from streamed paths + DB content.
@@ -2428,6 +2557,7 @@ ${(f.content ?? "").slice(0, 8000)}
 
       await consumeAIStream(res, {
         signal: controller.signal,
+        applyFileUpdates: (["build", "agent", "patch"] as EditorMode[]).includes(effectiveMode),
         onFileUpdate: (update) => {
           const norm = update.path.replace(/\\/g, "/").replace(/^\//, "");
           setStreamingFiles((prev) => (prev.includes(norm) ? prev : [...prev, norm]));
@@ -2911,14 +3041,6 @@ ${(f.content ?? "").slice(0, 8000)}
     return null;
   }, [messages]);
 
-  // Mode tab config
-  const MODE_TABS: { id: EditorMode; label: string; shortLabel: string }[] = [
-    { id: "chat",  label: "Chat",       shortLabel: "Chat"  },
-    { id: "build", label: "Build",      shortLabel: "Build" },
-    { id: "patch", label: "Quick Edit", shortLabel: "Edit"  },
-    { id: "plan",  label: "Plan",       shortLabel: "Plan"  },
-    { id: "agent", label: "Agent",      shortLabel: "Agent" },
-  ];
 
   return (
     <div
@@ -2929,24 +3051,13 @@ ${(f.content ?? "").slice(0, 8000)}
       // and keeps the most-recent messages visible.
       style={{ paddingBottom: keyboardInset }}
     >
-      {/* ── Lovable-style mode tab bar ── */}
-      <div className="flex items-center gap-0.5 px-3 pt-2 pb-0 border-b border-border/60 flex-shrink-0">
-        {MODE_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => onModeChange?.(tab.id)}
-            className={`relative px-3 py-2 text-xs font-medium transition-colors rounded-t-sm ${
-              mode === tab.id
-                ? "text-foreground"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {tab.label}
-            {mode === tab.id && (
-              <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-primary rounded-full" />
-            )}
-          </button>
-        ))}
+      {/* ── Minimal top strip: current mode label + utilities. Mode switching
+          lives in the compact dropdown next to the input (Lovable pattern), so
+          the old 5-tab bar is gone. ── */}
+      <div className="flex items-center gap-0.5 px-3 py-2 border-b border-border/60 flex-shrink-0">
+        <span className="text-xs font-medium text-foreground/80 px-1">
+          {mode === "patch" ? "Quick Edit" : mode.charAt(0).toUpperCase() + mode.slice(1)}
+        </span>
         <div className="flex-1" />
         {/* Credit cost badge */}
         <span className="text-[10px] text-muted-foreground/50 pr-1 pb-1.5 flex-shrink-0">
@@ -5250,6 +5361,41 @@ Please confirm the breakdown before implementing anything.`,
             )}
           </AnimatePresence>
 
+          {/* Security issues bar — Lovable "N issues · Try to fix all" (above input) */}
+          {securityIssueCount > 0 && !isLocked && (
+            <div className="flex items-center gap-2 px-3 py-2 border-t border-[color:var(--border-default)] bg-[var(--bg-secondary-pulse)]">
+              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-amber-500"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+              <span className="text-xs font-medium text-[var(--fg-primary)]">Security</span>
+              <span className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums bg-amber-500/15 text-amber-500">
+                {securityIssueCount} {securityIssueCount === 1 ? "issue" : "issues"}
+              </span>
+              <div className="flex-1" />
+              <button
+                type="button"
+                onClick={() => onOpenPanel?.("security")}
+                className="h-7 rounded-full px-3 text-xs font-normal text-[var(--fg-primary)] transition-colors hover:bg-[var(--bg-muted)]"
+              >
+                View issues
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  // Route through the multi-agent Editor Intelligence lenses (Security
+                  // Engineer + AI CTO) rather than a single-model chat send: open the
+                  // Intelligence panel and kick off a durable initiative.
+                  onOpenPanel?.("intelligence");
+                  window.dispatchEvent(new CustomEvent("lifemark-intelligence-run", {
+                    detail: { goal: "Fix all security issues in this project. Review every finding, apply the safest fix for each, and verify the app still builds." },
+                  }));
+                }}
+                disabled={noCredits}
+                className="h-7 rounded-full px-3 text-xs font-medium text-[var(--fg-inverse)] bg-[var(--bg-inverse)] transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Try to fix all
+              </button>
+            </div>
+          )}
+
           {/* Live environment lock banner */}
           {isLocked && (
             <div className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500/10 border-t border-emerald-500/20">
@@ -5262,13 +5408,13 @@ Please confirm the breakdown before implementing anything.`,
           )}
 
           {/* Textarea — not disabled while streaming so users can queue messages */}
-          <Textarea
-            ref={textareaRef}
+          <ChatTiptapInput
+            ref={textareaRef as unknown as React.Ref<ChatInputHandle>}
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
             placeholder={smartPlaceholder}
-            className={`min-h-[60px] max-h-40 resize-none border-0 bg-transparent px-4 pt-4 pb-2 text-sm focus-visible:ring-0 placeholder:text-muted-foreground/40 ${input.length > 3800 ? "ring-1 ring-red-500/50 rounded" : ""}`}
+            className={`min-h-[60px] max-h-40 ${input.length > 3800 ? "ring-1 ring-red-500/50 rounded" : ""}`}
             disabled={noCredits || isLocked}
           />
 
@@ -5468,6 +5614,23 @@ Please confirm the breakdown before implementing anything.`,
                   <div>
                     <p className="font-medium">Agent</p>
                     <p className="text-[10px] text-muted-foreground">Autonomous AI agent</p>
+                  </div>
+                </DropdownMenuItem>
+                <div className="h-px bg-border/60 my-1" />
+                {/* Team (multi-agent) toggle — routes Agent sends through the lens orchestrator */}
+                <DropdownMenuItem
+                  className="text-xs gap-2 py-2.5"
+                  onSelect={(e) => { e.preventDefault(); setMultiAgent((v) => !v); }}
+                >
+                  <div className="w-4 h-4 flex items-center justify-center">{multiAgent && <Check className="w-3 h-3" />}</div>
+                  <div className="flex-1">
+                    <p className="font-medium flex items-center gap-1.5">
+                      Team
+                      <span className="rounded bg-fuchsia-500/15 px-1 py-px text-[9px] font-semibold text-fuchsia-300">MULTI-AGENT</span>
+                    </p>
+                    <p className="text-[10px] text-muted-foreground leading-snug">
+                      Agent mode runs the full lens team (debate + waves) in the Intelligence panel
+                    </p>
                   </div>
                 </DropdownMenuItem>
                 {/* Matches Lovable's "Toggle with Alt P" hint below the mode list */}

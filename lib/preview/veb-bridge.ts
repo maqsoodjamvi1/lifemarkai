@@ -111,7 +111,18 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
 //   iframe -> parent: { type:'lifemark-preview-location', pathname }
 export const PREVIEW_RUNTIME_SCRIPT = `(function(){
   if (window.parent === window) return;
+  var hadRuntimeError = false;
+  function isNoise(text) {
+    var m = String(text || "").trim();
+    if (!m || m === "{}" || m === "[]" || m === "[object Object]") return true;
+    if (m.length < 4 && !/error|fail/i.test(m)) return true;
+    return false;
+  }
   function post(type, text){
+    if (type === "error") {
+      hadRuntimeError = true;
+      if (isNoise(text)) return;
+    }
     try { window.parent.postMessage({ source:'lifemark-preview', type:type, text:String(text) }, '*'); } catch(e){}
   }
   function loc(){
@@ -123,18 +134,32 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
   });
   window.addEventListener('unhandledrejection', function(e){
     var r = e && e.reason;
-    post('error', 'Unhandled promise rejection: ' + ((r && (r.stack || r.message)) || r));
+    var msg = (r && (r.stack || r.message)) || r;
+    if (msg && typeof msg === 'object') {
+      try { msg = JSON.stringify(msg); } catch(err) { msg = String(r); }
+    }
+    post('error', 'Unhandled promise rejection: ' + msg);
   });
   var _err = console.error;
   console.error = function(){
-    try { post('error', Array.prototype.map.call(arguments, function(a){
-      return (a && a.stack) ? a.stack : (typeof a === 'object' ? JSON.stringify(a) : String(a));
-    }).join(' ')); } catch(e){}
+    var parts = Array.prototype.map.call(arguments, function(a){
+      if (a && a.stack) return a.stack;
+      if (typeof a === 'string') return a;
+      if (a && a.message) return a.message;
+      return '';
+    }).filter(Boolean);
+    var text = parts.join(' ');
+    if (text && !isNoise(text)) post('error', text);
     return _err.apply(console, arguments);
   };
-  // Clear stale errors once the app has mounted cleanly.
+  function maybePostSuccess() {
+    var root = document.getElementById('root');
+    var mounted = root && root.innerHTML && root.innerHTML.trim().length > 0;
+    if (!hadRuntimeError && mounted) post('success', 'ok');
+    loc();
+  }
   window.addEventListener('load', function(){
-    setTimeout(function(){ post('success', 'ok'); loc(); }, 800);
+    setTimeout(maybePostSuccess, 1200);
   });
   // Keep the parent address bar in sync with client-side routing.
   var _push = history.pushState, _replace = history.replaceState;

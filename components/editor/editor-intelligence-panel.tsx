@@ -15,7 +15,7 @@
  * View subcomponents + the event reducer live in editor-intelligence-console.tsx.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BriefcaseBusiness,
   CheckCircle2,
@@ -140,6 +140,11 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
   const [buildLog, setBuildLog] = useState<string[]>([]);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [replaying, setReplaying] = useState(false);
+  // Latest runBuild closure — lets the external-trigger listener (below) start a
+  // run with fresh state without re-subscribing on every render.
+  const runBuildRef = useRef<
+    (resumeRunId?: string, autonomy?: Record<string, string>, goalOverride?: string) => Promise<void>
+  >();
 
   const runKey = `lifemark:editor-intelligence:${projectId}:run`;
 
@@ -211,8 +216,12 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
    * sanitizes and forwards the override to runInitiative (liveEnv can never
    * be overridden), so approving a gate genuinely unblocks the paused run.
    */
-  async function runBuild(resumeRunId?: string, autonomy?: Record<string, string>) {
-    const goal = buildGoal.trim() || (resumeRunId ? "Resume editor intelligence run" : "");
+  async function runBuild(
+    resumeRunId?: string,
+    autonomy?: Record<string, string>,
+    goalOverride?: string,
+  ) {
+    const goal = (goalOverride ?? buildGoal).trim() || (resumeRunId ? "Resume editor intelligence run" : "");
     if (!goal || building) return;
     setBuilding(true);
     if (!resumeRunId) {
@@ -333,6 +342,24 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
+
+  // Keep the ref pointing at the current runBuild closure (fresh buildGoal/building).
+  runBuildRef.current = runBuild;
+
+  // External trigger: other surfaces (e.g. the chat panel's "Try to fix all"
+  // security bar) dispatch `lifemark-intelligence-run` with a goal to kick off a
+  // full multi-agent initiative here instead of a single-model chat send.
+  useEffect(() => {
+    function onExternalRun(e: Event) {
+      const detail = (e as CustomEvent).detail as { goal?: string } | undefined;
+      const goal = detail?.goal?.trim();
+      if (!goal) return;
+      setBuildGoal(goal);
+      void runBuildRef.current?.(undefined, undefined, goal);
+    }
+    window.addEventListener("lifemark-intelligence-run", onExternalRun as EventListener);
+    return () => window.removeEventListener("lifemark-intelligence-run", onExternalRun as EventListener);
+  }, []);
 
   const discoveryPrompt = useMemo(() => {
     const agents = state?.agents.map((agent) => `- ${agent.name}: ${agent.title}`).join("\n") ?? "";

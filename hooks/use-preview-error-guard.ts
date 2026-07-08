@@ -5,6 +5,7 @@ import {
   buildHealingPrompt,
   formatErrorsForHealing,
   isBundlerError,
+  isNoisePreviewError,
   parsePreviewErrorMessage,
   type PreviewErrorReport,
   type PreviewRuntimeError,
@@ -33,7 +34,9 @@ export interface PreviewErrorGuardApi {
   freezePreview: boolean;
   clearErrors: () => void;
   startHealing: () => void;
+  enterHealingPhase: () => void;
   completeHealing: () => void;
+  failHealing: () => void;
 }
 
 export function usePreviewErrorGuard(
@@ -69,21 +72,23 @@ export function usePreviewErrorGuard(
     if (r.errors.length === 0) return;
 
     setReport(r);
-    if (healingRef.current) {
-      healingRef.current = false;
-    }
+    if (healingRef.current) return;
+
     setPhase("frozen");
 
-    if (autoHeal && !healingRef.current && onHealRequest) {
+    if (autoHeal && onHealRequest) {
+      const prompt = buildHealingPrompt(r.errors);
+      if (!prompt) return;
       healingRef.current = true;
       setPhase("healing");
-      onHealRequest(buildHealingPrompt(r.errors), r);
+      onHealRequest(prompt, r);
     }
   }, [autoHeal, buildReport, onHealRequest]);
 
   const pushError = useCallback(
     (err: PreviewRuntimeError) => {
-      if (!err.message.trim()) return;
+      if (isNoisePreviewError(err.message)) return;
+      if (healingRef.current) return;
       const key = `${err.kind}:${err.message}`;
       if (seenErrorsRef.current.has(key)) return;
       seenErrorsRef.current.add(key);
@@ -104,6 +109,7 @@ export function usePreviewErrorGuard(
     const d = data as Record<string, unknown>;
     if (d.source !== "lifemark-preview" || d.type !== "error") return null;
     const msg = String(d.text ?? "");
+    if (isNoisePreviewError(msg)) return null;
     return {
       kind: isBundlerError(msg) ? "bundler" : "runtime",
       message: msg,
@@ -143,18 +149,29 @@ export function usePreviewErrorGuard(
     }
   }, []);
 
-  const startHealing = useCallback(() => {
-    const r = buildReport();
-    if (r.errors.length === 0) return;
+  const enterHealingPhase = useCallback(() => {
+    if (healingRef.current) return;
     healingRef.current = true;
     setPhase("healing");
-    onHealRequest?.(buildHealingPrompt(r.errors), r);
-  }, [buildReport, onHealRequest]);
+  }, []);
+
+  const startHealing = useCallback(() => {
+    const r = buildReport();
+    const prompt = buildHealingPrompt(r.errors);
+    if (!prompt) return;
+    enterHealingPhase();
+    onHealRequest?.(prompt, r);
+  }, [buildReport, enterHealingPhase, onHealRequest]);
 
   const completeHealing = useCallback(() => {
     healingRef.current = false;
     clearErrors();
   }, [clearErrors]);
+
+  const failHealing = useCallback(() => {
+    healingRef.current = false;
+    setPhase("frozen");
+  }, []);
 
   const freezePreview = phase === "frozen" || phase === "healing";
 
@@ -164,6 +181,8 @@ export function usePreviewErrorGuard(
     freezePreview,
     clearErrors,
     startHealing,
+    enterHealingPhase,
     completeHealing,
+    failHealing,
   };
 }

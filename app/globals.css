@@ -75,6 +75,62 @@
   }
 }
 
+/* ──────────────────────────────────────────────────────────────────────────
+   Lovable-parity editor design tokens (OKLCH).
+   Semantic layer used by the editor chrome (view-switcher pill, URL bar,
+   fx-button, Sonner toasts). Class-based light/dark for compatibility with the
+   existing `.dark` toggle. Reference in components via arbitrary values, e.g.
+   `bg-[var(--bg-accent)]`, `text-[var(--fg-primary)]`, `rounded-[var(--radius-2)]`.
+   ────────────────────────────────────────────────────────────────────────── */
+@layer base {
+  :root {
+    --bg-base: oklch(0.99 0.004 95);
+    --bg-primary-pulse: oklch(1 0 0);
+    --bg-secondary-pulse: oklch(0.975 0.003 95);
+    --bg-muted: oklch(0.95 0.004 95);
+    --bg-translucent: oklch(1 0 0 / 0.6);
+    --bg-accent: oklch(0.58 0.19 258);
+    --bg-inverse: oklch(0.16 0.01 260);
+    --fg-primary: oklch(0.22 0.01 260);
+    --fg-secondary: oklch(0.40 0.01 260);
+    --fg-tertiary: oklch(0.55 0.01 260);
+    --fg-quaternary: oklch(0.70 0.008 260);
+    --fg-emphasis: oklch(1 0 0);
+    --fg-inverse: oklch(0.98 0 0);
+    --fg-accent: oklch(0.55 0.19 258);
+    --border-default: oklch(0.90 0.005 260);
+    --border-translucent: oklch(0.50 0.01 260 / 0.18);
+    --border-accent: oklch(0.58 0.19 258);
+    --glow-neutral-hover: oklch(0.6 0.01 260 / 0.12);
+    --radius-1: 4px;
+    --radius-2: 8px;
+    --radius-3: 12px;
+    --radius-4: 16px;
+    --radius-6: 24px;
+  }
+
+  .dark {
+    --bg-base: oklch(0.17 0.005 260);
+    --bg-primary-pulse: oklch(0.21 0.006 260);
+    --bg-secondary-pulse: oklch(0.24 0.006 260);
+    --bg-muted: oklch(0.28 0.006 260);
+    --bg-translucent: oklch(1 0 0 / 0.05);
+    --bg-accent: oklch(0.62 0.19 258);
+    --bg-inverse: oklch(0.98 0 0);
+    --fg-primary: oklch(0.97 0.003 260);
+    --fg-secondary: oklch(0.80 0.005 260);
+    --fg-tertiary: oklch(0.65 0.006 260);
+    --fg-quaternary: oklch(0.50 0.006 260);
+    --fg-emphasis: oklch(1 0 0);
+    --fg-inverse: oklch(0.18 0.005 260);
+    --fg-accent: oklch(0.72 0.16 258);
+    --border-default: oklch(1 0 0 / 0.10);
+    --border-translucent: oklch(1 0 0 / 0.08);
+    --border-accent: oklch(0.62 0.19 258);
+    --glow-neutral-hover: oklch(1 0 0 / 0.08);
+  }
+}
+
 @layer base {
   * {
     @apply border-border;

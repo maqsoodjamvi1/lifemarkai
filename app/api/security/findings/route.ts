@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { requireFeature } from "@/lib/plans/gating";
 
 /**
  * GET /api/security/findings
@@ -24,6 +25,10 @@ export async function GET(_req: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // Security Center is a Team-tier (Lovable "Business") feature.
+  const gate = await requireFeature(user.id, "security_center");
+  if (!gate.ok) return NextResponse.json({ error: gate.error, requiredPlan: gate.requiredPlan }, { status: gate.status });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: projects } = await (supabase as any)

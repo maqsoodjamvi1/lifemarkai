@@ -7,6 +7,8 @@ import type { PreviewGuardPhase } from "@/hooks/use-preview-error-guard";
 interface PreviewHealingOverlayProps {
   phase: PreviewGuardPhase;
   report: PreviewErrorReport | null;
+  /** Static import/export hints (missing files, export mismatches) */
+  importDiagnosis?: string | null;
   onRetry?: () => void;
   onDismiss?: () => void;
 }
@@ -18,6 +20,7 @@ interface PreviewHealingOverlayProps {
 export function PreviewHealingOverlay({
   phase,
   report,
+  importDiagnosis,
   onRetry,
   onDismiss,
 }: PreviewHealingOverlayProps) {
@@ -48,11 +51,21 @@ export function PreviewHealingOverlay({
           </div>
         </div>
 
-        {report && report.errors.length > 0 && (
-          <div className="px-5 py-3 max-h-40 overflow-y-auto">
-            <pre className="text-[10px] font-mono text-muted-foreground whitespace-pre-wrap leading-relaxed">
-              {report.formatted}
-            </pre>
+        {(report?.errors.length || importDiagnosis) && (
+          <div className="px-5 py-3 max-h-48 overflow-y-auto space-y-2">
+            {report && report.errors.length > 0 && (
+              <pre className="text-[10px] font-mono text-muted-foreground whitespace-pre-wrap leading-relaxed">
+                {report.formatted}
+              </pre>
+            )}
+            {importDiagnosis && (
+              <div>
+                <p className="text-[10px] font-semibold text-amber-400/90 mb-1">Likely fix</p>
+                <pre className="text-[10px] font-mono text-muted-foreground whitespace-pre-wrap leading-relaxed">
+                  {importDiagnosis}
+                </pre>
+              </div>
+            )}
           </div>
         )}
 

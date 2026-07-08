@@ -30,6 +30,9 @@ import type { Project, Profile } from "@/types/database";
 import type { EditorMode, ViewMode, LeftPanel } from "./editor-layout";
 import { toast } from "@/hooks/use-toast";
 import { createClient } from "@/lib/supabase/client";
+import { ViewSwitcherPill, type ViewSwitcherTab } from "./view-switcher-pill";
+import { UrlBarPill } from "./url-bar-pill";
+import { usePreviewToken } from "@/hooks/use-preview-token";
 
 interface PresenceUser {
   id: string;
@@ -143,6 +146,10 @@ export function EditorTopBar({
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
+  const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
+  // Short-lived signed preview URL (falls back to the plain path when tokens
+  // aren't configured server-side).
+  const { url: signedPreviewUrl } = usePreviewToken(project.id);
 
   // ── Environment (Test / Live) toggle ─────────────────────────────────────
   const [environment, setEnvironment] = useState<"test" | "live">(
@@ -543,73 +550,58 @@ export function EditorTopBar({
             <TooltipContent>Split view (⌘3)</TooltipContent>
           </Tooltip>
 
-          {/* Preview pill — active when viewing preview with no secondary panel */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => { onRightPanelChange?.(null); onViewChange("preview"); }}
-                className={`flex items-center gap-1.5 px-3 h-7 rounded-full text-xs font-medium transition-all flex-shrink-0 ${
-                  !rightPanel && (viewMode === "preview" || viewMode === "both")
-                    ? "bg-[#0066FF] text-white shadow-sm"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/60 border border-border/60"
-                }`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${!rightPanel && (viewMode === "preview" || viewMode === "both") ? "bg-white" : "bg-muted-foreground"}`} />
-                Preview
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>Preview (⌘1)</TooltipContent>
-          </Tooltip>
-
-          {/* Code `</>` */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon"
-                className={`h-7 w-7 flex-shrink-0 transition-all ${!rightPanel && viewMode === "code" ? "text-foreground bg-muted" : "text-muted-foreground hover:text-foreground hover:bg-muted/60"}`}
-                onClick={() => {
-                  const isPro = profile?.plan && profile.plan !== "free";
-                  if (!isPro) { setShowUpgradeDialog(true); return; }
-                  onRightPanelChange?.(null);
-                  if (!devMode) { onDevModeToggle?.(); onViewChange("code"); }
-                  else { onViewChange(viewMode === "code" ? "preview" : "code"); }
-                }}>
-                <Code2 className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{profile?.plan === "free" ? "Upgrade to unlock code editor" : "Code (⌘2)"}</TooltipContent>
-          </Tooltip>
-
-          {/* Cloud — deploy */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon"
-                className={`h-7 w-7 flex-shrink-0 transition-all ${rightPanel === "deploys" ? "text-foreground bg-muted" : "text-muted-foreground hover:text-foreground"}`}
-                onClick={() => onRightPanelChange?.(rightPanel === "deploys" ? null : "deploys")}>
-                <Cloud className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Deploy history</TooltipContent>
-          </Tooltip>
-
-          {/* Analytics */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon"
-                className={`h-7 w-7 flex-shrink-0 transition-all ${rightPanel === "analytics" ? "text-foreground bg-muted" : "text-muted-foreground hover:text-foreground"}`}
-                onClick={() => onRightPanelChange?.(rightPanel === "analytics" ? null : "analytics")}>
-                <BarChart2 className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Analytics</TooltipContent>
-          </Tooltip>
-
-          {/* … more — pinnable panels (exact Lovable overflow menu) */}
+          {/* Preview / Files / Code / More — Lovable-parity animated view switcher */}
           <DropdownMenu>
+          <ViewSwitcherPill
+            tabs={[
+              { id: "preview", label: "Preview", icon: Eye },
+              { id: "files", label: "Files", icon: FolderOpen },
+              { id: "code", label: "Code", icon: Code2 },
+            ] as ViewSwitcherTab[]}
+            activeId={
+              viewMode === "code" ? "code" : showFileTree ? "files" : "preview"
+            }
+            onSelect={(id) => {
+              if (id === "preview") { onRightPanelChange?.(null); onViewChange("preview"); return; }
+              if (id === "files") { onToggleFileTree(); return; }
+              if (id === "code") {
+                const isPro = profile?.plan && profile.plan !== "free";
+                if (!isPro) { setShowUpgradeDialog(true); return; }
+                onRightPanelChange?.(null);
+                if (!devMode) { onDevModeToggle?.(); onViewChange("code"); }
+                else { onViewChange(viewMode === "code" ? "preview" : "code"); }
+              }
+            }}
+          >
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground flex-shrink-0">
-                <MoreHorizontal className="h-3.5 w-3.5" />
-              </Button>
+              <button
+                type="button"
+                aria-label="More"
+                className="relative z-10 flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-full px-2 text-[var(--fg-tertiary)] outline-none transition-colors hover:text-[var(--fg-primary)] active:scale-[0.97]"
+              >
+                <MoreHorizontal className="h-4 w-4 shrink-0" />
+                <span className="text-sm font-[450] leading-none">More</span>
+              </button>
             </DropdownMenuTrigger>
+          </ViewSwitcherPill>
+
+          {/* Center URL bar — device · refresh · page · open-in-new-tab */}
+          <UrlBarPill
+            className="flex-1"
+            device={previewDevice}
+            onDeviceToggle={() => {
+              const next = previewDevice === "desktop" ? "mobile" : "desktop";
+              setPreviewDevice(next);
+              window.dispatchEvent(new CustomEvent("lifemark-preview-device", { detail: next }));
+            }}
+            onRefresh={() => window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"))}
+            onOpenNewTab={() => {
+              if (liveUrl) window.open(liveUrl, "_blank", "noopener,noreferrer");
+              else window.open(signedPreviewUrl || `/preview/${project.id}`, "_blank", "noopener,noreferrer");
+            }}
+          />
+
+            {/* More menu content — anchored to the pill's "More" segment trigger above */}
             <DropdownMenuContent align="center" className="w-52 p-1">
               {([
                 { id: "analytics" as LeftPanel, label: "Analytics",        icon: BarChart2 },
@@ -765,7 +757,7 @@ export function EditorTopBar({
               <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground flex-shrink-0"
                 onClick={() => {
                   if (liveUrl) window.open(liveUrl, "_blank", "noopener,noreferrer");
-                  else window.open(`/preview/${project.id}`, "_blank", "noopener,noreferrer");
+                  else window.open(signedPreviewUrl || `/preview/${project.id}`, "_blank", "noopener,noreferrer");
                 }}>
                 <Maximize2 className="h-3.5 w-3.5" />
               </Button>

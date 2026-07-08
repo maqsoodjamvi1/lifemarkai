@@ -18,6 +18,7 @@
  * run — verify in the editor once enabled; it has not been runtime-tested yet.
  */
 import type { ProjectFile } from "@/types/database";
+import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { preparePreviewCss, projectUsesTailwind, projectUsesTailwindV4 } from "@/lib/preview/build-fallback-html";
 
 // Pin a known esbuild-wasm version; the wasm is fetched lazily and cached by the
@@ -138,6 +139,7 @@ export interface EsbuildResult {
  * opaque eval failures of the regex engine.
  */
 export async function buildEsbuildHtml(files: ProjectFile[]): Promise<EsbuildResult> {
+  files = ensureCommonGeneratedSupportFiles(files);
   const byPath = new Map(files.map((f) => [f.path.replace(/\\/g, "/"), f.content ?? ""]));
   const entry = pickEntry(byPath);
   if (!entry) return { html: null, errors: ["No entry file (expected src/main.tsx or src/App.tsx)."] };

@@ -8,6 +8,7 @@ import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/system-prompts";
 import { claimDailyCredits } from "@/lib/credits";
 import { parseAIResponse } from "@/lib/ai/code-parser";
+import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { recordEditorIntelligenceBuild } from "@/lib/ai/editor-lenses/persistence";
 
 /**
@@ -48,6 +49,22 @@ export async function POST(req: NextRequest) {
 
   if (!projectId || !buildError) {
     return NextResponse.json({ error: "projectId and error are required" }, { status: 400 });
+  }
+
+  const { data: projectRow } = await (supabase as any)
+    .from("projects")
+    .select("environment")
+    .eq("id", projectId)
+    .single();
+
+  if (projectRow?.environment === "live") {
+    return NextResponse.json(
+      {
+        error: "This project is in the Live environment. Switch to Test to make changes, then publish them to Live.",
+        environment_locked: true,
+      },
+      { status: 423 },
+    );
   }
 
   await claimDailyCredits(supabase, user.id);
@@ -112,6 +129,7 @@ Return the fixed files as JSON.`;
     }
 
     const parsed = parseFixResponse(rawContent);
+    parsed.files = ensureCommonGeneratedSupportFiles(parsed.files, fileList);
 
     for (const fixedFile of parsed.files) {
       const { data: existing } = await (supabase as any)

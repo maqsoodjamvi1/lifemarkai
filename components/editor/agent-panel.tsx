@@ -14,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentStep } from "@/lib/ai/agent";
 import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
+import { AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
 import type { ProjectFile } from "@/types/database";
 
 interface AgentPanelProps {
@@ -256,7 +257,7 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
           );
         }
         if (res.status === 402) {
-          throw new Error("Insufficient credits — agent runs cost 5 credits.");
+          throw new Error(`Insufficient credits — agent runs need at least ${AGENT_MIN_CREDITS} credits.`);
         }
         throw new Error(`Agent API error: ${res.status}`);
       }

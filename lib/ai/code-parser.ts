@@ -1,4 +1,5 @@
 import { salvageFilesFromStreamJson } from "./streaming-file-extractor";
+import { ensureCommonGeneratedSupportFiles } from "./generated-support-files";
 
 export interface ValidationError {
   type: string;
@@ -492,17 +493,21 @@ function importedReactNames(content: string): Set<string> {
 }
 
 function findDuplicateDeclarations(content: string): string[] {
-  const seen = new Set<string>();
+  const seen = new Map<string, Set<string>>();
   const duplicates = new Set<string>();
   let depth = 0;
 
   for (const line of content.split("\n")) {
     const beforeDepth = depth;
-    const match = line.match(/^\s*(?:export\s+)?(?:const|let|var|function|class|interface|type)\s+([A-Za-z_$][\w$]*)\b/);
+    const match = line.match(/^\s*(?:export\s+)?(const|let|var|function|class|interface|type)\s+([A-Za-z_$][\w$]*)\b/);
     if (beforeDepth === 0 && match) {
-      const name = match[1];
-      if (seen.has(name)) duplicates.add(name);
-      else seen.add(name);
+      const kind = match[1];
+      const name = match[2];
+      const namespace = kind === "type" || kind === "interface" ? "type" : "value";
+      const seenNamespaces = seen.get(name) ?? new Set<string>();
+      if (seenNamespaces.has(namespace)) duplicates.add(name);
+      seenNamespaces.add(namespace);
+      seen.set(name, seenNamespaces);
     }
 
     const stripped = line
@@ -535,9 +540,10 @@ function hasDefaultExport(content: string): boolean {
 }
 
 function parseImportClause(content: string, source: string): string | null {
-  const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = content.match(new RegExp(`import\\s+([\\s\\S]*?)\\s+from\\s+['"]${escaped}['"]`));
-  return match?.[1]?.trim() ?? null;
+  for (const match of content.matchAll(/import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"]/g)) {
+    if (match[2] === source) return match[1]?.trim() ?? null;
+  }
+  return null;
 }
 
 function parseNamedImports(clause: string): string[] {
@@ -605,6 +611,7 @@ export function validateGeneratedFiles(
   files: ParsedFile[],
   existingFiles: ParsedFile[] = []
 ): ValidationError[] {
+  files = ensureCommonGeneratedSupportFiles(files, existingFiles);
   const errors: ValidationError[] = [];
   const allPaths = new Set([
     ...files.map((f) => f.path),
@@ -885,6 +892,31 @@ export function validateGeneratedFiles(
 
     for (const match of pkgImports) {
       if (match[1].startsWith("@/")) continue;
+      const projectTarget = resolveImportFile(pathIndex, match[1]);
+      if (projectTarget) {
+        const clause = parseImportClause(content, match[1]);
+        if (clause) {
+          const names = exportedNames(projectTarget.content);
+          const missingNames = parseNamedImports(clause).filter((name) => !names.has(name));
+          if (missingNames.length > 0) {
+            errors.push({
+              type: "missing_named_export",
+              file: filePath,
+              message: `Imports { ${missingNames.join(", ")} } from '${match[1]}', but ${projectTarget.path} does not export those name(s).`,
+              severity: "error",
+            });
+          }
+          if (hasDefaultImport(clause) && !hasDefaultExport(projectTarget.content)) {
+            errors.push({
+              type: "missing_default_export",
+              file: filePath,
+              message: `Imports a default export from '${match[1]}', but ${projectTarget.path} has no default export.`,
+              severity: "error",
+            });
+          }
+        }
+        continue;
+      }
       const pkg = match[1].split("/").slice(0, match[1].startsWith("@") ? 2 : 1).join("/");
       if (
         pkg === "react" || pkg === "react-dom" || // always available

@@ -9,6 +9,10 @@
  *   - full landing page w/ images  ~2.0
  * Costs are rounded to 0.05 and clamped to [0.5, 5].
  */
+
+/** Minimum balance to start an agent run (one step debits ~2 credits). */
+export const AGENT_MIN_CREDITS = 2;
+
 export function computeCreditCost(params: {
   mode: string;
   filesGenerated?: number;

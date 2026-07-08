@@ -27,6 +27,8 @@ import { filesContentSignature } from "@/lib/preview/files-signature";
 import { resolvePreviewEngine, WC_UNAVAILABLE_KEY, type PreviewEngine } from "@/lib/preview/resolve-preview-engine";
 import { useSandboxPreview } from "@/lib/preview/use-sandbox-preview";
 import { usePreviewErrorGuard } from "@/hooks/use-preview-error-guard";
+import { isNoisePreviewError } from "@/lib/preview/preview-error-bridge";
+import { appendImportDiagnosis, diagnoseBrokenImports } from "@/lib/preview/diagnose-imports";
 import { PreviewHealingOverlay } from "./preview-healing-overlay";
 import Link from "next/link";
 
@@ -325,37 +327,6 @@ function TabletFrame({ children }: { children: React.ReactNode }) {
   );
 }
 
-function BrowserFrame({ children, url }: { children: React.ReactNode; url: string }) {
-  return (
-    <div className="flex flex-col h-full">
-      {/* Browser chrome — Lovable style */}
-      <div className="flex items-center gap-2 px-3 h-9 bg-muted/40 border-b border-border shrink-0">
-        {/* Traffic lights */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <div className="w-3 h-3 rounded-full bg-[#ff5f57] border border-[#e0443e]/60" />
-          <div className="w-3 h-3 rounded-full bg-[#febc2e] border border-[#d4a017]/60" />
-          <div className="w-3 h-3 rounded-full bg-[#28c840] border border-[#1aab29]/60" />
-        </div>
-        {/* Nav arrows */}
-        <div className="flex items-center gap-0.5 shrink-0">
-          <button className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors" title="Back">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M7.5 2L3.5 6L7.5 10"/></svg>
-          </button>
-          <button className="p-1 rounded text-muted-foreground hover:text-foreground transition-colors" title="Forward">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M4.5 2L8.5 6L4.5 10"/></svg>
-          </button>
-        </div>
-        {/* URL bar */}
-        <div className="flex-1 flex items-center gap-1.5 bg-background border border-border rounded-md px-2.5 py-1 mx-1">
-          <div className="w-2 h-2 rounded-full bg-emerald-500/50 shrink-0" />
-          <span className="text-[11px] text-muted-foreground font-mono truncate flex-1 text-center">{url}</span>
-        </div>
-      </div>
-      <div className="flex-1 overflow-hidden">{children}</div>
-    </div>
-  );
-}
-
 export function PreviewPanel({
   files,
   projectId,
@@ -417,27 +388,42 @@ export function PreviewPanel({
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(false);
 
+  const importDiagnosis = useMemo(() => {
+    const issues = diagnoseBrokenImports(files);
+    return issues.length > 0 ? issues.map((i) => `• ${i}`).join("\n") : null;
+  }, [files]);
+
   const errorGuard = usePreviewErrorGuard({
     iframeRef: unifiedIframeRef,
     onHealRequest: (prompt) => {
-      onFixWithAI?.(prompt);
+      onFixWithAI?.(appendImportDiagnosis(prompt, files));
     },
   });
 
   const handleFixWithAI = useCallback(
     (error: string) => {
-      errorGuard.startHealing();
-      onFixWithAI?.(error);
+      if (errorGuard.report?.errors.length) {
+        errorGuard.startHealing();
+      } else if (!isNoisePreviewError(error)) {
+        onFixWithAI?.(appendImportDiagnosis(`Fix this preview error:\n\n${error}`, files));
+      }
     },
     [errorGuard, onFixWithAI],
   );
 
   useEffect(() => {
     function onHealStart() {
-      errorGuard.startHealing();
+      errorGuard.enterHealingPhase();
+    }
+    function onHealFailed() {
+      errorGuard.failHealing();
     }
     window.addEventListener("lifemark-preview-heal-start", onHealStart);
-    return () => window.removeEventListener("lifemark-preview-heal-start", onHealStart);
+    window.addEventListener("lifemark-preview-heal-failed", onHealFailed);
+    return () => {
+      window.removeEventListener("lifemark-preview-heal-start", onHealStart);
+      window.removeEventListener("lifemark-preview-heal-failed", onHealFailed);
+    };
   }, [errorGuard]);
 
   useEffect(() => {
@@ -574,11 +560,14 @@ export function PreviewPanel({
         setConsoleLines((prev) => [...prev.slice(-99), { type, text }]);
         if (type === "success") {
           errorGuard.clearErrors();
+          errorGuard.completeHealing();
+          window.dispatchEvent(new CustomEvent("lifemark-preview-heal-done"));
           setActiveError(null);
           setPreviewCompileFailed(false);
           setPreviewCompileOk(true);
           setErrorDismissed(false);
         } else if (type === "error") {
+          if (isNoisePreviewError(text)) return;
           if (outOfCredits) {
             setPreviewCompileFailed(true);
             setPreviewCompileOk(false);
@@ -681,9 +670,9 @@ export function PreviewPanel({
     const timer = window.setTimeout(() => {
       previewFilesSigRef.current = sig;
       setPreviewFiles(files);
-    }, 500);
+    }, isGenerating ? 120 : 500);
     return () => window.clearTimeout(timer);
-  }, [files]);
+  }, [files, isGenerating]);
 
   const template = useMemo(() => detectTemplate(files), [files]);
   const sandpackFiles = useMemo(() => {
@@ -913,13 +902,11 @@ export function PreviewPanel({
    * Wrap `children` in the appropriate device frame (or nothing for desktop).
    */
   function withDeviceFrame(children: React.ReactNode): React.ReactNode {
-    const previewUrl = previewEngine === "webcontainer"
-      ? `webcontainer://project/${projectId ?? "local"}`
-      : `preview://project/${projectId ?? "local"}`;
-
     if (device === "mobile" && showFrame) return <PhoneFrame>{children}</PhoneFrame>;
     if (device === "tablet" && showFrame) return <TabletFrame>{children}</TabletFrame>;
-    if (device === "desktop") return <BrowserFrame url={previewUrl}>{children}</BrowserFrame>;
+    // Desktop: flat, chrome-free preview (Lovable-minimal). Device + URL controls
+    // already live in the slim toolbar above — no macOS window skeuomorphism.
+    if (device === "desktop") return <div className="w-full h-full overflow-hidden bg-white">{children}</div>;
     // no-frame mobile/tablet
     return (
       <div className="flex items-start justify-center w-full h-full bg-muted/20 overflow-auto p-4">
@@ -1092,22 +1079,25 @@ export function PreviewPanel({
               <TooltipContent>Console</TooltipContent>
             </Tooltip>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => setShowFrame((v) => !v)}
-                  className={`p-1.5 rounded-md transition-all ${
-                    showFrame && device !== "desktop"
-                      ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
-                  }`}
-                  disabled={device === "desktop"}
-                >
-                  <Frame className="w-3.5 h-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>Toggle device frame</TooltipContent>
-            </Tooltip>
+            {/* Device-frame toggle: only meaningful for mobile/tablet — hidden
+                on desktop, which now renders flat (Lovable-minimal). */}
+            {device !== "desktop" && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={() => setShowFrame((v) => !v)}
+                    className={`p-1.5 rounded-md transition-all ${
+                      showFrame
+                        ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                    }`}
+                  >
+                    <Frame className="w-3.5 h-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Toggle device frame</TooltipContent>
+              </Tooltip>
+            )}
 
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1354,6 +1344,7 @@ export function PreviewPanel({
         <PreviewHealingOverlay
           phase={errorGuard.phase}
           report={errorGuard.report}
+          importDiagnosis={importDiagnosis}
           onRetry={() => errorGuard.startHealing()}
           onDismiss={() => errorGuard.clearErrors()}
         />

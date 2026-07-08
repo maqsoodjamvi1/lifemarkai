@@ -1,4 +1,5 @@
 import type { ProjectFile } from "@/types/database";
+import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { generateFallbackUtilityCss } from "@/lib/preview/generate-fallback-utilities";
 import {
   isNextAppProject,
@@ -12,7 +13,7 @@ import {
 } from "@/lib/preview/next-app-preview";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "26";
+export const PREVIEW_ENGINE_REV = "30";
 
 /** Strip PostCSS-only directives — invalid in a raw <style> tag. */
 export function sanitizePreviewCss(css: string): string {
@@ -90,6 +91,7 @@ const SHADCN_TAILWIND_CDN_CONFIG = `tailwind.config = {
 };`;
 
 export function buildFallbackHtml(files: ProjectFile[]): string {
+  files = ensureCommonGeneratedSupportFiles(files);
   // Static HTML project — serve as-is
   const indexHtml = files.find(
     (f) => f.path === "index.html" || f.path === "/index.html"
@@ -259,9 +261,9 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     return out.join("/");
   }
 
-  /** Default import binding — {} from a failed require is NOT a valid component. */
+  /** Default import binding — missing module or non-component export → undefined (shows placeholder). */
   const defaultImportExpr = (modVar: string, binding: string) =>
-    `const ${binding} = (function(){var m=${modVar};var c=m&&(m.default!==undefined?m.default:m);return typeof c==='function'?c:function(){return null;};})();`;
+    `const ${binding} = (function(){var m=${modVar};if(!m||typeof m!=='object')return undefined;var c=m.default!==undefined?m.default:m;return typeof c==='function'?c:undefined;})();`;
 
   /**
    * Remove // and /* *\/ comments, string-aware so we never touch text inside
@@ -770,9 +772,17 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
   }
   function relay(type, args) {
     var text = Array.from(args).map(function(a) {
+      if (a && a.stack) return a.stack;
+      if (typeof a === 'string') return a;
+      if (a && a.message) return a.message;
       try { return typeof a === 'object' ? JSON.stringify(a) : String(a); } catch(e) { return String(a); }
-    }).join(' ');
+    }).filter(Boolean).join(' ');
     text = nameScript(text);
+    if (type === 'error') {
+      var m = text.trim();
+      if (!m || m === '{}' || m === '[]' || m === '[object Object]') return;
+      if (m.length < 4 && !/error|fail/i.test(m)) return;
+    }
     try { window.parent.postMessage({ source: 'lifemark-preview', type: type, text: text }, '*'); } catch(e) {}
   }
   console.log   = function() { _log.apply(console, arguments);  relay('log',   arguments); };
@@ -802,14 +812,17 @@ window.__Mrequire = function(path) {
     return out.join('/');
   }
   var norm = normPreviewPath(path);
-  var candidates = [path, norm, 'src/' + norm.replace(/^src\\//, ''), norm + '.tsx', norm + '.jsx'];
+  var candidates = [path, norm, 'src/' + norm.replace(/^src\\//, ''), norm + '.tsx', norm + '.ts', norm + '.jsx', norm + '.js'];
   // Next-style "@/*" → "./*" alias (project root, NO src/): normPreviewPath
   // mapped '@/components/x' to 'src/components/x', so ALSO try the root-level
   // path (+ index files). Appended AFTER the original candidates so
   // src/-rooted projects keep winning when both exist.
   var rootAlt = norm.replace(/^src\\//, '');
-  if (rootAlt !== norm) candidates.push(rootAlt, rootAlt + '.tsx', rootAlt + '.jsx');
-  candidates.push(norm + '/index', rootAlt + '/index');
+  if (rootAlt !== norm) candidates.push(rootAlt, rootAlt + '.tsx', rootAlt + '.ts', rootAlt + '.jsx', rootAlt + '.js');
+  candidates.push(
+    norm + '/index', norm + '/index.tsx', norm + '/index.ts', norm + '/index.jsx', norm + '/index.js',
+    rootAlt + '/index', rootAlt + '/index.tsx', rootAlt + '/index.ts', rootAlt + '/index.jsx', rootAlt + '/index.js'
+  );
   for (var i = 0; i < candidates.length; i++) {
     if (window.__M[candidates[i]]) return window.__M[candidates[i]];
   }
@@ -849,6 +862,8 @@ window.__Mrequire = function(path) {
   // Radix UI — return empty proxy so destructuring doesn't crash
   if (path.startsWith('@radix-ui/')) return new Proxy({}, { get: function(_,k) { return k === '__esModule' ? true : function(){return null;}; } });
   console.warn('[preview] module not found:', path);
+  if (!window.__lmMissingModules) window.__lmMissingModules = [];
+  window.__lmMissingModules.push(path);
   return {};
 };
 // Inline stubs for packages without CDN UMD builds
@@ -1268,7 +1283,9 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
         // placeholder + warn instead, so the rest of the app still shows.
         if (window.React && !React.__lmGuarded) {
           var __lmOrigCreate = React.createElement;
+          var __lmMissingCount = 0;
           function __LmMissing() {
+            __lmMissingCount++;
             return __lmOrigCreate('span', { style: { display: 'inline-block', padding: '1px 6px', margin: '2px', border: '1px dashed #f59e0b', borderRadius: '4px', color: '#b45309', background: '#fffbeb', font: '11px ui-monospace, monospace' } }, '\\u26A0 missing component');
           }
           React.createElement = function(type) {
@@ -1280,6 +1297,7 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
             return __lmOrigCreate.apply(React, arguments);
           };
           React.__lmGuarded = true;
+          window.__lmMissingCount = function() { return __lmMissingCount; };
         }
         var root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(React.createElement(React.StrictMode, null, React.createElement(AppComp)));
@@ -1295,7 +1313,24 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
         setTimeout(refreshTailwind, 0);
         setTimeout(refreshTailwind, 100);
         setTimeout(refreshTailwind, 400);
-        try { window.parent.postMessage({ source: 'lifemark-preview', type: 'success', text: 'render ok' }, '*'); } catch (e) {}
+        setTimeout(function() {
+          var counted = (typeof window.__lmMissingCount === 'function') ? window.__lmMissingCount() : 0;
+          var domHits = (((document.body && document.body.innerText) || '').match(/\\u26A0 missing component|missing component/gi) || []).length;
+          var missing = Math.max(counted, domHits);
+          if (missing > 0) {
+            var mods = window.__lmMissingModules || [];
+            var modDetail = mods.length ? (' Missing module path(s): ' + mods.join(', ') + '.') : '';
+            try {
+              window.parent.postMessage({
+                source: 'lifemark-preview',
+                type: 'error',
+                text: missing + ' component(s) failed to resolve (shown as \\u26A0 missing component).' + modDetail + ' Check imports/exports or create the missing file(s).'
+              }, '*');
+            } catch (e) {}
+            return;
+          }
+          try { window.parent.postMessage({ source: 'lifemark-preview', type: 'success', text: 'render ok' }, '*'); } catch (e) {}
+        }, 600);
       } catch (err) { showError('${entryPath}', (err && err.message) || err); }
     }
     function tailwindRuntimeReady() {

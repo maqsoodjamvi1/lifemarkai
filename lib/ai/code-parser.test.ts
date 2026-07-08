@@ -11,6 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { assessGenerationQuality, parseAIResponse, validateGeneratedFiles } from "./code-parser.ts";
+import { ensureCommonGeneratedSupportFiles } from "./generated-support-files.ts";
 
 test("extracts files from backtick-labeled prose+fence response (Lovable style)", () => {
   // Exact shape the user pasted when reporting the bug:
@@ -190,6 +191,42 @@ test("validateGeneratedFiles resolves @ alias imports against src files", () => 
   ]);
 
   assert.ok(!errors.some((e) => e.type === "broken_alias_import" || e.type === "missing_package"));
+});
+
+test("ensureCommonGeneratedSupportFiles creates missing UI kit and type files", () => {
+  const files = ensureCommonGeneratedSupportFiles([
+    {
+      path: "src/App.tsx",
+      language: "typescriptreact",
+      content: [
+        "import { Card, CardContent } from 'src/components/ui/Card';",
+        "import { Button } from 'src/components/ui/Button';",
+        "import { Badge } from 'src/components/ui/Badge';",
+        "import type { Product, CartItem } from 'src/lib/types';",
+        "const product: Product = { name: 'Desk' };",
+        "const cartItem: CartItem = { product };",
+        "export default function App() {",
+        "  return <Card><CardContent><Badge>New</Badge><Button>{String(Boolean(cartItem))}</Button></CardContent></Card>;",
+        "}",
+      ].join("\n"),
+    },
+  ]);
+
+  const paths = new Set(files.map((file) => file.path));
+  assert.ok(paths.has("src/components/ui/Card.tsx"));
+  assert.ok(paths.has("src/components/ui/Button.tsx"));
+  assert.ok(paths.has("src/components/ui/Badge.tsx"));
+  assert.ok(paths.has("src/lib/types.ts"));
+
+  const errors = validateGeneratedFiles(files, [
+    { path: "index.html", language: "html", content: "<div id=\"root\"></div><script type=\"module\" src=\"/src/main.tsx\"></script>" },
+    { path: "vite.config.ts", language: "typescript", content: "" },
+    { path: "tsconfig.json", language: "json", content: "{}" },
+    { path: "package.json", language: "json", content: "{\"scripts\":{\"dev\":\"vite\"},\"dependencies\":{\"@vitejs/plugin-react\":\"latest\",\"vite\":\"latest\",\"react\":\"latest\",\"react-dom\":\"latest\"}}" },
+    { path: "src/main.tsx", language: "typescriptreact", content: "import App from './App'; export default App;" },
+  ]);
+
+  assert.ok(!errors.some((e) => e.type === "missing_package" || e.type === "broken_import" || e.type === "missing_named_export"), JSON.stringify(errors));
 });
 
 test("validateGeneratedFiles catches duplicate top-level declarations", () => {

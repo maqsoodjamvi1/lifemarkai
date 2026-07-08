@@ -359,6 +359,11 @@ export function resolvePromptMode(
     return "chat";
   }
 
+  // Preview/runtime errors → surgical fix modes (before generic agent routing on build tab).
+  if (ctx.hasPreviewError && FIX_KEYWORDS.test(trimmed)) {
+    return trimmed.length < 120 && PATCH_KEYWORDS.test(trimmed) ? "patch" : "build";
+  }
+
   // Honor Build tab — on existing apps, code changes go through agent (Lovable default).
   if (ctx.currentMode === "build") {
     if (stageFromCtx(ctx) === "app" && isCodeChangeIntent(trimmed)) {
@@ -372,10 +377,6 @@ export function resolvePromptMode(
 
   if (CHAT_KEYWORDS.test(trimmed) && !shouldAutoBuildMode(trimmed)) {
     return "chat";
-  }
-
-  if (ctx.hasPreviewError && FIX_KEYWORDS.test(trimmed)) {
-    return trimmed.length < 120 && PATCH_KEYWORDS.test(trimmed) ? "patch" : "build";
   }
 
   if (PLAN_KEYWORDS.test(trimmed) && !shouldAutoBuildMode(trimmed)) {
@@ -496,6 +497,12 @@ export function getPreviewErrorPrompts(error: string): string[] {
   }
   if (short.includes("syntax")) {
     prompts.push("Fix the syntax error in the generated code");
+  }
+  if (short.includes("map") || short.includes("undefined")) {
+    prompts.push("Guard .map() calls — use (items ?? []).map() and default context state to []");
+  }
+  if (short.includes("missing component") || short.includes("failed to resolve")) {
+    prompts.push("Fix import/export mismatch — create missing files or align default vs named exports");
   }
   prompts.push("Switch to Plan mode and investigate root cause");
   return prompts.slice(0, 3);

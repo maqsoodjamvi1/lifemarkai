@@ -21,6 +21,7 @@ import { pickStarterTemplate } from "@/lib/templates/starter-catalog";
 import { buildDesignDirectionBlock } from "@/lib/ai/design-directions";
 import { applyPatches, parsePatchResponse } from "@/lib/ai/patch-applier";
 import { parseAIResponse, validateGeneratedFiles, assessGenerationQuality, shouldAutoFix, needsBuildContinuation, type ParsedFile } from "@/lib/ai/code-parser";
+import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { StreamingFileExtractor } from "@/lib/ai/streaming-file-extractor";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { validateApiKey } from "@/app/api/keys/route";
@@ -1025,11 +1026,11 @@ The user has expressed frustration. Do the following:
             }
           } else if (mode === "build") {
             const parsed = parseAIResponse(fullContent);
-            let finalFiles = parsed.files;
+            const existingFiles = (files as ParsedFile[]) ?? [];
+            let finalFiles = ensureCommonGeneratedSupportFiles(parsed.files, existingFiles);
 
             // ── Validation pass ───────────────────────────────────────────
             if (finalFiles.length > 0) {
-              const existingFiles = (files as ParsedFile[]) ?? [];
               // Correctness errors (broken imports, missing config) + type-agnostic
               // RICHNESS errors (too thin / sparse) — both feed the auto-fix loop,
               // so a structurally-valid-but-empty app gets enriched, not shipped.
@@ -1092,7 +1093,7 @@ The user has expressed frustration. Do the following:
                     // Merge repaired files on top of originals
                     const mergedMap = new Map(finalFiles.map((f) => [f.path, f]));
                     for (const rf of repaired.files) mergedMap.set(rf.path, rf);
-                    finalFiles = Array.from(mergedMap.values());
+                    finalFiles = ensureCommonGeneratedSupportFiles(Array.from(mergedMap.values()), existingFiles);
                     tokensUsed += 1000; // rough estimate for fix pass
 
                     const remainingErrors = validateGeneratedFiles(finalFiles, existingFiles);
@@ -1139,7 +1140,7 @@ The user has expressed frustration. Do the following:
                 });
                 const retryParsed = parseAIResponse(retryContent);
                 if (retryParsed.files.length > 0) {
-                  finalFiles = retryParsed.files;
+                  finalFiles = ensureCommonGeneratedSupportFiles(retryParsed.files, existingFiles);
                   fullContent = retryContent; // persist the output that actually contained files
                   tokensUsed += 1500; // rough estimate for the retry pass
                 } else {

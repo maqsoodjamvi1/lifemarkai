@@ -108,6 +108,27 @@ export default function App(){ return <List/>; }`),
       return errs;
     },
   },
+  {
+    name: "missing common UI kit imports are synthesized before preview",
+    files: [
+      f("src/App.tsx", `import { Card, CardContent } from "src/components/ui/Card";
+import { Button } from "src/components/ui/Button";
+import { Badge } from "src/components/ui/Badge";
+import { Product } from "src/lib/types";
+const product: Product = { name: "Desk" };
+export default function App(){ return <Card><CardContent><Badge>New</Badge><Button>{String(Boolean(product))}</Button></CardContent></Card>; }`),
+      f("src/main.tsx", `import App from "./App"; export default App;`),
+    ],
+    assert: (html) => {
+      const errs: string[] = [];
+      for (const path of ["src/components/ui/Card.tsx", "src/components/ui/Button.tsx", "src/components/ui/Badge.tsx", "src/lib/types.ts"]) {
+        if (!html.includes(`data-file="${path}"`)) errs.push(`support file not synthesized: ${path}`);
+      }
+      if (!html.includes("__Mrequire('src/lib/types')")) errs.push("types import was not rewritten to a runtime resolver call");
+      if (!html.includes("norm + '.ts'")) errs.push("module resolver does not try .ts candidates");
+      return errs;
+    },
+  },
 ];
 
 let passed = 0;

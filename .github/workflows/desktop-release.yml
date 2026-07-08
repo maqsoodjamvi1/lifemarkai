@@ -1,0 +1,91 @@
+# Desktop release pipeline — builds + packages + publishes the LifemarkAI
+# desktop apps (macOS / Windows / Linux) with electron-builder.
+#
+# The scaffolding (electron/main.js, preload.js, electron-builder.yml,
+# capacitor.config.ts, icons) already exists — this workflow turns it into
+# shippable installers.
+#
+# Trigger: push a tag like `desktop-v1.2.3`, or run manually.
+#
+# Code-signing is GATED ON SECRETS (see docs/desktop-release-runbook.md):
+#   macOS : CSC_LINK, CSC_KEY_PASSWORD, APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+#   Windows: WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD
+#   Publish: GH_TOKEN (push access to the releases repo in electron-builder.yml `publish`)
+# Without the signing secrets the build still runs and produces UNSIGNED
+# artifacts (fine for internal testing; stores/Gatekeeper require signing).
+
+name: Desktop Release
+
+on:
+  push:
+    tags: ["desktop-v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to GitHub Releases (else build artifacts only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: windows-latest
+            platform: win
+          - os: ubuntu-latest
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The desktop app is a thin shell that loads the hosted web app, so no
+      # Next.js build is bundled — electron-builder only packages electron/** +
+      # icons (see `files` in electron-builder.yml).
+      - name: Build & package (${{ matrix.platform }})
+        env:
+          # Publishing (only when releasing)
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          # macOS signing + notarization (absent → unsigned build)
+          CSC_LINK: ${{ matrix.platform == 'mac' && secrets.CSC_LINK || secrets.WIN_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ matrix.platform == 'mac' && secrets.CSC_KEY_PASSWORD || secrets.WIN_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          PUBLISH="never"
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.publish }}" = "true" ]; then
+            if [ -n "${GH_TOKEN}" ]; then PUBLISH="always"; fi
+          fi
+          echo "Packaging ${{ matrix.platform }} (publish=$PUBLISH)"
+          npx electron-builder --${{ matrix.platform }} \
+            --config electron/electron-builder.yml \
+            --publish "$PUBLISH"
+
+      - name: Upload installers as workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifemarkai-desktop-${{ matrix.platform }}
+          path: |
+            dist-electron/*.dmg
+            dist-electron/*.zip
+            dist-electron/*.exe
+            dist-electron/*.AppImage
+            dist-electron/*.deb
+            dist-electron/*.rpm
+          if-no-files-found: ignore

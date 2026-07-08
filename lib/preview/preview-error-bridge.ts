@@ -3,10 +3,31 @@
  * bundler errors and post them to the parent editor for self-healing loops.
  */
 
+/** Skip React/console noise that is not actionable for the healing loop. */
+export function isNoisePreviewError(message: string): boolean {
+  const m = message.trim();
+  if (!m) return true;
+  if (m === "{}" || m === "[]" || m === "[object Object]") return true;
+  if (/^Unhandled promise rejection:\s*(\{\}|undefined|null)\s*$/i.test(m)) return true;
+  if (m.length < 4 && !/error|fail/i.test(m)) return true;
+  return false;
+}
+
+/** Preview rendered undefined components (bad import / export mismatch). */
+export function isMissingComponentError(message: string): boolean {
+  return /missing component|failed to resolve|export mismatch|undefined component/i.test(message);
+}
+
 export const PREVIEW_ERROR_BRIDGE_SCRIPT = `(function() {
   if (window.parent === window) return;
 
   var sent = {};
+  function isNoise(msg) {
+    var m = String(msg || "").trim();
+    if (!m || m === "{}" || m === "[]" || m === "[object Object]") return true;
+    if (m.length < 4 && !/error|fail/i.test(m)) return true;
+    return false;
+  }
   function dedupe(msg) {
     if (sent[msg]) return false;
     sent[msg] = 1;
@@ -14,7 +35,7 @@ export const PREVIEW_ERROR_BRIDGE_SCRIPT = `(function() {
   }
 
   function emit(kind, message, extra) {
-    if (!message || !dedupe(kind + ":" + message)) return;
+    if (isNoise(message) || !dedupe(kind + ":" + message)) return;
     try {
       window.parent.postMessage({
         source: "lifemark-preview-errors",
@@ -86,8 +107,9 @@ export function isBundlerError(message: string): boolean {
 }
 
 export function formatErrorsForHealing(errors: PreviewRuntimeError[]): string {
-  if (errors.length === 0) return "";
-  return errors
+  const actionable = errors.filter((e) => !isNoisePreviewError(e.message));
+  if (actionable.length === 0) return "";
+  return actionable
     .map((e, i) => {
       const loc = e.filename ? ` (${e.filename}:${e.lineno ?? "?"})` : "";
       return `${i + 1}. [${e.kind}] ${e.message}${loc}`;
@@ -96,10 +118,28 @@ export function formatErrorsForHealing(errors: PreviewRuntimeError[]): string {
 }
 
 export function buildHealingPrompt(errors: PreviewRuntimeError[]): string {
-  const log = formatErrorsForHealing(errors);
+  const actionable = errors.filter((e) => !isNoisePreviewError(e.message));
+  const log = formatErrorsForHealing(actionable);
+  if (!log) return "";
+  const hasMapError = actionable.some(
+    (e) => /\.map\b/i.test(e.message) || /reading 'map'/i.test(e.message),
+  );
+  const hasMissingComponent = actionable.some((e) => isMissingComponentError(e.message));
+  const hints: string[] = [];
+  if (hasMissingComponent) {
+    hints.push(
+      'One or more components failed to import — verify each file exists, default vs named exports match (e.g. `import Foo from` needs `export default Foo`), and paths are correct. Create any missing component files.',
+    );
+  }
+  if (hasMapError) {
+    hints.push(
+      "One error is `.map()` on undefined — guard arrays before mapping (e.g. `(items ?? []).map(...)`) and ensure context/hooks return `[]` not `undefined`.",
+    );
+  }
   return [
     "Fix the preview/runtime errors below. Apply minimal surgical patches only.",
     "Use <file_update> with <search> and <replace> when possible.",
+    ...hints,
     "",
     "```",
     log,
@@ -112,9 +152,11 @@ export function parsePreviewErrorMessage(data: unknown): PreviewRuntimeError | n
   const d = data as Record<string, unknown>;
   if (d.source !== "lifemark-preview-errors" || d.type !== "preview-error") return null;
   const extra = (d.extra && typeof d.extra === "object" ? d.extra : {}) as Record<string, unknown>;
+  const message = String(d.message ?? "");
+  if (isNoisePreviewError(message)) return null;
   return {
     kind: (d.kind as PreviewErrorKind) ?? "runtime",
-    message: String(d.message ?? ""),
+    message,
     filename: extra.filename as string | undefined,
     lineno: extra.lineno as number | undefined,
     colno: extra.colno as number | undefined,

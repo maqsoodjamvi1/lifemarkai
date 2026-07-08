@@ -788,6 +788,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                   }}
                   onOpenPanel={handleOpenPanel}
                   onFocusPreview={handleFocusPreview}
+                  securityIssueCount={securityIssueCount}
                 />
                 {leftChatOverlay === "history" && (
                   <div className="absolute inset-0 z-10 flex flex-col bg-background">
@@ -996,6 +997,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 onApprovePlan={() => setEditorMode("build")}
                 onOpenPanel={handleOpenPanel}
                 onFocusPreview={handleFocusPreview}
+                securityIssueCount={securityIssueCount}
               />
               {leftChatOverlay === "history" && (
                 <div className="absolute inset-0 z-10 flex flex-col bg-background">

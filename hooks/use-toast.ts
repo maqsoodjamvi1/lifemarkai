@@ -1,51 +1,40 @@
-// Adapted from shadcn/ui toast hook
-import { useCallback, useEffect, useState } from "react";
+// Toast API — Sonner-backed shim.
+//
+// Historically LifemarkAI shipped a bespoke in-memory toast store. This module
+// preserves the exact same public API — `toast({ title, description, variant })`
+// and `useToast()` — but routes every call to Sonner, so all existing call
+// sites keep working unchanged while gaining Lovable-parity toast visuals.
+import { toast as sonnerToast } from "sonner";
 
 export interface Toast {
-  id: string;
+  id?: string;
   title?: string;
   description?: string;
   variant?: "default" | "destructive";
   duration?: number;
 }
 
-let toastCount = 0;
-
-// Simple in-memory toast state (lifted to module level for cross-component access)
-const listeners: Array<(toasts: Toast[]) => void> = [];
-let toasts: Toast[] = [];
-
-function dispatch(toast: Toast) {
-  toasts = [...toasts, toast];
-  listeners.forEach((l) => l(toasts));
-
-  setTimeout(() => {
-    toasts = toasts.filter((t) => t.id !== toast.id);
-    listeners.forEach((l) => l(toasts));
-  }, toast.duration ?? 4000);
+/** Standalone toast — safe to call outside React components. */
+export function toast(props: Omit<Toast, "id">): void {
+  const { title, description, variant, duration } = props;
+  const message = title ?? description ?? "";
+  // When only a description was supplied, promote it to the message line.
+  const options = {
+    description: title ? description : undefined,
+    duration,
+  };
+  if (variant === "destructive") {
+    sonnerToast.error(message, options);
+  } else {
+    sonnerToast(message, options);
+  }
 }
 
-// Standalone toast function (can be called outside React components)
-export function toast(props: Omit<Toast, "id">) {
-  dispatch({ ...props, id: `toast-${++toastCount}` });
-}
-
+/**
+ * Hook form kept for backwards compatibility. `toasts` is retained (empty) so
+ * legacy consumers that destructured it don't break; Sonner renders its own
+ * queue via the <Toaster /> in the root layout.
+ */
 export function useToast() {
-  const [mountedToasts, setMountedToasts] = useState<Toast[]>(toasts);
-
-  useEffect(() => {
-    listeners.push(setMountedToasts);
-    setMountedToasts(toasts);
-
-    return () => {
-      const idx = listeners.indexOf(setMountedToasts);
-      if (idx > -1) listeners.splice(idx, 1);
-    };
-  }, []);
-
-  const toastFn = useCallback((props: Omit<Toast, "id">) => {
-    dispatch({ ...props, id: `toast-${++toastCount}` });
-  }, []);
-
-  return { toast: toastFn, toasts: mountedToasts };
+  return { toast, toasts: [] as Toast[] };
 }
