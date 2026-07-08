@@ -23,6 +23,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ChatTiptapInput, type ChatInputHandle } from "./chat-tiptap-input";
+import { sanitizeSvg } from "@/lib/security/sanitize";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { createClient } from "@/lib/supabase/client";
@@ -364,7 +365,9 @@ function MermaidBlock({ code }: { code: string }) {
         });
         const id = `mermaid-${Math.random().toString(36).slice(2)}`;
         const { svg: rendered } = await mermaid.render(id, code);
-        if (!cancelled) { setSvg(rendered); setLoading(false); }
+        // Defense-in-depth: sanitize the rendered SVG before it reaches
+        // dangerouslySetInnerHTML (AI-authored diagram source is untrusted).
+        if (!cancelled) { setSvg(sanitizeSvg(rendered)); setLoading(false); }
       } catch (e: unknown) {
         if (!cancelled) {
           setError(e instanceof Error ? e.message : "Diagram render failed");
@@ -937,6 +940,7 @@ export function ChatPanel({
 
   const [showSnippets, setShowSnippets] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [templateCursor, setTemplateCursor] = useState(0); // keyboard nav for the slash picker
   const [currentUserId, setCurrentUserId] = useState<string>("");
   // Save-as-skill draft state — opens when the user clicks the new ⚡+ button
   // on an assistant message. Pre-filled from that message's content.
@@ -2763,6 +2767,7 @@ ${(f.content ?? "").slice(0, 8000)}
     // "/" at start of input opens the template/skill picker
     if (val.startsWith("/")) {
       setShowTemplates(true);
+      setTemplateCursor(0); // reset keyboard selection as the query changes
       // Ensure skills are loaded when "/" is typed
       if (!skillsLoaded) void loadSkills();
       return;
@@ -2826,6 +2831,39 @@ ${(f.content ?? "").slice(0, 8000)}
       const len = prompt.length;
       textareaRef.current?.setSelectionRange(len, len);
     }, 10);
+  }
+
+  // Flat, ordered list of slash-picker items for keyboard navigation. The order
+  // here mirrors the render (skills first, then template groups) so `templateCursor`
+  // indexes and the per-button highlight keys stay in sync.
+  type SlashItem =
+    | { kind: "skill"; key: string; prompt: string; skillId: string }
+    | { kind: "template"; key: string; prompt: string };
+  const slashItems: SlashItem[] = useMemo(() => {
+    if (!showTemplates) return [];
+    const slashQuery = input.startsWith("/") ? input.slice(1).toLowerCase().trim() : "";
+    const allSkills = [...(skills.custom ?? []), ...(skills.builtin ?? [])];
+    const matched = allSkills
+      .filter((s) =>
+        !slashQuery ||
+        s.name.toLowerCase().includes(slashQuery) ||
+        (s.description ?? "").toLowerCase().includes(slashQuery) ||
+        (s.tags ?? []).some((t: string) => t.toLowerCase().includes(slashQuery))
+      )
+      .slice(0, 8)
+      .map((s): SlashItem => ({ kind: "skill", key: `skill:${s.id}`, prompt: s.prompt, skillId: s.id }));
+    const showTpl = input === "/" || !input.startsWith("/");
+    const tpl: SlashItem[] = showTpl
+      ? PROMPT_TEMPLATES.flatMap((g) => g.prompts.map((p): SlashItem => ({ kind: "template", key: `tpl:${p}`, prompt: p })))
+      : [];
+    return [...matched, ...tpl];
+  }, [showTemplates, input, skills]);
+  const slashSelectedKey = slashItems[templateCursor]?.key;
+
+  function selectSlashItem(item: SlashItem) {
+    if (item.kind === "skill") applySkill(item.prompt, item.skillId);
+    else insertTemplate(item.prompt);
+    setShowTemplates(false);
   }
 
   // Files + collaborators filtered by @mention query
@@ -2926,8 +2964,15 @@ ${(f.content ?? "").slice(0, 8000)}
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
-    // Close template picker on Escape
-    if (showTemplates && e.key === "Escape") { e.preventDefault(); setShowTemplates(false); return; }
+    // Slash picker keyboard navigation (skills + prompt templates)
+    if (showTemplates) {
+      if (e.key === "Escape") { e.preventDefault(); setShowTemplates(false); return; }
+      if (slashItems.length > 0) {
+        if (e.key === "ArrowDown") { e.preventDefault(); setTemplateCursor((c) => Math.min(c + 1, slashItems.length - 1)); return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); setTemplateCursor((c) => Math.max(c - 1, 0)); return; }
+        if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); selectSlashItem(slashItems[templateCursor]); return; }
+      }
+    }
     // Navigate mention dropdown with arrow keys
     // Trigger cross-project load when "@project" typed
     if (isCrossProjectQuery && !crossProjectsLoaded) { void loadCrossProjects(); }
@@ -4941,7 +4986,7 @@ Please confirm the breakdown before implementing anything.`,
                           <button
                             key={skill.id}
                             onMouseDown={(e) => { e.preventDefault(); applySkill(skill.prompt, skill.id); setShowTemplates(false); }}
-                            className="w-full flex items-start gap-2.5 px-3 py-2 text-xs text-left hover:bg-accent hover:text-accent-foreground transition-colors"
+                            className={`w-full flex items-start gap-2.5 px-3 py-2 text-xs text-left hover:bg-accent hover:text-accent-foreground transition-colors ${slashSelectedKey === `skill:${skill.id}` ? "bg-accent text-accent-foreground" : ""}`}
                           >
                             <span className="text-lg leading-none shrink-0 mt-0.5">{skill.icon ?? "✨"}</span>
                             <div className="flex-1 min-w-0">
@@ -4968,7 +5013,7 @@ Please confirm the breakdown before implementing anything.`,
                           <button
                             key={prompt}
                             onMouseDown={(e) => { e.preventDefault(); insertTemplate(prompt); }}
-                            className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-accent hover:text-accent-foreground transition-colors"
+                            className={`w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-accent hover:text-accent-foreground transition-colors ${slashSelectedKey === `tpl:${prompt}` ? "bg-accent text-accent-foreground" : ""}`}
                           >
                             <span className="text-muted-foreground/40 font-mono text-[10px] shrink-0">/</span>
                             <span className="truncate">{prompt}</span>

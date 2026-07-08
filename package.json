@@ -78,6 +78,7 @@
     "framer-motion": "^11.3.24",
     "geist": "^1.7.0",
     "ioredis": "^5.3.2",
+    "isomorphic-dompurify": "^2.16.0",
     "jszip": "^3.10.1",
     "lucide-react": "^0.408.0",
     "mermaid": "^11.4.0",

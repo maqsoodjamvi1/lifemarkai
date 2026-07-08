@@ -10,13 +10,14 @@ import { generateAI as generateDirect, clampMaxTokens } from "./provider";
 import { generateViaGateway, isGatewayAvailable } from "./gateway-client";
 import { getDefaultAiModel } from "./model-defaults";
 import { assertOpenRouterCredit, routesViaOpenRouter } from "./openrouter-credits";
+import { recordAiEval } from "./eval-log";
 export type { GenerateOptions, GenerateResult, AIMessage, AIModel } from "./provider";
 
 export { generateDirect as generateDirectAI };
 
 export async function generateAI(
   options: Parameters<typeof generateDirect>[0],
-  ctx?: { projectId?: string; userId?: string }
+  ctx?: { projectId?: string; userId?: string; task?: string }
 ): ReturnType<typeof generateDirect> {
   // Clamp the output budget per-model on BOTH paths (the gateway path doesn't
   // go through provider.ts, so clamp here too) — keeps 64K requests safe when a
@@ -31,8 +32,37 @@ export async function generateAI(
     await assertOpenRouterCredit();
   }
 
-  if (isGatewayAvailable()) {
-    return generateViaGateway(options, ctx);
+  // Observe every call (fire-and-forget; never blocks or throws) so model-tier
+  // changes are visible in ai_eval_log instead of shipping blind.
+  const viaGateway = isGatewayAvailable();
+  const startedAt = Date.now();
+  try {
+    const result = viaGateway
+      ? await generateViaGateway(options, ctx)
+      : await generateDirect(options);
+    recordAiEval({
+      model,
+      task: ctx?.task,
+      projectId: ctx?.projectId,
+      userId: ctx?.userId,
+      latencyMs: Date.now() - startedAt,
+      tokensUsed: result.tokensUsed,
+      toolCalls: result.toolCalls?.length ?? 0,
+      success: true,
+      viaGateway,
+    });
+    return result;
+  } catch (err) {
+    recordAiEval({
+      model,
+      task: ctx?.task,
+      projectId: ctx?.projectId,
+      userId: ctx?.userId,
+      latencyMs: Date.now() - startedAt,
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+      viaGateway,
+    });
+    throw err;
   }
-  return generateDirect(options);
 }

@@ -13,7 +13,7 @@ import {
 } from "@/lib/preview/next-app-preview";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "30";
+export const PREVIEW_ENGINE_REV = "31";
 
 /** Strip PostCSS-only directives — invalid in a raw <style> tag. */
 export function sanitizePreviewCss(css: string): string {
@@ -178,11 +178,56 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     if (/\/(sections?|features?|blocks?|widgets?|layouts?|views?|screens?|modules?|containers?)\//.test(s)) return 3.5;
     return 2; // everything else between leaves and components
   };
-  const sorted = [...codeFiles].sort((a, b) => {
+  const seedOrder = [...codeFiles].sort((a, b) => {
     const ra = loadRank(a.path), rb = loadRank(b.path);
     if (ra !== rb) return ra - rb;
     return a.path.localeCompare(b.path);
   });
+
+  // loadRank orders at the directory level, but files WITHIN a directory tie
+  // (e.g. components/Hero.tsx importing components/ui/Button.tsx — both rank 3),
+  // and the alphabetical tiebreak then emits the importer BEFORE its dependency.
+  // Because preview modules resolve imports eagerly at their own script
+  // execution, the consumer binds `undefined` → the "missing component"
+  // placeholder. Refine the seed order with a real import-graph topological sort
+  // so every intra-project dependency is emitted before anything that imports it.
+  const topoSortByImports = (seed: ProjectFile[]): ProjectFile[] => {
+    const short = (p: string) => p.replace(/\.(tsx?|jsx?)$/, "");
+    const byShort = new Map<string, ProjectFile>();
+    for (const f of seed) byShort.set(short(f.path), f);
+
+    const depsOf = (f: ProjectFile): ProjectFile[] => {
+      const code = f.content ?? "";
+      const specs = new Set<string>();
+      let m: RegExpExecArray | null;
+      const reFrom = /\bfrom\s*['"]([^'"]+)['"]/g;
+      while ((m = reFrom.exec(code))) specs.add(m[1]);
+      const reDyn = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
+      while ((m = reDyn.exec(code))) specs.add(m[1]);
+      const out: ProjectFile[] = [];
+      for (const spec of specs) {
+        if (!/^[.@]/.test(spec)) continue; // only project-relative / @/ alias imports
+        const resolved = resolveProjectImport(f.path, spec);
+        const hit = byShort.get(resolved) ?? byShort.get(`${resolved}/index`);
+        if (hit && hit !== f) out.push(hit);
+      }
+      return out;
+    };
+
+    const result: ProjectFile[] = [];
+    const state = new Map<ProjectFile, 1 | 2>(); // 1 = visiting, 2 = done
+    const visit = (f: ProjectFile) => {
+      const s = state.get(f);
+      if (s) return; // done, or currently visiting (cycle) — don't recurse again
+      state.set(f, 1);
+      for (const d of depsOf(f)) visit(d);
+      state.set(f, 2);
+      result.push(f);
+    };
+    for (const f of seed) visit(f);
+    return result;
+  };
+  const sorted = topoSortByImports(seedOrder);
 
   const mainFile =
     files.find((f) => f.path === "src/App.tsx" || f.path === "App.tsx") ??

@@ -35,6 +35,7 @@ const navItems = [
   { icon: Settings, label: "Settings", href: "/dashboard/settings", shortcut: "" },
   { icon: Users, label: "People", href: "/dashboard/people", shortcut: "" },
   { icon: ClipboardList, label: "Audit Logs", href: "/dashboard/audit-logs", shortcut: "" },
+  { icon: BarChart3, label: "AI Metrics", href: "/dashboard/ai-evals", shortcut: "" },
   { icon: Shield, label: "Security", href: "/dashboard/security", shortcut: "" },
   { icon: KeyRound, label: "SSO", href: "/dashboard/settings/sso", shortcut: "" },
   { icon: Server, label: "SCIM", href: "/dashboard/settings/scim", shortcut: "" },

@@ -9,7 +9,7 @@
  *   = "https://preview.lifemarkai.com"    → "https://preview.lifemarkai.com/preview/<id>?…"
  *   = "https://{id}.preview.lifemarkai.com" (contains "{id}") → per-project subdomain
  *
- * Query params mirror the standard signed-preview shape: token + sha.
+ * Query params mirror the standard signed-preview shape: token + sha + load_id.
  */
 
 export interface BuildPreviewUrlOpts {
@@ -20,10 +20,16 @@ export interface BuildPreviewUrlOpts {
   sha?: string;
   /** Override the origin (else reads NEXT_PUBLIC_PREVIEW_ORIGIN). */
   origin?: string;
+  /**
+   * Per-load correlation id (parity with Lovable's `__lovable_load_id`). Lets
+   * preview logs/telemetry tie a specific iframe load back to an editor session.
+   * Advisory only — the serve route ignores it.
+   */
+  loadId?: string;
 }
 
 export function buildPreviewUrl(opts: BuildPreviewUrlOpts): string {
-  const { projectId, token, sha } = opts;
+  const { projectId, token, sha, loadId } = opts;
   const configured = opts.origin ?? process.env.NEXT_PUBLIC_PREVIEW_ORIGIN ?? "";
 
   let base: string;
@@ -39,6 +45,28 @@ export function buildPreviewUrl(opts: BuildPreviewUrlOpts): string {
   const qs = new URLSearchParams();
   if (token) qs.set("token", token);
   if (sha) qs.set("sha", sha);
+  if (loadId) qs.set("load_id", loadId);
   const query = qs.toString();
   return query ? `${base}?${query}` : base;
+}
+
+/**
+ * Append a `load_id` to an already-built preview URL (e.g. one returned by the
+ * mint route) without clobbering existing params. Idempotent — if a load_id is
+ * already present it's left as-is.
+ */
+export function withLoadId(url: string, loadId: string | undefined): string {
+  if (!url || !loadId) return url;
+  if (/[?&]load_id=/.test(url)) return url;
+  return url + (url.includes("?") ? "&" : "?") + "load_id=" + encodeURIComponent(loadId);
+}
+
+/** Generate a per-load correlation id (browser-safe, falls back if crypto is absent). */
+export function newLoadId(): string {
+  try {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  } catch {
+    /* ignore */
+  }
+  return `ld_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 }

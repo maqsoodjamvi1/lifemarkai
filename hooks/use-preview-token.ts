@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { buildPreviewUrl } from "@/lib/preview/preview-url";
+import { buildPreviewUrl, withLoadId, newLoadId } from "@/lib/preview/preview-url";
 
 interface PreviewTokenState {
   url: string;
@@ -20,8 +20,13 @@ interface PreviewTokenState {
 }
 
 export function usePreviewToken(projectId: string | undefined, sha?: string): PreviewTokenState {
+  // Stable per-mount correlation id (parity with Lovable's __lovable_load_id).
+  const loadIdRef = useRef<string>(newLoadId());
+  const loadId = loadIdRef.current;
   const [token, setToken] = useState<string | null>(null);
-  const [url, setUrl] = useState<string>(projectId ? buildPreviewUrl({ projectId, sha }) : "");
+  const [url, setUrl] = useState<string>(
+    projectId ? buildPreviewUrl({ projectId, sha, loadId }) : ""
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -39,7 +44,7 @@ export function usePreviewToken(projectId: string | undefined, sha?: string): Pr
       if (res.status === 501) {
         // Tokens not configured — use the unsigned same-origin URL.
         setToken(null);
-        setUrl(buildPreviewUrl({ projectId, sha }));
+        setUrl(buildPreviewUrl({ projectId, sha, loadId }));
         return;
       }
       if (!res.ok) {
@@ -48,18 +53,18 @@ export function usePreviewToken(projectId: string | undefined, sha?: string): Pr
       }
       const data = (await res.json()) as { token: string; url: string; expiresAt: number };
       setToken(data.token);
-      setUrl(data.url);
+      setUrl(withLoadId(data.url, loadId));
       // Re-mint at 80% of the token lifetime.
       const msUntilRefresh = Math.max(30_000, (data.expiresAt * 1000 - Date.now()) * 0.8);
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => void mint(), msUntilRefresh);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to mint preview token");
-      if (projectId) setUrl(buildPreviewUrl({ projectId, sha }));
+      if (projectId) setUrl(buildPreviewUrl({ projectId, sha, loadId }));
     } finally {
       setLoading(false);
     }
-  }, [projectId, sha]);
+  }, [projectId, sha, loadId]);
 
   useEffect(() => {
     void mint();

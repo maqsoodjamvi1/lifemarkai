@@ -2,12 +2,15 @@ import Link from "next/link";
 import { DOC_PAGES, getDocBySlug, type DocPage } from "@/lib/docs/content";
 import { Navbar } from "@/components/marketing/navbar";
 import { Footer } from "@/components/marketing/footer";
+import { sanitizeHtml } from "@/lib/security/sanitize";
 
 function renderBody(text: string) {
   return text.split("\n").map((line, i) => {
-    const html = line
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(/`([^`]+)`/g, "<code class=\"px-1 py-0.5 rounded bg-muted text-sm\">$1</code>");
+    const html = sanitizeHtml(
+      line
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/`([^`]+)`/g, "<code class=\"px-1 py-0.5 rounded bg-muted text-sm\">$1</code>")
+    );
     if (line.startsWith("```")) return null;
     if (line.trim() === "") return <br key={i} />;
     return <p key={i} className="text-muted-foreground leading-relaxed mb-2" dangerouslySetInnerHTML={{ __html: html }} />;

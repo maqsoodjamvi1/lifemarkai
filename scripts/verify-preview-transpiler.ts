@@ -48,6 +48,34 @@ export default function App(){ return <TaskCard/>; }`),
     },
   },
   {
+    name: "dependency ordering: consumer that sorts before its ui/ primitive (topological emit)",
+    files: [
+      f("src/lib/utils.ts", `export const cn = (...a: string[]) => a.filter(Boolean).join(" ");`),
+      f("src/components/ui/Button.tsx", `import { cn } from "../../lib/utils";
+export const Button = ({ children }: { children?: unknown }) => <button className={cn("btn")}>{children as never}</button>;`),
+      f("src/components/AppHero.tsx", `import { Button } from "./ui/Button";
+export const AppHero = () => <div className="mt-8"><Button>Go</Button></div>;`),
+      f("src/App.tsx", `import { AppHero } from "./components/AppHero";
+export default function App(){ return <AppHero/>; }`),
+      f("src/main.tsx", `import App from "./App"; export default App;`),
+    ],
+    assert: (html) => {
+      const errs: string[] = [];
+      // AppHero sorts alphabetically before ui/Button and both rank 3 (components/),
+      // so the seed order emits the consumer first. Because modules eagerly require
+      // their imports at script execution, the dependency MUST be emitted first or
+      // the binding is `undefined` → the "missing component" placeholder. The topo
+      // sort must reorder Button (and lib/utils) ahead of AppHero.
+      const util = html.indexOf('data-file="src/lib/utils.ts"');
+      const dep = html.indexOf('data-file="src/components/ui/Button.tsx"');
+      const consumer = html.indexOf('data-file="src/components/AppHero.tsx"');
+      if (dep < 0 || consumer < 0) { errs.push("expected both AppHero and ui/Button module blocks in output"); return errs; }
+      if (!(dep < consumer)) errs.push("ui/Button emitted AFTER consumer AppHero — eager require binds undefined (missing-component regression)");
+      if (util >= 0 && !(util < dep)) errs.push("lib/utils emitted after ui/Button which imports it");
+      return errs;
+    },
+  },
+  {
     name: "import.meta.env rewritten (supabase-style scaffold)",
     files: [
       f("src/lib/supabase.ts", `const url = import.meta.env.VITE_SUPABASE_URL as string;
