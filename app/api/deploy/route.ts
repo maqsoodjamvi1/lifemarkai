@@ -240,10 +240,32 @@ export async function POST(req: NextRequest) {
     .eq("id", user.id)
     .single();
 
+  // Ensure the project has a unique app_slug so the deploy URL is a CLEAN
+  // slug host ({app_slug}.apps.lifemarkai.com). Generate lazily if missing;
+  // on any failure the builder falls back to the id-embedded host.
+  let appSlug: string | null = (project as { app_slug?: string | null }).app_slug ?? null;
+  if (!appSlug) {
+    try {
+      const { data: gen } = await (supabase as any).rpc("generate_app_slug", {
+        p_name: (project as { name?: string }).name ?? "app",
+      });
+      if (typeof gen === "string" && gen) {
+        appSlug = gen;
+        // Persist so the slug is stable across future deploys.
+        await (supabase as any)
+          .from("projects")
+          .update({ app_slug: gen })
+          .eq("id", projectId)
+          .is("app_slug", null);
+      }
+    } catch { /* fall back to id-based URL */ }
+  }
+
   const lifemarkUrl = () =>
     buildLifemarkDeployUrl({
       projectName: project.name as string,
       projectId,
+      appSlug,
       brandedSubdomain: ownerBranding?.branded_subdomain,
       brandedStatus: ownerBranding?.branded_status,
     });

@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { getTemplateById } from "@/lib/templates/built-in";
+import { projectSchema } from "@/lib/validations";
 
 export async function GET() {
   const supabase = await createClient();
@@ -23,6 +24,17 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await req.json();
+
+  // Validate the free-text inputs (non-empty name, sane sizes) before touching
+  // the DB. Permissive by design — see lib/validations.ts projectSchema.
+  const parsed = projectSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: parsed.error.issues[0]?.message ?? "Invalid project input" },
+      { status: 400 },
+    );
+  }
+
   const { name, description, templateId, forkFiles } = body;
   // SSR-first default: Next.js App Router unless the client picked a framework
   // or the deployment overrides it (DEFAULT_NEW_PROJECT_FRAMEWORK=react to revert).
@@ -47,6 +59,21 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Assign a clean, unique app_slug now so the public deploy URL is
+  // {app_slug}.apps.lifemarkai.com (best-effort — deploy generates it lazily too).
+  try {
+    const { data: gen } = await (supabase as any).rpc("generate_app_slug", {
+      p_name: project.name,
+    });
+    if (typeof gen === "string" && gen) {
+      await (supabase as any)
+        .from("projects")
+        .update({ app_slug: gen })
+        .eq("id", project.id)
+        .is("app_slug", null);
+    }
+  } catch { /* non-critical */ }
 
   // If duplicating an existing project (forkFiles takes priority)
   if (forkFiles && Array.isArray(forkFiles) && forkFiles.length > 0) {

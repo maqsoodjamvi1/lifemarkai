@@ -416,7 +416,11 @@ export type Database = {
         Returns: void;
       };
       generate_project_slug: {
-        Args: { project_id: string };
+        Args: { p_name: string; p_user_id: string };
+        Returns: string;
+      };
+      generate_app_slug: {
+        Args: { p_name: string };
         Returns: string;
       };
       increment_remix_count: {

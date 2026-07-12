@@ -241,6 +241,21 @@ function isSmallExistingEdit(prompt: string, fileCount: number): boolean {
   return true;
 }
 
+function shouldUseAgentForEdit(prompt: string, ctx: Pick<EditorIntelContext, "fileCount" | "hasPreviewError">): boolean {
+  const trimmed = prompt.trim();
+  if (!trimmed || ctx.fileCount <= 0) return false;
+  if (/\b(use|run|switch to|agent mode|autonomous|multi[- ]?agent)\b/i.test(trimmed)) return true;
+  if (trimmed.length >= 420) return true;
+  const coordinators = trimmed.match(/\b(and|then|also|plus|after that|next)\b/gi)?.length ?? 0;
+  if (coordinators >= 3) return true;
+  if (
+    /\b(entire|whole|all pages|every page|all files|codebase|from scratch|rebuild|rewrite|refactor|migrate|architecture|database|auth|login|signup|supabase|stripe|payment|backend|api|webhook|oauth|security|permissions?|roles?|integration|performance|slow query|production|complete app|full app)\b/i.test(trimmed)
+  ) {
+    return true;
+  }
+  return ctx.hasPreviewError && trimmed.length > 260 && FIX_KEYWORDS.test(trimmed);
+}
+
 export function resolveModelChain(
   mode: EditorMode,
   ctx: Pick<EditorIntelContext, "fileCount" | "hasPreviewError">,
@@ -271,17 +286,12 @@ export function resolveModelChain(
     require.push("reasoning");
     anchor = trimmed.length > 200 ? MODEL_TIERS.coding : MODEL_TIERS.reasoning;
   } else if (mode === "patch") {
-    const task = detectTaskType(trimmed);
-    if (task === "design") {
-      require.push("design");
-      anchor = MODEL_TIERS.design as AIModel;
-    } else if (task === "content") {
-      require.push("content");
-      anchor = MODEL_TIERS.content as AIModel;
-    } else {
-      preferCheap = trimmed.length < 160 || smallExistingEdit;
-      anchor = preferCheap ? ECONOMY_CHAT_MODEL : MODEL_TIERS.balanced;
-    }
+    // Patch must emit precise find/replace JSON against real source — use a
+    // coding model. Chat/flash models often return prose and leave fileCount=0
+    // (e.g. "add menu items in header" → empty patch).
+    require.push("code");
+    preferCheap = trimmed.length < 120 || smallExistingEdit;
+    anchor = preferCheap ? ECONOMY_CODING_MODEL : MODEL_TIERS.coding;
   } else {
     // chat / default — route by task type first, then length-based escalation.
     const task = detectTaskType(trimmed);
@@ -293,7 +303,11 @@ export function resolveModelChain(
       anchor = MODEL_TIERS.content as AIModel;
     } else if (task === "reasoning") {
       require.push("reasoning");
-      anchor = MODEL_TIERS.reasoning;
+      const lightweightReasoning =
+        trimmed.length < 220 &&
+        !/\b(architectur\w*|trade-?offs?|compare|versus|\bvs\.?\b|root cause|security|production|critical|entire|whole|codebase|refactor|migration|database|auth|payment)\b/i.test(trimmed);
+      preferCheap = lightweightReasoning;
+      anchor = lightweightReasoning ? ECONOMY_CHAT_MODEL : MODEL_TIERS.reasoning;
     } else {
       preferCheap = trimmed.length < 160 || smallExistingEdit;
       anchor =
@@ -323,6 +337,30 @@ function isCodeChangeIntent(prompt: string): boolean {
   return /\b(add|create|implement|integrate|update|change|fix|remove|delete|build|make|refactor|wire|connect)\b/i.test(prompt);
 }
 
+/**
+ * Chat-tab escape hatch: edits that should write files without requiring /build.
+ * Excludes greenfield "build/create a … app/site" (those stay Chat unless /build).
+ */
+function isSurgicalEditFromChat(prompt: string): boolean {
+  if (/\b(rebuild|from scratch|entire|whole app)\b/i.test(prompt)) return false;
+  if (/\b(build|create|make|generate|scaffold)\b.+\b(app|website|site|landing|dashboard|store|saas|platform)\b/i.test(prompt)) {
+    return false;
+  }
+  if (PATCH_KEYWORDS.test(prompt)) return true;
+  if (/\b(add|insert|include|put)\b.+\b(menu|nav|item|link|button|section|header|footer|tab|page|card|modal|form|field)\b/i.test(prompt)) {
+    return true;
+  }
+  return isCodeChangeIntent(prompt) && !/\b(build|create|make|generate|scaffold)\b/i.test(prompt);
+}
+
+/** Small chrome edits that should use patch even from the Build tab. */
+function isQuickUiChromeEdit(prompt: string): boolean {
+  if (PATCH_KEYWORDS.test(prompt)) return true;
+  return /\b(add|insert|include|put|update|change|fix|remove)\b.+\b(menu|nav|navbar|item|link|button|header|footer|tab)\b/i.test(
+    prompt,
+  );
+}
+
 /** Pick the best editor mode for a user prompt given project context. */
 export function resolvePromptMode(
   prompt: string,
@@ -342,12 +380,17 @@ export function resolvePromptMode(
   // Honor explicitly selected Agent tab — don't downgrade to build/chat via keywords
   if (ctx.currentMode === "agent") return "agent";
 
-  // Lovable parity: Chat tab is Q&A only — never auto-promote to build/agent.
-  // Slash commands (/build, /agent, /plan) are the escape hatch.
+  // Chat tab: Q&A by default. Explicit slash commands escape to other modes.
+  // Surgical edit intents auto-promote so "add a menu item" actually writes
+  // files — Chat mode itself never persists project_files. Greenfield
+  // "build a … app" stays in Chat unless the user uses /build (parity).
   if (ctx.currentMode === "chat") {
     if (/^\/build\b/i.test(trimmed)) return "build";
     if (/^\/agent\b/i.test(trimmed)) return "agent";
     if (/^\/plan\b/i.test(trimmed)) return "plan";
+    if (ctx.fileCount > 0 && isSurgicalEditFromChat(trimmed)) {
+      return shouldUseAgentForEdit(trimmed, ctx) ? "agent" : "patch";
+    }
     return "chat";
   }
 
@@ -364,10 +407,30 @@ export function resolvePromptMode(
     return trimmed.length < 120 && PATCH_KEYWORDS.test(trimmed) ? "patch" : "build";
   }
 
-  // Honor Build tab — on existing apps, code changes go through agent (Lovable default).
+  // Honor Build tab — short UI chrome edits use patch (fast, writes files);
+  // larger code changes on existing apps go through agent (Lovable default).
   if (ctx.currentMode === "build") {
-    if (stageFromCtx(ctx) === "app" && isCodeChangeIntent(trimmed)) {
-      return "agent";
+    if (CHAT_KEYWORDS.test(trimmed) && !shouldAutoBuildMode(trimmed)) {
+      return "chat";
+    }
+    if (
+      (PLAN_KEYWORDS.test(trimmed) || REASONING_HINTS.test(trimmed)) &&
+      !/\b(implement|build|create|add|fix|update|change|wire|connect|integrate|migrate|remove|delete)\b/i.test(trimmed)
+    ) {
+      return "plan";
+    }
+    if (PLAN_KEYWORDS.test(trimmed) && !shouldAutoBuildMode(trimmed)) {
+      return "plan";
+    }
+    if (
+      ctx.fileCount > 0 &&
+      isCodeChangeIntent(trimmed) &&
+      (isQuickUiChromeEdit(trimmed) || isSmallExistingEdit(trimmed, ctx.fileCount))
+    ) {
+      return "patch";
+    }
+    if (ctx.fileCount > 0 && isCodeChangeIntent(trimmed)) {
+      return shouldUseAgentForEdit(trimmed, ctx) ? "agent" : "patch";
     }
     return "build";
   }

@@ -34,7 +34,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
-import { validateApiKey } from "@/app/api/keys/route";
+import { validateApiKey } from "@/lib/api/api-key";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";

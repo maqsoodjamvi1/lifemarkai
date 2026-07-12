@@ -2,7 +2,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/provider";
-import { getDefaultAiModel, ESCALATION_MODEL } from "@/lib/ai/model-defaults";
+import { ECONOMY_CODING_MODEL, getDefaultAiModel, ESCALATION_MODEL } from "@/lib/ai/model-defaults";
 import { applyModelAdapter } from "@/lib/ai/model-catalog";
 import { sendLowCreditsEmail } from "@/lib/email/resend";
 import {
@@ -20,11 +20,21 @@ import { buildTemplateRefinementBlock } from "@/lib/ai/template-refine";
 import { pickStarterTemplate } from "@/lib/templates/starter-catalog";
 import { buildDesignDirectionBlock } from "@/lib/ai/design-directions";
 import { applyPatches, parsePatchResponse } from "@/lib/ai/patch-applier";
+import {
+  buildNavEditContext,
+  buildDeterministicMenuPatches,
+  extractMenuLabelsFromPrompt,
+  filterUnsafeHeaderPatches,
+  findNavSourceFiles,
+  isMenuNavEditIntent,
+  remapInventedNavPatchPaths,
+} from "@/lib/ai/nav-edit";
+import { buildDeterministicTextPatches } from "@/lib/ai/text-edit";
 import { parseAIResponse, validateGeneratedFiles, assessGenerationQuality, shouldAutoFix, needsBuildContinuation, type ParsedFile } from "@/lib/ai/code-parser";
 import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { StreamingFileExtractor } from "@/lib/ai/streaming-file-extractor";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import { validateApiKey } from "@/app/api/keys/route";
+import { validateApiKey } from "@/lib/api/api-key";
 import { logger } from "@/lib/logger";
 import { getProjectSchemaContext } from "@/lib/supabase/schema-reader";
 import { attachSkillsToPrompt } from "@/lib/ai/attach-skills";
@@ -56,6 +66,7 @@ import {
   maxOutputTokensForRequest,
   resolveBudgetAwareModel,
 } from "@/lib/ai/cost-controls";
+import { resolveSmartModel } from "@/lib/ai/editor-intelligence";
 
 export const runtime = "nodejs";
 // Generation + backend wiring + self-verification can exceed a minute on
@@ -180,6 +191,7 @@ export async function POST(req: NextRequest) {
     if (imageBase64 && typeof imageBase64 === "string" && imageBase64.length > 5 * 1024 * 1024) {
       return NextResponse.json({ error: "Image too large (max 5MB)" }, { status: 413 });
     }
+    const persistedUserMessage = typeof costPrompt === "string" && costPrompt.trim() ? costPrompt : message;
 
     // ── Publish from chat — "ship it" (Lovable parity) ──────────────────────
     // When the message is PRIMARILY a publish request ("ship it", "publish",
@@ -192,7 +204,7 @@ export async function POST(req: NextRequest) {
       (mode === "chat" || mode === "build") &&
       Array.isArray(files) &&
       files.length > 0 &&
-      detectDeployIntent(message)
+      detectDeployIntent(persistedUserMessage)
     ) {
       const { publishProjectFromChat } = await import("@/lib/deploy/publish-from-chat");
       const deployEncoder = new TextEncoder();
@@ -238,7 +250,7 @@ export async function POST(req: NextRequest) {
             const { data: insertedMessages } = await (supabase as any)
               .from("messages")
               .insert([
-                { project_id: projectId, role: "user", content: message, mode },
+                { project_id: projectId, role: "user", content: persistedUserMessage, mode },
                 {
                   project_id: projectId,
                   role: "assistant",
@@ -422,7 +434,7 @@ export async function POST(req: NextRequest) {
         },
       });
       await (supabase as any).from("messages").insert([
-        { project_id: projectId, role: "user", content: message, mode },
+        { project_id: projectId, role: "user", content: persistedUserMessage, mode },
         { project_id: projectId, role: "assistant", content: blockText, mode },
       ]);
       return new Response(blockStream, {
@@ -430,18 +442,22 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    const fileCount = Array.isArray(files) ? files.length : 0;
+    const serverAutoModel = modelManuallySelected === true
+      ? model
+      : resolveSmartModel(mode, { fileCount, hasPreviewError: false }, costPrompt);
     const effectiveModel = resolveBudgetAwareModel({
-      requestedModel: model,
+      requestedModel: serverAutoModel,
       mode,
       prompt: costPrompt,
-      fileCount: Array.isArray(files) ? files.length : 0,
+      fileCount,
       manuallySelected: modelManuallySelected === true,
       hasImage: !!imageBase64,
     });
     const outputMaxTokens = maxOutputTokensForRequest({
       mode,
       prompt: costPrompt,
-      fileCount: Array.isArray(files) ? files.length : 0,
+      fileCount,
       defaultBuildMax: BUILD_MAX_TOKENS,
       defaultChatMax: CHAT_MAX_TOKENS,
       hasImage: !!imageBase64,
@@ -449,7 +465,7 @@ export async function POST(req: NextRequest) {
     const simpleEconomyRequest = isSimpleEditorRequest({
       mode,
       prompt: costPrompt,
-      fileCount: Array.isArray(files) ? files.length : 0,
+      fileCount,
       hasImage: !!imageBase64,
     });
 
@@ -523,12 +539,12 @@ export async function POST(req: NextRequest) {
       // icons. Instruct the model to preserve everything it isn't asked to change.
       if (files.length > 0) {
         systemPrompt +=
-          `\n\n---\n# INCREMENTAL EDIT — preserve existing work\n` +
-          `This is an edit to an EXISTING app, not a rebuild. Strict rules:\n` +
-          `- Change ONLY what the user asked for; return all other files and content exactly as they already are.\n` +
+          `\n\n---\n# INCREMENTAL EDIT — return ONLY the files you change (unchanged files are auto-preserved)\n` +
+          `This is an edit to an EXISTING app, not a rebuild. Files are saved by PATH (merge/upsert), so any file you do NOT return is kept exactly as it is. Strict rules:\n` +
+          `- Return ONLY the files you actually change. NEVER re-emit unchanged files (data, config, utils, hooks, routes, or components you aren't touching) — echoing them back wastes time and changes nothing. This is the #1 rule.\n` +
           `- PRESERVE every real asset URL already in the project (img src, background-image, logos, og images, any https image URL). NEVER swap a real image for a placeholder, emoji, icon-font glyph, gradient, or solid color.\n` +
           `- Keep existing copy, data, routes, and component structure unless the request specifically requires changing them.\n` +
-          `- If the request is a restyle, change colors / typography / spacing / layout / theme, but keep the SAME content and the SAME real images.\n` +
+          `- If the request is a RESTYLE / redesign: change the CENTRAL theme FIRST — the CSS variables / design tokens in the global stylesheet and the Tailwind theme config — so the new look propagates everywhere with the fewest file rewrites. Then rewrite ONLY the specific components whose markup or utility classes must actually change. Keep the SAME content and the SAME real images. Do not re-emit components that don't visually change.\n` +
           `---`;
 
         // ── Asset manifest ────────────────────────────────────────────────────
@@ -580,6 +596,12 @@ export async function POST(req: NextRequest) {
         message,
       );
       if (patchContext) systemPrompt += `\n\n${patchContext}`;
+      // Menu/header edits: pin the real nav source files so the model cannot
+      // invent header.html or return {"patches":[]}.
+      systemPrompt += buildNavEditContext(
+        files as Array<{ path: string; content: string }>,
+        costPrompt,
+      );
       systemPrompt += schemaBlock;
     } else if (mode === "plan") {
       systemPrompt = PLAN_SYSTEM_PROMPT + summaryBlock + fileChangesBlock + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
@@ -849,7 +871,7 @@ The user has expressed frustration. Do the following:
               model: effectiveModel,
               messages: [
                 { role: "system", content: clarifySystemPrompt },
-                { role: "user", content: "Build request: " + message + "\n\nProject has " + files.length + " existing files." },
+                { role: "user", content: "Build request: " + persistedUserMessage + "\n\nProject has " + files.length + " existing files." },
               ],
               maxTokens: 600,
               stream: true,
@@ -887,6 +909,20 @@ The user has expressed frustration. Do the following:
         let tokensUsed = 0;
         let usedAutoFix = false;
         const streamedFilePaths = new Set<string>();
+        // Durability backstop: record every file the extractor streams so we can
+        // await-persist them if the request is interrupted before the normal save
+        // path runs (the mid-stream upserts below are fire-and-forget and can be
+        // dropped on a client/proxy abort). Only flushed when NOT completed normally,
+        // so a successful build's final/verified content is never clobbered.
+        const streamedFiles: Array<{ path: string; content: string; language: string }> = [];
+        let completedNormally = false;
+        // SSE keep-alive: reverse proxies (nginx proxy_read_timeout, Cloudflare ~100s)
+        // drop a connection that goes idle during model "thinking" gaps (continuation +
+        // self-verify phases emit no chunks). A comment frame every 20s keeps it open.
+        // The client skips any line that doesn't start with "data: ", so this is inert.
+        const heartbeat = setInterval(() => {
+          try { if (!isClientGone()) safeEnqueue(encoder.encode(`: keepalive\n\n`)); } catch { /* ignore */ }
+        }, 20_000);
 
         for (const step of subagentSteps) {
           safeEnqueue(
@@ -924,6 +960,7 @@ The user has expressed frustration. Do the following:
           ? new StreamingFileExtractor(async (file) => {
               if (streamedFilePaths.has(file.path)) return; // dedupe
               streamedFilePaths.add(file.path);
+              streamedFiles.push({ path: file.path, content: file.content, language: file.language });
               // Fire-and-forget upsert so it doesn't block streaming
               void (supabase as any).from("project_files").upsert({
                 project_id: projectId,
@@ -944,9 +981,9 @@ The user has expressed frustration. Do the following:
             messages,
             maxTokens: outputMaxTokens,
             stream: true,
-            // Force structured JSON output in build mode so parseAIResponse
-            // reliably gets a complete JSON object rather than prose + code fence.
-            jsonMode: mode === "build",
+            // Force structured JSON for build. Patch uses an object wrapper
+            // ({"patches":[...]}) so OpenAI json_object mode is valid.
+            jsonMode: mode === "build" || mode === "patch",
             onChunk: (chunk) => {
               fullContent += chunk;
               safeEnqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
@@ -1007,9 +1044,194 @@ The user has expressed frustration. Do the following:
           // ── Patch mode: apply find-and-replace patches ────────────────────
           let parsedFiles: ParsedFile[] = [];
           if (mode === "patch") {
-            const patches = parsePatchResponse(fullContent);
-            if (patches.length > 0) {
-              const patchResults = applyPatches(patches, files as Array<{ path: string; content: string }>);
+            const projectFiles = files as Array<{ path: string; content: string }>;
+            const menuIntent = isMenuNavEditIntent(costPrompt);
+            const navFiles = findNavSourceFiles(projectFiles);
+            const navSnippet = navFiles
+              .map((f) => `### ${f.path}\n\`\`\`\n${f.content.slice(0, 6000)}\n\`\`\``)
+              .join("\n\n");
+
+            let patches = parsePatchResponse(fullContent);
+            patches = remapInventedNavPatchPaths(patches, projectFiles);
+            patches = filterUnsafeHeaderPatches(patches, costPrompt);
+
+            // Repair when empty OR when every patch misses (common for menu edits).
+            const needsRepair =
+              (patches.length === 0 && fullContent.trim().length > 0) ||
+              (menuIntent &&
+                patches.length > 0 &&
+                applyPatches(patches, projectFiles).every((r) => !r.applied));
+
+            if (needsRepair) {
+              logger.warn("ai.chat.patch_empty_retry", {
+                projectId,
+                contentLen: fullContent.length,
+                preview: fullContent.slice(0, 240),
+                menuIntent,
+                navTargets: navFiles.map((f) => f.path),
+              });
+              safeEnqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    status: "fixing",
+                    message: "Retrying edit against the real header/nav files…",
+                  })}\n\n`,
+                ),
+              );
+              try {
+                let repairContent = "";
+                const allowedPaths =
+                  navFiles.length > 0
+                    ? navFiles.map((f) => f.path).join(", ")
+                    : projectFiles
+                        .map((f) => f.path)
+                        .filter((p) => /\.(tsx|jsx|html)$/i.test(p))
+                        .slice(0, 12)
+                        .join(", ");
+                await generateAI({
+                  model: effectiveModel,
+                  messages: [
+                    {
+                      role: "system",
+                      content:
+                        'Return ONLY a JSON object: {"patches":[{"path","find","replace","description"}]}. ' +
+                        "No markdown, no prose. find must be copied VERBATIM from the provided file. " +
+                        `Allowed paths only: ${allowedPaths || "(paths from file contents below)"}. ` +
+                        'Never invent header.html. Never return {"patches":[]} for an add-menu request.',
+                    },
+                    {
+                      role: "user",
+                      content:
+                        `User request:\n${costPrompt}\n\n` +
+                        `Previous invalid/empty response:\n${fullContent.slice(0, 1500)}\n\n` +
+                        `Real header/nav file contents to patch:\n${navSnippet || "(see project files — look for <header>/<nav> or Header/Navbar components)"}\n\n` +
+                        `Emit {"patches":[...]} that adds/updates the menu items in one of those files.`,
+                    },
+                  ],
+                  maxTokens: Math.max(outputMaxTokens, 3500),
+                  stream: true,
+                  jsonMode: true,
+                  onChunk: (chunk) => {
+                    repairContent += chunk;
+                    safeEnqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
+                  },
+                });
+                if (repairContent.trim()) {
+                  fullContent = repairContent;
+                  patches = filterUnsafeHeaderPatches(
+                    remapInventedNavPatchPaths(
+                      parsePatchResponse(repairContent),
+                      projectFiles,
+                    ),
+                    costPrompt,
+                  );
+                }
+              } catch (repairErr) {
+                logger.warn("ai.chat.patch_repair_failed", {
+                  projectId,
+                  error: String(repairErr),
+                });
+              }
+            }
+
+            if (patches.length === 0) {
+              // Deterministic last resort for menu/header edits — clone existing
+              // link markup in the real Header/Navbar so the preview always updates.
+              if (menuIntent) {
+                const deterministic = buildDeterministicMenuPatches(costPrompt, projectFiles);
+                if (deterministic.length > 0) {
+                  logger.info("ai.chat.patch_deterministic_menu", {
+                    projectId,
+                    paths: deterministic.map((p) => p.path),
+                  });
+                  patches = deterministic;
+                }
+              }
+              if (patches.length === 0) {
+                const deterministicText = buildDeterministicTextPatches(costPrompt, projectFiles);
+                if (deterministicText.length > 0) {
+                  logger.info("ai.chat.patch_deterministic_text", {
+                    projectId,
+                    paths: deterministicText.map((p) => p.path),
+                  });
+                  patches = deterministicText;
+                }
+              }
+            }
+
+            if (patches.length === 0) {
+              logger.warn("ai.chat.patch_empty", {
+                projectId,
+                contentLen: fullContent.length,
+                menuIntent,
+                navTargets: navFiles.map((f) => f.path),
+              });
+              safeEnqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    status: "patches_failed",
+                    message: menuIntent
+                      ? `Could not patch the header/nav. Expected targets: ${navFiles.map((f) => f.path).join(", ") || "Header/Navbar/App"}. Try: "add About and Contact links to the header".`
+                      : "Could not parse any file patches from the model response. Try Quick Edit or rephrase the change.",
+                  })}\n\n`,
+                ),
+              );
+            } else {
+              let patchResults = applyPatches(patches, projectFiles);
+              // If AI patches all missed, try deterministic menu insert once.
+              if (menuIntent && patchResults.every((r) => !r.applied)) {
+                const deterministic = buildDeterministicMenuPatches(costPrompt, projectFiles);
+                if (deterministic.length > 0) {
+                  logger.info("ai.chat.patch_deterministic_menu_after_miss", {
+                    projectId,
+                    paths: deterministic.map((p) => p.path),
+                  });
+                  patches = deterministic;
+                  patchResults = applyPatches(patches, projectFiles);
+                }
+              }
+              if (patchResults.every((r) => !r.applied)) {
+                const deterministicText = buildDeterministicTextPatches(costPrompt, projectFiles);
+                if (deterministicText.length > 0) {
+                  logger.info("ai.chat.patch_deterministic_text_after_miss", {
+                    projectId,
+                    paths: deterministicText.map((p) => p.path),
+                  });
+                  patches = deterministicText;
+                  patchResults = applyPatches(patches, projectFiles);
+                }
+              }
+              // Menu intent: patches may "apply" but still miss the real <nav>
+              // (e.g. model/logo Link cloned). Re-check labels and fall back.
+              if (menuIntent) {
+                const labels = extractMenuLabelsFromPrompt(costPrompt);
+                const workingFiles = projectFiles.map((f) => {
+                  const hit = patchResults.find((r) => r.applied && r.path === f.path);
+                  return hit ? { path: f.path, content: hit.content } : f;
+                });
+                const stillMissing = labels.length > 0 && workingFiles.every((f) => {
+                  const nav = f.content.match(/<nav\b[\s\S]*?<\/nav>/i)?.[0] ?? "";
+                  const hay = nav || f.content;
+                  return labels.some((label) => {
+                    const re = new RegExp(`>\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*<`, "i");
+                    return !re.test(hay);
+                  });
+                });
+                if (stillMissing) {
+                  const deterministic = buildDeterministicMenuPatches(costPrompt, projectFiles);
+                  if (deterministic.length > 0) {
+                    logger.info("ai.chat.patch_deterministic_menu_after_weak", {
+                      projectId,
+                      labels,
+                      paths: deterministic.map((p) => p.path),
+                    });
+                    patches = deterministic;
+                    patchResults = applyPatches(patches, projectFiles);
+                  }
+                }
+              }
+              const applied = patchResults.filter((r) => r.applied);
+              const failed = patchResults.filter((r) => !r.applied);
               for (const pr of patchResults) {
                 if (!pr.applied) {
                   logger.warn("ai.chat.patch_failed", { projectId, path: pr.path, error: pr.error });
@@ -1022,7 +1244,27 @@ The user has expressed frustration. Do the following:
                   project_id: projectId, path: pr.path, content: pr.content, language: langMap[lang] ?? lang,
                 }, { onConflict: "project_id,path" });
               }
-              safeEnqueue(encoder.encode(`data: ${JSON.stringify({ status: "patches_applied", count: patchResults.filter((r) => r.applied).length })}\n\n`));
+              safeEnqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    status: "patches_applied",
+                    count: applied.length,
+                    paths: applied.map((r) => r.path),
+                    failed: failed.map((r) => ({ path: r.path, error: r.error })),
+                  })}\n\n`,
+                ),
+              );
+              if (failed.length > 0 && applied.length === 0) {
+                safeEnqueue(
+                  encoder.encode(
+                    `data: ${JSON.stringify({
+                      status: "patches_failed",
+                      message: `${failed.length} patch${failed.length === 1 ? "" : "es"} could not be applied (${failed.map((f) => f.path).join(", ")}).`,
+                      failed: failed.map((f) => ({ path: f.path, error: f.error })),
+                    })}\n\n`,
+                  ),
+                );
+              }
             }
           } else if (mode === "build") {
             const parsed = parseAIResponse(fullContent);
@@ -1062,6 +1304,7 @@ The user has expressed frustration. Do the following:
                     needsEnrichment ? buildIntent?.blueprint : undefined,
                   );
                   let repairContent = "";
+                  const repairModel = simpleEconomyRequest ? ECONOMY_CODING_MODEL : ESCALATION_MODEL;
                   await generateAI({
                     // Escalation ladder (mirrors the lens system): repair with
                     // the STRONGEST tier, not the model that just produced the
@@ -1069,7 +1312,7 @@ The user has expressed frustration. Do the following:
                     // systematic mistake mostly reproduces it. Fires at most
                     // once per build and only after validation failed, so the
                     // premium model's cost lands exactly where it pays.
-                    model: ESCALATION_MODEL,
+                    model: repairModel,
                     messages: [
                       {
                         role: "system" as const,
@@ -1230,12 +1473,19 @@ The user has expressed frustration. Do the following:
               } catch { /* never fail the build */ }
             } catch { backendWiring = null; }
 
-            // 2. Self-verification — render the app, auto-fix runtime errors
+            // 2. Self-verification — render the app, auto-fix runtime errors.
+            //    For pure restyle/redesign edits, skip the slow auto-fix ROUNDS
+            //    (verify-only, maxRounds=0): a theme/color/spacing change almost
+            //    never introduces build errors, and the fix rounds are the biggest
+            //    time cost. Non-styling builds keep the default 2 fix rounds.
+            const isStyleOnlyEdit = /(re-?style|re-?design|change\s+(the\s+)?(theme|template|design|look|colou?rs?|style)|update\s+(the\s+)?(website\s+)?(theme|template|design|look|style)|new\s+(theme|template|design|look|style)|different\s+(theme|template|design|look)|make\s+it\s+(dark|light|modern|minimal|colou?rful|cleaner))/i.test(message);
+            const verifyOnlyFastLane = simpleEconomyRequest || isStyleOnlyEdit;
             try {
               verification = await runSelfVerification({
                 supabase,
                 projectId,
                 emit: emitStatus("verify_status"),
+                maxRounds: verifyOnlyFastLane ? 0 : undefined,
               });
               if (verification && verification.fixesApplied > 0) {
                 usedAutoFix = true;
@@ -1298,7 +1548,7 @@ The user has expressed frustration. Do the following:
           const { data: insertedMessages } = await (supabase as any)
             .from("messages")
             .insert([
-              { project_id: projectId, role: "user", content: message, mode },
+              { project_id: projectId, role: "user", content: persistedUserMessage, mode },
               {
                 project_id: projectId,
                 role: "assistant",
@@ -1426,6 +1676,10 @@ The user has expressed frustration. Do the following:
                 files: finalFilesForClient,
                 creditsUsed: creditCost,
                 fileCount: finalFilesForClient.length,
+                filesChanged: finalFilesForClient.length > 0 || streamedFilePaths.size > 0,
+                changedPaths: finalFilesForClient.length > 0
+                  ? finalFilesForClient.map((f) => f.path)
+                  : Array.from(streamedFilePaths),
                 assistantMessageId,
                 build_activity: buildActivity ?? undefined,
                 backend_wired: backendWiring ?? undefined,
@@ -1442,6 +1696,10 @@ The user has expressed frustration. Do the following:
                 displayMessage:
                   mode === "build" || mode === "patch"
                     ? (() => {
+                        if (mode === "patch" && finalFilesForClient.length > 0) {
+                          const paths = finalFilesForClient.map((f) => f.path).join(", ");
+                          return `Updated ${paths}. Preview refreshed.`;
+                        }
                         const parsed = parseAIResponse(fullContent);
                         const msg = parsed.message?.trim() ?? "";
                         if (msg && msg !== "Changes applied." && !msg.startsWith("{")) return msg;
@@ -1453,6 +1711,7 @@ The user has expressed frustration. Do the following:
               )
             );
           }
+          completedNormally = true;
         } catch (error) {
           logger.error("ai.chat.stream_error", error instanceof Error ? error : new Error(String(error)), {
             projectId,
@@ -1463,6 +1722,19 @@ The user has expressed frustration. Do the following:
             encoder.encode(`data: ${JSON.stringify({ error: String(error) })}\n\n`)
           );
         } finally {
+          clearInterval(heartbeat);
+          // Durability backstop: if the build did NOT complete normally (client/proxy
+          // abort, or an error before the save path), persist whatever streamed so an
+          // interrupted build never results in "no change". Idempotent; skipped on
+          // success so final/verified content is never overwritten by mid-stream text.
+          if (!completedNormally && streamedFiles.length > 0) {
+            try {
+              await (supabase as any).from("project_files").upsert(
+                streamedFiles.map((f) => ({ project_id: projectId, path: f.path, content: f.content, language: f.language })),
+                { onConflict: "project_id,path" },
+              );
+            } catch { /* best-effort */ }
+          }
           safeClose();
         }
       },

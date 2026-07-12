@@ -15,6 +15,7 @@ import { filesContentSignature } from "@/lib/preview/files-signature";
 interface WebContainerPreviewProps {
   files: ProjectFile[];
   onError?: (err: string) => void;
+  onReady?: (url: string) => void;
   /** Hide the internal toolbar when embedded inside PreviewPanel */
   embedded?: boolean;
   className?: string;
@@ -35,6 +36,15 @@ const DEVICE_SIZES: Record<DeviceMode, { width: string; label: string }> = {
 let _wcInstance: any = null;
 let _wcBooting: Promise<any> | null = null;
 let _bootInProgress = false;
+/**
+ * Incremented whenever a boot is ABANDONED (stall watchdog, hard refresh, project
+ * switch). A boot captures the value at its start; if it no longer matches, that
+ * boot is orphaned and MUST NOT touch component state. Without this, an abandoned
+ * boot's late callbacks still fire — most damagingly its 60s "server ready"
+ * timeout, which resurrected an already-failed preview into `status: "ready"` with
+ * no preview URL: a green "Live" badge over a permanently blank "Loading…".
+ */
+let _bootGeneration = 0;
 let _npmInstalled: boolean = false;
 let _lastPackageJsonContent: string | null = null;
 let _wcDevServerReady = false;
@@ -48,8 +58,15 @@ const _lastWrittenGlobal = new Map<string, string>();
 
 const MAX_WATCHDOG_ATTEMPTS = 3;
 const WATCHDOG_COUNTDOWN_SECS = 5;
+// WebContainers are high-fidelity, but they must not hold the whole preview
+// hostage. If the heavier runtime cannot boot quickly, PreviewPanel falls back
+// to the standard iframe renderer that works for generated React apps.
 const BOOT_TIMEOUT_MS = 15_000;
-const BOOT_STALL_MS = 18_000;
+const PHASE_STALL_MS: Record<Exclude<Status, "idle" | "ready" | "error">, number> = {
+  booting: 18_000,
+  installing: 75_000,
+  starting: 35_000,
+};
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
@@ -66,9 +83,21 @@ function resetWebContainerSingleton() {
   _wcDevServerReady = false;
   _wcPreviewUrl = null;
   _lastWrittenGlobal.clear();
+  // `boot()` early-returns while `_bootInProgress` is true. That flag is only
+  // cleared in boot()'s own `finally`, which does NOT run when we ABANDON a boot
+  // (phase-stall watchdog, hard refresh, project switch) — the orphaned promise
+  // keeps the flag set for up to ~128s. Meanwhile PreviewPanel remounts this
+  // component on every refresh/AI file write (`key={refreshKey}`), and the fresh
+  // instance's boot() silently no-ops against the stale flag: the panel sits at
+  // "idle"/"Ready to start" forever with no way to retry. Abandoning a boot must
+  // therefore release its guards too.
+  _bootInProgress = false;
+  _depsInstallRunning = false;
+  // Invalidate any in-flight boot so its late callbacks become no-ops.
+  _bootGeneration++;
 }
 
-const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onError, embedded = false, className = "", projectId }) => {
+const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onError, onReady, embedded = false, className = "", projectId }) => {
   const [status, setStatus] = useState<Status>("idle");
   const [logs, setLogs] = useState<string[]>([]);
   // Watchdog state
@@ -85,6 +114,9 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
   const lastWrittenRef = useRef<Map<string, string>>(new Map());
   const bootedRef = useRef(false);
   const bootingRef = useRef(false);
+  /** Always the newest `files` prop — see hardRefresh() for why the closure is unsafe. */
+  const latestFilesRef = useRef(files);
+  latestFilesRef.current = files;
 
   const addLog = useCallback((line: string) => {
     setLogs((prev) => [...prev.slice(-300), line.replace(/\n$/, "")]);
@@ -202,6 +234,12 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
     }
     if (projectId) _wcProjectId = projectId;
 
+    // Claim this boot. If anything abandons it (stall watchdog, hard refresh,
+    // project switch), _bootGeneration moves on and `isStale()` turns every late
+    // callback below into a no-op.
+    const myGeneration = ++_bootGeneration;
+    const isStale = () => myGeneration !== _bootGeneration;
+
     // Dev server already running — hot-sync changed files (Vite HMR picks these up)
     if (_wcInstance && _wcDevServerReady) {
       bootedRef.current = true;
@@ -261,7 +299,7 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
           } else {
             addLog("Booting WebContainer...");
             _wcBooting = withTimeout(
-              WebContainer.boot({ coep: "require-corp" }),
+              WebContainer.boot({ coep: "credentialless" }),
               BOOT_TIMEOUT_MS,
               "WebContainer boot",
             );
@@ -367,20 +405,48 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
       let serverReadyUnsubscribe: (() => void) | undefined;
       const serverReadyPromise = new Promise<void>((resolve) => {
         serverReadyTimeout = setTimeout(() => {
-          addLog("⚠ Server ready timeout — dev server may be running");
-          bootedRef.current = true;
+          // This boot may already have been abandoned by the phase-stall watchdog
+          // (which fires for "starting" at 35s — 25s BEFORE this). Resurrecting it
+          // here would overwrite the error state.
+          if (isStale()) { resolve(); return; }
+
+          // If the server-ready event was merely missed but we do know the URL,
+          // recover with it.
+          if (_wcPreviewUrl) {
+            addLog("⚠ Server ready event missed — recovering with known preview URL");
+            setPreviewUrl(_wcPreviewUrl);
+            setStatus("ready");
+            bootedRef.current = true;
+            bootingRef.current = false;
+            _bootInProgress = false;
+            resolve();
+            return;
+          }
+
+          // No URL means there is literally nothing to render. Reporting "ready"
+          // here (as this used to) paints a green "Live" badge over a blank
+          // "Loading…" pane forever. Fail honestly instead so the panel can fall
+          // back to the standard preview.
+          const msg = "Dev server never reported a preview URL — switching to standard preview";
+          addLog(`⚠ ${msg}`);
           bootingRef.current = false;
-          setStatus("ready");
+          bootedRef.current = false;
+          _bootInProgress = false;
+          setStatus("error");
+          setErrorMsg(msg);
+          queueMicrotask(() => onError?.(msg));
           resolve();
-        }, 30000);
+        }, 60000);
 
         serverReadyUnsubscribe = wc.on("server-ready", (_port: number, url: string) => {
           clearTimeout(serverReadyTimeout);
+          if (isStale()) { resolve(); return; }
           addLog(`Server ready at ${url}`);
           _wcPreviewUrl = url;
           _wcDevServerReady = true;
           setPreviewUrl(url);
           setStatus("ready");
+          onReady?.(url);
           bootedRef.current = true;
           bootingRef.current = false;
           _bootInProgress = false;
@@ -407,9 +473,21 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
         );
         addLog("❌ Cross-origin isolation error — WebContainers unavailable");
       } else if (msg.includes("Only a single WebContainer instance") && _wcInstance) {
+        // The singleton is already alive — adopt it. This MUST restore the preview
+        // URL from the singleton: setting "ready" without it (as this used to) left
+        // a green "Live" badge above a permanently blank "Loading…" pane, because
+        // the body renders `previewUrl ? <iframe/> : "Loading…"`.
         bootedRef.current = true;
         bootingRef.current = false;
-        setStatus("ready");
+        if (_wcPreviewUrl) {
+          setPreviewUrl(_wcPreviewUrl);
+          setStatus("ready");
+          onReady?.(_wcPreviewUrl);
+        } else {
+          // Container exists but has no serving URL yet — let it keep starting
+          // rather than lying about being ready.
+          setStatus("starting");
+        }
         return;
       } else {
         setErrorMsg(msg);
@@ -425,7 +503,7 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
     } finally {
       _bootInProgress = false;
     }
-  }, [addLog, mountFiles, onError, syncFiles, reinstallIfDepsChanged, projectId]);
+  }, [addLog, mountFiles, onError, onReady, syncFiles, reinstallIfDepsChanged, projectId]);
 
   const filesSignature = React.useMemo(() => filesContentSignature(files), [files]);
 
@@ -434,7 +512,10 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
     // belongs to THIS project, otherwise we'd flash the previous project's
     // preview URL before boot() tears the container down.
     if (projectId && _wcProjectId && _wcProjectId !== projectId) return;
-    if (_wcPreviewUrl) setPreviewUrl(_wcPreviewUrl);
+    if (_wcPreviewUrl) {
+      setPreviewUrl(_wcPreviewUrl);
+      onReady?.(_wcPreviewUrl);
+    }
     if (_wcDevServerReady) {
       bootedRef.current = true;
       setStatus("ready");
@@ -465,7 +546,7 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
       setErrorMsg(msg);
       // Defer parent callback — calling toast/setState upstream inside setStatus caused React warnings
       queueMicrotask(() => onError?.(msg));
-    }, BOOT_STALL_MS);
+    }, PHASE_STALL_MS[stalledPhase]);
     return () => clearTimeout(timer);
   }, [status, addLog, onError]);
 
@@ -481,7 +562,11 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
     _lastPackageJsonContent = null;
     setWatchdogCountdown(null);
     if (watchdogTimerRef.current) clearInterval(watchdogTimerRef.current);
-    boot(files);
+    // Read files from a ref, NOT the closure. The health watchdog's interval is
+    // created in an effect keyed only on `status`, so it captures the hardRefresh
+    // from the render where the error occurred — booting with a stale snapshot and
+    // discarding any files the AI streamed in during the 5s countdown.
+    boot(latestFilesRef.current);
   };
 
   // ── Health watchdog: auto-restart on crash ──────────────────────────────

@@ -45,8 +45,11 @@ function approvedModelOr(model: AIModel | string | null | undefined, fallback: A
 }
 
 function fallbackModelForMode(mode: EditorMode | string): AIModel {
-  if (mode === "chat" || mode === "plan" || mode === "patch") {
+  if (mode === "chat" || mode === "plan") {
     return approvedModelOr(ECONOMY_CHAT_MODEL, SAFE_ECONOMY_CHAT_MODEL);
+  }
+  if (mode === "patch") {
+    return approvedModelOr(ECONOMY_CODING_MODEL, SAFE_ECONOMY_CODING_MODEL);
   }
   return approvedModelOr(ECONOMY_CODING_MODEL, SAFE_ECONOMY_CODING_MODEL);
 }
@@ -91,10 +94,10 @@ export function resolveBudgetAwareModel(params: {
 
   const simple = isSimpleEditorRequest(params);
   if (simple && !justifiedAutoClaude) {
-    if (params.mode === "chat" || params.mode === "patch") {
+    if (params.mode === "chat") {
       return approvedModelOr(ECONOMY_CHAT_MODEL, SAFE_ECONOMY_CHAT_MODEL);
     }
-    if (FIX_RE.test(params.prompt)) {
+    if (params.mode === "patch" || FIX_RE.test(params.prompt)) {
       return approvedModelOr(ECONOMY_CODING_MODEL, SAFE_ECONOMY_CODING_MODEL);
     }
     return approvedModelOr(FREE_CODING_MODEL, SAFE_FREE_CODING_MODEL);
@@ -135,6 +138,14 @@ export function contextBudgetForRequest(params: {
   defaultBudget: number;
   hasImage?: boolean;
 }): number {
+  // Menu/header edits need the real Header/Navbar source in context — don't
+  // shrink the budget so aggressively that the nav file gets truncated away.
+  const menuNav =
+    params.mode === "patch" &&
+    /\b(menu|nav|navbar|header)\b/i.test(params.prompt) &&
+    /\b(add|insert|include|put|update|change|fix|remove)\b/i.test(params.prompt);
+  if (menuNav) return Math.max(params.defaultBudget, 32000);
+
   if (!isSimpleEditorRequest(params)) return params.defaultBudget;
   if (params.mode === "chat") return Math.min(params.defaultBudget, 12000);
   if (params.mode === "patch") return Math.min(params.defaultBudget, 18000);

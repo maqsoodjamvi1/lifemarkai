@@ -2,11 +2,8 @@ import type { Metadata, Viewport } from "next";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import "./globals.css";
-import { ThemeProvider } from "@/components/providers/theme-provider";
-import { QueryProvider } from "@/components/providers/query-provider";
-import { Toaster } from "@/components/ui/toaster";
-import { ConfirmDialogProvider } from "@/components/ui/confirm-dialog";
-import { ServiceWorkerRegistrar } from "@/components/pwa/service-worker-registrar";
+import { ClientShell } from "@/components/providers/client-shell";
+import { LM_BOOT_INLINE } from "@/lib/lm-boot-inline";
 
 export const viewport: Viewport = {
   themeColor: "#7c3aed",
@@ -78,24 +75,15 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Sync inline boot — must live in <head> (not a direct <html> child). */}
+        <script dangerouslySetInnerHTML={{ __html: LM_BOOT_INLINE }} />
+      </head>
       <body
         suppressHydrationWarning
         className={`${GeistSans.variable} ${GeistMono.variable} font-sans antialiased`}
       >
-        <ServiceWorkerRegistrar />
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="dark"
-          enableSystem
-          disableTransitionOnChange
-        >
-          <QueryProvider>
-            <ConfirmDialogProvider>
-              {children}
-              <Toaster />
-            </ConfirmDialogProvider>
-          </QueryProvider>
-        </ThemeProvider>
+        <ClientShell>{children}</ClientShell>
       </body>
     </html>
   );

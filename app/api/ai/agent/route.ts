@@ -24,7 +24,8 @@ import {
   buildEditorIntelligencePromptBlock,
   recordEditorIntelligenceBuild,
 } from "@/lib/ai/editor-lenses/persistence";
-import { maxOutputTokensForRequest, resolveBudgetAwareModel } from "@/lib/ai/cost-controls";
+import { isSimpleEditorRequest, maxOutputTokensForRequest, resolveBudgetAwareModel } from "@/lib/ai/cost-controls";
+import { resolveSmartModel } from "@/lib/ai/editor-intelligence";
 
 export const runtime = "nodejs";
 // Agent run + backend wiring + browser verification (Lovable budgets 15 min).
@@ -118,12 +119,21 @@ export async function POST(req: NextRequest) {
 
   const { data: files } = await (supabase as any)
     .from("project_files").select("path, content").eq("project_id", projectId);
+  const fileCount = Array.isArray(files) ? files.length : 0;
+  const serverAutoModel = modelManuallySelected === true
+    ? model
+    : resolveSmartModel("agent", { fileCount, hasPreviewError: false }, costTask);
   const effectiveModel = resolveBudgetAwareModel({
-    requestedModel: model,
+    requestedModel: serverAutoModel,
     mode: "agent",
     prompt: costTask,
-    fileCount: Array.isArray(files) ? files.length : 0,
+    fileCount,
     manuallySelected: modelManuallySelected === true,
+  });
+  const simpleAgentRequest = isSimpleEditorRequest({
+    mode: "agent",
+    prompt: costTask,
+    fileCount,
   });
 
   // ── User MCP chat connectors (migration 076) ─────────────────────────────
@@ -204,7 +214,7 @@ export async function POST(req: NextRequest) {
           maxOutputTokens: maxOutputTokensForRequest({
             mode: "agent",
             prompt: costTask,
-            fileCount: Array.isArray(files) ? files.length : 0,
+            fileCount,
             defaultBuildMax: 8000,
             defaultChatMax: 4000,
           }),
@@ -248,7 +258,7 @@ export async function POST(req: NextRequest) {
 
         // Save agent task as messages
         await (supabase as any).from("messages").insert([
-          { project_id: projectId, role: "user", content: task, mode: "agent" },
+          { project_id: projectId, role: "user", content: costTask, mode: "agent" },
           {
             project_id: projectId, role: "assistant",
             content: result.summary, tokens_used: result.tokensUsed,
@@ -304,6 +314,7 @@ export async function POST(req: NextRequest) {
               supabase,
               projectId,
               emit: (status) => send({ verify_status: status }),
+              maxRounds: simpleAgentRequest ? 0 : undefined,
             });
           } catch { verification = null; }
 

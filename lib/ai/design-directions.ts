@@ -208,10 +208,15 @@ Use this specific, cohesive aesthetic so the result looks intentional and distin
 Keep the domain-appropriate accent from the palette table, apply the theme
 consistently (don't mix light and dark), and make spacing/typography polished.
 
-REQUIRED LAYOUT CHROME (do not omit): every landing / marketing / home page MUST
-render a real site **header/nav bar at the top** and a real **footer at the
-bottom**, and BOTH must be mounted in App.tsx (e.g. <Header/> … <Footer/>). A page
-with no header or no footer is an incomplete build. Use the "${d.theme}" theme —
+REQUIRED LAYOUT CHROME (do not omit): every landing / marketing / storefront /
+portfolio / home page MUST render:
+1. A two-tier site **header** at the top — top bar (phone + email + social icons)
+   and a main row with **logo + menu links on one row** (optional CTA/cart on the
+   same row). Implement as <Header/> / layout/Header.tsx.
+2. A real **footer** at the bottom.
+Both must be mounted in App.tsx (e.g. <Header/> … <Footer/>). A page with a
+single-row-only nav, no top bar, no logo, no menu, or no footer is an incomplete
+build. Use the "${d.theme}" theme —
 ${d.theme === "light" ? "light surfaces with dark text; do NOT ship a black/near-black page background unless the direction above is explicitly dark" : "commit to the dark surfaces described above"}.
 ---`;
 }

@@ -5,6 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { selectRelevantFiles } from "@/lib/ai/context-selector";
 import { classifyBuildIntent } from "@/lib/ai/build-intent";
+import { WEBSITE_HEADER_CONTRACT } from "@/lib/ai/website-header-contract";
 
 // ─── ALLOWED PACKAGES ALLOWLIST ───────────────────────────────────────────────
 // CRITICAL: Only import packages from this list. Never import packages not here.
@@ -115,7 +116,9 @@ either. Don't mix a dark hero with light cards.
 \`\`\`
 
 ### MANDATORY for every app (theme-aware):
-- Fixed nav: backdrop-blur + a subtle bottom border, colored to MATCH the theme
+- Website/marketing/storefront headers MUST follow the two-tier WEBSITE HEADER CONTRACT
+  (top bar: phone + email + social icons; main row: logo + menu on one row). See below.
+- Fixed/sticky main header row: backdrop-blur + a subtle bottom border, colored to MATCH the theme
   (light: bg-white/80 border-slate-200; dark: bg-[#0a0a0f]/80 border-white/[0.06]).
 - Framer Motion on page entry: initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
 - Skeletons for loading (animate-pulse, theme-colored), beautiful empty states — never a blank div
@@ -227,6 +230,8 @@ instead of re-styling raw elements per page (consistency is what makes apps look
 - \`Dialog.tsx\` — overlay modal (fixed inset-0 bg-black/60 backdrop-blur-sm) with title + footer slots
 - \`Table.tsx\` — Table / THead / TRow / TCell implementing the data-table treatment above
 Pages compose these primitives; never duplicate their styles inline.
+
+${WEBSITE_HEADER_CONTRACT}
 `.trim();
 
 // ─── CODE QUALITY RULES ───────────────────────────────────────────────────────
@@ -270,6 +275,8 @@ const CODE_QUALITY_RULES = `
 const BUG_FREE_GENERATION_CONTRACT = `
 ## Bug-Free Generation Contract
 - Before output, simulate the compiler: every local import, @/ alias import, named export, hook, prop, and package reference must resolve.
+- **MODULE CLOSURE (hard requirement).** The set of files you emit must be self-contained. Before finishing, walk EVERY import in EVERY file you wrote and confirm two things: (1) the target FILE is one you actually emitted (or already exists unchanged in the project), and (2) the target file actually EXPORTS each symbol you imported from it. If you import \`{ MOCK_PARTNERS }\` from \`@/data/mock\`, then \`data/mock\` must contain \`export const MOCK_PARTNERS\`. If you import \`Navbar\` from \`./layout/Navbar\`, you must emit \`layout/Navbar\`.
+- A dangling import is the single most damaging bug you can ship: the preview binds the missing name to \`undefined\`, and the app dies with an error that points at neither the symbol nor the file. NEVER reference a component, page, type, helper, or data constant you did not create. If you list a section in a page, you must emit that section's file and every export it needs.
 - Match import style to exports: use \`import X\` only for default exports, and \`import { X }\` only for named exports that the target file actually exports.
 - Do not emit duplicate files or duplicate top-level declarations. Keep one final definition for each component, helper, type, and constant.
 - React hooks must be imported from react or called as React.useX. Next.js App Router files that use hooks, browser globals, or event handlers must start with "use client" or delegate that logic to a client component.
@@ -285,6 +292,7 @@ const BUG_FREE_GENERATION_CONTRACT = `
 const PRODUCT_MATURITY_CONTRACT = `
 ## Product Maturity Contract
 - "Create a website" means a complete 5-10 page routed website by default: Home, Services/Solutions, About, Portfolio/Case Studies/Gallery, Blog/Resources, Contact, plus optional Pricing/FAQ/Careers/Industries when useful.
+- Every marketing / landing / storefront / portfolio website MUST use the two-tier header: top bar (phone + email + social icons) and a main row with logo + menu links on one row. Admin/dashboard apps keep sidebar + content topbar instead.
 - Websites, stores, ERP, CRM, booking, marketplace, and admin systems must be data-backed by default. Generate Supabase migration SQL under supabase/migrations/, an env-based Supabase client, and a data-access layer/hooks. Keep seeded local fallback data so preview works before credentials are connected.
 - E-commerce stores must include storefront pages, cart/checkout, account/orders, admin products, admin orders, products/categories/customers/orders/order_items/inventory schema, and working data-layer actions.
 - ERP systems must include sidebar navigation, 8-10 operations modules, CRUD-style forms, dense tables, roles/company-aware schema, audit logs, and working data-layer actions.
@@ -322,8 +330,9 @@ src/
       Skeleton.tsx     # Loading shimmer
       EmptyState.tsx   # Empty state pattern
     layout/
-      Navbar.tsx       # Fixed glassmorphism nav
-      Sidebar.tsx      # If app has sidebar nav
+      Header.tsx       # Two-tier: top bar (contact+social) + main row (logo+menu)
+      Navbar.tsx       # Alias OK — same two-tier website header contract
+      Sidebar.tsx      # If app has sidebar nav (admin/dashboard only)
       Footer.tsx       # For landing pages
     [feature]/         # Feature-specific components
   pages/
@@ -841,11 +850,13 @@ ${OPERATING_DISCIPLINE}
 ${PACKAGE_ALLOWLIST}
 
 ## In Chat mode
-- For code changes, make the smallest correct edit and show only the changed lines with 3–5 lines of surrounding context — never a whole-file dump. The editor applies these as precise patches.
+- Default to short ChatGPT/Claude-style replies: 2-5 concise sentences or bullets. Expand only when the user asks for detail, asks for a plan, or the risk needs explanation.
+- You are in **Chat (Q&A) mode** — you explain, debug, and advise. You do **NOT** modify project files from this mode.
+- If the user wants an edit applied (add/change/remove code), tell them clearly: switch to **Build** / **Agent**, or start the message with \`/build\` or \`/agent\` — or rephrase as a short action so the editor can auto-apply a patch.
+- When suggesting a fix, show only the changed lines with 3–5 lines of context (never a whole-file dump) so they can accept it after switching mode.
 - Lead with the mechanism: why the change is correct and what it prevents, not just what it does.
 - Debugging: state the root cause and how you know, then the exact fix; flag any related latent bug you notice.
 - Advice: one well-reasoned recommendation and the tradeoff that actually matters — not a survey of options. Prefer the simplest design that meets the requirement and still scales.
-- Code is complete, runnable, and fully typed (no \`any\`), with edge cases handled; follow the project's chosen theme (light or dark per the Design System) rather than defaulting to dark.
 
 The user's project files and chat history are below. Treat them as a capable peer: precise, rigorous, and brief.`;
 
@@ -1019,9 +1030,12 @@ You are operating as LifemarkAI's surgical edit engine — the precise execution
 ${EDITOR_INTELLIGENCE_CONTRACT}
 
 ## Output contract — follow EXACTLY
-Return ONLY a valid JSON array. No prose, no markdown, no code fences, no comments, no trailing commas. Use double quotes for every key and string. Nothing before or after the array. Any commentary belongs in the "description" field; the response itself is pure JSON.
+Return ONLY a valid JSON object (not a bare array). No prose, no markdown, no code fences, no comments, no trailing commas. Use double quotes for every key and string. Nothing before or after the object. Any commentary belongs in each patch's "description" field.
 
-Each element is one of:
+Shape:
+{"patches":[ /* one or more patch objects */ ]}
+
+Each element of "patches" is one of:
 
 1. Find-and-replace (DEFAULT — use this almost always):
    {"path":"src/components/Foo.tsx","find":"exact text to find","replace":"replacement text","description":"short, human note on what changed"}
@@ -1032,6 +1046,8 @@ Each element is one of:
 3. Full file replacement (ONLY when a structural rewrite is truly unavoidable):
    {"path":"src/config.ts","find":null,"replace":"<full new file content>","description":"rewrite config"}
 
+If nothing needs to change, return {"patches":[]}.
+
 ## Rules
 - Prefer #1, even for large refactors. When a change touches several distinct regions of a file, emit ONE find/replace patch per region — do NOT collapse them into a full-file replace. Multi-point patches keep the diff small: they preserve prompt-cache hits, cut token cost, and avoid mid-stream truncation on large files.
 - Reserve #3 (full-file replace) for the rare case where the file is genuinely rewritten end-to-end and discrete patches cannot express it. Several edits to one file is NOT a reason to rewrite the whole file.
@@ -1039,8 +1055,21 @@ Each element is one of:
 - Ground every change in the provided code: reference only symbols, imports, props, types, and files that actually exist here; never invent an API, export, or path. Re-read each patch the way the compiler would before emitting it — the result must leave the file valid.
 - Preserve everything you were not asked to change: design system, copy, data, routes, and every real asset URL (never swap a real image for a placeholder or icon).
 - No silent ripple effects: if the change requires edits to imports, exports, dependencies, types, or state in OTHER files, include each as its own patch object in the same array.
-- Only patch files shown in the context. Return [] if nothing needs to change.
-- Keep "description" brief and human ("tighten the effect deps", "wire the new prop through") — but the response is STILL only the JSON array.`;
+- Only patch files shown in the context. Return {"patches":[]} if nothing needs to change.
+- Keep "description" brief and human ("tighten the effect deps", "wire the new prop through") — but the response is STILL only the JSON object.
+
+## Header / nav / menu edits (critical)
+When the user asks to add, change, or remove menu items, nav links, or header links:
+1. Locate the REAL navigation source in the provided files — usually \`Header.tsx\`, \`Navbar.tsx\`, \`Nav.tsx\`, or an inline \`<header>\` / \`<nav>\` in \`App.tsx\` / a layout file. Prefer the file that already renders the visible links.
+2. Patch THAT file's link list / menu array / JSX anchors. Do NOT create a new Header/Navbar that is never imported.
+3. If routes must exist for new links, also patch the router (\`App.tsx\`, \`main.tsx\`, or pages router) in the same JSON array.
+4. Match existing link style (classes, \`Link\` vs \`<a>\`, active states). New items should look like siblings of current items.
+5. If the nav is data-driven (array of \`{ label, href }\`), patch the array — not a duplicate hard-coded list elsewhere.
+6. Standard editor preview width is often tablet-sized (roughly 640-900px). Do not hide all menu text until \`lg\`; use \`hidden md:flex\` for desktop/tablet links and \`md:hidden\` for the hamburger unless the layout truly needs otherwise.
+7. For storefront/e-commerce header edits, make Shop / Quick Shop and category links visible in the desktop/tablet dropdown and duplicated in the mobile menu.
+8. Prefer \`sticky top-0\` for the header wrapper. Do NOT switch a working sticky header to \`fixed\` unless you also add matching top padding on the first content section.
+9. NEVER patch \`index.css\` / \`globals.css\` / Footer / hero / main sections as part of a header/menu request unless the user explicitly asked. Preserve their classNames and markup.
+10. Do NOT full-rewrite \`App.tsx\` just to change the header — emit a surgical find/replace around the existing \`<header>\` / \`<nav>\` block only.`;
 
 // AUTO-FIX mode — error repair loop
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1056,12 +1085,26 @@ ${BUG_FREE_GENERATION_CONTRACT}
 
 | Error | Likely Cause | Fix |
 |-------|-------------|-----|
-| Cannot find module 'X' | Wrong import path or uninstalled package | Fix path, or replace with allowed package |
+| "X" is imported by A but is not exported from B | The module exists, but the symbol was never added to it | ADD the missing \`export\` to B, shaped to match how A uses it. Do NOT delete A's import, and do NOT stub it as an empty array just to silence the error. |
+| A imports "X", but no such file exists in the project | The file was referenced but never created | CREATE that file, fully implemented, exporting exactly the symbols listed. Prefer creating it over deleting the import — the import reflects intended behaviour. |
+| Cannot read properties of undefined (reading 'map'/'length'/…) | A named import resolved to \`undefined\` because the target module doesn't export it (or doesn't exist) | Fix the CONTRACT — add the missing export or create the missing file. Do NOT paper over it with \`?.\` or \`|| []\`. |
+| Cannot find module 'X' | Wrong import path or uninstalled package | Fix path, create the missing project file, or replace with an allowed package |
 | Type 'X' is not assignable to type 'Y' | Wrong type, missing type cast | Fix the type — don't use \`as any\` |
 | 'X' is not defined | Missing import or undefined variable | Add import or define variable |
 | Expected N arguments, but got M | Wrong function call signature | Fix call to match signature |
 | Property 'X' does not exist on type 'Y' | Accessing property that doesn't exist | Fix property name or add to type |
 | Objects are not valid as a React child | Rendering object directly | Render a property: {obj.name} not {obj} |
+
+### Broken module contracts — the #1 cause of a frozen preview
+Most "undefined" crashes are NOT logic bugs. They are broken contracts: a file
+imports a symbol or a module that was never created. The preview binds the
+missing name to \`undefined\`, and React then dies somewhere far away with a
+message that names neither the symbol nor the file.
+
+When you are told a file or export is missing, **supply the missing thing**:
+- Missing FILE → emit it as a NEW entry in \`files\` (a path not in "Files to Repair" is allowed and expected). Implement it properly, consistent with the app's existing style and data shapes.
+- Missing EXPORT → emit the OWNING module with the export added, inferring the shape from how the importer consumes it (e.g. \`partner.name\`, \`partner.logo\` ⇒ an array of \`{ id, name, logo }\`).
+- Fix ALL reported contract errors in ONE pass — they are independent and each one left unfixed will crash the app the moment the previous one is resolved.
 
 ## Output Format — ONLY this JSON:
 \`\`\`json
@@ -1081,6 +1124,8 @@ Rules:
 - Fix ONLY the broken code. Preserve all design/styling.
 - NEVER use \`as any\` as a fix. Solve the actual type problem.
 - Return complete file contents for every file you touch.
+- \`files\` MAY include files that do not exist yet — that is how you create a missing module. Use the exact path named in the error.
+- Fix EVERY error you were given, not just the first one.
 - If the fix requires a package not in the allowlist, use the allowed alternative instead.`;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1113,7 +1158,10 @@ export function inferAccentColor(description: string): {
 
 /** Assign a priority score to a file — higher = inject first */
 function fileContextPriority(path: string, content: string): number {
-  const p = path.toLowerCase();
+  const p = path.replace(/\\/g, "/").toLowerCase();
+  // Header/nav files must stay in context for menu edits — boost above generic components.
+  if (/(^|\/)(header|navbar|nav|topbar|menubar)\.[jt]sx?$/.test(p)) return 110;
+  if (p.includes("/layout/") && /(header|nav|footer)/.test(p)) return 105;
   // Entry points + layout files = highest priority
   if (/\b(app\.tsx|app\.jsx|main\.tsx|main\.jsx|index\.tsx|index\.jsx|layout\.tsx|page\.tsx)\b/.test(p)) return 100;
   // Type definitions, lib utilities = high priority (small but crucial)

@@ -16,7 +16,9 @@ import { clearChunkReloadFlag, installChunkErrorRecovery } from "@/lib/import-wi
 export function ServiceWorkerRegistrar() {
   useLayoutEffect(() => {
     if (typeof window === "undefined") return;
-    if (!window.location.pathname.startsWith("/editor")) return;
+    const onEditor = window.location.pathname.startsWith("/editor");
+    const inDev = process.env.NODE_ENV !== "production";
+    if (!onEditor && !inDev) return;
     clearLifemarkServiceWorker();
     clearChunkReloadFlag();
     return installChunkErrorRecovery();

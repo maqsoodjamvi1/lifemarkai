@@ -161,10 +161,30 @@ export async function publishProjectFromChat(
       .eq("id", userId)
       .single();
 
+    // Ensure a unique app_slug so the URL is a CLEAN slug host; generate lazily
+    // if missing (builder falls back to the id-embedded host on failure).
+    let appSlug: string | null = (project as { app_slug?: string | null }).app_slug ?? null;
+    if (!appSlug) {
+      try {
+        const { data: gen } = await (supabase as any).rpc("generate_app_slug", {
+          p_name: (project as { name?: string }).name ?? "app",
+        });
+        if (typeof gen === "string" && gen) {
+          appSlug = gen;
+          await (supabase as any)
+            .from("projects")
+            .update({ app_slug: gen })
+            .eq("id", projectId)
+            .is("app_slug", null);
+        }
+      } catch { /* fall back to id-based URL */ }
+    }
+
     const lifemarkUrl = () =>
       buildLifemarkDeployUrl({
         projectName: project.name as string,
         projectId,
+        appSlug,
         brandedSubdomain: ownerProfile?.branded_subdomain,
         brandedStatus: ownerProfile?.branded_status,
       });

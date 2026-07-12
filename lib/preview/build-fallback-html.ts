@@ -13,7 +13,7 @@ import {
 } from "@/lib/preview/next-app-preview";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "31";
+export const PREVIEW_ENGINE_REV = "35";
 
 /** Strip PostCSS-only directives — invalid in a raw <style> tag. */
 export function sanitizePreviewCss(css: string): string {
@@ -63,7 +63,8 @@ export function preparePreviewCss(
   return css;
 }
 
-const SHADCN_TAILWIND_CDN_CONFIG = `tailwind.config = {
+const SHADCN_TAILWIND_CDN_CONFIG = `window.tailwind = window.tailwind || {};
+tailwind.config = {
   darkMode: ['class'],
   theme: {
     extend: {
@@ -670,12 +671,51 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
         : `${indent}const __default_export_extra = `; // a second default — keep it parseable
     });
 
+    // Collected exports as {exported, local} pairs. Bare names can't represent
+    // `export { Card as Panel }` (exported name ≠ local binding), which is why the
+    // old bare-string list had to smuggle aliases in as a "...(spread)" entry —
+    // and the assembly step below then filtered those very entries back out, so
+    // `export { … }` silently registered NOTHING. Pairs make aliases first-class.
+    const namedExports: Array<{ exported: string; local: string }> = [];
+    const addExport = (exported: string, local = exported) => {
+      if (/^[\w$]+$/.test(local)) namedExports.push({ exported, local });
+    };
+
+    // ── Destructured exports: `export const { a, b: c } = …` / `export const [a] = …`
+    // The identifier handler below requires a plain name after const/let/var, so
+    // these never matched and fell through to the final safety net. That net is
+    // single-line, so a MULTI-line destructure had only its first line commented
+    // out, leaving a dangling `} = foo();` — a SyntaxError that blanks the WHOLE
+    // preview (Babel failure paints the red error box over #root). Handle them
+    // properly: drop the `export` keyword, keep the declaration, register the
+    // bound names.
+    const bindingNames = (pattern: string): string[] => {
+      const inner = pattern.slice(1, -1); // strip the outer { } or [ ]
+      const out: string[] = [];
+      for (const raw of inner.split(",")) {
+        let p = raw.trim();
+        if (!p) continue;
+        p = p.replace(/^\.\.\./, "");         // rest element
+        p = p.split("=")[0].trim();            // default value
+        if (p.includes(":")) p = p.split(":").pop()!.trim(); // { a: localName }
+        const m = p.match(/^[\w$]+/);
+        if (m) out.push(m[0]);
+      }
+      return out;
+    };
+    src = src.replace(
+      /export\s+(const|let|var)\s+(\{[^}]*\}|\[[^\]]*\])\s*=/g,
+      (_, kw: string, pattern: string) => {
+        for (const n of bindingNames(pattern)) addExport(n);
+        return `${kw} ${pattern} =`;
+      }
+    );
+
     // Collect names declared via export const/let/var/function/class
-    const namedExports: string[] = [];
     src = src.replace(
       /export\s+(async\s+)?(const|let|var|function|class)\s+([\w$]+)/g,
       (_, asyncKw: string | undefined, kw: string, name: string) => {
-        namedExports.push(name);
+        addExport(name);
         // Keep `async` — dropping just the line via the safety net would leave
         // a dangling function body and a fresh SyntaxError.
         return `${asyncKw ?? ""}${kw} ${name}`;
@@ -716,20 +756,17 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
         `try { const __star_exports = Object.assign(window.__M['${file.path}'] || {}, window.__Mrequire('${resolveRuntimeSpec(spec)}')); window.__Mdefine('${file.path}', __star_exports); window.__Mdefine('${fileShortPath}', __star_exports); } catch(e) {}\n`
     );
 
-    // export { A, B as C }
+    // export { A, B as C }   (bracket list with no `from` — grouped at file end)
     src = src.replace(
       /export\s+\{([^}]+)\}\s*;?\n?/g,
       (_, names: string) => {
-        const entries = names
-          .split(",")
-          .map((n) => n.trim())
-          .filter(Boolean)
-          .map((n) => {
-            const [orig, alias] = n.split(/\s+as\s+/).map((s) => s.trim());
-            return alias ? `${alias}: ${orig}` : `${n}: ${n}`;
-          })
-          .join(", ");
-        namedExports.push(`...({${entries}})`);
+        for (const raw of names.split(",")) {
+          const n = raw.trim().replace(/^type\s+/, ""); // `export { type Foo }`
+          if (!n) continue;
+          const [orig, alias] = n.split(/\s+as\s+/).map((s) => s.trim());
+          // The EXPORTED name is the alias when present; the LOCAL binding is orig.
+          addExport(alias ?? orig, orig);
+        }
         return `/* named exports: ${names} */`;
       }
     );
@@ -749,9 +786,15 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
       src += `\ntry { window.__Mdefine('${file.path}', { default: ${defaultExportName} }); window.__Mdefine('${shortPath}', { default: ${defaultExportName} }); } catch(e) {}\n`;
     }
     if (namedExports.length > 0) {
-      const safeEntries = namedExports
-        .filter((n) => !n.startsWith("..."))
-        .map((n) => `${n}: typeof ${n} !== 'undefined' ? ${n} : undefined`)
+      // Dedupe on the EXPORTED name (last declaration wins, as in real ESM).
+      const byExported = new Map<string, string>();
+      for (const { exported, local } of namedExports) byExported.set(exported, local);
+
+      const safeEntries = [...byExported]
+        .map(
+          ([exported, local]) =>
+            `'${exported}': typeof ${local} !== 'undefined' ? ${local} : undefined`
+        )
         .join(", ");
       if (safeEntries) {
         src += `\ntry { window.__Mdefine('${file.path}', Object.assign(window.__M['${file.path}'] || {}, { ${safeEntries} })); window.__Mdefine('${shortPath}', window.__M['${file.path}']); } catch(e) {}\n`;
@@ -830,14 +873,40 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
     }
     try { window.parent.postMessage({ source: 'lifemark-preview', type: type, text: text }, '*'); } catch(e) {}
   }
+  function emitPreviewError(kind, message, extra) {
+    var text = nameScript(String(message || 'Unknown error'));
+    var m = text.trim();
+    if (!m || m === '{}' || m === '[]' || m === '[object Object]') return;
+    if (m.length < 4 && !/error|fail/i.test(m)) return;
+    try {
+      window.parent.postMessage({
+        source: 'lifemark-preview-errors',
+        type: 'preview-error',
+        kind: kind,
+        message: text,
+        extra: extra || {},
+        url: location.href,
+        timestamp: Date.now()
+      }, '*');
+    } catch(e) {}
+  }
   console.log   = function() { _log.apply(console, arguments);  relay('log',   arguments); };
   console.warn  = function() { _warn.apply(console, arguments); relay('warn',  arguments); };
   console.error = function() { _err.apply(console, arguments);  relay('error', arguments); };
   window.addEventListener('error', function(e) {
     relay('error', [(e.message || 'Unknown error') + (e.filename ? ' (' + e.filename + ':' + e.lineno + ')' : '')]);
+    emitPreviewError('runtime', e.message || 'Unknown error', {
+      filename: e.filename,
+      lineno: e.lineno,
+      colno: e.colno,
+      stack: e.error && e.error.stack ? String(e.error.stack) : ''
+    });
   });
   window.addEventListener('unhandledrejection', function(e) {
     relay('error', ['Unhandled promise rejection: ' + (e.reason?.message || String(e.reason))]);
+    emitPreviewError('promise', e.reason?.message || String(e.reason), {
+      stack: e.reason && e.reason.stack ? String(e.reason.stack) : ''
+    });
   });
 })();
 </script>`;
@@ -909,7 +978,37 @@ window.__Mrequire = function(path) {
   console.warn('[preview] module not found:', path);
   if (!window.__lmMissingModules) window.__lmMissingModules = [];
   window.__lmMissingModules.push(path);
-  return {};
+
+  // A missing PROJECT module (src/..., ./..., not a bare package) used to return
+  // a bare {} — so \`const { Navbar } = __Mrequire('src/.../Navbar')\` bound
+  // Navbar to undefined and the app later died with a stack deep inside
+  // react-dom that named neither the symbol nor the file. Hand back a proxy that
+  // reports exactly which symbol was pulled from which missing file, ONCE per
+  // symbol. Behaviour is unchanged (the value is still undefined) — but the
+  // failure is now self-describing, both in the console and in the error overlay.
+  var looksLikeProjectModule = /^(src\/|\.\/|\.\.\/)/.test(path) || path.indexOf('/') !== -1;
+  if (!looksLikeProjectModule) return {};
+
+  if (!window.__lmMissingExports) window.__lmMissingExports = [];
+  var reported = {};
+  return new Proxy({}, {
+    get: function(_, key) {
+      if (typeof key !== 'string') return undefined;
+      if (key === '__esModule') return true;
+      // React/JSX probe these on any value — never treat them as app symbols.
+      if (key === 'default' || key === 'then' || key === '$$typeof' || key === 'prototype') return undefined;
+      if (!reported[key]) {
+        reported[key] = true;
+        window.__lmMissingExports.push({ module: path, symbol: key });
+        console.error(
+          '[preview] "' + key + '" was imported from "' + path +
+          '", but that file does not exist in the project. Create ' + path +
+          ' and export ' + key + '.'
+        );
+      }
+      return undefined;
+    }
+  });
 };
 // Inline stubs for packages without CDN UMD builds
 window.__clsx = function() { return Array.from(arguments).flat(Infinity).filter(function(x) { return !!x && typeof x === 'string'; }).join(' '); };
@@ -1230,14 +1329,15 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
        through cross-origin code (notably Babel-executed output) are masked as
        the useless "Script error." — with it, real messages reach the console
        bridge. unpkg + jsdelivr both send Access-Control-Allow-Origin: *. -->
-  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js" crossorigin></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js" crossorigin
+    onerror="(function(){var s=document.createElement('script');s.src='https://unpkg.com/@babel/standalone/babel.min.js';s.crossOrigin='anonymous';document.head.appendChild(s);})();"></script>
   <!-- lucide-react and recharts use inline stubs below; their browser bundles
        are optional and have caused preview-blocking CDN/runtime errors. -->
   <!-- react-router-dom UMD requires react-router + @remix-run/router peers — loading it
        without those deps overwrote our function stubs with broken module objects
        ("Element type is invalid: got: object"). In-preview routing uses __reactRouterDom stubs. -->
   <script async src="https://cdn.jsdelivr.net/npm/react-hook-form@7/dist/index.umd.js" crossorigin
-    onload="if(window.ReactHookForm)Object.assign(window.__reactHookForm,window.ReactHookForm);"
+    onload="window.__reactHookForm=window.__reactHookForm||{};if(window.ReactHookForm)Object.assign(window.__reactHookForm,window.ReactHookForm);"
     onerror="console.warn('[preview] react-hook-form CDN failed — using stubs');"></script>
   <script async src="https://cdn.jsdelivr.net/npm/zod@3/lib/index.umd.js" crossorigin
     onload="if(window.Zod)window.__zod=window.Zod;"
@@ -1261,9 +1361,24 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
   ${fileScripts}
   <script>
   (function() {
-    function showError(file, msg) {
+    function showError(file, msg, err) {
+      var text = String(msg == null ? '' : msg);
+      try {
+        window.parent.postMessage({
+          source: 'lifemark-preview-errors',
+          type: 'preview-error',
+          kind: 'runtime',
+          message: text,
+          extra: {
+            filename: file,
+            stack: err && err.stack ? String(err.stack) : ''
+          },
+          url: location.href,
+          timestamp: Date.now()
+        }, '*');
+      } catch (e) {}
       try { console.error('[preview] ' + file + ': ' + msg); } catch (e) {}
-      var esc = String(msg == null ? '' : msg).replace(/[&<>]/g, function (c) {
+      var esc = text.replace(/[&<>]/g, function (c) {
         return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c];
       });
       var root = document.getElementById('root');
@@ -1310,12 +1425,12 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
             sourceType: 'unambiguous',
             filename: file,
           }).code;
-        } catch (err) { showError(file, (err && err.message) || err); return; }
+        } catch (err) { showError(file, (err && err.message) || err, err); return; }
         // Execute in an isolated IIFE so per-file const/let can't collide; cross
         // file linkage goes through window.__M (define/require), not scope.
         try {
           (0, eval)('(function(){"use strict";\\n' + code + '\\n})()');
-        } catch (err) { showError(file, (err && err.message) || err); return; }
+        } catch (err) { showError(file, (err && err.message) || err, err); return; }
       }
       try {
         var mod = window.__Mrequire('${entryPath}');
@@ -1367,6 +1482,15 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
             var modDetail = mods.length ? (' Missing module path(s): ' + mods.join(', ') + '.') : '';
             try {
               window.parent.postMessage({
+                source: 'lifemark-preview-errors',
+                type: 'preview-error',
+                kind: 'runtime',
+                message: missing + ' component(s) failed to resolve (shown as \\u26A0 missing component).' + modDetail + ' Check imports/exports or create the missing file(s).',
+                extra: { filename: '${entryPath}' },
+                url: location.href,
+                timestamp: Date.now()
+              }, '*');
+              window.parent.postMessage({
                 source: 'lifemark-preview',
                 type: 'error',
                 text: missing + ' component(s) failed to resolve (shown as \\u26A0 missing component).' + modDetail + ' Check imports/exports or create the missing file(s).'
@@ -1376,7 +1500,7 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
           }
           try { window.parent.postMessage({ source: 'lifemark-preview', type: 'success', text: 'render ok' }, '*'); } catch (e) {}
         }, 600);
-      } catch (err) { showError('${entryPath}', (err && err.message) || err); }
+      } catch (err) { showError('${entryPath}', (err && err.message) || err, err); }
     }
     function tailwindRuntimeReady() {
       if (window.__twBrowserV4 && window.__twLoaded) return true;

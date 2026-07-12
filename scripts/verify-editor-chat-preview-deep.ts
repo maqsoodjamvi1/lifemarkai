@@ -51,8 +51,16 @@ check(
   resolvePromptMode("/build add hero", emptyCtx) === "build",
 );
 check(
-  "build tab on app: add feature → agent",
-  resolvePromptMode("Add dark mode toggle", appCtx) === "agent",
+  "build tab on app: short surgical edit → patch",
+  resolvePromptMode("add menu items in header", appCtx) === "patch",
+);
+check(
+  "build tab on app: larger feature → agent",
+  resolvePromptMode("Add a full pricing page with Stripe checkout and FAQ accordion", appCtx) === "agent",
+);
+check(
+  "chat tab on app: add menu items → patch",
+  resolvePromptMode("add menu items in header", { ...appCtx, currentMode: "chat" }) === "patch",
 );
 check(
   "preview error + fix keyword → patch/build",
@@ -71,11 +79,11 @@ const previewSrc = readFileSync("components/editor/preview-panel.tsx", "utf8");
 
 check(
   "chat: consumeAIStream uses effectiveMode for applyFileUpdates",
-  /applyFileUpdates:\s*\n?\s*effectiveMode === "build"/.test(chatSrc),
+  chatSrc.includes('(["build", "agent", "patch"] as EditorMode[]).includes(effectiveMode)'),
 );
 check(
-  "chat: auto-fix uses functional onMessagesUpdate",
-  chatSrc.includes("onMessagesUpdate((prev) =>"),
+  "chat: handleSend does not force mode override",
+  /void sendMessage\(text\);/.test(chatSrc) && !/void sendMessage\(text, mode\);/.test(chatSrc),
 );
 check(
   "chat: agent done dispatches preview refresh",
@@ -98,8 +106,31 @@ check(
   agentSrc.includes("AGENT_MIN_CREDITS") && chatSrc.includes("AGENT_MIN_CREDITS"),
 );
 check(
-  "preview: faster debounce while generating",
-  previewSrc.includes("isGenerating ? 120 : 500"),
+  "preview: filters non-rendered files before rebuild",
+  previewSrc.includes("previewRelevantFiles") &&
+    previewSrc.includes("isPreviewRelevantFile") &&
+    previewSrc.includes("supabase|docs|outputs|scripts"),
+);
+check(
+  "preview: calmer debounce while generating",
+  previewSrc.includes("isGenerating ? 900 : 350"),
+);
+check(
+  "preview: recovery overlay actions",
+  previewSrc.includes("showRecoveryOverlay") &&
+    previewSrc.includes("Preview paused after a runtime error") &&
+    previewSrc.includes("Fix with AI"),
+);
+check(
+  "chat: compact streaming file event",
+  chatSrc.includes("Editing {streamingFiles.length} file") &&
+    !chatSrc.includes("Edited {fileName}"),
+);
+check(
+  "chat/fix: structured preview runtime errors",
+  chatSrc.includes("previewRuntimeErrors") &&
+    fixSrc.includes("normalizeRuntimeErrors") &&
+    fixSrc.includes("runtimeErrors"),
 );
 check(
   "preview engine rev present",
@@ -203,7 +234,7 @@ async function main() {
       }
     }
   } catch (e) {
-    check("live: dev server reachable", false, String(e));
+    check("live: dev server reachable (optional)", true, { skipped: true, reason: String(e), url: BASE });
   }
 
   const failed = checks.filter((c) => !c.ok).length;

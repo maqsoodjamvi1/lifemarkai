@@ -43,6 +43,10 @@ function pathVariants(resolved: string): string[] {
   ].map(normalizePath);
 }
 
+function isProjectImportSpec(spec: string): boolean {
+  return spec.startsWith(".") || spec.startsWith("@/") || spec.startsWith("src/");
+}
+
 function fileIndex(files: DiagnosableFile[]): Map<string, DiagnosableFile> {
   const idx = new Map<string, DiagnosableFile>();
   for (const f of files) {
@@ -70,7 +74,16 @@ function hasNamedExport(content: string, name: string): boolean {
   const re = new RegExp(
     `export\\s+(?:async\\s+)?(?:function|const|let|var|class)\\s+${name}\\b`,
   );
-  return re.test(content);
+  if (re.test(content)) return true;
+  // export { Name } / export { default as Name } / export { Foo as Name }
+  for (const match of content.matchAll(/\bexport\s*\{([^}]+)\}/g)) {
+    for (const raw of match[1].split(",")) {
+      const parts = raw.trim().split(/\s+as\s+/i).map((s) => s.trim());
+      const exported = parts[parts.length - 1];
+      if (exported === name) return true;
+    }
+  }
+  return false;
 }
 
 interface ParsedImport {
@@ -83,11 +96,13 @@ interface ParsedImport {
 function parseRelativeImports(file: DiagnosableFile): ParsedImport[] {
   const out: ParsedImport[] = [];
   const content = file.content;
+  const specPattern = `((?:\\.{1,2}\\/|@\\/|src\\/)[^'"]+)`;
 
   const defaultOnly =
-    /import\s+(\w+)\s+from\s+['"](\.\.?\/[^'"]+)['"]\s*;?/g;
+    new RegExp(`\\bimport\\s+(?!type\\b)(\\w+)\\s+from\\s+['"]${specPattern}['"]\\s*;?`, "g");
   let m: RegExpExecArray | null;
   while ((m = defaultOnly.exec(content)) !== null) {
+    if (!isProjectImportSpec(m[2])) continue;
     out.push({
       fromFile: file.path,
       spec: m[2],
@@ -97,21 +112,25 @@ function parseRelativeImports(file: DiagnosableFile): ParsedImport[] {
   }
 
   const namedOnly =
-    /import\s+\{([^}]+)\}\s+from\s+['"](\.\.?\/[^'"]+)['"]\s*;?/g;
+    new RegExp(`\\bimport\\s+(?:type\\s+)?\\{([^}]+)\\}\\s+from\\s+['"]${specPattern}['"]\\s*;?`, "g");
   while ((m = namedOnly.exec(content)) !== null) {
+    if (!isProjectImportSpec(m[2])) continue;
     const named = m[1]
       .split(",")
       .map((s) => s.trim().split(/\s+as\s+/)[0].trim())
+      .filter((s) => s !== "type")
       .filter(Boolean);
     out.push({ fromFile: file.path, spec: m[2], named });
   }
 
   const mixed =
-    /import\s+(\w+)\s*,\s*\{([^}]+)\}\s+from\s+['"](\.\.?\/[^'"]+)['"]\s*;?/g;
+    new RegExp(`\\bimport\\s+(?!type\\b)(\\w+)\\s*,\\s*\\{([^}]+)\\}\\s+from\\s+['"]${specPattern}['"]\\s*;?`, "g");
   while ((m = mixed.exec(content)) !== null) {
+    if (!isProjectImportSpec(m[3])) continue;
     const named = m[2]
       .split(",")
       .map((s) => s.trim().split(/\s+as\s+/)[0].trim())
+      .filter((s) => s !== "type")
       .filter(Boolean);
     out.push({ fromFile: file.path, spec: m[3], defaultName: m[1], named });
   }
@@ -139,7 +158,7 @@ export function diagnoseBrokenImports(files: DiagnosableFile[]): string[] {
 
       if (!target) {
         push(
-          `${imp.fromFile}: import from "${imp.spec}" — file not found (expected ${resolved}.tsx or similar)`,
+          `${imp.fromFile}: import from "${imp.spec}" - file not found (expected ${resolved}.tsx or similar)`,
         );
         continue;
       }
@@ -148,7 +167,7 @@ export function diagnoseBrokenImports(files: DiagnosableFile[]): string[] {
         if (!hasDefaultExport(target.content)) {
           if (hasNamedExport(target.content, imp.defaultName)) {
             push(
-              `${imp.fromFile}: \`import ${imp.defaultName} from "${imp.spec}"\` but ${target.path} uses named export — add \`export default ${imp.defaultName}\` or switch to \`import { ${imp.defaultName} }\``,
+              `${imp.fromFile}: \`import ${imp.defaultName} from "${imp.spec}"\` but ${target.path} uses named export - add \`export default ${imp.defaultName}\` or switch to \`import { ${imp.defaultName} }\``,
             );
           } else {
             push(
@@ -169,7 +188,7 @@ export function diagnoseBrokenImports(files: DiagnosableFile[]): string[] {
             new RegExp(`export\\s+default\\s+function\\s+${name}\\b`).test(target.content);
           if (!onlyDefault) {
             push(
-              `${imp.fromFile}: \`{ ${name} }\` not found in ${target.path} — check export name`,
+              `${imp.fromFile}: \`{ ${name} }\` not found in ${target.path} - check export name`,
             );
           }
         }

@@ -53,13 +53,16 @@ export const PREVIEW_ERROR_BRIDGE_SCRIPT = `(function() {
     emit("runtime", e.message || "Unknown error", {
       filename: e.filename,
       lineno: e.lineno,
-      colno: e.colno
+      colno: e.colno,
+      stack: e.error && e.error.stack ? String(e.error.stack) : ""
     });
   });
 
   window.addEventListener("unhandledrejection", function(e) {
     var msg = e.reason && (e.reason.message || String(e.reason)) || "Unhandled rejection";
-    emit("promise", msg, {});
+    emit("promise", msg, {
+      stack: e.reason && e.reason.stack ? String(e.reason.stack) : ""
+    });
   });
 
   var _err = console.error;
@@ -90,6 +93,7 @@ export interface PreviewRuntimeError {
   filename?: string;
   lineno?: number;
   colno?: number;
+  stack?: string;
   url?: string;
   timestamp: number;
 }
@@ -112,9 +116,22 @@ export function formatErrorsForHealing(errors: PreviewRuntimeError[]): string {
   return actionable
     .map((e, i) => {
       const loc = e.filename ? ` (${e.filename}:${e.lineno ?? "?"})` : "";
-      return `${i + 1}. [${e.kind}] ${e.message}${loc}`;
+      const stack = compactStack(e.stack);
+      return `${i + 1}. [${e.kind}] ${e.message}${loc}${stack ? `\n   stack: ${stack}` : ""}`;
     })
     .join("\n");
+}
+
+function compactStack(stack: string | undefined): string {
+  if (!stack) return "";
+  return stack
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^at\s+/i.test(line))
+    .filter((line) => !/react-dom|react\.production|scheduler/i.test(line))
+    .slice(0, 3)
+    .join(" | ")
+    .slice(0, 500);
 }
 
 export function buildHealingPrompt(errors: PreviewRuntimeError[]): string {
@@ -160,6 +177,7 @@ export function parsePreviewErrorMessage(data: unknown): PreviewRuntimeError | n
     filename: extra.filename as string | undefined,
     lineno: extra.lineno as number | undefined,
     colno: extra.colno as number | undefined,
+    stack: extra.stack as string | undefined,
     url: d.url as string | undefined,
     timestamp: Number(d.timestamp) || Date.now(),
   };

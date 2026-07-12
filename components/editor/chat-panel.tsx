@@ -57,14 +57,26 @@ import {
   resolveSmartModel,
   DEFAULT_CODING_MODEL,
 } from "@/lib/ai/editor-intelligence";
-import { isNoisePreviewError } from "@/lib/preview/preview-error-bridge";
-import { appendImportDiagnosis } from "@/lib/preview/diagnose-imports";
+import { isNoisePreviewError, type PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
+import {
+  getAutoFixAttempts,
+  recordAutoFixAttempt,
+  clearAutoFixLedger,
+} from "@/lib/preview/autofix-ledger";
+import { appendPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
 import {
   CHAT_MODEL_OPTIONS,
   getOpenRouterModelLabel,
   type OpenRouterModelId,
 } from "@/lib/ai/openrouter-models";
-import { shouldRunPreviewVerify } from "@/lib/ai/preview-verify";
+import {
+  CHAT_INPUT_CAPABILITIES,
+  createLongPasteAttachment,
+  detectPromptSecret,
+  redactPromptSecrets,
+  shouldAttachLongPaste,
+  type SecretAssignment,
+} from "@/lib/ai/chat-capabilities";
 import type { SubagentStep } from "@/lib/ai/subagents";
 import { SubagentActivityCard } from "./subagent-activity-card";
 import { BuildActivityCard } from "./build-activity-card";
@@ -111,6 +123,7 @@ interface ChatPanelProps {
   credits: number;
   starterPrompt?: string;
   previewError?: string | null;
+  previewRuntimeErrors?: PreviewRuntimeError[];
   pendingFixPrompt?: string | null;
   /** When set, inserts "@filename " into the chat input and focuses it */
   pendingFileRef?: ProjectFile | null;
@@ -694,9 +707,76 @@ function groupIntoThreads(msgs: Message[]): Message[][] {
   return threads;
 }
 
+function stripInternalChatContext(content: string): string {
+  let text = content ?? "";
+  text = text
+    .replace(/<project_context>[\s\S]*?<\/project_context>\s*/gi, "")
+    .replace(/<attached_file\b[^>]*>[\s\S]*?<\/attached_file>\s*/gi, (block) => {
+      const path = block.match(/\bpath=["']([^"']+)["']/i)?.[1];
+      return path ? `[Attached file: ${path}]\n` : "";
+    })
+    .replace(/<scraped_page\b[^>]*>[\s\S]*?<\/scraped_page>\s*/gi, (block) => {
+      const url = block.match(/\burl=["']([^"']+)["']/i)?.[1];
+      return url ? `[Referenced page: ${url}]\n` : "";
+    })
+    .replace(/\n{2,}--- Referenced files from other projects ---[\s\S]*$/i, "");
+
+  const directiveIdx = text.search(/\n?---\s*\nAutonomous build:/i);
+  if (directiveIdx >= 0) text = text.slice(0, directiveIdx);
+
+  return text
+    .replace(/^\s*[-=]{3,}\s*$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function tryExtractJsonMessage(content: string): string | null {
+  const trimmed = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
+  if (!/^[{\[]/.test(trimmed)) return null;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const obj = parsed as { message?: unknown; summary?: unknown; files?: unknown };
+      if (typeof obj.message === "string" && obj.message.trim()) return obj.message.trim();
+      if (typeof obj.summary === "string" && obj.summary.trim()) return obj.summary.trim();
+      if (Array.isArray(obj.files)) {
+        return `Updated ${obj.files.length} file${obj.files.length === 1 ? "" : "s"}. Open preview to see the result.`;
+      }
+    }
+    if (Array.isArray(parsed)) return `Updated ${parsed.length} item${parsed.length === 1 ? "" : "s"}.`;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function firstSentences(content: string, maxSentences = 2, maxChars = 260): string {
+  const prose = content.split("```")[0].trim();
+  const sentences = prose
+    .split(/(?<=[.!?])\s+/)
+    .filter(Boolean)
+    .slice(0, maxSentences)
+    .join(" ");
+  return (sentences || prose).replace(/[*_`]/g, "").slice(0, maxChars).trim();
+}
+
+function getDisplayMessageContent(msg: Message): string {
+  const stripped = stripInternalChatContext(msg.content ?? "");
+  if (msg.role === "user") return stripped || "Continue";
+
+  const jsonMessage = tryExtractJsonMessage(stripped);
+  if (jsonMessage) return jsonMessage;
+
+  if (msg.mode === "build" || msg.mode === "agent" || msg.mode === "patch") {
+    return firstSentences(stripped, 2, 260) || "Done. Open preview to see the result.";
+  }
+
+  return stripped;
+}
+
 export function ChatPanel({
   project, messages, files, activeFile, mode, credits, starterPrompt,
-  previewError, pendingFixPrompt, pendingFileRef,
+  previewError, previewRuntimeErrors = [], pendingFixPrompt, pendingFileRef,
   onMessagesUpdate, onFilesUpdate, onCreditsUpdate,
   onAutoFixComplete, onPendingFixConsumed, onPendingFileRefConsumed,
   onStreamingChange, onModeChange, onApprovePlan,
@@ -725,6 +805,15 @@ export function ChatPanel({
   });
 
   const { toast } = useToast();
+
+  const refreshProjectFiles = useCallback(async () => {
+    const res = await fetch(`/api/projects/${project.id}/files`, { cache: "no-store" });
+    if (!res.ok) throw new Error("Failed to refresh project files");
+    const updatedFiles = (await res.json()) as ProjectFile[];
+    onFilesUpdate(updatedFiles);
+    window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
+    return updatedFiles;
+  }, [onFilesUpdate, project.id]);
 
   const contextualEmptyPrompts = useMemo(() => {
     if (credits <= 0) return getNoCreditsPrompts();
@@ -906,6 +995,7 @@ export function ChatPanel({
   const [approvedSteps, setApprovedSteps] = useState<Record<string, Set<number>>>({});
   // Patch mode: track how many patches were applied per assistant message
   const [patchCounts, setPatchCounts] = useState<Record<string, number>>({});
+  const [messageChangedPaths, setMessageChangedPaths] = useState<Record<string, string[]>>({});
 
   // Prompt queue — messages queued while AI is streaming
   const [promptQueue, setPromptQueue] = useState<QueueItem[]>([]);
@@ -919,6 +1009,14 @@ export function ChatPanel({
   const [previewVerify, setPreviewVerify] = useState<{ ok: boolean; checks: Array<{ name: string; pass: boolean; detail?: string }> } | null>(null);
   const [messageCredits, setMessageCredits] = useState<Record<string, number>>({});
   const [buildStatus, setBuildStatus] = useState<BuildIntent | null>(null);
+  const runQuickPreviewVerify = useCallback((delayMs = 900) => {
+    window.setTimeout(() => {
+      void fetch(`/api/projects/${project.id}/preview-verify`, { method: "POST" })
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error("preview verify failed"))))
+        .then((result) => setPreviewVerify(result))
+        .catch(() => setPreviewVerify(null));
+    }, delayMs);
+  }, [project.id]);
   // Post-build pipeline status — backend wiring + self-verification progress
   // streamed from the server (wiring_status / verify_status events).
   const [postBuildStatus, setPostBuildStatus] = useState<string | null>(null);
@@ -1254,7 +1352,17 @@ export function ChatPanel({
     } else if (isCode) {
       const reader = new FileReader();
       reader.onload = () => {
-        setAttachedText({ name: file.name, content: reader.result as string });
+        const content = reader.result as string;
+        const secret = detectPromptSecret(content);
+        if (secret) {
+          toast({
+            title: "Secret-looking value blocked",
+            description: `Detected ${secret.label}. Store keys in Env/Secrets, then reference the variable name in chat.`,
+            variant: "destructive",
+          });
+          return;
+        }
+        setAttachedText({ name: file.name, content });
         setAttachedImage(null);
       };
       reader.readAsText(file);
@@ -1265,7 +1373,7 @@ export function ChatPanel({
 
   function startEditMessage(msg: Message) {
     setEditingMessageId(msg.id);
-    setEditInput(msg.content);
+    setEditInput(getDisplayMessageContent(msg));
   }
 
   async function submitEditedMessage() {
@@ -1303,7 +1411,7 @@ export function ChatPanel({
     // Truncate to just before the last assistant message
     const truncated = messages.slice(0, lastAsstIdx);
     onMessagesUpdate(truncated);
-    await sendMessage(lastUserMsg.content, undefined, truncated);
+    await sendMessage(getDisplayMessageContent(lastUserMsg), undefined, truncated);
   }
 
   useEffect(() => {
@@ -1364,7 +1472,7 @@ export function ChatPanel({
     // Healing overlay sends structured prompt — one-click send (Lovable self-repair)
     if (prompt.startsWith("Fix the preview/runtime errors")) {
       healActiveRef.current = true;
-      void sendMessage(appendImportDiagnosis(prompt, files), "build");
+      void sendMessage(appendPreviewDiagnosis(prompt, files), "build");
       return;
     }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- consume preview fix request into composer state
@@ -1409,7 +1517,15 @@ export function ChatPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingFileRef]);
 
-  // Auto-fix loop: when a preview error arrives, call /api/ai/fix automatically
+  // Auto-fix loop: when a preview error arrives, call /api/ai/fix automatically.
+  //
+  // `autoFixAttempts` is component state, so it resets to 0 on every mount. On its
+  // own that meant a project with an UNFIXABLE preview error (e.g. a component
+  // importing a file that was never created) re-ran the full 3-attempt loop every
+  // single time the editor was opened — 3 more paid /api/ai/fix calls, 3 more
+  // failures, forever. The persistent ledger remembers that we already tried THIS
+  // error on THIS project, so a reload no longer buys the user the same failure
+  // twice. It's cleared whenever the code changes, so a real retry is still allowed.
   useEffect(() => {
     if (
       !previewError ||
@@ -1423,13 +1539,19 @@ export function ChatPanel({
     )
       return;
 
+    // Survives reloads — the in-memory counter above does not.
+    if (getAutoFixAttempts(project.id, previewError) >= MAX_AUTO_FIX_ATTEMPTS) {
+      setAutoFixAttempts(MAX_AUTO_FIX_ATTEMPTS); // show the "needs manual fix" nudge
+      return;
+    }
+
     const timer = setTimeout(() => {
-      void triggerAutoFix(previewError);
+      void triggerAutoFix(previewError, previewRuntimeErrors);
     }, 1500); // short delay so user sees the error first
 
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewError]);
+  }, [previewError, previewRuntimeErrors]);
 
   // Auto-collapse all threads except the latest 2 whenever messages grow
   useEffect(() => {
@@ -1466,14 +1588,21 @@ export function ChatPanel({
     messagesEndRef.current?.scrollIntoView({ block: "end" });
   }, [messages, streamingContent, streamingFiles, agentSteps, isAtBottom]);
 
-  async function triggerAutoFix(error: string) {
+  async function triggerAutoFix(error: string, runtimeErrors: PreviewRuntimeError[] = []) {
     setAutoFixing(true);
     setLastFixedError(error);
     setAutoFixAttempts((n) => n + 1);
+    // Persist the attempt BEFORE the request, so a mid-flight reload can't reset
+    // the count and buy the user another round of the same failing fix.
+    recordAutoFixAttempt(project.id, error);
 
-    const fixPayload = /missing component|failed to resolve/i.test(error)
-      ? appendImportDiagnosis(error, files)
-      : error;
+    const fixPayload = appendPreviewDiagnosis(
+      error,
+      files,
+      runtimeErrors.length > 0
+        ? runtimeErrors
+        : [{ kind: "runtime", message: error, timestamp: Date.now() }],
+    );
 
     // Show an in-chat notification
     const fixingMsg: Message = {
@@ -1498,6 +1627,7 @@ export function ChatPanel({
         body: JSON.stringify({
           projectId: project.id,
           error: fixPayload,
+          runtimeErrors,
           files: files.map((f) => ({ path: f.path, content: f.content })),
         }),
       });
@@ -1758,7 +1888,13 @@ export function ChatPanel({
   }
 
   async function sendMessage(userMessage: string, overrideMode?: EditorMode, historyOverride?: Message[]) {
-    if (!userMessage.trim() || streaming || sendingRef.current) return;
+    if ((!userMessage.trim() && !attachedImage) || streaming || sendingRef.current) return;
+
+    // The user is giving a new instruction, so the code is about to change. Past
+    // auto-fix failures were about the OLD code — forget them, and let the fixer
+    // have a fresh budget against whatever this build produces.
+    clearAutoFixLedger(project.id);
+    setAutoFixAttempts(0);
 
     const effectiveMode = resolvePromptMode(userMessage, intelCtx, overrideMode);
     const effectiveModel = modelManuallySelectedRef.current
@@ -1802,9 +1938,24 @@ export function ChatPanel({
       }
       return;
     }
-    const slashRouted = /^\/(build|agent|plan)\b/i.test(userMessage.trim());
-    if (!overrideMode && effectiveMode !== mode && (mode !== "chat" || slashRouted)) {
+    // Keep the mode chip in sync whenever intelligence upgrades Chat/Build → patch/agent
+    // (otherwise the UI still says "Chat" while files are being written — or worse,
+    // Chat stayed as Chat and only streamed prose with no file saves).
+    if (effectiveMode !== mode) {
       onModeChange?.(effectiveMode);
+      if (
+        (mode === "chat" || mode === "build") &&
+        (effectiveMode === "patch" || effectiveMode === "build" || effectiveMode === "agent") &&
+        effectiveMode !== mode
+      ) {
+        toast({
+          title: "Applying your edit",
+          description:
+            effectiveMode === "patch"
+              ? "Running as Quick Edit so the header (and other files) actually update."
+              : `Running as ${effectiveMode} so your changes are saved to the project.`,
+        });
+      }
     }
     sendingRef.current = true;
     setInput("");
@@ -1873,7 +2024,7 @@ export function ChatPanel({
       id: `temp-${Date.now()}`,
       project_id: project.id,
       role: "user",
-      content: userMessage,
+      content: userMessage.trim() ? userMessage : "[Image attached]",
       tokens_used: null,
       model: null,
       // EditorMode includes "patch" but the persisted Message['mode'] does
@@ -1967,7 +2118,7 @@ ${(f.content ?? "").slice(0, 8000)}
             projectId: project.id,
             task: agentTask,
             rawTask: userMessage,
-            model: effectiveModel,
+            ...(modelManuallySelectedRef.current ? { model: effectiveModel } : {}),
             modelManuallySelected: modelManuallySelectedRef.current,
           }),
         });
@@ -2102,12 +2253,7 @@ ${(f.content ?? "").slice(0, 8000)}
                   onMessagesUpdate(syncedMessages);
                 }
 
-                if (shouldRunPreviewVerify(userMessage, effectiveMode)) {
-                  void fetch(`/api/projects/${project.id}/preview-verify`, { method: "POST" })
-                    .then((r) => r.json())
-                    .then((result) => setPreviewVerify(result))
-                    .catch(() => setPreviewVerify(null));
-                }
+                runQuickPreviewVerify();
 
                 const captureId = syncedMessages?.at(-1)?.id ?? `assistant-${Date.now()}`;
                 setTimeout(() => {
@@ -2155,7 +2301,7 @@ ${(f.content ?? "").slice(0, 8000)}
           message: messageWithContext + crossProjectContext,
           rawMessage: userMessage,
           mode: effectiveMode,
-          model: effectiveModel,
+          ...(modelManuallySelectedRef.current ? { model: effectiveModel } : {}),
           modelManuallySelected: modelManuallySelectedRef.current,
           framework: mobileMode ? "react-native" : (project.framework ?? "web"),
           clarifyFirst: effectiveMode === "build" && clarifyFirst && files.length === 0,
@@ -2238,7 +2384,37 @@ ${(f.content ?? "").slice(0, 8000)}
           }
 
           if (data.status === "patches_applied" && data.count != null) {
-            setPatchCounts((prev) => ({ ...prev, __pending: data.count as number }));
+            const count = data.count as number;
+            const paths = Array.isArray(data.paths)
+              ? (data.paths as unknown[]).filter((p): p is string => typeof p === "string")
+              : [];
+            setPatchCounts((prev) => ({ ...prev, __pending: count }));
+            if (paths.length > 0) {
+              setMessageChangedPaths((prev) => ({ ...prev, __pending: paths }));
+            }
+            if (count > 0) {
+              toast({
+                title: "Edit applied",
+                description: `Updated ${data.count} file${(data.count as number) === 1 ? "" : "s"}. Preview is refreshing…`,
+              });
+              void refreshProjectFiles().catch(() => {
+                toast({
+                  title: "Refresh needed",
+                  description: "The edit saved, but the preview did not refresh automatically. Use the preview refresh button.",
+                  variant: "destructive",
+                });
+              });
+            }
+          }
+
+          if (data.status === "patches_failed") {
+            toast({
+              title: "Edit not applied",
+              description:
+                (data.message as string | undefined) ??
+                "The patch could not be applied. Try Quick Edit or rephrase.",
+              variant: "destructive",
+            });
           }
 
           if (data.subagent) {
@@ -2353,19 +2529,32 @@ ${(f.content ?? "").slice(0, 8000)}
               // where parseAIResponse came back empty but the streaming
               // extractor (or Strategy 6 rescue inside parseAIResponse)
               // produced rows in project_files.
+              setMessageChangedPaths((prev) => {
+                const pending = prev.__pending;
+                if (!pending || pending.length === 0) return prev;
+                const { __pending, ...rest } = prev;
+                return { ...rest, [assistantId]: pending };
+              });
+
               const reportedFileCount =
                 typeof data.fileCount === "number"
                   ? data.fileCount
                   : (data.files as unknown[] | undefined)?.length ?? 0;
               const haveStreamedFiles = serverStreamedPathsRef.current.size > 0;
-              if ((data.files && (data.files as unknown[]).length > 0) || haveStreamedFiles || reportedFileCount > 0) {
-                const supabase = createClient();
-                const { data: updatedFiles } = await (supabase as any)
-                  .from("project_files")
-                  .select("*")
-                  .eq("project_id", project.id);
-
-                if (updatedFiles) {
+              const filesChanged = data.filesChanged === true;
+              const changedPaths = Array.isArray(data.changedPaths)
+                ? (data.changedPaths as unknown[]).filter((p): p is string => typeof p === "string")
+                : [];
+              if (changedPaths.length > 0) {
+                setMessageChangedPaths((prev) => {
+                  const merged = [...(prev[assistantId] ?? []), ...changedPaths]
+                    .filter((path, index, arr) => arr.indexOf(path) === index);
+                  return { ...prev, [assistantId]: merged };
+                });
+              }
+              if ((data.files && (data.files as unknown[]).length > 0) || haveStreamedFiles || reportedFileCount > 0 || filesChanged) {
+                const updatedFiles = await refreshProjectFiles();
+                {
                   // Build diff entries. Prefer data.files (has fresh content from
                   // the AI response) when present; fall back to the streamed
                   // paths + their re-fetched content when only streaming
@@ -2373,7 +2562,7 @@ ${(f.content ?? "").slice(0, 8000)}
                   const diffSource: Array<{ path: string; content: string }> =
                     (data.files as Array<{ path: string; content: string }> | undefined)?.length
                       ? (data.files as Array<{ path: string; content: string }>)
-                      : Array.from(serverStreamedPathsRef.current).map((path) => {
+                      : (changedPaths.length > 0 ? changedPaths : Array.from(serverStreamedPathsRef.current)).map((path) => {
                           const row = (updatedFiles as Array<{ path: string; content: string }>).find((f) => f.path === path);
                           return { path, content: row?.content ?? "" };
                         });
@@ -2516,11 +2705,8 @@ ${(f.content ?? "").slice(0, 8000)}
                     ...(v.errors ?? []).map((e) => ({ name: e, pass: false, detail: undefined })),
                   ],
                 });
-              } else if (shouldRunPreviewVerify(userMessage, effectiveMode)) {
-                void fetch(`/api/projects/${project.id}/preview-verify`, { method: "POST" })
-                  .then((r) => r.json())
-                  .then((result) => setPreviewVerify(result))
-                  .catch(() => setPreviewVerify(null));
+              } else if ((["build", "patch", "agent"] as string[]).includes(effectiveMode)) {
+                runQuickPreviewVerify();
               }
 
               // Multi-role test chips (Lovable best-practice: recheck multi-role behavior after big edits)
@@ -2634,17 +2820,82 @@ ${(f.content ?? "").slice(0, 8000)}
     }
   }
 
-  function handleSend() {
+  async function handleSend() {
     if (isLocked) return;
-    if (!input.trim()) return;
+    let text = input.trim();
+    if (!text && !attachedImage) return;
+
+    const redaction = text ? redactPromptSecrets(text) : null;
+    if (redaction && redaction.assignments.length > 0) {
+      if (redaction.hasUnsecuredSecret) {
+        toast({
+          title: "Secret-looking value blocked",
+          description: `Detected ${redaction.unsecuredSecret?.label ?? "a raw secret"} that is not attached to a variable name. Use NAME=value so LifemarkAI can save it safely.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      try {
+        const saved = await saveSecretAssignments(redaction.assignments);
+        text = redaction.redactedText.trim();
+        setInput(text);
+        toast({
+          title: "Secret saved",
+          description: `${saved.join(", ")} saved to Secrets Vault and hidden from the prompt.`,
+        });
+      } catch (error) {
+        toast({
+          title: "Could not save secret",
+          description: error instanceof Error ? error.message : "Open Secrets Vault and add it manually.",
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
+    const inputSecret = text ? detectPromptSecret(text) : null;
+    if (inputSecret) {
+      toast({
+        title: "Secret-looking value blocked",
+        description: `Detected ${inputSecret.label}. Store keys in Env/Secrets and reference the variable name instead.`,
+        variant: "destructive",
+      });
+      return;
+    }
+    if (attachedText) {
+      const attachmentSecret = detectPromptSecret(attachedText.content);
+      if (attachmentSecret) {
+        toast({
+          title: "Attached file contains a secret-looking value",
+          description: `Detected ${attachmentSecret.label}. Remove the secret before sending it to AI.`,
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+    if (text.length > CHAT_INPUT_CAPABILITIES.maxMessageLength) {
+      toast({
+        title: "Prompt is too large",
+        description: `Keep the prompt under ${CHAT_INPUT_CAPABILITIES.maxMessageLength.toLocaleString()} characters or attach the extra context as a file.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (streaming) {
       // AI is busy — add to queue instead of blocking
-      const text = input.trim();
+      if (attachedImage || attachedText) {
+        toast({
+          title: "Attachments cannot be queued",
+          description: "Wait for the current run to finish, or remove the attachment and queue a text follow-up.",
+          variant: "destructive",
+        });
+        return;
+      }
       setPromptQueue((prev) => [...prev, { id: `q-${Date.now()}`, text, repeat: 1, remaining: 1 }]);
       setInput("");
       return;
     }
-    const text = input.trim();
     if (
       !skipDesignPreviewOnceRef.current &&
       !attachedImage &&
@@ -2656,7 +2907,10 @@ ${(f.content ?? "").slice(0, 8000)}
       return;
     }
     skipDesignPreviewOnceRef.current = false;
-    void sendMessage(text, mode);
+    // Do NOT pass `mode` as override — that blocks Chat→patch / Build→agent
+    // promotion, so edits like "add menu items in header" stay in Chat and
+    // never write project_files (preview stays unchanged).
+    void sendMessage(text);
   }
 
   /** Feature: file generation in chat — POST the current prompt to /api/ai/generate-file. */
@@ -2726,7 +2980,7 @@ ${(f.content ?? "").slice(0, 8000)}
     setDesignPreviewOpen(false);
     setPendingDesignPrompt(null);
     if (!base) return;
-    void sendMessage(`${base}\n\n${buildDesignBrief(direction)}`, mode);
+    void sendMessage(`${base}\n\n${buildDesignBrief(direction)}`);
   }
 
   function handleDesignPreviewSkip() {
@@ -2734,7 +2988,7 @@ ${(f.content ?? "").slice(0, 8000)}
     setDesignPreviewOpen(false);
     setPendingDesignPrompt(null);
     skipDesignPreviewOnceRef.current = true;
-    if (base) void sendMessage(base, mode);
+    if (base) void sendMessage(base);
   }
 
   // Auto-drain the queue when streaming finishes (unless paused)
@@ -2754,12 +3008,115 @@ ${(f.content ?? "").slice(0, 8000)}
     } else {
       setPromptQueue(rest);
     }
-    void sendMessage(next.text, mode);
+    // Same as handleSend: let resolvePromptMode promote surgical edits.
+    void sendMessage(next.text);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streaming]);
 
   // Debounce ref for URL scraping
   const scrapeDebounceRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  function replaceInputRange(selection: { from: number; to: number }, replacement: string) {
+    setInput((prev) => {
+      const from = Math.max(0, Math.min(selection.from, prev.length));
+      const to = Math.max(from, Math.min(selection.to, prev.length));
+      return `${prev.slice(0, from)}${replacement}${prev.slice(to)}`;
+    });
+  }
+
+  async function saveSecretAssignments(assignments: SecretAssignment[]): Promise<string[]> {
+    const unique = new Map<string, string>();
+    for (const assignment of assignments) unique.set(assignment.name, assignment.value);
+    const names: string[] = [];
+    for (const [key, value] of unique) {
+      const res = await fetch(`/api/projects/${project.id}/secrets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key,
+          value,
+          description: "Saved automatically from chat input",
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(data.error ?? `Could not save ${key}`);
+      }
+      names.push(key);
+    }
+    return names;
+  }
+
+  function handlePromptPaste(
+    text: string,
+    _event: ClipboardEvent,
+    selection: { from: number; to: number },
+  ): boolean {
+    const redaction = redactPromptSecrets(text);
+    if (redaction.assignments.length > 0) {
+      if (redaction.hasUnsecuredSecret) {
+        toast({
+          title: "Secret-looking paste blocked",
+          description: `Detected ${redaction.unsecuredSecret?.label ?? "a raw secret"} that is not attached to a variable name. Paste secrets as NAME=value so LifemarkAI can save them safely.`,
+          variant: "destructive",
+        });
+        return true;
+      }
+
+      void (async () => {
+        try {
+          const saved = await saveSecretAssignments(redaction.assignments);
+          if (shouldAttachLongPaste(redaction.redactedText)) {
+            const attachment = createLongPasteAttachment(redaction.redactedText);
+            setAttachedText({ name: attachment.name, content: attachment.content });
+            setAttachedImage(null);
+            setAttachedImageName(null);
+            const mentionLine = saved.map((name) => `@secret:${name}`).join(" ");
+            const note = `Use the attached pasted context file (${attachment.name}) for this request. ${mentionLine}`.trim();
+            replaceInputRange(selection, note);
+          } else {
+            replaceInputRange(selection, redaction.redactedText);
+          }
+          toast({
+            title: "Secret saved",
+            description: `${saved.join(", ")} saved to Secrets Vault and hidden from the chat prompt.`,
+          });
+        } catch (error) {
+          toast({
+            title: "Could not save secret",
+            description: error instanceof Error ? error.message : "Open Secrets Vault and add it manually.",
+            variant: "destructive",
+          });
+        }
+      })();
+      return true;
+    }
+
+    const secret = detectPromptSecret(text);
+    if (secret) {
+      toast({
+        title: "Secret-looking paste blocked",
+        description: `Detected ${secret.label}. Paste as NAME=value so LifemarkAI can save it to Secrets Vault.`,
+        variant: "destructive",
+      });
+      return true;
+    }
+
+    if (!shouldAttachLongPaste(text)) return false;
+
+    const attachment = createLongPasteAttachment(text);
+    setAttachedText({ name: attachment.name, content: attachment.content });
+    setAttachedImage(null);
+    setAttachedImageName(null);
+    replaceInputRange(selection, `Use the attached pasted context file (${attachment.name}) for this request.`);
+    toast({
+      title: "Long paste attached",
+      description: attachment.truncated
+        ? `Attached the first ${CHAT_INPUT_CAPABILITIES.longPasteMaxChars.toLocaleString()} characters as ${attachment.name}.`
+        : `Attached as ${attachment.name} instead of filling the prompt box.`,
+    });
+    return true;
+  }
 
   function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const val = e.target.value;
@@ -2984,9 +3341,14 @@ ${(f.content ?? "").slice(0, 8000)}
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      void handleSend();
     }
   }
+
+  const visibleMessages = useMemo(
+    () => messages.map((m) => ({ ...m, content: getDisplayMessageContent(m) })),
+    [messages],
+  );
 
   async function copyMessage(content: string, id: string) {
     await navigator.clipboard.writeText(content);
@@ -3006,14 +3368,14 @@ ${(f.content ?? "").slice(0, 8000)}
   }
 
   function exportChatAsMarkdown() {
-    if (messages.length === 0) return;
+    if (visibleMessages.length === 0) return;
     const lines: string[] = [
       `# ${project.name} — Chat Export`,
       ``,
       `> Exported ${new Date().toLocaleString()}`,
       ``,
     ];
-    for (const msg of messages) {
+    for (const msg of visibleMessages) {
       const role = msg.role === "user" ? "**You**" : "**LifemarkAI**";
       lines.push(`### ${role}`);
       lines.push(``);
@@ -3111,7 +3473,7 @@ ${(f.content ?? "").slice(0, 8000)}
         {/* Export chat as Markdown */}
         <button
           onClick={exportChatAsMarkdown}
-          disabled={messages.length === 0}
+                  disabled={visibleMessages.length === 0}
           className="mb-1 p-1 rounded text-muted-foreground/40 hover:text-foreground hover:bg-muted/60 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
           title="Export conversation as Markdown"
         >
@@ -3120,12 +3482,12 @@ ${(f.content ?? "").slice(0, 8000)}
         {/* Copy all messages */}
         <button
           onClick={async () => {
-            const text = messages.map((m) => `${m.role === "user" ? "You" : "AI"}: ${m.content}`).join("\n\n");
+            const text = visibleMessages.map((m) => `${m.role === "user" ? "You" : "AI"}: ${m.content}`).join("\n\n");
             await navigator.clipboard.writeText(text);
             setCopiedAll(true);
             setTimeout(() => setCopiedAll(false), 2000);
           }}
-          disabled={messages.length === 0}
+          disabled={visibleMessages.length === 0}
           className="mb-1 p-1 rounded text-muted-foreground/40 hover:text-foreground hover:bg-muted/60 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
           title="Copy all messages"
         >
@@ -3222,7 +3584,7 @@ ${(f.content ?? "").slice(0, 8000)}
                 className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/50 text-foreground"
               />
               {searchQuery && (() => {
-                const matchCount = messages.filter((m) =>
+                const matchCount = visibleMessages.filter((m) =>
                   m.content.toLowerCase().includes(searchQuery.toLowerCase())
                 ).length;
                 return (
@@ -3316,7 +3678,7 @@ ${(f.content ?? "").slice(0, 8000)}
 
         {/* Pinned message banner */}
         {pinnedMsgId && (() => {
-          const pinned = messages.find((m) => m.id === pinnedMsgId);
+          const pinned = visibleMessages.find((m) => m.id === pinnedMsgId);
           if (!pinned) return null;
           const preview = pinned.content.replace(/\s+/g, " ").slice(0, 90) + (pinned.content.length > 90 ? "…" : "");
           return (
@@ -3344,12 +3706,12 @@ ${(f.content ?? "").slice(0, 8000)}
 
         {groupIntoThreads(
           showBookmarks
-            ? messages.filter((m) => bookmarkedIds.has(m.id))
+            ? visibleMessages.filter((m) => bookmarkedIds.has(m.id))
             : searchQuery
-            ? messages.filter((m) =>
+            ? visibleMessages.filter((m) =>
                 m.content.toLowerCase().includes(searchQuery.toLowerCase())
               )
-            : messages
+            : visibleMessages
         ).map((thread, threadIdx) => {
           const isCollapsed = !searchQuery && collapsedThreads.has(threadIdx);
           const userMsg = thread.find((m) => m.role === "user");
@@ -3543,6 +3905,7 @@ ${(f.content ?? "").slice(0, 8000)}
                         // Cowork/Codex-style description; the Code tab + preview hold the
                         // actual result, and the "Edited …" cards below list the files.
                         const diffCount = messageDiffs[msg.id]?.length ?? 0;
+                        const changedCount = messageChangedPaths[msg.id]?.length ?? 0;
                         const c = (msg.content ?? "").trim();
                         const looksRaw =
                           !c || c.startsWith("```") || c.startsWith("{") || c.startsWith("[");
@@ -3550,7 +3913,9 @@ ${(f.content ?? "").slice(0, 8000)}
                         if (looksRaw) {
                           summary = diffCount > 0
                             ? `Updated ${diffCount} file${diffCount === 1 ? "" : "s"}. Open the Code tab or preview to see the result.`
-                            : "Changes applied. Open the Code tab or preview to see the result.";
+                            : changedCount > 0
+                              ? `Updated ${changedCount} file${changedCount === 1 ? "" : "s"}. Preview refreshed.`
+                              : "Changes applied. Open the Code tab or preview to see the result.";
                         } else {
                           const prose = c.split("```")[0].trim(); // drop any trailing code block
                           summary =
@@ -3734,6 +4099,41 @@ ${(f.content ?? "").slice(0, 8000)}
                 })()}
 
                 {/* Preview snapshot thumbnail — shown after build/agent generations */}
+                {msg.role === "assistant" &&
+                  (!messageDiffs[msg.id] || messageDiffs[msg.id].length === 0) &&
+                  messageChangedPaths[msg.id] &&
+                  messageChangedPaths[msg.id].length > 0 && (
+                    <div className="w-full mt-1 rounded-lg border border-border/60 bg-muted/20 overflow-hidden">
+                      <div className="px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium block">
+                            Updated {messageChangedPaths[msg.id].length} file{messageChangedPaths[msg.id].length === 1 ? "" : "s"}
+                          </span>
+                          {onFocusPreview && (
+                            <button
+                              onClick={onFocusPreview}
+                              className="ml-auto text-[10px] px-2 py-0.5 rounded-full border border-border/60 bg-background/70 text-muted-foreground hover:text-foreground hover:bg-background transition-colors"
+                            >
+                              Preview
+                            </button>
+                          )}
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {messageChangedPaths[msg.id].slice(0, 6).map((path) => (
+                            <span key={path} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-background/70 text-muted-foreground border border-border/40">
+                              {path}
+                            </span>
+                          ))}
+                          {messageChangedPaths[msg.id].length > 6 && (
+                            <span className="text-[10px] text-muted-foreground">
+                              +{messageChangedPaths[msg.id].length - 6} more
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                 {msg.role === "assistant" && messageScreenshots[msg.id] && (
                   <div className="w-full mt-1.5 rounded-lg overflow-hidden border border-border/50 bg-muted/10 group/thumb">
                     <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/30">
@@ -3872,9 +4272,9 @@ ${(f.content ?? "").slice(0, 8000)}
                       <button
                         onClick={() => {
                           // Find the preceding user message so we can suggest a description.
-                          const idx = messages.findIndex((m) => m.id === msg.id);
+                          const idx = visibleMessages.findIndex((m) => m.id === msg.id);
                           const prevUser = idx > 0
-                            ? [...messages.slice(0, idx)].reverse().find((m) => m.role === "user")
+                            ? [...visibleMessages.slice(0, idx)].reverse().find((m) => m.role === "user")
                             : null;
                           // Derive a name from the first 60 chars of the user prompt, falling
                           // back to "Saved skill" so the modal always has a sensible default.
@@ -4136,21 +4536,29 @@ ${(f.content ?? "").slice(0, 8000)}
               )}
 
               {/* Lovable-style per-file "Edited …" cards */}
-              {streamingFiles.length > 0 && streamingFiles.map((path, idx) => {
-                const fileName = path.split("/").pop() ?? path;
-                return (
-                  <div
-                    key={`${path}-${idx}`}
-                    className="rounded-xl border border-border/60 bg-muted/20 overflow-hidden mb-1"
-                  >
-                    <div className="px-3 py-2 border-b border-border/40 bg-muted/30">
-                      <span className="text-sm font-semibold text-foreground">
-                        Edited {fileName}
-                      </span>
-                    </div>
+              {streamingFiles.length > 0 && (
+                <div className="rounded-xl border border-border/60 bg-muted/20 overflow-hidden mb-1">
+                  <div className="px-3 py-2 border-b border-border/40 bg-muted/30 flex items-center gap-2">
+                    <FileCode2 className="w-3.5 h-3.5 text-violet-300 shrink-0" />
+                    <span className="text-sm font-semibold text-foreground">
+                      Editing {streamingFiles.length} file{streamingFiles.length === 1 ? "" : "s"}
+                    </span>
+                    <span className="ml-auto text-[10px] text-muted-foreground">live</span>
                   </div>
-                );
-              })}
+                  <div className="px-3 py-2 flex flex-wrap gap-1.5">
+                    {streamingFiles.slice(0, 8).map((path) => (
+                      <span key={path} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-background/70 text-muted-foreground border border-border/40">
+                        {path.split("/").pop() ?? path}
+                      </span>
+                    ))}
+                    {streamingFiles.length > 8 && (
+                      <span className="text-[10px] text-muted-foreground py-0.5">
+                        +{streamingFiles.length - 8} more
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Hide raw JSON stream in build mode — chat stays conversational like Lovable */}
               <div className="text-sm leading-relaxed py-0.5">
@@ -5458,8 +5866,9 @@ Please confirm the breakdown before implementing anything.`,
             value={input}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
+            onPasteText={handlePromptPaste}
             placeholder={smartPlaceholder}
-            className={`min-h-[60px] max-h-40 ${input.length > 3800 ? "ring-1 ring-red-500/50 rounded" : ""}`}
+            className={`min-h-[60px] max-h-40 ${input.length > CHAT_INPUT_CAPABILITIES.maxMessageLength ? "ring-1 ring-red-500/50 rounded" : input.length > CHAT_INPUT_CAPABILITIES.warnMessageLength ? "ring-1 ring-amber-500/40 rounded" : ""}`}
             disabled={noCredits || isLocked}
           />
 
@@ -5475,11 +5884,11 @@ Please confirm the breakdown before implementing anything.`,
                 <span />
               )}
               <span className={`text-[10px] tabular-nums transition-colors ${
-                input.length > 3800 ? "text-red-400" :
-                input.length > 3000 ? "text-amber-400" :
+                input.length > CHAT_INPUT_CAPABILITIES.maxMessageLength ? "text-red-400" :
+                input.length > CHAT_INPUT_CAPABILITIES.warnMessageLength ? "text-amber-400" :
                 "text-muted-foreground/40"
               }`}>
-                {input.length} / 4000
+                {input.length} / {CHAT_INPUT_CAPABILITIES.maxMessageLength.toLocaleString()}
               </span>
             </div>
           )}
@@ -5564,13 +5973,25 @@ Please confirm the breakdown before implementing anything.`,
 
             <div className="flex-1" />
 
-            {/* Plan / Build toggle — Lovable primary modes */}
+            {/* Chat / Plan / Build toggle - Lovable primary modes */}
             <div className="flex items-center rounded-lg border border-border/70 overflow-hidden flex-shrink-0">
               <button
                 type="button"
-                onClick={() => onModeChange?.("plan")}
+                onClick={() => onModeChange?.("chat")}
                 className={`h-7 px-2.5 text-xs font-medium transition-colors ${
-                  mode === "plan" || mode === "chat"
+                  mode === "chat"
+                    ? "bg-muted text-foreground"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                }`}
+                title="Short Q&A"
+              >
+                Chat
+              </button>
+              <button
+                type="button"
+                onClick={() => onModeChange?.("plan")}
+                className={`h-7 px-2.5 text-xs font-medium transition-colors border-l border-border/70 ${
+                  mode === "plan"
                     ? "bg-muted text-foreground"
                     : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
                 }`}
@@ -5782,14 +6203,31 @@ Please confirm the breakdown before implementing anything.`,
 
             {/* Send / Stop — Lovable uses square stop while generating */}
             {streaming ? (
-              <button
-                type="button"
-                onClick={stopGeneration}
-                className="flex items-center justify-center w-7 h-7 rounded-lg bg-foreground text-background hover:bg-foreground/90 transition-all flex-shrink-0"
-                title="Stop generation"
-              >
-                <Square className="w-3 h-3 fill-current" />
-              </button>
+              <>
+                {input.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => void handleSend()}
+                    disabled={noCredits || isLocked || !!attachedImage || !!attachedText}
+                    className={`flex items-center justify-center w-7 h-7 rounded-lg border transition-all flex-shrink-0 ${
+                      !noCredits && !isLocked && !attachedImage && !attachedText
+                        ? "border-violet-500/50 bg-violet-500/15 text-violet-300 hover:bg-violet-500/25"
+                        : "border-border/70 bg-muted/40 text-muted-foreground/40 cursor-not-allowed"
+                    }`}
+                    title={attachedImage || attachedText ? "Remove attachments before queueing a follow-up" : "Add follow-up to queue"}
+                  >
+                    <ListChecks className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={stopGeneration}
+                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-foreground text-background hover:bg-foreground/90 transition-all flex-shrink-0"
+                  title="Stop generation"
+                >
+                  <Square className="w-3 h-3 fill-current" />
+                </button>
+              </>
             ) : (
               <button
                 onClick={() => void handleSend()}

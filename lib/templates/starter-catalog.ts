@@ -12,6 +12,8 @@
  * strong, opinionated frame to fill.
  */
 
+import { ensureWebsiteHeaderSections } from "@/lib/ai/website-header-contract";
+
 export interface DesignTokens {
   /** Tailwind/CSS color values. */
   colors: {
@@ -892,7 +894,12 @@ export const STARTER_TEMPLATES: StarterTemplate[] = [
 ];
 
 export function getStarterTemplate(id: string): StarterTemplate | undefined {
-  return STARTER_TEMPLATES.find((t) => t.id === id);
+  const t = STARTER_TEMPLATES.find((x) => x.id === id);
+  if (!t) return undefined;
+  return {
+    ...t,
+    sections: ensureWebsiteHeaderSections(t.sections, t.category),
+  };
 }
 
 /** Resolve a gallery card name (e.g. "Aurora — Modern SaaS") to its catalog id. */

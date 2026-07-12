@@ -95,8 +95,36 @@ function hasPath(paths: Set<string>, noExtPath: string): boolean {
     paths.has(`${clean}.js`) ||
     paths.has(`${clean}.jsx`) ||
     paths.has(`${clean}/index.ts`) ||
-    paths.has(`${clean}/index.tsx`)
+    paths.has(`${clean}/index.tsx`) ||
+    paths.has(`${clean}/index.js`) ||
+    paths.has(`${clean}/index.jsx`)
   );
+}
+
+function findKnownFile(files: MinimalGeneratedFile[], noExtPath: string): MinimalGeneratedFile | null {
+  const clean = stripExtension(noExtPath);
+  return files.find((file) => {
+    const path = stripExtension(file.path);
+    return path === clean || path === clean.replace(/^src\//, "") || `src/${path}` === clean;
+  }) ?? null;
+}
+
+function upsertSupportFile<T extends MinimalGeneratedFile>(
+  out: T[],
+  paths: Set<string>,
+  path: string,
+  language: string,
+  content: string,
+) {
+  const clean = stripExtension(path);
+  const idx = out.findIndex((file) => stripExtension(file.path) === clean);
+  if (idx >= 0) {
+    out[idx] = { ...out[idx], content, language: out[idx].language ?? language };
+    addPathVariants(paths, out[idx].path);
+    return;
+  }
+  out.push({ path, content, language } as T);
+  addPathVariants(paths, path);
 }
 
 function importRecords(file: MinimalGeneratedFile): Array<{ clause: string; spec: string; resolved: string | null }> {
@@ -122,6 +150,13 @@ function importRecords(file: MinimalGeneratedFile): Array<{ clause: string; spec
   return records;
 }
 
+function parseDefaultImport(clause: string): string | null {
+  const clean = clause.trim();
+  if (!clean || clean.startsWith("{") || clean.startsWith("*") || clean.startsWith("type {")) return null;
+  const first = clean.split(",")[0]?.trim().replace(/^type\s+/, "");
+  return /^[A-Za-z_$][\w$]*$/.test(first ?? "") ? first ?? null : null;
+}
+
 function parseNamedImports(clause: string): string[] {
   const match = clause.match(/\{([^}]+)\}/);
   if (!match) return [];
@@ -129,6 +164,34 @@ function parseNamedImports(clause: string): string[] {
     .split(",")
     .map((raw) => raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/i)[0]?.trim())
     .filter((name): name is string => /^[A-Za-z_$][\w$]*$/.test(name ?? ""));
+}
+
+function exportedNames(content: string): Set<string> {
+  const names = new Set<string>();
+  for (const match of content.matchAll(/\bexport\s+(?:const|let|var|function|class|interface|type)\s+([A-Za-z_$][\w$]*)\b/g)) {
+    names.add(match[1]);
+  }
+  for (const match of content.matchAll(/\bexport\s*\{([^}]+)\}/g)) {
+    for (const raw of match[1].split(",")) {
+      const name = raw.trim().split(/\s+as\s+/i).pop()?.trim();
+      if (name && name !== "default") names.add(name);
+    }
+  }
+  return names;
+}
+
+function pascalCase(value: string): string {
+  const base = value
+    .split("/")
+    .pop()
+    ?.replace(/\.(tsx?|jsx?)$/, "")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .trim() || "GeneratedComponent";
+  const name = base
+    .split(/\s+/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join("");
+  return /^[A-Za-z_$][\w$]*$/.test(name) ? name : "GeneratedComponent";
 }
 
 function findUiSupport(resolved: string): { path: string; spec: SupportSpec } | null {
@@ -139,6 +202,227 @@ function findUiSupport(resolved: string): { path: string; spec: SupportSpec } | 
   const spec = UI_SUPPORT[key];
   if (!spec) return null;
   return { path: `${clean}.tsx`, spec };
+}
+
+function isTypesPath(resolved: string): boolean {
+  const clean = stripExtension(resolved);
+  return clean === "src/lib/types" || clean === "lib/types";
+}
+
+function isUtilsPath(resolved: string): boolean {
+  const clean = stripExtension(resolved);
+  return /(^|\/)(lib\/utils|utils)$/.test(clean);
+}
+
+function isDataPath(resolved: string): boolean {
+  const clean = stripExtension(resolved);
+  return /^(src\/)?data\//.test(clean);
+}
+
+function isContextPath(resolved: string): boolean {
+  const clean = stripExtension(resolved);
+  return /^(src\/)?(context|contexts)\//.test(clean) || /Context$/i.test(clean.split("/").pop() ?? "");
+}
+
+function isHookPath(resolved: string): boolean {
+  const clean = stripExtension(resolved);
+  return /^(src\/)?hooks\//.test(clean) || /^use[A-Z]/.test(clean.split("/").pop() ?? "");
+}
+
+function isLibModulePath(resolved: string): boolean {
+  const clean = stripExtension(resolved);
+  return /^(src\/)?lib\//.test(clean) && !isUtilsPath(clean) && !isTypesPath(clean);
+}
+
+function isComponentOrPagePath(resolved: string): boolean {
+  if (isMissingComponentPath(resolved)) return true;
+  // Also repair root-level UI modules like src/Button.tsx / src/Shop.tsx
+  const clean = stripExtension(resolved);
+  const base = clean.split("/").pop() ?? "";
+  return /^(src\/)?[A-Z][\w$]*$/.test(clean) || /^[A-Z][\w$]*$/.test(base);
+}
+
+function hasDefaultExport(content: string): boolean {
+  return /\bexport\s+default\b/m.test(content);
+}
+
+function appendDefaultExport(content: string, name: string): string {
+  if (hasDefaultExport(content)) return content;
+  const safe = /^[A-Za-z_$][\w$]*$/.test(name) ? name : "GeneratedComponent";
+  // Prefer re-exporting an existing named symbol; otherwise create a tiny default.
+  if (exportedNames(content).has(safe)) {
+    return appendBlock(content, "// LifemarkAI generated default export", `export default ${safe};`);
+  }
+  return appendBlock(
+    content,
+    "// LifemarkAI generated default export",
+    `export default function ${safe}(props) {\n  return props?.children ?? null;\n}\n`,
+  );
+}
+
+function appendNamedReExports(content: string, names: string[]): string {
+  const missing = names.filter(
+    (name) => /^[A-Za-z_$][\w$]*$/.test(name) && !exportedNames(content).has(name),
+  );
+  if (missing.length === 0) return content;
+
+  const blockLines: string[] = [];
+  for (const name of missing) {
+    // Default export function/const with the same name → also expose as named.
+    if (
+      new RegExp(`export\\s+default\\s+(?:async\\s+)?function\\s+${name}\\b`).test(content) ||
+      new RegExp(`(?:function|const|class)\\s+${name}\\b`).test(content)
+    ) {
+      blockLines.push(`export { ${name} };`);
+      continue;
+    }
+    // File has some default export — alias it to the requested named import.
+    if (hasDefaultExport(content)) {
+      blockLines.push(`export { default as ${name} };`);
+      continue;
+    }
+    if (/^[A-Z]/.test(name)) {
+      blockLines.push(
+        `export function ${name}(props) {\n  return props?.children ?? <div>${name}</div>;\n}`,
+      );
+    } else if (/^use[A-Z]/.test(name)) {
+      blockLines.push(hookExport(name));
+    } else {
+      blockLines.push(`export const ${name} = undefined;`);
+    }
+  }
+
+  const block = blockLines.join("\n\n");
+  return block ? appendBlock(content, "// LifemarkAI generated missing named exports", block) : content;
+}
+
+function hookExport(name: string): string {
+  if (name === "useCart") {
+    return `export function useCart() {
+  return {
+    items: [],
+    cart: [],
+    addItem: () => {},
+    removeItem: () => {},
+    updateQty: () => {},
+    clear: () => {},
+    total: 0,
+    count: 0,
+  };
+}`;
+  }
+  if (name === "useAuth") {
+    return `export function useAuth() {
+  return { user: null, session: null, loading: false, signIn: async () => ({}), signOut: async () => {} };
+}`;
+  }
+  return `export function ${name}(..._args) {
+  return {};
+}`;
+}
+
+function contextExportBlock(names: string[]): string {
+  const lines: string[] = [];
+  const hasProvider = names.some((n) => /Provider$/i.test(n));
+  const hookNames = names.filter((n) => /^use[A-Z]/.test(n));
+  const providers = names.filter((n) => /Provider$/i.test(n));
+  const other = names.filter((n) => !/^use[A-Z]/.test(n) && !/Provider$/i.test(n));
+
+  if (hookNames.includes("useCart") || providers.some((p) => /Cart/i.test(p)) || other.some((n) => /Cart/i.test(n))) {
+    lines.push(`import React from "react";
+const CartContext = React.createContext({
+  items: [],
+  cart: [],
+  addItem: () => {},
+  removeItem: () => {},
+  updateQty: () => {},
+  clear: () => {},
+  total: 0,
+  count: 0,
+});
+export function CartProvider({ children }) {
+  return <CartContext.Provider value={{ items: [], cart: [], addItem: () => {}, removeItem: () => {}, updateQty: () => {}, clear: () => {}, total: 0, count: 0 }}>{children}</CartContext.Provider>;
+}
+export function useCart() {
+  return React.useContext(CartContext);
+}
+export { CartContext };`);
+  } else {
+    for (const name of providers) {
+      lines.push(`export function ${name}({ children }) { return children ?? null; }`);
+    }
+    for (const name of hookNames) {
+      lines.push(hookExport(name));
+    }
+    for (const name of other) {
+      lines.push(`export const ${name} = {};`);
+    }
+  }
+
+  if (!hasProvider && providers.length === 0 && lines.length === 0) {
+    for (const name of names) {
+      if (/^use[A-Z]/.test(name)) lines.push(hookExport(name));
+      else if (/^[A-Z]/.test(name)) lines.push(`export function ${name}({ children }) { return children ?? null; }`);
+      else lines.push(`export const ${name} = {};`);
+    }
+  }
+
+  return lines.join("\n\n");
+}
+
+function appendContextExports(content: string, names: string[]): string {
+  const missing = names.filter((name) => !exportedNames(content).has(name));
+  if (missing.length === 0) return content;
+  // If file is empty/minimal, write a coherent cart context when relevant
+  if (!content.trim() || content.trim().length < 40) {
+    return contextExportBlock(names);
+  }
+  const block = missing
+    .map((name) => {
+      if (/^use[A-Z]/.test(name)) return hookExport(name);
+      if (/Provider$/i.test(name)) return `export function ${name}({ children }) { return children ?? null; }`;
+      return `export const ${name} = {};`;
+    })
+    .join("\n\n");
+  return appendBlock(content, "// LifemarkAI generated missing context exports", block);
+}
+
+function appendHookExports(content: string, names: string[]): string {
+  const missing = names.filter((name) => !exportedNames(content).has(name));
+  if (missing.length === 0) return content;
+  const block = missing.map(hookExport).join("\n\n");
+  return appendBlock(content, "// LifemarkAI generated missing hook exports", block);
+}
+
+function libModuleExport(name: string): string {
+  if (name === "subscribeNewsletter") {
+    return `export async function subscribeNewsletter(email) {
+  return { ok: true, email: String(email ?? "") };
+}`;
+  }
+  if (name === "supabase") {
+    return `export const supabase = {
+  auth: { getUser: async () => ({ data: { user: null }, error: null }), getSession: async () => ({ data: { session: null }, error: null }) },
+  from: () => ({ select: async () => ({ data: [], error: null }), insert: async () => ({ data: null, error: null }) }),
+};`;
+  }
+  if (/^use[A-Z]/.test(name)) return hookExport(name);
+  if (/^[A-Z]/.test(name)) {
+    return `export function ${name}(..._args) { return null; }`;
+  }
+  return `export async function ${name}(..._args) { return null; }`;
+}
+
+function appendLibExports(content: string, names: string[]): string {
+  const missing = names.filter((name) => !exportedNames(content).has(name));
+  if (missing.length === 0) return content;
+  const block = missing.map(libModuleExport).join("\n\n");
+  return appendBlock(content, "// LifemarkAI generated missing lib exports", block);
+}
+
+function isMissingComponentPath(resolved: string): boolean {
+  const clean = stripExtension(resolved);
+  return /^(src\/)?(components|pages|views|screens|sections|layouts|features|blocks)\//.test(clean);
 }
 
 function addSupportFile<T extends MinimalGeneratedFile>(
@@ -170,27 +454,143 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
 ): T[] {
   const out = [...files];
   const paths = new Set<string>();
-  for (const file of [...existingFiles, ...files]) addPathVariants(paths, file.path);
+  const allInputFiles = [...existingFiles, ...files];
+  for (const file of allInputFiles) addPathVariants(paths, file.path);
 
-  for (const file of files) {
+  const neededExports = new Map<string, Set<string>>();
+  const defaultComponentImports = new Map<string, Set<string>>();
+
+  for (const file of allInputFiles) {
+    for (const record of importRecords(file)) {
+      if (!record.resolved) continue;
+      const resolved = stripExtension(record.resolved);
+      const named = parseNamedImports(record.clause);
+      if (named.length > 0) {
+        const set = neededExports.get(resolved) ?? new Set<string>();
+        for (const name of named) set.add(name);
+        neededExports.set(resolved, set);
+      }
+      const defaultName = parseDefaultImport(record.clause);
+      if (defaultName && isMissingComponentPath(resolved)) {
+        const set = defaultComponentImports.get(resolved) ?? new Set<string>();
+        set.add(defaultName);
+        defaultComponentImports.set(resolved, set);
+      }
+    }
+  }
+
+  for (const file of allInputFiles) {
     for (const record of importRecords(file)) {
       if (!record.resolved) continue;
       const ui = findUiSupport(record.resolved);
       if (ui) {
         addSupportFile(out, paths, ui.path, ui.spec.language, ui.spec.content(ui.path));
+        continue;
+      }
+      if (!hasPath(paths, record.resolved) && isMissingComponentPath(record.resolved)) {
+        const clean = stripExtension(record.resolved);
+        const names = new Set<string>([
+          ...(defaultComponentImports.get(clean) ?? []),
+          ...parseNamedImports(record.clause),
+          pascalCase(clean),
+        ]);
+        addSupportFile(out, paths, `${clean}.tsx`, "typescriptreact", genericComponentFile(clean, [...names]));
       }
     }
   }
 
-  const neededTypes = collectNeededTypes(files);
-  const importsTypes = neededTypes.length > 0 || files.some((file) =>
+  const neededTypes = collectNeededTypes(allInputFiles);
+  const importsTypes = neededTypes.length > 0 || allInputFiles.some((file) =>
     importRecords(file).some((record) => record.resolved === "src/lib/types" || record.resolved === "lib/types"),
   );
   if (importsTypes) {
-    const typesPath = files.some((file) =>
+    const typesPath = allInputFiles.some((file) =>
       importRecords(file).some((record) => record.resolved === "lib/types"),
     ) ? "lib/types.ts" : "src/lib/types.ts";
-    addSupportFile(out, paths, typesPath, "typescript", typesFile(neededTypes));
+    const known = findKnownFile(allInputFiles, typesPath);
+    const missing = neededTypes.filter((name) => !exportedNames(known?.content ?? "").has(name));
+    if (!known || missing.length > 0) {
+      const content = known
+        ? appendTypeExports(known.content ?? "", missing)
+        : typesFile(neededTypes);
+      upsertSupportFile(out, paths, known?.path ?? typesPath, "typescript", content);
+    }
+  }
+
+  for (const [resolved, namesSet] of neededExports) {
+    const names = [...namesSet].sort();
+    // Prefer the in-progress `out` copy so chained repairs see prior upserts.
+    const known = findKnownFile(out, resolved) ?? findKnownFile(allInputFiles, resolved);
+    const missing = names.filter((name) => !exportedNames(known?.content ?? "").has(name));
+    if (missing.length === 0) continue;
+
+    if (isTypesPath(resolved)) {
+      const path = known?.path ?? `${resolved}.ts`;
+      upsertSupportFile(out, paths, path, "typescript", known ? appendTypeExports(known.content ?? "", missing) : typesFile(names));
+      continue;
+    }
+
+    if (isUtilsPath(resolved)) {
+      const path = known?.path ?? `${resolved}.ts`;
+      const base = known?.content ?? "";
+      upsertSupportFile(out, paths, path, "typescript", appendUtilityExports(base, missing));
+      continue;
+    }
+
+    if (isDataPath(resolved)) {
+      const path = known?.path ?? `${resolved}.ts`;
+      const base = known?.content ?? "";
+      upsertSupportFile(out, paths, path, "typescript", appendDataExports(base, missing));
+      continue;
+    }
+
+    if (isContextPath(resolved)) {
+      const path = known?.path ?? `${resolved}.tsx`;
+      const base = known?.content ?? "";
+      upsertSupportFile(out, paths, path, "typescriptreact", appendContextExports(base, missing));
+      continue;
+    }
+
+    if (isHookPath(resolved)) {
+      const path = known?.path ?? `${resolved}.ts`;
+      const base = known?.content ?? "";
+      upsertSupportFile(out, paths, path, "typescript", appendHookExports(base, missing));
+      continue;
+    }
+
+    if (isLibModulePath(resolved)) {
+      const path = known?.path ?? `${resolved}.ts`;
+      const base = known?.content ?? "";
+      upsertSupportFile(out, paths, path, "typescript", appendLibExports(base, missing));
+      continue;
+    }
+
+    if (isComponentOrPagePath(resolved)) {
+      const path = known?.path ?? `${resolved}.tsx`;
+      const base = known?.content ?? "";
+      // Also ensure default import consumers work when only named exists.
+      let next = appendNamedReExports(base, missing);
+      const defaultImporters = defaultComponentImports.get(stripExtension(resolved));
+      if (defaultImporters && defaultImporters.size > 0) {
+        const primary = [...defaultImporters][0]!;
+        next = appendDefaultExport(next, primary);
+      }
+      upsertSupportFile(out, paths, path, "typescriptreact", next);
+    }
+  }
+
+  // Second pass: default-import a named-only component/page (e.g. ProductList).
+  for (const file of [...allInputFiles, ...out]) {
+    for (const record of importRecords(file)) {
+      if (!record.resolved) continue;
+      const defaultName = parseDefaultImport(record.clause);
+      if (!defaultName || !isComponentOrPagePath(record.resolved)) continue;
+      const known = findKnownFile(out, record.resolved) ?? findKnownFile(allInputFiles, record.resolved);
+      if (!known) continue;
+      if (hasDefaultExport(known.content ?? "")) continue;
+      const next = appendDefaultExport(known.content ?? "", defaultName);
+      upsertSupportFile(out, paths, known.path, known.language ?? "typescriptreact", next);
+    }
   }
 
   return out;
@@ -381,12 +781,153 @@ export default Table;
 `;
 }
 
+function genericComponentFile(path: string, names: string[]) {
+  const primary = pascalCase(path);
+  const exportNames = [...new Set(names.filter((name) => /^[A-Z][A-Za-z0-9_$]*$/.test(name)))];
+  if (!exportNames.includes(primary)) exportNames.unshift(primary);
+  const aliases = exportNames
+    .filter((name) => name !== primary)
+    .map((name) => `export const ${name} = ${primary};`)
+    .join("\n");
+  const title = primary.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
+  return `${joinHelper()}
+
+export function ${primary}({ children, title = "${title}", ...props }) {
+  return (
+    <section className={cx("rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-700", props.className)}>
+      {children ?? <div><h2 className="text-xl font-semibold text-slate-900">{title}</h2><p className="mt-2 text-sm">This generated section is ready to customize.</p></div>}
+    </section>
+  );
+}
+
+${aliases}
+
+export default ${primary};
+`;
+}
+
+function appendBlock(content: string, marker: string, block: string): string {
+  if (content.includes(block.trim())) return content;
+  return `${content.trimEnd()}\n\n${marker}\n${block.trim()}\n`;
+}
+
+function typeExportBlock(names: string[]): string {
+  const builtIns = new Set(["EntityId", "EntityRecord", "Status", "CurrencyCode"]);
+  return names
+    .filter((name) => /^[A-Za-z_$][\w$]*$/.test(name) && !builtIns.has(name))
+    .map((name) => `export type ${name} = EntityRecord;\nexport const ${name} = {};`)
+    .join("\n\n");
+}
+
+function appendTypeExports(content: string, names: string[]): string {
+  const missing = names.filter((name) => /^[A-Za-z_$][\w$]*$/.test(name));
+  if (missing.length === 0) return content;
+  const base = content.trim()
+    ? content
+    : `export type EntityId = string | number;
+export const EntityId = "";
+
+export type EntityRecord = Record<string, unknown>;
+export const EntityRecord = {};
+`;
+  const block = typeExportBlock(missing);
+  if (!block.trim()) return base;
+  return appendBlock(base, "// LifemarkAI generated missing type/value exports", block);
+}
+
+function utilityExport(name: string): string {
+  const generic = `export function ${name}(value = "") { return value == null ? "" : String(value); }`;
+  const map: Record<string, string> = {
+    cn: "export function cn(...values) { return values.flat(Infinity).filter(Boolean).join(\" \"); }",
+    cx: "export function cx(...values) { return values.flat(Infinity).filter(Boolean).join(\" \"); }",
+    formatDate: "export function formatDate(value) { const d = value ? new Date(value) : new Date(); return Number.isNaN(d.getTime()) ? \"\" : d.toLocaleDateString(); }",
+    formatDateShort: "export function formatDateShort(value) { const d = value ? new Date(value) : new Date(); return Number.isNaN(d.getTime()) ? \"\" : d.toLocaleDateString(undefined, { month: \"short\", day: \"numeric\", year: \"numeric\" }); }",
+    formatCurrency: "export function formatCurrency(value, currency = \"USD\") { const n = Number(value ?? 0); return new Intl.NumberFormat(undefined, { style: \"currency\", currency }).format(Number.isFinite(n) ? n : 0); }",
+    formatPrice: "export function formatPrice(value, currency = \"USD\") { const n = Number(value ?? 0); return new Intl.NumberFormat(undefined, { style: \"currency\", currency }).format(Number.isFinite(n) ? n : 0); }",
+    slugify: "export function slugify(value = \"\") { return String(value).toLowerCase().trim().replace(/[^a-z0-9]+/g, \"-\").replace(/^-+|-+$/g, \"\"); }",
+    capitalize: "export function capitalize(value = \"\") { const s = String(value); return s.charAt(0).toUpperCase() + s.slice(1); }",
+    truncate: "export function truncate(value = \"\", length = 120) { const s = String(value); return s.length > length ? `${s.slice(0, length)}...` : s; }",
+  };
+  return map[name] ?? generic;
+}
+
+function appendUtilityExports(content: string, names: string[]): string {
+  const block = names
+    .filter((name) => /^[A-Za-z_$][\w$]*$/.test(name))
+    .map(utilityExport)
+    .join("\n\n");
+  return block ? appendBlock(content, "// LifemarkAI generated missing utility exports", block) : content;
+}
+
+function sampleArrayFor(name: string): string {
+  if (/PRODUCT/i.test(name)) {
+    return `[
+  { id: "product-1", name: "Sample Product", title: "Sample Product", price: 29.99, image: "", description: "A sample product ready to customize.", category: "General" },
+  { id: "product-2", name: "Featured Item", title: "Featured Item", price: 49.99, image: "", description: "Another sample product.", category: "Featured" }
+]`;
+  }
+  if (/SERVICES?/i.test(name)) {
+    return `[
+  { id: "service-1", title: "Strategy", name: "Strategy", category: "Consulting", description: "A focused service ready to customize.", icon: "Sparkles" }
+]`;
+  }
+  if (/PARTNERS?/i.test(name)) {
+    return `[
+  { id: "partner-1", name: "Partner", logo: "", category: "Partner", description: "Trusted partner" }
+]`;
+  }
+  if (/PORTFOLIO|PROJECT|CASE/i.test(name)) {
+    return `[
+  { id: "project-1", title: "Featured Project", name: "Featured Project", category: "Work", description: "A featured project ready to customize.", image: "" }
+]`;
+  }
+  if (/BLOG|POST|JOURNAL/i.test(name)) {
+    return `[
+  { id: "post-1", title: "Latest Update", slug: "latest-update", excerpt: "A generated journal entry.", date: new Date().toISOString(), category: "News" }
+]`;
+  }
+  if (/TEAM|MEMBER/i.test(name)) {
+    return `[
+  { id: "member-1", name: "Team Member", role: "Founder", bio: "Profile ready to customize.", image: "" }
+]`;
+  }
+  if (/TESTIMONIAL|REVIEW/i.test(name)) {
+    return `[
+  { id: "testimonial-1", name: "Customer", quote: "A thoughtful testimonial goes here.", role: "Client" }
+]`;
+  }
+  if (/STAT|METRIC/i.test(name)) {
+    return `[
+  { id: "stat-1", label: "Projects", value: "100+" }
+]`;
+  }
+  return "[]";
+}
+
+function dataExport(name: string): string {
+  if (
+    /^[A-Z0-9_]+S$/.test(name) ||
+    /^MOCK_/i.test(name) ||
+    /(LIST|ITEMS|DATA|products|PRODUCTS)$/i.test(name) ||
+    /^[a-z].*s$/i.test(name)
+  ) {
+    return `export const ${name} = ${sampleArrayFor(name)};`;
+  }
+  return `export const ${name} = {};`;
+}
+
+function appendDataExports(content: string, names: string[]): string {
+  const block = names
+    .filter((name) => /^[A-Za-z_$][\w$]*$/.test(name))
+    .map(dataExport)
+    .join("\n\n");
+  return block ? appendBlock(content, "// LifemarkAI generated missing data exports", block) : content;
+}
+
 function typesFile(names: string[]) {
   const builtIns = new Set(["EntityId", "EntityRecord", "Status", "CurrencyCode"]);
   const safeNames = names.filter((name) => /^[A-Za-z_$][\w$]*$/.test(name) && !builtIns.has(name));
-  const dynamic = safeNames
-    .map((name) => `export type ${name} = EntityRecord;\nexport const ${name} = {};`)
-    .join("\n\n");
+  const dynamic = typeExportBlock(safeNames);
   return `export type EntityId = string | number;
 export const EntityId = "";
 

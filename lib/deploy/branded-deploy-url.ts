@@ -20,6 +20,10 @@ const ROOT_DOMAIN = process.env.LIFEMARK_ROOT_DOMAIN ?? "lifemarkai.com";
 export interface BrandedDeployContext {
   projectName: string;
   projectId: string;
+  /** Unique per-project slug (projects.app_slug). When present, produces a CLEAN
+   *  slug-only host `{app_slug}.apps.lifemarkai.com`; otherwise falls back to the
+   *  id-embedded host so routing never breaks. */
+  appSlug?: string | null;
   brandedSubdomain?: string | null;
   brandedStatus?: string | null;
 }
@@ -41,12 +45,20 @@ function shortSlug(name: string): string {
 }
 
 export function buildLifemarkDeployUrl(ctx: BrandedDeployContext): string {
-  const slug = shortSlug(ctx.projectName);
+  // Branded (white-label) host wins when active.
   if (ctx.brandedStatus === "active" && ctx.brandedSubdomain) {
-    return `https://${slug}.${ctx.brandedSubdomain}.${ROOT_DOMAIN}`;
+    const label = ctx.appSlug || shortSlug(ctx.projectName);
+    return `https://${label}.${ctx.brandedSubdomain}.${ROOT_DOMAIN}`;
   }
-  // Full project id as the resolvable suffix → exact lookup by the host router.
-  return `https://${slug}-${ctx.projectId}.${APPS_DOMAIN}`;
+  // CLEAN slug-only host when the project has a unique app_slug
+  // (e.g. https://my-store.apps.lifemarkai.com). Resolved by the slug host
+  // rewrite → /preview-by-slug/[slug].
+  if (ctx.appSlug) {
+    return `https://${ctx.appSlug}.${APPS_DOMAIN}`;
+  }
+  // Fallback (no slug yet): id-embedded host so the exact-id host router still
+  // resolves it. Never breaks routing for un-migrated projects.
+  return `https://${shortSlug(ctx.projectName)}-${ctx.projectId}.${APPS_DOMAIN}`;
 }
 
 export function isBrandedDeployActive(ctx: BrandedDeployContext): boolean {

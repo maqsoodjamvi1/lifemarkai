@@ -10,6 +10,8 @@ import { ActivityFeed } from "@/components/dashboard/activity-feed";
 import { PinnedRail } from "@/components/dashboard/pinned-rail";
 import { GettingStartedChecklist } from "@/components/dashboard/getting-started-checklist";
 import { ContinueCard } from "@/components/dashboard/continue-card";
+import { RecentlyVisited } from "@/components/dashboard/recently-visited";
+import { ProjectInsightsCard } from "@/components/dashboard/project-insights-card";
 import { BillingAlertBanner } from "@/components/dashboard/billing-alert-banner";
 
 export const metadata = { title: "Dashboard" };
@@ -66,6 +68,7 @@ export default async function DashboardPage({
           <>
             <PinnedRail projects={projects ?? []} />
             <ContinueCard projects={projects ?? []} />
+            <RecentlyVisited projects={projects ?? []} />
           </>
         )}
 
@@ -88,6 +91,8 @@ export default async function DashboardPage({
         {!isNewUser && (
           <StatsCards projects={projects ?? []} credits={profile?.credits ?? 0} />
         )}
+
+        {!isNewUser && <ProjectInsightsCard />}
 
         {!isNewUser && <ActivityFeed />}
       </div>

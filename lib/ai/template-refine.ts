@@ -10,6 +10,11 @@
  * See lib/templates/starter-catalog.ts.
  */
 import { getStarterTemplate } from "@/lib/templates/starter-catalog";
+import {
+  ensureWebsiteHeaderSections,
+  WEBSITE_HEADER_CONTRACT,
+  WEBSITE_HEADER_CATEGORIES,
+} from "@/lib/ai/website-header-contract";
 
 /**
  * Build a system-prompt block for a chosen starter template. Returns "" when the
@@ -21,6 +26,9 @@ export function buildTemplateRefinementBlock(templateId?: string | null): string
   if (!t) return "";
 
   const c = t.tokens.colors;
+  const sections = ensureWebsiteHeaderSections(t.sections, t.category);
+  const isWebsite = WEBSITE_HEADER_CATEGORIES.has(t.category);
+
   return `
 
 ---
@@ -38,7 +46,7 @@ Keep the look cohesive and polished; do not invent a different visual language.
 - Visual vibe: ${t.tokens.vibe.join(", ")}
 
 ## Section blueprint (include these, in order, adapting to the user's domain)
-${t.sections.map((s, i) => `${i + 1}. ${s}`).join("\n")}
+${sections.map((s, i) => `${i + 1}. ${s}`).join("\n")}
 
 ## Design directions (follow precisely — this is what makes it look designed)
 ${t.designNotes.map((n) => `- ${n}`).join("\n")}
@@ -48,5 +56,6 @@ ${t.designNotes.map((n) => `- ${n}`).join("\n")}
 - Replace placeholder copy with content relevant to the user's request.
 - Keep spacing generous and the type hierarchy strong (clear h1 → h2 → body scale).
 - Reuse the same component patterns across sections for consistency.
+${isWebsite ? `\n${WEBSITE_HEADER_CONTRACT}\n` : ""}
 ---`;
 }

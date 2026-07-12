@@ -1,6 +1,7 @@
 import { createBrowserClient } from "@supabase/ssr";
 import { processLock } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
+import { isTransientSupabaseError, sleep } from "@/lib/supabase/transient-error";
 
 /**
  * Singleton Supabase browser client.
@@ -17,93 +18,175 @@ import type { Database } from "@/types/database";
  * tab shares one auth-refresh loop, one lock acquisition, and one
  * realtime connection pool. The API surface is unchanged — every
  * existing `const supabase = createClient()` call still works.
- *
- * Notes:
- *   • `globalThis` is used so HMR (which reloads this module) doesn't
- *     create a second client. The previous instance survives module
- *     reload and keeps its auth state.
- *   • SSR safety: createClient() should never be called from a server
- *     component. createBrowserClient() reads document.cookie under the
- *     hood. The factory throws helpfully if window is undefined.
  */
 
 declare global {
-   
   var __lifemark_supabase_browser_client: ReturnType<typeof createBrowserClient<Database>> | undefined;
+  var __lifemark_supabase_browser_client_rev: number | undefined;
+  var __lifemark_supabase_auth_noise_guard: boolean | undefined;
+}
+
+/** Bump when client construction options change so HMR drops the stale singleton. */
+const CLIENT_REV = 2;
+
+function isAuthNetworkNoise(reason: unknown): boolean {
+  const msg = reason instanceof Error ? reason.message : String(reason ?? "");
+  const name = reason instanceof Error ? reason.name : "";
+  // GoTrue auto-refresh throws TypeError: Failed to fetch when Cloudflare/Supabase
+  // times out — noisy in Next.js overlay but recoverable on the next tick.
+  return (
+    /failed to fetch/i.test(msg) ||
+    /fetch failed/i.test(msg) ||
+    /networkerror/i.test(msg) ||
+    /timeout/i.test(msg) ||
+    /connect timeout/i.test(msg) ||
+    /aborted/i.test(msg) ||
+    name === "AbortError" ||
+    (name === "TypeError" && /fetch/i.test(msg))
+  );
+}
+
+function installAuthNoiseGuard(): void {
+  if (typeof window === "undefined" || globalThis.__lifemark_supabase_auth_noise_guard) return;
+  globalThis.__lifemark_supabase_auth_noise_guard = true;
+
+  window.addEventListener("unhandledrejection", (event) => {
+    if (!isAuthNetworkNoise(event.reason)) return;
+    event.preventDefault();
+    if (process.env.NODE_ENV === "development") {
+      console.warn("[supabase] transient auth network error (ignored)");
+    }
+  });
+}
+
+async function withAuthRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!isTransientSupabaseError(err) || attempt >= retries) break;
+      await sleep(500 * (attempt + 1));
+    }
+  }
+  throw lastErr;
 }
 
 export function createClient(): ReturnType<typeof createBrowserClient<Database>> {
   if (typeof window === "undefined") {
-    // "use client" components still render once on the server during SSR, and
-    // `const supabase = createClient()` at render scope is the standard pattern
-    // throughout this codebase — throwing here crashes every such page's SSR
-    // pass. createBrowserClient is safe to construct without `window` (cookie
-    // access is lazy), so return a throwaway, UNCACHED instance: it has no
-    // session and is discarded after the SSR pass; the browser singleton takes
-    // over on hydration. Server components / route handlers should still use
-    // @/lib/supabase/server for real data access.
+    // "use client" components still render once on the server during SSR.
+    // Return a throwaway, UNCACHED instance for SSR; the browser singleton
+    // takes over on hydration.
     return createBrowserClient<Database>(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     );
   }
-  if (!globalThis.__lifemark_supabase_browser_client) {
+
+  installAuthNoiseGuard();
+
+  if (
+    !globalThis.__lifemark_supabase_browser_client ||
+    globalThis.__lifemark_supabase_browser_client_rev !== CLIENT_REV
+  ) {
+    // Use the native fetch — a custom AbortController timeout wrapper was
+    // re-throwing TypeError: Failed to fetch with a stack pointing at our
+    // client.ts and flooding the Next.js overlay on flaky Supabase/CF links.
+    globalThis.__lifemark_supabase_browser_client_rev = CLIENT_REV;
     globalThis.__lifemark_supabase_browser_client = createBrowserClient<Database>(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         auth: {
-          // Use the in-process mutex instead of the Navigator Web Locks API.
-          // The default navigatorLock "steals" the lock after a timeout, and
-          // with many components calling auth.getUser() concurrently on mount
-          // (the editor opens ~a dozen panels) plus the auto-refresh timer,
-          // losers surface as runtime overlays: "Lock was released because
-          // another request stole it" / "Lock broken by another request with
-          // the 'steal' option". processLock serializes auth ops within the
-          // tab and never steals. Trade-off: no cross-tab refresh
-          // coordination — acceptable, since Supabase tolerates concurrent
-          // refreshes within its token-reuse interval.
           lock: processLock,
+          autoRefreshToken: true,
+          persistSession: true,
+          detectSessionInUrl: true,
         },
       },
     );
 
     // ── Coalesce concurrent auth.getUser() calls ──────────────────────────
-    // getUser() performs a NETWORK request while holding the auth lock. The
-    // editor mounts ~a dozen panels that each call getUser() (doubled by
-    // React StrictMode in dev), so 30–60 calls queue on the lock and the
-    // tail waiters exceed the acquire timeout ("Acquiring process lock …
-    // timed out"). Dedupe: all concurrent callers share one in-flight
-    // request, and the result is cached for a few seconds. The cache is
-    // invalidated on any auth state change (sign-in/out, token refresh).
     const client = globalThis.__lifemark_supabase_browser_client!;
     const origGetUser = client.auth.getUser.bind(client.auth);
+    const origGetSession = client.auth.getSession.bind(client.auth);
+    const origRefreshSession = client.auth.refreshSession.bind(client.auth);
     type GetUserResult = Awaited<ReturnType<typeof origGetUser>>;
-    let inflight: Promise<GetUserResult> | null = null;
-    let cached: { res: GetUserResult; at: number } | null = null;
+    type GetSessionResult = Awaited<ReturnType<typeof origGetSession>>;
+    type RefreshResult = Awaited<ReturnType<typeof origRefreshSession>>;
+
+    let inflightUser: Promise<GetUserResult> | null = null;
+    let cachedUser: { res: GetUserResult; at: number } | null = null;
     const CACHE_MS = 5000;
 
     client.auth.getUser = ((jwt?: string) => {
-      if (jwt) return origGetUser(jwt); // explicit-JWT calls bypass the cache
-      if (cached && Date.now() - cached.at < CACHE_MS) return Promise.resolve(cached.res);
-      if (!inflight) {
-        inflight = origGetUser()
+      if (jwt) return origGetUser(jwt);
+      if (cachedUser && Date.now() - cachedUser.at < CACHE_MS) {
+        return Promise.resolve(cachedUser.res);
+      }
+      if (!inflightUser) {
+        inflightUser = withAuthRetry(() => origGetUser())
           .then((res) => {
-            cached = { res, at: Date.now() };
-            inflight = null;
+            cachedUser = { res, at: Date.now() };
+            inflightUser = null;
             return res;
           })
           .catch((err) => {
-            inflight = null;
+            inflightUser = null;
+            // Soft-fail transient network errors so the Next overlay stays quiet.
+            if (isAuthNetworkNoise(err)) {
+              return {
+                data: { user: cachedUser?.res.data.user ?? null },
+                error: null,
+              } as GetUserResult;
+            }
             throw err;
           });
       }
-      return inflight;
+      return inflightUser;
     }) as typeof client.auth.getUser;
+
+    client.auth.getSession = (async () => {
+      try {
+        return await withAuthRetry(() => origGetSession());
+      } catch (err) {
+        if (isAuthNetworkNoise(err)) {
+          return { data: { session: null }, error: null } as GetSessionResult;
+        }
+        throw err;
+      }
+    }) as typeof client.auth.getSession;
+
+    client.auth.refreshSession = (async (currentSession?) => {
+      try {
+        return await withAuthRetry(() => origRefreshSession(currentSession));
+      } catch (err) {
+        if (isAuthNetworkNoise(err)) {
+          // Keep existing session if refresh fails transiently — don't sign the user out.
+          try {
+            const current = await origGetSession();
+            return {
+              data: {
+                session: current.data.session,
+                user: current.data.session?.user ?? null,
+              },
+              error: null,
+            } as RefreshResult;
+          } catch {
+            return {
+              data: { session: null, user: null },
+              error: null,
+            } as RefreshResult;
+          }
+        }
+        throw err;
+      }
+    }) as typeof client.auth.refreshSession;
 
     // Sync callback only — never run auth methods inside onAuthStateChange.
     client.auth.onAuthStateChange(() => {
-      cached = null;
+      cachedUser = null;
     });
   }
   return globalThis.__lifemark_supabase_browser_client!;

@@ -4,7 +4,7 @@ import { ensureDevCredits, getDevProfile } from "@/lib/dev-credits";
 import { redirect, notFound } from "next/navigation";
 import { EditorLayout } from "@/components/editor/editor-layout";
 import { EditorConnectivityError } from "@/components/editor/editor-connectivity-error";
-import { isTransientSupabaseError, sleep } from "@/lib/supabase/transient-error";
+import { isTransientSupabaseError, describeSupabaseError, withSupabaseRetry } from "@/lib/supabase/transient-error";
 import type { Project } from "@/types/database";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +15,27 @@ interface EditorPageProps {
 }
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://lifemarkai.app";
+const PROJECT_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function fetchProjectForEditor(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  projectId: string,
+): Promise<{ project: Project | null; error: unknown | null }> {
+  const result = await withSupabaseRetry(
+    () =>
+      (supabase as any)
+        .from("projects")
+        .select("*")
+        .eq("id", projectId)
+        .maybeSingle(),
+    { attempts: 4, baseDelayMs: 1000 },
+  );
+  return {
+    project: (result.data as Project | null) ?? null,
+    error: result.error,
+  };
+}
 
 export async function generateMetadata({ params }: EditorPageProps) {
   const { projectId } = await params;
@@ -23,7 +44,7 @@ export async function generateMetadata({ params }: EditorPageProps) {
     .from("projects")
     .select("name, description, framework, is_public")
     .eq("id", projectId)
-    .single();
+    .maybeSingle();
 
   if (!project) return { title: "Editor | LifemarkAI" };
 
@@ -57,6 +78,7 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
   try {
     const { projectId } = await params;
     const { prompt, deploy, mode } = await searchParams;
+    if (!PROJECT_ID_RE.test(projectId)) notFound();
     const starterMode =
       mode === "plan" || mode === "build" || mode === "agent" || mode === "chat"
         ? mode
@@ -69,39 +91,33 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
     }
 
     // Allow collaborators to open the editor too — retry transient Supabase timeouts.
-    let project: Project | null = null;
-    let projectError: { code?: string; message?: string } | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const result = await (supabase as any)
-        .from("projects")
-        .select("*")
-        .eq("id", projectId)
-        .single();
-      project = result.data;
-      projectError = result.error;
-      if (project || !projectError || projectError.code === "PGRST116") break;
-      if (!isTransientSupabaseError(projectError)) break;
-      await sleep(1000 * (attempt + 1));
-    }
+    let { project, error: projectError } = await fetchProjectForEditor(supabase, projectId);
 
-    // Retry once after refreshing session — stale JWT can make RLS return 0 rows (PGRST116).
-    if ((projectError?.code === "PGRST116" || !project) && user) {
+    // Stale JWT can make RLS return 0 rows — refresh session and retry with a fresh client.
+    if (!project && user) {
       const { data: refreshed } = await supabase.auth.refreshSession();
       if (refreshed.session) {
-        const retry = await (supabase as any)
-          .from("projects")
-          .select("*")
-          .eq("id", projectId)
-          .single();
-        project = retry.data;
+        const supabaseFresh = await createClient();
+        const retry = await fetchProjectForEditor(supabaseFresh, projectId);
+        project = retry.project;
         projectError = retry.error;
       }
     }
 
-    if (projectError || !project) {
-      console.error("Project fetch error:", projectError);
+    if (projectError) {
+      const described = describeSupabaseError(projectError);
+      console.error("Project fetch error:", described.code ?? "?", described.message);
       if (isTransientSupabaseError(projectError)) {
-        return <EditorConnectivityError detail={projectError?.message} />;
+        return <EditorConnectivityError detail={described.message} />;
+      }
+      notFound();
+    }
+
+    if (!project) {
+      if (process.env.NODE_ENV === "development") {
+        console.warn(
+          `Editor: project not found or access denied (id=${projectId}, user=${user.id})`,
+        );
       }
       notFound();
     }
@@ -156,13 +172,10 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
       />
     );
   } catch (error) {
-    console.error("Editor page error:", error);
+    const described = describeSupabaseError(error);
+    console.error("Editor page error:", described.code ?? "?", described.message);
     if (isTransientSupabaseError(error)) {
-      return (
-        <EditorConnectivityError
-          detail={error instanceof Error ? error.message : String(error)}
-        />
-      );
+      return <EditorConnectivityError detail={described.message} />;
     }
     notFound();
   }

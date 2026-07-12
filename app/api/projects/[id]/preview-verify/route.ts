@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { buildFallbackHtml } from "@/lib/preview/build-fallback-html";
 import { verifyPreviewHtml } from "@/lib/ai/preview-verify";
+import { runSelfVerification } from "@/lib/ai/self-verify";
 import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
 
 export const runtime = "nodejs";
@@ -34,5 +35,27 @@ export async function POST(
 
   const html = buildFallbackHtml(files);
   const result = verifyPreviewHtml(html);
-  return NextResponse.json(result);
+  if (!result.ok) return NextResponse.json(result);
+
+  const runtime = await runSelfVerification({
+    supabase,
+    projectId: id,
+    maxRounds: 0,
+  });
+
+  if (!runtime) return NextResponse.json(result);
+
+  return NextResponse.json({
+    ok: result.ok && runtime.passed,
+    checks: [
+      ...result.checks,
+      {
+        name: `Runtime render (${runtime.engine})`,
+        pass: runtime.passed,
+        detail: runtime.passed
+          ? "Mounted without runtime errors"
+          : runtime.errors.slice(0, 2).join("; "),
+      },
+    ],
+  });
 }

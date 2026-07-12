@@ -35,6 +35,12 @@ interface ChatTiptapInputProps {
   onChange: (e: React.ChangeEvent<HTMLTextAreaElement>) => void;
   /** Receives a synthetic event shaped like a textarea keydown event. */
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  /** Return true to consume the paste before ProseMirror inserts it. */
+  onPasteText?: (
+    text: string,
+    event: ClipboardEvent,
+    selection: { from: number; to: number },
+  ) => boolean;
   placeholder?: string;
   disabled?: boolean;
   className?: string;
@@ -58,15 +64,17 @@ function textOffsetToPos(doc: ProseMirrorNode, offset: number): number {
 
 export const ChatTiptapInput = React.forwardRef<ChatInputHandle, ChatTiptapInputProps>(
   function ChatTiptapInput(
-    { value, onChange, onKeyDown, placeholder, disabled, className },
+    { value, onChange, onKeyDown, onPasteText, placeholder, disabled, className },
     ref,
   ) {
     // Keep the latest onKeyDown/onChange in refs so the editor's static
     // handlers always see current closures without re-instantiating the editor.
     const onKeyDownRef = React.useRef(onKeyDown);
     const onChangeRef = React.useRef(onChange);
+    const onPasteTextRef = React.useRef(onPasteText);
     onKeyDownRef.current = onKeyDown;
     onChangeRef.current = onChange;
+    onPasteTextRef.current = onPasteText;
     // Placeholder is read live via a ref so the (dynamic) smartPlaceholder from
     // chat-panel updates without re-instantiating the editor.
     const placeholderRef = React.useRef(placeholder);
@@ -112,6 +120,19 @@ export const ChatTiptapInput = React.forwardRef<ChatInputHandle, ChatTiptapInput
           // If the parent consumed the key (Enter-to-send, mention nav, …),
           // stop ProseMirror from also acting on it.
           return prevented;
+        },
+        handlePaste: (_view: EditorView, event: ClipboardEvent) => {
+          const text = event.clipboardData?.getData("text/plain") ?? "";
+          if (!text) return false;
+          const selection = {
+            from: posToTextOffset(_view.state.doc, _view.state.selection.from),
+            to: posToTextOffset(_view.state.doc, _view.state.selection.to),
+          };
+          if (onPasteTextRef.current?.(text, event, selection)) {
+            event.preventDefault();
+            return true;
+          }
+          return false;
         },
       },
       onUpdate: ({ editor: ed }: { editor: Editor }) => {

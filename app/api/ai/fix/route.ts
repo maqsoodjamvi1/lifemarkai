@@ -10,6 +10,8 @@ import { claimDailyCredits } from "@/lib/credits";
 import { parseAIResponse } from "@/lib/ai/code-parser";
 import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { recordEditorIntelligenceBuild } from "@/lib/ai/editor-lenses/persistence";
+import { appendPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
+import type { PreviewRuntimeError, PreviewErrorKind } from "@/lib/preview/preview-error-bridge";
 
 /**
  * Free daily "Try to fix" quota (Lovable parity — error fixes are Lovable's
@@ -19,6 +21,45 @@ import { recordEditorIntelligenceBuild } from "@/lib/ai/editor-lenses/persistenc
  * enforceable server-side. Fix #21+ costs 1 credit as before.
  */
 const FREE_FIXES_PER_DAY = 20;
+
+const PREVIEW_ERROR_KINDS = new Set<PreviewErrorKind>([
+  "runtime",
+  "promise",
+  "bundler",
+  "empty-root",
+  "console",
+]);
+
+function normalizeRuntimeErrors(value: unknown, fallbackMessage: string): PreviewRuntimeError[] {
+  if (!Array.isArray(value)) {
+    return [{ kind: "runtime", message: fallbackMessage, timestamp: Date.now() }];
+  }
+
+  const errors = value
+    .map((item): PreviewRuntimeError | null => {
+      if (!item || typeof item !== "object") return null;
+      const raw = item as Record<string, unknown>;
+      const message = typeof raw.message === "string" ? raw.message : "";
+      if (!message.trim()) return null;
+      const kind = typeof raw.kind === "string" && PREVIEW_ERROR_KINDS.has(raw.kind as PreviewErrorKind)
+        ? (raw.kind as PreviewErrorKind)
+        : "runtime";
+      return {
+        kind,
+        message: message.slice(0, 4000),
+        filename: typeof raw.filename === "string" ? raw.filename : undefined,
+        lineno: typeof raw.lineno === "number" ? raw.lineno : undefined,
+        colno: typeof raw.colno === "number" ? raw.colno : undefined,
+        stack: typeof raw.stack === "string" ? raw.stack.slice(0, 4000) : undefined,
+        url: typeof raw.url === "string" ? raw.url : undefined,
+        timestamp: typeof raw.timestamp === "number" ? raw.timestamp : Date.now(),
+      };
+    })
+    .filter((err): err is PreviewRuntimeError => Boolean(err))
+    .slice(0, 12);
+
+  return errors.length > 0 ? errors : [{ kind: "runtime", message: fallbackMessage, timestamp: Date.now() }];
+}
 
 function parseFixResponse(raw: string): {
   files: Array<{ path: string; content: string }>;
@@ -45,7 +86,7 @@ export async function POST(req: NextRequest) {
   const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { projectId, error: buildError, files } = await req.json();
+  const { projectId, error: buildError, files, runtimeErrors } = await req.json();
 
   if (!projectId || !buildError) {
     return NextResponse.json({ error: "projectId and error are required" }, { status: 400 });
@@ -93,16 +134,22 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const buildErrorText = String(buildError);
   const fileList = Array.isArray(files) ? files : [];
   const fileContext = fileList
     .slice(0, 10)
     .map((f: { path: string; content: string }) => `=== ${f.path} ===\n${f.content}`)
     .join("\n\n");
+  const enrichedError = appendPreviewDiagnosis(
+    buildErrorText,
+    fileList,
+    normalizeRuntimeErrors(runtimeErrors, buildErrorText),
+  );
 
   const userPrompt = `Fix this build/runtime error:
 
 \`\`\`
-${buildError}
+${enrichedError}
 \`\`\`
 
 Current files:
@@ -166,7 +213,7 @@ Return the fixed files as JSON.`;
       amount: isFreeFix ? 0 : 1,
       action: "auto_fix",
       project_id: projectId,
-      description: `Auto-fixed: ${buildError.slice(0, 80)}`,
+      description: `Auto-fixed: ${buildErrorText.slice(0, 80)}`,
     });
 
     await recordEditorIntelligenceBuild({
@@ -174,7 +221,7 @@ Return the fixed files as JSON.`;
       projectId,
       source: "chat",
       mode: "auto_fix",
-      prompt: `Auto-fix: ${buildError}`,
+      prompt: `Auto-fix: ${buildErrorText}`,
       filesChanged: parsed.files.map((file) => file.path),
       verification: {
         engine: "static",
@@ -186,7 +233,7 @@ Return the fixed files as JSON.`;
           content: file.content,
           language: file.path.endsWith(".tsx") ? "typescriptreact" : file.path.endsWith(".ts") ? "typescript" : "javascript",
         })),
-        errors: [`Auto-fix generated for: ${String(buildError).slice(0, 180)}. Re-open preview to verify.`],
+        errors: [`Auto-fix generated for: ${buildErrorText.slice(0, 180)}. Re-open preview to verify.`],
       },
     });
 

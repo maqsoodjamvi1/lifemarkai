@@ -16,10 +16,12 @@
 
 import { buildFallbackHtml } from "@/lib/preview/build-fallback-html";
 import { verifyPreviewHtml } from "@/lib/ai/preview-verify";
+import { findContractErrors } from "@/lib/preview/export-contract";
 import { generateAI } from "@/lib/ai/provider";
 import { ECONOMY_CODING_MODEL, getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { selectModelChain, applyModelAdapter } from "@/lib/ai/model-catalog";
 import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/system-prompts";
+import { buildPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
 import type { ProjectFile } from "@/types/database";
 
 export interface SelfVerifyResult {
@@ -87,8 +89,17 @@ async function renderAndCollectErrors(
       const childCount = root ? root.children.length : 0;
       const text = ((document.body && document.body.innerText) || "").trim();
       const missing = (((document.body && document.body.innerText) || "").match(/missing component/gi) || []).length;
-      return { hasRoot: !!root, childCount, textLen: text.length, missing };
-    }).catch(() => ({ hasRoot: true, childCount: 1, textLen: 999, missing: 0 }));
+      // Symbols the app pulled out of modules that don't exist — recorded by the
+      // preview's __Mrequire proxy. These name the exact file+symbol to create.
+      const w = window as unknown as {
+        __lmMissingExports?: Array<{ module: string; symbol: string }>;
+      };
+      const missingExports = (w.__lmMissingExports ?? []).slice(0, 12);
+      return { hasRoot: !!root, childCount, textLen: text.length, missing, missingExports };
+    }).catch(() => ({
+      hasRoot: true, childCount: 1, textLen: 999, missing: 0,
+      missingExports: [] as Array<{ module: string; symbol: string }>,
+    }));
 
     if (errors.length === 0) {
       if (!diag.hasRoot || diag.childCount === 0) {
@@ -97,13 +108,24 @@ async function renderAndCollectErrors(
         errors.push("App appears to render a blank screen — no visible content after mount.");
       }
     }
-    // Undefined components (rendered as guarded "missing component" placeholders)
-    // usually mean a bad import/export or a component file that wasn't created.
-    if (diag.missing > 0) {
+    // Name the exact file+symbol rather than just counting placeholders — a count
+    // is not something the fixer can act on, but "create src/.../Navbar exporting
+    // Navbar" is.
+    const byModule = new Map<string, string[]>();
+    for (const { module, symbol } of diag.missingExports ?? []) {
+      byModule.set(module, [...(byModule.get(module) ?? []), symbol]);
+    }
+    for (const [module, symbols] of byModule) {
+      errors.push(
+        `${symbols.join(", ")} ${symbols.length === 1 ? "was" : "were"} imported from "${module}", but that file does not exist in the project — create it and export ${symbols.join(", ")}.`
+      );
+    }
+
+    if (diag.missing > 0 && byModule.size === 0) {
       errors.push(`${diag.missing} component(s) failed to resolve (shown as "missing component" placeholders) — check imports/exports or create the missing file.`);
     }
 
-    return [...new Set(errors)].slice(0, 4);
+    return [...new Set(errors)].slice(0, 6);
   } finally {
     await browser.close().catch(() => {});
   }
@@ -193,9 +215,23 @@ export async function runSelfVerification(opts: {
       result.rounds = round + 1;
       const html = buildFallbackHtml(files);
 
-      const errors = playwright
+      // Broken module contracts — a file imported but never created, or a symbol
+      // imported but never exported — surface at runtime only as an opaque
+      // "Cannot read properties of undefined" deep inside React, naming neither
+      // the symbol nor the file. Worse, the FIRST such crash masks all the
+      // others, so a browser-only check finds one bug per round.
+      //
+      // Detect them statically from source instead: we get ALL of them at once,
+      // each as a precise, directly actionable instruction. That's what makes
+      // the auto-fix round actually succeed rather than flailing on a stack
+      // trace that points into minified react-dom.
+      const contractErrors = findContractErrors(files);
+
+      const runtimeErrors = playwright
         ? await renderAndCollectErrors(playwright, html)
         : staticVerify(html);
+
+      const errors = [...new Set([...contractErrors, ...runtimeErrors])].slice(0, 6);
 
       if (errors.length === 0) {
         result.passed = true;
@@ -215,6 +251,14 @@ export async function runSelfVerification(opts: {
       const context = relevantFiles(files, errors)
         .map((f) => `=== ${f.path} ===\n${(f.content ?? "").slice(0, 6_000)}`)
         .join("\n\n");
+      const diagnosis = buildPreviewDiagnosis(
+        files,
+        errors.map((message) => ({
+          kind: /vite|compile|syntax|transform|unexpected token/i.test(message) ? "bundler" : "runtime",
+          message,
+          timestamp: Date.now(),
+        })),
+      );
 
       const fixModel = fixChain[Math.min(round, fixChain.length - 1)] ?? ECONOMY_CODING_MODEL ?? getDefaultAiModel();
       if (round > 0) emit("Retrying the fix with a different model…");
@@ -226,7 +270,7 @@ export async function runSelfVerification(opts: {
             role: "user",
             content: `Fix these runtime errors found while rendering the app in a browser:\n\n${errors
               .map((e) => `- ${e}`)
-              .join("\n")}\n\nRelevant files:\n${context}\n\nReturn the fixed files as JSON.`,
+              .join("\n")}${diagnosis ? `\n\nPreview diagnosis (fix these first):\n${diagnosis}` : ""}\n\nRelevant files:\n${context}\n\nReturn the fixed files as JSON.`,
           },
         ],
         temperature: 0.1,

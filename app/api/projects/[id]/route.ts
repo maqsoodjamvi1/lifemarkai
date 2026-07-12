@@ -32,8 +32,23 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   // Handle generate_slug flag — call the DB function, don't pass it to update()
   const { generate_slug, ...updateFields } = body;
   if (generate_slug) {
-    const { data: slugData } = await (supabase as any)
-      .rpc("generate_project_slug", { project_id: id });
+    // generate_project_slug(p_name, p_user_id) slugifies + dedupes the `slug`
+    // column. Use the incoming rename or the project's current name.
+    let slugName: string | undefined =
+      typeof updateFields.name === "string" ? updateFields.name : undefined;
+    if (!slugName) {
+      const { data: existing } = await (supabase as any)
+        .from("projects")
+        .select("name")
+        .eq("id", id)
+        .eq("user_id", user.id)
+        .single();
+      slugName = (existing as { name?: string } | null)?.name;
+    }
+    const { data: slugData } = await (supabase as any).rpc("generate_project_slug", {
+      p_name: slugName ?? "project",
+      p_user_id: user.id,
+    });
     if (slugData) {
       updateFields.slug = slugData as string;
     }

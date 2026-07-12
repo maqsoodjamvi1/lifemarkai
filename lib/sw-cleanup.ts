@@ -35,9 +35,10 @@ function isChunkLoadMessage(message: string): boolean {
   );
 }
 
-/** Client-side chunk recovery — also used after SPA navigations to /editor. */
+/** Client-side chunk recovery — SPA navigations to /editor (lm-boot.js handles full loads). */
 export function installEditorChunkRecovery(): void {
   if (typeof window === "undefined") return;
+  if (document.getElementById("lm-boot")) return;
   clearLifemarkServiceWorker();
 
   function reloadOnChunkError(): boolean {
@@ -49,7 +50,7 @@ export function installEditorChunkRecovery(): void {
     sessionStorage.setItem(CHUNK_RELOAD_KEY, String(count + 1));
     const url = new URL(location.href);
     url.searchParams.set("_cb", String(Date.now()));
-    location.replace(url.toString());
+    window.setTimeout(() => location.replace(url.toString()), 2000);
     return true;
   }
 
@@ -58,22 +59,16 @@ export function installEditorChunkRecovery(): void {
     if (isChunkLoadMessage(message)) reloadOnChunkError();
   }
 
-  window.addEventListener("error", (e) => onChunkError(e.error ?? e.message));
+  window.addEventListener("error", (e) => {
+    if (e.target instanceof HTMLScriptElement) return;
+    onChunkError(e.error ?? e.message);
+  });
   window.addEventListener("unhandledrejection", (e) => onChunkError(e.reason));
   window.addEventListener("load", () => {
-    window.setTimeout(() => sessionStorage.removeItem(CHUNK_RELOAD_KEY), 4000);
+    window.setTimeout(() => sessionStorage.removeItem(CHUNK_RELOAD_KEY), 5000);
   });
 }
 
-/** Inline script for SSR — injected via useServerInsertedHTML (React 19 safe). */
-export const EDITOR_BOOT_SCRIPT = `(function(){
-  if("serviceWorker" in navigator){navigator.serviceWorker.getRegistrations().then(function(r){r.forEach(function(x){x.unregister();});});}
-  if("caches" in window){caches.keys().then(function(k){k.filter(function(n){return n.indexOf("lifemarkai-")===0;}).forEach(function(n){caches.delete(n);});});}
-  var KEY="lifemark-chunk-reload",MAX=2;
-  function isChunk(m){return m&&(m.indexOf("Failed to load chunk")>=0||m.indexOf("Loading chunk")>=0||m.indexOf("ChunkLoadError")>=0||m.indexOf("Failed to fetch dynamically imported module")>=0);}
-  function reload(){var n=Number(sessionStorage.getItem(KEY)||"0");if(n>=MAX){sessionStorage.removeItem(KEY);return false;}sessionStorage.setItem(KEY,String(n+1));var u=new URL(location.href);u.searchParams.set("_cb",String(Date.now()));location.replace(u.toString());return true;}
-  function onErr(x){var m=x instanceof Error?x.message:String(x||"");if(isChunk(m))reload();}
-  addEventListener("error",function(e){onErr(e.error||e.message);});
-  addEventListener("unhandledrejection",function(e){onErr(e.reason);});
-  addEventListener("load",function(){setTimeout(function(){sessionStorage.removeItem(KEY);},4000);});
-})();`;
+/** @deprecated lm-boot.js + AppBootScript — kept for editor-boot-script */
+export const APP_BOOT_SCRIPT = "";
+export const EDITOR_BOOT_SCRIPT = APP_BOOT_SCRIPT;

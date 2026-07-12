@@ -103,6 +103,26 @@ const CONSOLE_TABS = [
 
 type ConsoleTab = (typeof CONSOLE_TABS)[number]["id"];
 
+async function readApiJson<T = Record<string, unknown>>(res: Response): Promise<T> {
+  const text = await res.text();
+  const ct = res.headers.get("content-type") ?? "";
+  if (!ct.includes("json")) {
+    if (text.trimStart().startsWith("<")) {
+      throw new Error(
+        res.status === 404
+          ? "API route not found — restart the dev server (npm run dev)"
+          : `Server returned HTML instead of JSON (${res.status})`,
+      );
+    }
+    throw new Error(text.slice(0, 200) || `Request failed (${res.status})`);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("Invalid JSON from server");
+  }
+}
+
 /** One human-readable raw-log line per streamed event (null = don't log). */
 function formatLogLine(ev: Record<string, unknown>): string | null {
   switch (ev.type) {
@@ -148,18 +168,65 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
 
   const runKey = `lifemark:editor-intelligence:${projectId}:run`;
 
+  async function fetchIntelligence(
+    init?: RequestInit,
+  ): Promise<{ agents: IntelligenceLens[]; messages: IntelligenceMessage[]; decisions: IntelligenceDecision[] }> {
+    const maxAttempts = 3;
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/editor-intelligence`, {
+          cache: "no-store",
+          ...init,
+        });
+        const data = await readApiJson<{
+          error?: string;
+          retryable?: boolean;
+          transient?: boolean;
+          agents?: IntelligenceLens[];
+          messages?: IntelligenceMessage[];
+          decisions?: IntelligenceDecision[];
+        }>(res);
+        if (res.ok) {
+          return {
+            agents: data.agents ?? [],
+            messages: data.messages ?? [],
+            decisions: data.decisions ?? [],
+          };
+        }
+        const retryable =
+          res.status === 503 ||
+          data.retryable === true ||
+          data.transient === true ||
+          /fetch failed|timeout|network|could not load project/i.test(data.error ?? "");
+        const friendly =
+          retryable
+            ? "Database connection timed out. Retrying…"
+            : (data.error ?? "Could not load editor intelligence");
+        lastError = new Error(
+          attempt >= maxAttempts - 1 && retryable
+            ? "Could not reach the database (connection timeout). Check your network and try again."
+            : friendly,
+        );
+        if (!retryable || attempt >= maxAttempts - 1) throw lastError;
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const retryable =
+          /fetch failed|failed to fetch|timeout|network|503/i.test(lastError.message);
+        if (!retryable || attempt >= maxAttempts - 1) throw lastError;
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+      }
+    }
+    throw lastError ?? new Error("Could not load editor intelligence");
+  }
+
   async function loadIntelligence() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/projects/${projectId}/editor-intelligence`, { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Could not load editor intelligence");
-      setState({
-        agents: data.agents ?? [],
-        messages: data.messages ?? [],
-        decisions: data.decisions ?? [],
-      });
+      const data = await fetchIntelligence();
+      setState(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -171,18 +238,12 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/projects/${projectId}/editor-intelligence`, {
+      const data = await fetchIntelligence({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "bootstrap" }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "Could not initialize editor intelligence");
-      setState({
-        agents: data.agents ?? [],
-        messages: data.messages ?? [],
-        decisions: data.decisions ?? [],
-      });
+      setState(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -288,10 +349,10 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
         if (!opts.silent) setBuildLog((prev) => [...prev, `Replay failed (${res.status})`]);
         return;
       }
-      const data = await res.json() as {
+      const data = await readApiJson<{
         run?: { id?: string; status?: string; goal?: string } | null;
         events?: Array<{ payload?: Record<string, unknown> } & Record<string, unknown>>;
-      };
+      }>(res);
       let next = initialConsoleState();
       const lines: string[] = [];
       for (const row of data.events ?? []) {
@@ -428,8 +489,17 @@ Then identify the smallest safe implementation slice and build it using existing
         )}
 
         {error && (
-          <div className="mb-3 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-300">
-            {error}
+          <div className="mb-3 space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200">
+            <p>{error}</p>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 text-[11px]"
+              onClick={() => void loadIntelligence()}
+            >
+              Retry
+            </Button>
           </div>
         )}
 

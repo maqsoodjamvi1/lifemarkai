@@ -128,6 +128,20 @@ async function main() {
     { got: resolvePromptMode("Add a pricing page to the site", appCtx), stage: inferProjectStage(appFiles) },
   );
 
+  const chatAppCtx = { ...appCtx, currentMode: "chat" as const };
+  check(
+    "chat tab: add menu items in header → patch",
+    resolvePromptMode("add menu items in header", chatAppCtx) === "patch",
+    "H2b",
+    { got: resolvePromptMode("add menu items in header", chatAppCtx) },
+  );
+  check(
+    "build tab: add menu items in header → patch",
+    resolvePromptMode("add menu items in header", appCtx) === "patch",
+    "H2c",
+    { got: resolvePromptMode("add menu items in header", appCtx) },
+  );
+
   check(
     "design preview: salon booking empty project",
     shouldOfferDesignPreviews("Build a salon booking website", 0),

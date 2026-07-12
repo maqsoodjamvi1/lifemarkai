@@ -30,6 +30,7 @@ import { useShortcutsModal } from "@/hooks/use-shortcuts-modal";
 import type { CommandPaletteActions } from "@/components/command-palette";
 import { useRecordProjectVisit } from "@/hooks/use-recent-projects";
 import type { Project, ProjectFile, Message, Profile } from "@/types/database";
+import type { PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import {
   pickActiveFileAfterUpdate,
   resolvePromptMode,
@@ -229,6 +230,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   const [showFileTree, setShowFileTree] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewRuntimeErrors, setPreviewRuntimeErrors] = useState<PreviewRuntimeError[]>([]);
   const [pendingFix, setPendingFix] = useState<string | null>(null);
   const [pendingComponentPrompt, setPendingComponentPrompt] = useState<string | null>(null);
   const [pendingCrossRefPrompt, setPendingCrossRefPrompt] = useState<string | null>(null);
@@ -416,6 +418,9 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
       if (changedPaths.length > 0) {
         queueMicrotask(() => {
           setActiveFile((current) => pickActiveFileAfterUpdate(next, changedPaths, current) ?? current);
+          window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
+            detail: { files: next, reason: "files-updated" },
+          }));
           if (shouldFocusPreviewAfterGeneration(editorMode, changedPaths.length)) {
             handleFocusPreview();
           }
@@ -769,12 +774,16 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                   credits={uiCredits}
                   starterPrompt={pendingConnectorPrompt ?? pendingComponentPrompt ?? starterPrompt}
                   previewError={previewError}
+                  previewRuntimeErrors={previewRuntimeErrors}
                   pendingFixPrompt={pendingFix}
                   pendingFileRef={pendingFileRef}
                   onMessagesUpdate={handleMessagesUpdate}
                   onFilesUpdate={handleFilesUpdate}
                   onCreditsUpdate={handleCreditsUpdate}
-                  onAutoFixComplete={() => setPreviewError(null)}
+                  onAutoFixComplete={() => {
+                    setPreviewError(null);
+                    setPreviewRuntimeErrors([]);
+                  }}
                   onPendingFixConsumed={() => setPendingFix(null)}
                   onPendingFileRefConsumed={() => setPendingFileRef(null)}
                   onStreamingChange={(s, fc) => { setIsGenerating(s); if (fc !== undefined) setGeneratingFileCount(fc); }}
@@ -837,6 +846,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
                 onFileUpdate={handleFileUpdate}
                 onError={setPreviewError}
+                onErrorReport={(report) => setPreviewRuntimeErrors(report?.errors ?? [])}
                 onFixWithAI={(err) => {
                   window.dispatchEvent(new CustomEvent("lifemark-preview-heal-start"));
                   setMobilePaneActive("left");
@@ -981,12 +991,16 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 credits={uiCredits}
                 starterPrompt={pendingConnectorPrompt ?? pendingCrossRefPrompt ?? starterPrompt}
                 previewError={previewError}
+                previewRuntimeErrors={previewRuntimeErrors}
                 pendingFixPrompt={pendingFix}
                 pendingFileRef={pendingFileRef}
                 onMessagesUpdate={handleMessagesUpdate}
                 onFilesUpdate={handleFilesUpdate}
                 onCreditsUpdate={handleCreditsUpdate}
-                onAutoFixComplete={() => setPreviewError(null)}
+                onAutoFixComplete={() => {
+                  setPreviewError(null);
+                  setPreviewRuntimeErrors([]);
+                }}
                 onPendingFixConsumed={() => setPendingFix(null)}
                 onPendingFileRefConsumed={() => setPendingFileRef(null)}
                 onStreamingChange={(s, fc) => { setIsGenerating(s); if (fc !== undefined) setGeneratingFileCount(fc); }}
@@ -1127,6 +1141,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                       isGenerating={isGenerating}
                       generatingFileCount={generatingFileCount}
                       onError={setPreviewError}
+                      onErrorReport={(report) => setPreviewRuntimeErrors(report?.errors ?? [])}
                       onFixWithAI={(err) => {
                         window.dispatchEvent(new CustomEvent("lifemark-preview-heal-start"));
                         setLeftPanel("chat");
@@ -1189,6 +1204,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                   isGenerating={isGenerating}
                   generatingFileCount={generatingFileCount}
                   onError={setPreviewError}
+                  onErrorReport={(report) => setPreviewRuntimeErrors(report?.errors ?? [])}
                   onFixWithAI={(err) => {
                     window.dispatchEvent(new CustomEvent("lifemark-preview-heal-start"));
                     setLeftPanel("chat");

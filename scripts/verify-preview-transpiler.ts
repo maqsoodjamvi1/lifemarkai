@@ -157,6 +157,36 @@ export default function App(){ return <Card><CardContent><Badge>New</Badge><Butt
       return errs;
     },
   },
+  {
+    name: "missing app pages and data exports are synthesized before preview",
+    files: [
+      f("src/App.tsx", `import Navbar from "./components/layout/Navbar";
+import Portfolio from "./pages/Portfolio";
+import BlogPost from "./pages/BlogPost";
+export default function App(){ return <><Navbar/><Portfolio/><BlogPost/></>; }`),
+      f("src/components/home/PartnersSection.tsx", `import { MOCK_PARTNERS } from "../../data/mock";
+export function PartnersSection(){ return <>{MOCK_PARTNERS.map((p) => <span key={p.id}>{p.name}</span>)}</>; }`),
+      f("src/components/home/FeaturedJournal.tsx", `import { formatDateShort } from "../../lib/utils";
+export function FeaturedJournal(){ return <span>{formatDateShort(new Date())}</span>; }`),
+      f("src/data/mock.ts", `import { Service, PortfolioItem, TeamMember, BlogPost, Testimonial, Stat } from "../lib/types";
+export const MOCK_SERVICES = [];`),
+      f("src/lib/types.ts", `export type EntityRecord = Record<string, unknown>;`),
+      f("src/lib/utils.ts", `export function cn(...values) { return values.filter(Boolean).join(" "); }`),
+      f("src/main.tsx", `import App from "./App"; export default App;`),
+    ],
+    assert: (html) => {
+      const errs: string[] = [];
+      for (const path of ["src/components/layout/Navbar.tsx", "src/pages/Portfolio.tsx", "src/pages/BlogPost.tsx"]) {
+        if (!html.includes(`data-file="${path}"`)) errs.push(`missing page/component stub not synthesized: ${path}`);
+      }
+      if (!/export const MOCK_PARTNERS|MOCK_PARTNERS\s*:/.test(html)) errs.push("MOCK_PARTNERS data export was not synthesized");
+      if (!html.includes("formatDateShort")) errs.push("formatDateShort utility export was not synthesized");
+      if (!html.includes("'Service': typeof Service") && !html.includes("Service = {};")) {
+        errs.push("Service type/value export was not synthesized");
+      }
+      return errs;
+    },
+  },
 ];
 
 let passed = 0;

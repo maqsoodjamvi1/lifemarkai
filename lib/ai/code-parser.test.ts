@@ -229,6 +229,58 @@ test("ensureCommonGeneratedSupportFiles creates missing UI kit and type files", 
   assert.ok(!errors.some((e) => e.type === "missing_package" || e.type === "broken_import" || e.type === "missing_named_export"), JSON.stringify(errors));
 });
 
+test("ensureCommonGeneratedSupportFiles repairs missing pages, utilities, data, and type exports", () => {
+  const files = [
+    {
+      path: "src/App.tsx",
+      language: "typescriptreact",
+      content: [
+        "import Navbar from './components/layout/Navbar';",
+        "import Portfolio from './pages/Portfolio';",
+        "import BlogPost from './pages/BlogPost';",
+        "export default function App() { return <><Navbar /><Portfolio /><BlogPost /></>; }",
+      ].join("\n"),
+    },
+    {
+      path: "src/components/home/PartnersSection.tsx",
+      language: "typescriptreact",
+      content: "import { MOCK_PARTNERS } from '../../data/mock';\nexport function PartnersSection(){ return <>{MOCK_PARTNERS.map((p) => <span key={p.id}>{p.name}</span>)}</>; }",
+    },
+    {
+      path: "src/components/home/FeaturedJournal.tsx",
+      language: "typescriptreact",
+      content: "import { formatDateShort } from '../../lib/utils';\nexport function FeaturedJournal(){ return <span>{formatDateShort(new Date())}</span>; }",
+    },
+    {
+      path: "src/data/mock.ts",
+      language: "typescript",
+      content: "import { Service, PortfolioItem, TeamMember, BlogPost, Testimonial, Stat } from '../lib/types';\nexport const MOCK_SERVICES = [];",
+    },
+  ];
+  const existing = [
+    { path: "index.html", language: "html", content: "<div id=\"root\"></div><script type=\"module\" src=\"/src/main.tsx\"></script>" },
+    { path: "vite.config.ts", language: "typescript", content: "" },
+    { path: "tsconfig.json", language: "json", content: "{}" },
+    { path: "package.json", language: "json", content: "{\"scripts\":{\"dev\":\"vite\"},\"dependencies\":{\"@vitejs/plugin-react\":\"latest\",\"vite\":\"latest\",\"react\":\"latest\",\"react-dom\":\"latest\"}}" },
+    { path: "src/main.tsx", language: "typescriptreact", content: "import App from './App'; export default App;" },
+    { path: "src/lib/types.ts", language: "typescript", content: "export type EntityRecord = Record<string, unknown>;" },
+    { path: "src/lib/utils.ts", language: "typescript", content: "export function cn(...values) { return values.filter(Boolean).join(' '); }" },
+  ];
+
+  const repaired = ensureCommonGeneratedSupportFiles(files, existing);
+  const byPath = new Map(repaired.map((file) => [file.path, file.content]));
+  assert.ok(byPath.has("src/components/layout/Navbar.tsx"));
+  assert.ok(byPath.has("src/pages/Portfolio.tsx"));
+  assert.ok(byPath.has("src/pages/BlogPost.tsx"));
+  assert.match(byPath.get("src/data/mock.ts") ?? "", /export const MOCK_PARTNERS/);
+  assert.match(byPath.get("src/lib/utils.ts") ?? "", /formatDateShort/);
+  assert.match(byPath.get("src/lib/types.ts") ?? "", /export type Service/);
+  assert.match(byPath.get("src/lib/types.ts") ?? "", /export const BlogPost/);
+
+  const errors = validateGeneratedFiles(repaired, existing);
+  assert.ok(!errors.some((e) => e.type === "broken_import" || e.type === "missing_named_export" || e.type === "missing_default_export"), JSON.stringify(errors));
+});
+
 test("validateGeneratedFiles catches duplicate top-level declarations", () => {
   const errors = validateGeneratedFiles([
     {
@@ -255,7 +307,10 @@ test("validateGeneratedFiles catches duplicate top-level declarations", () => {
 });
 
 test("validateGeneratedFiles catches local named export mismatches", () => {
-  const errors = validateGeneratedFiles([
+  // validateGeneratedFiles auto-repairs via ensureCommonGeneratedSupportFiles,
+  // so a default-only Button imported as { Button } gets `export { default as Button }`
+  // and should no longer report missing_named_export after repair.
+  const files = [
     {
       path: "src/App.tsx",
       language: "typescriptreact",
@@ -266,18 +321,20 @@ test("validateGeneratedFiles catches local named export mismatches", () => {
       language: "typescriptreact",
       content: "export default function Button() { return <button />; }",
     },
-  ], [
+  ];
+  const existing = [
     { path: "index.html", language: "html", content: "" },
     { path: "vite.config.ts", language: "typescript", content: "" },
     { path: "tsconfig.json", language: "json", content: "{}" },
     { path: "package.json", language: "json", content: "{}" },
     { path: "src/main.tsx", language: "typescriptreact", content: "" },
-  ]);
-
-  assert.ok(errors.some((e) => e.type === "missing_named_export"));
+  ];
+  const errors = validateGeneratedFiles(files, existing);
+  assert.ok(!errors.some((e) => e.type === "missing_named_export"), JSON.stringify(errors));
 });
 
 test("validateGeneratedFiles catches alias default export mismatches", () => {
+  // Same auto-repair: named-only Button imported as default gets `export default Button`.
   const errors = validateGeneratedFiles([
     {
       path: "src/App.tsx",
@@ -297,7 +354,7 @@ test("validateGeneratedFiles catches alias default export mismatches", () => {
     { path: "src/main.tsx", language: "typescriptreact", content: "" },
   ]);
 
-  assert.ok(errors.some((e) => e.type === "missing_default_export"));
+  assert.ok(!errors.some((e) => e.type === "missing_default_export"), JSON.stringify(errors));
 });
 
 test("validateGeneratedFiles uses existing package.json during incremental edits", () => {

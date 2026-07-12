@@ -20,6 +20,7 @@
 import type { ProjectFile } from "@/types/database";
 import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { preparePreviewCss, projectUsesTailwind, projectUsesTailwindV4 } from "@/lib/preview/build-fallback-html";
+import { PREVIEW_ERROR_BRIDGE_SCRIPT } from "@/lib/preview/preview-error-bridge";
 
 // Pin a known esbuild-wasm version; the wasm is fetched lazily and cached by the
 // browser after first use. Bump together with the package if you vendor it.
@@ -34,7 +35,7 @@ let initPromise: Promise<void> | null = null;
 async function ensureEsbuild(): Promise<Esbuild> {
   if (!esbuildMod) {
     // Dynamic import so esbuild-wasm only loads when this engine is selected.
-    esbuildMod = (await import(/* webpackIgnore: true */ "esbuild-wasm")) as unknown as Esbuild;
+    esbuildMod = (await import("esbuild-wasm")) as unknown as Esbuild;
   }
   if (!initPromise) {
     initPromise = esbuildMod.initialize({ wasmURL: ESBUILD_WASM_URL, worker: true });
@@ -253,6 +254,9 @@ export async function buildEsbuildHtml(files: ProjectFile[]): Promise<EsbuildRes
 ${tailwindCdn}
 <style>${css}</style>
 </head><body><div id="root"></div>
+<script>
+${PREVIEW_ERROR_BRIDGE_SCRIPT}
+</script>
 <script>
 (function(){
   function relay(type,text){try{window.parent.postMessage({source:'lifemark-preview',type:type,text:String(text)},'*');}catch(e){}}

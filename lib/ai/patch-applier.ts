@@ -112,22 +112,43 @@ export function applyPatches(
 
 /**
  * Parse a raw AI response string into a list of FilePatch objects.
- * Handles the AI wrapping the JSON in a ```json code fence.
+ * Accepts:
+ *   - {"patches":[...]}  (preferred — works with OpenAI json_object mode)
+ *   - bare [...] array   (legacy)
+ * Also tolerates markdown fences and trailing commas.
  */
 export function parsePatchResponse(raw: string): FilePatch[] {
-  // Strip JSON code fences if present
   const stripped = raw
-    .replace(/^```(?:json)?\s*/m, "")
-    .replace(/\s*```\s*$/m, "")
+    .replace(/```(?:json)?\s*/gi, "")
+    .replace(/```/g, "")
     .trim();
 
-  // Find the outermost JSON array
+  // Prefer object wrapper first (json_object mode)
+  const objStart = stripped.indexOf("{");
+  const objEnd = stripped.lastIndexOf("}");
+  if (objStart !== -1 && objEnd > objStart) {
+    const objText = stripped.slice(objStart, objEnd + 1).replace(/,\s*([\]}])/g, "$1");
+    try {
+      const parsed = JSON.parse(objText) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const rec = parsed as Record<string, unknown>;
+        const list = rec.patches ?? rec.edits ?? rec.changes ?? rec.files;
+        if (Array.isArray(list)) {
+          return (list as unknown[]).filter(isFilePatch);
+        }
+      }
+    } catch {
+      /* fall through to array parse */
+    }
+  }
+
   const arrStart = stripped.indexOf("[");
   const arrEnd = stripped.lastIndexOf("]");
-  if (arrStart === -1 || arrEnd === -1) return [];
+  if (arrStart === -1 || arrEnd === -1 || arrEnd <= arrStart) return [];
 
+  const jsonText = stripped.slice(arrStart, arrEnd + 1).replace(/,\s*([\]}])/g, "$1");
   try {
-    const parsed = JSON.parse(stripped.slice(arrStart, arrEnd + 1));
+    const parsed = JSON.parse(jsonText);
     if (!Array.isArray(parsed)) return [];
     return (parsed as unknown[]).filter(isFilePatch);
   } catch {

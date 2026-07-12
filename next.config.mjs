@@ -100,6 +100,17 @@ const nextConfig = {
           ],
           destination: "/preview/:pid/:path",
         },
+        {
+          // CLEAN slug host: {app_slug}.apps.lifemarkai.com → /preview-by-slug/[slug].
+          // Listed AFTER the id rule so id-embedded hosts win exact lookup; only a
+          // single-label slug host (no trailing UUID) reaches here. Assets still go
+          // to /preview/{id}/… (excluded above), so no slug asset handler is needed.
+          source: "/:path((?!preview/|api/|_next/).*)",
+          has: [
+            { type: "host", value: `(?<slug>[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\\.${APPS_DOMAIN}` },
+          ],
+          destination: "/preview-by-slug/:slug/:path",
+        },
       ],
     };
   },
@@ -107,11 +118,17 @@ const nextConfig = {
   async headers() {
     return [
       {
-        // WebContainers (SharedArrayBuffer) require strict cross-origin isolation on editor routes.
+        // WebContainers need SharedArrayBuffer via cross-origin isolation.
+        // Use COEP "credentialless" (not require-corp): require-corp blocks many
+        // same-tab fetches (Supabase realtime, HMR, third-party assets without
+        // CORP) and floods the console with TypeError: Failed to fetch.
+        // Isolation still works in Chromium with credentialless + COOP.
+        // Only on /editor — applying this on /dashboard broke client navigations
+        // and unrelated API polling.
         source: "/editor/:path*",
         headers: [
           { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
-          { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+          { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
         ],
       },
       {
@@ -130,7 +147,7 @@ const nextConfig = {
               "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com https://cdn.jsdelivr.net",
               "img-src 'self' data: blob: https:",
               "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
-              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.openai.com https://api.anthropic.com https://api.stripe.com blob: https://cdn.jsdelivr.net" + webContainerConnectSrc,
+              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.openai.com https://api.anthropic.com https://api.stripe.com https://openrouter.ai https://*.openrouter.ai blob: https://cdn.jsdelivr.net ws: wss:" + webContainerConnectSrc,
               "frame-src 'self' blob: data:" + webContainerFrameSrc,
               "worker-src 'self' blob:" + webContainerFrameSrc,
               "child-src 'self' blob: data:",
@@ -147,6 +164,14 @@ const nextConfig = {
       { protocol: "https", hostname: "avatars.githubusercontent.com" },
       { protocol: "https", hostname: "lh3.googleusercontent.com"    },
     ],
+  },
+
+  // First dev compile can exceed webpack's default chunk load timeout (~12s).
+  webpack: (config, { dev, isServer }) => {
+    if (dev && !isServer) {
+      config.output = { ...config.output, chunkLoadTimeout: 300000 };
+    }
+    return config;
   },
 };
 

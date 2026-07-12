@@ -24,11 +24,11 @@ import dynamic from "next/dynamic";
 import { buildFallbackHtml, PREVIEW_ENGINE_REV } from "@/lib/preview/build-fallback-html";
 import { buildEsbuildHtml } from "@/lib/preview/esbuild-engine";
 import { filesContentSignature } from "@/lib/preview/files-signature";
-import { resolvePreviewEngine, WC_UNAVAILABLE_KEY, type PreviewEngine } from "@/lib/preview/resolve-preview-engine";
+import { resolvePreviewEngine, shouldUseWebContainer, WC_UNAVAILABLE_KEY, type PreviewEngine } from "@/lib/preview/resolve-preview-engine";
 import { useSandboxPreview } from "@/lib/preview/use-sandbox-preview";
 import { usePreviewErrorGuard } from "@/hooks/use-preview-error-guard";
-import { isNoisePreviewError } from "@/lib/preview/preview-error-bridge";
-import { appendImportDiagnosis, diagnoseBrokenImports } from "@/lib/preview/diagnose-imports";
+import { isNoisePreviewError, type PreviewErrorReport } from "@/lib/preview/preview-error-bridge";
+import { appendPreviewDiagnosis, buildPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
 import { PreviewHealingOverlay } from "./preview-healing-overlay";
 import Link from "next/link";
 
@@ -98,6 +98,21 @@ const VEB_SCRIPT = `(function() {
 })();`;
 
 type DeviceSize = "mobile" | "tablet" | "desktop";
+type PreviewMachineState = "idle" | "building" | "loading" | "ready" | "error" | "fallback";
+
+const PREVIEW_RELEVANT_FILE_RE = /(^|\/)(package\.json|index\.html|vite\.config\.[cm]?[jt]s|tailwind\.config\.[cm]?[jt]s|postcss\.config\.[cm]?js)$|(^|\/)(src|app|components|pages|lib|hooks|styles|public|assets)\//i;
+const PREVIEW_RELEVANT_EXT_RE = /\.(tsx?|jsx?|css|scss|sass|html|json|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf)$/i;
+
+function isPreviewRelevantFile(path: string): boolean {
+  const clean = path.replace(/\\/g, "/");
+  if (/\.(md|mdx|sql|log|txt|csv|yml|yaml)$/i.test(clean)) return false;
+  if (/^(supabase|docs|outputs|scripts|\.github)\//i.test(clean)) return false;
+  return PREVIEW_RELEVANT_FILE_RE.test(clean) || PREVIEW_RELEVANT_EXT_RE.test(clean);
+}
+
+function previewRelevantFiles(files: ProjectFile[]): ProjectFile[] {
+  return files.filter((file) => isPreviewRelevantFile(file.path));
+}
 
 interface VebElement {
   tagName: string;
@@ -115,6 +130,7 @@ interface PreviewPanelProps {
   onVisualEditToggle?: () => void;
   onFileUpdate?: (file: ProjectFile) => void;
   onError?: (error: string) => void;
+  onErrorReport?: (report: PreviewErrorReport | null) => void;
   onFixWithAI?: (error: string) => void;
   /** When true, use WebContainers for preview instead of static bundler */
   useWebContainers?: boolean;
@@ -170,6 +186,13 @@ const DEVICE_WIDTHS: Record<DeviceSize, string> = {
 const WC_UNAVAILABLE_AT_KEY = `${WC_UNAVAILABLE_KEY}-at`;
 const WC_UNAVAILABLE_TTL_MS = 10 * 60 * 1000;
 
+// How long a WebContainer may keep warming in the BACKGROUND before we give up on
+// it. This must outlast WebContainerPreview's own phase budgets (boot 18s +
+// install 75s + start 35s ≈ 128s), otherwise we tear the container down while it
+// is still legitimately installing — which is precisely what the previous 12s
+// value did, so the background Vite hand-off could never once succeed.
+const WC_WARM_BUDGET_MS = 140_000;
+
 function isWcBlocked(): boolean {
   if (typeof window === "undefined") return false;
   try {
@@ -197,6 +220,15 @@ function markWcUnavailable(): void {
   }
 }
 
+function clearWcBlock(): void {
+  try {
+    sessionStorage.removeItem(WC_UNAVAILABLE_KEY);
+    sessionStorage.removeItem(WC_UNAVAILABLE_AT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 const TAILWIND_SIZES = ["text-xs","text-sm","text-base","text-lg","text-xl","text-2xl","text-3xl","text-4xl"];
 const TAILWIND_WEIGHTS = ["font-normal","font-medium","font-semibold","font-bold","font-extrabold"];
 const TAILWIND_COLORS = [
@@ -207,6 +239,17 @@ const BG_COLORS = [
   "bg-transparent","bg-white","bg-black","bg-gray-100",
   "bg-blue-500","bg-green-500","bg-red-500","bg-yellow-500",
 ];
+
+function isEsbuildPreviewEnabled(): boolean {
+  return (
+    process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "1" ||
+    process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "true"
+  );
+}
+
+function shouldAutoStartVitePreview(): boolean {
+  return process.env.NEXT_PUBLIC_PREVIEW_AUTO_VITE === "1";
+}
 
 function detectTemplate(files: ProjectFile[]): "react-ts" | "react" | "static" {
   const paths = files.map((f) => f.path);
@@ -335,6 +378,7 @@ export function PreviewPanel({
   onVisualEditToggle,
   onFileUpdate,
   onError,
+  onErrorReport,
   onFixWithAI,
   useWebContainers,
 
@@ -369,11 +413,35 @@ export function PreviewPanel({
   const [commentSaving, setCommentSaving] = useState(false);
   const { toast } = useToast();
   const [previewEngine, setPreviewEngine] = useState<PreviewEngine>(() => {
-    if (typeof window === "undefined") return "detecting";
+    if (typeof window === "undefined") return "fallback";
     if (isWcBlocked()) return "fallback";
-    return "detecting";
+    return "fallback";
   });
+  const [vitePreviewRequested, setVitePreviewRequested] = useState(shouldAutoStartVitePreview);
+  const [backgroundViteActive, setBackgroundViteActive] = useState(false);
+  const [backgroundViteKey, setBackgroundViteKey] = useState(0);
   const [consoleLines, setConsoleLines] = useState<{ type: string; text: string }[]>([]);
+  const [previewMachineState, setPreviewMachineState] = useState<PreviewMachineState>("idle");
+  const previewBuildShaRef = useRef<string>("");
+  const transitionPreviewMachine = useCallback((next: PreviewMachineState, reason: string) => {
+    setPreviewMachineState((prev) => {
+      if (prev === next) return prev;
+      const payload = {
+        from: prev,
+        to: next,
+        reason,
+        engine: previewEngine,
+        buildSha: previewBuildShaRef.current,
+        at: Date.now(),
+      };
+      window.dispatchEvent(new CustomEvent("lifemark-preview-machine-transition", { detail: payload }));
+      setConsoleLines((lines) => [
+        ...lines.slice(-99),
+        { type: "log", text: `[preview] ${prev} -> ${next}: ${reason}` },
+      ]);
+      return next;
+    });
+  }, [previewEngine]);
   // Real sandbox preview (E2B). Resolves to a live URL when configured; otherwise
   // the hook stays empty and we fall back to WebContainers / srcdoc.
   const { previewUrl: sandboxUrl, requestPreview: requestSandboxPreview, stopPreview: stopSandboxPreview } = useSandboxPreview(projectId ?? "");
@@ -388,27 +456,35 @@ export function PreviewPanel({
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(false);
 
-  const importDiagnosis = useMemo(() => {
-    const issues = diagnoseBrokenImports(files);
-    return issues.length > 0 ? issues.map((i) => `• ${i}`).join("\n") : null;
-  }, [files]);
-
   const errorGuard = usePreviewErrorGuard({
     iframeRef: unifiedIframeRef,
-    onHealRequest: (prompt) => {
-      onFixWithAI?.(appendImportDiagnosis(prompt, files));
+    onHealRequest: (prompt, report) => {
+      onFixWithAI?.(appendPreviewDiagnosis(prompt, files, report.errors));
     },
   });
+
+  const previewDiagnosis = useMemo(
+    () => buildPreviewDiagnosis(files, errorGuard.report?.errors ?? []),
+    [files, errorGuard.report],
+  );
+
+  useEffect(() => {
+    onErrorReport?.(errorGuard.report);
+  }, [errorGuard.report, onErrorReport]);
 
   const handleFixWithAI = useCallback(
     (error: string) => {
       if (errorGuard.report?.errors.length) {
         errorGuard.startHealing();
       } else if (!isNoisePreviewError(error)) {
-        onFixWithAI?.(appendImportDiagnosis(`Fix this preview error:\n\n${error}`, files));
+        onFixWithAI?.(appendPreviewDiagnosis(
+          `Fix this preview error:\n\n${error}`,
+          files,
+          [{ kind: "runtime", message: error, timestamp: Date.now() }],
+        ));
       }
     },
-    [errorGuard, onFixWithAI],
+    [errorGuard, files, onFixWithAI],
   );
 
   useEffect(() => {
@@ -449,7 +525,7 @@ export function PreviewPanel({
   // Pick WebContainers (Lovable-style Vite runtime) or srcdoc fallback.
   useEffect(() => {
     if (files.length === 0) {
-      setPreviewEngine("detecting");
+      setPreviewEngine("fallback");
       return;
     }
 
@@ -464,12 +540,12 @@ export function PreviewPanel({
 
     const isolated = typeof window !== "undefined" ? window.crossOriginIsolated : false;
     const engine = resolvePreviewEngine(files, {
-      preferWebContainers: useWebContainers,
+      preferWebContainers: useWebContainers && vitePreviewRequested,
       crossOriginIsolated: isolated,
       sandboxUrl,
     });
     setPreviewEngine(engine);
-  }, [files, useWebContainers, projectId, sandboxUrl]);
+  }, [files, useWebContainers, vitePreviewRequested, projectId, sandboxUrl]);
 
   // The engines report different location shapes (srcdoc: virtual hash path;
   // WebContainer: real URL path). Reset the shared address-bar state on engine
@@ -478,7 +554,8 @@ export function PreviewPanel({
     setPreviewPath("/");
     setUrlInput("/");
     setUrlEditing(false);
-  }, [previewEngine]);
+    transitionPreviewMachine("loading", `engine switched to ${previewEngine}`);
+  }, [previewEngine, transitionPreviewMachine]);
 
   // Attempt a real sandbox preview once files are present. Gated behind an env
   // flag (default OFF) so there's no extra request unless E2B preview is enabled.
@@ -566,16 +643,19 @@ export function PreviewPanel({
           setPreviewCompileFailed(false);
           setPreviewCompileOk(true);
           setErrorDismissed(false);
+          transitionPreviewMachine("ready", "preview runtime reported success");
         } else if (type === "error") {
           if (isNoisePreviewError(text)) return;
           if (outOfCredits) {
             setPreviewCompileFailed(true);
             setPreviewCompileOk(false);
+            transitionPreviewMachine("error", "preview compile failed with no credits");
             return;
           }
           if (onError) onError(text);
           setActiveError(text);
           setErrorDismissed(false);
+          transitionPreviewMachine("error", "preview runtime error");
         }
       }
       if (d.type === "lifemark-screenshot") {
@@ -601,7 +681,7 @@ export function PreviewPanel({
     return () => window.removeEventListener("message", handler);
     // urlEditing MUST be a dep: without it the listener kept a stale
     // urlEditing=false and location reports overwrote the user's typing.
-  }, [onError, visualEdit, commentPinMode, outOfCredits, errorGuard, urlEditing]);
+  }, [onError, visualEdit, commentPinMode, outOfCredits, errorGuard, urlEditing, transitionPreviewMachine]);
 
   useEffect(() => {
     if (outOfCredits) {
@@ -624,15 +704,29 @@ export function PreviewPanel({
     return () => window.removeEventListener("lifemark-request-screenshot", handleCaptureRequest);
   }, []);
 
+  const refreshPreview = useCallback((nextFiles?: ProjectFile[]) => {
+    if (Array.isArray(nextFiles)) {
+      const relevantFiles = previewRelevantFiles(nextFiles);
+      const sig = filesContentSignature(relevantFiles);
+      previewFilesSigRef.current = sig;
+      setPreviewFiles(relevantFiles);
+    }
+    setRefreshKey((k) => k + 1);
+    setConsoleLines([]);
+    setVebSelected(null);
+    errorGuard.clearErrors();
+    previewBuildShaRef.current = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    transitionPreviewMachine("loading", "refresh requested");
+  }, [errorGuard, transitionPreviewMachine]);
+
   useEffect(() => {
-    function handleRefresh() {
-      setRefreshKey((k) => k + 1);
-      setConsoleLines([]);
-      setVebSelected(null);
+    function handleRefresh(event: Event) {
+      const detail = (event as CustomEvent<{ files?: ProjectFile[] }>).detail;
+      refreshPreview(detail?.files);
     }
     window.addEventListener("lifemark-refresh-preview", handleRefresh);
     return () => window.removeEventListener("lifemark-refresh-preview", handleRefresh);
-  }, []);
+  }, [refreshPreview]);
 
   const captureForAnnotation = useCallback(() => {
     const msgId = `ann-${Date.now()}`;
@@ -656,23 +750,26 @@ export function PreviewPanel({
   // the first non-empty set applies immediately so project open isn't delayed.
   // Raw `files` still flow to the visual-edit overlays and engine resolution,
   // which need the latest content and are cheap.
-  const [previewFiles, setPreviewFiles] = useState<ProjectFile[]>(files);
-  const previewFilesSigRef = useRef<string>(filesContentSignature(files));
+  const [previewFiles, setPreviewFiles] = useState<ProjectFile[]>(() => previewRelevantFiles(files));
+  const previewFilesSigRef = useRef<string>(filesContentSignature(previewRelevantFiles(files)));
   useEffect(() => {
-    const sig = filesContentSignature(files);
+    const relevantFiles = previewRelevantFiles(files);
+    const sig = filesContentSignature(relevantFiles);
     if (sig === previewFilesSigRef.current) return; // identity churn, same content
+    previewBuildShaRef.current = sig.slice(0, 12) || `${Date.now()}`;
+    transitionPreviewMachine("building", "project files changed");
     if (previewFilesSigRef.current === "") {
       // Leading edge: empty → first real content renders without delay.
       previewFilesSigRef.current = sig;
-      setPreviewFiles(files);
+      setPreviewFiles(relevantFiles);
       return;
     }
     const timer = window.setTimeout(() => {
       previewFilesSigRef.current = sig;
-      setPreviewFiles(files);
-    }, isGenerating ? 120 : 500);
+      setPreviewFiles(relevantFiles);
+    }, isGenerating ? 900 : 350);
     return () => window.clearTimeout(timer);
-  }, [files, isGenerating]);
+  }, [files, isGenerating, transitionPreviewMachine]);
 
   const template = useMemo(() => detectTemplate(files), [files]);
   const sandpackFiles = useMemo(() => {
@@ -691,9 +788,7 @@ export function PreviewPanel({
   const [esbuildHtml, setEsbuildHtml] = useState("");
   const [esbuildBuilding, setEsbuildBuilding] = useState(false);
   useEffect(() => {
-    const on =
-      process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "1" ||
-      process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "true";
+    const on = isEsbuildPreviewEnabled();
     if (!on || previewEngine !== "fallback" || previewFiles.length === 0) {
       setEsbuildHtml("");
       setEsbuildBuilding(false);
@@ -702,12 +797,14 @@ export function PreviewPanel({
     let cancelled = false;
     setEsbuildHtml("");
     setEsbuildBuilding(true);
+    transitionPreviewMachine("building", "esbuild preview compiling");
     void buildEsbuildHtml(previewFiles)
       .then((res) => {
         if (cancelled) return;
         if (res.html) {
           setEsbuildHtml(res.html);
           setEsbuildBuilding(false);
+          transitionPreviewMachine("loading", "esbuild preview compiled");
         } else {
           console.warn("[preview/esbuild] build failed; using fallback engine:", res.errors);
           setConsoleLines((prev) => [
@@ -719,6 +816,7 @@ export function PreviewPanel({
           ]);
           setEsbuildHtml("");
           setEsbuildBuilding(false);
+          transitionPreviewMachine("fallback", "esbuild preview fell back");
         }
       })
       .catch((e) => {
@@ -733,15 +831,92 @@ export function PreviewPanel({
           ]);
           setEsbuildHtml("");
           setEsbuildBuilding(false);
+          transitionPreviewMachine("fallback", "esbuild preview error");
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [previewFiles, previewEngine]);
+  }, [previewFiles, previewEngine, transitionPreviewMachine]);
   /** Rendered HTML: the esbuild bundle when ready, else the regex-engine result. */
   const effectivePreviewHtml = esbuildHtml || fallbackHtml;
   const filesSignature = useMemo(() => filesContentSignature(previewFiles), [previewFiles]);
+
+  // Foreground reliability guard: WebContainer can occasionally stall while its
+  // hidden StackBlitz runtime boots. Keep it available as a high-fidelity retry,
+  // but switch the user back to the standard preview quickly so the panel never
+  // looks blank after code generation.
+  useEffect(() => {
+    if (previewEngine !== "webcontainer") return;
+    const timer = window.setTimeout(() => {
+      const frames = Array.from(sandpackContainerRef.current?.querySelectorAll("iframe") ?? []);
+      const hasLivePreviewFrame = frames.some((frame) => {
+        const src = frame.getAttribute("src") ?? "";
+        const rect = frame.getBoundingClientRect();
+        return (
+          frame.getAttribute("title") === "Preview" &&
+          src.length > 0 &&
+          !src.includes("stackblitz.com/headless") &&
+          rect.width > 0 &&
+          rect.height > 0
+        );
+      });
+
+      if (hasLivePreviewFrame) return;
+
+      // SLOW IS NOT BROKEN. A cold WebContainer has to boot AND `npm install`
+      // before it can paint — WebContainerPreview itself budgets 18s/75s/35s for
+      // boot/install/start. This watchdog fires after 12s, so for any project that
+      // needs a real install it ALWAYS wins the race while the container is still
+      // happily installing. It used to call markWcUnavailable(), which poisons
+      // sessionStorage and pins the user to the srcdoc engine for the whole
+      // session — on a machine where WebContainer works perfectly.
+      //
+      // So: show the fast preview immediately (good UX), but DEMOTE the container
+      // to background warming rather than killing it. Its onReady swaps it back in
+      // when the dev server is actually up. Only a genuine failure (the child's
+      // onError, raised after ITS phase budgets expire) may mark WC unavailable.
+      setVitePreviewRequested(false); // keep the resolver on fallback (no flip-flop)
+      setBackgroundViteActive(true);  // …but keep the container alive and installing
+      setConsoleLines((prev) => [
+        ...prev.slice(-99),
+        {
+          type: "warn",
+          text: "Vite runtime is still warming up; showing the standard preview and switching over when it's ready.",
+        },
+      ]);
+      setPreviewEngine("fallback");
+      transitionPreviewMachine("fallback", "vite still warming — demoted to background");
+      toast({
+        title: "Standard preview loaded",
+        description: "The Vite runtime is still starting and will take over once it's ready.",
+      });
+    }, 12_000);
+    return () => window.clearTimeout(timer);
+  }, [previewEngine, refreshKey, filesSignature, toast, transitionPreviewMachine]);
+
+  // Backstop for background warming. This must OUTLAST the container's own phase
+  // budgets (boot 18s + install 75s + start 35s ≈ 128s) — at the old 12s it killed
+  // the warm-up long before `npm install` could possibly finish, which is why the
+  // background Vite path never once succeeded. It also no longer marks WC
+  // unavailable: a real failure arrives via the child's onError, and "still slow"
+  // is not evidence that WebContainer is broken.
+  useEffect(() => {
+    if (!backgroundViteActive || previewEngine !== "fallback") return;
+    const timer = window.setTimeout(() => {
+      setVitePreviewRequested(false);
+      setBackgroundViteActive(false);
+      transitionPreviewMachine("fallback", "background vite preview timed out");
+      setConsoleLines((prev) => [
+        ...prev.slice(-99),
+        {
+          type: "warn",
+          text: "Vite preview did not become ready in the background; standard preview stayed visible.",
+        },
+      ]);
+    }, WC_WARM_BUDGET_MS);
+    return () => window.clearTimeout(timer);
+  }, [backgroundViteActive, previewEngine, backgroundViteKey, transitionPreviewMachine]);
 
   useEffect(() => {
     unifiedIframeRef.current =
@@ -761,11 +936,24 @@ export function PreviewPanel({
   const iframeVisible = !outOfCredits || previewCompileOk;
   const showPausedOverlay = outOfCredits && !previewCompileOk && !showDeployedPreview;
   const showEsbuildBadge =
-    (process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "1" ||
-      process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "true") &&
+    isEsbuildPreviewEnabled() &&
     previewEngine === "fallback" &&
     !showDeployedPreview &&
     (esbuildBuilding || !!esbuildHtml);
+  const previewStatusText =
+    previewMachineState === "building"
+      ? "Preparing preview"
+      : previewMachineState === "loading"
+        ? "Loading update"
+        : previewMachineState === "fallback"
+          ? "Standard preview active"
+          : previewMachineState === "error"
+            ? "Preview needs repair"
+            : null;
+  const showRecoveryOverlay =
+    !showDeployedPreview &&
+    !errorGuard.freezePreview &&
+    previewMachineState === "error";
 
   async function submitElementComment() {
     if (!projectId || !pendingComment || !commentDraft.trim()) return;
@@ -828,6 +1016,29 @@ export function PreviewPanel({
 
   const hasFiles = files.length > 0;
   const useFallback = previewEngine === "fallback";
+  const viteCapable = useWebContainers && shouldUseWebContainer(files);
+
+  const retryVitePreview = useCallback(() => {
+    clearWcBlock();
+    if (!viteCapable) {
+      toast({
+        title: "Standard preview",
+        description: "This project does not use a Vite/package.json layout.",
+      });
+      return;
+    }
+    if (typeof window !== "undefined" && !window.crossOriginIsolated) {
+      toast({
+        title: "Reloading for Vite preview",
+        description: "A full page load is required for the in-browser Vite runtime.",
+      });
+      window.location.reload();
+      return;
+    }
+    setBackgroundViteActive(true);
+    setBackgroundViteKey((k) => k + 1);
+    setConsoleLines([]);
+  }, [toast, viteCapable]);
 
   function refresh() {
     if (previewEngine === "webcontainer") {
@@ -1006,9 +1217,33 @@ export function PreviewPanel({
           </div>
 
           <div className="flex items-center gap-0.5">
+            <span
+              title={`Preview state: ${previewMachineState}`}
+              className={`text-[10px] px-1.5 py-0.5 rounded border mr-1 ${
+                previewMachineState === "ready"
+                  ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"
+                  : previewMachineState === "error"
+                    ? "bg-red-500/15 text-red-400 border-red-500/25"
+                    : previewMachineState === "fallback"
+                      ? "bg-amber-500/15 text-amber-400 border-amber-500/25"
+                      : "bg-blue-500/15 text-blue-400 border-blue-500/25"
+              }`}
+            >
+              {previewMachineState}
+            </span>
             {previewEngine === "webcontainer" && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-400 border border-violet-500/30 mr-1">
                 Vite
+              </span>
+            )}
+            {previewEngine === "fallback" && !showDeployedPreview && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/20 text-slate-400 border border-slate-500/30 mr-1">
+                Standard
+              </span>
+            )}
+            {previewEngine === "sandbox" && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 mr-1">
+                Sandbox
               </span>
             )}
 
@@ -1108,6 +1343,20 @@ export function PreviewPanel({
               <TooltipContent>Refresh preview</TooltipContent>
             </Tooltip>
 
+            {previewEngine === "fallback" && viteCapable && !showDeployedPreview && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    onClick={retryVitePreview}
+                    className="p-1.5 rounded-md text-violet-400/80 hover:text-violet-300 hover:bg-violet-500/10 transition-all"
+                  >
+                    <Wand2 className="w-3.5 h-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent>Switch to Vite preview (real dev server)</TooltipContent>
+              </Tooltip>
+            )}
+
             <Tooltip>
               <TooltipTrigger asChild>
                 <button onClick={openInNewTab} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-all">
@@ -1164,6 +1413,7 @@ export function PreviewPanel({
                 className="w-full h-full border-0"
                 title="Live sandbox preview"
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                onLoad={() => transitionPreviewMachine("ready", "sandbox iframe loaded")}
               />
             )}
           </div>
@@ -1179,9 +1429,11 @@ export function PreviewPanel({
                 projectId={projectId}
                 embedded
                 onError={(msg) => {
+                  transitionPreviewMachine("fallback", "webcontainer preview error");
                   if (typeof window !== "undefined") {
                     markWcUnavailable();
                   }
+                  setVitePreviewRequested(false);
                   queueMicrotask(() => {
                     toast({
                       title: "WebContainer preview unavailable",
@@ -1229,6 +1481,7 @@ export function PreviewPanel({
                     className="w-full h-full border-0"
                     title="Live deployment"
                     sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                    onLoad={() => transitionPreviewMachine("ready", "deployment iframe loaded")}
                   />
                 ) : (
                   <div className="relative w-full h-full">
@@ -1244,6 +1497,7 @@ export function PreviewPanel({
                       }
                       title="App Preview"
                       sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                      onLoad={() => transitionPreviewMachine("ready", "standard preview iframe loaded")}
                     />
                   </div>
                 )
@@ -1251,6 +1505,35 @@ export function PreviewPanel({
             </div>
 
             {/* VisualEditOverlay — works because srcDoc iframe is same-origin */}
+            {backgroundViteActive && viteCapable && !showDeployedPreview && (
+              <div className="hidden" aria-hidden="true">
+                <WebContainerPreview
+                  key={`background-vite-${backgroundViteKey}`}
+                  files={previewFiles}
+                  projectId={projectId}
+                  embedded
+                  onReady={() => {
+                    setBackgroundViteActive(false);
+                    setVitePreviewRequested(true);
+                    setPreviewEngine("webcontainer");
+                    setRefreshKey((k) => k + 1);
+                    setConsoleLines([]);
+                  }}
+                  onError={(msg) => {
+                    if (typeof window !== "undefined") {
+                      markWcUnavailable();
+                    }
+                    setVitePreviewRequested(false);
+                    setBackgroundViteActive(false);
+                    setConsoleLines((prev) => [
+                      ...prev.slice(-99),
+                      { type: "warn", text: `Vite preview stayed in the background: ${msg}` },
+                    ]);
+                  }}
+                />
+              </div>
+            )}
+
             <VisualEditOverlay
               iframeRef={iframeRef}
               files={files}
@@ -1344,10 +1627,77 @@ export function PreviewPanel({
         <PreviewHealingOverlay
           phase={errorGuard.phase}
           report={errorGuard.report}
-          importDiagnosis={importDiagnosis}
+          importDiagnosis={previewDiagnosis}
           onRetry={() => errorGuard.startHealing()}
+          onShowLogs={() => setShowConsole((value) => !value)}
           onDismiss={() => errorGuard.clearErrors()}
+          logsVisible={showConsole}
         />
+
+        {previewStatusText && previewMachineState !== "ready" && (
+          <div className="absolute top-2 left-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-background/90 border border-border/70 text-[10px] text-muted-foreground shadow-sm">
+            {previewMachineState === "building" || previewMachineState === "loading" ? (
+              <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
+            ) : previewMachineState === "error" ? (
+              <AlertTriangle className="w-3 h-3 text-red-400" />
+            ) : (
+              <Check className="w-3 h-3 text-amber-400" />
+            )}
+            <span>{previewStatusText}</span>
+          </div>
+        )}
+
+        <AnimatePresence>
+          {showRecoveryOverlay && (
+            <motion.div
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 12 }}
+              transition={{ duration: 0.18 }}
+              className="absolute top-12 left-1/2 -translate-x-1/2 z-40 w-[min(420px,92%)] rounded-xl border border-red-500/30 bg-background/95 shadow-2xl backdrop-blur px-3 py-2.5"
+            >
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 mt-0.5 text-red-400 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold text-foreground">Preview paused after a runtime error</div>
+                  <div className="mt-0.5 text-[11px] text-muted-foreground truncate">
+                    {activeError ?? errorGuard.report?.errors[0]?.message ?? "The last update could not render cleanly."}
+                  </div>
+                  {previewDiagnosis && (
+                    <div className="mt-1 text-[10px] text-muted-foreground/80 line-clamp-2">
+                      {previewDiagnosis.replace(/\n+/g, " ").slice(0, 180)}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="mt-2 flex flex-wrap justify-end gap-1.5">
+                <button
+                  onClick={() => setShowConsole((value) => !value)}
+                  className="px-2 py-1 rounded-md border border-border/70 bg-muted/40 hover:bg-muted text-[11px] text-muted-foreground"
+                >
+                  Logs
+                </button>
+                <button
+                  onClick={() => refreshPreview(files)}
+                  className="px-2 py-1 rounded-md border border-border/70 bg-muted/40 hover:bg-muted text-[11px] text-muted-foreground"
+                >
+                  Refresh
+                </button>
+                {onFixWithAI && (
+                  <button
+                    onClick={() => {
+                      handleFixWithAI(activeError ?? errorGuard.report?.formatted ?? "Preview runtime error");
+                      setErrorDismissed(true);
+                    }}
+                    className="px-2 py-1 rounded-md border border-red-500/30 bg-red-500/15 hover:bg-red-500/25 text-[11px] text-red-200"
+                  >
+                    Fix with AI
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {showDeployedPreview && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/15 border border-violet-500/25 text-[10px] text-violet-300">

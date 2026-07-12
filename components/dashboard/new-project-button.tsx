@@ -9,6 +9,7 @@ import {
 import { GitHubImportModal } from "./github-import-modal";
 import { LovableImportModal } from "./lovable-import-modal";
 import { Button } from "@/components/ui/button";
+import { FxButton } from "@/components/ui/fx-button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -90,13 +91,14 @@ export function NewProjectButton() {
 
   return (
     <>
-      <Button
+      <FxButton
+        variant="accent"
         onClick={() => setOpen(true)}
-        className="gap-2 bg-gradient-to-r from-violet-600 to-blue-600 hover:from-violet-700 hover:to-blue-700 text-white shadow-lg shadow-violet-500/20"
+        className="gap-2 h-9 px-4"
       >
         <Plus className="w-4 h-4" />
         New Project
-      </Button>
+      </FxButton>
       {/* Import button lives on NewProjectButton so it can be rendered alongside it */}
 
       <Dialog open={open} onOpenChange={handleClose}>

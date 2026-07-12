@@ -134,7 +134,7 @@ const saasLanding: BuiltInTemplate = {
     path: "src/App.tsx",
     language: "typescriptreact",
     content: `import { motion } from 'framer-motion'
-import { CheckCircle, Zap, Shield, BarChart3, Star, ArrowRight, Menu, X } from 'lucide-react'
+import { CheckCircle, Zap, Shield, BarChart3, Star, ArrowRight, Menu, X, Phone, Mail, Twitter, Instagram, Linkedin } from 'lucide-react'
 import { useState } from 'react'
 
 const NAV_LINKS = ['Features', 'Pricing', 'Testimonials', 'FAQ']
@@ -161,28 +161,42 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false)
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white">
-      {/* Nav */}
-      <nav className="fixed top-0 inset-x-0 z-50 border-b border-white/[0.06] bg-[#0a0a0f]/80 backdrop-blur-xl">
-        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2 font-bold text-lg"><Zap className="w-5 h-5 text-violet-400" /> Launchpad</div>
-          <div className="hidden md:flex items-center gap-8">
-            {NAV_LINKS.map(l => <a key={l} href={\`#\${l.toLowerCase()}\`} className="text-sm text-slate-400 hover:text-white transition-colors">{l}</a>)}
+      <header className="sticky top-0 z-50">
+        <div className="hidden sm:block border-b border-white/[0.06] bg-[#050508] text-xs text-slate-400">
+          <div className="max-w-6xl mx-auto px-4 h-9 flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <a href="tel:+15551234567" className="inline-flex items-center gap-1.5 hover:text-white"><Phone className="w-3 h-3" /> (555) 123-4567</a>
+              <a href="mailto:hello@launchpad.app" className="inline-flex items-center gap-1.5 hover:text-white"><Mail className="w-3 h-3" /> hello@launchpad.app</a>
+            </div>
+            <div className="flex items-center gap-3">
+              <a href="#" aria-label="Twitter" className="hover:text-white"><Twitter className="w-3.5 h-3.5" /></a>
+              <a href="#" aria-label="Instagram" className="hover:text-white"><Instagram className="w-3.5 h-3.5" /></a>
+              <a href="#" aria-label="LinkedIn" className="hover:text-white"><Linkedin className="w-3.5 h-3.5" /></a>
+            </div>
           </div>
-          <div className="hidden md:flex items-center gap-3">
-            <button className="text-sm text-slate-300 hover:text-white">Log in</button>
-            <button className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm font-medium transition-colors">Get started</button>
-          </div>
-          <button className="md:hidden text-slate-400" onClick={() => setMenuOpen(v => !v)}>{menuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}</button>
         </div>
-        {menuOpen && (
-          <div className="md:hidden border-t border-white/[0.06] bg-[#0a0a0f] p-4 space-y-3">
-            {NAV_LINKS.map(l => <a key={l} href={\`#\${l.toLowerCase()}\`} className="block text-slate-400 py-1" onClick={() => setMenuOpen(false)}>{l}</a>)}
+        <nav className="border-b border-white/[0.06] bg-[#0a0a0f]/80 backdrop-blur-xl">
+          <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2 font-bold text-lg shrink-0"><Zap className="w-5 h-5 text-violet-400" /> Launchpad</div>
+            <div className="hidden md:flex items-center gap-8 flex-1 justify-center">
+              {NAV_LINKS.map(l => <a key={l} href={\`#\${l.toLowerCase()}\`} className="text-sm text-slate-400 hover:text-white transition-colors">{l}</a>)}
+            </div>
+            <div className="hidden md:flex items-center gap-3 shrink-0">
+              <button className="text-sm text-slate-300 hover:text-white">Log in</button>
+              <button className="px-4 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm font-medium transition-colors">Get started</button>
+            </div>
+            <button className="md:hidden text-slate-400" onClick={() => setMenuOpen(v => !v)}>{menuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}</button>
           </div>
-        )}
-      </nav>
+          {menuOpen && (
+            <div className="md:hidden border-t border-white/[0.06] bg-[#0a0a0f] p-4 space-y-3">
+              {NAV_LINKS.map(l => <a key={l} href={\`#\${l.toLowerCase()}\`} className="block text-slate-400 py-1" onClick={() => setMenuOpen(false)}>{l}</a>)}
+            </div>
+          )}
+        </nav>
+      </header>
 
       {/* Hero */}
-      <section className="pt-40 pb-24 px-4 text-center relative overflow-hidden">
+      <section className="pt-24 pb-24 px-4 text-center relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-radial from-violet-600/10 via-transparent to-transparent" style={{background:'radial-gradient(ellipse 80% 50% at 50% 0%, rgba(139,92,246,0.15), transparent)'}} />
         <motion.div initial={{opacity:0,y:20}} animate={{opacity:1,y:0}} transition={{duration:0.6}} className="relative max-w-3xl mx-auto">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-300 text-sm mb-6">
@@ -435,7 +449,7 @@ const ecommerceStore: BuiltInTemplate = {
     path: "src/App.tsx",
     language: "typescriptreact",
     content: `import { useState } from 'react'
-import { ShoppingCart, Star, Plus, Minus, X, Search, SlidersHorizontal } from 'lucide-react'
+import { ShoppingCart, Star, Plus, Minus, X, Search, SlidersHorizontal, Phone, Mail, Facebook, Instagram, Twitter } from 'lucide-react'
 
 interface Product { id:number; name:string; price:number; category:string; rating:number; reviews:number; image:string; badge?:string }
 interface CartItem { product:Product; qty:number }
@@ -466,15 +480,34 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-white border-b sticky top-0 z-30">
+        <div className="hidden sm:block bg-slate-900 text-slate-300 text-xs">
+          <div className="max-w-6xl mx-auto px-4 h-9 flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <span className="inline-flex items-center gap-1.5"><Phone className="w-3 h-3" /> (555) 010-2200</span>
+              <span className="inline-flex items-center gap-1.5"><Mail className="w-3 h-3" /> support@shopco.com</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <a href="#" aria-label="Facebook" className="hover:text-white"><Facebook className="w-3.5 h-3.5" /></a>
+              <a href="#" aria-label="Instagram" className="hover:text-white"><Instagram className="w-3.5 h-3.5" /></a>
+              <a href="#" aria-label="Twitter" className="hover:text-white"><Twitter className="w-3.5 h-3.5" /></a>
+            </div>
+          </div>
+        </div>
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center gap-4">
-          <div className="font-bold text-xl text-slate-900">🛍️ ShopCo</div>
-          <div className="flex-1 flex items-center gap-2 bg-gray-100 rounded-full px-4 py-2 max-w-md mx-auto">
+          <div className="font-bold text-xl text-slate-900 shrink-0">🛍️ ShopCo</div>
+          <nav className="hidden md:flex items-center gap-5 text-sm text-slate-600">
+            <a href="#" className="hover:text-slate-900">Home</a>
+            <a href="#" className="hover:text-slate-900">Shop</a>
+            <a href="#" className="hover:text-slate-900">Collections</a>
+            <a href="#" className="hover:text-slate-900">About</a>
+            <a href="#" className="hover:text-slate-900">Contact</a>
+          </nav>
+          <div className="flex-1 flex items-center gap-2 bg-gray-100 rounded-full px-4 py-2 max-w-md ml-auto">
             <Search className="w-4 h-4 text-gray-400" />
             <input value={search} onChange={e=>setSearch(e.target.value)} className="flex-1 bg-transparent text-sm outline-none" placeholder="Search products..." />
           </div>
-          <button onClick={()=>setCartOpen(true)} className="relative flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-full text-sm font-medium hover:bg-slate-700 transition-colors">
+          <button onClick={()=>setCartOpen(true)} className="relative flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-full text-sm font-medium hover:bg-slate-700 transition-colors shrink-0">
             <ShoppingCart className="w-4 h-4" /> Cart
             {totalItems>0 && <span className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-violet-600 rounded-full flex items-center justify-center text-xs font-bold">{totalItems}</span>}
           </button>
@@ -950,7 +983,7 @@ const portfolio: BuiltInTemplate = {
     path: "src/App.tsx",
     language: "typescriptreact",
     content: `import { motion } from 'framer-motion'
-import { Github, Linkedin, Twitter, Mail, ArrowUpRight, MapPin } from 'lucide-react'
+import { Github, Linkedin, Twitter, Mail, ArrowUpRight, MapPin, Phone } from 'lucide-react'
 
 const PROJECTS = [
   { name:'Orbit Analytics', desc:'Real-time product analytics processing 2B+ events/day.', tags:['React','Node','ClickHouse'], emoji:'📊' },
@@ -960,22 +993,34 @@ const PROJECTS = [
 ]
 const SKILLS = [ { name:'Frontend', level:95 }, { name:'Backend', level:88 }, { name:'Design', level:78 }, { name:'DevOps', level:72 } ]
 const SOCIALS = [ { icon:Github, href:'#' }, { icon:Linkedin, href:'#' }, { icon:Twitter, href:'#' }, { icon:Mail, href:'#' } ]
+const NAV_LINKS = ['Work', 'About', 'Contact']
 
 export default function App() {
   return (
     <div className="min-h-screen bg-[#0a0a0f] text-white">
-      <nav className="fixed top-0 inset-x-0 z-50 backdrop-blur-xl bg-[#0a0a0f]/70 border-b border-white/[0.06]">
-        <div className="max-w-3xl mx-auto px-6 h-16 flex items-center justify-between">
-          <span className="font-bold">Alex Rivera</span>
-          <div className="flex gap-6 text-sm text-slate-400">
-            <a href="#work" className="hover:text-white transition-colors">Work</a>
-            <a href="#about" className="hover:text-white transition-colors">About</a>
-            <a href="#contact" className="hover:text-white transition-colors">Contact</a>
+      <header className="sticky top-0 z-50">
+        <div className="hidden sm:block border-b border-white/[0.06] bg-[#050508] text-xs text-slate-400">
+          <div className="max-w-3xl mx-auto px-6 h-9 flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <span className="inline-flex items-center gap-1.5"><Phone className="w-3 h-3" /> (415) 555-0199</span>
+              <a href="mailto:alex@rivera.dev" className="inline-flex items-center gap-1.5 hover:text-white"><Mail className="w-3 h-3" /> alex@rivera.dev</a>
+            </div>
+            <div className="flex items-center gap-3">
+              {SOCIALS.map((s,i)=><a key={i} href={s.href} className="hover:text-white"><s.icon className="w-3.5 h-3.5" /></a>)}
+            </div>
           </div>
         </div>
-      </nav>
+        <nav className="backdrop-blur-xl bg-[#0a0a0f]/70 border-b border-white/[0.06]">
+          <div className="max-w-3xl mx-auto px-6 h-16 flex items-center justify-between gap-4">
+            <span className="font-bold shrink-0">Alex Rivera</span>
+            <div className="flex gap-6 text-sm text-slate-400">
+              {NAV_LINKS.map(l => <a key={l} href={\`#\${l.toLowerCase()}\`} className="hover:text-white transition-colors">{l}</a>)}
+            </div>
+          </div>
+        </nav>
+      </header>
 
-      <section className="max-w-3xl mx-auto px-6 pt-40 pb-24">
+      <section className="max-w-3xl mx-auto px-6 pt-24 pb-24">
         <motion.div initial={{opacity:0,y:20}} animate={{opacity:1,y:0}} transition={{duration:0.6}}>
           <div className="flex items-center gap-2 text-sm text-emerald-400 mb-4"><span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" /> Available for freelance</div>
           <h1 className="text-5xl md:text-6xl font-extrabold tracking-tight mb-6">Hi, I'm Alex.<br /><span className="text-slate-500">I build delightful software.</span></h1>
@@ -1541,23 +1586,42 @@ const landingMinimal: BuiltInTemplate = {
     path: "src/App.tsx",
     language: "typescriptreact",
     content: `import { motion } from 'framer-motion'
-import { ArrowRight, Check } from 'lucide-react'
+import { ArrowRight, Check, Phone, Mail, Twitter, Instagram, Linkedin } from 'lucide-react'
 
 const SCREENS = [
   { kicker:'Introducing Halo', title:'Simplicity, refined.', sub:'The tool that gets out of your way so you can do your best work.', emoji:'◯' },
   { kicker:'Designed to focus', title:'Nothing extra.', sub:'Every pixel earns its place. No clutter, no noise — just what matters.', emoji:'◐' },
   { kicker:'Built to last', title:'Quietly powerful.', sub:'Instant everywhere. Thoughtful defaults. Power when you want it.', emoji:'●' },
 ]
+const NAV_LINKS = ['Product', 'Features', 'Pricing', 'Contact']
 
 export default function App() {
   return (
     <div className="bg-white text-slate-900">
-      <nav className="fixed top-0 inset-x-0 z-50 backdrop-blur-xl bg-white/70 border-b border-slate-100">
-        <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
-          <span className="font-semibold tracking-tight">Halo</span>
-          <button className="text-sm bg-slate-900 text-white px-4 py-1.5 rounded-full hover:bg-slate-700 transition-colors">Get Halo</button>
+      <header className="sticky top-0 z-50">
+        <div className="hidden sm:block bg-slate-900 text-slate-300 text-xs">
+          <div className="max-w-5xl mx-auto px-6 h-9 flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <span className="inline-flex items-center gap-1.5"><Phone className="w-3 h-3" /> (800) 555-0142</span>
+              <span className="inline-flex items-center gap-1.5"><Mail className="w-3 h-3" /> hello@halo.app</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <a href="#" aria-label="Twitter" className="hover:text-white"><Twitter className="w-3.5 h-3.5" /></a>
+              <a href="#" aria-label="Instagram" className="hover:text-white"><Instagram className="w-3.5 h-3.5" /></a>
+              <a href="#" aria-label="LinkedIn" className="hover:text-white"><Linkedin className="w-3.5 h-3.5" /></a>
+            </div>
+          </div>
         </div>
-      </nav>
+        <nav className="backdrop-blur-xl bg-white/70 border-b border-slate-100">
+          <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between gap-4">
+            <span className="font-semibold tracking-tight shrink-0">Halo</span>
+            <div className="hidden md:flex items-center gap-6 text-sm text-slate-500">
+              {NAV_LINKS.map(l => <a key={l} href={\`#\${l.toLowerCase()}\`} className="hover:text-slate-900">{l}</a>)}
+            </div>
+            <button className="text-sm bg-slate-900 text-white px-4 py-1.5 rounded-full hover:bg-slate-700 transition-colors shrink-0">Get Halo</button>
+          </div>
+        </nav>
+      </header>
 
       {SCREENS.map((s, i) => (
         <section key={i} className="min-h-screen flex flex-col items-center justify-center px-6 text-center">
@@ -1847,7 +1911,7 @@ const startupLanding: BuiltInTemplate = {
     language: "typescriptreact",
     content: `import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { ArrowRight, Check, ChevronDown, Star, Zap } from 'lucide-react'
+import { ArrowRight, Check, ChevronDown, Star, Zap, Phone, Mail, Twitter, Instagram, Linkedin } from 'lucide-react'
 
 const FEATURES = [
   { emoji:'⚡', title:'Instant setup', desc:'Connect your stack in under a minute. No config files, no yak-shaving.' },
@@ -1860,6 +1924,7 @@ const FAQS = [
   { q:'When does it launch?', a:'We are rolling out to the waitlist in batches over the coming weeks.' },
   { q:'Can I cancel anytime?', a:'Absolutely. No contracts, no lock-in. Cancel from settings in one click.' },
 ]
+const NAV_LINKS = ['Features', 'Press', 'FAQ']
 
 export default function App() {
   const [email, setEmail] = useState('')
@@ -1871,10 +1936,28 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0b0b12] text-white">
-      <nav className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between">
-        <div className="flex items-center gap-2 font-bold"><Zap className="w-5 h-5 text-violet-400" /> Beacon</div>
-        <button className="text-sm bg-white/10 hover:bg-white/20 px-4 py-1.5 rounded-full transition-colors">Sign in</button>
-      </nav>
+      <header className="sticky top-0 z-40">
+        <div className="hidden sm:block border-b border-white/10 bg-[#07070c] text-xs text-slate-400">
+          <div className="max-w-5xl mx-auto px-6 h-9 flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <span className="inline-flex items-center gap-1.5"><Phone className="w-3 h-3" /> (555) 014-8800</span>
+              <span className="inline-flex items-center gap-1.5"><Mail className="w-3 h-3" /> hello@beacon.app</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <a href="#" aria-label="Twitter" className="hover:text-white"><Twitter className="w-3.5 h-3.5" /></a>
+              <a href="#" aria-label="Instagram" className="hover:text-white"><Instagram className="w-3.5 h-3.5" /></a>
+              <a href="#" aria-label="LinkedIn" className="hover:text-white"><Linkedin className="w-3.5 h-3.5" /></a>
+            </div>
+          </div>
+        </div>
+        <nav className="max-w-5xl mx-auto px-6 h-16 flex items-center justify-between gap-4 border-b border-white/10 bg-[#0b0b12]/90 backdrop-blur">
+          <div className="flex items-center gap-2 font-bold shrink-0"><Zap className="w-5 h-5 text-violet-400" /> Beacon</div>
+          <div className="hidden md:flex items-center gap-6 text-sm text-slate-400">
+            {NAV_LINKS.map(l => <a key={l} href={\`#\${l.toLowerCase()}\`} className="hover:text-white">{l}</a>)}
+          </div>
+          <button className="text-sm bg-white/10 hover:bg-white/20 px-4 py-1.5 rounded-full transition-colors shrink-0">Sign in</button>
+        </nav>
+      </header>
 
       <section className="max-w-3xl mx-auto px-6 pt-16 pb-12 text-center">
         <motion.div initial={{opacity:0,y:20}} animate={{opacity:1,y:0}} transition={{duration:0.6}}>
@@ -2735,7 +2818,7 @@ const shopifyStorefront: BuiltInTemplate = {
     path: "src/App.tsx",
     language: "typescriptreact",
     content: `import { useState } from 'react'
-import { ShoppingBag, X, Plus, Minus, ExternalLink, Store } from 'lucide-react'
+import { ShoppingBag, X, Plus, Minus, ExternalLink, Store, Phone, Mail, Facebook, Instagram, Twitter } from 'lucide-react'
 
 interface Product { id: string; title: string; price: number; image: string; handle: string }
 
@@ -2745,6 +2828,7 @@ const DEMO_PRODUCTS: Product[] = [
   { id: '3', title: 'Ceramic Mug', price: 18, image: '☕', handle: 'ceramic-mug' },
   { id: '4', title: 'Studio Cap', price: 28, image: '🧢', handle: 'studio-cap' },
 ]
+const NAV_LINKS = ['Home', 'Shop', 'Collections', 'About', 'Contact']
 
 export default function App() {
   const [cart, setCart] = useState<Array<{ product: Product; qty: number }>>([])
@@ -2760,9 +2844,25 @@ export default function App() {
   return (
     <div className="min-h-screen bg-stone-50 text-stone-900">
       <header className="border-b bg-white sticky top-0 z-20">
-        <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between">
-          <div className="flex items-center gap-2 font-semibold"><Store className="w-4 h-4" /> My Shopify Store</div>
-          <button onClick={() => setOpen(true)} className="relative p-2 rounded-full hover:bg-stone-100">
+        <div className="hidden sm:block bg-stone-900 text-stone-300 text-xs">
+          <div className="max-w-5xl mx-auto px-4 h-9 flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <span className="inline-flex items-center gap-1.5"><Phone className="w-3 h-3" /> (555) 019-4400</span>
+              <span className="inline-flex items-center gap-1.5"><Mail className="w-3 h-3" /> hello@mystore.com</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <a href="#" aria-label="Facebook" className="hover:text-white"><Facebook className="w-3.5 h-3.5" /></a>
+              <a href="#" aria-label="Instagram" className="hover:text-white"><Instagram className="w-3.5 h-3.5" /></a>
+              <a href="#" aria-label="Twitter" className="hover:text-white"><Twitter className="w-3.5 h-3.5" /></a>
+            </div>
+          </div>
+        </div>
+        <div className="max-w-5xl mx-auto px-4 h-14 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 font-semibold shrink-0"><Store className="w-4 h-4" /> My Shopify Store</div>
+          <nav className="hidden md:flex items-center gap-5 text-sm text-stone-600">
+            {NAV_LINKS.map(l => <a key={l} href="#" className="hover:text-stone-900">{l}</a>)}
+          </nav>
+          <button onClick={() => setOpen(true)} className="relative p-2 rounded-full hover:bg-stone-100 shrink-0">
             <ShoppingBag className="w-5 h-5" />
             {count > 0 && <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-emerald-600 text-white text-[10px] rounded-full flex items-center justify-center">{count}</span>}
           </button>

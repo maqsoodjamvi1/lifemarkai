@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { randomBytes, createHash } from "crypto";
-
-// Canonical validator now lives in lib/api/api-key.ts. Re-exported here so
-// existing importers (`@/app/api/keys/route`) keep working unchanged.
-export { validateApiKey } from "@/lib/api/api-key";
 import { logAuditFromRequest } from "@/lib/audit/log";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

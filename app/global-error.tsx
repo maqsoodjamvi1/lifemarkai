@@ -10,8 +10,10 @@
  * https://nextjs.org/docs/app/building-your-application/routing/error-handling#handling-errors-in-root-layouts
  */
 
-import { useEffect } from "react";
+import { useEffect, useLayoutEffect } from "react";
 import { AlertTriangle, RefreshCw, Home } from "lucide-react";
+import { isChunkLoadError, reloadOnceOnChunkError } from "@/lib/import-with-retry";
+import { clearLifemarkServiceWorker } from "@/lib/sw-cleanup";
 
 export default function GlobalError({
   error,
@@ -20,8 +22,15 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const chunkStale = isChunkLoadError(error);
+
+  useLayoutEffect(() => {
+    if (!chunkStale) return;
+    clearLifemarkServiceWorker();
+    reloadOnceOnChunkError();
+  }, [chunkStale]);
+
   useEffect(() => {
-    // Log to Sentry / console in production
     console.error("[GlobalError]", error);
   }, [error]);
 
@@ -73,7 +82,7 @@ export default function GlobalError({
               marginBottom: "0.5rem",
             }}
           >
-            Something went wrong
+            {chunkStale ? "Updating scripts…" : "Something went wrong"}
           </h1>
           <p
             style={{
@@ -83,7 +92,9 @@ export default function GlobalError({
               marginBottom: "2rem",
             }}
           >
-            An unexpected error occurred. Our team has been notified.
+            {chunkStale
+              ? "The app loaded an outdated script bundle (common after a dev server restart). Reloading to fetch the latest version…"
+              : "An unexpected error occurred. Our team has been notified."}
             {error.digest && (
               <>
                 <br />

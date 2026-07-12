@@ -8,7 +8,7 @@ import {
   Zap, LayoutDashboard, FolderOpen, Settings,
   CreditCard, Users, BookTemplate, LogOut,
   ChevronRight, Plus, Sparkles, BarChart3,
-  ClipboardList, Shield, KeyRound, Server, Brain,
+  ClipboardList, Shield, KeyRound, Server, Brain, Palette,
   MessageCircle, BookOpen, Inbox, Star, History,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,7 @@ const navItems = [
   { icon: Server, label: "SCIM", href: "/dashboard/settings/scim", shortcut: "" },
   { icon: Brain, label: "Workspace AI", href: "/dashboard/settings/workspace-knowledge", shortcut: "" },
   { icon: Zap, label: "Skills", href: "/dashboard/settings/skills", shortcut: "" },
+  { icon: Palette, label: "Branding", href: "/dashboard/settings/branding", shortcut: "" },
 ];
 
 const planColors: Record<string, string> = {
