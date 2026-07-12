@@ -7,8 +7,13 @@ import { detectLanguage } from "@/lib/ai/code-parser";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 import { ensureDevCredits } from "@/lib/dev-credits";
-import { claimDailyCredits } from "@/lib/credits";
-import { AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
+import {
+  cancelCreditReservation,
+  claimDailyCredits,
+  reserveCredits,
+  settleCreditReservation,
+} from "@/lib/credits";
+import { computeCreditCost, maxCreditCostForMode } from "@/lib/ai/credit-cost";
 import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { autoWireBackend } from "@/lib/cloud/auto-wire";
 import { autoWireAi } from "@/lib/ai/auto-wire-ai";
@@ -63,15 +68,7 @@ export async function POST(req: NextRequest) {
   await claimDailyCredits(supabase, user.id); // grants today's free credits before the gate
   const { data: profile } = await (supabase as any).from("profiles")
     .select("credits, workspace_knowledge, cloud_tool_permissions").eq("id", user.id).single();
-  let creditsBalance = profile?.credits ?? 0;
-  const granted = await ensureDevCredits(user.id);
-  if (granted !== null) creditsBalance = granted;
-  if (creditsBalance < AGENT_MIN_CREDITS) {
-    return NextResponse.json(
-      { error: `Need at least ${AGENT_MIN_CREDITS} credits for Agent Mode` },
-      { status: 402 },
-    );
-  }
+  await ensureDevCredits(user.id);
 
   const cloudPermissions = parseCloudToolPermissions(profile?.cloud_tool_permissions);
 
@@ -192,11 +189,29 @@ export async function POST(req: NextRequest) {
     console.warn("[agent] MCP connector loading failed:", err instanceof Error ? err.message : err);
   }
 
+  const reservationAmount = maxCreditCostForMode("agent");
+  const creditReservation = await reserveCredits(supabase, {
+    userId: user.id,
+    amount: reservationAmount,
+    action: "agent_run",
+    projectId,
+  });
+  if (!creditReservation) {
+    return NextResponse.json(
+      { error: `Need at least ${reservationAmount} credits for Agent Mode`, requiredCredits: reservationAmount },
+      { status: 402 },
+    );
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (data: object) =>
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+
+      let reservationFinalized = false;
+      let producedBillableWork = false;
+      let finalCreditCost: number | null = null;
 
       try {
         const projectFileMap = new Map<string, { path: string; content: string; language?: string }>();
@@ -209,6 +224,7 @@ export async function POST(req: NextRequest) {
         const result = await runAgent({
           task,
           projectId,
+          userId: user.id,
           files: files ?? [],
           model: effectiveModel,
           maxOutputTokens: maxOutputTokensForRequest({
@@ -220,8 +236,12 @@ export async function POST(req: NextRequest) {
           }),
           knowledge,
           extraTools: extraTools.length > 0 ? extraTools : undefined,
-          onStep: (step: AgentStep) => send({ step }),
+          onStep: (step: AgentStep) => {
+            producedBillableWork = true;
+            send({ step });
+          },
           onFileChange: async (path: string, content: string) => {
+            producedBillableWork = true;
             const cleanPath = path.replace(/\\/g, "/").replace(/^\/+/, "");
             projectFileMap.set(cleanPath, { path: cleanPath, content, language: detectLanguage(cleanPath) });
             send({ fileUpdated: { path: cleanPath, content: content.slice(0, 100) + "..." } });
@@ -267,17 +287,6 @@ export async function POST(req: NextRequest) {
           },
         ]);
 
-        // Deduct credits
-        const creditCost = Math.min(result.steps.length * 2, 20);
-        await (supabase as any).rpc("deduct_credits", {
-          user_id: user.id, amount: creditCost,
-          action: "agent_run", project_id: projectId,
-        });
-
-        import("@/lib/stripe/auto-topup")
-          .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
-          .catch(() => {});
-
         // ── Lovable parity: backend auto-wiring + self-verification ──────────
         let backendWiring = null;
         let verification = null;
@@ -313,6 +322,7 @@ export async function POST(req: NextRequest) {
             verification = await runSelfVerification({
               supabase,
               projectId,
+              userId: user.id,
               emit: (status) => send({ verify_status: status }),
               maxRounds: simpleAgentRequest ? 0 : undefined,
             });
@@ -331,10 +341,32 @@ export async function POST(req: NextRequest) {
           });
         }
 
+        finalCreditCost = computeCreditCost({
+          mode: "agent",
+          filesGenerated: filesChanged.length,
+          tokensUsed: result.tokensUsed,
+          usedAutoFix: (verification?.fixesApplied ?? 0) > 0,
+        });
+        const remainingCredits = await settleCreditReservation(
+          supabase,
+          creditReservation.id,
+          finalCreditCost,
+        );
+        if (remainingCredits == null) {
+          throw new Error("Unable to settle reserved Agent credits");
+        }
+        reservationFinalized = true;
+
+        import("@/lib/stripe/auto-topup")
+          .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
+          .catch(() => {});
+
         send({
           done: true,
           summary: result.summary,
           filesChanged,
+          creditsUsed: finalCreditCost,
+          remainingCredits,
           backend_wired: backendWiring ?? undefined,
           verification: verification
             ? { engine: verification.engine, passed: verification.passed, fixesApplied: verification.fixesApplied, errors: verification.errors }
@@ -344,6 +376,29 @@ export async function POST(req: NextRequest) {
         const msg = err instanceof Error ? err.message : "Agent failed";
         send({ error: msg });
       } finally {
+        if (!reservationFinalized) {
+          try {
+            if (producedBillableWork) {
+              const fallbackCost = Math.min(
+                creditReservation.amount,
+                finalCreditCost ?? creditReservation.amount,
+              );
+              const remaining = await settleCreditReservation(
+                supabase,
+                creditReservation.id,
+                fallbackCost,
+              );
+              reservationFinalized = remaining != null;
+            } else {
+              await cancelCreditReservation(supabase, creditReservation.id);
+              reservationFinalized = true;
+            }
+          } catch (reservationError) {
+            // Fail closed: keep the reservation deducted when provider work may
+            // already have been delivered or persisted.
+            console.error("[agent] Failed to finalize credit reservation", reservationError);
+          }
+        }
         controller.close();
       }
     },

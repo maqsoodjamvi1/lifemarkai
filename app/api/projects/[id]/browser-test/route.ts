@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 
@@ -268,7 +268,7 @@ Return the JSON test plan now.`;
             { role: "user", content: planUser },
           ],
           maxTokens: 800,
-        });
+        }, { projectId, userId: user.id, task: "browser_test_plan" });
         let steps: TestStep[] = [];
         try {
           const txt = (planRes.content ?? "").trim()
@@ -368,7 +368,7 @@ Page text snippet (first 800 chars):
 ${snap.text.slice(0, 800)}` },
             ],
             maxTokens: 220,
-          });
+          }, { projectId, userId: user.id, task: "browser_test_summary" });
           summary = (sumRes.content ?? summary).trim();
         } catch { /* keep default summary */ }
 

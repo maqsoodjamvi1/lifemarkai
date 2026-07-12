@@ -31,26 +31,19 @@ function AcceptInviteContent() {
         return;
       }
 
-      const { data: team } = await (supabase as any)
-        .from("teams")
-        .select("name")
-        .eq("id", teamId)
-        .maybeSingle();
+      const { data, error } = await (supabase as any).rpc("accept_team_invite", {
+        p_team_id: teamId,
+        p_member_id: memberId,
+      });
+      const result = data as { ok?: boolean; error?: string; team_name?: string } | null;
 
-      setTeamName(team?.name ?? "the team");
-
-      const { error } = await (supabase as any)
-        .from("team_members")
-        .update({ user_id: user.id, accepted_at: new Date().toISOString() })
-        .eq("id", memberId)
-        .eq("team_id", teamId);
-
-      if (error) {
+      if (error || !result?.ok) {
         setStatus("error");
-        setErrorMsg(error.message);
+        setErrorMsg(result?.error ?? error?.message ?? "Unable to accept this invitation.");
         return;
       }
 
+      setTeamName(result.team_name ?? "the team");
       setStatus("success");
       setTimeout(() => router.push("/dashboard/team"), 2500);
     }
@@ -129,13 +122,13 @@ function AcceptInviteContent() {
             </p>
             <div className="flex flex-col gap-2">
               <button
-                onClick={() => router.push(`/login?next=/accept-invite?teamId=${teamId}&memberId=${memberId}`)}
+                onClick={() => router.push(`/login?next=${encodeURIComponent(`/accept-invite?teamId=${teamId}&memberId=${memberId}`)}`)}
                 className="w-full py-3 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-semibold hover:opacity-90 transition-all"
               >
                 Sign in
               </button>
               <button
-                onClick={() => router.push(`/signup?next=/accept-invite?teamId=${teamId}&memberId=${memberId}`)}
+                onClick={() => router.push(`/signup?next=${encodeURIComponent(`/accept-invite?teamId=${teamId}&memberId=${memberId}`)}`)}
                 className="w-full py-3 rounded-xl border border-white/10 text-white font-medium hover:bg-white/[0.04] transition-all"
               >
                 Create an account

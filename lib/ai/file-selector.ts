@@ -94,7 +94,7 @@ export async function selectRelevantFiles(opts: SelectFilesOpts): Promise<FileRe
       maxTokens: 400,
       temperature: 0,
       jsonMode: true,
-    });
+    }, { task: "file_selection" });
     for (const p of parsePathArray(res?.content ?? "")) chosen.add(p);
   } catch {
     /* fall back to heuristics only */

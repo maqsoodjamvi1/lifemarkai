@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
 import {
   describeSupabaseError,
   isTransientSupabaseError,
@@ -18,7 +18,9 @@ interface CollaboratorAccessRow {
 
 /** Resolve whether the user may read or write a project (owner, collaborator, or public). */
 export async function getProjectAccess(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  supabase:
+    | Awaited<ReturnType<typeof createClient>>
+    | Awaited<ReturnType<typeof createAdminClient>>,
   projectId: string,
   userId: string | undefined,
 ): Promise<ProjectAccess | null> {

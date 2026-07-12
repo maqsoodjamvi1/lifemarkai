@@ -52,7 +52,7 @@ Rules:
     ],
     temperature: 0.1,
     maxTokens: 512,
-  });
+  }, { projectId: body.projectId, userId: user.id, task: "sql_generation" });
 
   const sql = result.content?.trim() ?? "";
 

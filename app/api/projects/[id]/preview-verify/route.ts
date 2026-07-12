@@ -40,6 +40,7 @@ export async function POST(
   const runtime = await runSelfVerification({
     supabase,
     projectId: id,
+    userId: user.id,
     maxRounds: 0,
   });
 

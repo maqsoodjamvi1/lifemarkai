@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
       model: getFastAiModel(),
       messages: [{ role: "user" as const, content: prompt }],
       temperature: 0.15,
-    });
+    }, { userId: user.id, task: "refactor" });
 
     let refactored = result.content.trim();
 

@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { DESIGN_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import {
@@ -46,17 +46,20 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await generateAI({
-      model: DESIGN_MODEL,
-      messages: [
-        { role: "system", content: DESIGN_PREVIEW_SYSTEM_PROMPT },
-        { role: "user", content: `Build request:\n${prompt}` },
-      ],
-      maxTokens: 3500,
-      temperature: 0.7,
-      stream: false,
-      jsonMode: true,
-    });
+    const result = await generateAI(
+      {
+        model: DESIGN_MODEL,
+        messages: [
+          { role: "system", content: DESIGN_PREVIEW_SYSTEM_PROMPT },
+          { role: "user", content: `Build request:\n${prompt}` },
+        ],
+        maxTokens: 3500,
+        temperature: 0.7,
+        stream: false,
+        jsonMode: true,
+      },
+      { projectId, userId: user.id, task: "design_previews" },
+    );
 
     const raw = result.content.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
     const parsed = JSON.parse(raw) as { directions?: DesignPreviewDirection[] };

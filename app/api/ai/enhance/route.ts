@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
         temperature: 0.5,
         maxTokens: 800,
       },
-      { userId: user.id },
+      { userId: user.id, task: "prompt_enhancement" },
     );
     const enhanced = result.content.trim();
     return NextResponse.json({ enhanced: enhanced || prompt });

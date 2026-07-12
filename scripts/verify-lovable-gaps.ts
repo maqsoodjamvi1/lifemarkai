@@ -17,12 +17,23 @@ assert("subagents on investigate prompt", shouldUseSubagents("Investigate the au
 
 const sixFileCost = computeCreditCost({ mode: "build", filesGenerated: 6 });
 assert("credit cost scales with files (fractional)", sixFileCost >= 1.0, { cost: sixFileCost });
-assert("preview verify minimal html", verifyPreviewHtml("<html><body><div id=\"root\"></div></body></html>").ok);
+assert(
+  "preview verify rejects an empty root shell",
+  !verifyPreviewHtml("<html><body><div id=\"root\"></div></body></html>").ok,
+);
 
 const sampleFiles = [
   { path: "src/App.tsx", content: "export default function App(){return <div>Hi</div>}", language: "tsx", id: "1", project_id: "p", created_at: "", updated_at: "" },
-  { path: "src/main.tsx", content: "import App from './App'", language: "tsx", id: "2", project_id: "p", created_at: "", updated_at: "" },
-  { path: "index.html", content: "<html><body><div id=\"root\"></div></body></html>", language: "html", id: "3", project_id: "p", created_at: "", updated_at: "" },
+  {
+    path: "src/main.tsx",
+    content: "import React from 'react'; import { createRoot } from 'react-dom/client'; import App from './App'; createRoot(document.getElementById('root')!).render(<App />);",
+    language: "tsx",
+    id: "2",
+    project_id: "p",
+    created_at: "",
+    updated_at: "",
+  },
+  { path: "index.html", content: "<html><body><div id=\"root\"></div><script type=\"module\" src=\"/src/main.tsx\"></script></body></html>", language: "html", id: "3", project_id: "p", created_at: "", updated_at: "" },
 ];
 const bundled = buildFallbackHtml(sampleFiles as any);
 const bundleVerify = verifyPreviewHtml(bundled);

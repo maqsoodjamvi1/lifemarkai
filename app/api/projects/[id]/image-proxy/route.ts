@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateImage, isImageGenConfigured, type ImageSize } from "@/lib/ai/image-generate";
 import { rateLimit } from "@/lib/rate-limit";
+import {
+  consumeProjectAiCredits,
+  ProjectAiCreditLimitError,
+} from "@/lib/ai/project-credit-meter";
 
 // ─── POST /api/projects/[id]/image-proxy ─────────────────────────────────────
 // Managed IMAGE generation for apps built with LifemarkAI (Lovable parity).
@@ -16,6 +20,7 @@ export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const VALID_SIZES = new Set<ImageSize>(["1024x1024", "1792x1024", "1024x1792"]);
+const IMAGE_CREDIT_COST = 3;
 
 interface ProxyRequest {
   prompt: string;
@@ -70,7 +75,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   // Project AI credit pool guard.
-  if (project.ai_credits_used >= project.ai_credit_limit) {
+  if (project.ai_credits_used + IMAGE_CREDIT_COST > project.ai_credit_limit) {
     return NextResponse.json(
       { error: "AI credit limit reached for this project. Increase it in the AI Integration panel." },
       { status: 402, headers: cors(origin) },
@@ -110,20 +115,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const size: ImageSize = body.size && VALID_SIZES.has(body.size) ? body.size : "1024x1024";
 
   try {
+    const used = await consumeProjectAiCredits(projectId, IMAGE_CREDIT_COST);
     const result = await generateImage({ prompt, size, style: body.style });
     if (!result) {
       return NextResponse.json({ error: "Image generation failed" }, { status: 502, headers: cors(origin) });
     }
 
     // Images cost more than a chat call — deduct 3 from the project pool.
-    const used = project.ai_credits_used + 3;
-    await (supabase as any).from("projects").update({ ai_credits_used: used }).eq("id", projectId);
-
     return NextResponse.json(
       { url: result.url, model: result.model, revisedPrompt: result.revisedPrompt, creditsUsed: used },
       { headers: cors(origin) },
     );
   } catch (err) {
+    if (err instanceof ProjectAiCreditLimitError) {
+      return NextResponse.json(
+        { error: err.message },
+        { status: 402, headers: cors(origin) },
+      );
+    }
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Image generation failed" },
       { status: 500, headers: cors(origin) },

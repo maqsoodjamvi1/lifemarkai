@@ -2,11 +2,16 @@
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/system-prompts";
-import { claimDailyCredits } from "@/lib/credits";
+import {
+  cancelCreditReservation,
+  claimFreeCreditAction,
+  reserveCredits,
+  settleCreditReservation,
+} from "@/lib/credits";
 import { parseAIResponse } from "@/lib/ai/code-parser";
 import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { recordEditorIntelligenceBuild } from "@/lib/ai/editor-lenses/persistence";
@@ -16,8 +21,8 @@ import type { PreviewRuntimeError, PreviewErrorKind } from "@/lib/preview/previe
 /**
  * Free daily "Try to fix" quota (Lovable parity — error fixes are Lovable's
  * flagship free action): the first N auto-fix runs per user per UTC day cost
- * 0 credits. Usage is still logged to credit_logs (via `deduct_credits` with
- * amount 0, action "auto_fix") so the count survives restarts and is
+ * 0 credits. Usage is still logged to credit_logs via a dedicated self-scoped
+ * audit RPC so the count survives restarts and is
  * enforceable server-side. Fix #21+ costs 1 credit as before.
  */
 const FREE_FIXES_PER_DAY = 20;
@@ -94,11 +99,15 @@ export async function POST(req: NextRequest) {
 
   const { data: projectRow } = await (supabase as any)
     .from("projects")
-    .select("environment")
+    .select("id, environment")
     .eq("id", projectId)
     .single();
 
-  if (projectRow?.environment === "live") {
+  if (!projectRow) {
+    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  }
+
+  if (projectRow.environment === "live") {
     return NextResponse.json(
       {
         error: "This project is in the Live environment. Switch to Test to make changes, then publish them to Live.",
@@ -108,31 +117,40 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  await claimDailyCredits(supabase, user.id);
+  let freeUseNumber: number;
+  try {
+    freeUseNumber = await claimFreeCreditAction(supabase, {
+      userId: user.id,
+      action: "auto_fix",
+      dailyLimit: FREE_FIXES_PER_DAY,
+      projectId,
+    });
+  } catch (error) {
+    console.error("Unable to claim auto-fix quota:", error);
+    return NextResponse.json({ error: "Unable to verify the daily fix quota" }, { status: 500 });
+  }
 
-  // Count today's (UTC) auto-fix runs — under the free quota, the fix is free
-  // and the balance gate is skipped entirely (same pattern as inline-edit).
-  const utcDayStart = new Date();
-  utcDayStart.setUTCHours(0, 0, 0, 0);
-  const { count: fixesUsedToday } = await (supabase as any)
-    .from("credit_logs")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", user.id)
-    .eq("action", "auto_fix")
-    .gte("created_at", utcDayStart.toISOString());
-  const isFreeFix = (fixesUsedToday ?? 0) < FREE_FIXES_PER_DAY;
-
+  const isFreeFix = freeUseNumber > 0;
+  let reservation: Awaited<ReturnType<typeof reserveCredits>> = null;
   if (!isFreeFix) {
-    const { data: profile } = await (supabase as any)
-      .from("profiles")
-      .select("credits")
-      .eq("id", user.id)
-      .single();
-
-    if (!profile || profile.credits < 0.5) {
+    try {
+      reservation = await reserveCredits(supabase, {
+        userId: user.id,
+        amount: 1,
+        action: "auto_fix",
+        projectId,
+      });
+    } catch (error) {
+      console.error("Unable to reserve auto-fix credits:", error);
+      return NextResponse.json({ error: "Unable to reserve credits" }, { status: 500 });
+    }
+    if (!reservation) {
       return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
     }
   }
+
+  // Count today's (UTC) auto-fix runs — under the free quota, the fix is free
+  // and the balance gate is skipped entirely (same pattern as inline-edit).
 
   const buildErrorText = String(buildError);
   const fileList = Array.isArray(files) ? files : [];
@@ -157,6 +175,8 @@ ${fileContext}
 
 Return the fixed files as JSON.`;
 
+  let providerReturned = false;
+  let reservationSettled = false;
   try {
     const result = await generateAI({
       model: getDefaultAiModel(),
@@ -167,12 +187,18 @@ Return the fixed files as JSON.`;
       temperature: 0.1,
       maxTokens: 4000,
       jsonMode: true,
-    });
+    }, { projectId, userId: user.id, task: "auto_fix" });
+    providerReturned = true;
+
+    if (reservation) {
+      await settleCreditReservation(supabase, reservation.id, 1);
+      reservationSettled = true;
+    }
 
     const rawContent = result?.content ?? "";
 
     if (!rawContent.trim()) {
-      return NextResponse.json({ error: "AI returned empty response" }, { status: 500 });
+      throw new Error("AI returned empty response");
     }
 
     const parsed = parseFixResponse(rawContent);
@@ -204,17 +230,6 @@ Return the fixed files as JSON.`;
         });
       }
     }
-
-    // First FREE_FIXES_PER_DAY fixes/day are free: log usage at cost 0
-    // (deduct_credits inserts the credit_logs row we count against the quota,
-    // bypassing RLS via SECURITY DEFINER). Beyond the quota, deduct 1 credit.
-    await (supabase as any).rpc("deduct_credits" as never, {
-      user_id: user.id,
-      amount: isFreeFix ? 0 : 1,
-      action: "auto_fix",
-      project_id: projectId,
-      description: `Auto-fixed: ${buildErrorText.slice(0, 80)}`,
-    });
 
     await recordEditorIntelligenceBuild({
       supabase,
@@ -250,10 +265,21 @@ Return the fixed files as JSON.`;
       free: isFreeFix,
       freeFixesRemainingToday: Math.max(
         0,
-        FREE_FIXES_PER_DAY - (fixesUsedToday ?? 0) - 1
+        isFreeFix ? FREE_FIXES_PER_DAY - freeUseNumber : 0,
       ),
     });
   } catch (err) {
+    if (reservation && !reservationSettled) {
+      try {
+        if (providerReturned) {
+          await settleCreditReservation(supabase, reservation.id, 1);
+        } else {
+          await cancelCreditReservation(supabase, reservation.id);
+        }
+      } catch (billingError) {
+        console.error("Auto-fix reservation cleanup failed:", billingError);
+      }
+    }
     console.error("Auto-fix error:", err);
     return NextResponse.json(
       { error: "Failed to auto-fix. Please fix manually." },

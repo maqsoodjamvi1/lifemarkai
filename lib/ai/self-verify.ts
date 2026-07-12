@@ -17,7 +17,7 @@
 import { buildFallbackHtml } from "@/lib/preview/build-fallback-html";
 import { verifyPreviewHtml } from "@/lib/ai/preview-verify";
 import { findContractErrors } from "@/lib/preview/export-contract";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { ECONOMY_CODING_MODEL, getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { selectModelChain, applyModelAdapter } from "@/lib/ai/model-catalog";
 import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/system-prompts";
@@ -171,6 +171,7 @@ function relevantFiles(files: ProjectFile[], errors: string[]): ProjectFile[] {
 export async function runSelfVerification(opts: {
   supabase: SupabaseClient;
   projectId: string;
+  userId?: string;
   maxRounds?: number;
   emit?: (status: string) => void;
 }): Promise<SelfVerifyResult | null> {
@@ -262,21 +263,24 @@ export async function runSelfVerification(opts: {
 
       const fixModel = fixChain[Math.min(round, fixChain.length - 1)] ?? ECONOMY_CODING_MODEL ?? getDefaultAiModel();
       if (round > 0) emit("Retrying the fix with a different model…");
-      const fix = await generateAI({
-        model: fixModel,
-        messages: [
-          { role: "system", content: applyModelAdapter(AUTO_FIX_SYSTEM_PROMPT, fixModel) },
-          {
-            role: "user",
-            content: `Fix these runtime errors found while rendering the app in a browser:\n\n${errors
-              .map((e) => `- ${e}`)
-              .join("\n")}${diagnosis ? `\n\nPreview diagnosis (fix these first):\n${diagnosis}` : ""}\n\nRelevant files:\n${context}\n\nReturn the fixed files as JSON.`,
-          },
-        ],
-        temperature: 0.1,
-        maxTokens: 6_000,
-        jsonMode: true,
-      });
+      const fix = await generateAI(
+        {
+          model: fixModel,
+          messages: [
+            { role: "system", content: applyModelAdapter(AUTO_FIX_SYSTEM_PROMPT, fixModel) },
+            {
+              role: "user",
+              content: `Fix these runtime errors found while rendering the app in a browser:\n\n${errors
+                .map((e) => `- ${e}`)
+                .join("\n")}${diagnosis ? `\n\nPreview diagnosis (fix these first):\n${diagnosis}` : ""}\n\nRelevant files:\n${context}\n\nReturn the fixed files as JSON.`,
+            },
+          ],
+          temperature: 0.1,
+          maxTokens: 6_000,
+          jsonMode: true,
+        },
+        { projectId, userId: opts.userId, task: "self_verify.autofix" },
+      );
 
       const fixedFiles = parseFixFiles(fix?.content ?? "");
       if (fixedFiles.length === 0) {

@@ -2,7 +2,11 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
-import { claimDailyCredits } from "@/lib/credits";
+import {
+  cancelCreditReservation,
+  reserveCredits,
+  settleCreditReservation,
+} from "@/lib/credits";
 
 const VALID_SIZES = new Set(["1024x1024", "1792x1024", "1024x1792"]);
 const VALID_STYLES = new Set(["vivid", "natural"]);
@@ -27,10 +31,6 @@ export async function POST(req: NextRequest) {
       { status: 429, headers: { "X-RateLimit-Reset": String(rl.resetAt) } }
     );
   }
-
-  await claimDailyCredits(supabase, user.id);
-  const { data: profile } = await (supabase as any).from("profiles").select("credits").eq("id", user.id).single();
-  if (!profile || profile.credits < 3) return NextResponse.json({ error: "Need 3 credits for image generation" }, { status: 402 });
 
   const body = await req.json();
   const { prompt, size = "1024x1024", style = "vivid" } = body;
@@ -61,20 +61,56 @@ export async function POST(req: NextRequest) {
       { status: 502 },
     );
   }
-  const generated = await generateImage({
-    prompt,
-    size: size as "1024x1024" | "1792x1024" | "1024x1792",
-    style: style as "vivid" | "natural",
-  });
-  if (!generated) return NextResponse.json({ error: "No image generated" }, { status: 500 });
-  const result = { url: generated.url, revised_prompt: generated.revisedPrompt };
-  const model = generated.model;
+  let reservation: Awaited<ReturnType<typeof reserveCredits>> = null;
+  let billableOutput = false;
+  let reservationFinalized = false;
 
-  await (supabase as any).rpc("deduct_credits", { user_id: user.id, amount: 3, action: "image_generation" });
+  try {
+    reservation = await reserveCredits(supabase, {
+      userId: user.id,
+      amount: 3,
+      action: "image_generation",
+    });
+    if (!reservation) {
+      return NextResponse.json({ error: "Need 3 credits for image generation" }, { status: 402 });
+    }
 
-  import("@/lib/stripe/auto-topup")
-    .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
-    .catch(() => {});
+    const generated = await generateImage({
+      prompt,
+      size: size as "1024x1024" | "1792x1024" | "1024x1792",
+      style: style as "vivid" | "natural",
+    });
+    if (!generated) throw new Error("No image generated");
+    billableOutput = true;
 
-  return NextResponse.json({ url: result.url, revised_prompt: result.revised_prompt, model });
+    await settleCreditReservation(supabase, reservation.id, 3);
+    reservationFinalized = true;
+
+    import("@/lib/stripe/auto-topup")
+      .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
+      .catch(() => {});
+
+    return NextResponse.json({
+      url: generated.url,
+      revised_prompt: generated.revisedPrompt,
+      model: generated.model,
+    });
+  } catch (err) {
+    if (reservation && !reservationFinalized) {
+      try {
+        if (billableOutput) {
+          await settleCreditReservation(supabase, reservation.id, 3);
+        } else {
+          await cancelCreditReservation(supabase, reservation.id);
+        }
+      } catch (billingError) {
+        console.error("[ai/image] Failed to finalize credit reservation", billingError);
+      }
+    }
+
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Image generation failed" },
+      { status: 500 },
+    );
+  }
 }

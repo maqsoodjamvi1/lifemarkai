@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
@@ -69,17 +69,20 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const result = await generateAI({
-      model: getDefaultAiModel(),
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: `App/feature description: ${prompt.slice(0, 500)}` },
-      ],
-      maxTokens: 4000,
-      temperature: 0.7,
-      stream: false,
-      jsonMode: true,
-    });
+    const result = await generateAI(
+      {
+        model: getDefaultAiModel(),
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: `App/feature description: ${prompt.slice(0, 500)}` },
+        ],
+        maxTokens: 4000,
+        temperature: 0.7,
+        stream: false,
+        jsonMode: true,
+      },
+      { userId: user.id, task: "design_directions" },
+    );
 
     let parsed: {
       directions: Array<{ id: string; label: string; description: string; html: string }>;

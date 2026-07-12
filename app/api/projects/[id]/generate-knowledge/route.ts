@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
 
@@ -109,7 +109,7 @@ Generate the Knowledge file now.`;
         { role: "user", content: userPrompt },
       ],
       maxTokens: 2000,
-    });
+    }, { projectId: id, userId: user.id, task: "project_knowledge" });
     const knowledge = (aiRes.content ?? "").trim();
     return NextResponse.json({ knowledge });
   } catch (err) {

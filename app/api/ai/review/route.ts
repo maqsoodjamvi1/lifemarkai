@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
       ],
       jsonMode: true,
       temperature: 0.2,
-    });
+    }, { userId: user.id, task: "code_review" });
 
     const text = raw.content;
     const result: ReviewResult = JSON.parse(text);

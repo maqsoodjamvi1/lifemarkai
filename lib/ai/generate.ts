@@ -4,7 +4,8 @@
  * Routes through the AI Gateway Worker when LIFEMARK_GATEWAY_URL is set,
  * falls back to the direct provider.ts path otherwise (local dev / self-hosted).
  *
- * Import from here (or @/lib/ai/provider directly) — both paths work.
+ * Application code must import from here. provider.ts is the direct transport
+ * implementation and is reserved for this module and tightly scoped tooling.
  */
 import { generateAI as generateDirect, clampMaxTokens } from "./provider";
 import { generateViaGateway, isGatewayAvailable } from "./gateway-client";

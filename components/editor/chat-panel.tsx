@@ -26,6 +26,7 @@ import { ChatTiptapInput, type ChatInputHandle } from "./chat-tiptap-input";
 import { sanitizeSvg } from "@/lib/security/sanitize";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { normalizeArrayResponse } from "@/lib/api/array-response";
 import { createClient } from "@/lib/supabase/client";
 import { DiffViewer, computeFileDiff, type FileState } from "@/components/editor/diff-viewer";
 import {
@@ -152,6 +153,11 @@ interface ChatPanelProps {
   onFocusPreview?: () => void;
   /** Show skeleton shimmer while messages are being fetched from the server */
   isMessagesLoading?: boolean;
+}
+
+interface ProjectPrivateContext {
+  context_summary: string | null;
+  context_summary_covers: number | null;
 }
 
 const PROMPT_TEMPLATES: { category: string; prompts: string[] }[] = [
@@ -926,6 +932,28 @@ export function ChatPanel({
   const [mentionCursor, setMentionCursor] = useState(0);
   // Collaborator @mention
   const [collaborators, setCollaborators] = useState<{ id: string; display: string; email: string }[]>([]);
+  const [privateContext, setPrivateContext] = useState<ProjectPrivateContext | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const supabase = createClient();
+
+    void (supabase as any)
+      .from("project_private_context")
+      .select("context_summary, context_summary_covers")
+      .eq("project_id", project.id)
+      .maybeSingle()
+      .then(({ data }: { data: ProjectPrivateContext | null }) => {
+        if (!cancelled) setPrivateContext(data ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setPrivateContext(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
+
   useEffect(() => {
     const supabase = createClient();
     void (supabase as any)
@@ -1808,8 +1836,11 @@ export function ChatPanel({
     try {
       const res = await fetch("/api/projects");
       if (!res.ok) return;
-      const data = await res.json() as { projects?: Array<{id:string;name:string;slug:string}> };
-      const others = (data.projects ?? []).filter((p) => p.id !== project.id);
+      const data = normalizeArrayResponse<{id:string;name:string;slug:string}>(
+        await res.json(),
+        "projects",
+      );
+      const others = data.filter((p) => p.id !== project.id);
       setCrossProjects(others);
       setCrossProjectsLoaded(true);
     } catch { /* ignore */ }
@@ -1820,8 +1851,8 @@ export function ChatPanel({
     try {
       const res = await fetch("/api/projects/" + projectId + "/files");
       if (!res.ok) return;
-      const data = await res.json() as { files?: Array<{path:string}> };
-      setCrossProjectFiles((prev) => ({ ...prev, [projectId]: data.files ?? [] }));
+      const data = normalizeArrayResponse<{path:string}>(await res.json(), "files");
+      setCrossProjectFiles((prev) => ({ ...prev, [projectId]: data }));
     } catch { /* ignore */ }
   }
 
@@ -2095,8 +2126,11 @@ ${(f.content ?? "").slice(0, 8000)}
             try {
               const r = await fetch("/api/projects/" + ref.projectId + "/files");
               if (!r.ok) return null;
-              const d = await r.json() as { files?: Array<{path:string;content:string}> };
-              const match = (d.files ?? []).find((f) => f.path === ref.filePath);
+              const referencedFiles = normalizeArrayResponse<{path:string;content:string}>(
+                await r.json(),
+                "files",
+              );
+              const match = referencedFiles.find((f) => f.path === ref.filePath);
               if (!match) return null;
               return "// Cross-project reference: @" + ref.projectName + "/" + ref.filePath + "\n" + match.content;
             } catch { return null; }
@@ -3605,13 +3639,13 @@ ${(f.content ?? "").slice(0, 8000)}
       </AnimatePresence>
 
       {/* Context summary banner — shown when older messages have been compressed */}
-      {!!(project.metadata as Record<string, unknown> | null)?.context_summary && (
+      {!!privateContext?.context_summary && (
         <div className="flex items-center gap-2 px-4 py-2 bg-violet-500/5 border-b border-violet-500/15 text-[11px] text-muted-foreground">
           <Brain className="w-3 h-3 text-violet-400 flex-shrink-0" />
           <span>
             <span className="text-violet-400 font-medium">Context summarised</span>
             {" · "}
-            {(project.metadata as Record<string, unknown>).context_summary_covers as number ?? "Earlier"} messages compressed to keep AI focused
+            {privateContext.context_summary_covers ?? "Earlier"} messages compressed to keep AI focused
           </span>
         </div>
       )}

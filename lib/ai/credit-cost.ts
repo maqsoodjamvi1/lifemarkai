@@ -10,8 +10,17 @@
  * Costs are rounded to 0.05 and clamped to [0.5, 5].
  */
 
-/** Minimum balance to start an agent run (one step debits ~2 credits). */
-export const AGENT_MIN_CREDITS = 2;
+/** Agent reserves its full maximum before starting to prevent overspend. */
+export const AGENT_MIN_CREDITS = 5;
+
+/** Maximum charge reserved before work begins, preventing concurrent overspend. */
+export const AGENT_MAX_CREDITS = 5;
+
+export function maxCreditCostForMode(mode: string): number {
+  if (mode === "chat" || mode === "plan") return 1;
+  if (mode === "agent") return AGENT_MAX_CREDITS;
+  return 5;
+}
 
 export function computeCreditCost(params: {
   mode: string;

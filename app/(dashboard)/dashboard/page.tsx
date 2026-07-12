@@ -19,9 +19,9 @@ export const metadata = { title: "Dashboard" };
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; new?: string; fromUrl?: string }>;
 }) {
-  const { tab } = await searchParams;
+  const { tab, new: newProject, fromUrl } = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -55,6 +55,11 @@ export default async function DashboardPage({
     : tab === "shared" ? "shared"
     : tab === "visitors" ? "visitors"
     : "mine";
+  const isPromptHandoff =
+    newProject === "true" ||
+    newProject === "1" ||
+    fromUrl === "true" ||
+    fromUrl === "1";
 
   return (
     <div className="flex-1 overflow-auto">
@@ -98,8 +103,8 @@ export default async function DashboardPage({
       </div>
 
       <DashboardClient
-        showOnboarding={isNewUser}
-        showSetupWizard={!(profile as any)?.setup_complete && isNewUser}
+        showOnboarding={isNewUser && !isPromptHandoff}
+        showSetupWizard={!(profile as any)?.setup_complete && isNewUser && !isPromptHandoff}
         projects={(projects ?? []).map((p) => ({ id: p.id, name: p.name, framework: p.framework as string }))}
         credits={profile?.credits ?? 0}
       />

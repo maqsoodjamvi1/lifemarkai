@@ -43,6 +43,12 @@ export async function POST(req: NextRequest) {
   if (!user) {
     return new Response("Unauthorized", { status: 401 });
   }
+  if (process.env.ALLOW_UNSANDBOXED_TEST_RUNS !== "true") {
+    return Response.json(
+      { error: "Server-side test execution is unavailable until an isolated sandbox is configured." },
+      { status: 503 },
+    );
+  }
 
   const body = await req.json() as RunRequest;
   const { projectId, files, runner = "vitest" } = body;
@@ -131,9 +137,22 @@ export default defineConfig({
         const startTime = Date.now();
 
         await new Promise<void>((resolve) => {
+          const childEnv: NodeJS.ProcessEnv = {
+            NODE_ENV: "test",
+            CI: "true",
+            NO_COLOR: "1",
+            FORCE_COLOR: "0",
+            HOME: tmpDir,
+            USERPROFILE: tmpDir,
+            TEMP: tmpDir,
+            TMP: tmpDir,
+          };
+          for (const key of ["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL"] as const) {
+            if (process.env[key]) childEnv[key] = process.env[key];
+          }
           const child = spawn(cmd, args, {
             cwd: tmpDir,
-            env: { ...process.env, CI: "true", NO_COLOR: "1", FORCE_COLOR: "0" },
+            env: childEnv,
             timeout: 120_000, // 2-minute hard limit
           });
 

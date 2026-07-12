@@ -62,7 +62,7 @@ Framework: ${project.framework ?? "react"}
         { role: "user", content: userPrompt },
       ],
       maxTokens: 120,
-    });
+    }, { projectId, userId: user.id, task: "code_completion" });
 
     const raw = response.content ?? "";
     // Strip any accidental code fences

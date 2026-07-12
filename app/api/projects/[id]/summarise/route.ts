@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
@@ -38,7 +38,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
     const { data: project } = await (supabase as any)
       .from("projects")
-      .select("id, name, metadata")
+      .select("id, name")
       .eq("id", projectId)
       .single();
 
@@ -81,23 +81,28 @@ export async function POST(req: NextRequest, { params }: Params) {
       temperature: 0.3,
       stream: true,
       onChunk: (chunk: string) => { summary += chunk; },
-    });
+    }, { projectId, userId: user.id, task: "project_summary" });
 
     summary = summary.trim();
 
-    // Persist in project metadata
-    const existingMeta = (project.metadata as Record<string, unknown>) ?? {};
-    await (supabase as any)
-      .from("projects")
-      .update({
-        metadata: {
-          ...existingMeta,
+    // Conversation-derived context is private even when the project itself is
+    // public. Persist it in the dedicated RLS-protected table.
+    const { error: contextError } = await (supabase as any)
+      .from("project_private_context")
+      .upsert(
+        {
+          project_id: projectId,
           context_summary: summary,
           context_summary_at: new Date().toISOString(),
           context_summary_covers: toSummarise.length,
         },
-      })
-      .eq("id", projectId);
+        { onConflict: "project_id" },
+      );
+
+    if (contextError) {
+      console.error("[summarise] failed to persist private context", contextError);
+      return NextResponse.json({ error: "Failed to save conversation summary" }, { status: 500 });
+    }
 
     return NextResponse.json({ summary, messagesCompressed: toSummarise.length });
   } catch (err) {

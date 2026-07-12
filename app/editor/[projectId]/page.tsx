@@ -1,17 +1,19 @@
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { ensureDevCredits, getDevProfile } from "@/lib/dev-credits";
-import { redirect, notFound } from "next/navigation";
+import { redirect, notFound, unstable_rethrow } from "next/navigation";
 import { EditorLayout } from "@/components/editor/editor-layout";
 import { EditorConnectivityError } from "@/components/editor/editor-connectivity-error";
 import { isTransientSupabaseError, describeSupabaseError, withSupabaseRetry } from "@/lib/supabase/transient-error";
 import type { Project } from "@/types/database";
+import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { withAuthRedirect } from "@/lib/auth/safe-redirect";
 
 export const dynamic = "force-dynamic";
 
 interface EditorPageProps {
   params: Promise<{ projectId: string }>;
-  searchParams: Promise<{ prompt?: string; deploy?: string; mode?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://lifemarkai.app";
@@ -77,7 +79,12 @@ export async function generateMetadata({ params }: EditorPageProps) {
 export default async function EditorPage({ params, searchParams }: EditorPageProps) {
   try {
     const { projectId } = await params;
-    const { prompt, deploy, mode } = await searchParams;
+    const rawSearchParams = await searchParams;
+    const firstValue = (value: string | string[] | undefined) =>
+      Array.isArray(value) ? value[0] : value;
+    const prompt = firstValue(rawSearchParams.prompt);
+    const deploy = firstValue(rawSearchParams.deploy);
+    const mode = firstValue(rawSearchParams.mode);
     if (!PROJECT_ID_RE.test(projectId)) notFound();
     const starterMode =
       mode === "plan" || mode === "build" || mode === "agent" || mode === "chat"
@@ -87,11 +94,21 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) {
-      redirect("/login");
+      const returnSearch = new URLSearchParams();
+      Object.entries(rawSearchParams).forEach(([key, value]) => {
+        if (Array.isArray(value)) value.forEach((item) => returnSearch.append(key, item));
+        else if (value !== undefined) returnSearch.set(key, value);
+      });
+      const returnQuery = returnSearch.toString();
+      redirect(withAuthRedirect(
+        "/login",
+        `/editor/${projectId}${returnQuery ? `?${returnQuery}` : ""}`,
+      ));
     }
 
     // Allow collaborators to open the editor too — retry transient Supabase timeouts.
     let { project, error: projectError } = await fetchProjectForEditor(supabase, projectId);
+    let accessClient = supabase;
 
     // Stale JWT can make RLS return 0 rows — refresh session and retry with a fresh client.
     if (!project && user) {
@@ -101,6 +118,7 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
         const retry = await fetchProjectForEditor(supabaseFresh, projectId);
         project = retry.project;
         projectError = retry.error;
+        accessClient = supabaseFresh;
       }
     }
 
@@ -122,33 +140,24 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
       notFound();
     }
 
-    // Verify access: owner or collaborator
-    const isOwner = project.user_id === user.id;
-    if (!isOwner) {
-      const { data: collab } = await (supabase as any)
-        .from("collaborators")
-        .select("role")
-        .eq("project_id", projectId)
-        .eq("user_id", user.id)
-        .single();
-      if (!collab && !project.is_public) notFound();
-    }
+    const access = await getProjectAccess(accessClient, projectId, user.id);
+    if (!canReadProjectFiles(access)) notFound();
 
     await ensureDevCredits(user.id);
 
     const [filesResult, messagesResult, profileResult] = await Promise.all([
-      (supabase as any)
+      (accessClient as any)
         .from("project_files")
         .select("*")
         .eq("project_id", projectId)
         .order("path"),
-      (supabase as any)
+      (accessClient as any)
         .from("messages")
         .select("*")
         .eq("project_id", projectId)
         .order("created_at")
         .limit(100),
-      (supabase as any)
+      (accessClient as any)
         .from("profiles")
         .select("*")
         .eq("id", user.id)
@@ -172,6 +181,8 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
       />
     );
   } catch (error) {
+    // redirect() and notFound() are framework control-flow exceptions.
+    unstable_rethrow(error);
     const described = describeSupabaseError(error);
     console.error("Editor page error:", described.code ?? "?", described.message);
     if (isTransientSupabaseError(error)) {

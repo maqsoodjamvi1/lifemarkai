@@ -75,8 +75,19 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { amount } = await req.json() as { amount: number };
-  if (!amount || amount <= 0) return NextResponse.json({ error: "Invalid amount" }, { status: 400 });
+  if (!Number.isInteger(amount) || amount <= 0) {
+    return NextResponse.json({ error: "Amount must be a positive whole number" }, { status: 400 });
+  }
 
-  await (supabase as any).rpc("add_workspace_credits", { p_team_id: id, p_amount: amount });
-  return NextResponse.json({ ok: true });
+  const { data, error } = await (supabase as any).rpc("fund_workspace_credit_pool", {
+    p_team_id: id,
+    p_user_id: user.id,
+    p_amount: amount,
+  });
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  if (!data?.ok) {
+    const status = data?.error === "Insufficient personal credits" ? 402 : 403;
+    return NextResponse.json({ error: data?.error ?? "Unable to fund workspace" }, { status });
+  }
+  return NextResponse.json({ ok: true, remainingCredits: data.remaining });
 }

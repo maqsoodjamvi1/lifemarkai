@@ -39,10 +39,10 @@ const baseCtx = {
 const cases = [
   {
     hypothesisId: "H1",
-    name: "explain on build tab → build",
+    name: "explain on build tab → chat",
     prompt: "Explain how React hooks work",
     ctx: baseCtx,
-    expect: "build" as const,
+    expect: "chat" as const,
   },
   {
     hypothesisId: "H1",
@@ -60,21 +60,21 @@ const cases = [
   },
   {
     hypothesisId: "H1",
-    name: "plan keywords on build tab → build",
+    name: "plan keywords on build tab → plan",
     prompt: "Plan the architecture for a multi-tenant SaaS",
     ctx: { ...baseCtx, fileCount: 3, files: [{ path: "src/App.tsx" }] },
-    expect: "build" as const,
+    expect: "plan" as const,
   },
   {
     hypothesisId: "H1",
-    name: "small patch on build tab → build",
+    name: "small patch on build tab → patch",
     prompt: "Change the header color to blue",
     ctx: {
       ...baseCtx,
       fileCount: 5,
       files: [{ path: "src/App.tsx" }, { path: "src/components/Header.tsx" }],
     },
-    expect: "build" as const,
+    expect: "patch" as const,
   },
   {
     hypothesisId: "H1",
@@ -90,14 +90,14 @@ const cases = [
   },
   {
     hypothesisId: "H1",
-    name: "create login page on build tab → build",
+    name: "create login page on build tab → agent",
     prompt: "Create a login page with email and password",
     ctx: {
       ...baseCtx,
       fileCount: 12,
       files: [{ path: "src/App.tsx" }, { path: "src/pages/Home.tsx" }],
     },
-    expect: "build" as const,
+    expect: "agent" as const,
   },
   {
     hypothesisId: "H1",
@@ -225,13 +225,13 @@ for (const mc of modelCases) {
 
 const claudePrompt = "Deep debug the runtime error across multiple editor files and find the root cause";
 const claudeChain = resolveModelChain("agent", { fileCount: 44, hasPreviewError: true }, claudePrompt);
-const claudeOk = claudeChain[0] === "anthropic/claude-sonnet-4.6" && claudeChain.includes(MODEL_TIERS.coding);
+const claudeOk = claudeChain[0] === MODEL_TIERS.coding && claudeChain.includes("anthropic/claude-sonnet-4.6");
 if (claudeOk) passed++;
 else failed++;
 log({
   hypothesisId: "H5",
   location: "verify-editor-intelligence.ts",
-  message: "resolveModelChain: deep multi-file debug auto-selects Claude Sonnet",
+  message: "resolveModelChain: deep multi-file debug retains Claude Sonnet fallback",
   data: { prompt: claudePrompt, chain: claudeChain, ok: claudeOk },
 });
 

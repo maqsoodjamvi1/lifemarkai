@@ -4,6 +4,12 @@ import { generateAI } from "@/lib/ai/generate";
 import { REASONING_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { buildEditorIntelligencePromptBlock } from "@/lib/ai/editor-lenses/persistence";
+import {
+  cancelCreditReservation,
+  reserveCredits,
+  settleCreditReservation,
+} from "@/lib/credits";
+import { computeCreditCost, maxCreditCostForMode } from "@/lib/ai/credit-cost";
 
 export async function POST(request: NextRequest) {
   try {
@@ -43,6 +49,19 @@ export async function POST(request: NextRequest) {
     }
 
     const editorIntelligenceContext = await buildEditorIntelligencePromptBlock(supabase, projectId);
+    const reservationAmount = maxCreditCostForMode("plan");
+    const reservation = await reserveCredits(supabase, {
+      userId: user.id,
+      amount: reservationAmount,
+      action: "plan_message",
+      projectId,
+    });
+    if (!reservation) {
+      return NextResponse.json(
+        { error: "Insufficient credits", requiredCredits: reservationAmount },
+        { status: 402 },
+      );
+    }
 
     const systemPrompt = `You are a senior software architect. Given a project idea, create a detailed, structured implementation plan.
 
@@ -66,7 +85,10 @@ Return ONLY valid JSON in this exact format:
 Use exactly 5-7 steps. Categories must be one of: ui, api, database, auth, deployment.
 Think strategically: order steps by dependency, call out architectural trade-offs in each description, and surface risks/edge cases the build should handle.${editorIntelligenceContext}`;
 
-    const aiResult = await generateAI({
+    let reservationFinalized = false;
+    let providerProducedWork = false;
+    try {
+      const aiResult = await generateAI({
       // Route planning through the strong reasoning tier (Claude Opus) for
       // genuine strategic planning rather than the default coding model.
       model: REASONING_MODEL,
@@ -77,7 +99,17 @@ Think strategically: order steps by dependency, call out architectural trade-off
       temperature: 0.7,
       maxTokens: 8000,
       jsonMode: true,
-    });
+      }, { projectId, userId: user.id, task: "implementation_plan" });
+      providerProducedWork = true;
+
+      const creditCost = computeCreditCost({ mode: "plan", tokensUsed: aiResult.tokensUsed });
+      const remainingCredits = await settleCreditReservation(
+        supabase,
+        reservation.id,
+        creditCost,
+      );
+      if (remainingCredits == null) throw new Error("Unable to settle reserved plan credits");
+      reservationFinalized = true;
 
     // With jsonMode the response is guaranteed to be a JSON object — parse directly
     // with a regex fallback for safety.
@@ -91,14 +123,26 @@ Think strategically: order steps by dependency, call out architectural trade-off
       plan = JSON.parse(jsonMatch[0]);
     }
 
-    // Deduct 1 credit for plan generation
-    await (supabase as any).rpc("deduct_credits", { user_id: user.id, amount: 1 }).maybeSingle();
-
     import("@/lib/stripe/auto-topup")
       .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
       .catch(() => {});
 
-    return NextResponse.json({ plan });
+      return NextResponse.json({ plan, creditsUsed: creditCost, remainingCredits });
+    } catch (error) {
+      if (!reservationFinalized) {
+        try {
+          if (providerProducedWork) {
+            await settleCreditReservation(supabase, reservation.id, reservation.amount);
+          } else {
+            await cancelCreditReservation(supabase, reservation.id);
+          }
+          reservationFinalized = true;
+        } catch (reservationError) {
+          console.error("Plan credit reservation cancellation failed:", reservationError);
+        }
+      }
+      throw error;
+    }
   } catch (error) {
     console.error("Plan generation error:", error);
     return NextResponse.json({ error: "Plan generation failed" }, { status: 500 });

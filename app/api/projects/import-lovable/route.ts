@@ -6,7 +6,12 @@ import JSZip from "jszip";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { detectLanguage } from "@/lib/ai/code-parser";
 import { adaptLovableProject, type ImportFile } from "@/lib/import/lovable-adapter";
-import { claimDailyCredits } from "@/lib/credits";
+import {
+  cancelCreditReservation,
+  reserveCredits,
+  settleCreditReservation,
+  type CreditReservation,
+} from "@/lib/credits";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -127,21 +132,20 @@ export async function POST(req: NextRequest) {
   const rl = await rateLimitAsync(user.id, RATE_LIMITS.api);
   if (!rl.success) return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
 
-  await claimDailyCredits(supabase, user.id);
   const { data: profile } = await (supabase as any)
     .from("profiles")
-    .select("github_token, credits")
+    .select("github_access_token")
     .eq("id", user.id)
     .single();
-  if (!profile || profile.credits <= 0) {
-    return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
-  }
 
   let raw: ImportFile[] = [];
   let sourceLabel = "";
   let githubRepo: string | null = null;
   let githubBranch: string | null = null;
   let repoDescription: string | null = null;
+  let creditReservation: CreditReservation | null = null;
+  let reservationFinalized = false;
+  let durableImportStarted = false;
 
   try {
     const contentType = req.headers.get("content-type") ?? "";
@@ -166,7 +170,7 @@ export async function POST(req: NextRequest) {
       if (!parsed) return NextResponse.json({ error: "Invalid GitHub URL" }, { status: 400 });
 
       const gh = await filesFromGitHub(
-        profile.github_token ?? process.env.GITHUB_TOKEN ?? undefined,
+        profile?.github_access_token ?? process.env.GITHUB_TOKEN ?? undefined,
         parsed.owner, parsed.repo, branch,
       );
       raw = gh.files;
@@ -188,6 +192,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Parsing, fetching, and adaptation are read-only. Reserve immediately
+    // before the first durable project write.
+    creditReservation = await reserveCredits(supabase, {
+      userId: user.id,
+      amount: 2,
+      action: "lovable_import",
+      projectId: null,
+    });
+    if (!creditReservation) {
+      return NextResponse.json(
+        { error: "Insufficient credits", requiredCredits: 2 },
+        { status: 402 },
+      );
+    }
+
     const projectName = `${adapted.packageName ?? githubRepo?.split("/")[1] ?? "Lovable app"} (imported)`;
     const { data: project, error: projectError } = await (supabase as any)
       .from("projects")
@@ -195,7 +214,7 @@ export async function POST(req: NextRequest) {
         user_id: user.id,
         name: projectName,
         description: repoDescription ?? `Imported from ${sourceLabel}`,
-        status: "ready",
+        status: "active",
         framework: "react", // Lovable exports are Vite + React
         ...(githubRepo ? { github_repo: githubRepo, github_branch: githubBranch } : {}),
       })
@@ -204,6 +223,7 @@ export async function POST(req: NextRequest) {
     if (projectError || !project) {
       return NextResponse.json({ error: "Failed to create project" }, { status: 500 });
     }
+    durableImportStarted = true;
 
     // Persist migration notes INSIDE the project too — the modal's summary is
     // gone after one click, but these stay:
@@ -232,7 +252,8 @@ export async function POST(req: NextRequest) {
         content: f.content,
         language: f.language,
       }));
-      await (supabase as any).from("project_files").insert(batch);
+      const { error: filesError } = await (supabase as any).from("project_files").insert(batch);
+      if (filesError) throw new Error(`Failed to persist imported files: ${filesError.message}`);
     }
 
     // Welcome message in chat (best-effort — import must not fail on this).
@@ -254,12 +275,13 @@ export async function POST(req: NextRequest) {
       });
     } catch { /* non-fatal */ }
 
-    await (supabase as any).rpc("deduct_credits", {
-      user_id: user.id,
-      amount: 2,
-      action: "lovable_import",
-      project_id: project.id,
-    });
+    const remainingCredits = await settleCreditReservation(
+      supabase,
+      creditReservation.id,
+      2,
+    );
+    if (remainingCredits == null) throw new Error("Unable to settle reserved Lovable import credits");
+    reservationFinalized = true;
 
     return NextResponse.json({
       projectId: project.id,
@@ -278,5 +300,19 @@ export async function POST(req: NextRequest) {
     }
     console.error("[projects/import-lovable]", err);
     return NextResponse.json({ error: "Import failed: " + message }, { status: 500 });
+  } finally {
+    if (creditReservation && !reservationFinalized) {
+      try {
+        if (durableImportStarted) {
+          const remaining = await settleCreditReservation(supabase, creditReservation.id, 2);
+          reservationFinalized = remaining != null;
+        } else {
+          await cancelCreditReservation(supabase, creditReservation.id);
+          reservationFinalized = true;
+        }
+      } catch {
+        // Fail closed when a project or any imported files may already exist.
+      }
+    }
   }
 }

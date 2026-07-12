@@ -1,8 +1,13 @@
 // @ts-nocheck
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
+import {
+  cancelCreditReservation,
+  reserveCredits,
+  settleCreditReservation,
+} from "@/lib/credits";
 import { spawn } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
@@ -36,14 +41,36 @@ export const maxDuration = 60;
  * }
  *
  * Notes:
- *   - This runs Python with timeouts and CPU limits to avoid abuse. For a
- *     production-grade sandbox use e2b.dev, Daytona, or Docker isolation.
+ *   - A temporary directory and timeout are not an OS security boundary.
+ *     Keep this route disabled unless execution is moved into a real sandbox.
  *   - The script can read INPUT_FILE env var (path to the uploaded file) and
  *     write to OUTPUT_DIR.
  */
 
 const SCRIPT_TIMEOUT_MS = 25_000;
 const MAX_OUTPUT_BYTES = 20 * 1024 * 1024; // 20 MB total
+const MAX_INPUT_BYTES = 20 * 1024 * 1024;
+
+/** Give generated code only the OS variables required to launch Python. */
+function buildSandboxEnv(inputPath: string, outputDir: string, sandboxDir: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    INPUT_FILE: inputPath,
+    OUTPUT_DIR: outputDir,
+    MPLBACKEND: "Agg",
+    MPLCONFIGDIR: path.join(sandboxDir, ".matplotlib"),
+    HOME: sandboxDir,
+    USERPROFILE: sandboxDir,
+    TEMP: sandboxDir,
+    TMP: sandboxDir,
+  };
+
+  // PATH resolves Python; the Windows variables are required by the
+  // interpreter. Application secrets and proxy credentials are not forwarded.
+  for (const key of ["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL"] as const) {
+    if (process.env[key]) env[key] = process.env[key];
+  }
+  return env;
+}
 
 interface AnalyzeBody {
   instruction: string;
@@ -70,10 +97,43 @@ export async function POST(req: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (process.env.ALLOW_UNSANDBOXED_ANALYZE !== "true") {
+    return NextResponse.json(
+      { error: "Data analysis execution is unavailable until an isolated sandbox is configured." },
+      { status: 503 },
+    );
+  }
 
   const { instruction, inputFile, projectId } = await req.json() as AnalyzeBody;
   if (!instruction?.trim()) {
     return NextResponse.json({ error: "instruction is required" }, { status: 400 });
+  }
+
+  // Validate and decode the upload before reserving credits or calling a
+  // provider. The encoded-length guard avoids allocating an oversized buffer.
+  let inputBuffer: Buffer | null = null;
+  if (inputFile?.base64) {
+    const maxEncodedLength = Math.ceil(MAX_INPUT_BYTES / 3) * 4 + 4;
+    if (inputFile.base64.length > maxEncodedLength) {
+      return NextResponse.json({ error: "Input file too large (max 20MB)" }, { status: 413 });
+    }
+    inputBuffer = Buffer.from(inputFile.base64, "base64");
+    if (inputBuffer.byteLength > MAX_INPUT_BYTES) {
+      return NextResponse.json({ error: "Input file too large (max 20MB)" }, { status: 413 });
+    }
+  }
+
+  const creditReservation = await reserveCredits(supabase, {
+    userId: user.id,
+    amount: 1,
+    action: "analyze",
+    projectId: projectId ?? null,
+  });
+  if (!creditReservation) {
+    return NextResponse.json(
+      { error: "Insufficient credits", requiredCredits: 1 },
+      { status: 402 },
+    );
   }
 
   // ── 1) Ask the AI to draft the script ──────────────────────────────────────
@@ -82,19 +142,46 @@ export async function POST(req: NextRequest) {
     : `Instruction: ${instruction}\n\nNo input file was uploaded. INPUT_FILE env var will be empty. Output goes in env var OUTPUT_DIR.`;
 
   let script = "";
+  let providerReturned = false;
+  let reservationFinalized = false;
   try {
-    const aiRes = await generateAI({
-      model: BALANCED_CODING_MODEL,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userMsg },
-      ],
-      maxTokens: 2500,
-    });
+    const aiRes = await generateAI(
+      {
+        model: BALANCED_CODING_MODEL,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userMsg },
+        ],
+        maxTokens: 2500,
+      },
+      { projectId, userId: user.id, task: "data_analysis_script" },
+    );
+    providerReturned = true;
     script = (aiRes.content ?? "").trim()
       .replace(/^```python\s*/i, "").replace(/^```\s*/i, "")
       .replace(/```\s*$/i, "").trim();
+
+    // Provider output is billable even when validation, sandbox execution, or
+    // later persistence fails. Settle before any of those fallible steps.
+    const remainingCredits = await settleCreditReservation(
+      supabase,
+      creditReservation.id,
+      1,
+    );
+    if (remainingCredits == null) throw new Error("Unable to settle reserved analysis credits");
+    reservationFinalized = true;
   } catch (err) {
+    if (!reservationFinalized) {
+      try {
+        if (providerReturned) {
+          await settleCreditReservation(supabase, creditReservation.id, 1);
+        } else {
+          await cancelCreditReservation(supabase, creditReservation.id);
+        }
+      } catch {
+        // Fail closed: a provider result may already have been produced.
+      }
+    }
     return NextResponse.json({ error: `AI script generation failed: ${(err as Error).message}` }, { status: 500 });
   }
 
@@ -112,13 +199,9 @@ export async function POST(req: NextRequest) {
   fs.mkdirSync(outputDir, { recursive: true });
 
   let inputPath = "";
-  if (inputFile?.base64) {
+  if (inputFile?.base64 && inputBuffer) {
     inputPath = path.join(sandboxDir, inputFile.name.replace(/[^a-zA-Z0-9._-]/g, "_"));
-    const buf = Buffer.from(inputFile.base64, "base64");
-    if (buf.byteLength > 20 * 1024 * 1024) {
-      return NextResponse.json({ error: "Input file too large (max 20MB)" }, { status: 413 });
-    }
-    fs.writeFileSync(inputPath, buf);
+    fs.writeFileSync(inputPath, inputBuffer);
   }
 
   const scriptPath = path.join(sandboxDir, "script.py");
@@ -127,12 +210,7 @@ export async function POST(req: NextRequest) {
   // ── 3) Run the script ──────────────────────────────────────────────────────
   const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
     const child = spawn("python3", [scriptPath], {
-      env: {
-        ...process.env,
-        INPUT_FILE: inputPath,
-        OUTPUT_DIR: outputDir,
-        MPLBACKEND: "Agg",
-      },
+      env: buildSandboxEnv(inputPath, outputDir, sandboxDir),
       cwd: sandboxDir,
     });
     let stdout = "";
@@ -220,12 +298,6 @@ export async function POST(req: NextRequest) {
       .select("id, role, content, metadata, created_at");
     if (!msgErr && inserted) persistedMessages = inserted;
 
-    await (supabase as any).rpc("deduct_credits", {
-      user_id: user.id,
-      amount: 1,
-      action: "analyze",
-      project_id: projectId,
-    });
   }
 
   return NextResponse.json({

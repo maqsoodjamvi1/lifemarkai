@@ -71,7 +71,7 @@ Generate a commit message for these changes.`;
         { role: "user", content: userPrompt },
       ],
       maxTokens: 80,
-    });
+    }, { projectId, userId: user.id, task: "commit_message" });
 
     const message = (response.content ?? "").trim().replace(/^["']|["']$/g, "");
     if (!message) return NextResponse.json({ error: "AI returned empty response" }, { status: 500 });

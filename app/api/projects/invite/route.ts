@@ -1,158 +1,81 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { sendCollaborationInviteEmail } from "@/lib/email/resend";
 import { logAuditFromRequest } from "@/lib/audit/log";
+
+const INVITE_ROLES = new Set(["viewer", "editor"]);
 
 export async function POST(request: NextRequest) {
   try {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const { projectId, email, role = "viewer" } = await request.json();
-
+    const body = await request.json() as { projectId?: string; email?: string; role?: string };
+    const projectId = body.projectId?.trim();
+    const email = body.email?.trim().toLowerCase();
+    const role = body.role ?? "viewer";
     if (!projectId || !email) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
+    if (email.length > 320 || !/^\S+@\S+\.\S+$/.test(email)) {
+      return NextResponse.json({ error: "Invalid email address" }, { status: 400 });
+    }
+    if (!INVITE_ROLES.has(role)) {
+      return NextResponse.json({ error: "Role must be viewer or editor" }, { status: 400 });
+    }
 
-    // Check if the current user owns the project or is an admin collaborator
-    const { data: project } = await (supabase as any)
+    const admin = await createAdminClient();
+    const { data: project, error: projectError } = await (admin as any)
       .from("projects")
-      .select("user_id")
+      .select("id, user_id, name")
       .eq("id", projectId)
-      .single();
-
-    if (!project) {
-      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+      .maybeSingle();
+    if (projectError) throw new Error(projectError.message);
+    if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    if (project.user_id !== user.id) {
+      return NextResponse.json({ error: "Only the project owner can invite collaborators" }, { status: 403 });
     }
 
-    const isOwner = project.user_id === user.id;
-
-    if (!isOwner) {
-      // Check if user is admin collaborator
-      const { data: collab } = await (supabase as any)
-        .from("collaborators")
-        .select("role")
-        .eq("project_id", projectId)
-        .eq("user_id", user.id)
-        .single();
-
-      if (!collab || collab.role !== "admin") {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-      }
-    }
-
-    // Find the user by email
-    const { data: invitedProfile } = await (supabase as any)
+    const { data: ownerProfile } = await (admin as any)
       .from("profiles")
-      .select("id, full_name, avatar_url")
-      .eq("email", email)
-      .single();
-
-    if (!invitedProfile) {
-      // Send email invitation to non-registered user
-      const { data: inviterProfile } = await (supabase as any)
-        .from("profiles")
-        .select("full_name")
-        .eq("id", user.id)
-        .single();
-
-      const { data: projectData } = await (supabase as any)
-        .from("projects")
-        .select("name")
-        .eq("id", projectId)
-        .single();
-
-      const inviteUrl = `${process.env.NEXT_PUBLIC_APP_URL}/signup?invite=${projectId}&email=${encodeURIComponent(email)}`;
-
-      try {
-        await sendCollaborationInviteEmail(
-          email,
-          inviterProfile?.full_name ?? "Someone",
-          projectData?.name ?? "a project",
-          role,
-          inviteUrl
-        );
-      } catch (e) {
-        console.error("Failed to send invite email:", e);
-      }
-
-      void logAuditFromRequest(request, {
-        userId: user.id,
-        action: "member.invite",
-        resourceType: "project",
-        resourceId: projectId,
-        metadata: { email, role, status: "pending" },
-      });
-      return NextResponse.json({
-        status: "pending",
-        message: `Invitation sent to ${email}. They will be added when they sign up.`,
-      });
-    }
-
-    // Check if already a collaborator
-    const { data: existingCollab } = await (supabase as any)
-      .from("collaborators")
-      .select("id")
-      .eq("project_id", projectId)
-      .eq("user_id", invitedProfile.id)
-      .single();
-
-    if (existingCollab) {
-      return NextResponse.json({ error: "User is already a collaborator" }, { status: 409 });
-    }
-
-    // Don't invite the owner
-    if (invitedProfile.id === project.user_id) {
+      .select("email, full_name")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (ownerProfile?.email?.toLowerCase() === email) {
       return NextResponse.json({ error: "Cannot invite the project owner" }, { status: 400 });
     }
 
-    // Add collaborator
-    const { data: newCollab, error: collabError } = await (supabase as any)
-      .from("collaborators")
+    // Email invites use the same single-use capability flow for existing and
+    // future users. Signup/login returns to /invite/[token], where one checked
+    // RPC grants access and consumes the token atomically.
+    const { data: invite, error: inviteError } = await (admin as any)
+      .from("project_invite_tokens")
       .insert({
         project_id: projectId,
-        user_id: invitedProfile.id,
+        created_by: user.id,
         role,
+        max_uses: 1,
+        expires_at: new Date(Date.now() + 7 * 86_400_000).toISOString(),
       })
-      .select()
+      .select("token, expires_at")
       .single();
-
-    if (collabError) {
-      return NextResponse.json({ error: collabError.message }, { status: 500 });
+    if (inviteError || !invite) {
+      throw new Error(inviteError?.message ?? "Unable to create invite");
     }
 
-    // Send email to the newly added collaborator
-    const { data: inviterProfile } = await (supabase as any)
-      .from("profiles")
-      .select("full_name")
-      .eq("id", user.id)
-      .single();
-
-    const { data: projectData } = await (supabase as any)
-      .from("projects")
-      .select("name")
-      .eq("id", projectId)
-      .single();
-
-    const { data: invitedUser } = await supabase.auth.admin.getUserById(invitedProfile.id);
-    const invitedEmail = invitedUser?.user?.email;
-
-    if (invitedEmail) {
-      try {
-        await sendCollaborationInviteEmail(
-          invitedEmail,
-          inviterProfile?.full_name ?? "Someone",
-          projectData?.name ?? "a project",
-          role,
-          `${process.env.NEXT_PUBLIC_APP_URL}/editor/${projectId}`
-        );
-      } catch (e) {
-        console.error("Failed to send invite email:", e);
-      }
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const inviteUrl = `${appUrl}/invite/${invite.token as string}`;
+    try {
+      await sendCollaborationInviteEmail(
+        email,
+        ownerProfile?.full_name ?? "Someone",
+        project.name ?? "a project",
+        role,
+        inviteUrl,
+      );
+    } catch (error) {
+      console.error("Failed to send collaboration invite email:", error);
     }
 
     void logAuditFromRequest(request, {
@@ -160,17 +83,16 @@ export async function POST(request: NextRequest) {
       action: "member.invite",
       resourceType: "project",
       resourceId: projectId,
-      metadata: { invitedUserId: invitedProfile.id, email, role, status: "added" },
+      metadata: { email, role, status: "pending", expiresAt: invite.expires_at },
     });
     return NextResponse.json({
-      collaborator: {
-        ...newCollab,
-        profile: invitedProfile,
-      },
+      status: "pending",
+      message: `Invitation sent to ${email}.`,
+      expiresAt: invite.expires_at,
     });
   } catch (error) {
     console.error("Invite error:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    return NextResponse.json({ error: "Unable to create invitation" }, { status: 500 });
   }
 }
 
@@ -178,39 +100,30 @@ export async function DELETE(request: NextRequest) {
   try {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const { searchParams } = new URL(request.url);
-    const projectId = searchParams.get("projectId");
-    const collaboratorId = searchParams.get("collaboratorId");
-
+    const projectId = request.nextUrl.searchParams.get("projectId");
+    const collaboratorId = request.nextUrl.searchParams.get("collaboratorId");
     if (!projectId || !collaboratorId) {
       return NextResponse.json({ error: "Missing required parameters" }, { status: 400 });
     }
 
-    // Check ownership
-    const { data: project } = await (supabase as any)
+    const admin = await createAdminClient();
+    const { data: project } = await (admin as any)
       .from("projects")
       .select("user_id")
       .eq("id", projectId)
-      .single();
-
+      .maybeSingle();
     if (!project || project.user_id !== user.id) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const { error } = await (supabase as any)
+    const { error } = await (admin as any)
       .from("collaborators")
       .delete()
       .eq("id", collaboratorId)
       .eq("project_id", projectId);
-
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
     void logAuditFromRequest(request, {
       userId: user.id,

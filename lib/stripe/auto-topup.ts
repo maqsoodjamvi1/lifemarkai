@@ -19,7 +19,7 @@ export interface AutoTopupResult {
 }
 
 export async function triggerAutoTopupIfNeeded(userId: string): Promise<AutoTopupResult> {
-  const supabase = createAdminClient();
+  const supabase = await createAdminClient();
 
   // Fetch profile fields needed for auto top-up
   const { data: profile, error } = await (supabase as any)
@@ -87,15 +87,14 @@ export async function triggerAutoTopupIfNeeded(userId: string): Promise<AutoTopu
     }
 
     // Add credits atomically
-    await (supabase as any).rpc("add_credits", { p_user_id: userId, p_amount: pack.credits });
-
-    // Audit log
-    await (supabase as any).from("credit_logs").insert({
-      user_id: userId,
-      amount: pack.credits,
-      action: "auto_topup",
-      description: `Auto top-up: ${pack.credits} credits ($${(pack.priceCents / 100).toFixed(2)})`,
+    const description = `Auto top-up: ${pack.credits} credits ($${(pack.priceCents / 100).toFixed(2)})`;
+    const { error: creditError } = await (supabase as any).rpc("add_credits", {
+      p_user_id: userId,
+      p_amount: pack.credits,
+      p_action: "auto_topup",
+      p_description: description,
     });
+    if (creditError) throw new Error(`Payment succeeded but crediting failed: ${creditError.message}`);
 
     return { triggered: true, creditsAdded: pack.credits };
   } catch (err: unknown) {

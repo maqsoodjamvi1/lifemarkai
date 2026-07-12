@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useEffect } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { resolveSafeRedirect, withAuthRedirect } from "@/lib/auth/safe-redirect";
 
 const perks = [
   "5 free AI credits daily",
@@ -42,27 +43,39 @@ function SignupContent() {
   const { toast } = useToast();
   const supabase = createClient();
   const searchParams = useSearchParams();
-  const [refCode, setRefCode] = useState<string | null>(null);
+  const refCode = searchParams.get("ref");
+  const requestedRedirect = searchParams.get("next") ?? searchParams.get("redirect");
+  const safeRedirect = resolveSafeRedirect(requestedRedirect);
 
-  useEffect(() => {
-    const ref = searchParams.get("ref");
-    if (ref) setRefCode(ref);
-  }, [searchParams]);
+  function getRedirectDestination() {
+    return resolveSafeRedirect(requestedRedirect, "/dashboard", window.location.origin);
+  }
+
+  function getCallbackUrl() {
+    const callback = new URL("/auth/callback", window.location.origin);
+    callback.searchParams.set("next", getRedirectDestination());
+    if (refCode) callback.searchParams.set("ref", refCode);
+    return callback.toString();
+  }
 
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
     try {
-      const { error } = await supabase.auth.signUp({
+      const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
           data: { full_name: name },
-          emailRedirectTo: `${window.location.origin}/auth/callback${refCode ? `?ref=${encodeURIComponent(refCode)}` : ""}`,
+          emailRedirectTo: getCallbackUrl(),
         },
       });
       if (error) throw error;
-      setEmailSent(true);
+      if (data.session) {
+        router.replace(getRedirectDestination());
+      } else {
+        setEmailSent(true);
+      }
     } catch (err: unknown) {
       toast({
         title: "Signup failed",
@@ -79,7 +92,7 @@ function SignupContent() {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider,
-        options: { redirectTo: `${window.location.origin}/auth/callback` },
+        options: { redirectTo: getCallbackUrl() },
       });
       if (error) throw error;
     } catch (err: unknown) {
@@ -107,7 +120,7 @@ function SignupContent() {
           <p className="text-muted-foreground mb-6">
             We sent a confirmation link to <strong>{email}</strong>. Click it to activate your account.
           </p>
-          <Button variant="outline" onClick={() => router.push("/login")}>
+          <Button variant="outline" onClick={() => router.push(withAuthRedirect("/login", safeRedirect))}>
             Back to login
           </Button>
         </motion.div>
@@ -210,7 +223,7 @@ function SignupContent() {
 
             <p className="text-center text-sm text-muted-foreground mt-6">
               Already have an account?{" "}
-              <Link href="/login" className="text-primary hover:underline font-medium">Sign in</Link>
+              <Link href={withAuthRedirect("/login", safeRedirect)} className="text-primary hover:underline font-medium">Sign in</Link>
             </p>
             <p className="text-center text-xs text-muted-foreground mt-3">
               By signing up, you agree to our{" "}

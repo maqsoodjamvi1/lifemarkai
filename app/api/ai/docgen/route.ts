@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
         },
       ],
       temperature: 0.2,
-    });
+    }, { userId: user.id, task: "documentation_generation" });
 
     let docs = result.content.trim();
 

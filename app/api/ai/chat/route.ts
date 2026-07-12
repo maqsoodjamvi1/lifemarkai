@@ -1,7 +1,8 @@
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
+import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 import { NextRequest, NextResponse } from "next/server";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { ECONOMY_CODING_MODEL, getDefaultAiModel, ESCALATION_MODEL } from "@/lib/ai/model-defaults";
 import { applyModelAdapter } from "@/lib/ai/model-catalog";
 import { sendLowCreditsEmail } from "@/lib/email/resend";
@@ -40,8 +41,13 @@ import { getProjectSchemaContext } from "@/lib/supabase/schema-reader";
 import { attachSkillsToPrompt } from "@/lib/ai/attach-skills";
 import type { SkillMatch } from "@/lib/ai/skill-matcher";
 import { shouldUseSubagents, runSubagentInvestigation, type SubagentStep } from "@/lib/ai/subagents";
-import { computeCreditCost } from "@/lib/ai/credit-cost";
-import { claimDailyCredits } from "@/lib/credits";
+import { computeCreditCost, maxCreditCostForMode } from "@/lib/ai/credit-cost";
+import {
+  cancelCreditReservation,
+  claimDailyCredits,
+  reserveCredits,
+  settleCreditReservation,
+} from "@/lib/credits";
 import { autoWireBackend, type AutoWireResult } from "@/lib/cloud/auto-wire";
 import { autoWireAi } from "@/lib/ai/auto-wire-ai";
 import { selectRelevantFiles } from "@/lib/ai/file-selector";
@@ -188,6 +194,10 @@ export async function POST(req: NextRequest) {
     if (!projectId || typeof projectId !== "string") {
       return NextResponse.json({ error: "projectId is required" }, { status: 400 });
     }
+    const projectAccess = await getProjectAccess(supabase, projectId, userId);
+    if (!canWriteProjectFiles(projectAccess)) {
+      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
     if (imageBase64 && typeof imageBase64 === "string" && imageBase64.length > 5 * 1024 * 1024) {
       return NextResponse.json({ error: "Image too large (max 5MB)" }, { status: 413 });
     }
@@ -320,14 +330,26 @@ export async function POST(req: NextRequest) {
         .maybeSingle()
     ).data?.cloud_tool_permissions;
 
-    // Fetch project knowledge + recent messages + DB schema in parallel
-    const [projectRes, recentMessagesRes, schemaContext, editorIntelligenceContext] = await Promise.all([
+    // Fetch project knowledge, private conversation context, recent messages,
+    // and DB schema in parallel.
+    const [
+      projectRes,
+      recentMessagesRes,
+      privateContextRes,
+      schemaContext,
+      editorIntelligenceContext,
+    ] = await Promise.all([
       // select("*") — NOT an explicit column list: cloud_* columns arrive with
       // migration 064 and an explicit list would make this query fail (and
       // degrade chat) on databases that haven't run it yet.
       (supabase as any).from("projects").select("*").eq("id", projectId).single(),
       (supabase as any).from("messages").select("role, content, mode, metadata").eq("project_id", projectId)
         .order("created_at", { ascending: false }).limit(40),
+      (supabase as any)
+        .from("project_private_context")
+        .select("context_summary, context_summary_at, context_summary_covers")
+        .eq("project_id", projectId)
+        .maybeSingle(),
       // Schema reading is best-effort — never blocks the response
       getProjectSchemaContext(projectSupabaseUrl, projectServiceKey).catch(() => ""),
       buildEditorIntelligencePromptBlock(supabase, projectId).catch(() => ""),
@@ -337,12 +359,24 @@ export async function POST(req: NextRequest) {
     // Supabase backend and the client didn't supply integration credentials,
     // read the schema context from the managed backend server-side.
     let cloudSchemaContext = schemaContext;
-    const cloudCreds = projectRes.data as { cloud_supabase_url?: string | null; cloud_service_key?: string | null } | null;
-    if (!cloudSchemaContext && cloudCreds?.cloud_supabase_url && cloudCreds?.cloud_service_key) {
-      cloudSchemaContext = await getProjectSchemaContext(
-        cloudCreds.cloud_supabase_url,
-        cloudCreds.cloud_service_key
-      ).catch(() => "");
+    const cloudProject = projectRes.data as { cloud_supabase_url?: string | null } | null;
+    if (!cloudSchemaContext && cloudProject?.cloud_supabase_url) {
+      try {
+        const admin = await createAdminClient();
+        const { data: managedCredentials } = await (admin as any)
+          .from("project_cloud_credentials")
+          .select("service_key")
+          .eq("project_id", projectId)
+          .maybeSingle();
+        if (managedCredentials?.service_key) {
+          cloudSchemaContext = await getProjectSchemaContext(
+            cloudProject.cloud_supabase_url,
+            managedCredentials.service_key,
+          ).catch(() => "");
+        }
+      } catch {
+        // Managed schema context is best-effort and secrets remain server-only.
+      }
     }
 
     // Test/Live environments (migration 046): when the project is Live, block
@@ -381,7 +415,6 @@ export async function POST(req: NextRequest) {
     const projectData = projectRes.data as {
       knowledge?: string | null;
       name?: string;
-      metadata?: Record<string, unknown> | null;
       disabled_skill_ids?: string[] | null;
       cloud_enabled?: boolean;
       github_repo?: string | null;
@@ -398,8 +431,13 @@ export async function POST(req: NextRequest) {
       : "";
 
     // Context summary — injected when long conversations have been compressed
-    const contextSummary = (projectData?.metadata as Record<string, unknown> | null)?.context_summary as string | undefined;
-    const summaryCovers = (projectData?.metadata as Record<string, unknown> | null)?.context_summary_covers as number | undefined;
+    const privateContext = privateContextRes.data as {
+      context_summary?: string | null;
+      context_summary_at?: string | null;
+      context_summary_covers?: number | null;
+    } | null;
+    const contextSummary = privateContext?.context_summary ?? undefined;
+    const summaryCovers = privateContext?.context_summary_covers ?? undefined;
     const summaryBlock = contextSummary
       ? `\n\n---\n# Conversation History Summary (covers the ${summaryCovers ?? "earlier"} messages before this context window)\n${contextSummary}\n---`
       : "";
@@ -848,6 +886,19 @@ The user has expressed frustration. Do the following:
 
     // ── Clarify-first mode: ask AI for clarifying questions before building ──────
     if (mode === "build" && clarifyFirst) {
+      const clarifyReservation = await reserveCredits(supabase, {
+        userId,
+        amount: maxCreditCostForMode("chat"),
+        action: "clarify_message",
+        projectId,
+      });
+      if (!clarifyReservation) {
+        return NextResponse.json(
+          { error: "Insufficient credits", requiredCredits: maxCreditCostForMode("chat") },
+          { status: 402 },
+        );
+      }
+
       const clarifySystemPrompt = [
         "You are an expert software architect helping a developer before they build a feature.",
         "Given a user's build request, generate 2-4 targeted clarifying questions that would help produce better output.",
@@ -865,28 +916,69 @@ The user has expressed frustration. Do the following:
             clarifyEncoder,
             req.signal,
           );
+          let questionsJson = "";
+          let reservationFinalized = false;
           try {
-            let questionsJson = "";
-            await generateAI({
-              model: effectiveModel,
-              messages: [
-                { role: "system", content: clarifySystemPrompt },
-                { role: "user", content: "Build request: " + persistedUserMessage + "\n\nProject has " + files.length + " existing files." },
-              ],
-              maxTokens: 600,
-              stream: true,
-              jsonMode: true,
-              onChunk: (chunk) => { questionsJson += chunk; },
+            const clarifyResult = await generateAI(
+              {
+                model: effectiveModel,
+                messages: [
+                  { role: "system", content: clarifySystemPrompt },
+                  { role: "user", content: "Build request: " + persistedUserMessage + "\n\nProject has " + files.length + " existing files." },
+                ],
+                maxTokens: 600,
+                stream: true,
+                jsonMode: true,
+                onChunk: (chunk) => { questionsJson += chunk; },
+              },
+              { projectId, userId, task: "chat.clarify" },
+            );
+
+            const clarifyCost = computeCreditCost({
+              mode: "chat",
+              tokensUsed: clarifyResult.tokensUsed,
             });
+            const remaining = await settleCreditReservation(
+              supabase,
+              clarifyReservation.id,
+              clarifyCost,
+            );
+            if (remaining == null) throw new Error("Unable to settle clarification credits");
+            reservationFinalized = true;
 
             let questions: unknown[] = [];
             try { questions = JSON.parse(questionsJson); } catch { questions = []; }
             if (!Array.isArray(questions)) questions = [];
 
-            const qPayload = JSON.stringify({ clarifying_questions: questions, originalPrompt: message });
+            const qPayload = JSON.stringify({
+              clarifying_questions: questions,
+              originalPrompt: message,
+              creditsUsed: clarifyCost,
+              remainingCredits: remaining,
+            });
             clarifyEnqueue(clarifyEncoder.encode("data: " + qPayload + "\n\n"));
             clarifyEnqueue(clarifyEncoder.encode("data: {}\n\n"));
           } catch {
+            if (!reservationFinalized) {
+              try {
+                if (questionsJson.trim()) {
+                  await settleCreditReservation(
+                    supabase,
+                    clarifyReservation.id,
+                    clarifyReservation.amount,
+                  );
+                } else {
+                  await cancelCreditReservation(supabase, clarifyReservation.id);
+                }
+                reservationFinalized = true;
+              } catch (reservationError) {
+                logger.error(
+                  "ai.chat.clarify_reservation_finalize_failed",
+                  reservationError instanceof Error ? reservationError : new Error(String(reservationError)),
+                  { projectId, userId },
+                );
+              }
+            }
             const errPayload = JSON.stringify({ error: "Failed to generate clarifying questions" });
             clarifyEnqueue(clarifyEncoder.encode("data: " + errPayload + "\n\n"));
           } finally {
@@ -899,6 +991,20 @@ The user has expressed frustration. Do the following:
       });
     }
 
+
+    const reservationAmount = maxCreditCostForMode(mode);
+    const creditReservation = await reserveCredits(supabase, {
+      userId,
+      amount: reservationAmount,
+      action: `${mode}_message`,
+      projectId,
+    });
+    if (!creditReservation) {
+      return NextResponse.json(
+        { error: "Insufficient credits", requiredCredits: reservationAmount },
+        { status: 402 },
+      );
+    }
 
         // Create a streaming response
     const encoder = new TextEncoder();
@@ -916,6 +1022,8 @@ The user has expressed frustration. Do the following:
         // so a successful build's final/verified content is never clobbered.
         const streamedFiles: Array<{ path: string; content: string; language: string }> = [];
         let completedNormally = false;
+        let reservationFinalized = false;
+        let finalCreditCost: number | null = null;
         // SSE keep-alive: reverse proxies (nginx proxy_read_timeout, Cloudflare ~100s)
         // drop a connection that goes idle during model "thinking" gaps (continuation +
         // self-verify phases emit no chunks). A comment frame every 20s keeps it open.
@@ -976,21 +1084,24 @@ The user has expressed frustration. Do the following:
           : null;
 
         try {
-          const result = await generateAI({
-            model: effectiveModel,
-            messages,
-            maxTokens: outputMaxTokens,
-            stream: true,
-            // Force structured JSON for build. Patch uses an object wrapper
-            // ({"patches":[...]}) so OpenAI json_object mode is valid.
-            jsonMode: mode === "build" || mode === "patch",
-            onChunk: (chunk) => {
-              fullContent += chunk;
-              safeEnqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
-              // Feed chunk into incremental file extractor (build mode only)
-              fileExtractor?.feed(chunk);
+          const result = await generateAI(
+            {
+              model: effectiveModel,
+              messages,
+              maxTokens: outputMaxTokens,
+              stream: true,
+              // Force structured JSON for build. Patch uses an object wrapper
+              // ({"patches":[...]}) so OpenAI json_object mode is valid.
+              jsonMode: mode === "build" || mode === "patch",
+              onChunk: (chunk) => {
+                fullContent += chunk;
+                safeEnqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
+                // Feed chunk into incremental file extractor (build mode only)
+                fileExtractor?.feed(chunk);
+              },
             },
-          });
+            { projectId, userId, task: `chat.${mode}.primary` },
+          );
 
           tokensUsed = result.tokensUsed;
 
@@ -1031,7 +1142,7 @@ The user has expressed frustration. Do the following:
                     safeEnqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
                     fileExtractor?.feed(chunk);
                   },
-                });
+                }, { projectId, userId, task: "chat.build.continuation" });
               } catch (contErr) {
                 logger.warn("ai.chat.continuation_failed", { projectId, error: String(contErr) });
                 break;
@@ -1115,7 +1226,7 @@ The user has expressed frustration. Do the following:
                     repairContent += chunk;
                     safeEnqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
                   },
-                });
+                }, { projectId, userId, task: "chat.patch.repair" });
                 if (repairContent.trim()) {
                   fullContent = repairContent;
                   patches = filterUnsafeHeaderPatches(
@@ -1329,7 +1440,7 @@ The user has expressed frustration. Do the following:
                     stream: true,
                     jsonMode: true,
                     onChunk: (chunk) => { repairContent += chunk; },
-                  });
+                  }, { projectId, userId, task: "chat.build.autofix" });
 
                   const repaired = parseAIResponse(repairContent);
                   if (repaired.files.length > 0) {
@@ -1380,7 +1491,7 @@ The user has expressed frustration. Do the following:
                   stream: true,
                   jsonMode: true,
                   onChunk: (chunk) => { retryContent += chunk; },
-                });
+                }, { projectId, userId, task: "chat.build.format_retry" });
                 const retryParsed = parseAIResponse(retryContent);
                 if (retryParsed.files.length > 0) {
                   finalFiles = ensureCommonGeneratedSupportFiles(retryParsed.files, existingFiles);
@@ -1484,6 +1595,7 @@ The user has expressed frustration. Do the following:
               verification = await runSelfVerification({
                 supabase,
                 projectId,
+                userId,
                 emit: emitStatus("verify_status"),
                 maxRounds: verifyOnlyFastLane ? 0 : undefined,
               });
@@ -1539,6 +1651,7 @@ The user has expressed frustration. Do the following:
             usedSubagents: subagentSteps.length > 0,
             usedAutoFix,
           });
+          finalCreditCost = creditCost;
 
           // Save messages to DB — attach files_changed + credits metadata
           const persistedContent =
@@ -1581,15 +1694,17 @@ The user has expressed frustration. Do the following:
             });
           }
 
-          await (supabase as any).rpc("deduct_credits", {
-            user_id: userId,
-            amount: creditCost,
-            action: `${mode}_message`,
-            project_id: projectId,
-          });
+          const remainingCredits = await settleCreditReservation(
+            supabase,
+            creditReservation.id,
+            creditCost,
+          );
+          if (remainingCredits == null) {
+            throw new Error("Unable to settle reserved credits");
+          }
+          reservationFinalized = true;
 
           // Warn user when credits drop low (fire-and-forget)
-          const remainingCredits = (profile.credits ?? 0) - creditCost;
           const profileEmail = (profile as { email?: string }).email;
           if (remainingCredits <= 10 && remainingCredits > 0 && profileEmail) {
             sendLowCreditsEmail(profileEmail, remainingCredits).catch(() => {});
@@ -1610,7 +1725,7 @@ The user has expressed frustration. Do the following:
                 .eq("project_id", projectId);
 
               const totalMessages = count ?? 0;
-              const lastSummaryAt = (projectData?.metadata as Record<string, unknown> | null)?.context_summary_at as string | undefined;
+              const lastSummaryAt = privateContext?.context_summary_at ?? undefined;
               const hoursSinceSummary = lastSummaryAt
                 ? (Date.now() - new Date(lastSummaryAt).getTime()) / 3_600_000
                 : Infinity;
@@ -1675,6 +1790,7 @@ The user has expressed frustration. Do the following:
                 tokensUsed,
                 files: finalFilesForClient,
                 creditsUsed: creditCost,
+                remainingCredits,
                 fileCount: finalFilesForClient.length,
                 filesChanged: finalFilesForClient.length > 0 || streamedFilePaths.size > 0,
                 changedPaths: finalFilesForClient.length > 0
@@ -1734,6 +1850,35 @@ The user has expressed frustration. Do the following:
                 { onConflict: "project_id,path" },
               );
             } catch { /* best-effort */ }
+          }
+          if (!reservationFinalized) {
+            try {
+              const producedBillableWork =
+                tokensUsed > 0 || fullContent.trim().length > 0 || streamedFiles.length > 0;
+              if (producedBillableWork) {
+                const fallbackCost = Math.min(
+                  creditReservation.amount,
+                  finalCreditCost ?? creditReservation.amount,
+                );
+                const remaining = await settleCreditReservation(
+                  supabase,
+                  creditReservation.id,
+                  fallbackCost,
+                );
+                reservationFinalized = remaining != null;
+              } else {
+                await cancelCreditReservation(supabase, creditReservation.id);
+                reservationFinalized = true;
+              }
+            } catch (reservationError) {
+              // Fail closed: leave the reservation deducted for reconciliation
+              // rather than refunding provider work that may already be persisted.
+              logger.error(
+                "ai.chat.reservation_finalize_failed",
+                reservationError instanceof Error ? reservationError : new Error(String(reservationError)),
+                { projectId, userId, mode, reservationId: creditReservation.id },
+              );
+            }
           }
           safeClose();
         }

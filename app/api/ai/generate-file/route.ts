@@ -4,6 +4,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import {
+  cancelCreditReservation,
+  reserveCredits,
+  settleCreditReservation,
+} from "@/lib/credits";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -85,14 +90,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
   }
 
-  // Grant today's daily free credits before the balance gate (migration 063)
-  await (await import("@/lib/credits")).claimDailyCredits(supabase, user.id);
-  const { data: profile } = await (supabase as any)
-    .from("profiles").select("credits").eq("id", user.id).single();
-  if (!profile || profile.credits <= 0) {
-    return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
-  }
-
   const body = await req.json();
   const { projectId, prompt, format } = body as {
     projectId?: string;
@@ -118,7 +115,21 @@ Rules:
 - Return ONLY the raw file content — no explanations before or after.
 - Be complete and production-quality; invent sensible realistic details when the request is open-ended.`;
 
+  let reservation: Awaited<ReturnType<typeof reserveCredits>> = null;
+  let billableOutput = false;
+  let reservationFinalized = false;
+
   try {
+    reservation = await reserveCredits(supabase, {
+      userId: user.id,
+      amount: 1,
+      action: "generate_file",
+      projectId: projectId ?? null,
+    });
+    if (!reservation) {
+      return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
+    }
+
     const result = await generateAI(
       {
         model: getDefaultAiModel(),
@@ -130,21 +141,17 @@ Rules:
         temperature: 0.4,
         stream: false,
       },
-      { projectId, userId: user.id }
+      { projectId, userId: user.id, task: "standalone_file_generation" }
     );
+    billableOutput = true;
 
     const content = stripFence(result.content ?? "");
     if (!content) {
-      return NextResponse.json({ error: "AI returned empty content" }, { status: 502 });
+      throw new Error("AI returned empty content");
     }
 
-    // Deduct 1 credit (same pattern as sibling AI routes)
-    await (supabase as any).rpc("deduct_credits", {
-      user_id: user.id,
-      amount: 1,
-      action: "generate_file",
-      project_id: projectId ?? null,
-    });
+    await settleCreditReservation(supabase, reservation.id, 1);
+    reservationFinalized = true;
 
     import("@/lib/stripe/auto-topup")
       .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
@@ -156,9 +163,22 @@ Rules:
       mimeType: fmt.mimeType,
     });
   } catch (err) {
+    if (reservation && !reservationFinalized) {
+      try {
+        if (billableOutput) {
+          await settleCreditReservation(supabase, reservation.id, 1);
+        } else {
+          await cancelCreditReservation(supabase, reservation.id);
+        }
+      } catch (billingError) {
+        console.error("[ai/generate-file] Failed to finalize credit reservation", billingError);
+      }
+    }
+
+    const status = err instanceof Error && err.message === "AI returned empty content" ? 502 : 500;
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "AI failed" },
-      { status: 500 }
+      { status }
     );
   }
 }

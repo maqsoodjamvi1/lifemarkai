@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import {
   getManagedProjectStatus,
@@ -8,6 +8,20 @@ import {
   configureManagedAuthRedirects,
 } from "@/lib/cloud/management";
 import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "@/lib/project/env-file";
+
+// Never return managed service credentials to the browser. These are the only
+// project fields the Cloud panel needs for status rendering and provisioning.
+const CLOUD_STATUS_PROJECT_COLUMNS = [
+  "id",
+  "cloud_enabled",
+  "cloud_region",
+  "cloud_instance",
+  "cloud_status",
+  "cloud_provisioned_at",
+  "cloud_project_ref",
+  "cloud_supabase_url",
+  "deployed_url",
+].join(", ");
 
 /**
  * GET /api/cloud/status?projectId=...
@@ -25,11 +39,9 @@ export async function GET(req: NextRequest) {
   const projectId = req.nextUrl.searchParams.get("projectId");
   if (!projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 });
 
-  // select("*") keeps this working on databases that haven't run migration
-  // 064 yet (cloud_project_ref / cloud_supabase_url columns).
   let { data: project } = await supabase
     .from("projects")
-    .select("*")
+    .select(CLOUD_STATUS_PROJECT_COLUMNS)
     .eq("id", projectId)
     .eq("user_id", user.id)
     .single();
@@ -45,15 +57,27 @@ export async function GET(req: NextRequest) {
       const { status } = await getManagedProjectStatus(project.cloud_project_ref);
       if (status === "active") {
         const keys = await getManagedProjectKeys(project.cloud_project_ref);
+        const admin = await createAdminClient();
+        const { error: credentialError } = await (admin as any)
+          .from("project_cloud_credentials")
+          .upsert(
+            {
+              project_id: projectId,
+              service_key: keys.serviceKey,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "project_id" },
+          );
+        if (credentialError) throw new Error(credentialError.message);
+
         const { data: updated } = await supabase
           .from("projects")
           .update({
             cloud_status: "active",
             cloud_anon_key: keys.anonKey,
-            cloud_service_key: keys.serviceKey,
           })
           .eq("id", projectId)
-          .select("id, cloud_enabled, cloud_region, cloud_instance, cloud_status, cloud_provisioned_at, cloud_project_ref, cloud_supabase_url, deployed_url")
+          .select(CLOUD_STATUS_PROJECT_COLUMNS)
           .single();
         if (updated) project = updated;
 

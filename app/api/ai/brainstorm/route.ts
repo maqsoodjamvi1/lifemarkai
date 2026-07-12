@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { getFastAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
@@ -51,21 +51,24 @@ export async function POST(req: NextRequest) {
         try {
           let fullText = "";
 
-          await generateAI({
-            model: getFastAiModel(),
-            messages: [
-              { role: "system", content: BRAINSTORM_SYSTEM },
-              { role: "user",   content: `Generate 3 app concepts for: "${idea.trim()}"` },
-            ],
-            temperature: 0.9,
-            stream: true,
-            onChunk: (chunk: string) => {
-              fullText += chunk;
-              controller.enqueue(
-                encoder.encode(`data: ${JSON.stringify({ content: chunk })}\n\n`)
-              );
+          await generateAI(
+            {
+              model: getFastAiModel(),
+              messages: [
+                { role: "system", content: BRAINSTORM_SYSTEM },
+                { role: "user",   content: `Generate 3 app concepts for: "${idea.trim()}"` },
+              ],
+              temperature: 0.9,
+              stream: true,
+              onChunk: (chunk: string) => {
+                fullText += chunk;
+                controller.enqueue(
+                  encoder.encode(`data: ${JSON.stringify({ content: chunk })}\n\n`)
+                );
+              },
             },
-          });
+            { userId: user.id, task: "brainstorm" },
+          );
 
           // Validate JSON before finalising
           const match = fullText.match(/\[[\s\S]*\]/);

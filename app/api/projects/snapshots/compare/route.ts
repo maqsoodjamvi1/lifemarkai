@@ -6,7 +6,7 @@ import {
   type SnapshotChainEntry,
   type SnapshotFile,
 } from "@/lib/diff/snapshot-diff";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
 
 /**
@@ -109,7 +109,7 @@ Be specific and concrete. No filler. Use plain prose, no headings, no bullets.`;
           { role: "user", content: `Comparing snapshot "${oldRow?.label}" (T-1, ${oldRow?.created_at}) → "${newRow?.label}" (T-0, ${newRow?.created_at}).\n\nDiff digest:\n\n${digest}` },
         ],
         maxTokens: 600,
-      });
+      }, { userId: user.id, task: "snapshot_compare" });
       summary = (aiRes.content ?? "").trim();
     } catch (err) {
       summary = `Compared ${diffs.length} file${diffs.length === 1 ? "" : "s"}. (AI summary unavailable: ${(err as Error).message})`;

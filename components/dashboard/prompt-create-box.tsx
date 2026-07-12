@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Sparkles, ArrowRight, Loader2, Code2, Zap, Box, Wind,
@@ -19,6 +19,11 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useEnhancePrompt } from "@/lib/hooks/use-enhance-prompt";
 import { listStarterTemplates } from "@/lib/templates/starter-catalog";
+import {
+  BUILD_WITH_URL_STORAGE_KEY,
+  buildPromptFromUrlPayload,
+  parseBuildWithUrlPayload,
+} from "@/lib/build-with-url";
 
 type CreateMode = "build" | "plan";
 
@@ -73,15 +78,60 @@ export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
   const [buildingConceptIdx, setBuildingConceptIdx] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const router = useRouter();
+  const dashboardSearch = useSearchParams().toString();
   const { toast } = useToast();
   const { enhance, enhancing } = useEnhancePrompt();
 
   // Preselect a design template when arriving from the gallery (?template=<id>).
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const t = new URLSearchParams(window.location.search).get("template");
+    const search = new URLSearchParams(dashboardSearch);
+    const t = search.get("template");
     if (t && STARTER_TEMPLATES.some((s) => s.id === t)) setTemplateId(t);
-  }, []);
+
+    const isNewProjectRequest = search.get("new") === "true" || search.get("new") === "1";
+    const isUrlHandoff = search.get("fromUrl") === "1" || search.get("fromUrl") === "true";
+    if (!isNewProjectRequest && !isUrlHandoff) return;
+
+    if (isUrlHandoff) {
+      const storedPayload = parseBuildWithUrlPayload(
+        sessionStorage.getItem(BUILD_WITH_URL_STORAGE_KEY),
+      );
+      const fallbackPrompt = search.get("prompt");
+      const fallbackPayload = fallbackPrompt
+        ? parseBuildWithUrlPayload(JSON.stringify({
+            prompt: fallbackPrompt,
+            images: search.getAll("images"),
+            at: Date.now(),
+          }))
+        : null;
+      const payload = storedPayload ?? fallbackPayload;
+      if (payload) {
+        setPrompt(buildPromptFromUrlPayload(payload));
+        // Remove only after the payload has been accepted into component state.
+        if (storedPayload) sessionStorage.removeItem(BUILD_WITH_URL_STORAGE_KEY);
+      }
+    }
+
+    window.requestAnimationFrame(() => {
+      textareaRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      textareaRef.current?.focus();
+      const length = textareaRef.current?.value.length ?? 0;
+      textareaRef.current?.setSelectionRange(length, length);
+    });
+
+    // Consume the one-shot dashboard flags without disturbing tabs/templates.
+    search.delete("new");
+    search.delete("fromUrl");
+    search.delete("prompt");
+    search.delete("images");
+    const query = search.toString();
+    window.history.replaceState(
+      window.history.state,
+      "",
+      `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`,
+    );
+  }, [dashboardSearch]);
 
   async function handleEnhance() {
     const trimmed = prompt.trim();
@@ -101,7 +151,9 @@ export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
       const res = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description: trimmed, framework }),
+        // The editor receives the complete starter prompt below. Keep only a
+        // bounded summary in the project's description column.
+        body: JSON.stringify({ name, description: trimmed.slice(0, 10_000), framework }),
       });
       if (!res.ok) throw new Error(await res.text());
       const project = await res.json();

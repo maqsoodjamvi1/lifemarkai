@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
 
 /**
@@ -73,14 +73,17 @@ Be specific, cite what you observed. Do NOT invent rules. If you can't extract e
   const userPrompt = `Recent projects (${list.length}):\n\n${summary}\n\nDraft the Workspace Knowledge document now.`;
 
   try {
-    const aiRes = await generateAI({
-      model: BALANCED_CODING_MODEL,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      maxTokens: 1500,
-    });
+    const aiRes = await generateAI(
+      {
+        model: BALANCED_CODING_MODEL,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        maxTokens: 1500,
+      },
+      { userId: user.id, task: "workspace_knowledge" },
+    );
     return NextResponse.json({ knowledge: (aiRes.content ?? "").trim() });
   } catch (err) {
     return NextResponse.json(

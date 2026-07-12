@@ -1,11 +1,16 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { sendWelcomeEmail } from "@/lib/email/resend";
+import { resolveSafeRedirect } from "@/lib/auth/safe-redirect";
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
-  const next = searchParams.get("next") ?? "/dashboard";
+  const next = resolveSafeRedirect(
+    searchParams.get("next") ?? searchParams.get("redirect"),
+    "/dashboard",
+    origin,
+  );
 
   if (code) {
     const supabase = await createClient();
@@ -43,9 +48,12 @@ export async function GET(request: Request) {
         } catch { /* non-fatal */ }
       }
 
-      return NextResponse.redirect(`${origin}${next}`);
+      return NextResponse.redirect(new URL(next, origin));
     }
   }
 
-  return NextResponse.redirect(`${origin}/login?error=auth_callback_failed`);
+  const loginUrl = new URL("/login", origin);
+  loginUrl.searchParams.set("error", "auth_callback_failed");
+  loginUrl.searchParams.set("next", next);
+  return NextResponse.redirect(loginUrl);
 }

@@ -1,7 +1,6 @@
 // @ts-nocheck
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { stripe } from "@/lib/stripe/client";
 import { CREDIT_PACKS } from "@/lib/stripe/plans";
 
@@ -10,6 +9,7 @@ export async function GET() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const admin = await createAdminClient();
 
   const { data: profile } = await (supabase as any)
     .from("profiles")
@@ -35,7 +35,7 @@ export async function GET() {
       }
     } catch {
       // PM may have been deleted — clear it
-      await (createAdminClient() as any)
+      await (admin as any)
         .from("profiles")
         .update({ auto_topup_pm_id: null })
         .eq("id", user.id);
@@ -56,6 +56,7 @@ export async function POST(req: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const admin = await createAdminClient();
 
   const body = await req.json();
 
@@ -75,7 +76,7 @@ export async function POST(req: NextRequest) {
         metadata: { supabase_user_id: user.id },
       });
       customerId = customer.id;
-      await (createAdminClient() as any)
+      await (admin as any)
         .from("profiles")
         .update({ stripe_customer_id: customerId })
         .eq("id", user.id);
@@ -96,7 +97,7 @@ export async function POST(req: NextRequest) {
     const { paymentMethodId } = body;
     if (!paymentMethodId) return NextResponse.json({ error: "paymentMethodId required" }, { status: 400 });
 
-    await (createAdminClient() as any)
+    await (admin as any)
       .from("profiles")
       .update({ auto_topup_pm_id: paymentMethodId })
       .eq("id", user.id);
@@ -122,7 +123,7 @@ export async function POST(req: NextRequest) {
 
   // ── Action: remove-card ────────────────────────────────────────────────────
   if (body.action === "remove-card") {
-    await (createAdminClient() as any)
+    await (admin as any)
       .from("profiles")
       .update({ auto_topup_pm_id: null, auto_topup_enabled: false })
       .eq("id", user.id);
@@ -146,7 +147,7 @@ export async function POST(req: NextRequest) {
   if (threshold !== undefined) updates.auto_topup_threshold = threshold;
   if (amount !== undefined) updates.auto_topup_amount = amount;
 
-  await (createAdminClient() as any)
+  await (admin as any)
     .from("profiles")
     .update(updates)
     .eq("id", user.id);

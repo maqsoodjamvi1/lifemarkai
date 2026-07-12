@@ -29,13 +29,24 @@ export async function POST(req: NextRequest) {
   // Uses the dedicated stripe_events table (migration 060). The old approach
   // logged into credit_logs with a sentinel user_id, which violated the FK to
   // profiles and silently never recorded anything — so retries double-credited.
-  const { data: processed } = await (supabase as any)
+  // Claim first with the primary-key insert. A read-then-write guard lets two
+  // concurrent Stripe deliveries both pass the read and double-credit.
+  // Claims remain after downstream failures so partially-applied financial
+  // events require reconciliation instead of being replayed automatically.
+  const { error: claimError } = await (supabase as any)
     .from("stripe_events")
-    .select("id")
-    .eq("id", event.id)
-    .maybeSingle();
-  if (processed) {
-    return NextResponse.json({ received: true, skipped: "already processed" });
+    .insert({
+      id: event.id,
+      type: event.type,
+      status: "processing",
+      claimed_at: new Date().toISOString(),
+    });
+  if (claimError) {
+    if (claimError.code === "23505") {
+      return NextResponse.json({ received: true, skipped: "already claimed" });
+    }
+    console.error("Unable to claim Stripe event", event.id, claimError);
+    return NextResponse.json({ error: "Unable to claim webhook event" }, { status: 500 });
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -54,43 +65,29 @@ export async function POST(req: NextRequest) {
     const { error } = await (supabase as any).rpc("add_credits" as never, {
       p_user_id: userId,
       p_amount: amount,
+      p_action: action,
+      p_description: description,
     } as never);
 
     if (error) {
-      // Absolute last-resort fallback using a DB-side increment expression
-      await (supabase as any).rpc("deduct_credits" as never, {
-        user_id: userId,
-        amount: -amount, // negative = add
-        action,
-        project_id: null,
-      } as never).catch(() => {});
+      throw new Error(`Unable to credit user: ${error.message}`);
     }
-
-    await (supabase as any).from("credit_logs").insert({
-      user_id: userId,
-      amount,
-      action,
-      description,
-    });
   }
 
   /** Atomically increment team credits using a DB-side expression. */
-  async function creditTeam(teamId: string, amount: number, _description: string) {
+  async function creditTeam(teamId: string, amount: number, description: string) {
     // Use a raw increment to avoid read-modify-write race conditions
-    await (supabase as any).rpc("add_team_credits" as never, {
+    const { error } = await (supabase as any).rpc("add_team_credits" as never, {
       p_team_id: teamId,
       p_amount: amount,
-    } as never).catch(async () => {
-      // Fallback if RPC missing — at least try
-      const { data: team } = await (supabase as any).from("teams").select("credits").eq("id", teamId).single();
-      if (team) {
-        await (supabase as any).from("teams").update({ credits: (team.credits ?? 0) + amount }).eq("id", teamId);
-      }
-    });
+      p_description: description,
+    } as never);
+    if (error) throw new Error(`Unable to credit team: ${error.message}`);
   }
 
   // ── event routing ─────────────────────────────────────────────────────────
-  switch (event.type) {
+  try {
+    switch (event.type) {
 
     // ── Subscription created / updated → update plan + credits ────────────
     case "customer.subscription.created":
@@ -311,15 +308,34 @@ export async function POST(req: NextRequest) {
       break;
     }
 
-    default:
-      break;
+      default:
+        break;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await (supabase as any)
+      .from("stripe_events")
+      .update({ status: "failed", last_error: message.slice(0, 2000) })
+      .eq("id", event.id);
+    console.error("Stripe webhook handling failed", event.id, error);
+    return NextResponse.json({ error: "Webhook handling failed" }, { status: 500 });
   }
 
   // ── Mark this event as processed (idempotency key) ────────────────────────
-  await (supabase as any).from("stripe_events").insert({
-    id: event.id,
-    type: event.type,
-  }).then(() => {}).catch(() => {}); // best-effort; don't fail the response
+  const completedAt = new Date().toISOString();
+  const { error: completionError } = await (supabase as any)
+    .from("stripe_events")
+    .update({
+      status: "completed",
+      processed_at: completedAt,
+      completed_at: completedAt,
+      last_error: null,
+    })
+    .eq("id", event.id);
+  if (completionError) {
+    console.error("Unable to complete Stripe event claim", event.id, completionError);
+    return NextResponse.json({ error: "Unable to complete webhook event" }, { status: 500 });
+  }
 
   return NextResponse.json({ received: true });
 }

@@ -135,6 +135,8 @@ export interface InitiativeOptions {
   budgetCredits?: number;
   checkpoint?: InitiativeCheckpoint | null;
   onCheckpoint?: (checkpoint: InitiativeCheckpoint) => Promise<void> | void;
+  /** Reports cumulative role-call credit usage as soon as provider work returns. */
+  onCreditUsage?: (creditsUsed: number) => Promise<void> | void;
   /** 'live' projects reject code-writing with 423 (migration 046). */
   environment?: "test" | "live";
   /**

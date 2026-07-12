@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { Github, Mail, Loader2, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,8 +11,21 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { resolveSafeRedirect, withAuthRedirect } from "@/lib/auth/safe-redirect";
 
 export default function LoginPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+      </div>
+    }>
+      <LoginContent />
+    </Suspense>
+  );
+}
+
+function LoginContent() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -20,6 +33,19 @@ export default function LoginPage() {
   const router = useRouter();
   const { toast } = useToast();
   const supabase = createClient();
+  const searchParams = useSearchParams();
+  const requestedRedirect = searchParams.get("next") ?? searchParams.get("redirect");
+  const safeRedirect = resolveSafeRedirect(requestedRedirect);
+
+  function getRedirectDestination() {
+    return resolveSafeRedirect(requestedRedirect, "/dashboard", window.location.origin);
+  }
+
+  function getCallbackUrl() {
+    const callback = new URL("/auth/callback", window.location.origin);
+    callback.searchParams.set("next", getRedirectDestination());
+    return callback.toString();
+  }
 
   async function handleEmailLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -31,9 +57,9 @@ export default function LoginPage() {
       const { data: mfaData } = await supabase.auth.mfa.listFactors();
       const hasVerifiedTotp = mfaData?.totp?.some((f) => f.status === "verified");
       if (hasVerifiedTotp) {
-        router.push("/mfa-challenge");
+        router.push(`/mfa-challenge?next=${encodeURIComponent(getRedirectDestination())}`);
       } else {
-        router.push("/dashboard");
+        router.push(getRedirectDestination());
       }
     } catch (err: unknown) {
       toast({
@@ -51,7 +77,7 @@ export default function LoginPage() {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider,
-        options: { redirectTo: `${window.location.origin}/auth/callback` },
+        options: { redirectTo: getCallbackUrl() },
       });
       if (error) throw error;
     } catch (err: unknown) {
@@ -173,7 +199,7 @@ export default function LoginPage() {
 
           <p className="text-center text-sm text-muted-foreground mt-6">
             Don&apos;t have an account?{" "}
-            <Link href="/signup" className="text-primary hover:underline font-medium">
+            <Link href={withAuthRedirect("/signup", safeRedirect)} className="text-primary hover:underline font-medium">
               Sign up free
             </Link>
           </p>

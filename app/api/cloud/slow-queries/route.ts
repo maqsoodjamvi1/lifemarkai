@@ -214,7 +214,7 @@ export async function POST(req: NextRequest) {
           },
         ],
       },
-      { projectId, userId: user.id }
+      { projectId, userId: user.id, task: "slow_query_indexes" }
     );
 
     let parsed: { analysis?: string; indexes?: Array<{ sql: string; reason?: string }> } = {};

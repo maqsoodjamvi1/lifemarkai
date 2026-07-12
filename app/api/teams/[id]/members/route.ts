@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { sendTeamInviteEmail } from "@/lib/email/resend";
 
 // POST — invite member to team
@@ -9,26 +9,43 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const admin = await createAdminClient();
 
   // Must be owner or admin
-  const { data: myMembership } = await (supabase as any)
+  const { data: myMembership } = await (admin as any)
     .from("team_members")
-    .select("role")
+    .select("role, accepted_at")
     .eq("team_id", id)
     .eq("user_id", user.id)
     .single();
 
-  if (!myMembership || !["owner","admin"].includes(myMembership.role)) {
+  if (
+    !myMembership
+    || !myMembership.accepted_at
+    || !["owner", "admin"].includes(myMembership.role)
+  ) {
     return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
   }
 
-  const { email, role = "member", credit_allowance } = await req.json();
-  if (!email) return NextResponse.json({ error: "Email required" }, { status: 400 });
+  const { email: rawEmail, role = "member", credit_allowance } = await req.json();
+  const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
+  if (!email || email.length > 320 || !/^\S+@\S+\.\S+$/.test(email)) {
+    return NextResponse.json({ error: "Valid email required" }, { status: 400 });
+  }
+  if (!["admin", "member", "viewer"].includes(role)) {
+    return NextResponse.json({ error: "Invalid team role" }, { status: 400 });
+  }
+  if (
+    credit_allowance != null
+    && (!Number.isInteger(credit_allowance) || credit_allowance < 0)
+  ) {
+    return NextResponse.json({ error: "credit_allowance must be a non-negative integer" }, { status: 400 });
+  }
 
-  const { data: team } = await (supabase as any).from("teams").select("name, max_members").eq("id", id).single();
+  const { data: team } = await (admin as any).from("teams").select("name, max_members").eq("id", id).single();
 
   // Check member count limit
-  const { count } = await (supabase as any)
+  const { count } = await (admin as any)
     .from("team_members")
     .select("id", { count: "exact" })
     .eq("team_id", id)
@@ -39,7 +56,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   // Find existing user by email
-  const { data: invitedProfile } = await (supabase as any)
+  const { data: invitedProfile } = await (admin as any)
     .from("profiles")
     .select("id, full_name, email")
     .eq("email", email)
@@ -49,7 +66,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   if (invitedProfile) {
     // User exists — add to team (pending acceptance)
-    const { data: member, error } = await (supabase as any)
+    const { data: member, error } = await (admin as any)
       .from("team_members")
       .upsert({
         team_id: id,
@@ -67,11 +84,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     memberId = member.id;
   } else {
     // User doesn't exist — store invite; user_id set to inviter as placeholder
-    const { data: member } = await (supabase as any)
+    const { data: member, error } = await (admin as any)
       .from("team_members")
       .insert({
         team_id: id,
-        user_id: user.id,   // placeholder; replaced when they accept
+        user_id: null,
         role,
         credit_allowance: credit_allowance ?? null,
         invited_by: user.id,
@@ -80,11 +97,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       })
       .select()
       .single();
+    if (error) return NextResponse.json({ error: error.message }, { status: 400 });
     memberId = member?.id ?? null;
   }
 
   // Fetch inviter profile for email
-  const { data: inviterProfile } = await (supabase as any)
+  const { data: inviterProfile } = await (admin as any)
     .from("profiles")
     .select("full_name, email")
     .eq("id", user.id)

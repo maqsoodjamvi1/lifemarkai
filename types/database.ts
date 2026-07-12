@@ -69,6 +69,18 @@ export type Database = {
         Insert: Omit<Database["public"]["Tables"]["projects"]["Row"], "id" | "created_at" | "updated_at">;
         Update: Partial<Database["public"]["Tables"]["projects"]["Insert"]>;
       };
+      project_private_context: {
+        Row: {
+          project_id: string;
+          context_summary: string | null;
+          context_summary_at: string | null;
+          context_summary_covers: number | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Omit<Database["public"]["Tables"]["project_private_context"]["Row"], "created_at" | "updated_at">;
+        Update: Partial<Database["public"]["Tables"]["project_private_context"]["Insert"]>;
+      };
       project_files: {
         Row: {
           id: string;
@@ -246,7 +258,7 @@ export type Database = {
           id: string;
           project_id: string;
           created_by: string;
-          role: string;
+          role: "viewer" | "editor";
           token: string;
           expires_at: string;
           used_count: number;
@@ -256,7 +268,7 @@ export type Database = {
         Insert: {
           project_id: string;
           created_by: string;
-          role?: string;
+          role?: "viewer" | "editor";
           token?: string;
           expires_at?: string;
           max_uses?: number | null;
@@ -400,6 +412,56 @@ export type Database = {
         };
         Update: Partial<Database["public"]["Tables"]["project_ai_initiative_events"]["Insert"]>;
       };
+      credit_reservations: {
+        Row: {
+          id: string;
+          user_id: string;
+          project_id: string | null;
+          action: string;
+          reserved_amount: number;
+          settled_amount: number | null;
+          refunded_amount: number;
+          status: "active" | "settled" | "cancelled" | "expired";
+          expires_at: string;
+          completed_at: string | null;
+          balance_after: number | null;
+          created_at: string;
+        };
+        Insert: Omit<Database["public"]["Tables"]["credit_reservations"]["Row"], "id" | "created_at">;
+        Update: Partial<Database["public"]["Tables"]["credit_reservations"]["Insert"]>;
+      };
+      stripe_events: {
+        Row: {
+          id: string;
+          type: string;
+          processed_at: string;
+          status: "processing" | "completed" | "failed";
+          claimed_at: string;
+          completed_at: string | null;
+          last_error: string | null;
+        };
+        Insert: {
+          id: string;
+          type: string;
+          processed_at?: string;
+          status?: "processing" | "completed" | "failed";
+          claimed_at?: string;
+          completed_at?: string | null;
+          last_error?: string | null;
+        };
+        Update: Partial<Database["public"]["Tables"]["stripe_events"]["Insert"]>;
+      };
+      project_cloud_credentials: {
+        Row: {
+          project_id: string;
+          service_key: string | null;
+          db_password: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Omit<Database["public"]["Tables"]["project_cloud_credentials"]["Row"], "created_at" | "updated_at">;
+        Update: Partial<Database["public"]["Tables"]["project_cloud_credentials"]["Insert"]>;
+      };
     },
     Views: Record<string, never>;
     Functions: {
@@ -408,12 +470,71 @@ export type Database = {
         Returns: boolean;
       };
       add_credits: {
-        Args: { p_user_id: string; p_amount: number };
+        Args: { p_user_id: string; p_amount: number; p_action?: string; p_description?: string };
         Returns: void;
       };
       add_team_credits: {
-        Args: { p_team_id: string; p_amount: number };
+        Args: { p_team_id: string; p_amount: number; p_description?: string };
         Returns: void;
+      };
+      grant_daily_credits: {
+        Args: { p_user_id: string };
+        Returns: number;
+      };
+      reserve_credits: {
+        Args: {
+          p_user_id: string;
+          p_amount: number;
+          p_action: string;
+          p_project_id?: string | null;
+          p_ttl_seconds?: number;
+        };
+        Returns: string | null;
+      };
+      settle_credit_reservation: {
+        Args: { p_reservation_id: string; p_actual_amount: number };
+        Returns: number | null;
+      };
+      cancel_credit_reservation: {
+        Args: { p_reservation_id: string };
+        Returns: number | null;
+      };
+      log_free_credit_action: {
+        Args: { p_user_id: string; p_action: "auto_fix" | "inline_edit"; p_project_id?: string | null };
+        Returns: void;
+      };
+      claim_free_credit_action: {
+        Args: {
+          p_user_id: string;
+          p_action: "auto_fix" | "inline_edit";
+          p_daily_limit: number;
+          p_project_id?: string | null;
+        };
+        Returns: number;
+      };
+      consume_project_ai_credits: {
+        Args: { p_project_id: string; p_amount?: number };
+        Returns: number | null;
+      };
+      fund_workspace_credit_pool: {
+        Args: { p_team_id: string; p_user_id: string; p_amount: number };
+        Returns: Json;
+      };
+      can_access_project_private_context: {
+        Args: { p_project_id: string; p_write?: boolean };
+        Returns: boolean;
+      };
+      is_project_owner: {
+        Args: { p_project_id: string };
+        Returns: boolean;
+      };
+      accept_project_invite_token: {
+        Args: { p_token: string };
+        Returns: Json;
+      };
+      accept_team_invite: {
+        Args: { p_team_id: string; p_member_id: string };
+        Returns: Json;
       };
       generate_project_slug: {
         Args: { p_name: string; p_user_id: string };

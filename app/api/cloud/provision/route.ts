@@ -46,6 +46,17 @@ export async function POST(req: NextRequest) {
       region: project.cloud_region,
     });
   }
+  if (project.cloud_enabled && project.cloud_status === "provisioning") {
+    return NextResponse.json(
+      {
+        ok: true,
+        message: "Cloud provisioning is already in progress",
+        region: project.cloud_region,
+        status: "provisioning",
+      },
+      { status: 202 },
+    );
+  }
 
   // Pull workspace default region if none provided
   const { data: profile } = await supabase

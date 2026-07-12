@@ -1,12 +1,12 @@
 # LifemarkAI — Codebase Guide
 
-A full-stack AI-powered app builder (Lovable.dev clone) built with Next.js 14, Supabase, and multi-model AI.
+A full-stack AI-powered app builder (Lovable.dev clone) built with Next.js 16, Supabase, and multi-model AI.
 
 ## Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Framework | Next.js 14 App Router (TypeScript) |
+| Framework | Next.js 16 App Router (TypeScript) |
 | Database | Supabase (PostgreSQL + RLS + Realtime) |
 | Auth | Supabase Auth (Email + GitHub OAuth) |
 | AI | OpenRouter-first per-task tiers (streaming SSE): Pareto Code router (coding), Fusion (planning/chat/reasoning), DeepSeek V4 Flash (fast) — `MODEL_TIERS` in `lib/ai/editor-intelligence.ts`; Nano Banana 2 → DALL-E 3 for images |
@@ -194,8 +194,6 @@ See `.env.local.example` for all required vars. Minimum to run locally:
 
 ## Migrations
 
-Run in order via Supabase dashboard SQL editor or `supabase db push`:
-1. `supabase/migrations/001_initial_schema.sql`
-2. `supabase/migrations/002_add_metadata_and_enhancements.sql`
+Run every numbered file in `supabase/migrations/` in order via the Supabase SQL editor or `supabase db push`. Never skip later security or billing migrations.
 
 ## Imported Claude Cowork project instructions

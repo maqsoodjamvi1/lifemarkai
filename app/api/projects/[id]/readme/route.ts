@@ -84,7 +84,7 @@ Generate a complete README.md for this project.`;
         { role: "user", content: userPrompt },
       ],
       maxTokens: 2000,
-    });
+    }, { projectId: id, userId: user.id, task: "readme_generation" });
     readme = response.content ?? "";
   } catch (e) {
     return NextResponse.json({ error: "AI generation failed: " + String(e) }, { status: 500 });

@@ -8,6 +8,8 @@
 
 # production
 /build
+/outputs/
+/build-*.txt
 
 # env files
 .env
@@ -17,6 +19,8 @@
 # debug
 npm-debug.log*
 debug-*.log
+.codex-dev*.log
+*.log
 
 # typescript
 *.tsbuildinfo
@@ -38,4 +42,8 @@ Thumbs.db
 # supabase
 .branches
 .temp
-\n# Ignore local installer and nested git backup\nDockerDesktopInstaller.exe\nlifemarkai/.git.bak
+
+# local installers, scratch scripts, and nested repository backups
+/DockerDesktopInstaller.exe
+/_tmp_*.mjs
+/lifemarkai/.git.bak/

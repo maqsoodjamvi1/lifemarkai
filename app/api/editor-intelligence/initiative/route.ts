@@ -16,7 +16,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
-import { claimDailyCredits } from "@/lib/credits";
+import {
+  cancelCreditReservation,
+  reserveCredits,
+  settleCreditReservation,
+} from "@/lib/credits";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInitiative } from "@/lib/ai/editor-lenses/orchestrator";
 import { getRole } from "@/lib/ai/editor-lenses/roles";
@@ -40,6 +44,7 @@ export const maxDuration = 300;
 
 /** Skip the QA self-verify loop when fewer than ~60s of the route budget remain. */
 const VERIFY_TIME_CUTOFF_MS = (maxDuration - 60) * 1000;
+const INITIATIVE_MAX_CREDITS = 5;
 
 interface Body {
   projectId: string;
@@ -102,10 +107,6 @@ interface ProjectRow {
   environment?: string | null;
 }
 
-interface ProfileCreditsRow {
-  credits: number | string | null;
-}
-
 interface ProjectFileRow {
   path?: string | null;
   content?: string | null;
@@ -147,14 +148,42 @@ export async function POST(req: NextRequest) {
   const rl = await rateLimitAsync(`editor-intelligence:${user.id}`, RATE_LIMITS.ai);
   if (!rl.success) return NextResponse.json({ error: "Rate limited" }, { status: 429 });
 
-  // Credit gate (claim daily free credits first, like other AI routes).
-  await claimDailyCredits(supabase, user.id);
-  const { data: profile } = await db
-    .from<ProfileCreditsRow>("profiles")
-    .select("credits")
-    .eq("id", user.id)
-    .single();
-  if (!profile || Number(profile.credits) <= 0) {
+  const existingRun = runId ? await loadEditorInitiativeRun(supabase, runId) : null;
+  if (runId && !existingRun) {
+    return NextResponse.json({ error: "Initiative run not found" }, { status: 404 });
+  }
+  if (existingRun && existingRun.project_id !== projectId) {
+    return NextResponse.json({ error: "Initiative run belongs to a different project" }, { status: 400 });
+  }
+
+  if (
+    budgetCredits != null
+    && (!Number.isFinite(budgetCredits) || budgetCredits < 0.5 || budgetCredits > INITIATIVE_MAX_CREDITS)
+  ) {
+    return NextResponse.json(
+      { error: `budgetCredits must be between 0.5 and ${INITIATIVE_MAX_CREDITS}` },
+      { status: 400 },
+    );
+  }
+  const storedBudget = Number(existingRun?.budget_credits ?? 0);
+  const reservationCap = budgetCredits
+    ?? (Number.isFinite(storedBudget) && storedBudget >= 0.5
+      ? Math.min(storedBudget, INITIATIVE_MAX_CREDITS)
+      : INITIATIVE_MAX_CREDITS);
+  let creditReservation: Awaited<ReturnType<typeof reserveCredits>>;
+  try {
+    creditReservation = await reserveCredits(supabase, {
+      userId: user.id,
+      amount: reservationCap,
+      action: "editor_intelligence_build",
+      projectId,
+      ttlSeconds: 900,
+    });
+  } catch (error) {
+    console.error("Unable to reserve initiative credits:", error);
+    return NextResponse.json({ error: "Unable to reserve credits" }, { status: 500 });
+  }
+  if (!creditReservation) {
     return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
   }
 
@@ -175,22 +204,22 @@ export async function POST(req: NextRequest) {
     /* table optional / non-fatal */
   }
 
-  const existingRun = runId ? await loadEditorInitiativeRun(supabase, runId) : null;
-  if (runId && !existingRun) {
-    return NextResponse.json({ error: "Initiative run not found" }, { status: 404 });
-  }
-  if (existingRun && existingRun.project_id !== projectId) {
-    return NextResponse.json({ error: "Initiative run belongs to a different project" }, { status: 400 });
+  let initiativeRun;
+  try {
+    initiativeRun = existingRun ?? await createEditorInitiativeRun({
+      supabase,
+      projectId,
+      userId: user.id,
+      goal: requestedGoal,
+      budgetCredits: reservationCap,
+    });
+  } catch (error) {
+    await cancelCreditReservation(supabase, creditReservation.id).catch(() => {});
+    console.error("Unable to create initiative run:", error);
+    return NextResponse.json({ error: "Unable to create initiative run" }, { status: 500 });
   }
 
-  const initiativeRun = existingRun ?? await createEditorInitiativeRun({
-    supabase,
-    projectId,
-    userId: user.id,
-    goal: requestedGoal,
-    budgetCredits: budgetCredits ?? null,
-  });
-
+  const startingCreditsUsed = Number(existingRun?.checkpoint?.creditsUsed ?? 0) || 0;
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -282,6 +311,7 @@ export async function POST(req: NextRequest) {
           const verification = await runSelfVerification({
             supabase,
             projectId,
+            userId: user.id,
             emit: (status) => {
               const progress: EditorIntelligenceEvent = {
                 type: "agent_message",
@@ -339,7 +369,9 @@ export async function POST(req: NextRequest) {
         }
       };
 
-      let creditsUsed = 0;
+      let creditsUsed = startingCreditsUsed;
+      let agentCreditsThisRequest = 0;
+      let billableWorkReturned = false;
       try {
         const runStartEvent = {
           type: "initiative_run",
@@ -362,8 +394,12 @@ export async function POST(req: NextRequest) {
           goal: initiativeRun.goal ?? requestedGoal,
           files,
           autonomy,
-          budgetCredits: Number(initiativeRun.budget_credits ?? budgetCredits ?? 0) || undefined,
+          budgetCredits: reservationCap,
           checkpoint: initiativeRun.checkpoint ?? null,
+          onCreditUsage: (cumulative) => {
+            creditsUsed = Math.max(creditsUsed, cumulative);
+            if (cumulative > startingCreditsUsed) billableWorkReturned = true;
+          },
           onCheckpoint: (checkpoint) => updateEditorInitiativeCheckpoint({
             supabase,
             initiativeId: initiativeRun.id,
@@ -376,12 +412,17 @@ export async function POST(req: NextRequest) {
             const result = await runAgent({
               task: `${title}${acceptance ? `\n\nAcceptance criteria: ${acceptance}` : ""}`,
               projectId,
+              userId: user.id,
               files: taskFiles,
               knowledge: getRole(role).systemPrompt,
               maxIterations: 12,
               onStep: () => {},
               onFileChange: (p, c) => changed.set(p, c),
             });
+            if (result.tokensUsed > 0) {
+              billableWorkReturned = true;
+              agentCreditsThisRequest += Math.round((result.tokensUsed / 1000) * 0.05 * 100) / 100;
+            }
             const changedFiles = [...changed.entries()].map(([path, content]) => ({ path, content }));
             // Persist the agent's file changes to project_files so the build is real.
             if (changedFiles.length) {
@@ -454,17 +495,25 @@ export async function POST(req: NextRequest) {
         }).catch(() => {});
       }
 
-      // Debit credits for the run (files were persisted per-task above).
+      // Settle only usage produced by this HTTP run. Checkpoint credits are
+      // cumulative, so subtracting the starting value avoids double-charging a
+      // resumed initiative.
       try {
-        const debit = Math.max(1, Math.ceil(creditsUsed));
-        await db.rpc("deduct_credits", {
-          user_id: user.id,
-          amount: debit,
-          action: "editor_intelligence_build",
-          project_id: projectId,
-        });
-      } catch {
-        /* non-fatal */
+        if (billableWorkReturned) {
+          const roleCreditsThisRequest = Math.max(0, creditsUsed - startingCreditsUsed);
+          const rawActual = roleCreditsThisRequest + agentCreditsThisRequest;
+          const actual = Math.min(
+            creditReservation.amount,
+            Math.max(0.5, Math.ceil(rawActual * 20) / 20),
+          );
+          await settleCreditReservation(supabase, creditReservation.id, actual);
+        } else {
+          await cancelCreditReservation(supabase, creditReservation.id);
+        }
+      } catch (billingError) {
+        // Leave an active reservation untouched if settlement fails; its TTL is
+        // safer than refunding work that may already have been delivered.
+        console.error("Initiative reservation settlement failed:", billingError);
       }
 
       if (!clientGone) {

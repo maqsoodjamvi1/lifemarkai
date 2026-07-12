@@ -21,14 +21,10 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Loader2 } from "lucide-react";
-
-const STORAGE_KEY = "lifemark.buildWithUrl";
-
-interface BuildPayload {
-  prompt: string;
-  images: string[];
-  at: number;
-}
+import {
+  BUILD_WITH_URL_STORAGE_KEY,
+  type BuildWithUrlPayload,
+} from "@/lib/build-with-url";
 
 function parseHash(): { prompt?: string; images: string[] } | null {
   if (typeof window === "undefined") return null;
@@ -36,7 +32,11 @@ function parseHash(): { prompt?: string; images: string[] } | null {
   if (!raw) return null;
   const params = new URLSearchParams(raw);
   const prompt = params.get("prompt") ?? undefined;
-  const images = params.getAll("images");
+  const images = params
+    .getAll("images")
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
   if (!prompt && images.length === 0) return null;
   return { prompt, images };
 }
@@ -67,14 +67,16 @@ export function BuildWithUrlHandler() {
 
     setProcessing(true);
 
-    // Stash payload for the dashboard to consume
+    // Stash payload for the dashboard to consume.
+    let stored = false;
     try {
-      const payload: BuildPayload = {
+      const payload: BuildWithUrlPayload = {
         prompt: parsed.prompt,
         images: parsed.images,
         at: Date.now(),
       };
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      sessionStorage.setItem(BUILD_WITH_URL_STORAGE_KEY, JSON.stringify(payload));
+      stored = true;
     } catch {
       // sessionStorage can fail in private modes — fall back to a URL param
     }
@@ -88,7 +90,12 @@ export function BuildWithUrlHandler() {
         router.push(`/signup?redirect=${encodeURIComponent(target)}`);
         return;
       }
-      router.push("/dashboard?new=true&fromUrl=1");
+      const dashboardSearch = new URLSearchParams({ new: "true", fromUrl: "1" });
+      if (!stored) {
+        dashboardSearch.set("prompt", parsed.prompt!);
+        parsed.images.forEach((image) => dashboardSearch.append("images", image));
+      }
+      router.push(`/dashboard?${dashboardSearch.toString()}`);
     })();
   }, [router, search]);
 

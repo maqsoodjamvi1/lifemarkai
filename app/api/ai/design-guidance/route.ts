@@ -1,8 +1,13 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
-import { generateAI } from "@/lib/ai/provider";
+import { generateAI } from "@/lib/ai/generate";
 import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import {
+  cancelCreditReservation,
+  reserveCredits,
+  settleCreditReservation,
+} from "@/lib/credits";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -43,14 +48,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
   }
 
-  // Grant today's daily free credits before the balance gate (migration 063)
-  await (await import("@/lib/credits")).claimDailyCredits(supabase, user.id);
-  const { data: profile } = await (supabase as any)
-    .from("profiles").select("credits").eq("id", user.id).single();
-  if (!profile || profile.credits <= 0) {
-    return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
-  }
-
   const body = await req.json();
   const { projectId, filesSample, screenshotBase64 } = body;
 
@@ -77,15 +74,33 @@ export async function POST(req: NextRequest) {
         { role: "user", content: textContent },
       ];
 
+  let reservation: Awaited<ReturnType<typeof reserveCredits>> = null;
+  let billableOutput = false;
+  let reservationFinalized = false;
+
   try {
-    const result = await generateAI({
-      model: DEFAULT_CODING_MODEL,
-      messages,
-      maxTokens: 3000,
-      temperature: 0.3,
-      stream: false,
-      jsonMode: !screenshotBase64, // JSON mode only for text-only requests
+    reservation = await reserveCredits(supabase, {
+      userId: user.id,
+      amount: 1,
+      action: "design_guidance",
+      projectId,
     });
+    if (!reservation) {
+      return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
+    }
+
+    const result = await generateAI(
+      {
+        model: DEFAULT_CODING_MODEL,
+        messages,
+        maxTokens: 3000,
+        temperature: 0.3,
+        stream: false,
+        jsonMode: !screenshotBase64, // JSON mode only for text-only requests
+      },
+      { projectId, userId: user.id, task: "design_guidance" },
+    );
+    billableOutput = true;
 
     let parsed: {
       score: number;
@@ -105,16 +120,11 @@ export async function POST(req: NextRequest) {
       const raw = result.content.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
       parsed = JSON.parse(raw);
     } catch {
-      return NextResponse.json({ error: "AI returned invalid JSON" }, { status: 500 });
+      throw new Error("AI returned invalid JSON");
     }
 
-    // Deduct 1 credit
-    await (supabase as any).rpc("deduct_credits", {
-      user_id: user.id,
-      amount: 1,
-      action: "design_guidance",
-      project_id: projectId,
-    });
+    await settleCreditReservation(supabase, reservation.id, 1);
+    reservationFinalized = true;
 
     import("@/lib/stripe/auto-topup")
       .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
@@ -122,6 +132,18 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(parsed);
   } catch (err) {
+    if (reservation && !reservationFinalized) {
+      try {
+        if (billableOutput) {
+          await settleCreditReservation(supabase, reservation.id, 1);
+        } else {
+          await cancelCreditReservation(supabase, reservation.id);
+        }
+      } catch (billingError) {
+        console.error("[ai/design-guidance] Failed to finalize credit reservation", billingError);
+      }
+    }
+
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Analysis failed" },
       { status: 500 }

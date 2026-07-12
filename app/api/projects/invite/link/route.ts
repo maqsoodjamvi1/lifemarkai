@@ -11,8 +11,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
 
 // ── POST — create a new invite link ──────────────────────────────────────────
 export async function POST(req: NextRequest) {
@@ -24,9 +23,18 @@ export async function POST(req: NextRequest) {
     await req.json() as { projectId: string; role?: string; maxUses?: number; expiresInDays?: number };
 
   if (!projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 });
+  if (role !== "viewer" && role !== "editor") {
+    return NextResponse.json({ error: "role must be viewer or editor" }, { status: 400 });
+  }
+  if (maxUses != null && (!Number.isInteger(maxUses) || maxUses < 1 || maxUses > 10_000)) {
+    return NextResponse.json({ error: "maxUses must be an integer between 1 and 10000" }, { status: 400 });
+  }
+  if (!Number.isFinite(expiresInDays) || expiresInDays < 1 || expiresInDays > 365) {
+    return NextResponse.json({ error: "expiresInDays must be between 1 and 365" }, { status: 400 });
+  }
 
-  // Verify ownership or admin role
-  const { data: project } = await (supabase as any)
+  const admin = await createAdminClient();
+  const { data: project } = await (admin as any)
     .from("projects")
     .select("id, user_id")
     .eq("id", projectId)
@@ -34,22 +42,12 @@ export async function POST(req: NextRequest) {
 
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-  const isOwner = project.user_id === user.id;
-  if (!isOwner) {
-    const { data: collab } = await (supabase as any)
-      .from("collaborators")
-      .select("role")
-      .eq("project_id", projectId)
-      .eq("user_id", user.id)
-      .single();
-    if (!collab || collab.role !== "admin") {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+  if (project.user_id !== user.id) {
+    return NextResponse.json({ error: "Only the project owner can create invite links" }, { status: 403 });
   }
 
   const expiresAt = new Date(Date.now() + expiresInDays * 86_400_000).toISOString();
 
-  const admin = await createAdminClient();
   const { data: tokenRow, error } = await (admin as any)
     .from("project_invite_tokens")
     .insert({

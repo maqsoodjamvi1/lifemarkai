@@ -12,6 +12,12 @@ import { Loader2, ShieldCheck, KeyRound, AlertCircle, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { createClient } from "@/lib/supabase/client";
+import { resolveSafeRedirect } from "@/lib/auth/safe-redirect";
+
+function getRedirectDestination() {
+  const requested = new URLSearchParams(window.location.search).get("next");
+  return resolveSafeRedirect(requested, "/dashboard", window.location.origin);
+}
 
 export default function MfaChallengePage() {
   const router = useRouter();
@@ -31,7 +37,7 @@ export default function MfaChallengePage() {
       const verified = data.totp?.find((f) => f.status === "verified");
       if (!verified) {
         // No 2FA factor — redirect to dashboard
-        router.replace("/dashboard");
+        router.replace(getRedirectDestination());
         return;
       }
       setFactorId(verified.id);
@@ -62,7 +68,7 @@ export default function MfaChallengePage() {
         return;
       }
       // Success — session is now fully authenticated
-      router.replace("/dashboard");
+      router.replace(getRedirectDestination());
     } finally {
       setBusy(false);
     }

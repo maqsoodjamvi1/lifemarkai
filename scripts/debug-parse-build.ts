@@ -3,7 +3,7 @@
  * Logs to debug-06409d.log (session 06409d).
  */
 import { appendFileSync, readFileSync } from "fs";
-import { generateAI } from "../lib/ai/provider";
+import { generateAI } from "../lib/ai/generate";
 import { DEFAULT_CODING_MODEL } from "../lib/ai/model-defaults";
 import { buildGenerationPrompt } from "../lib/ai/system-prompts";
 import { parseAIResponse, needsBuildContinuation } from "../lib/ai/code-parser";
@@ -49,7 +49,7 @@ async function main() {
       stream: true,
       jsonMode: true,
       onChunk: (c) => { raw += c; },
-    });
+    }, { task: "debug_parse_build" });
     raw = result.content || raw;
     log("generate ok", { contentLen: raw.length, tokensUsed: result.tokensUsed, model: result.model }, "H2");
 
@@ -73,7 +73,7 @@ async function main() {
         stream: true,
         jsonMode: false,
         onChunk: (c) => { raw += c; contChunk += c; },
-      });
+      }, { task: "debug_parse_build_continuation" });
       log("continuation round", { contRounds, contChunkLen: contChunk.length, totalLen: raw.length }, "H4");
       if (!contChunk.trim()) break;
     }

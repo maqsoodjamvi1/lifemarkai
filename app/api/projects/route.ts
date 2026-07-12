@@ -3,6 +3,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTemplateById } from "@/lib/templates/built-in";
 import { projectSchema } from "@/lib/validations";
 
+// Explicitly exclude managed service credentials on databases where the
+// server-only credential migration has not been deployed yet.
+const PROJECT_SAFE_SELECT = [
+  "id", "user_id", "name", "description", "framework", "status", "is_public",
+  "preview_url", "deployed_url", "github_repo", "github_branch", "supabase_project_url",
+  "template_id", "created_at", "updated_at", "metadata", "slug", "custom_domain",
+  "team_id", "knowledge", "seo_title", "seo_description", "og_image_url", "favicon_url",
+  "remix_enabled", "remix_count", "remix_of", "badge_hidden", "total_views", "is_starred",
+  "visibility", "git_provider", "star_count", "ai_integration_enabled", "ai_integration_model",
+  "ai_credits_used", "ai_credit_limit", "environment", "live_locked_at", "cloud_enabled",
+  "cloud_region", "cloud_instance", "cloud_provisioned_at", "cloud_status", "is_design_system",
+  "design_system_meta", "disabled_skill_ids", "cloud_tool_permissions", "cloud_project_ref",
+  "cloud_supabase_url", "cloud_anon_key", "app_slug",
+].join(", ");
+
 export async function GET() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -10,7 +25,7 @@ export async function GET() {
 
   const { data, error } = await (supabase as any)
     .from("projects")
-    .select("*")
+    .select(PROJECT_SAFE_SELECT)
     .eq("user_id", user.id)
     .order("updated_at", { ascending: false });
 
@@ -55,7 +70,7 @@ export async function POST(req: NextRequest) {
       is_public: false,
       template_id: templateId ?? null,
     })
-    .select()
+    .select(PROJECT_SAFE_SELECT)
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

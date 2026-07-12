@@ -4,6 +4,12 @@ import { createClient } from "@/lib/supabase/server";
 import { Octokit } from "@octokit/rest";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { detectLanguage } from "@/lib/ai/code-parser";
+import {
+  cancelCreditReservation,
+  reserveCredits,
+  settleCreditReservation,
+  type CreditReservation,
+} from "@/lib/credits";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -91,24 +97,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid GitHub URL" }, { status: 400 });
   }
 
-  // Grant today's daily free credits before the balance gate (migration 063)
-  await (await import("@/lib/credits")).claimDailyCredits(supabase, user.id);
-
   // Use user's GitHub token if available (allows private repos), fall back to anonymous
   const { data: profile } = await (supabase as any)
     .from("profiles")
-    .select("github_token, credits")
+    .select("github_access_token")
     .eq("id", user.id)
     .single();
 
-  if (!profile || profile.credits <= 0) {
-    return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
-  }
-
   const octokit = new Octokit({
-    auth: profile.github_token ?? process.env.GITHUB_TOKEN ?? undefined,
+    auth: profile?.github_access_token ?? process.env.GITHUB_TOKEN ?? undefined,
   });
 
+  let creditReservation: CreditReservation | null = null;
+  let reservationFinalized = false;
+  let durableImportStarted = false;
   try {
     // Fetch repo metadata
     const { data: repoData } = await octokit.repos.get({
@@ -167,6 +169,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Could not fetch any file contents" }, { status: 422 });
     }
 
+    // Remote discovery is read-only. Reserve the full import cost immediately
+    // before creating any durable project state.
+    creditReservation = await reserveCredits(supabase, {
+      userId: user.id,
+      amount: 2,
+      action: "github_import",
+      projectId: null,
+    });
+    if (!creditReservation) {
+      return NextResponse.json(
+        { error: "Insufficient credits", requiredCredits: 2 },
+        { status: 402 },
+      );
+    }
+
     // Create the project
     const projectName = `${parsed.repo} (imported)`;
     const { data: project, error: projectError } = await (supabase as any)
@@ -175,7 +192,7 @@ export async function POST(req: NextRequest) {
         user_id: user.id,
         name: projectName,
         description: repoData.description ?? `Imported from ${parsed.owner}/${parsed.repo}`,
-        status: "ready",
+        status: "active",
         framework: detectFramework(fileContents.map((f) => f.path)),
         github_repo: `${parsed.owner}/${parsed.repo}`,
         github_branch: targetBranch,
@@ -186,6 +203,7 @@ export async function POST(req: NextRequest) {
     if (projectError || !project) {
       return NextResponse.json({ error: "Failed to create project" }, { status: 500 });
     }
+    durableImportStarted = true;
 
     // Insert files in batches
     for (let i = 0; i < fileContents.length; i += 50) {
@@ -195,16 +213,17 @@ export async function POST(req: NextRequest) {
         content: f.content,
         language: f.language,
       }));
-      await (supabase as any).from("project_files").insert(batch);
+      const { error: filesError } = await (supabase as any).from("project_files").insert(batch);
+      if (filesError) throw new Error(`Failed to persist imported files: ${filesError.message}`);
     }
 
-    // Deduct 2 credits for import
-    await (supabase as any).rpc("deduct_credits", {
-      user_id: user.id,
-      amount: 2,
-      action: "github_import",
-      project_id: project.id,
-    });
+    const remainingCredits = await settleCreditReservation(
+      supabase,
+      creditReservation.id,
+      2,
+    );
+    if (remainingCredits == null) throw new Error("Unable to settle reserved GitHub import credits");
+    reservationFinalized = true;
 
     return NextResponse.json({
       projectId: project.id,
@@ -223,17 +242,29 @@ export async function POST(req: NextRequest) {
     }
     console.error("[github/import]", err);
     return NextResponse.json({ error: "Import failed: " + message }, { status: 500 });
+  } finally {
+    if (creditReservation && !reservationFinalized) {
+      try {
+        if (durableImportStarted) {
+          const remaining = await settleCreditReservation(supabase, creditReservation.id, 2);
+          reservationFinalized = remaining != null;
+        } else {
+          await cancelCreditReservation(supabase, creditReservation.id);
+          reservationFinalized = true;
+        }
+      } catch {
+        // Fail closed when a project or any imported files may already exist.
+      }
+    }
   }
 }
 
 function detectFramework(paths: string[]): string {
   const has = (name: string) => paths.some((p) => p.includes(name));
-  if (has("next.config")) return "nextjs";
+  if (has("next.config")) return "next";
   if (has("vite.config")) return "react";
-  if (has("nuxt.config")) return "nuxtjs";
+  if (has("nuxt.config")) return "vue";
   if (has("svelte.config")) return "svelte";
-  if (has("astro.config")) return "astro";
-  if (has("remix.config")) return "remix";
-  if (has("angular.json")) return "angular";
+  if (has("astro.config") || has("remix.config") || has("angular.json")) return "react";
   return "react";
 }

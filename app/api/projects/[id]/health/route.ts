@@ -5,6 +5,12 @@ import { generateAI } from "@/lib/ai/generate";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { runHealthScan } from "@/lib/ai/self-healing";
+import {
+  cancelCreditReservation,
+  reserveCredits,
+  settleCreditReservation,
+  type CreditReservation,
+} from "@/lib/credits";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -145,14 +151,6 @@ export async function POST(req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
     }
 
-    // Grant today's daily free credits before the balance gate (migration 063)
-    await (await import("@/lib/credits")).claimDailyCredits(supabase, user.id);
-    const { data: profile } = await (supabase as any)
-      .from("profiles").select("credits").eq("id", user.id).single();
-    if (!profile || profile.credits <= 0) {
-      return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
-    }
-
     // Context: the flagged file plus package.json (dependency fixes need it).
     const wantedPaths = [finding.file_path, "package.json"].filter(Boolean);
     const { data: contextRows } = await (supabase as any)
@@ -186,7 +184,20 @@ ${contextFiles.length > 0
   ? contextFiles.map((f: any) => `--- ${f.path} ---\n${f.content}`).join("\n\n")
   : "(no file content available — propose the file(s) that resolve the finding)"}`;
 
+    let creditReservation: CreditReservation | null = null;
+    let providerReturned = false;
+    let reservationFinalized = false;
     try {
+      creditReservation = await reserveCredits(supabase, {
+        userId: user.id,
+        amount: 1,
+        action: "health_propose_fix",
+        projectId: id,
+      });
+      if (!creditReservation) {
+        return NextResponse.json({ error: "Insufficient credits" }, { status: 402 });
+      }
+
       const result = await generateAI(
         {
           model: getDefaultAiModel(),
@@ -198,8 +209,19 @@ ${contextFiles.length > 0
           temperature: 0.2,
           stream: false,
         },
-        { projectId: id, userId: user.id }
+        { projectId: id, userId: user.id, task: "health_fix" }
       );
+      providerReturned = true;
+
+      // A provider response is billable even when its JSON is invalid or the
+      // proposed-fix persistence step later fails.
+      const remainingCredits = await settleCreditReservation(
+        supabase,
+        creditReservation.id,
+        1,
+      );
+      if (remainingCredits == null) throw new Error("Unable to settle reserved health-fix credits");
+      reservationFinalized = true;
 
       const fix = parseFixJson(result.content ?? "");
       if (!fix) {
@@ -219,16 +241,19 @@ ${contextFiles.length > 0
         .single();
       if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
 
-      // Deduct 1 credit (same pattern as sibling AI routes)
-      await (supabase as any).rpc("deduct_credits", {
-        user_id: user.id,
-        amount: 1,
-        action: "health_propose_fix",
-        project_id: id,
-      });
-
       return NextResponse.json({ ok: true, finding: updated });
     } catch (err) {
+      if (creditReservation && !reservationFinalized) {
+        try {
+          if (providerReturned) {
+            await settleCreditReservation(supabase, creditReservation.id, 1);
+          } else {
+            await cancelCreditReservation(supabase, creditReservation.id);
+          }
+        } catch {
+          // Fail closed if provider work may already exist.
+        }
+      }
       return NextResponse.json(
         { error: err instanceof Error ? err.message : "AI failed" },
         { status: 500 }

@@ -2,6 +2,8 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "./use-toast";
+import { normalizeArrayResponse } from "@/lib/api/array-response";
+import type { Project, ProjectFile } from "@/types/database";
 
 export function useProject(projectId: string) {
   return useQuery({
@@ -21,8 +23,7 @@ export function useProjects() {
     queryFn: async () => {
       const res = await fetch("/api/projects");
       if (!res.ok) throw new Error("Failed to fetch projects");
-      const data = await res.json();
-      return data.projects || [];
+      return normalizeArrayResponse<Project>(await res.json(), "projects");
     },
   });
 }
@@ -102,8 +103,7 @@ export function useProjectFiles(projectId: string) {
     queryFn: async () => {
       const res = await fetch(`/api/projects/${projectId}/files`);
       if (!res.ok) throw new Error("Failed to fetch files");
-      const data = await res.json();
-      return data.files || [];
+      return normalizeArrayResponse<ProjectFile>(await res.json(), "files");
     },
     enabled: !!projectId,
   });

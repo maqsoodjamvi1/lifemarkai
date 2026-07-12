@@ -6,6 +6,10 @@ import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { generateImage, isImageGenConfigured, type ImageSize } from "@/lib/ai/image-generate";
 import { rateLimit } from "@/lib/rate-limit";
 import { isApprovedModel } from "@/lib/ai/cost-controls";
+import {
+  consumeProjectAiCredits,
+  ProjectAiCreditLimitError,
+} from "@/lib/ai/project-credit-meter";
 
 // POST /api/projects/[id]/ai-proxy
 // Managed, no-key AI connector for apps built with LifemarkAI.
@@ -171,18 +175,8 @@ async function logAiRequest(
   }
 }
 
-async function consumeCredits(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  supabase: any,
-  projectId: string,
-  currentUsed: number,
-  cost: number,
-  meta?: LogMeta,
-): Promise<number> {
-  const creditsUsed = currentUsed + cost;
-  await supabase.from("projects").update({ ai_credits_used: creditsUsed }).eq("id", projectId);
-  if (meta) void logAiRequest(projectId, { ...meta, cost, status: "success" });
-  return creditsUsed;
+function logSuccessfulRequest(projectId: string, cost: number, meta: LogMeta): void {
+  void logAiRequest(projectId, { ...meta, cost, status: "success" });
 }
 
 export async function POST(
@@ -255,6 +249,7 @@ export async function POST(
     return json(origin, { error: `${capability} rate limit exceeded`, resetAt: rl.resetAt }, 429);
   }
 
+  let meteredCost = 0;
   try {
     if (capability === "image") {
       if (!isImageGenConfigured()) {
@@ -266,10 +261,12 @@ export async function POST(
       if (prompt.length > 4000) return json(origin, { error: "prompt must be under 4000 characters" }, 400);
 
       const size = body.size && VALID_IMAGE_SIZES.has(body.size) ? body.size : "1024x1024";
+      const creditsUsed = await consumeProjectAiCredits(projectId, cost);
+      meteredCost = cost;
       const result = await generateImage({ prompt, size, style: body.style });
-      if (!result) return json(origin, { error: "Image generation failed" }, 502);
+      if (!result) throw new Error("Image generation failed");
 
-      const creditsUsed = await consumeCredits(supabase as any, projectId, currentUsed, cost, {
+      logSuccessfulRequest(projectId, cost, {
         capability,
         model: result.model,
         startedAt,
@@ -295,12 +292,14 @@ export async function POST(
       }
 
       const model = body.model ?? defaultEmbeddingModel();
+      const creditsUsed = await consumeProjectAiCredits(projectId, cost);
+      meteredCost = cost;
       const result = await openai.embeddings.create({
         model,
         input: Array.isArray(input) ? cleanItems : cleanItems[0],
       });
 
-      const creditsUsed = await consumeCredits(supabase as any, projectId, currentUsed, cost, {
+      logSuccessfulRequest(projectId, cost, {
         capability,
         model: result.model ?? model,
         tokensUsed: result.usage?.total_tokens,
@@ -328,6 +327,8 @@ export async function POST(
       const format = body.format && VALID_TTS_FORMATS.has(body.format) ? body.format : "mp3";
       const model = body.model ?? "gpt-4o-mini-tts";
       const voice = body.voice ?? "alloy";
+      const creditsUsed = await consumeProjectAiCredits(projectId, cost);
+      meteredCost = cost;
       const speech = await openai.audio.speech.create({
         model,
         voice: voice as Parameters<typeof openai.audio.speech.create>[0]["voice"],
@@ -336,7 +337,7 @@ export async function POST(
       });
       const audio = Buffer.from(await speech.arrayBuffer()).toString("base64");
       const mimeType = format === "mp3" ? "audio/mpeg" : `audio/${format}`;
-      const creditsUsed = await consumeCredits(supabase as any, projectId, currentUsed, cost, {
+      logSuccessfulRequest(projectId, cost, {
         capability,
         model,
         startedAt,
@@ -370,13 +371,15 @@ export async function POST(
       }
 
       const model = body.model ?? "whisper-1";
+      const creditsUsed = await consumeProjectAiCredits(projectId, cost);
+      meteredCost = cost;
       const transcription = await openai.audio.transcriptions.create({
         file: parsed.file,
         model,
         language: body.language?.slice(0, 16),
         prompt: body.prompt?.slice(0, 500),
       });
-      const creditsUsed = await consumeCredits(supabase as any, projectId, currentUsed, cost, {
+      logSuccessfulRequest(projectId, cost, {
         capability,
         model,
         startedAt,
@@ -410,6 +413,8 @@ export async function POST(
 
     const requestedModel = body.model ?? project.ai_integration_model ?? DEFAULT_CODING_MODEL;
     const selectedModel = isApprovedModel(requestedModel) ? requestedModel : DEFAULT_CODING_MODEL;
+    const creditsUsed = await consumeProjectAiCredits(projectId, cost);
+    meteredCost = cost;
     const result = await generateAI(
       {
         model: selectedModel,
@@ -418,10 +423,10 @@ export async function POST(
         temperature: clampNumber(body.temperature, 0.7, 0, 2),
         stream: false,
       },
-      { projectId, userId: project.user_id },
+      { projectId, userId: project.user_id, task: "app_ai_proxy" },
     );
 
-    const creditsUsed = await consumeCredits(supabase as any, projectId, currentUsed, cost, {
+    logSuccessfulRequest(projectId, cost, {
       capability,
       model: result.model ?? selectedModel,
       tokensUsed: result.tokensUsed,
@@ -435,10 +440,18 @@ export async function POST(
       creditsUsed,
     });
   } catch (err) {
+    if (err instanceof ProjectAiCreditLimitError) {
+      return json(origin, {
+        error: err.message,
+        capability,
+        creditsUsed: currentUsed,
+        creditLimit,
+      }, 402);
+    }
     void logAiRequest(projectId, {
       capability,
       model: body.model ?? null,
-      cost: 0,
+      cost: meteredCost,
       startedAt,
       status: "error",
       error: err instanceof Error ? err.message : "AI request failed",

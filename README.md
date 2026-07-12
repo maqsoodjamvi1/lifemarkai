@@ -1,6 +1,6 @@
 # LifemarkAI — AI App Builder
 
-A full-featured Lovable.dev clone built with Next.js 14, Supabase, Monaco Editor, and multi-model AI.
+A full-featured Lovable.dev clone built with Next.js 16, Supabase, Monaco Editor, and multi-model AI.
 
 ## Quick Start
 
@@ -19,7 +19,7 @@ Then open [http://localhost:3000](http://localhost:3000).
 ### 1. Supabase
 
 1. Create a project at [supabase.com](https://supabase.com)
-2. Run `supabase/migrations/001_initial.sql` in the Supabase SQL Editor
+2. Apply every SQL file in `supabase/migrations/` in numeric order
 3. Enable Google and GitHub OAuth providers in Auth → Providers
 4. Set your redirect URL: `http://localhost:3000/auth/callback`
 
@@ -49,7 +49,7 @@ NETLIFY_AUTH_TOKEN=...
 ### 3. Stripe Webhook (local dev)
 
 ```bash
-stripe listen --forward-to localhost:3000/api/stripe/webhook
+stripe listen --forward-to localhost:3000/api/billing/webhook
 ```
 
 ## Architecture
@@ -90,7 +90,7 @@ lib/
 
 ## Database Schema
 
-Run `supabase/migrations/001_initial.sql` to create:
+Apply the numbered files in `supabase/migrations/` to create and evolve:
 - `profiles` — extends auth.users, stores plan/credits
 - `projects` — user projects with framework, visibility
 - `project_files` — individual files per project

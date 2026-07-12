@@ -87,9 +87,14 @@ async function callRole(
       jsonMode: opts.jsonMode,
       maxTokens: 4000,
     },
-    { projectId: ctx.opts.projectId, userId: ctx.opts.userId },
+    {
+      projectId: ctx.opts.projectId,
+      userId: ctx.opts.userId,
+      task: `editor_intelligence_${role}`,
+    },
   );
   ctx.creditsUsed += creditsForTokens(res.tokensUsed);
+  await ctx.opts.onCreditUsage?.(ctx.creditsUsed);
   return res.content;
 }
 
