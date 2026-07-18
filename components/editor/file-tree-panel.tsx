@@ -167,7 +167,12 @@ interface NodeActions {
   onDelete: (node: TreeNode) => void;
   onNewFile: (parentPath: string) => void;
   onNewFolder: (parentPath: string) => void;
+  onDuplicate: (node: TreeNode) => void;
+  /** Drag-drop: move the file at sourcePath into targetFolder ("" = root) */
+  onMove: (sourcePath: string, targetFolder: string) => void;
 }
+
+const DRAG_MIME = "text/lifemark-file-path";
 
 function TreeNodeComponent({
   node, activeFile, onFileSelect, depth = 0, actions,
@@ -181,6 +186,7 @@ function TreeNodeComponent({
   const [open, setOpen] = useState(depth < 2);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [dropHover, setDropHover] = useState(false);
   const isActive = node.file?.id === activeFile?.id;
   // Collapse / expand-all events from file tree toolbar
   useEffect(() => {
@@ -217,7 +223,21 @@ function TreeNodeComponent({
                 <button
                   onClick={() => setOpen((v) => !v)}
                   onDoubleClick={(e) => { e.preventDefault(); setRenaming(true); }}
-                  className="flex items-center gap-1.5 w-full px-2 py-1 rounded hover:bg-[#313244]/60 text-xs text-[#a6adc8] hover:text-[#cdd6f4] transition-colors group"
+                  onDragOver={(e) => {
+                    if (e.dataTransfer.types.includes(DRAG_MIME)) { e.preventDefault(); setDropHover(true); }
+                  }}
+                  onDragLeave={() => setDropHover(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDropHover(false);
+                    const src = e.dataTransfer.getData(DRAG_MIME);
+                    if (src) { actions.onMove(src, node.path); setOpen(true); }
+                  }}
+                  className={`flex items-center gap-1.5 w-full px-2 py-1 rounded text-xs transition-colors group ${
+                    dropHover
+                      ? "bg-violet-500/20 outline outline-1 outline-violet-500/50 text-[#cdd6f4]"
+                      : "hover:bg-[#313244]/60 text-[#a6adc8] hover:text-[#cdd6f4]"
+                  }`}
                   style={{ paddingLeft: `${8 + depth * 12}px` }}
                 >
                   <span className="text-[#585b70] shrink-0">
@@ -311,6 +331,11 @@ function TreeNodeComponent({
               <button
                 onClick={() => node.file && onFileSelect(node.file)}
                 onDoubleClick={(e) => { e.preventDefault(); setRenaming(true); }}
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData(DRAG_MIME, node.path);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
                 className={`flex items-center gap-1.5 w-full py-1 rounded text-xs transition-colors group ${
                   isActive
                     ? "bg-[#313244] text-[#cdd6f4]"
@@ -327,6 +352,9 @@ function TreeNodeComponent({
         <ContextMenuContent className="bg-[#181825] border-[#313244] text-[#cdd6f4] text-xs">
           <ContextMenuItem onClick={() => setRenaming(true)} className="gap-2 text-xs cursor-pointer">
             <Pencil className="w-3.5 h-3.5" /> Rename
+          </ContextMenuItem>
+          <ContextMenuItem onClick={() => actions.onDuplicate(node)} className="gap-2 text-xs cursor-pointer">
+            <FilePlus className="w-3.5 h-3.5" /> Duplicate
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onClick={() => setDeleting(true)} className="gap-2 text-xs text-red-400 cursor-pointer focus:text-red-400 focus:bg-red-500/10">
@@ -470,11 +498,57 @@ export function FileTreePanel({
     }
   }, [files, activeFile, apiBase, onFilesChange, onFileSelect, toast]);
 
+  const duplicateNode = useCallback(async (node: TreeNode) => {
+    if (!node.file) return;
+    const dir = node.path.includes("/") ? node.path.split("/").slice(0, -1).join("/") : "";
+    const dot = node.name.lastIndexOf(".");
+    const base = dot > 0 ? node.name.slice(0, dot) : node.name;
+    const ext = dot > 0 ? node.name.slice(dot) : "";
+    const paths = new Set(files.map((f) => f.path));
+    let candidate = `${base}-copy${ext}`;
+    let n = 2;
+    while (paths.has(dir ? `${dir}/${candidate}` : candidate)) candidate = `${base}-copy-${n++}${ext}`;
+    const path = dir ? `${dir}/${candidate}` : candidate;
+    const res = await fetch(apiBase, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, content: node.file.content ?? "", language: node.file.language ?? detectLanguage(path) }),
+    });
+    if (!res.ok) { toast({ title: "Failed to duplicate", variant: "destructive" }); return; }
+    const newFile = await res.json() as ProjectFile;
+    onFilesChange([...files, newFile]);
+    onFileSelect(newFile);
+    toast({ title: `Duplicated as "${candidate}"` });
+  }, [files, apiBase, onFilesChange, onFileSelect, toast]);
+
+  const moveNode = useCallback(async (sourcePath: string, targetFolder: string) => {
+    const file = files.find((f) => f.path === sourcePath);
+    if (!file) return;
+    const name = sourcePath.split("/").pop()!;
+    const newPath = targetFolder ? `${targetFolder}/${name}` : name;
+    if (newPath === sourcePath) return;
+    if (files.some((f) => f.path === newPath)) {
+      toast({ title: "A file with that name already exists there", variant: "destructive" });
+      return;
+    }
+    const res = await fetch(apiBase, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileId: file.id, path: newPath }),
+    });
+    if (!res.ok) { toast({ title: "Failed to move file", variant: "destructive" }); return; }
+    const updated = await res.json() as ProjectFile;
+    onFilesChange(files.map((f) => (f.id === updated.id ? updated : f)));
+    toast({ title: `Moved to ${targetFolder || "project root"}` });
+  }, [files, apiBase, onFilesChange, toast]);
+
   const nodeActions: NodeActions = {
     onRename: renameNode,
     onDelete: deleteNode,
     onNewFile: (parentPath) => setCreating({ type: "file", parentPath }),
     onNewFolder: (parentPath) => setCreating({ type: "folder", parentPath }),
+    onDuplicate: duplicateNode,
+    onMove: moveNode,
   };
 
   const generateReadme = useCallback(async () => {
@@ -634,8 +708,20 @@ export function FileTreePanel({
         </div>
       </div>
 
-      {/* Tree */}
-      <div className="flex-1 overflow-y-auto py-1">
+      {/* Tree — the container itself is a drop target for "move to root" */}
+      <div
+        className="flex-1 overflow-y-auto py-1"
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes(DRAG_MIME)) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          // Folder nodes preventDefault when they handle a drop; if the event
+          // reaches here unhandled, move the dragged file to the project root.
+          if (e.defaultPrevented) return;
+          const src = e.dataTransfer.getData(DRAG_MIME);
+          if (src && src.includes("/")) { e.preventDefault(); moveNode(src, ""); }
+        }}
+      >
         {/* Inline new file/folder at root */}
         {creating && creating.parentPath === "" && (
           <InlineInput

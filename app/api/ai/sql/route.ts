@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
-import { getDefaultAiModel } from "@/lib/ai/model-defaults";
+import { getFastAiModel } from "@/lib/ai/model-defaults";
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -45,7 +45,8 @@ Rules:
 - Never generate DROP, TRUNCATE, or ALTER TABLE statements`;
 
   const result = await generateAI({
-    model: getDefaultAiModel(),
+    // One-shot NL→SQL is light work — fast tier, not the coding workhorse.
+    model: getFastAiModel(),
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: body.prompt },

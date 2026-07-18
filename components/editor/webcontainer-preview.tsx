@@ -620,6 +620,9 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
     error: "Error",
   };
 
+  /** Lovable never exposes npm-install/boot phases — spinner only when embedded. */
+  const overlayLabel = embedded ? null : statusLabel[status];
+
   return (
     <div className={`flex flex-col h-full bg-[#0a0a0f] ${className}`}>
       {!embedded && (
@@ -675,11 +678,15 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-0 z-10 flex items-center justify-center bg-[#0a0a0f]"
+              className={`absolute inset-0 z-10 flex items-center justify-center ${embedded ? "bg-[#0a0a0a]" : "bg-[#0a0a0f]"}`}
             >
               <div className="flex flex-col items-center gap-3">
-                <Loader2 className="w-8 h-8 text-violet-400 animate-spin" />
-                <p className="text-xs text-slate-400">{statusLabel[status]}...</p>
+                <Loader2 className={`animate-spin ${embedded ? "w-6 h-6 text-muted-foreground/50" : "w-8 h-8 text-violet-400"}`} />
+                {overlayLabel && (
+                  <p className={`text-xs ${embedded ? "text-muted-foreground/40" : "text-slate-400"}`}>
+                    {overlayLabel}…
+                  </p>
+                )}
               </div>
             </motion.div>
           )}

@@ -3,11 +3,8 @@
  * environment and get a LIVE preview URL (Lovable-parity real execution).
  * Part of the Lovable-parity sandbox preview flow.
  *
- * Pattern adapted from the Lovable-Clone reference (E2B cloud sandboxes):
- * create a sandbox, write the project files, start the dev server, and return
- * `https://<host>` from sandbox.getHost(port). This is real server-side
- * execution + a public preview URL — beyond the client-side WebContainer/srcdoc
- * preview LifemarkAI uses today.
+ * Pattern: Lovable uses **Modal Sandboxes** at scale; LifemarkAI implements Modal
+ * as the primary provider (see lib/sandbox/modal.ts), with E2B as fallback.
  *
  * Design notes:
  * - Provider-agnostic interface so Docker / Firecracker can be added later.
@@ -62,7 +59,7 @@ export interface ClaudeCodeResult {
 }
 
 export interface SandboxProvider {
-  readonly id: "e2b" | "docker" | "firecracker";
+  readonly id: "modal" | "e2b" | "docker" | "firecracker";
   /** True when credentials/SDK are present. */
   isEnabled(): boolean;
   /**
@@ -79,6 +76,8 @@ export interface SandboxProvider {
     startCommand?: string;
     /** Max sandbox lifetime in ms. */
     timeoutMs?: number;
+    /** Project id — enables Lovable-style named warm sandboxes. */
+    projectId?: string;
   }): Promise<SandboxRunResult>;
   /**
    * Run Claude Code agentically inside the sandbox (E2B `claude` template).
@@ -106,12 +105,20 @@ export interface SandboxProvider {
   writeFiles(sandboxId: string, files: SandboxFile[]): Promise<void>;
   /** Re-derive the live preview URL for a running sandbox. */
   getPreviewUrl(sandboxId: string, port?: number): Promise<string>;
+  /** Reconnect to an existing sandbox if still alive (Lovable warm-session parity). */
+  reconnect(sandboxId: string, port?: number): Promise<SandboxRunResult>;
+  /** Reconnect by stable project name (Modal named sandboxes). */
+  reconnectByProject?(projectId: string, port?: number): Promise<SandboxRunResult>;
   /** Tear down a sandbox. */
   kill(sandboxId: string): Promise<void>;
 }
 
+import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared";
+import { ModalSandboxProvider } from "./modal";
+export { detectSandboxStart, sandboxNameForProject } from "./shared";
+export { ModalSandboxProvider } from "./modal";
+
 const DEFAULT_PORT = 3000;
-const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 min
 
 /**
  * Load the E2B SDK only when present. The package name is assembled at runtime
@@ -128,29 +135,8 @@ async function loadE2B(): Promise<{ Sandbox: any } | null> {
   }
 }
 
-function trunc(s: string, n = 4000): string {
-  return s.length > n ? s.slice(0, n) + "…" : s;
-}
-
-/**
- * Poll a URL until the dev server inside the sandbox actually responds.
- * `getHost(port)` only maps the port — it returns instantly, before `next dev` /
- * `vite` has started listening. Returning the URL too early makes the preview
- * iframe load a dead URL (blank / connection refused). Any HTTP response — even
- * a 404 — means the server is up.
- */
-async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(5000) });
-      if (res.status > 0) return true;
-    } catch {
-      /* dev server not listening yet — retry */
-    }
-    await new Promise((r) => setTimeout(r, 1500));
-  }
-  return false;
+function truncLocal(s: string, n = 4000): string {
+  return trunc(s, n);
 }
 
 class E2BSandboxProvider implements SandboxProvider {
@@ -210,7 +196,7 @@ class E2BSandboxProvider implements SandboxProvider {
         ok: true,
         sandboxId: sandbox.sandboxId,
         previewUrl,
-        logs: trunc(
+        logs: truncLocal(
           logs + (ready ? "" : "\n[preview] dev server was slow to start — give the preview a moment to load."),
         ),
       };
@@ -319,11 +305,11 @@ class E2BSandboxProvider implements SandboxProvider {
         sessionId,
         summary,
         changedFiles,
-        diff: trunc(diffRes?.stdout ?? "", 60000),
-        logs: trunc(logs),
+        diff: truncLocal(diffRes?.stdout ?? "", 60000),
+        logs: truncLocal(logs),
       };
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err), logs: trunc(logs) };
+      return { ok: false, error: err instanceof Error ? err.message : String(err), logs: truncLocal(logs) };
     }
   }
 
@@ -359,6 +345,26 @@ class E2BSandboxProvider implements SandboxProvider {
     return `https://${await sandbox.getHost(port)}`;
   }
 
+  async reconnect(sandboxId: string, port = DEFAULT_PORT): Promise<SandboxRunResult> {
+    if (!this.isEnabled()) {
+      return { ok: false, error: "E2B not configured (set E2B_API_KEY)." };
+    }
+    try {
+      const previewUrl = await this.getPreviewUrl(sandboxId, port);
+      const alive = await waitForServer(previewUrl, 8000);
+      if (!alive) {
+        return { ok: false, error: "Sandbox not responding", sandboxId };
+      }
+      return { ok: true, sandboxId, previewUrl };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  async reconnectByProject(projectId: string, port?: number): Promise<SandboxRunResult> {
+    return { ok: false, error: "reconnectByProject not supported for E2B" };
+  }
+
   async kill(sandboxId: string): Promise<void> {
     try {
       const sandbox = await this.connect(sandboxId);
@@ -371,10 +377,23 @@ class E2BSandboxProvider implements SandboxProvider {
 
 let cached: SandboxProvider | null = null;
 
-/** Get the configured sandbox provider (E2B today; Docker/Firecracker later). */
+/** Lovable uses Modal; auto-picks Modal when creds exist, else E2B. */
 export function getSandboxProvider(): SandboxProvider {
-  if (!cached) cached = new E2BSandboxProvider();
+  if (!cached) {
+    const pref = (process.env.SANDBOX_PROVIDER ?? "auto").toLowerCase();
+    const modal = new ModalSandboxProvider();
+    const e2b = new E2BSandboxProvider();
+    if (pref === "e2b") cached = e2b;
+    else if (pref === "modal") cached = modal;
+    else if (modal.isEnabled()) cached = modal;
+    else cached = e2b;
+  }
   return cached;
+}
+
+/** Active provider id (modal | e2b | …). */
+export function getSandboxProviderId(): SandboxProvider["id"] {
+  return getSandboxProvider().id;
 }
 
 /** True when a real sandbox backend is available (else use in-browser preview). */

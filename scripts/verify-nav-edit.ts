@@ -159,13 +159,163 @@ const responsiveHeader =
 cases.push([
   "responsive nav visibility patch applies",
   responsivePatches.length >= 2 &&
-    responsiveHeader.includes("hidden md:flex") &&
-    responsiveHeader.includes("md:hidden"),
+    responsiveHeader.includes("hidden sm:flex") &&
+    responsiveHeader.includes("sm:hidden"),
 ]);
 const commerceLabels = extractMenuLabelsFromPrompt("add Quick Shop links and category links to the header");
 cases.push([
   "commerce prompt extracts useful default links",
   commerceLabels.includes("All Products") && commerceLabels.includes("Best Sellers"),
+]);
+
+// Regression: App.tsx monolith with section <h2>About</h2> must NOT skip nav inserts
+const monolithFiles = [
+  {
+    path: "src/App.tsx",
+    content: `export default function App() {
+  return (
+    <div>
+      <header>
+        <nav className="hidden lg:flex gap-4">
+          <a href="/">Home</a>
+          <a href="/shop">Shop</a>
+        </nav>
+      </header>
+      <main>
+        <h2>About</h2>
+        <p>We are a store.</p>
+        <h2>Services</h2>
+        <p>We ship worldwide.</p>
+        <h2>Contact</h2>
+        <p>Hello@store.com</p>
+      </main>
+    </div>
+  );
+}`,
+  },
+];
+const monolithDet = buildDeterministicMenuPatches("add menu items in header", monolithFiles);
+const monolithApplied = applyPatches(monolithDet, monolithFiles);
+const monolithFinal =
+  [...monolithApplied].reverse().find((r) => r.applied && r.path === "src/App.tsx")?.content ?? "";
+const monolithNav = monolithFinal.match(/<nav[\s\S]*?<\/nav>/)?.[0] ?? "";
+cases.push([
+  "monolith App: section headings do not block nav inserts",
+  monolithDet.length > 0 &&
+    monolithNav.includes("About") &&
+    monolithNav.includes("Services") &&
+    monolithNav.includes("Contact") &&
+    (monolithFinal.match(/<h2>About<\/h2>/g)?.length ?? 0) === 1,
+]);
+
+// Volta-style: empty desktop <nav> + mobile drawer with Home — links must go in desktop nav
+const voltaFiles = [
+  {
+    path: "src/components/Header.tsx",
+    content: `export default function Header() {
+  return (
+    <header className="flex items-center justify-between">
+      <a href="/" className="font-bold">Volta</a>
+      <nav className="hidden lg:flex items-center gap-8">
+      </nav>
+      <div className="flex gap-2">
+        <button aria-label="search" />
+        <button aria-label="cart" />
+      </div>
+      <div className="lg:hidden flex flex-col gap-2">
+        <a href="/">Home</a>
+        <a href="/shop">Shop</a>
+      </div>
+    </header>
+  );
+}`,
+  },
+];
+const voltaDet = buildDeterministicMenuPatches(
+  "Add About, Services, Contact to the header",
+  voltaFiles,
+);
+const voltaApplied = applyPatches(voltaDet, voltaFiles);
+const voltaFinal =
+  [...voltaApplied].reverse().find((r) => r.applied && r.path === "src/components/Header.tsx")
+    ?.content ?? "";
+const voltaDesktopNav = voltaFinal.match(/<nav className="hidden sm:flex[\s\S]*?<\/nav>/)?.[0]
+  ?? voltaFinal.match(/<nav className="hidden lg:flex[\s\S]*?<\/nav>/)?.[0]
+  ?? "";
+const voltaMobile = voltaFinal.match(/lg:hidden[\s\S]*?<\/div>/)?.[0] ?? "";
+cases.push([
+  "Volta empty desktop nav gets About/Services/Contact",
+  voltaDet.length > 0 &&
+    /About/i.test(voltaDesktopNav) &&
+    /Services/i.test(voltaDesktopNav) &&
+    /Contact/i.test(voltaDesktopNav),
+]);
+cases.push([
+  "Volta does not only put links in mobile drawer",
+  voltaDet.length > 0 &&
+    /About/i.test(voltaDesktopNav) &&
+    // Mobile drawer may still have Home/Shop only — About should be in desktop nav
+    (voltaMobile.match(/About/g)?.length ?? 0) <= (voltaDesktopNav.match(/About/g)?.length ?? 0),
+]);
+
+// About only in mobile drawer → still insert into empty desktop nav
+const mobileOnlyAbout = [
+  {
+    path: "src/components/Header.tsx",
+    content: `export default function Header() {
+  return (
+    <header>
+      <nav className="hidden lg:flex gap-4"></nav>
+      <div className="lg:hidden flex flex-col">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+      </div>
+    </header>
+  );
+}`,
+  },
+];
+const mobileOnlyDet = buildDeterministicMenuPatches(
+  "Add About, Services, Contact to the header",
+  mobileOnlyAbout,
+);
+const mobileOnlyApplied = applyPatches(mobileOnlyDet, mobileOnlyAbout);
+const mobileOnlyFinal =
+  [...mobileOnlyApplied].reverse().find((r) => r.applied)?.content ?? "";
+const mobileOnlyDesktop =
+  mobileOnlyFinal.match(/<nav className="hidden sm:flex[\s\S]*?<\/nav>/)?.[0]
+  ?? mobileOnlyFinal.match(/<nav className="hidden lg:flex[\s\S]*?<\/nav>/)?.[0]
+  ?? "";
+cases.push([
+  "mobile-only About still inserts Services+Contact on desktop",
+  mobileOnlyDet.length > 0 &&
+    /Services/i.test(mobileOnlyDesktop) &&
+    /Contact/i.test(mobileOnlyDesktop),
+]);
+
+// Logo-only header (no <nav>) → creates nav with links
+const logoOnly = [
+  {
+    path: "src/components/Header.tsx",
+    content: `export default function Header() {
+  return (
+    <header className="flex justify-between">
+      <a href="/" className="font-bold logo">Volta</a>
+      <button aria-label="cart" />
+    </header>
+  );
+}`,
+  },
+];
+const logoDet = buildDeterministicMenuPatches("add About and Contact to the header", logoOnly);
+const logoApplied = applyPatches(logoDet, logoOnly);
+const logoFinal = [...logoApplied].reverse().find((r) => r.applied)?.content ?? "";
+cases.push([
+  "logo-only header creates desktop nav",
+  logoDet.length > 0 &&
+    /<nav\b/i.test(logoFinal) &&
+    /About/i.test(logoFinal) &&
+    /Contact/i.test(logoFinal),
 ]);
 
 const wrapped = parsePatchResponse(

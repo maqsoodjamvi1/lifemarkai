@@ -17,6 +17,11 @@ export function isManagementConfigured(): boolean {
   return Boolean(process.env.SUPABASE_MANAGEMENT_TOKEN && process.env.SUPABASE_ORG_ID);
 }
 
+/** Management operations that don't create projects only need an API token. */
+export function isManagementTokenConfigured(): boolean {
+  return Boolean(process.env.SUPABASE_MANAGEMENT_TOKEN);
+}
+
 /** Lifemark region → Supabase region slug */
 const REGION_MAP: Record<string, string> = {
   "americas": "us-east-1",
@@ -32,11 +37,12 @@ interface ManagementProject {
 }
 
 async function mgmtFetch(path: string, init?: RequestInit): Promise<Response> {
+  const isMultipart = typeof FormData !== "undefined" && init?.body instanceof FormData;
   return fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       Authorization: `Bearer ${process.env.SUPABASE_MANAGEMENT_TOKEN}`,
-      "Content-Type": "application/json",
+      ...(isMultipart ? {} : { "Content-Type": "application/json" }),
       ...(init?.headers ?? {}),
     },
   });
@@ -109,10 +115,105 @@ export function managedProjectUrl(ref: string): string {
   return `https://${ref}.supabase.co`;
 }
 
+export interface ManagedEdgeFunction {
+  id: string;
+  name: string;
+  slug: string;
+  status: "ACTIVE" | "INACTIVE" | "DEPLOYING";
+  created_at: string;
+  updated_at: string;
+  version?: number;
+  verify_jwt?: boolean;
+}
+
+/** List deployed Edge Functions for a managed project. */
+export async function listManagedEdgeFunctions(ref: string): Promise<{
+  ok: boolean;
+  functions: ManagedEdgeFunction[];
+  error?: string;
+}> {
+  try {
+    const res = await mgmtFetch(`/projects/${ref}/functions`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { ok: false, functions: [], error: `HTTP ${res.status}: ${body.slice(0, 300)}` };
+    }
+    const functions = await res.json() as ManagedEdgeFunction[];
+    return { ok: true, functions: Array.isArray(functions) ? functions : [] };
+  } catch (error) {
+    return { ok: false, functions: [], error: error instanceof Error ? error.message : "request failed" };
+  }
+}
+
+/**
+ * Deploy a Deno Edge Function through Supabase's Management API. The API
+ * bundles the submitted source and creates or updates the supplied slug.
+ */
+export async function deployManagedEdgeFunction(
+  ref: string,
+  input: { slug: string; name: string; code: string; verifyJwt?: boolean },
+): Promise<{ ok: boolean; function?: ManagedEdgeFunction; error?: string }> {
+  try {
+    const form = new FormData();
+    form.append("metadata", JSON.stringify({
+      name: input.name,
+      entrypoint_path: "index.ts",
+      verify_jwt: input.verifyJwt ?? true,
+    }));
+    form.append("file", new Blob([input.code], { type: "application/typescript" }), "index.ts");
+
+    const res = await mgmtFetch(
+      `/projects/${ref}/functions/deploy?slug=${encodeURIComponent(input.slug)}`,
+      { method: "POST", body: form },
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { ok: false, error: `HTTP ${res.status}: ${body.slice(0, 500)}` };
+    }
+    return { ok: true, function: await res.json() as ManagedEdgeFunction };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "request failed" };
+  }
+}
+
 /** Delete a managed project (used when Cloud provisioning is rolled back). */
 export async function deleteManagedProject(ref: string): Promise<boolean> {
   const res = await mgmtFetch(`/projects/${ref}`, { method: "DELETE" });
   return res.ok;
+}
+
+/**
+ * Pause a managed project's real infrastructure (Supabase Management API).
+ * Best-effort: local-mode Cloud (no management token) just flips the flag.
+ */
+export async function pauseManagedProject(ref: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await mgmtFetch(`/projects/${ref}/pause`, { method: "POST" });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { ok: false, error: `HTTP ${res.status}: ${body.slice(0, 200)}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "request failed" };
+  }
+}
+
+/**
+ * Restore (wake) a paused managed project. The project takes a few minutes
+ * to come back; poll getManagedProjectStatus for health.
+ */
+export async function restoreManagedProject(ref: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await mgmtFetch(`/projects/${ref}/restore`, { method: "POST" });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { ok: false, error: `HTTP ${res.status}: ${body.slice(0, 200)}` };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : "request failed" };
+  }
 }
 
 /**

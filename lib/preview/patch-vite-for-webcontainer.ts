@@ -43,7 +43,14 @@ export function patchReactPluginBabelConfig(content: string): string {
   );
 }
 
+import { injectGuestCommentsIntoHtml } from "./inject-guest-comments";
 import { injectVebBridgeIntoHtml } from "./veb-bridge";
+
+export interface WebContainerPatchOpts {
+  projectId?: string;
+  isPublic?: boolean;
+  appOrigin?: string;
+}
 
 // Vite entry points, in priority order. The AI frequently emits an index.html
 // whose <script src> points at the wrong one (e.g. /src/main.ts when the file is
@@ -82,9 +89,12 @@ export function fixHtmlEntry(html: string, entry: string | null): string {
 
 export function patchFilesForWebContainer<T extends { path: string; content?: string | null }>(
   files: T[],
+  opts?: WebContainerPatchOpts,
 ): T[] {
   const paths = new Set(files.map((f) => f.path.replace(/\\/g, "/").replace(/^\/+/, "")));
   const entry = findEntry(paths);
+  const injectGuest =
+    !!opts?.isPublic && !!opts?.projectId;
   return files.map((file) => {
     const path = file.path.replace(/\\/g, "/");
     if (file.content == null) return file;
@@ -95,8 +105,15 @@ export function patchFilesForWebContainer<T extends { path: string; content?: st
     // parent editor can drive element picking via postMessage (Lovable-style).
     // Also repair a mis-pointed entry <script> so real Vite finds the app.
     if (/^(public\/)?index\.html$/.test(path.replace(/^\//, ""))) {
-      const repaired = fixHtmlEntry(file.content, entry);
-      return { ...file, content: injectVebBridgeIntoHtml(repaired) };
+      let html = fixHtmlEntry(file.content, entry);
+      html = injectVebBridgeIntoHtml(html);
+      if (injectGuest) {
+        html = injectGuestCommentsIntoHtml(html, {
+          projectId: opts!.projectId!,
+          origin: opts?.appOrigin,
+        });
+      }
+      return { ...file, content: html };
     }
     return file;
   });

@@ -270,6 +270,46 @@ section [style*="opacity: 0"] {
   animation: lifemark-fallback-reveal 0.01s linear 1.5s forwards;
 }
 
+/* ─── Lovable editor surface tokens ─────────────────────────────────────── */
+.shadow-surface-xs {
+  box-shadow:
+    0 1px 2px oklch(0 0 0 / 0.04),
+    0 0 0 0.5px var(--border-default);
+}
+.shadow-surface-md {
+  box-shadow:
+    0 4px 16px oklch(0 0 0 / 0.08),
+    0 0 0 0.5px var(--border-translucent);
+}
+.shadow-surface-xl {
+  box-shadow:
+    0 8px 32px oklch(0 0 0 / 0.10),
+    0 2px 8px oklch(0 0 0 / 0.04),
+    0 0 0 0.5px var(--border-default);
+}
+
+.prose-pulse {
+  color: var(--fg-primary);
+  line-height: 1.65;
+}
+.prose-pulse p { margin: 0.5em 0; }
+.prose-pulse a { color: var(--fg-accent); text-decoration: underline; }
+
+.prose-chat {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--fg-primary);
+}
+.prose-chat pre,
+.prose-chat code {
+  font-family: var(--font-geist-mono), Consolas, monospace;
+}
+
+.chat-scroll-container {
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
 /* ─── Mobile / Capacitor shell readiness ─────────────────────────────────── */
 /* The editor and chat panel are densely packed; without these the iOS notch
    eats the top bar and the Android keyboard pushes the bottom composer off

@@ -16,7 +16,22 @@ export async function GET(
   const { data, error } = await (supabase as any)
     .from("project_comments")
     .select(`
-      *,
+      id,
+      project_id,
+      user_id,
+      parent_id,
+      content,
+      resolved,
+      resolved_by,
+      resolved_at,
+      created_at,
+      updated_at,
+      element_xpath,
+      element_tag,
+      page_path,
+      element_preview,
+      is_guest,
+      guest_name,
       author:profiles!project_comments_user_id_fkey(id, full_name, avatar_url, email)
     `)
     .eq("project_id", id)

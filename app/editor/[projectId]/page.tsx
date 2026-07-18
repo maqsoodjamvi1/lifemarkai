@@ -156,13 +156,17 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
         .select("*")
         .eq("project_id", projectId)
         .order("created_at")
-        .limit(100),
+        .limit(500),
       (accessClient as any)
         .from("profiles")
         .select("*")
         .eq("id", user.id)
         .single(),
     ]);
+
+    if (messagesResult.error) {
+      console.error("Editor messages load failed:", messagesResult.error.message ?? messagesResult.error);
+    }
 
     let profile = profileResult.data;
     if ((!profile || (profile.credits ?? 0) <= 0) && process.env.NODE_ENV === "development") {

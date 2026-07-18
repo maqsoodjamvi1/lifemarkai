@@ -6,10 +6,11 @@ import { PREVIEW_ERROR_BRIDGE_SCRIPT } from "./preview-error-bridge";
 export const VEB_BRIDGE_SCRIPT = `(function() {
   if (window.parent === window) return;
   var enabled = false;
+  var commentPinEnabled = false;
   var hovered = null;
   var style = document.createElement('style');
   style.id = 'lm-veb-style';
-  style.textContent = '.lm-hover{outline:2px solid #7c3aed!important;outline-offset:2px;cursor:pointer!important}.lm-selected{outline:2px solid #0e90e8!important;outline-offset:2px}';
+  style.textContent = '.lm-hover{outline:2px solid #7c3aed!important;outline-offset:2px;cursor:pointer!important}.lm-selected{outline:2px solid #0e90e8!important;outline-offset:2px}.lm-inline-editing{outline:2px dashed #22c55e!important;outline-offset:2px;cursor:text!important}';
 
   function getXPath(el) {
     var parts = [], cur = el;
@@ -53,6 +54,21 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
   }
   function onOut(e) { if (e.target && e.target.classList) e.target.classList.remove('lm-hover'); }
   function onClick(e) {
+    if (commentPinEnabled) {
+      e.preventDefault(); e.stopPropagation();
+      var el = e.target;
+      if (!el || el === document.body) return;
+      var rect = el.getBoundingClientRect();
+      window.parent.postMessage({
+        source: 'lifemark-comment-pin',
+        tagName: el.tagName.toLowerCase(),
+        textContent: (el.textContent || '').trim().slice(0, 80),
+        classList: Array.prototype.filter.call(el.classList, function(c){ return c.indexOf('lm-') !== 0; }),
+        xpath: getXPath(el),
+        rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
+      }, '*');
+      return;
+    }
     if (!enabled) return;
     e.preventDefault(); e.stopPropagation();
     var el = e.target;
@@ -71,9 +87,61 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
     }, '*');
   }
 
+  // True in-place text editing (Lovable parity): double-click leaf text → edit in preview.
+  function onDblClick(e) {
+    if (!enabled || commentPinEnabled) return;
+    var el = e.target;
+    if (!el || el === document.body || el.isContentEditable) return;
+    var text = (el.textContent || '').trim();
+    if (!text || el.children.length > 2 || text.length > 500) return;
+    e.preventDefault();
+    e.stopPropagation();
+    var original = text;
+    var snapshot = {
+      tagName: el.tagName.toLowerCase(),
+      textContent: original,
+      classList: Array.prototype.filter.call(el.classList, function(c){ return c.indexOf('lm-') !== 0; }),
+      xpath: getXPath(el)
+    };
+    el.setAttribute('contenteditable', 'plaintext-only');
+    el.classList.add('lm-inline-editing');
+    el.focus();
+    try {
+      var range = document.createRange();
+      range.selectNodeContents(el);
+      var sel = window.getSelection();
+      if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+    } catch (err) {}
+    function finish(commit) {
+      el.removeAttribute('contenteditable');
+      el.classList.remove('lm-inline-editing');
+      el.removeEventListener('blur', onBlur);
+      el.removeEventListener('keydown', onKey);
+      if (!commit) { el.textContent = original; return; }
+      var next = (el.textContent || '').trim();
+      if (!next || next === original) return;
+      window.parent.postMessage({
+        source: 'lifemark-veb-inline',
+        text: next,
+        tagName: snapshot.tagName,
+        textContent: original,
+        classList: snapshot.classList,
+        xpath: snapshot.xpath
+      }, '*');
+    }
+    function onBlur() { finish(true); }
+    function onKey(ev) {
+      if (ev.key === 'Enter' && !ev.shiftKey) { ev.preventDefault(); el.blur(); }
+      if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+    }
+    el.addEventListener('blur', onBlur);
+    el.addEventListener('keydown', onKey);
+  }
+
   document.addEventListener('mouseover', onOver, true);
   document.addEventListener('mouseout', onOut, true);
   document.addEventListener('click', onClick, true);
+  document.addEventListener('dblclick', onDblClick, true);
 
   window.addEventListener('message', function(e) {
     var d = e.data || {};
@@ -81,6 +149,36 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
       enabled = !!d.enabled;
       if (enabled) { if (!style.parentNode) document.head.appendChild(style); }
       else { clearMarks(); }
+    }
+    if (d.type === 'lifemark-comment-pin-mode') {
+      commentPinEnabled = !!d.enabled;
+      if (!commentPinEnabled) clearMarks();
+    }
+    if (d.type === 'lifemark-capture') {
+      var msgId = d.messageId;
+      var src = e.source;
+      function loadCanvas(cb) {
+        if (typeof html2canvas !== 'undefined') return cb();
+        var s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+        s.onload = cb;
+        s.onerror = function() {
+          src.postMessage({ type: 'lifemark-screenshot', messageId: msgId, dataUrl: null }, '*');
+        };
+        document.head.appendChild(s);
+      }
+      loadCanvas(function() {
+        setTimeout(function() {
+          html2canvas(document.documentElement, {
+            scale: 0.4, useCORS: true, logging: false,
+            width: 800, height: 600, windowWidth: 800, windowHeight: 600
+          }).then(function(canvas) {
+            src.postMessage({ type: 'lifemark-screenshot', messageId: msgId, dataUrl: canvas.toDataURL('image/jpeg', 0.72) }, '*');
+          }).catch(function() {
+            src.postMessage({ type: 'lifemark-screenshot', messageId: msgId, dataUrl: null }, '*');
+          });
+        }, 400);
+      });
     }
     if (d.type === 'lifemark-veb-apply' && d.xpath) {
       var el = findByXPath(d.xpath);
@@ -167,6 +265,30 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
   history.replaceState = function(){ var r = _replace.apply(this, arguments); loc(); return r; };
   window.addEventListener('popstate', loc);
   window.addEventListener('hashchange', loc);
+  // Network panel — intercept fetch for parent devtools (Lovable parity).
+  var _fetch = window.fetch;
+  window.fetch = function(input, init) {
+    var method = ((init && init.method) || 'GET').toUpperCase();
+    var url = typeof input === 'string' ? input : (input && input.url) || String(input);
+    var start = Date.now();
+    function postNet(extra) {
+      try {
+        window.parent.postMessage(Object.assign({
+          source: 'lifemark-preview-network',
+          method: method,
+          url: url,
+          durationMs: Date.now() - start
+        }, extra || {}), '*');
+      } catch(e) {}
+    }
+    return _fetch.apply(this, arguments).then(function(res) {
+      postNet({ status: res.status, ok: res.ok });
+      return res;
+    }).catch(function(err) {
+      postNet({ status: 0, ok: false, error: String((err && err.message) || err) });
+      throw err;
+    });
+  };
   // Inbound: parent address-bar navigation (lifemark-preview-navigate). The WC
   // engine runs a REAL router on real URLs, so push the path and fire popstate
   // so react-router re-renders. Mirrors the srcdoc engine's navigate handler.

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import type { Project } from "@/types/database";
+import { LovableGuestCommentsSetup } from "@/components/editor/lovable/guest-comments-setup";
 
 /* ─── Data ─────────────────────────────────────────────── */
 
@@ -438,6 +439,14 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy }: PublishPanelP
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* Guest preview comments */}
+            <div className="p-3 bg-muted/50 rounded-xl border border-border">
+              <LovableGuestCommentsSetup
+                projectId={project.id}
+                isPublic={websiteAccess === "public" || !!project.is_public}
+              />
             </div>
 
             {/* Save button */}

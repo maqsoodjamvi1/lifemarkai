@@ -13,7 +13,7 @@ import {
   reserveCredits,
   settleCreditReservation,
 } from "@/lib/credits";
-import { computeCreditCost, maxCreditCostForMode } from "@/lib/ai/credit-cost";
+import { computeCreditCost, maxCreditCostForMode, AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
 import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { autoWireBackend } from "@/lib/cloud/auto-wire";
 import { autoWireAi } from "@/lib/ai/auto-wire-ai";
@@ -31,6 +31,7 @@ import {
 } from "@/lib/ai/editor-lenses/persistence";
 import { isSimpleEditorRequest, maxOutputTokensForRequest, resolveBudgetAwareModel } from "@/lib/ai/cost-controls";
 import { resolveSmartModel } from "@/lib/ai/editor-intelligence";
+import { persistChatTurnMessages } from "@/lib/ai/persist-chat-turn";
 
 export const runtime = "nodejs";
 // Agent run + backend wiring + browser verification (Lovable budgets 15 min).
@@ -74,7 +75,7 @@ export async function POST(req: NextRequest) {
 
   const { data: projectRow } = await (supabase as any)
     .from("projects")
-    .select("name, knowledge, cloud_enabled, environment, disabled_skill_ids")
+    .select("name, knowledge, cloud_enabled, environment, disabled_skill_ids, metadata")
     .eq("id", projectId)
     .single();
 
@@ -189,6 +190,60 @@ export async function POST(req: NextRequest) {
     console.warn("[agent] MCP connector loading failed:", err instanceof Error ? err.message : err);
   }
 
+  // ── connector_call agent tool (Lovable-parity connector actions) ─────────
+  // Lets the agent call the project's configured app connectors directly.
+  // Reads run freely; WRITES pause for user approval (Allow once / Always /
+  // Never — stored in projects.metadata) exactly like Lovable's approval
+  // cards. Blocked writes surface an approval_required observation that the
+  // chat panel renders as an approval card.
+  try {
+    const { executeConnectorCall, configuredConnectorIds } = await import("@/lib/integrations/connector-exec");
+    const { ENV_FILE_PATH: envPath, parseEnvFile: parseEnv } = await import("@/lib/project/env-file");
+    const { data: envRow } = await (supabase as any)
+      .from("project_files")
+      .select("content")
+      .eq("project_id", projectId)
+      .eq("path", envPath)
+      .maybeSingle();
+    const configured = configuredConnectorIds(parseEnv((envRow as { content?: string } | null)?.content ?? ""));
+    if (configured.length > 0) {
+      extraTools.push({
+        name: "connector_call",
+        description: `Call one of the project's configured app connectors (${configured.join(", ")}). Reads (GET) run immediately; writes (POST/PUT/PATCH/DELETE) require the user's approval and may return approval_required — if so, tell the user to approve the action in chat and do not retry.`,
+        inputSchema: {
+          type: "object",
+          properties: {
+            connector: { type: "string", description: `Connector id, one of: ${configured.join(", ")}` },
+            path: { type: "string", description: "API path starting with /, appended to the connector's base URL" },
+            method: { type: "string", enum: ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+            body: { type: "object", description: "JSON body for write methods" },
+            query: { type: "object", description: "Query string parameters" },
+          },
+          required: ["connector", "path"],
+        },
+        execute: async (args: Record<string, unknown>) => {
+          const res = await executeConnectorCall(
+            supabase,
+            projectId,
+            (projectRow as { metadata?: unknown } | null)?.metadata,
+            {
+              connector: String(args.connector ?? ""),
+              path: String(args.path ?? ""),
+              method: typeof args.method === "string" ? args.method : "GET",
+              body: args.body,
+              query: (args.query ?? undefined) as Record<string, string> | undefined,
+            },
+          );
+          return res.approval_required
+            ? res.result // JSON payload with approval_required:true — panel renders the card
+            : JSON.stringify({ ok: res.ok, status: res.status, body: res.result });
+        },
+      });
+    }
+  } catch (err) {
+    console.warn("[agent] connector_call tool setup failed:", err instanceof Error ? err.message : err);
+  }
+
   const reservationAmount = maxCreditCostForMode("agent");
   const creditReservation = await reserveCredits(supabase, {
     userId: user.id,
@@ -198,7 +253,7 @@ export async function POST(req: NextRequest) {
   });
   if (!creditReservation) {
     return NextResponse.json(
-      { error: `Need at least ${reservationAmount} credits for Agent Mode`, requiredCredits: reservationAmount },
+      { error: `Need at least ${reservationAmount} credits for Agent Mode (minimum ${AGENT_MIN_CREDITS})`, requiredCredits: reservationAmount, agentMinCredits: AGENT_MIN_CREDITS },
       { status: 402 },
     );
   }
@@ -276,16 +331,45 @@ export async function POST(req: NextRequest) {
           new Set([...(Array.isArray(result.filesChanged) ? result.filesChanged : []), ...supportFiles.map((file) => file.path)]),
         );
 
-        // Save agent task as messages
-        await (supabase as any).from("messages").insert([
-          { project_id: projectId, role: "user", content: costTask, mode: "agent" },
-          {
-            project_id: projectId, role: "assistant",
-            content: result.summary, tokens_used: result.tokensUsed,
-            model: effectiveModel ?? getDefaultAiModel(), mode: "agent",
-            metadata: { steps: result.steps.length, files_changed: filesChanged },
-          },
-        ]);
+        // Save agent task as messages — including a compact persisted work
+        // trace (Lovable parity: expandable "Worked for Xs · N steps" on
+        // finished messages, surviving reloads).
+        const traceSteps = result.steps
+          .filter((s: AgentStep) => s.type === "action" || s.type === "thought")
+          .slice(0, 40)
+          .map((s: AgentStep) => ({
+            t: s.type,
+            ...(s.tool ? { tool: s.tool } : {}),
+            c: (s.content ?? "").slice(0, 140),
+            ...(s.args?.path ? { path: String(s.args.path).slice(0, 120) } : {}),
+          }));
+        const firstTs = result.steps[0]?.timestamp;
+        const lastTs = result.steps[result.steps.length - 1]?.timestamp;
+        const workSeconds = firstTs && lastTs
+          ? Math.max(1, Math.round((new Date(lastTs).getTime() - new Date(firstTs).getTime()) / 1000))
+          : undefined;
+        const persisted = await persistChatTurnMessages(
+          supabase,
+          [
+            { project_id: projectId, role: "user", content: costTask, mode: "agent" },
+            {
+              project_id: projectId,
+              role: "assistant",
+              content: result.summary || "Agent finished.",
+              tokens_used: result.tokensUsed,
+              model: effectiveModel ?? getDefaultAiModel(),
+              mode: "agent",
+              metadata: {
+                steps: result.steps.length,
+                files_changed: filesChanged,
+                agent_trace: traceSteps,
+                ...(workSeconds ? { work_seconds: workSeconds } : {}),
+              },
+            },
+          ],
+          { projectId, label: "agent-turn" },
+        );
+        const assistantMessageId = persisted.assistantMessageId;
 
         // ── Lovable parity: backend auto-wiring + self-verification ──────────
         let backendWiring = null;
@@ -336,6 +420,7 @@ export async function POST(req: NextRequest) {
             mode: "agent",
             prompt: task,
             filesChanged,
+            assistantMessageId,
             backendWiring,
             verification,
           });
@@ -367,6 +452,7 @@ export async function POST(req: NextRequest) {
           filesChanged,
           creditsUsed: finalCreditCost,
           remainingCredits,
+          assistantMessageId,
           backend_wired: backendWiring ?? undefined,
           verification: verification
             ? { engine: verification.engine, passed: verification.passed, fixesApplied: verification.fixesApplied, errors: verification.errors }

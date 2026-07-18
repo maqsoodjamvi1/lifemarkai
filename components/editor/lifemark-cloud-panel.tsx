@@ -661,17 +661,84 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
               </p>
             </div>
 
-            {/* Danger zone */}
-            <div className="rounded-xl border border-red-500/25 bg-red-500/[0.04] p-4">
+            {/* Export project data */}
+            <div className="rounded-xl border border-border bg-card p-4">
               <div className="flex items-center gap-2 mb-2">
-                <AlertCircle className="w-4 h-4 text-red-400" />
-                <span className="text-sm font-medium text-red-200">Danger zone</span>
+                <Database className="w-4 h-4 text-sky-400" />
+                <span className="text-sm font-medium">Export project data</span>
               </div>
-              <p className="text-[11px] text-red-200/70 leading-relaxed mb-3">
-                Once Cloud is enabled, it cannot be disconnected. To stop usage, pause the project.
+              <p className="text-[11px] text-muted-foreground leading-relaxed mb-3">
+                Download your database as a SQL dump (schema + data) — use it before moving backend
+                infrastructure outside Lifemark Cloud, or as an extra backup.
               </p>
-              <Button size="sm" variant="outline" className="text-xs border-red-500/40 text-red-300 hover:bg-red-500/10" disabled>
-                Pause project (contact support)
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const res = await fetch(`/api/cloud/export?projectId=${project.id}`);
+                    if (!res.ok) {
+                      const data = await res.json().catch(() => ({}));
+                      toast({ title: "Export failed", description: (data as { error?: string }).error, variant: "destructive" });
+                      return;
+                    }
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `${project.name.replace(/[^\w-]+/g, "-")}-database-export.sql`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    toast({ title: "Database exported", description: "SQL dump downloaded." });
+                  } finally { setBusy(false); }
+                }}
+              >
+                Export database
+              </Button>
+            </div>
+
+            {/* Pause Cloud */}
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.04] p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <AlertCircle className="w-4 h-4 text-amber-400" />
+                <span className="text-sm font-medium text-amber-200">
+                  {project.cloud_status === "paused" ? "Cloud is paused" : "Pause Cloud"}
+                </span>
+              </div>
+              <p className="text-[11px] text-amber-200/70 leading-relaxed mb-3">
+                {project.cloud_status === "paused"
+                  ? "The backend (database, auth, storage, functions) is offline and not using compute credits. Wake it up to bring your app back online — takes a few minutes."
+                  : "Pausing stops compute usage while keeping your data. The live app stops working until you resume. Idle projects auto-pause after 14 days."}
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
+                disabled={busy}
+                onClick={async () => {
+                  const action = project.cloud_status === "paused" ? "wake" : "pause";
+                  if (action === "pause" && !confirm("Pause the Cloud backend? Your deployed app can't read or write data until you resume.")) return;
+                  setBusy(true);
+                  try {
+                    const res = await fetch("/api/cloud/pause", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ projectId: project.id, action }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                      toast({ title: "Action failed", description: (data as { error?: string }).error, variant: "destructive" });
+                      return;
+                    }
+                    toast({ title: action === "pause" ? "Cloud paused" : "Waking up…", description: action === "wake" ? "The backend will be online in a few minutes." : undefined });
+                    await loadStatus();
+                  } finally { setBusy(false); }
+                }}
+              >
+                {project.cloud_status === "paused" ? "Wake up" : "Pause Cloud"}
               </Button>
             </div>
           </div>

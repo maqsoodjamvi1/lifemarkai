@@ -40,7 +40,7 @@ interface Connector {
   oauthFlow?: boolean;    // show "Connect with OAuth" instead of key form
 }
 
-const CONNECTORS: Connector[] = [
+export const CONNECTORS: Connector[] = [
   // ── Communication ──────────────────────────────────────────────────────────
   {
     id: "slack",

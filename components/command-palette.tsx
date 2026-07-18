@@ -39,7 +39,7 @@ export interface CommandPaletteActions {
   onDeploy?: () => void;
   onPushGithub?: () => void;
   onOpenPanel?: (panel: string) => void;
-  onSetViewMode?: (mode: "preview" | "code" | "both") => void;
+  onSetViewMode?: (mode: "preview" | "code" | "both" | "files") => void;
   onToggleFileTree?: () => void;
 }
 
@@ -136,6 +136,11 @@ export function CommandPalette({ projects = [], files = [], actions }: CommandPa
                 <Eye className="mr-2 h-4 w-4" />
                 Preview only
                 <CommandShortcut>⌘1</CommandShortcut>
+              </CommandItem>
+              <CommandItem onSelect={() => run(() => actions?.onSetViewMode?.("files"))}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                Files view
+                <CommandShortcut>⌘4</CommandShortcut>
               </CommandItem>
               <CommandItem onSelect={() => run(() => actions?.onToggleFileTree?.())}>
                 <FolderOpen className="mr-2 h-4 w-4" />

@@ -20,14 +20,19 @@ import {
 import { buildTemplateRefinementBlock } from "@/lib/ai/template-refine";
 import { pickStarterTemplate } from "@/lib/templates/starter-catalog";
 import { buildDesignDirectionBlock } from "@/lib/ai/design-directions";
-import { applyPatches, parsePatchResponse } from "@/lib/ai/patch-applier";
+import { applyPatches, collapsePatchResults, parsePatchResponse } from "@/lib/ai/patch-applier";
+import { buildPersistedAssistantContent } from "@/lib/ai/persist-message-mode";
+import { persistChatTurnMessages } from "@/lib/ai/persist-chat-turn";
 import {
   buildNavEditContext,
   buildDeterministicMenuPatches,
   extractMenuLabelsFromPrompt,
+  extractNavHaystack,
+  extractDesktopNavHaystack,
   filterUnsafeHeaderPatches,
   findNavSourceFiles,
   isMenuNavEditIntent,
+  navContainsLabel,
   remapInventedNavPatchPaths,
 } from "@/lib/ai/nav-edit";
 import { buildDeterministicTextPatches } from "@/lib/ai/text-edit";
@@ -60,6 +65,7 @@ import {
 } from "@/lib/cloud/permissions";
 import { ensureDevCredits, getDevProfile } from "@/lib/dev-credits";
 import { detectDeployIntent } from "@/lib/ai/deploy-intent";
+import { detectCloudIntent } from "@/lib/ai/cloud-intent";
 import { buildMcpContextBlock } from "@/lib/ai/mcp-context";
 import { ENV_FILE_PATH, parseEnvFile } from "@/lib/project/env-file";
 import {
@@ -257,9 +263,9 @@ export async function POST(req: NextRequest) {
           // Persist the turn exactly like the normal flow (user + assistant rows).
           let assistantMessageId: string | undefined;
           try {
-            const { data: insertedMessages } = await (supabase as any)
-              .from("messages")
-              .insert([
+            const persisted = await persistChatTurnMessages(
+              supabase,
+              [
                 { project_id: projectId, role: "user", content: persistedUserMessage, mode },
                 {
                   project_id: projectId,
@@ -273,11 +279,10 @@ export async function POST(req: NextRequest) {
                     ...(deployUrl ? { deploy_url: deployUrl } : {}),
                   },
                 },
-              ])
-              .select("id, role");
-            assistantMessageId = (insertedMessages as Array<{ id: string; role: string }> | null)?.find(
-              (row) => row.role === "assistant",
-            )?.id;
+              ],
+              { projectId, label: "deploy-turn" },
+            );
+            assistantMessageId = persisted.assistantMessageId;
           } catch {
             /* message persistence is best-effort — the deploy already happened */
           }
@@ -299,6 +304,85 @@ export async function POST(req: NextRequest) {
       return new Response(deployStream, {
         headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" },
       });
+    }
+
+    // ── Cloud ops from chat (Lovable parity: pause / resize with approval
+    // card). Zero AI cost, zero credits: detect the intent, emit an approval
+    // card over SSE, and let the panel call the Cloud APIs after the user
+    // approves. Nothing executes without the click.
+    if (mode === "chat" || mode === "build") {
+      const cloudIntent = detectCloudIntent(persistedUserMessage);
+      if (cloudIntent) {
+        const { data: cloudProject } = await (supabase as any)
+          .from("projects")
+          .select("cloud_enabled, cloud_status, cloud_instance")
+          .eq("id", projectId)
+          .single();
+        if (cloudProject?.cloud_enabled) {
+          const encoder2 = new TextEncoder();
+          const cardStream = new ReadableStream({
+            async start(controller) {
+              const { safeEnqueue, safeClose } = createStreamSink(controller, encoder2, req.signal);
+              const send = (payload: Record<string, unknown>) =>
+                safeEnqueue(encoder2.encode(`data: ${JSON.stringify(payload)}\n\n`));
+
+              const tier = (cloudProject.cloud_instance as string | null) ?? "tiny";
+              const paused = cloudProject.cloud_status === "paused";
+              const assistantContent =
+                cloudIntent.kind === "resize"
+                  ? `I can resize your Cloud compute instance (currently **${tier}**). Pick a size below and approve — the resize takes a few minutes, during which the backend is briefly unavailable. A larger instance handles more traffic but increases Cloud usage.`
+                  : cloudIntent.kind === "pause"
+                    ? paused
+                      ? `Your Cloud backend is already paused. Use the card below if you want to wake it up.`
+                      : `I can pause your Cloud backend (database, auth, storage, functions) so it stops using compute credits. Your data is preserved and you can wake it any time — but the live app stops working while paused. Approve below to pause.`
+                    : paused
+                      ? `Approve below to wake your Cloud backend up — it'll be back online in a few minutes.`
+                      : `Your Cloud backend is already active — nothing to resume.`;
+
+              let assistantMessageId: string | undefined;
+              try {
+                const persisted = await persistChatTurnMessages(
+                  supabase,
+                  [
+                    { project_id: projectId, role: "user", content: persistedUserMessage, mode },
+                    {
+                      project_id: projectId,
+                      role: "assistant",
+                      content: assistantContent,
+                      tokens_used: 0,
+                      mode,
+                      metadata: { credits_used: 0, cloud_action: cloudIntent.kind },
+                    },
+                  ],
+                  { projectId, label: "cloud-turn" },
+                );
+                assistantMessageId = persisted.assistantMessageId;
+              } catch { /* best-effort */ }
+
+              send({ chunk: assistantContent });
+              send({
+                cloud_action: {
+                  kind: paused && cloudIntent.kind !== "resize" ? "resume" : cloudIntent.kind,
+                  currentTier: tier,
+                  paused,
+                  actionable:
+                    cloudIntent.kind === "resize" ||
+                    (cloudIntent.kind === "pause" && !paused) ||
+                    (cloudIntent.kind === "resume" && paused),
+                },
+              });
+              send({
+                done: true, tokensUsed: 0, creditsUsed: 0, fileCount: 0,
+                assistantMessageId, displayMessage: assistantContent,
+              });
+              safeClose();
+            },
+          });
+          return new Response(cardStream, {
+            headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" },
+          });
+        }
+      }
     }
 
     // Check credits (dev: auto-grant if empty so local builds are testable)
@@ -471,10 +555,14 @@ export async function POST(req: NextRequest) {
           blockClose();
         },
       });
-      await (supabase as any).from("messages").insert([
-        { project_id: projectId, role: "user", content: persistedUserMessage, mode },
-        { project_id: projectId, role: "assistant", content: blockText, mode },
-      ]);
+      await persistChatTurnMessages(
+        supabase,
+        [
+          { project_id: projectId, role: "user", content: persistedUserMessage, mode },
+          { project_id: projectId, role: "assistant", content: blockText, mode },
+        ],
+        { projectId, label: "cloud-block" },
+      );
       return new Response(blockStream, {
         headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" },
       });
@@ -722,6 +810,28 @@ export async function POST(req: NextRequest) {
       if (configuredConnectors.length > 0) {
         systemPrompt += `\n\n---\n# Connector Gateway\nConnectors configured for this project: ${configuredConnectors.join(", ")}.\nWhen the app calls these third-party APIs, NEVER put API keys in client code. Route calls through the gateway instead:\n  POST ${process.env.NEXT_PUBLIC_APP_URL ?? ""}/api/projects/${projectId}/connector-proxy\n  body: { "connector": "${configuredConnectors[0]}", "path": "/<api-path>", "method": "POST", "body": { ... } }\nThe gateway injects credentials server-side and forwards to the connector's official API host.\n---`;
       }
+    }
+
+    // @connector:<id> mentions (Lovable parity: reference a connector in chat)
+    // — steer the AI toward the referenced connector explicitly.
+    {
+      const connectorMentions = [...new Set(
+        [...(message ?? "").matchAll(/@connector:([\w-]+)/g)].map((m) => m[1]),
+      )];
+      if (connectorMentions.length > 0) {
+        systemPrompt += `\n\n---\n# Referenced Connectors\nThe user explicitly referenced these app connectors: ${connectorMentions.join(", ")}.\nBuild the requested functionality against them. All API calls MUST go through the project's connector gateway (POST /api/projects/${projectId}/connector-proxy with { "connector": "<id>", "path": "...", "method": "...", "body": ... }) — never embed credentials in app code. If the connector's credentials are not configured yet, still write the integration against the gateway and tell the user to add the key in the Connectors panel.\n---`;
+      }
+    }
+
+    // Reference pages (Build-with-URL html= links): fetch the user-provided
+    // public pages server-side and inject readable text as layout/content
+    // reference (Lovable parity, Jun 16 2026).
+    if (message?.includes("Reference pages:")) {
+      try {
+        const { buildPageReferenceBlock } = await import("@/lib/ai/page-reference");
+        const pageBlock = await buildPageReferenceBlock(message);
+        if (pageBlock) systemPrompt += pageBlock;
+      } catch { /* reference fetching is best-effort */ }
     }
 
     // ── Design Systems: inject .lovable/system.md + rules from connected DS ───
@@ -1024,6 +1134,10 @@ The user has expressed frustration. Do the following:
         let completedNormally = false;
         let reservationFinalized = false;
         let finalCreditCost: number | null = null;
+        // Pre-build snapshot id — links the persisted assistant message to the
+        // project state right before this build (Lovable per-message versions).
+        // Stays null if snapshotting fails; must NEVER fail the build.
+        let preBuildSnapshotId: string | null = null;
         // SSE keep-alive: reverse proxies (nginx proxy_read_timeout, Cloudflare ~100s)
         // drop a connection that goes idle during model "thinking" gaps (continuation +
         // self-verify phases emit no chunks). A comment frame every 20s keeps it open.
@@ -1154,6 +1268,8 @@ The user has expressed frustration. Do the following:
 
           // ── Patch mode: apply find-and-replace patches ────────────────────
           let parsedFiles: ParsedFile[] = [];
+          /** Lovable honesty: don't claim success when nothing landed in project_files. */
+          let patchOutcome: "applied" | "failed" | "n/a" = mode === "patch" ? "failed" : "n/a";
           if (mode === "patch") {
             const projectFiles = files as Array<{ path: string; content: string }>;
             const menuIntent = isMenuNavEditIntent(costPrompt);
@@ -1320,16 +1436,18 @@ The user has expressed frustration. Do the following:
                   const hit = patchResults.find((r) => r.applied && r.path === f.path);
                   return hit ? { path: f.path, content: hit.content } : f;
                 });
-                const stillMissing = labels.length > 0 && workingFiles.every((f) => {
-                  const nav = f.content.match(/<nav\b[\s\S]*?<\/nav>/i)?.[0] ?? "";
-                  const hay = nav || f.content;
-                  return labels.some((label) => {
-                    const re = new RegExp(`>\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*<`, "i");
-                    return !re.test(hay);
-                  });
-                });
+                const navTargets = findNavSourceFiles(workingFiles, 4);
+                const stillMissing =
+                  labels.length > 0 &&
+                  (navTargets.length === 0 ||
+                    navTargets.some((f) => {
+                      // Desktop-visible nav only — mobile drawer labels don't count.
+                      const hay =
+                        extractDesktopNavHaystack(f.content) || extractNavHaystack(f.content);
+                      return labels.some((label) => !navContainsLabel(hay, label));
+                    }));
                 if (stillMissing) {
-                  const deterministic = buildDeterministicMenuPatches(costPrompt, projectFiles);
+                  const deterministic = buildDeterministicMenuPatches(costPrompt, workingFiles);
                   if (deterministic.length > 0) {
                     logger.info("ai.chat.patch_deterministic_menu_after_weak", {
                       projectId,
@@ -1337,23 +1455,25 @@ The user has expressed frustration. Do the following:
                       paths: deterministic.map((p) => p.path),
                     });
                     patches = deterministic;
-                    patchResults = applyPatches(patches, projectFiles);
+                    patchResults = applyPatches(patches, workingFiles);
                   }
                 }
               }
               const applied = patchResults.filter((r) => r.applied);
               const failed = patchResults.filter((r) => !r.applied);
-              for (const pr of patchResults) {
-                if (!pr.applied) {
-                  logger.warn("ai.chat.patch_failed", { projectId, path: pr.path, error: pr.error });
-                  continue;
-                }
+              if (applied.length > 0) patchOutcome = "applied";
+              // Upsert FINAL content per path — sequential multi-patches on the
+              // same file must not be overwritten by an earlier intermediate result.
+              for (const pr of collapsePatchResults(patchResults)) {
                 const lang = pr.path.split(".").pop()?.toLowerCase() ?? "text";
                 const langMap: Record<string, string> = { ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", css: "css", html: "html", json: "json", md: "markdown" };
                 parsedFiles.push({ path: pr.path, content: pr.content, language: langMap[lang] ?? lang });
                 await (supabase as any).from("project_files").upsert({
                   project_id: projectId, path: pr.path, content: pr.content, language: langMap[lang] ?? lang,
                 }, { onConflict: "project_id,path" });
+              }
+              for (const pr of failed) {
+                logger.warn("ai.chat.patch_failed", { projectId, path: pr.path, error: pr.error });
               }
               safeEnqueue(
                 encoder.encode(
@@ -1521,31 +1641,77 @@ The user has expressed frustration. Do the following:
                 .eq("project_id", projectId);
 
               if (currentFiles && currentFiles.length > 0) {
-                void (supabase as any).from("project_snapshots").insert({
-                  project_id:  projectId,
-                  user_id:     userId,
-                  label:       `Auto-save before: ${message.slice(0, 60)}`,
-                  is_baseline: true,
-                  files:       currentFiles,
-                  patches:     null,
-                  parent_id:   null,
-                });
+                try {
+                  const { data: preSnap } = await (supabase as any)
+                    .from("project_snapshots")
+                    .insert({
+                      project_id:  projectId,
+                      user_id:     userId,
+                      label:       `Auto-save before: ${message.slice(0, 60)}`,
+                      is_baseline: true,
+                      files:       currentFiles,
+                      patches:     null,
+                      parent_id:   null,
+                    })
+                    .select("id")
+                    .single();
+                  preBuildSnapshotId = (preSnap as { id: string } | null)?.id ?? null;
+                } catch {
+                  preBuildSnapshotId = null; // best-effort — never fail the build
+                }
               }
 
-              // Only upsert files that weren't already saved by the streaming extractor.
-              // The streamer does fire-and-forget upserts mid-stream so post-validation
-              // repairs (auto-fix pass) or new files added by repair need a final write.
+              // Always upsert FINAL parsed/repaired content. Mid-stream upserts are
+              // for UX only — skipping here left autofix/repair changes on disk out
+              // of sync with what the model "finished" (Lovable: preview = latest).
               for (const file of parsedFiles) {
-                const alreadyStreamed = streamedFilePaths.has(file.path);
-                // Always write if content was repaired (auto-fix may have changed it)
-                // or if the file wasn't streamed at all
-                if (!alreadyStreamed || streamedFilePaths.size !== parsedFiles.length) {
-                  await (supabase as any).from("project_files").upsert({
-                    project_id: projectId,
-                    path: file.path,
-                    content: file.content,
-                    language: file.language,
-                  }, { onConflict: "project_id,path" });
+                await (supabase as any).from("project_files").upsert({
+                  project_id: projectId,
+                  path: file.path,
+                  content: file.content,
+                  language: file.language,
+                }, { onConflict: "project_id,path" });
+              }
+
+              // Lovable parity: menu-intent builds often rewrite many files with an
+              // empty desktop <nav>. Force About/Services/Contact into the real header.
+              if (isMenuNavEditIntent(costPrompt)) {
+                const mergedForNav = new Map<string, { path: string; content: string }>();
+                for (const f of (currentFiles as Array<{ path: string; content: string }> | null) ?? []) {
+                  mergedForNav.set(f.path, { path: f.path, content: f.content });
+                }
+                for (const f of parsedFiles) {
+                  mergedForNav.set(f.path, { path: f.path, content: f.content });
+                }
+                const workingNavFiles = Array.from(mergedForNav.values());
+                const menuPatches = buildDeterministicMenuPatches(costPrompt, workingNavFiles);
+                if (menuPatches.length > 0) {
+                  const menuResults = applyPatches(menuPatches, workingNavFiles);
+                  for (const pr of collapsePatchResults(menuResults)) {
+                    if (!pr.applied) continue;
+                    const lang = pr.path.split(".").pop()?.toLowerCase() ?? "text";
+                    const langMap: Record<string, string> = {
+                      ts: "typescript", tsx: "typescript", js: "javascript",
+                      jsx: "javascript", css: "css", html: "html", json: "json", md: "markdown",
+                    };
+                    const language = langMap[lang] ?? lang;
+                    parsedFiles = parsedFiles.map((f) =>
+                      f.path === pr.path ? { ...f, content: pr.content } : f,
+                    );
+                    if (!parsedFiles.some((f) => f.path === pr.path)) {
+                      parsedFiles.push({ path: pr.path, content: pr.content, language });
+                    }
+                    await (supabase as any).from("project_files").upsert({
+                      project_id: projectId,
+                      path: pr.path,
+                      content: pr.content,
+                      language,
+                    }, { onConflict: "project_id,path" });
+                  }
+                  logger.info("ai.chat.build_deterministic_menu", {
+                    projectId,
+                    paths: menuPatches.map((p) => p.path),
+                  });
                 }
               }
             }
@@ -1638,6 +1804,7 @@ The user has expressed frustration. Do the following:
             (mode === "build" || mode === "patch") && parsedFiles.length > 0
               ? {
                   files_changed: parsedFiles.map((f) => f.path),
+                  snapshot_id: preBuildSnapshotId ?? undefined,
                   ...(buildActivity ? { build_activity: buildActivity } : {}),
                 }
               : buildActivity
@@ -1653,14 +1820,25 @@ The user has expressed frustration. Do the following:
           });
           finalCreditCost = creditCost;
 
-          // Save messages to DB — attach files_changed + credits metadata
+          // Save messages to DB — attach files_changed + credits metadata.
+          // Map "patch" → "build" for the messages.mode CHECK; admin retry on RLS fail.
+          const changedPathsForPersist =
+            mode === "patch" && patchOutcome === "failed"
+              ? []
+              : parsedFiles.length > 0
+                ? parsedFiles.map((f) => f.path)
+                : Array.from(streamedFilePaths);
           const persistedContent =
-            mode === "build" || mode === "patch"
-              ? parseAIResponse(fullContent).message
-              : fullContent;
-          const { data: insertedMessages } = await (supabase as any)
-            .from("messages")
-            .insert([
+            mode === "patch" && patchOutcome === "failed"
+              ? "I couldn't apply that edit to your files — the preview wasn't changed. Try rephrasing or switch to Build."
+              : buildPersistedAssistantContent({
+                  mode,
+                  fullContent,
+                  changedPaths: changedPathsForPersist,
+                });
+          const { assistantMessageId } = await persistChatTurnMessages(
+            supabase,
+            [
               { project_id: projectId, role: "user", content: persistedUserMessage, mode },
               {
                 project_id: projectId,
@@ -1673,11 +1851,9 @@ The user has expressed frustration. Do the following:
                   ? { ...assistantMetadata, credits_used: creditCost }
                   : { credits_used: creditCost },
               },
-            ])
-            .select("id, role");
-          const assistantMessageId = (insertedMessages as Array<{ id: string; role: string }> | null)?.find(
-            (row) => row.role === "assistant",
-          )?.id;
+            ],
+            { projectId, label: "chat-turn" },
+          );
 
           if ((mode === "build" || mode === "patch") && (parsedFiles.length > 0 || streamedFilePaths.size > 0)) {
             await recordEditorIntelligenceBuild({
@@ -1792,13 +1968,21 @@ The user has expressed frustration. Do the following:
                 creditsUsed: creditCost,
                 remainingCredits,
                 fileCount: finalFilesForClient.length,
-                filesChanged: finalFilesForClient.length > 0 || streamedFilePaths.size > 0,
-                changedPaths: finalFilesForClient.length > 0
-                  ? finalFilesForClient.map((f) => f.path)
-                  : Array.from(streamedFilePaths),
+                filesChanged:
+                  mode === "patch"
+                    ? patchOutcome === "applied"
+                    : finalFilesForClient.length > 0 || streamedFilePaths.size > 0,
+                changedPaths:
+                  mode === "patch" && patchOutcome !== "applied"
+                    ? []
+                    : finalFilesForClient.length > 0
+                      ? finalFilesForClient.map((f) => f.path)
+                      : Array.from(streamedFilePaths),
                 assistantMessageId,
+                snapshot_id: preBuildSnapshotId ?? undefined,
                 build_activity: buildActivity ?? undefined,
                 backend_wired: backendWiring ?? undefined,
+                patch_failed: mode === "patch" && patchOutcome === "failed" ? true : undefined,
                 verification: verification
                   ? {
                       engine: verification.engine,
@@ -1812,6 +1996,9 @@ The user has expressed frustration. Do the following:
                 displayMessage:
                   mode === "build" || mode === "patch"
                     ? (() => {
+                        if (mode === "patch" && patchOutcome === "failed") {
+                          return "I couldn't apply that edit to your files — the preview wasn't changed. Try rephrasing (e.g. \"add About, Services, and Contact links in the header\") or switch to **Build**.";
+                        }
                         if (mode === "patch" && finalFilesForClient.length > 0) {
                           const paths = finalFilesForClient.map((f) => f.path).join(", ");
                           return `Updated ${paths}. Preview refreshed.`;

@@ -2,7 +2,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
-import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
+import { ECONOMY_CHAT_MODEL } from "@/lib/ai/model-defaults";
 
 /**
  * POST /api/account/generate-workspace-knowledge
@@ -75,7 +75,8 @@ Be specific, cite what you observed. Do NOT invent rules. If you can't extract e
   try {
     const aiRes = await generateAI(
       {
-        model: BALANCED_CODING_MODEL,
+        // Workspace-knowledge doc is summarization — economy chat tier.
+        model: ECONOMY_CHAT_MODEL,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },

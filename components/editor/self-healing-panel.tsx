@@ -70,6 +70,34 @@ export function SelfHealingPanel({ projectId, isLocked, onFilesRefresh }: SelfHe
   const [scanning, setScanning] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [showResolved, setShowResolved] = useState(false);
+  const [monitoring, setMonitoring] = useState<{ enabled: boolean; cadence: "daily" | "weekly" } | null>(null);
+
+  useEffect(() => {
+    void fetch(`/api/projects/${projectId}/monitoring`)
+      .then(async (res) => {
+        if (!res.ok) return;
+        const data = await res.json();
+        const m = data.monitoring as { enabled?: boolean; cadence?: string } | undefined;
+        setMonitoring({ enabled: !!m?.enabled, cadence: m?.cadence === "weekly" ? "weekly" : "daily" });
+      })
+      .catch(() => {});
+  }, [projectId]);
+
+  async function saveMonitoring(enabled: boolean, cadence: "daily" | "weekly") {
+    setMonitoring({ enabled, cadence }); // optimistic
+    try {
+      const res = await fetch(`/api/projects/${projectId}/monitoring`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled, cadence }),
+      });
+      if (!res.ok) throw new Error();
+      toast({ title: enabled ? `Monitoring on (${cadence})` : "Monitoring off" });
+    } catch {
+      setMonitoring((m) => (m ? { ...m, enabled: !enabled } : m));
+      toast({ title: "Couldn't update monitoring", variant: "destructive" });
+    }
+  }
 
   const loadFindings = useCallback(async () => {
     try {
@@ -340,6 +368,37 @@ export function SelfHealingPanel({ projectId, isLocked, onFilesRefresh }: SelfHe
             )}
           </div>
         )}
+      </div>
+
+      {/* Project monitoring (Lovable parity: scheduled checks + owner email) */}
+      <div className="px-3 py-2.5 border-t border-border">
+        <div className="flex items-center gap-2">
+          <HeartPulse className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          <span className="text-xs font-medium flex-1">Project monitoring</span>
+          {monitoring?.enabled && (
+            <select
+              value={monitoring.cadence}
+              onChange={(e) => void saveMonitoring(true, e.target.value as "daily" | "weekly")}
+              className="text-[10px] bg-muted/40 border border-border/60 rounded-md px-1.5 py-0.5 text-muted-foreground"
+            >
+              <option value="daily">Daily</option>
+              <option value="weekly">Weekly</option>
+            </select>
+          )}
+          <button
+            role="switch"
+            aria-checked={!!monitoring?.enabled}
+            onClick={() => void saveMonitoring(!monitoring?.enabled, monitoring?.cadence ?? "daily")}
+            className={`relative w-8 h-[18px] rounded-full transition-colors ${monitoring?.enabled ? "bg-emerald-500/80" : "bg-muted"}`}
+          >
+            <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all ${monitoring?.enabled ? "left-4" : "left-0.5"}`} />
+          </button>
+        </div>
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          {monitoring?.enabled
+            ? `Scheduled ${monitoring.cadence} checks — you'll get an email when important issues are found.`
+            : "Turn on to have LifemarkAI check this app on a schedule and email you about important issues."}
+        </p>
       </div>
 
       {/* Scan button */}

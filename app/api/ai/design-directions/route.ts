@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
-import { getDefaultAiModel } from "@/lib/ai/model-defaults";
+import { DESIGN_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -71,7 +71,9 @@ export async function POST(req: NextRequest) {
   try {
     const result = await generateAI(
       {
-        model: getDefaultAiModel(),
+        // Design ideation belongs on the purpose-built design tier (cheaper
+        // than the coding workhorse and better at aesthetics).
+        model: DESIGN_MODEL,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: `App/feature description: ${prompt.slice(0, 500)}` },

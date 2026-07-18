@@ -187,6 +187,28 @@ export const MOCK_SERVICES = [];`),
       return errs;
     },
   },
+  {
+    name: "module registry script must not emit broken /^(src/ regex (template-literal escape)",
+    files: [
+      f("src/App.tsx", `export default function App(){ return <div>ok</div>; }`),
+      f("src/main.tsx", `import App from "./App"; export default App;`),
+    ],
+    assert: (html) => {
+      const errs: string[] = [];
+      // The old bug emitted a regex literal that the browser parsed as an
+      // unterminated group and prevented `window.__Mrequire = …` from defining.
+      if (/var looksLikeProjectModule\s*=\s*\/\^\(src\//.test(html)) {
+        errs.push("emitted broken regex literal for looksLikeProjectModule");
+      }
+      if (!/window\.__Mrequire\s*=\s*function/.test(html)) {
+        errs.push("module registry does not define window.__Mrequire");
+      }
+      if (!html.includes("path.indexOf('src/') === 0")) {
+        errs.push("expected string-based project-module check (not regex literal)");
+      }
+      return errs;
+    },
+  },
 ];
 
 let passed = 0;

@@ -79,6 +79,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         },
       ],
       temperature: 0.3,
+      maxTokens: 800, // a summary, not a transcript
       stream: true,
       onChunk: (chunk: string) => { summary += chunk; },
     }, { projectId, userId: user.id, task: "project_summary" });

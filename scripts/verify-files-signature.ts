@@ -26,10 +26,17 @@ const sig1 = filesContentSignature(base);
 const sig2 = filesContentSignature([...base]);
 const sig3 = filesContentSignature([{ path: "src/App.tsx", content: "export default function App(){return <Login/>}" }]);
 const sig4 = filesContentSignature([...base, { path: "src/pages/Login.tsx", content: "login" }]);
+// Same length + same prefix — old signature collided; menu renames must remount.
+const menuBefore = [{ path: "src/components/Header.tsx", content: 'const links = ["Home", "Store", "Blog"];\n' + "x".repeat(200) }];
+const menuAfter = [{ path: "src/components/Header.tsx", content: 'const links = ["Shop", "About", "News"];\n' + "x".repeat(200) }];
+const sigMenu1 = filesContentSignature(menuBefore);
+const sigMenu2 = filesContentSignature(menuAfter);
 
 const sameContent = sig1 === sig2;
 const contentChange = sig1 !== sig3;
 const newFile = sig1 !== sig4;
+const surgicalEdit = sigMenu1 !== sigMenu2;
+const ok = sameContent && contentChange && newFile && surgicalEdit;
 
-log("signature checks", { sameContent, contentChange, newFile, ok: sameContent && contentChange && newFile });
-process.exit(sameContent && contentChange && newFile ? 0 : 1);
+log("signature checks", { sameContent, contentChange, newFile, surgicalEdit, ok });
+process.exit(ok ? 0 : 1);

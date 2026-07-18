@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   KeyRound, ArrowLeft, ChevronDown, ChevronUp, ExternalLink,
@@ -10,6 +10,7 @@ import {
   Building2,
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { useWorkspaceIdentity } from "@/hooks/use-workspace-identity";
 
 /* ─── Types ─────────────────────────────────────────────── */
 
@@ -87,6 +88,7 @@ const CALLBACK_URL = `${process.env.NEXT_PUBLIC_APP_URL ?? "https://app.lifemark
 
 export function SSOSetupPage() {
   const router = useRouter();
+  const { sso: loadedSso, enforceSettings: loadedEnforce, loading, patch } = useWorkspaceIdentity();
 
   // Simulated provider state
   const [activeProvider, setActiveProvider] = useState<SSOProvider | null>(null);
@@ -96,6 +98,15 @@ export function SSOSetupPage() {
     jitEnabled: true,
     jitDefaultRole: "editor",
   });
+
+  useEffect(() => {
+    if (loading) return;
+    if (loadedSso) {
+      setActiveProvider(loadedSso as SSOProvider);
+      setShowSetup(false);
+    }
+    if (loadedEnforce) setEnforceSettings(loadedEnforce);
+  }, [loading, loadedSso, loadedEnforce]);
 
   const [showSetup,    setShowSetup]    = useState(true);
   const [protocol,    setProtocol]      = useState<Protocol>("oidc");
@@ -123,7 +134,7 @@ export function SSOSetupPage() {
     toast({ title: "Copied to clipboard" });
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (protocol === "oidc" && (!issuerUrl || !clientId || !clientSecret)) {
       toast({ title: "Missing fields", description: "Please fill in Issuer URL, Client ID and Client Secret.", variant: "destructive" });
       return;
@@ -141,17 +152,31 @@ export function SSOSetupPage() {
       tenantId: slug,
       issuerUrl: protocol === "oidc" ? issuerUrl : undefined,
       signOnUrl: protocol === "saml" ? signOnUrl : undefined,
+      clientId: protocol === "oidc" ? clientId : undefined,
+      clientSecret: protocol === "oidc" ? clientSecret : undefined,
+      entityId: protocol === "saml" ? entityId : undefined,
+      certificate: protocol === "saml" ? certificate : undefined,
       status: "active",
     };
-    setActiveProvider(newProvider);
-    setShowSetup(false);
-    toast({ title: "SSO provider configured", description: `${newProvider.displayName} is now active.` });
+    try {
+      await patch({ sso: newProvider, enforceSettings });
+      setActiveProvider(newProvider);
+      setShowSetup(false);
+      toast({ title: "SSO provider configured", description: `${newProvider.displayName} is now active.` });
+    } catch (err) {
+      toast({ title: "Save failed", description: err instanceof Error ? err.message : "Try again.", variant: "destructive" });
+    }
   };
 
-  const handleDelete = () => {
-    setActiveProvider(null);
-    setShowSetup(true);
-    toast({ title: "SSO provider deleted" });
+  const handleDelete = async () => {
+    try {
+      await patch({ sso: null });
+      setActiveProvider(null);
+      setShowSetup(true);
+      toast({ title: "SSO provider deleted" });
+    } catch (err) {
+      toast({ title: "Delete failed", description: err instanceof Error ? err.message : "Try again.", variant: "destructive" });
+    }
   };
 
   const handleTest = async () => {

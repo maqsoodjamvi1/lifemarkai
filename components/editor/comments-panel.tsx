@@ -13,6 +13,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { createClient } from "@/lib/supabase/client";
 
+import { LovableGuestCommentsSetup } from "@/components/editor/lovable/guest-comments-setup";
+
 interface CommentAuthor {
   id: string;
   full_name: string | null;
@@ -23,7 +25,7 @@ interface CommentAuthor {
 interface Comment {
   id: string;
   project_id: string;
-  user_id: string;
+  user_id: string | null;
   parent_id: string | null;
   content: string;
   resolved: boolean;
@@ -35,12 +37,15 @@ interface Comment {
   element_tag?: string | null;
   page_path?: string | null;
   element_preview?: string | null;
+  is_guest?: boolean;
+  guest_name?: string | null;
   author: CommentAuthor | null;
 }
 
 interface CommentsPanelProps {
   projectId: string;
   currentUserId: string;
+  isPublic?: boolean;
 }
 
 function timeAgo(iso: string): string {
@@ -54,12 +59,13 @@ function timeAgo(iso: string): string {
   return `${d}d ago`;
 }
 
-function authorLabel(author: CommentAuthor | null): string {
-  return author?.full_name || author?.email?.split("@")[0] || "User";
+function authorLabel(comment: Comment): string {
+  if (comment.is_guest) return comment.guest_name || "Guest";
+  return comment.author?.full_name || comment.author?.email?.split("@")[0] || "User";
 }
 
-function authorInitials(author: CommentAuthor | null): string {
-  const name = authorLabel(author);
+function authorInitials(comment: Comment): string {
+  const name = authorLabel(comment);
   return name.slice(0, 2).toUpperCase();
 }
 
@@ -68,9 +74,11 @@ const AVATAR_COLORS = [
   "bg-amber-500", "bg-rose-500", "bg-cyan-500",
 ];
 
-function avatarColor(userId: string): string {
+function avatarColor(userId: string | null, isGuest?: boolean): string {
+  if (isGuest) return "bg-sky-500";
+  const id = userId ?? "guest";
   let h = 0;
-  for (let i = 0; i < userId.length; i++) h = (h * 31 + userId.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
 
@@ -92,7 +100,8 @@ function CommentCard({
   onDelete: (id: string) => void;
   depth?: number;
 }) {
-  const isOwn = comment.user_id === currentUserId;
+  const isOwn = !!comment.user_id && comment.user_id === currentUserId;
+  const isGuest = !!comment.is_guest;
 
   return (
     <div className={`${depth > 0 ? "ml-6 border-l border-border pl-3" : ""}`}>
@@ -100,19 +109,24 @@ function CommentCard({
         {/* Author row */}
         <div className="flex items-start gap-2">
           {/* Avatar */}
-          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0 ${avatarColor(comment.user_id)}`}>
+          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0 ${avatarColor(comment.user_id, isGuest)}`}>
             {comment.author?.avatar_url ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={comment.author.avatar_url} alt="" className="w-full h-full rounded-full object-cover" />
             ) : (
-              authorInitials(comment.author)
+              authorInitials(comment)
             )}
           </div>
 
           <div className="flex-1 min-w-0">
             {/* Header */}
             <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-xs font-semibold text-foreground">{authorLabel(comment.author)}</span>
+              <span className="text-xs font-semibold text-foreground">{authorLabel(comment)}</span>
+              {isGuest && (
+                <span className="text-[9px] font-medium text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded-full">
+                  Guest
+                </span>
+              )}
               {comment.resolved && (
                 <span className="flex items-center gap-0.5 text-[10px] text-emerald-500 font-medium">
                   <CheckCheck className="w-3 h-3" />Resolved
@@ -200,7 +214,7 @@ function CommentCard({
 }
 
 // ── Main panel ───────────────────────────────────────────────────────────────
-export function CommentsPanel({ projectId, currentUserId }: CommentsPanelProps) {
+export function CommentsPanel({ projectId, currentUserId, isPublic = false }: CommentsPanelProps) {
   const { toast } = useToast();
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -208,6 +222,7 @@ export function CommentsPanel({ projectId, currentUserId }: CommentsPanelProps) 
   const [text, setText] = useState("");
   const [replyTo, setReplyTo] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "open" | "resolved">("all");
+  const [activeTab, setActiveTab] = useState<"inbox" | "embed">("inbox");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -299,6 +314,7 @@ export function CommentsPanel({ projectId, currentUserId }: CommentsPanelProps) 
   });
 
   const openCount = topLevel.filter((c) => !c.resolved).length;
+  const guestOpenCount = topLevel.filter((c) => c.is_guest && !c.resolved).length;
   const replyTarget = replyTo ? comments.find((c) => c.id === replyTo) : null;
 
   return (
@@ -313,8 +329,14 @@ export function CommentsPanel({ projectId, currentUserId }: CommentsPanelProps) 
               {openCount}
             </span>
           )}
+          {guestOpenCount > 0 && (
+            <span className="text-[10px] font-medium bg-sky-500/10 text-sky-400 px-1.5 py-0.5 rounded-full">
+              {guestOpenCount} guest
+            </span>
+          )}
         </div>
         {/* Filter */}
+        {activeTab === "inbox" && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors">
@@ -334,8 +356,30 @@ export function CommentsPanel({ projectId, currentUserId }: CommentsPanelProps) 
             ))}
           </DropdownMenuContent>
         </DropdownMenu>
+        )}
       </div>
 
+      <div className="flex gap-1 px-3 py-2 border-b border-border shrink-0">
+        {(["inbox", "embed"] as const).map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveTab(tab)}
+            className={`flex-1 py-1.5 rounded-md text-xs font-medium capitalize transition-all ${
+              activeTab === tab ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {tab === "inbox" ? "Inbox" : "Guest embed"}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "embed" ? (
+        <div className="flex-1 overflow-y-auto p-4">
+          <LovableGuestCommentsSetup projectId={projectId} isPublic={isPublic} />
+        </div>
+      ) : (
+        <>
       {/* Comment list */}
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
         {loading ? (
@@ -380,7 +424,7 @@ export function CommentsPanel({ projectId, currentUserId }: CommentsPanelProps) 
           <div className="flex items-center justify-between bg-muted/50 rounded-md px-2.5 py-1.5 text-[10px] text-muted-foreground">
             <span className="flex items-center gap-1">
               <Reply className="w-3 h-3" />
-              Replying to <span className="font-medium text-foreground">{authorLabel(replyTarget.author)}</span>
+              Replying to <span className="font-medium text-foreground">{replyTarget ? authorLabel(replyTarget) : "comment"}</span>
             </span>
             <button onClick={() => setReplyTo(null)} className="hover:text-foreground transition-colors">✕</button>
           </div>
@@ -408,6 +452,8 @@ export function CommentsPanel({ projectId, currentUserId }: CommentsPanelProps) 
         </div>
         <p className="text-[10px] text-muted-foreground">⌘↵ to send</p>
       </div>
+        </>
+      )}
     </div>
   );
 }

@@ -209,6 +209,142 @@ SEO/AEO panel). The July 2, 2026 session closed the rest:
 
 ---
 
+## 13. Deep re-comparison — July 13, 2026
+
+Method: (a) 30-point automated repo audit of every parity feature — **all 30 PRESENT**, none partial; (b) fresh read of Lovable's changelog through **July 9, 2026** and the current Cloud docs. This section supersedes the gap list above where they differ.
+
+### 13a. Parity confirmed in code (audit highlights)
+
+Version system (per-message revert + preview with after-state semantics, restore route, preview banner), follow-up suggestion chips, security bar above composer, publish-from-chat, Lovable import incl. database, DB manager, custom MCP connectors, self-verify + backend auto-wire, both visual-edit engines, connector proxy (**registry now at ~52 connectors** — ahead of the 42 noted in §12), OpenRouter balance guard + prompt-cache static-head split + free-model routing, SSR-first Next.js generation + preview, Test/Live lock, self-healing scans, embedded paywall, daily credits + rollover, unified billing, knowledge panel, prompt queue, domains/Figma/voice/analytics/collab/templates-remix/Monaco — all verified on disk.
+
+### 13b. New at Lovable since the last pass (Jun 15 – Jul 9) — and where LifemarkAI stands
+
+| Lovable ship | LifemarkAI status |
+|---|---|
+| One credit balance (Jun 18) | ✅ Equivalent (migration 074) — shipped the same week |
+| Publish from chat (Jun 9) | ✅ Done |
+| Slow-query finder (Jun 10) | ✅ Done |
+| Manage scheduled jobs (Jun 24) | ✅ Done (Jobs tab, pg_cron) |
+| Queued messages fixes (Jul 3) | ✅ promptQueue predates it |
+| Connectors page in project (Jul 2) | ✅ Connectors panel exists |
+| PWA support (Jun 3) | ✅ PWA panel |
+| Comments in shared previews (Jun 26) | ✅ Comments panel |
+| AI activity dashboard (Jun 18) | ✅ Gateway logs usage per project (`lifemark_cloud_usage` + AI overview); per-request drill-down with redacted request capture is thinner than theirs |
+| Priority processing for speed (Jun 30) | ✅ Equivalent lever: `OPENROUTER_PROVIDER_SORT=throughput` |
+| Browser testing integration (Jun 22) | ✅ e2e + testing panels |
+| Aikido pentest all plans (Jun 22) | ◑ Analog: vuln-scan + nightly security scans; no third-party pentest brand |
+| Pause Cloud manually / auto-pause idle (Jul 8) | ◑ Auto-pause exists on credit exhaustion (`bill-usage`); **manual pause + idle auto-pause missing** |
+| Resize instance from chat w/ approval card (Jul 8) | ◑ Tier resize exists in Cloud panel (`setManagedComputeTier`); **not offered from chat** |
+| Paste API key in chat → auto-secret (Jun 26) | ❌ Env panel exists; **no key auto-detection in composer** |
+| Reference exact code lines in chat (`file.tsx:42` pills) (Jun 10) | ❌ @file mentions exist; **no line-level references** |
+| Reference a connector via `@` in chat (Jul 8) | ❌ @-mentions are file-only |
+| Connector action approval cards in chat (Jul 9) | ❌ DB writes have allow/ask/never; **generic connector writes don't pause for approval** |
+| Build with URL (`html=` page references) (Jun 16) | ❌ Not present |
+| Unpublished-changes dot on Publish (Jun 16) | ❌ Not present (cheap win) |
+| Project monitoring beta (scheduled checks + email) (Jun 30) | ◑ Health scans + cron exist; **no per-project schedule opt-in / owner email digest** |
+| TTS/STT models in AI gateway for built apps (Jun 18) | ❌ Editor has voice input; **generated apps get no voice API via gateway** |
+| DB export (5 GB dump, emailed link) (Jul 3) | ◑ Snapshots/backups exist; **no user-facing full-dump export** |
+| Domain buy/transfer/WHOIS via registrar (Jun 4–8) | ❌ Domains panel connects, doesn't sell — registrar integration is a business deal, not code |
+| Desktop app (Windows, Jul 6) | ❌ Out of scope — web-only |
+| Interface language picker (Jun 17) | ❌ Platform UI is English-only (generated-app i18n panel exists) |
+| Private npm registry (Enterprise, Jun 18) | ❌ Enterprise infra, not started |
+| New connectors: dbt, ClickHouse, GitHub API, WordPress, X, Calendly, Chargebee/Zoho/Wix/WooCommerce batch, Athena, Replicate… | ◑ Registry ~52 vs their continuous drops — treadmill, not a gap; add on demand |
+| SSO groups/JIT/domain-login, workspace insights, region defaults, audit-log filters | ❌ Enterprise admin surface — LifemarkAI has none of the SSO/SCIM layer (known, unchanged) |
+| IPTC AI-provenance metadata on generated images (Jul 8) | ❌ Trivial to add in image pipeline |
+| TanStack Start default (Enterprise, Jun 22) | ✅ Different answer, same goal: SSR-first Next.js |
+
+### 13c. Honest bottom line (July 13)
+
+- **Core product loop: at parity or ahead.** Chat/plan/agent modes, versioning, visual edits, Cloud with real Supabase provisioning, unified credits, publish-from-chat, import-from-Lovable (they have no reverse), multi-model routing with cost guardrails (they have nothing user-visible like the balance guard/free-tier routing), custom MCP servers (their MCP is Lovable-as-server; ours lets users bring their own).
+- **Behind on chat ergonomics (small, closeable):** line-level code references, @connector mentions, API-key paste-to-secret, unpublished-changes dot, connector approval cards, pause/resize from chat.
+- **Behind on managed-platform depth (medium):** manual/idle Cloud pause, user-facing DB dump export, project monitoring as an opt-in scheduled product with email digests, TTS/STT for built apps.
+- **Behind structurally (unchanged, acknowledged):** enterprise identity (SSO/SCIM/groups/insights), domain registrar resale, desktop app, private npm registry, SOC 2, Paddle account auto-creation, hosted per-project preview servers (ops).
+
+## 14. July 13 close-out session — ALL closeable gaps from §13 shipped
+
+Everything in §13c's "small" and "medium" tiers is now implemented; only the structural tier remains.
+
+**Chat ergonomics — CLOSED:**
+
+1. **Unpublished-changes dot** — `editor-top-bar.tsx`: amber dot on Publish when `lastSaved > deployedAt` (from `/api/deploy/status`), "Publish changes" label in the dropdown; cleared on successful deploy.
+2. **Paste API key → secret** — `lib/security/detect-secret.ts` (24 conservative token patterns: OpenAI/Anthropic/OpenRouter/Stripe/GitHub/Slack/Resend/AWS/Notion/Shopify/GitLab/Linear/Figma/JWT…) + composer `onPasteCapture`: the raw key never enters the message — replaced with a `{{TAG}}`, value saved via the project env API, toast confirms. Better than Lovable's (they swap before send; we swap before it ever hits the input state).
+3. **Line-level code references** — Monaco action "Reference Line(s) in Chat" (⌘⇧L + context menu + "Ref line" in the selection bar) dispatches `monaco-line-ref` → composer inserts `@path:12-34`; on send, files referenced with lines are sliced to the referenced range ±5 lines *with line numbers* instead of whole-file context (sharper + cheaper than Lovable's whole-file pills).
+4. **@connector mentions** — mention picker now lists the 50+ app connectors (`CONNECTORS` catalog); inserts `@connector:stripe`; chat route detects it and injects a steering block that forces gateway-routed integration code.
+5. **Connector approval cards** — NEW agent tool `connector_call` (agent can actually *use* the project's configured connectors): GETs run freely, writes gated by `decideConnectorWrite` over `projects.metadata` (`always`/`never`/10-min `once` grants — `lib/integrations/connector-exec.ts`, decision API `/api/projects/[id]/connector-permissions`). Blocked writes surface an approval card in chat (Allow once / Always allow / Never / Skip); approving re-runs the agent. Port-tested 6/6.
+6. **Pause/resize Cloud from chat** — `lib/ai/cloud-intent.ts` (conservative detector, port-tested 8/8) + zero-credit chat-route branch that emits an approval card: resize shows the tiny→large size picker with current preselected (→ `PATCH /api/cloud/provision`), pause/wake confirm (→ `POST /api/cloud/pause`). Nothing executes without the click — same contract as Lovable.
+
+**Managed-platform depth — CLOSED:**
+
+7. **Manual pause + wake** — `/api/cloud/pause` flips `cloud_status` and, when the Management API is configured, pauses/restores the REAL Supabase project (`pauseManagedProject`/`restoreManagedProject` added to `lib/cloud/management.ts`). Cloud panel Advanced tab: real Pause/Wake card (replaces the dead "contact support" button).
+8. **Idle auto-pause** — bill-usage cron pauses paid-tier Cloud projects untouched for 14 days (`cloud_paused_idle`); the top-up auto-resume now explicitly skips manually/idle-paused projects so it can't wake them by accident.
+9. **DB export** — `GET /api/cloud/export`: portable SQL dump (CREATE TABLE from information_schema + data as INSERTs; 200 tables / 5 000 rows / 20 MB caps) via `queryManagedSql`, downloads as `.sql` from the Cloud panel.
+10. **Project monitoring** — opt-in per project (`metadata.monitoring`, toggle + daily/weekly cadence in the Self-Heal panel, API `/api/projects/[id]/monitoring`). The nightly health-scan cron now also scans monitored projects regardless of recent edits and emails the owner (Resend) when critical/error findings are open, respecting cadence.
+11. **TTS/STT for built apps** — turns out this was already live via `/api/projects/[id]/ai-proxy` (capabilities `tts`/`stt` with billing) + `aiSpeak`/`aiListen` scaffolded into generated apps. Added the same on the Cloudflare gateway (`/v1/audio/speech`, `/v1/audio/transcriptions` with credit billing: 2¢/1k chars TTS, 2¢/MB STT) so edge-function apps get voice too. §13's "gap" corrected.
+
+**Also shipped:**
+
+12. **IPTC/XMP AI-provenance** — `lib/ai/image-provenance.ts`: pure-TS PNG iTXt injection of `DigitalSourceType=trainedAlgorithmicMedia` XMP after IHDR (CRC32 correct — port-tested with full chunk-walk validation, 10/10); applied to all data-URL PNG outputs of `generateImage`.
+13. **Build-with-URL `html=` page references** — handler + payload + prompt-create-box accept up to 10 combined image/page refs; chat route fetches referenced public pages server-side (SSRF-guarded: private/loopback/link-local/metadata ranges blocked — port-tested), strips to readable text with structural hints, and injects as layout/content reference.
+
+**Port tests: 38/38 pass** (secret detection/redaction, cloud intents, PNG provenance incl. CRC chunk-walk + idempotency, page-ref extraction/SSRF guard/HTML stripping, connector write decisions).
+
+**Remaining vs Lovable (structural only):** enterprise identity (SSO/SCIM/group mapping/workspace insights), domain registrar resale, desktop app, private npm registry, SOC 2, Paddle account auto-creation, hosted per-project preview servers (ops), platform UI language picker. Everything else is at parity or ahead.
+
+## 15. July 13 — editor-surface deep audit + final closures
+
+A strict 34-point audit of the editor components (UI render + wiring, not just state) found 21 features fully present and surfaced 6 real Lovable-editor gaps. All 6 closed same day:
+
+1. **SVG previews in chat** (Lovable Jun 9) — new `SvgBlock` in `chat-panel.tsx`: any ```svg block (or bare `<svg>…</svg>` output) renders as a sanitized image on a checkerboard, with Preview/Source toggle, Copy, and Download.
+2. **Markdown preview in the code editor** (Lovable Jun 8) — `code-panel.tsx`: a Preview/Source toggle appears for `.md/.mdx/.markdown` tabs; rendered via ReactMarkdown+GFM as a styled overlay, live against unsaved buffer content.
+3. **Project media gallery** (Lovable Jul 9) — new `media-gallery-panel.tsx` (panel id `media`, 🖼️ in the panel catalog): every image in the project — image files (SVG rendered inline sanitized, data-URL/base64 rendered) plus image URLs referenced anywhere in code — in a real-proportions CSS-columns grid with hover actions: Reference in chat, Copy URL/source, Download, Delete (project files, confirm-gated).
+4. **Click a `file.tsx:42` pill in a sent message → editor jumps to the line** (Lovable Jun 10) — `linkifyLineRefs` rewrites refs to pill-buttons (code fences excluded), clicking dispatches `lifemark-open-file-at-line`; `editor-layout` opens the file, switches to Code view, and reveals the line. Port-tested 7/7 (incl. fence exclusion, plain-@ non-matches, href round-trip).
+5. **Compact "Show toolbar" toggle** (Lovable Jun 23) — preview toolbar gains a Hide button; collapsed state shows a floating "Show toolbar" pill; persisted in localStorage.
+6. **True in-place inline text editing + free-quota counter** — double-click any text element in the srcdoc preview → edit it directly (`contenteditable=plaintext-only`, select-all on entry, Enter/blur commits to source via the visual-edit matcher, Escape cancels, empty commits rejected); the visual-edit popover now shows "Free today: N of 100 edits left" fed by a new `GET /api/ai/inline-edit` quota endpoint.
+
+Polish en route: prompt-queue repeat cycle extended to Lovable's 50× (1→2→3→5→10→25→50); dead `repeatInputId` state removed.
+
+**Editor-surface verdict:** at parity or ahead on all 34 audited points. Ours-ahead items confirmed in the audit: edit-past-message branching, per-message cost badges, DB-persisted message feedback, bookmarks + filter, draw-annotate modal, element-anchored preview comments, split-view Monaco + format-on-save, cross-file find-and-replace, deploy rollback, command palette + shortcuts modal, design-direction picker.
+
+### 15a. Beyond-parity extras (July 13, second pass)
+
+Items neither product strictly required but that push past Lovable:
+
+- **Preview back/forward** — route-history stack in the address bar (Lovable's preview has no back/forward); back/forward navigate both engines via the existing `lifemark-preview-navigate` bridge, with iframe-echo suppression so clicks don't double-push history.
+- **In-app fullscreen preview** — Maximize toggles the preview pane to fill the window (Esc exits); Lovable only opens a new tab.
+- **File tree: Duplicate + drag-drop move** — Duplicate with `-copy`/`-copy-N` dedupe; drag any file onto a folder (violet drop highlight) or the tree background (move to root); conflicts rejected. Lovable's code mode has neither.
+- **Settings search** (Lovable Jul 8 parity) — filter box over settings sections with synonym matching (`sso` → Security, `token` → API Keys), "No matching settings" empty state.
+- **JPEG XMP provenance** — AI-provenance now also covers JPEG data-URLs (APP1 XMP segment after SOI/APP0, 64KB guard, idempotent) — port-tested 11/11 with full marker-walk validation; Lovable documents PNG-pipeline provenance only.
+
+## 16. July 13 — depth batch (workflow-layer parity items from §1/§5/§10)
+
+1. **Publishing gate** (§10 "block publish on critical findings" — was Lovable-only) — `handleDeploy` now runs the pre-publish check: CRITICAL static-scan findings (exposed keys etc., severity-filtered `criticalSecurityCount` from editor-layout) pause the publish with an explicit confirm; declining opens the Security panel. Warn-and-confirm rather than hard-block — the user stays in charge.
+2. **Persisted agent work trace** (§1 "Task visibility" follow-through) — the agent route now stores a compact trace (≤40 thought/action steps, tool + path + 140-char content) and wall-clock `work_seconds` in the assistant message's metadata; chat renders a collapsible **"Worked for Xs · N steps"** disclosure on finished messages that survives reloads — Lovable's Tasks panel is ephemeral per-run; ours persists.
+3. **Per-request AI activity** (§4 "thinner than theirs" — closed) — the AI Metrics dashboard gained a Requests drill-down: every `ai_eval_log` row with status/model/task/tokens/latency/route, All-vs-Failed filter, per-model filter, incremental "Show more".
+4. **Browser performance profiling** (§1 testing-depth delta) — the Playwright browser-test engine now measures **Core Web Vitals** (TTFB/FCP/LCP/CLS/DCL via PerformanceObserver installed pre-navigation), rates them against Google's good/needs-improvement/poor bands, streams a `vitals` SSE event, and the Browser Tests panel renders color-coded metric chips.
+5. Landing-page "Powered by GPT-4o…" stale-copy TODO — verified already fixed (hero reads Claude Fable/Opus/Codex/GPT-5).
+
+## 17. July 13 — per-route model economics pass
+
+Full audit of every `generateAI` call site (39 across app/api + lib), then right-sized the over-provisioned ones. Heavy paths (build, agent, fix, self-verify, health fixes, orchestrator) untouched — they already route through the smart-model/budget-aware chain.
+
+**Downshifted (was → now):**
+
+| Route | Task | Was | Now |
+|---|---|---|---|
+| `ai/sql` | NL→SQL one-shot | coding workhorse | fast tier |
+| `ai/enhance` | prompt rewrite | frontier balanced | economy chat |
+| `ai/inline-edit` | few-line selection edit | coding workhorse | economy coder (explicit model still wins) |
+| `ai/analyze` | small script gen | frontier balanced | fast tier |
+| `ai/design-directions` + `design-guidance` | design ideation/critique | coding workhorse | design tier (aesthetics-tuned, cheaper) |
+| `ai/generate-email` | email templates | coding workhorse | content tier |
+| `ai/generate-file` | md/csv/json/html docs | coding workhorse | content tier |
+| `ai/generate-tests` + `generate-browser-tests` | single-file test gen | coding workhorse | balanced tier |
+| `projects/[id]/generate-knowledge` + workspace variant | knowledge-doc summarization | frontier balanced | economy chat |
+
+**Token caps added** (were uncapped → model-ceiling): review 1500, refactor 4000, docgen 2500, brainstorm 700, summarise 800.
+
+Impact: the coding workhorse is now reserved for actual builds/fixes; a dozen everyday interactions (SQL helper, inline edits, design pickers, emails, docs, tests, knowledge) run 2–10× cheaper and faster on purpose-fit tiers, with provider.ts's free-tier congestion fallback and the balance guard still underneath. Everything remains env-overridable per tier.
+
 ### Sources
 
 - [Plan mode](https://docs.lovable.dev/features/plan-mode) · [Build/Agent mode](https://docs.lovable.dev/features/agent-mode) · [Subagents](https://docs.lovable.dev/features/subagents)

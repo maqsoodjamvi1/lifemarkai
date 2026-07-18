@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   Users, ArrowLeft, ChevronDown, ChevronUp, Shield, Copy, Check,
@@ -9,6 +9,7 @@ import {
   Server, Info, Plus, Trash2, Eye, EyeOff,
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { useWorkspaceIdentity } from "@/hooks/use-workspace-identity";
 
 /* ─── Types ─────────────────────────────────────────────── */
 
@@ -27,8 +28,6 @@ interface GroupMapping {
 }
 
 /* ─── Constants ─────────────────────────────────────────── */
-
-const BASE_URL = "https://api.lifemarkai.com/scim/v2";
 
 const FAQ = [
   { q: "Can I use SCIM without SSO?",
@@ -54,20 +53,28 @@ const TROUBLESHOOTING = [
     a: "Check that group names in your mappings exactly match what your IdP sends (case-insensitive), your IdP is configured to send group membership data, and group push is enabled." },
 ];
 
-function generateApiKey() {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let key = "lmai_";
-  for (let i = 0; i < 40; i++) key += chars.charAt(Math.floor(Math.random() * chars.length));
-  return key;
-}
-
 /* ─── Component ─────────────────────────────────────────── */
 
 export function SCIMSetupPage({ hasSso = true }: { hasSso?: boolean }) {
   const router = useRouter();
+  const { scim: loadedScim, loading, patch, scimBaseUrl } = useWorkspaceIdentity();
 
   const [config,   setConfig]   = useState<SCIMConfig | null>(null);
   const [mappings, setMappings] = useState<GroupMapping[]>([]);
+
+  useEffect(() => {
+    if (loading) return;
+    if (loadedScim?.enabled) {
+      setConfig({
+        enabled: true,
+        apiKeyPrefix: loadedScim.apiKeyPrefix ?? "lmai_…",
+        apiKeyFull: "",
+        welcomeEmail: loadedScim.welcomeEmail ?? true,
+        lastRotatedAt: loadedScim.lastRotatedAt ?? new Date().toISOString(),
+      });
+      setMappings(loadedScim.groupMappings ?? []);
+    }
+  }, [loading, loadedScim]);
 
   const [showApiKey,      setShowApiKey]      = useState(false);
   const [copied,          setCopied]          = useState("");
@@ -87,45 +94,75 @@ export function SCIMSetupPage({ hasSso = true }: { hasSso?: boolean }) {
 
   const handleEnable = async () => {
     setIsEnabling(true);
-    await new Promise((r) => setTimeout(r, 1000));
-    const key = generateApiKey();
-    setConfig({
-      enabled: true,
-      apiKeyPrefix: key.slice(0, 12) + "…",
-      apiKeyFull: key,
-      welcomeEmail: true,
-      lastRotatedAt: new Date().toISOString(),
-    });
-    setShowApiKey(true);
-    setIsEnabling(false);
-    toast({ title: "SCIM provisioning enabled", description: "Save your API key — it will only be shown once." });
+    try {
+      const data = await patch({
+        scim: { enabled: true, welcomeEmail: true, groupMappings: mappings },
+        rotateScimKey: true,
+      });
+      const key = data.scimApiKey ?? "";
+      setConfig({
+        enabled: true,
+        apiKeyPrefix: key ? key.slice(0, 12) + "…" : "lmai_…",
+        apiKeyFull: key,
+        welcomeEmail: true,
+        lastRotatedAt: new Date().toISOString(),
+      });
+      setShowApiKey(true);
+      toast({ title: "SCIM provisioning enabled", description: "Save your API key — it will only be shown once." });
+    } catch (err) {
+      toast({ title: "Enable failed", description: err instanceof Error ? err.message : "Try again.", variant: "destructive" });
+    } finally {
+      setIsEnabling(false);
+    }
   };
 
   const handleRotate = async () => {
-    const key = generateApiKey();
-    setConfig((c) => c ? { ...c, apiKeyPrefix: key.slice(0, 12) + "…", apiKeyFull: key, lastRotatedAt: new Date().toISOString() } : c);
-    setShowRotate(false);
-    setShowApiKey(true);
-    toast({ title: "API key rotated", description: "Update your IdP with the new key immediately." });
+    try {
+      const data = await patch({ rotateScimKey: true });
+      const key = data.scimApiKey ?? "";
+      setConfig((c) => c ? { ...c, apiKeyPrefix: key.slice(0, 12) + "…", apiKeyFull: key, lastRotatedAt: new Date().toISOString() } : c);
+      setShowRotate(false);
+      setShowApiKey(true);
+      toast({ title: "API key rotated", description: "Update your IdP with the new key immediately." });
+    } catch (err) {
+      toast({ title: "Rotate failed", description: err instanceof Error ? err.message : "Try again.", variant: "destructive" });
+    }
   };
 
-  const handleAddMapping = () => {
+  const handleAddMapping = async () => {
     if (!groupName.trim()) { toast({ title: "Enter a group name", variant: "destructive" }); return; }
-    setMappings((m) => [...m, { id: crypto.randomUUID(), groupName: groupName.trim(), role: groupRole }]);
+    const next = [...mappings, { id: crypto.randomUUID(), groupName: groupName.trim(), role: groupRole }];
+    setMappings(next);
     setGroupName("");
-    toast({ title: "Group mapping added" });
+    try {
+      await patch({ scim: { enabled: true, welcomeEmail: config?.welcomeEmail ?? true, groupMappings: next } });
+      toast({ title: "Group mapping added" });
+    } catch {
+      toast({ title: "Save failed", variant: "destructive" });
+    }
   };
 
-  const handleRemoveMapping = (id: string) => {
-    setMappings((m) => m.filter((x) => x.id !== id));
-    toast({ title: "Mapping removed" });
+  const handleRemoveMapping = async (id: string) => {
+    const next = mappings.filter((x) => x.id !== id);
+    setMappings(next);
+    try {
+      await patch({ scim: { enabled: true, welcomeEmail: config?.welcomeEmail ?? true, groupMappings: next } });
+      toast({ title: "Mapping removed" });
+    } catch {
+      toast({ title: "Save failed", variant: "destructive" });
+    }
   };
 
-  const handleDisable = () => {
-    setConfig(null);
-    setMappings([]);
-    setShowApiKey(false);
-    toast({ title: "SCIM provisioning disabled" });
+  const handleDisable = async () => {
+    try {
+      await patch({ disableScim: true });
+      setConfig(null);
+      setMappings([]);
+      setShowApiKey(false);
+      toast({ title: "SCIM provisioning disabled" });
+    } catch (err) {
+      toast({ title: "Disable failed", description: err instanceof Error ? err.message : "Try again.", variant: "destructive" });
+    }
   };
 
   return (
@@ -199,8 +236,8 @@ export function SCIMSetupPage({ hasSso = true }: { hasSso?: boolean }) {
                 <div>
                   <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider">Base URL</label>
                   <div className="flex items-center gap-2 mt-1">
-                    <code className="flex-1 text-xs font-mono bg-muted/40 px-3 py-2 rounded-lg border border-border truncate">{BASE_URL}</code>
-                    <button onClick={() => handleCopy(BASE_URL, "baseurl")}
+                    <code className="flex-1 text-xs font-mono bg-muted/40 px-3 py-2 rounded-lg border border-border truncate">{scimBaseUrl}</code>
+                    <button onClick={() => handleCopy(scimBaseUrl, "baseurl")}
                       className="p-2 hover:bg-muted rounded-lg transition">
                       {copied === "baseurl" ? <Check size={13} className="text-green-400" /> : <Copy size={13} className="text-muted-foreground" />}
                     </button>
@@ -377,7 +414,7 @@ export function SCIMSetupPage({ hasSso = true }: { hasSso?: boolean }) {
                     <li>Go to Microsoft Entra admin center → Enterprise applications</li>
                     <li>Create or select your app → Provisioning → New configuration</li>
                     <li>Authentication method: <strong>Bearer Authentication</strong></li>
-                    <li>Tenant URL: <code className="bg-background px-1 rounded border border-border">{BASE_URL}</code></li>
+                    <li>Tenant URL: <code className="bg-background px-1 rounded border border-border">{scimBaseUrl}</code></li>
                     <li>Secret token: <code className="bg-background px-1 rounded border border-border">Bearer &lt;your API key&gt;</code></li>
                     <li>Click Test connection, then Create, then Start provisioning</li>
                   </ol>
@@ -392,7 +429,7 @@ export function SCIMSetupPage({ hasSso = true }: { hasSso?: boolean }) {
                     <div className="grid grid-cols-2 gap-2">
                       <div>
                         <span className="text-muted-foreground/60 text-[10px]">SCIM base URL</span>
-                        <code className="block bg-background px-2 py-1 rounded border border-border text-[10px] font-mono mt-0.5">{BASE_URL}</code>
+                        <code className="block bg-background px-2 py-1 rounded border border-border text-[10px] font-mono mt-0.5">{scimBaseUrl}</code>
                       </div>
                       <div>
                         <span className="text-muted-foreground/60 text-[10px]">Auth method</span>

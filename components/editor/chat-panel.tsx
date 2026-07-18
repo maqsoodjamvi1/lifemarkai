@@ -2,44 +2,69 @@
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-// Use the ESM path (not dist/cjs) to avoid the "module factory is not
-// available" error Turbopack emits on Next 16 when the cjs build's
-// refractor/refractor-core chunk graph gets stale-cached by the service
-// worker. The ESM Prism export bundles all languages and works with
-// Turbopack out of the box.
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import {
-  Loader2, Image, Sparkles,
-  Copy, Check, ChevronDown, AlertCircle,
-  Wand2, XCircle, ThumbsUp, ThumbsDown, Bookmark,
-  CheckCheck, FileText, Pencil, Play, Pause, ChevronUp,
-  RefreshCw, Brain, Trash2, Search, FileCode, Download,
-  Paperclip, FileCode2, X, Pin, PinOff, Minimize2, Zap, ListChecks, Globe, Square,
-  FileDown,
+  Loader2, Sparkles,
+  Copy, Check, AlertCircle,
+  Wand2, ThumbsUp, ThumbsDown,
+  Play, Pause,
+  Brain, Download,
+  X, Pin, PinOff, Minimize2, Square,
 } from "lucide-react";
+import { suggestFollowUps } from "@/lib/ai/follow-up-suggestions";
+import { detectPastedSecret, redactSecret } from "@/lib/security/detect-secret";
+import { CONNECTORS } from "./app-connectors-panel";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ChatTiptapInput, type ChatInputHandle } from "./chat-tiptap-input";
-import { sanitizeSvg } from "@/lib/security/sanitize";
+import type { ChatInputHandle } from "./chat-tiptap-input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { normalizeArrayResponse } from "@/lib/api/array-response";
 import { createClient } from "@/lib/supabase/client";
-import { DiffViewer, computeFileDiff, type FileState } from "@/components/editor/diff-viewer";
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { createStreamedFilePathTracker } from "@/lib/ai/stream-file-paths";
+import type { FileState } from "@/components/editor/diff-viewer";
 import type { Project, ProjectFile, Message, Json } from "@/types/database";
 import type { EditorMode } from "./editor-layout";
-import { VoiceMode } from "./voice-mode";
-import { SnippetPicker } from "./snippet-picker";
 import type { GeneratedFile } from "./file-attachment-card";
-import { AnalyzeMessageCard, parseAnalyzeMetadata } from "./analyze-message-card";
-import { PreviewAnnotateModal } from "./preview-annotate-modal";
-import { DesignPreviewPicker } from "./design-preview-picker";
+import {
+  LovableChatPanelShell,
+  LovableChatComposerShell,
+  LovableChatInputCard,
+  LovableChatTimeline,
+  LovableChatHeader,
+  LovableChatHeaderStatus,
+  LovableScrollToBottom,
+  LovableStreamingFilesCard,
+  LovableChatSearchBar,
+  LovableThreadItem,
+  LovableContextSummaryBanner,
+  type LovableFileDiffEntry,
+  type LovableFileGenResult,
+  LOVABLE_PROMPT_TEMPLATES,
+  type LovableMentionItem,
+  mergeAgentStep,
+  type AgentTaskStep,
+  groupIntoThreads,
+  getDisplayMessageContent,
+  LovableChatStreamingFooter,
+  LovableChatTimelineHeader,
+  LovableComposerDock,
+  LovableComposerPreInput,
+  LovableComposerInputArea,
+  LovableChatModals,
+  useComposerDockController,
+  useChatKeyboardShortcuts,
+  useThreadMessageProps,
+  extractStreamingReasoning,
+  type ClarifySession,
+  type LovableQueueItem,
+  type LovableSecretBannerState,
+} from "./lovable";
+import { parseLineRefs, removeLineRefFromInput } from "@/lib/editor/parse-line-refs";
+import { formatGuestCommentsForAi } from "@/lib/editor/format-guest-comments";
+import { formatErrorsForHealing } from "@/lib/preview/preview-error-bridge";
+import type { ChatSearchMode } from "@/lib/editor/search-chat-messages";
+import type { LovableFileGenFormat } from "./lovable/composer-file-gen-picker";
+import { useGuestCommentCount } from "@/hooks/use-guest-comment-count";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
 import { findMissingPackages, buildInstallCommand, syncPackageJsonDeps } from "@/lib/ai/npm-auto-install";
@@ -56,6 +81,7 @@ import {
   inferProjectStage,
   resolvePromptMode,
   resolveSmartModel,
+  looksLikeEditRequest,
   DEFAULT_CODING_MODEL,
 } from "@/lib/ai/editor-intelligence";
 import { isNoisePreviewError, type PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
@@ -66,7 +92,6 @@ import {
 } from "@/lib/preview/autofix-ledger";
 import { appendPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
 import {
-  CHAT_MODEL_OPTIONS,
   getOpenRouterModelLabel,
   type OpenRouterModelId,
 } from "@/lib/ai/openrouter-models";
@@ -79,8 +104,6 @@ import {
   type SecretAssignment,
 } from "@/lib/ai/chat-capabilities";
 import type { SubagentStep } from "@/lib/ai/subagents";
-import { SubagentActivityCard } from "./subagent-activity-card";
-import { BuildActivityCard } from "./build-activity-card";
 import {
   initialBuildActivitySteps,
   applyBuildIntentLabel,
@@ -90,30 +113,8 @@ import {
 } from "@/lib/ai/build-activity";
 import { useAIStreamChat } from "@/hooks/use-ai-stream-chat";
 
-/** Prose intro shown above Working/Edited cards during build streams. */
-function extractStreamingProse(content: string): string | null {
-  const trimmed = content.trim();
-  if (!trimmed) return null;
-  if (/^\s*[\[{]/.test(trimmed) && /"path"\s*:/.test(trimmed)) return null;
-  const beforeFence = trimmed.split(/```/)[0].trim();
-  if (beforeFence.length < 8) return null;
-  return beforeFence.slice(0, 800);
-}
-
 // UI discovery list only. The provider accepts any valid OpenRouter slug.
 type AIModel = OpenRouterModelId;
-
-function modelPickerRank(model: (typeof CHAT_MODEL_OPTIONS)[number]): number {
-  if (model.free) return 0;
-  if (model.fast && !model.creditMultiplier) return 1;
-  if (model.category === "coding" && !model.creditMultiplier) return 2;
-  if (model.creditMultiplier && model.creditMultiplier >= 2) return 5;
-  return 3;
-}
-
-const AI_MODELS = [...CHAT_MODEL_OPTIONS].sort(
-  (a, b) => modelPickerRank(a) - modelPickerRank(b) || a.label.localeCompare(b.label),
-);
 
 interface ChatPanelProps {
   project: Project;
@@ -129,7 +130,7 @@ interface ChatPanelProps {
   /** When set, inserts "@filename " into the chat input and focuses it */
   pendingFileRef?: ProjectFile | null;
   onMessagesUpdate: (msgs: Message[]) => void;
-  onFilesUpdate: (files: ProjectFile[]) => void;
+  onFilesUpdate: (files: ProjectFile[], opts?: { replace?: boolean }) => void;
   onCreditsUpdate: (credits: number) => void;
   onAutoFixComplete?: () => void;
   onPendingFixConsumed?: () => void;
@@ -151,8 +152,15 @@ interface ChatPanelProps {
   securityIssueCount?: number;
   /** Focus the preview pane (Lovable Details/Preview card) */
   onFocusPreview?: () => void;
+  /** Sync project fields after inline edits (e.g. add-to-knowledge). */
+  onProjectUpdate?: (updates: Partial<Project>) => void;
+  /** Toggle visual edit mode on the preview iframe */
+  onVisualEditToggle?: () => void;
+  isVisualEditActive?: boolean;
   /** Show skeleton shimmer while messages are being fetched from the server */
   isMessagesLoading?: boolean;
+  /** When true, older messages exist beyond the SSR batch */
+  hasMoreMessages?: boolean;
 }
 
 interface ProjectPrivateContext {
@@ -160,178 +168,10 @@ interface ProjectPrivateContext {
   context_summary_covers: number | null;
 }
 
-const PROMPT_TEMPLATES: { category: string; prompts: string[] }[] = [
-  {
-    category: "UI & Design",
-    prompts: [
-      "Add a dark mode toggle to the header",
-      "Make the layout fully responsive for mobile",
-      "Add smooth page transition animations",
-      "Style all buttons consistently with a primary color",
-      "Add a loading skeleton for data-fetching sections",
-    ],
-  },
-  {
-    category: "Features",
-    prompts: [
-      "Add user authentication with email and password",
-      "Create a dashboard with key metrics cards",
-      "Add a search bar that filters results in real time",
-      "Implement infinite scroll for the list",
-      "Add a notification bell with a dropdown feed",
-    ],
-  },
-  {
-    category: "Fixes",
-    prompts: [
-      "Fix all TypeScript errors in the project",
-      "Make all images use next/image for optimization",
-      "Add proper error boundaries and fallback UI",
-      "Fix layout overflow issues on small screens",
-      "Replace all console.log calls with proper error handling",
-    ],
-  },
-  {
-    category: "Data & API",
-    prompts: [
-      "Add a REST API integration with loading and error states",
-      "Create a form with validation and submission handler",
-      "Add optimistic UI updates for mutations",
-      "Implement client-side pagination for the table",
-      "Add data export to CSV functionality",
-    ],
-  },
-];
-
-interface FileDiffEntry {
-  path: string;
-  fileId?: string;
-  oldContent: string;
-  newContent: string;
-}
+interface FileDiffEntry extends LovableFileDiffEntry {}
 
 /** An item sitting in the prompt queue while AI is busy */
-interface ClarifyQuestion {
-  id: string;
-  question: string;
-  type: "text" | "choice";
-  options?: string[];
-  answer: string;
-}
-
-interface ClarifySession {
-  originalPrompt: string;
-  questions: ClarifyQuestion[];
-}
-
-interface QueueItem {
-  id: string;
-  text: string;
-  /** Total number of times to run this prompt */
-  repeat: number;
-  /** How many runs are still remaining */
-  remaining: number;
-}
-
-/** A visible task step shown during Agent mode execution */
-type AgentStepKind =
-  | "edit" | "delete" | "read" | "search"
-  | "image" | "analyze" | "finalize" | "error" | "other";
-
-interface AgentTaskStep {
-  label: string;
-  status: "running" | "done";
-  kind: AgentStepKind;
-  /** Dedupe key — repeated ops on the same target collapse into one row. */
-  key: string;
-}
-
-/** Pull a clean file name (basename) out of a step's args or content. */
-function agentStepFile(step: AgentStep): string | undefined {
-  const fromArgs = (step.args?.path ?? step.args?.file ?? step.args?.filename) as string | undefined;
-  const raw = fromArgs ?? step.content?.match(/"(?:path|file|filename)"\s*:\s*"([^"]+)"/)?.[1];
-  return raw ? (raw.split("/").pop() || raw) : undefined;
-}
-
-/**
- * Map a raw ReAct step to a clean, human-readable activity row (Lovable-style).
- * Returns null for steps that should NOT get their own row — thoughts and
- * observations are folded into the previous row by `mergeAgentStep`.
- */
-function agentStepToTaskStep(step: AgentStep): AgentTaskStep | null {
-  if (step.type === "thought" || step.type === "observation") return null;
-  if (step.type === "done") return { label: "Done", status: "done", kind: "finalize", key: "done" };
-  if (step.type === "error") return { label: "Recovering from an error", status: "done", kind: "error", key: `err:${step.timestamp}` };
-
-  const tool = step.tool ?? "";
-  const file = agentStepFile(step);
-  const fk = file ?? "";
-
-  switch (tool) {
-    case "write_file":
-    case "edit_file":
-      return { label: file ? `Editing ${file}` : "Editing files", status: "running", kind: "edit", key: `edit:${fk}` };
-    case "delete_file":
-      return { label: file ? `Removing ${file}` : "Removing files", status: "running", kind: "delete", key: `del:${fk}` };
-    case "read_file":
-      return { label: file ? `Reading ${file}` : "Reading files", status: "running", kind: "read", key: `read:${fk}` };
-    case "list_files":
-      return { label: "Exploring the project", status: "running", kind: "search", key: "list" };
-    case "glob_search":
-      return { label: "Searching files", status: "running", kind: "search", key: "glob" };
-    case "search_code":
-      return { label: "Searching the code", status: "running", kind: "search", key: "search" };
-    case "find_definition":
-      return { label: "Tracing definitions", status: "running", kind: "search", key: "find" };
-    case "analyze_code":
-      return { label: file ? `Checking ${file}` : "Checking the code", status: "running", kind: "analyze", key: `analyze:${fk}` };
-    case "generate_image":
-      return { label: "Generating an image", status: "running", kind: "image", key: `img:${step.timestamp}` };
-    case "finish":
-      return { label: "Wrapping up", status: "running", kind: "finalize", key: "finish" };
-    default:
-      return { label: tool ? `Running ${tool}` : "Working", status: "running", kind: "other", key: `other:${tool}` };
-  }
-}
-
-/**
- * Fold a streamed step into the visible activity list (Lovable-style):
- *  - thoughts / observations don't add rows — they just complete the active row,
- *  - repeated ops on the same target collapse into a single row,
- *  - only the newest actionable row stays "running".
- */
-function mergeAgentStep(prev: AgentTaskStep[], step: AgentStep): AgentTaskStep[] {
-  if (step.type === "thought" || step.type === "observation") {
-    if (prev.length === 0) return prev;
-    return prev.map((s, i) => (i === prev.length - 1 ? { ...s, status: "done" as const } : s));
-  }
-  const next = agentStepToTaskStep(step);
-  if (!next) return prev;
-  const settled: AgentTaskStep[] = prev.map((s) => ({ ...s, status: "done" }));
-  const existing = settled.findIndex((s) => s.key === next.key);
-  if (existing >= 0) {
-    const updated = [...settled];
-    updated[existing] = next; // keep position, mark running again
-    return updated;
-  }
-  return [...settled, next];
-}
-
-/** Small glyph that conveys what kind of work a step is doing. */
-function AgentStepGlyph({ kind }: { kind: AgentStepKind }) {
-  const cls = "w-3.5 h-3.5 shrink-0 text-muted-foreground/70";
-  switch (kind) {
-    case "edit": return <Pencil className={cls} />;
-    case "delete": return <Trash2 className={cls} />;
-    case "read": return <FileText className={cls} />;
-    case "search": return <Search className={cls} />;
-    case "image": return <Image className={cls} />;
-    case "analyze": return <ListChecks className={cls} />;
-    case "finalize": return <Sparkles className={cls} />;
-    case "error": return <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-400" />;
-    default: return <FileCode className={cls} />;
-  }
-}
+interface QueueItem extends LovableQueueItem {}
 
 const MAX_AUTO_FIX_ATTEMPTS = 3;
 
@@ -354,432 +194,6 @@ function waitForPreviewSuccess(timeoutMs = 10_000): Promise<boolean> {
 }
 
 
-/** Stateful wrapper for code blocks in chat — adds Copy + Insert + Collapse buttons */
-// ── Mermaid diagram renderer ──────────────────────────────────────────────────
-function MermaidBlock({ code }: { code: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [svg, setSvg] = useState<string>("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function render() {
-      try {
-        setLoading(true);
-        setError(null);
-        const mermaid = (await import("mermaid")).default;
-        mermaid.initialize({
-          startOnLoad: false,
-          theme: "dark",
-          themeVariables: {
-            background: "#1e1e2e",
-            primaryColor: "#7c3aed",
-            primaryTextColor: "#cdd6f4",
-            primaryBorderColor: "#313244",
-            lineColor: "#6c7086",
-            secondaryColor: "#313244",
-            tertiaryColor: "#1e1e2e",
-          },
-        });
-        const id = `mermaid-${Math.random().toString(36).slice(2)}`;
-        const { svg: rendered } = await mermaid.render(id, code);
-        // Defense-in-depth: sanitize the rendered SVG before it reaches
-        // dangerouslySetInnerHTML (AI-authored diagram source is untrusted).
-        if (!cancelled) { setSvg(sanitizeSvg(rendered)); setLoading(false); }
-      } catch (e: unknown) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Diagram render failed");
-          setLoading(false);
-        }
-      }
-    }
-    void render();
-    return () => { cancelled = true; };
-  }, [code]);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center gap-2 py-6 my-2 rounded-lg border border-border/40 bg-[#1e1e2e]">
-        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-        <span className="text-xs text-muted-foreground">Rendering diagram…</span>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="my-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
-        <p className="text-[10px] text-destructive font-mono">{error}</p>
-        <pre className="mt-2 text-[10px] text-muted-foreground font-mono whitespace-pre-wrap">{code}</pre>
-      </div>
-    );
-  }
-
-  return (
-    <div className="my-2 rounded-lg overflow-hidden border border-border/40 bg-[#1e1e2e]">
-      <div className="flex items-center justify-between px-3 py-1 border-b border-border/30">
-        <span className="text-[10px] text-[#6c7086] font-mono flex items-center gap-1">
-          <span>📊</span> mermaid diagram
-        </span>
-        <button
-          onClick={() => navigator.clipboard.writeText(code).catch(() => {})}
-          className="text-[10px] text-[#6c7086] hover:text-[#cdd6f4] transition-colors px-1.5 py-0.5 rounded hover:bg-[#313244]/60"
-        >Copy source</button>
-      </div>
-      <div
-        ref={ref}
-        className="p-4 overflow-x-auto"
-        dangerouslySetInnerHTML={{ __html: svg }}
-      />
-    </div>
-  );
-}
-
-function ChatCodeBlock({ language, code }: { language: string; code: string }) {
-  const [copied, setCopied] = useState(false);
-  const [inserted, setInserted] = useState(false);
-  // Default-collapse code blocks > 8 lines so long generated files don't
-  // dominate the chat panel. Matches Lovable's behavior: chat is for prose,
-  // code lives in the editor/preview. Short blocks (≤8 lines) stay expanded
-  // because they're usually inline snippets the user wants to see.
-  const lineCount = code.split("\n").length;
-  const [isCollapsed, setIsCollapsed] = useState(lineCount > 8);
-
-  useEffect(() => {
-    function handleSetAll(e: Event) {
-      setIsCollapsed((e as CustomEvent<{ collapsed: boolean }>).detail.collapsed);
-    }
-    window.addEventListener("chat-codeblock-set-all", handleSetAll);
-    return () => window.removeEventListener("chat-codeblock-set-all", handleSetAll);
-  }, []);
-
-  // Render Mermaid diagrams natively
-  if (language === "mermaid") return <MermaidBlock code={code} />;
-
-  function handleCopy() {
-    navigator.clipboard.writeText(code).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1800);
-  }
-
-  function handleInsert() {
-    window.dispatchEvent(new CustomEvent("monaco-insert-code", { detail: { text: code } }));
-    setInserted(true);
-    setTimeout(() => setInserted(false), 1800);
-  }
-
-  // Languages that map to downloadable file types
-  const DOWNLOADABLE: Record<string, string> = {
-    csv:  "data.csv",
-    json: "data.json",
-    xml:  "data.xml",
-    yaml: "data.yaml",
-    yml:  "data.yaml",
-    toml: "data.toml",
-    txt:  "output.txt",
-    text: "output.txt",
-    markdown: "output.md",
-    md:   "output.md",
-    sql:  "query.sql",
-    sh:   "script.sh",
-    bash: "script.sh",
-  };
-  const downloadFilename = DOWNLOADABLE[language?.toLowerCase() ?? ""];
-
-  function handleDownload() {
-    const mimeMap: Record<string, string> = {
-      csv: "text/csv", json: "application/json", xml: "application/xml",
-      yaml: "text/yaml", yml: "text/yaml", sql: "text/plain",
-    };
-    const mime = mimeMap[language?.toLowerCase() ?? ""] ?? "text/plain";
-    const blob = new Blob([code], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = downloadFilename ?? "file.txt";
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  if (isCollapsed) {
-    return (
-      <div className="relative my-2 rounded-lg border border-border/40 bg-[#1e1e2e] flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-[#24243e] transition-colors" onClick={() => setIsCollapsed(false)}>
-        <FileCode2 className="w-3 h-3 text-[#6c7086] shrink-0" />
-        <span className="text-[10px] text-[#6c7086] font-mono">{language || "code"}</span>
-        <span className="text-[10px] text-[#45475a]">·</span>
-        <span className="text-[10px] text-[#45475a] font-mono">{lineCount} line{lineCount !== 1 ? "s" : ""}</span>
-        <ChevronDown className="w-3 h-3 text-[#6c7086] ml-auto" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="relative group my-2 rounded-lg overflow-hidden border border-border/40">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-1 bg-[#1e1e2e] border-b border-border/30">
-        <span className="text-[10px] text-[#6c7086] font-mono">{language || "code"}</span>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setIsCollapsed(true)}
-            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-[#6c7086] hover:text-[#cba6f7] hover:bg-[#313244]/60 transition-colors"
-            title="Collapse code block"
-          >
-            <ChevronUp className="w-3 h-3" />
-          </button>
-          <button
-            onClick={handleInsert}
-            className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
-              inserted
-                ? "text-green-400 bg-green-500/10"
-                : "text-[#6c7086] hover:text-[#cba6f7] hover:bg-[#313244]/60"
-            }`}
-            title="Insert at cursor in editor"
-          >
-            {inserted ? <Check className="w-3 h-3" /> : <FileCode2 className="w-3 h-3" />}
-            {inserted ? "Inserted" : "Insert"}
-          </button>
-          {downloadFilename && (
-            <button
-              onClick={handleDownload}
-              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-[#6c7086] hover:text-[#a6e3a1] hover:bg-[#313244]/60 transition-colors"
-              title={`Download as ${downloadFilename}`}
-            >
-              <Download className="w-3 h-3" />
-              Download
-            </button>
-          )}
-          <button
-            onClick={handleCopy}
-            className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
-              copied
-                ? "text-green-400 bg-green-500/10"
-                : "text-[#6c7086] hover:text-[#cdd6f4] hover:bg-[#313244]/60"
-            }`}
-            title="Copy code"
-          >
-            {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
-      </div>
-      <SyntaxHighlighter
-        style={oneDark as Record<string, React.CSSProperties>}
-        language={language || "text"}
-        PreTag="div"
-        customStyle={{ margin: 0, borderRadius: 0, fontSize: "0.78rem" }}
-      >
-        {code}
-      </SyntaxHighlighter>
-    </div>
-  );
-}
-
-const MessageContent = React.memo(function MessageContent({ content, mode }: { content: string; mode: string }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        code({ className, children, ...props }: React.ComponentPropsWithoutRef<"code"> & { inline?: boolean }) {
-          const match = /language-(\w+)/.exec(className || "");
-          const inline = !match;
-          const code = String(children).replace(/\n$/, "");
-          return !inline ? (
-            <ChatCodeBlock language={match?.[1] ?? ""} code={code} />
-          ) : (
-            <code className="bg-muted/60 px-1 py-0.5 rounded text-[0.85em] font-mono" {...props}>
-              {children}
-            </code>
-          );
-        },
-        p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
-        ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-0.5">{children}</ul>,
-        ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-0.5">{children}</ol>,
-        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-        strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
-        h1: ({ children }) => <h1 className="text-base font-bold mt-3 mb-1">{children}</h1>,
-        h2: ({ children }) => <h2 className="text-sm font-semibold mt-3 mb-1">{children}</h2>,
-        h3: ({ children }) => <h3 className="text-sm font-medium mt-2 mb-1">{children}</h3>,
-        blockquote: ({ children }) => (
-          <blockquote className="border-l-2 border-muted-foreground/30 pl-3 italic text-muted-foreground my-2">{children}</blockquote>
-        ),
-        a: ({ href, children }) => (
-          <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline">{children}</a>
-        ),
-      }}
-    >
-      {content}
-    </ReactMarkdown>
-  );
-});
-
-/**
- * Plain-text renderer with <mark>-style highlights for chat-history search.
- * Used in place of MessageContent while a search query is active so matched
- * substrings are visibly highlighted (Lovable parity, Apr 2026).
- */
-const HighlightedText = React.memo(function HighlightedText({ text, query }: { text: string; query: string }) {
-  const q = query.trim();
-  if (!q) return <p className="whitespace-pre-wrap leading-relaxed">{text}</p>;
-  const lower = text.toLowerCase();
-  const needle = q.toLowerCase();
-  const parts: React.ReactNode[] = [];
-  let i = 0;
-  let idx = lower.indexOf(needle);
-  let key = 0;
-  while (idx >= 0) {
-    if (idx > i) parts.push(text.slice(i, idx));
-    parts.push(
-      <mark key={key++} className="bg-amber-400/40 text-inherit rounded-[2px] px-0.5">
-        {text.slice(idx, idx + needle.length)}
-      </mark>
-    );
-    i = idx + needle.length;
-    idx = lower.indexOf(needle, i);
-  }
-  if (i < text.length) parts.push(text.slice(i));
-  return <p className="whitespace-pre-wrap leading-relaxed break-words">{parts}</p>;
-});
-
-/** Formats offered by the "Generate as file" affordance (→ /api/ai/generate-file). */
-const FILE_GEN_FORMATS: Array<{
-  id: "md" | "csv" | "json" | "txt" | "html";
-  label: string;
-}> = [
-  { id: "md",   label: "Markdown document" },
-  { id: "csv",  label: "CSV spreadsheet" },
-  { id: "json", label: "JSON data" },
-  { id: "txt",  label: "Plain text" },
-  { id: "html", label: "HTML page" },
-];
-
-/** Human-readable size of a generated file's content. */
-function genFileSize(content: string): string {
-  const bytes = new TextEncoder().encode(content).length;
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-/** Format a message timestamp for the hover tooltip */
-function formatMsgTime(isoString: string | null | undefined): string {
-  if (!isoString) return "";
-  const d = new Date(isoString);
-  const now = new Date();
-  const isToday = d.toDateString() === now.toDateString();
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  const isYesterday = d.toDateString() === yesterday.toDateString();
-  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  if (isToday) return time;
-  if (isYesterday) return `Yesterday ${time}`;
-  return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + time;
-}
-
-/** Lovable-style date divider label between messages on different days */
-function formatDateSeparator(isoString: string | null | undefined): string {
-  if (!isoString) return "";
-  const d = new Date(isoString);
-  const now = new Date();
-  const isToday = d.toDateString() === now.toDateString();
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  const isYesterday = d.toDateString() === yesterday.toDateString();
-  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-  if (isToday) return `Today at ${time}`;
-  if (isYesterday) return `Yesterday at ${time}`;
-  const datePart = d.toLocaleDateString([], { month: "short", day: "numeric" });
-  return `${datePart} at ${time}`;
-}
-
-function sameCalendarDay(a: string | null | undefined, b: string | null | undefined): boolean {
-  if (!a || !b) return true;
-  return new Date(a).toDateString() === new Date(b).toDateString();
-}
-
-/** Group a flat message array into per-turn threads (each user message starts a new thread) */
-function groupIntoThreads(msgs: Message[]): Message[][] {
-  const threads: Message[][] = [];
-  let current: Message[] = [];
-  for (const msg of msgs) {
-    if (msg.role === "user" && current.length > 0) {
-      threads.push(current);
-      current = [msg];
-    } else {
-      current.push(msg);
-    }
-  }
-  if (current.length > 0) threads.push(current);
-  return threads;
-}
-
-function stripInternalChatContext(content: string): string {
-  let text = content ?? "";
-  text = text
-    .replace(/<project_context>[\s\S]*?<\/project_context>\s*/gi, "")
-    .replace(/<attached_file\b[^>]*>[\s\S]*?<\/attached_file>\s*/gi, (block) => {
-      const path = block.match(/\bpath=["']([^"']+)["']/i)?.[1];
-      return path ? `[Attached file: ${path}]\n` : "";
-    })
-    .replace(/<scraped_page\b[^>]*>[\s\S]*?<\/scraped_page>\s*/gi, (block) => {
-      const url = block.match(/\burl=["']([^"']+)["']/i)?.[1];
-      return url ? `[Referenced page: ${url}]\n` : "";
-    })
-    .replace(/\n{2,}--- Referenced files from other projects ---[\s\S]*$/i, "");
-
-  const directiveIdx = text.search(/\n?---\s*\nAutonomous build:/i);
-  if (directiveIdx >= 0) text = text.slice(0, directiveIdx);
-
-  return text
-    .replace(/^\s*[-=]{3,}\s*$/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function tryExtractJsonMessage(content: string): string | null {
-  const trimmed = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-  if (!/^[{\[]/.test(trimmed)) return null;
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const obj = parsed as { message?: unknown; summary?: unknown; files?: unknown };
-      if (typeof obj.message === "string" && obj.message.trim()) return obj.message.trim();
-      if (typeof obj.summary === "string" && obj.summary.trim()) return obj.summary.trim();
-      if (Array.isArray(obj.files)) {
-        return `Updated ${obj.files.length} file${obj.files.length === 1 ? "" : "s"}. Open preview to see the result.`;
-      }
-    }
-    if (Array.isArray(parsed)) return `Updated ${parsed.length} item${parsed.length === 1 ? "" : "s"}.`;
-  } catch {
-    return null;
-  }
-  return null;
-}
-
-function firstSentences(content: string, maxSentences = 2, maxChars = 260): string {
-  const prose = content.split("```")[0].trim();
-  const sentences = prose
-    .split(/(?<=[.!?])\s+/)
-    .filter(Boolean)
-    .slice(0, maxSentences)
-    .join(" ");
-  return (sentences || prose).replace(/[*_`]/g, "").slice(0, maxChars).trim();
-}
-
-function getDisplayMessageContent(msg: Message): string {
-  const stripped = stripInternalChatContext(msg.content ?? "");
-  if (msg.role === "user") return stripped || "Continue";
-
-  const jsonMessage = tryExtractJsonMessage(stripped);
-  if (jsonMessage) return jsonMessage;
-
-  if (msg.mode === "build" || msg.mode === "agent" || msg.mode === "patch") {
-    return firstSentences(stripped, 2, 260) || "Done. Open preview to see the result.";
-  }
-
-  return stripped;
-}
-
 export function ChatPanel({
   project, messages, files, activeFile, mode, credits, starterPrompt,
   previewError, previewRuntimeErrors = [], pendingFixPrompt, pendingFileRef,
@@ -787,7 +201,10 @@ export function ChatPanel({
   onAutoFixComplete, onPendingFixConsumed, onPendingFileRefConsumed,
   onStreamingChange, onModeChange, onApprovePlan,
   pendingBuildFromFile, onPendingBuildFromFileConsumed,
-  isLocked = false, onOpenPanel, onFocusPreview, isMessagesLoading = false,
+  isLocked = false, onOpenPanel, onFocusPreview, onProjectUpdate,
+  onVisualEditToggle, isVisualEditActive = false,
+  isMessagesLoading = false,
+  hasMoreMessages: hasMoreMessagesInitial = false,
   securityIssueCount = 0,
 }: ChatPanelProps) {
   const intelCtx = useMemo(
@@ -803,7 +220,7 @@ export function ChatPanel({
     [files, previewError, credits, activeFile?.path, project.framework, mode],
   );
 
-  const { consume: consumeAIStream, fileSync: streamFileSync } = useAIStreamChat({
+  const { consume: consumeAIStream } = useAIStreamChat({
     projectId: project.id,
     files,
     onFilesChange: onFilesUpdate,
@@ -816,10 +233,20 @@ export function ChatPanel({
     const res = await fetch(`/api/projects/${project.id}/files`, { cache: "no-store" });
     if (!res.ok) throw new Error("Failed to refresh project files");
     const updatedFiles = (await res.json()) as ProjectFile[];
-    onFilesUpdate(updatedFiles);
-    window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
+    if (!Array.isArray(updatedFiles)) {
+      throw new Error("Invalid files payload");
+    }
+    // Never wipe a live project with an empty refresh (RLS / transient empty).
+    if (updatedFiles.length === 0 && files.length > 0) {
+      return files;
+    }
+    // Replace (not merge) so deleted/renamed paths don't linger in preview — Lovable parity.
+    onFilesUpdate(updatedFiles, { replace: true });
+    window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
+      detail: { files: updatedFiles, reason: "chat-files-refreshed" },
+    }));
     return updatedFiles;
-  }, [onFilesUpdate, project.id]);
+  }, [files, onFilesUpdate, project.id]);
 
   const contextualEmptyPrompts = useMemo(() => {
     if (credits <= 0) return getNoCreditsPrompts();
@@ -922,6 +349,11 @@ export function ChatPanel({
   // Real-time file generation progress
   const [streamingFiles, setStreamingFiles] = useState<string[]>([]);
   const [thoughtSeconds, setThoughtSeconds] = useState(0);
+  const [secretBanner, setSecretBanner] = useState<LovableSecretBannerState | null>(null);
+  const [publishBannerDismissed, setPublishBannerDismissed] = useState(false);
+  const [guestCommentsBannerDismissed, setGuestCommentsBannerDismissed] = useState(false);
+  const [runtimeErrorsDismissed, setRuntimeErrorsDismissed] = useState(false);
+  const [publishBusy, setPublishBusy] = useState(false);
   // Follow-up suggestion chips — keyed by assistant message id
   const [suggestions, setSuggestions] = useState<Record<string, string[]>>({});
   // Multi-role test chips — appear after agent/build runs that touched 5+ files
@@ -977,7 +409,6 @@ export function ChatPanel({
   }, [project.id]);
   // Emoji reactions: { [messageId]: Set<emoji> }
   const [reactions, setReactions] = useState<Record<string, Set<string>>>({});
-  const QUICK_EMOJI = ["👍", "❤️", "🚀", "😂", "😮", "👎"];
   function toggleReaction(messageId: string, emoji: string) {
     setReactions((prev) => {
       const set = new Set(prev[messageId] ?? []);
@@ -1025,12 +456,23 @@ export function ChatPanel({
   const [patchCounts, setPatchCounts] = useState<Record<string, number>>({});
   const [messageChangedPaths, setMessageChangedPaths] = useState<Record<string, string[]>>({});
 
+  // Connector approval card (Lovable parity): blocked agent write via a
+  // project connector awaits Allow once / Always allow / Skip.
+  const [connectorApproval, setConnectorApproval] = useState<{
+    connector: string; method: string; path: string; summary: string; retryPrompt: string;
+  } | null>(null);
+
+  // Cloud ops card (Lovable parity): pause / wake / resize instance from chat
+  const [cloudAction, setCloudAction] = useState<{
+    kind: "pause" | "resume" | "resize"; currentTier: string; paused: boolean; actionable: boolean;
+  } | null>(null);
+  const [cloudTierPick, setCloudTierPick] = useState<string>("tiny");
+
   // Prompt queue — messages queued while AI is streaming
   const [promptQueue, setPromptQueue] = useState<QueueItem[]>([]);
   const [queuePaused, setQueuePaused] = useState(false);
   const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
   const [editingQueueText, setEditingQueueText] = useState("");
-  const [repeatInputId, setRepeatInputId] = useState<string | null>(null);
   // Agent task step visibility
   const [agentSteps, setAgentSteps] = useState<AgentTaskStep[]>([]);
   const [subagentSteps, setSubagentSteps] = useState<SubagentStep[]>([]);
@@ -1086,9 +528,7 @@ export function ChatPanel({
   // Results render as download cards above the composer; they never touch project files.
   const [showFileGenPicker, setShowFileGenPicker] = useState(false);
   const [fileGenBusy, setFileGenBusy] = useState<string | null>(null);
-  const [fileGenResults, setFileGenResults] = useState<
-    Array<{ id: string; prompt: string; filename: string; content: string; mimeType: string }>
-  >([]);
+  const [fileGenResults, setFileGenResults] = useState<LovableFileGenResult[]>([]);
   const saveGeneratedFileToProject = useCallback(async (file: GeneratedFile) => {
     try {
       const res = await fetch(`/api/projects/${project.id}/files`, {
@@ -1112,6 +552,10 @@ export function ChatPanel({
   }, [project.id, toast]);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [searchMode, setSearchMode] = useState<ChatSearchMode>("keyword");
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchHitIds, setSearchHitIds] = useState<Set<string> | null>(null);
+  const [searchMatchCount, setSearchMatchCount] = useState(0);
   const [collapsedThreads, setCollapsedThreads] = useState<Set<number>>(new Set());
   const searchInputRef = useRef<HTMLInputElement>(null);
   const bookmarkKey = `lifemark-bookmarks-${project.id}`;
@@ -1208,6 +652,9 @@ export function ChatPanel({
   useEffect(() => () => { abortControllerRef.current?.abort(); }, []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [hasMoreMessages, setHasMoreMessages] = useState(hasMoreMessagesInitial);
+  const loadingOlderRef = useRef(false);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Handle file-to-app drop: pre-fill input (and image) then consume
@@ -1343,6 +790,47 @@ export function ChatPanel({
     }
   }
 
+  /** Lovable-parity per-message revert: restore the pre-build snapshot linked
+   *  to an assistant build message (metadata.snapshot_id). The restore route
+   *  saves a safety snapshot of the current state before applying. */
+  async function handleRevertToVersion(snapshotId: string) {
+    if (!window.confirm("Revert the project files to before this change? A safety snapshot of the current state is saved first.")) return;
+    try {
+      let res = await fetch("/api/projects/snapshots/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ snapshotId, projectId: project.id }),
+      });
+      if (res.status === 409) {
+        // Restore route refused: SQL schema/migration files would change.
+        if (!window.confirm("This revert changes SQL schema or migration files. Proceed anyway?")) return;
+        res = await fetch("/api/projects/snapshots/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ snapshotId, projectId: project.id, confirmSchema: true }),
+        });
+      }
+      if (!res.ok) throw new Error(`Restore failed (${res.status})`);
+      const { message: restoreMsg } = (await res.json()) as { message?: string };
+
+      // Refresh files from DB (same pattern as triggerAutoFix)
+      const supabase = createClient();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: updatedFiles } = await (supabase as any)
+        .from("project_files")
+        .select("*")
+        .eq("project_id", project.id);
+      if (updatedFiles) onFilesUpdate(updatedFiles);
+      window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
+        detail: { files: updatedFiles ?? undefined, reason: "project-reverted" },
+      }));
+      window.dispatchEvent(new CustomEvent("lifemark-exit-version-preview"));
+      toast({ title: "Project reverted", description: restoreMsg ?? "Files restored to the selected version." });
+    } catch {
+      toast({ title: "Failed to revert", variant: "destructive" });
+    }
+  }
+
   function handleImageAttach(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1358,6 +846,41 @@ export function ChatPanel({
     reader.readAsDataURL(file);
     // Reset input so same file can be re-attached
     e.target.value = "";
+  }
+
+  /** Lovable parity: paste an API key → auto-saved as a project secret, and
+   *  the composer receives a {{TAG}} instead of the raw value, so the key
+   *  never lands in the message, chat history, or AI context. */
+  function handleSecretPaste(e: React.ClipboardEvent<HTMLDivElement>) {
+    const text = e.clipboardData?.getData("text/plain") ?? "";
+    const secret = detectPastedSecret(text);
+    if (!secret) return; // normal paste
+    e.preventDefault();
+    e.stopPropagation();
+    const redacted = redactSecret(text, secret);
+    setInput((prev) => (prev ? `${prev}${prev.endsWith(" ") ? "" : " "}${redacted}` : redacted));
+    setTimeout(() => textareaRef.current?.focus(), 0);
+    void fetch(`/api/projects/${project.id}/env`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: secret.name, value: secret.value }),
+    })
+      .then((res) => {
+        setSecretBanner({
+          key: secret.name,
+          label: secret.label,
+          ok: res.ok,
+        });
+        toast(
+          res.ok
+            ? { title: `${secret.label} saved`, description: `Stored as the project secret ${secret.name}. The chat message only carries the tag.` }
+            : { title: "Couldn't save the secret", description: "The key was redacted from your message — add it manually in the Env panel.", variant: "destructive" },
+        );
+      })
+      .catch(() => {
+        setSecretBanner({ key: secret.name, label: secret.label, ok: false });
+        toast({ title: "Couldn't save the secret", description: "The key was redacted from your message — add it manually in the Env panel.", variant: "destructive" });
+      });
   }
 
   function handleDrop(e: React.DragEvent<HTMLDivElement>) {
@@ -1526,7 +1049,21 @@ export function ChatPanel({
     };
     window.addEventListener("monaco-ask-snippet", handler);
     return () => window.removeEventListener("monaco-ask-snippet", handler);
-   
+
+  }, []);
+
+  // Line references from the code panel (Lovable parity): "Reference Line(s)
+  // in Chat" / ⌘⇧L inserts `@path:12` or `@path:12-34` into the composer.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { path, startLine, endLine } = (e as CustomEvent<{ path: string; startLine: number; endLine: number }>).detail ?? {};
+      if (!path || !startLine) return;
+      const ref = `@${path}:${startLine}${endLine && endLine !== startLine ? `-${endLine}` : ""} `;
+      setInput((prev) => (prev ? `${prev}${prev.endsWith(" ") ? "" : " "}${ref}` : ref));
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    };
+    window.addEventListener("monaco-line-ref", handler);
+    return () => window.removeEventListener("monaco-line-ref", handler);
   }, []);
 
   // Insert "@filename " into input when user clicks "Ask AI" in code panel
@@ -1608,6 +1145,43 @@ export function ChatPanel({
     return () => el.removeEventListener("scroll", handleScroll);
   }, []);
 
+  // Load older messages when scrolling near the top (Lovable long-thread parity).
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (!hasMoreMessages || loadingOlderRef.current || messages.length === 0) return;
+      if (el.scrollTop > 120) return;
+      const oldest = messages[0];
+      if (!oldest?.created_at) return;
+      loadingOlderRef.current = true;
+      setLoadingOlderMessages(true);
+      const prevHeight = el.scrollHeight;
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/projects/${project.id}/messages?before=${encodeURIComponent(oldest.created_at)}&limit=50`,
+          );
+          if (!res.ok) return;
+          const data = await res.json() as { messages?: Message[]; hasMore?: boolean };
+          const older = data.messages ?? [];
+          if (older.length > 0) {
+            onMessagesUpdate([...older, ...messages]);
+            requestAnimationFrame(() => {
+              el.scrollTop = el.scrollHeight - prevHeight;
+            });
+          }
+          setHasMoreMessages(Boolean(data.hasMore));
+        } finally {
+          loadingOlderRef.current = false;
+          setLoadingOlderMessages(false);
+        }
+      })();
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [hasMoreMessages, messages, onMessagesUpdate, project.id]);
+
   // Follow new content (messages + streamed chunks), but ONLY while the user
   // is already at the bottom — isAtBottom flips false the moment they scroll
   // up, so streaming never fights their reading position.
@@ -1615,6 +1189,15 @@ export function ChatPanel({
     if (!isAtBottom) return;
     messagesEndRef.current?.scrollIntoView({ block: "end" });
   }, [messages, streamingContent, streamingFiles, agentSteps, isAtBottom]);
+
+  // Broadcast live agent steps for the floating Tasks sidebar (Lovable parity).
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("lifemark-live-tasks", {
+        detail: { streaming, steps: agentSteps },
+      }),
+    );
+  }, [streaming, agentSteps]);
 
   async function triggerAutoFix(error: string, runtimeErrors: PreviewRuntimeError[] = []) {
     setAutoFixing(true);
@@ -1699,8 +1282,7 @@ export function ChatPanel({
         .select("*")
         .eq("project_id", project.id);
 
-      if (updatedFiles) onFilesUpdate(updatedFiles);
-
+      if (updatedFiles) onFilesUpdate(updatedFiles, { replace: true });
       // Show success message
       const successMsg: Message = {
         id: `autofix-done-${Date.now()}`,
@@ -1715,7 +1297,9 @@ export function ChatPanel({
         created_at: new Date().toISOString(),
       };
       onMessagesUpdate([...messagesWithFixing, successMsg]);
-      window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
+      window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
+        detail: { files: updatedFiles ?? undefined, reason: "auto-fix-applied" },
+      }));
       const previewOk = await waitForPreviewSuccess(12_000);
       healActiveRef.current = false;
       if (previewOk) {
@@ -1882,25 +1466,6 @@ export function ChatPanel({
     }
   }
 
-  // Parse <!-- STEP_PLAN --> messages into ordered steps
-  function parseStepPlan(raw: string): string[] {
-    const body = raw.replace("<!-- STEP_PLAN -->", "").trim();
-    // Split on numbered list items: 1. ... or **1.** ...
-    const lines = body.split("\n");
-    const steps: string[] = [];
-    let current = "";
-    for (const line of lines) {
-      if (/^\*{0,2}\d+\.\*{0,2}\s/.test(line.trim())) {
-        if (current.trim()) steps.push(current.trim());
-        current = line.trim().replace(/^\*{0,2}\d+\.\*{0,2}\s+/, "");
-      } else {
-        current += " " + line.trim();
-      }
-    }
-    if (current.trim()) steps.push(current.trim());
-    return steps.filter(Boolean);
-  }
-
   function toggleStepApproval(msgId: string, idx: number) {
     setApprovedSteps((prev) => {
       const existing = new Set(prev[msgId] ?? []);
@@ -1946,7 +1511,10 @@ export function ChatPanel({
     }
 
     let availableCredits = credits;
-    if (effectiveMode === "agent" && availableCredits < AGENT_MIN_CREDITS) {
+    const minCredits = effectiveMode === "agent" ? AGENT_MIN_CREDITS : 1;
+    // Always refresh when low — stale 0 (or "Simulate 0 credits") used to
+    // silently return here for chat/build/patch, so nothing appeared in history.
+    if (availableCredits < minCredits) {
       try {
         const cr = await fetch("/api/billing/credits");
         if (cr.ok) {
@@ -1956,17 +1524,17 @@ export function ChatPanel({
             onCreditsUpdate(fresh);
           }
         }
-      } catch {}
+      } catch { /* use prop value */ }
     }
-    const minCredits = effectiveMode === "agent" ? AGENT_MIN_CREDITS : 1;
     if (availableCredits < minCredits) {
-      if (effectiveMode === "agent") {
-        toast({
-          title: "Insufficient credits",
-          description: `Agent mode needs at least ${AGENT_MIN_CREDITS} credits.`,
-          variant: "destructive",
-        });
-      }
+      toast({
+        title: "Insufficient credits",
+        description:
+          effectiveMode === "agent"
+            ? `Agent mode needs at least ${AGENT_MIN_CREDITS} credits.`
+            : "Add credits or upgrade your plan to continue. (Dev: use Grant 100 credits if the balance is stuck at 0.)",
+        variant: "destructive",
+      });
       return;
     }
     // Keep the mode chip in sync whenever intelligence upgrades Chat/Build → patch/agent
@@ -1987,6 +1555,16 @@ export function ChatPanel({
               : `Running as ${effectiveMode} so your changes are saved to the project.`,
         });
       }
+    } else if (
+      effectiveMode === "chat" &&
+      files.length > 0 &&
+      looksLikeEditRequest(userMessage)
+    ) {
+      // Lovable honesty: ask-mode won't touch the preview — tell the user how to edit.
+      toast({
+        title: "Ask mode — preview won't change",
+        description: "Switch to Build (or say /build) so this edit is applied to your app.",
+      });
     }
     sendingRef.current = true;
     setInput("");
@@ -2112,6 +1690,25 @@ ${(f.content ?? "").slice(0, 8000)}
         ? files.filter((f) => mentionedPaths.some((p) => f.path.includes(p)))
         : null;
 
+      // Line-level references (Lovable parity): @path:12 or @path:12-34.
+      // For files referenced with line numbers, send only the referenced
+      // slice (±5 lines, numbered) instead of the whole file — sharper focus
+      // for the AI and fewer tokens.
+      const lineRefs = [...userMessageFinal.matchAll(/@([\w./\-]+):(\d+)(?:-(\d+))?/g)]
+        .map((m) => ({ path: m[1], start: parseInt(m[2], 10), end: parseInt(m[3] ?? m[2], 10) }));
+      const mentionedFilesForAI = mentionedFiles?.map((f) => {
+        const refs = lineRefs.filter((r) => f.path.includes(r.path));
+        if (refs.length === 0) return { path: f.path, content: f.content };
+        const lines = f.content.split("\n");
+        const excerpts = refs.map((r) => {
+          const s = Math.max(1, Math.min(r.start, r.end) - 5);
+          const e = Math.min(lines.length, Math.max(r.start, r.end) + 5);
+          const marked = lines.slice(s - 1, e).map((ln, i) => `${s + i}: ${ln}`).join("\n");
+          return `// ${f.path} — referenced lines ${r.start}${r.end !== r.start ? `-${r.end}` : ""} (showing ${s}-${e} with line numbers)\n${marked}`;
+        });
+        return { path: f.path, content: excerpts.join("\n// …\n") };
+      }) ?? null;
+
       // Extract cross-project references: @ProjectName/path/to/file
       const crossProjectRefs = crossProjects.flatMap((p) => {
         const prefix = p.name + "/";
@@ -2200,6 +1797,23 @@ ${(f.content ?? "").slice(0, 8000)}
               if (data.step) {
                 const step = data.step as AgentStep;
                 setAgentSteps((prev) => mergeAgentStep(prev, step));
+                // Connector approval card (Lovable parity): a blocked write
+                // surfaces as an approval_required observation.
+                const obs = step.type === "observation" ? step.content ?? "" : "";
+                if (obs.includes('"approval_required":true')) {
+                  try {
+                    const payload = JSON.parse(obs.slice(obs.indexOf("{"))) as { connector?: string; method?: string; path?: string; summary?: string };
+                    if (payload.connector) {
+                      setConnectorApproval({
+                        connector: payload.connector,
+                        method: payload.method ?? "POST",
+                        path: payload.path ?? "",
+                        summary: payload.summary ?? `${payload.method} ${payload.path} via ${payload.connector}`,
+                        retryPrompt: userMessage,
+                      });
+                    }
+                  } catch { /* malformed — ignore */ }
+                }
               }
 
               if (typeof data.fileUpdated?.path === "string") {
@@ -2211,6 +1825,15 @@ ${(f.content ?? "").slice(0, 8000)}
               // Backend wiring + self-verification progress (Lovable-style)
               if (typeof data.wiring_status === "string" || typeof data.verify_status === "string") {
                 setPostBuildStatus((data.wiring_status ?? data.verify_status) as string);
+              }
+
+              // Cloud ops approval card (pause / wake / resize from chat)
+              if (data.cloud_action && typeof data.cloud_action === "object") {
+                const ca = data.cloud_action as { kind: "pause" | "resume" | "resize"; currentTier: string; paused: boolean; actionable: boolean };
+                if (ca.actionable) {
+                  setCloudAction(ca);
+                  setCloudTierPick(ca.currentTier || "tiny");
+                }
               }
 
               if (data.done) {
@@ -2229,7 +1852,9 @@ ${(f.content ?? "").slice(0, 8000)}
                     const row = (updatedFiles as Array<{ path: string; content: string }>).find((f) => f.path === path);
                     return { path, content: row?.content ?? "" };
                   });
-                  const assistantId = `assistant-${Date.now()}`;
+                  const assistantId =
+                    (typeof data.assistantMessageId === "string" && data.assistantMessageId) ||
+                    `assistant-${Date.now()}`;
                   const diffs: FileDiffEntry[] = diffSource
                     .map((newFile) => {
                       const oldFile = files.find((f) => f.path === newFile.path);
@@ -2245,8 +1870,12 @@ ${(f.content ?? "").slice(0, 8000)}
                     setMessageDiffs((prev) => ({ ...prev, [assistantId]: diffs }));
                     setCanUndo(true);
                   }
-                  onFilesUpdate(updatedFiles);
-                  window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
+                  if (Array.isArray(updatedFiles) && updatedFiles.length > 0) {
+                    onFilesUpdate(updatedFiles, { replace: true });
+                    window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
+                      detail: { files: updatedFiles, reason: "agent-files-updated" },
+                    }));
+                  }
                   if (healActiveRef.current) {
                     void (async () => {
                       const previewOk = await waitForPreviewSuccess(12_000);
@@ -2262,11 +1891,26 @@ ${(f.content ?? "").slice(0, 8000)}
 
                   const missingPkgs = findMissingPackages(diffSource, updatedFiles.find((f: { path: string }) => f.path === "package.json")?.content ?? null);
                   if (missingPkgs.length > 0) {
-                    toast({
-                      title: `${missingPkgs.length} new package${missingPkgs.length > 1 ? "s" : ""} detected`,
-                      description: `Run: ${buildInstallCommand(missingPkgs)}`,
-                      duration: 8000,
-                    });
+                    const pkgContent = updatedFiles.find((f: { path: string; content: string }) => f.path === "package.json")?.content;
+                    if (pkgContent) {
+                      const sync = syncPackageJsonDeps(updatedFiles as Array<{ path: string; content: string }>, pkgContent);
+                      if (sync) {
+                        try {
+                          const supabase = createClient();
+                          await (supabase as any).from("project_files").upsert({
+                            project_id: project.id,
+                            path: "package.json",
+                            content: sync.updated,
+                            language: "json",
+                          }, { onConflict: "project_id,path" });
+                          const { data: refreshed } = await (supabase as any)
+                            .from("project_files")
+                            .select("*")
+                            .eq("project_id", project.id);
+                          if (refreshed) onFilesUpdate(refreshed);
+                        } catch { /* preview installs deps */ }
+                      }
+                    }
                   }
                 }
 
@@ -2341,8 +1985,8 @@ ${(f.content ?? "").slice(0, 8000)}
           clarifyFirst: effectiveMode === "build" && clarifyFirst && files.length === 0,
           ...(effectiveMode === "build" && designTemplateId ? { templateId: designTemplateId } : {}),
           // If @mentions present, only send those files for context (saves tokens + focuses AI)
-          files: mentionedFiles
-            ? mentionedFiles.map((f) => ({ path: f.path, content: f.content }))
+          files: mentionedFilesForAI
+            ? mentionedFilesForAI
             : files.map((f) => ({ path: f.path, content: f.content })),
           ...(imageToSend ? { imageBase64: imageToSend, imageFileName: imageNameToSend } : {}),
           ...(textToSend
@@ -2398,6 +2042,8 @@ ${(f.content ?? "").slice(0, 8000)}
       }
 
       let accumulated = "";
+      const streamedPathTracker = createStreamedFilePathTracker();
+      let hasPendingStreamedPathUpdate = false;
       const streamingAssistantId = `assistant-${Date.now()}`;
       let clarifyExited = false;
       // Local mirror of pendingSkills — the async stream handlers below close
@@ -2619,7 +2265,9 @@ ${(f.content ?? "").slice(0, 8000)}
                   }
 
                   onFilesUpdate(updatedFiles);
-                  window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
+                  window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
+                    detail: { files: updatedFiles, reason: "agent-files-updated" },
+                  }));
                   if (healActiveRef.current) {
                     void (async () => {
                       const previewOk = await waitForPreviewSuccess(12_000);
@@ -2645,35 +2293,25 @@ ${(f.content ?? "").slice(0, 8000)}
                           });
                     const pkgJsonFile = updatedFiles.find((f: { path: string; content: string }) => f.path === "package.json");
                     const missingPkgs = findMissingPackages(generatedFiles, pkgJsonFile?.content ?? null);
-                    if (missingPkgs.length > 0) {
-                      const cmd = buildInstallCommand(missingPkgs);
-                      toast({
-                        title: `${missingPkgs.length} new package${missingPkgs.length > 1 ? "s" : ""} detected`,
-                        description: `Run: ${cmd}`,
-                        duration: 8000,
-                      });
-
-                      // #384 — package.json auto-sync: also update package.json in the project files
-                      if (pkgJsonFile?.content) {
-                        const sync = syncPackageJsonDeps(updatedFiles as Array<{ path: string; content: string }>, pkgJsonFile.content);
-                        if (sync) {
-                          try {
-                            const supabase = createClient();
-                            await (supabase as any).from("project_files").upsert({
-                              project_id: project.id,
-                              path: "package.json",
-                              content: sync.updated,
-                              language: "json",
-                            }, { onConflict: "project_id,path" });
-                            // Refresh files so the editor shows the updated package.json
-                            const { data: refreshed } = await (supabase as any)
-                              .from("project_files")
-                              .select("*")
-                              .eq("project_id", project.id);
-                            if (refreshed) onFilesUpdate(refreshed);
-                          } catch {
-                            // Silently ignore — not critical
-                          }
+                    if (missingPkgs.length > 0 && pkgJsonFile?.content) {
+                      // Lovable parity: sync package.json silently; preview installs deps.
+                      const sync = syncPackageJsonDeps(updatedFiles as Array<{ path: string; content: string }>, pkgJsonFile.content);
+                      if (sync) {
+                        try {
+                          const supabase = createClient();
+                          await (supabase as any).from("project_files").upsert({
+                            project_id: project.id,
+                            path: "package.json",
+                            content: sync.updated,
+                            language: "json",
+                          }, { onConflict: "project_id,path" });
+                          const { data: refreshed } = await (supabase as any)
+                            .from("project_files")
+                            .select("*")
+                            .eq("project_id", project.id);
+                          if (refreshed) onFilesUpdate(refreshed);
+                        } catch {
+                          // not critical
                         }
                       }
                     }
@@ -2695,12 +2333,65 @@ ${(f.content ?? "").slice(0, 8000)}
                   if (completedBuildActivity) meta.build_activity = completedBuildActivity;
                   if (data.verification) meta.verification = data.verification;
                   if (data.backend_wired) meta.backend_wired = data.backend_wired;
+                  // Pre-build snapshot id — powers per-message Revert / Preview version
+                  if (typeof data.snapshot_id === "string") meta.snapshot_id = data.snapshot_id;
                   return Object.keys(meta).length > 0 ? (meta as unknown as Json) : null;
                 })(),
                 rating: null,
                 created_at: new Date().toISOString(),
               };
               onMessagesUpdate([...baseMessages, tempUserMsg, assistantMsg]);
+              if (!data.assistantMessageId) {
+                console.warn(
+                  "[chat] turn finished without assistantMessageId — persisting via client fallback",
+                  { mode: effectiveMode, projectId: project.id },
+                );
+                try {
+                  const persistRes = await fetch(`/api/projects/${project.id}/messages`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      messages: [
+                        {
+                          role: "user",
+                          content: tempUserMsg.content,
+                          mode: effectiveMode === "patch" ? "build" : effectiveMode,
+                        },
+                        {
+                          role: "assistant",
+                          content: assistantMsg.content,
+                          mode: effectiveMode === "patch" ? "build" : effectiveMode,
+                          tokens_used: assistantMsg.tokens_used,
+                          model: assistantMsg.model,
+                          metadata: assistantMsg.metadata,
+                        },
+                      ],
+                    }),
+                  });
+                  if (persistRes.ok) {
+                    const persisted = (await persistRes.json()) as { assistantMessageId?: string };
+                    if (persisted.assistantMessageId) {
+                      onMessagesUpdate([
+                        ...baseMessages,
+                        tempUserMsg,
+                        { ...assistantMsg, id: persisted.assistantMessageId },
+                      ]);
+                    }
+                  } else {
+                    toast({
+                      title: "Chat history may not have saved",
+                      description: "Reload the page after your next successful edit to confirm.",
+                      variant: "destructive",
+                    });
+                  }
+                } catch {
+                  toast({
+                    title: "Chat history may not have saved",
+                    description: "Check your connection and try again.",
+                    variant: "destructive",
+                  });
+                }
+              }
               setGenTimes((prev) => ({ ...prev, [assistantId]: Math.round((Date.now() - genStartRef.current) / 100) / 10 }));
 
               // Request preview screenshot for build/agent messages (2.5 s delay for React to re-render)
@@ -2784,8 +2475,11 @@ ${(f.content ?? "").slice(0, 8000)}
         applyFileUpdates: (["build", "agent", "patch"] as EditorMode[]).includes(effectiveMode),
         onFileUpdate: (update) => {
           const norm = update.path.replace(/\\/g, "/").replace(/^\//, "");
-          setStreamingFiles((prev) => (prev.includes(norm) ? prev : [...prev, norm]));
-          onStreamingChange?.(true, streamFileSync.pendingPaths.length + 1);
+          if (streamedPathTracker.add(norm)) {
+            const paths = streamedPathTracker.getPaths();
+            setStreamingFiles(paths);
+            onStreamingChange?.(true, paths.length);
+          }
           applyBuildSteps((prev) =>
             prev.length > 0 ? onBuildFileProgress(prev) : prev,
           );
@@ -2798,19 +2492,17 @@ ${(f.content ?? "").slice(0, 8000)}
           // still renders.
           onTextChunk: (piece) => {
             accumulated += piece;
+            hasPendingStreamedPathUpdate = streamedPathTracker.append(piece) || hasPendingStreamedPathUpdate;
             if (streamFlushTimer === null) {
               streamFlushTimer = setTimeout(() => {
                 streamFlushTimer = null;
                 setStreamingContent(accumulated);
-                const pathMatches = [
-                  ...accumulated.matchAll(/"path"\s*:\s*"([^"]+)"/g),
-                  ...accumulated.matchAll(/"name"\s*:\s*"([^"/][^"]*)"/g),
-                ];
-                if (pathMatches.length > 0) {
-                  const paths = pathMatches.map((m) => m[1]);
+                if (hasPendingStreamedPathUpdate) {
+                  hasPendingStreamedPathUpdate = false;
+                  const paths = streamedPathTracker.getPaths();
                   // Paths only ever grow — skip the state update (and the
                   // re-render it causes) when nothing new appeared.
-                  setStreamingFiles((prev) => (prev.length === paths.length ? prev : paths));
+                  setStreamingFiles(paths);
                   onStreamingChange?.(true, paths.length);
                   applyBuildSteps((prev) =>
                     prev.length > 0 ? onBuildFileProgress(prev) : prev,
@@ -2948,12 +2640,57 @@ ${(f.content ?? "").slice(0, 8000)}
   }
 
   /** Feature: file generation in chat — POST the current prompt to /api/ai/generate-file. */
-  async function handleGenerateFile(format: "md" | "csv" | "json" | "txt" | "html") {
+  async function handleGenerateFile(format: LovableFileGenFormat) {
     const prompt = input.trim();
     if (!prompt || fileGenBusy) return;
     setShowFileGenPicker(false);
     setFileGenBusy(format);
+    const isBinary = format === "pdf" || format === "xlsx" || format === "pptx";
     try {
+      if (isBinary) {
+        const res = await fetch("/api/ai/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId: project.id,
+            instruction:
+              `Generate a ${format.toUpperCase()} file for this request. Use Python with ` +
+              `(reportlab for PDF, openpyxl for XLSX, python-pptx for PPTX). ` +
+              `Write the file to OUTPUT_DIR as output.${format}.\n\nRequest: ${prompt}`,
+          }),
+        });
+        const data = (await res.json()) as {
+          files?: Array<{ name: string; base64: string; mimeType?: string }>;
+          error?: string;
+        };
+        if (!res.ok || !data.files?.length) {
+          throw new Error(data.error ?? `Binary generation failed (${res.status})`);
+        }
+        const file =
+          data.files.find((f) => f.name.toLowerCase().endsWith(`.${format}`)) ?? data.files[0]!;
+        const mime =
+          file.mimeType ??
+          (format === "pdf"
+            ? "application/pdf"
+            : format === "xlsx"
+              ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              : "application/vnd.openxmlformats-officedocument.presentationml.presentation");
+        setFileGenResults((prev) => [
+          ...prev,
+          {
+            id: `gen-${Date.now()}`,
+            prompt,
+            filename: file.name,
+            content: file.base64,
+            mimeType: mime,
+            base64: true,
+          },
+        ]);
+        setInput("");
+        toast({ title: `Generated ${file.name}`, description: "Ready to download below." });
+        return;
+      }
+
       const res = await fetch("/api/ai/generate-file", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2996,17 +2733,87 @@ ${(f.content ?? "").slice(0, 8000)}
     }
   }
 
-  /** Download a generated standalone file via a blob URL + download attribute. */
-  function downloadGeneratedFile(f: { filename: string; content: string; mimeType: string }) {
-    const blob = new Blob([f.content], { type: f.mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = f.filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
+
+  async function handleSaveSkill() {
+    if (!saveSkillDraft || savingSkill) return;
+    const draft = saveSkillDraft;
+    if (!draft.name.trim() || !draft.prompt.trim()) {
+      toast({ title: "Name and playbook are required", variant: "destructive" });
+      return;
+    }
+    setSavingSkill(true);
+    try {
+      const res = await fetch("/api/skills", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: draft.name.trim(),
+          description: draft.description.trim() || null,
+          prompt: draft.prompt.trim(),
+          icon: "⚡",
+          tags: [],
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error((err as { error?: string }).error ?? "Failed to save skill");
+      }
+      toast({ title: "Skill saved", description: `"${draft.name}" will auto-attach when future prompts match.` });
+      setSaveSkillDraft(null);
+    } catch (err) {
+      toast({
+        title: "Save failed",
+        description: err instanceof Error ? err.message : "Try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setSavingSkill(false);
+    }
+  }
+
+  async function handleRunAnalyze() {
+    if (!analyzeInstruction.trim() || analyzeRunning) return;
+    setAnalyzeRunning(true);
+    try {
+      const res = await fetch("/api/ai/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          instruction: analyzeInstruction.trim(),
+          projectId: project.id,
+          inputFile: analyzeFile ?? undefined,
+        }),
+      });
+      const data = await res.json() as {
+        ok?: boolean;
+        error?: string;
+        script?: string;
+        stdout?: string;
+        stderr?: string;
+        files?: GeneratedFile[];
+        messages?: Message[];
+      };
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error ?? data.stderr ?? "Analysis failed");
+      }
+      if (data.messages?.length) {
+        onMessagesUpdate([...messages, ...data.messages]);
+      }
+      toast({
+        title: `Analysis complete · ${(data.files ?? []).length} file${(data.files ?? []).length === 1 ? "" : "s"}`,
+      });
+      setAnalyzeOpen(false);
+      setAnalyzeInstruction("");
+      setAnalyzeFile(null);
+    } catch (err) {
+      toast({
+        title: "Analysis failed",
+        description: err instanceof Error ? err.message : "Try again with a smaller file or simpler request.",
+        variant: "destructive",
+      });
+    } finally {
+      setAnalyzeRunning(false);
+    }
   }
 
   function handleDesignPreviewSelect(direction: DesignPreviewDirection) {
@@ -3245,7 +3052,7 @@ ${(f.content ?? "").slice(0, 8000)}
       .map((s): SlashItem => ({ kind: "skill", key: `skill:${s.id}`, prompt: s.prompt, skillId: s.id }));
     const showTpl = input === "/" || !input.startsWith("/");
     const tpl: SlashItem[] = showTpl
-      ? PROMPT_TEMPLATES.flatMap((g) => g.prompts.map((p): SlashItem => ({ kind: "template", key: `tpl:${p}`, prompt: p })))
+      ? LOVABLE_PROMPT_TEMPLATES.flatMap((g) => g.prompts.map((p): SlashItem => ({ kind: "template", key: `tpl:${p}`, prompt: p })))
       : [];
     return [...matched, ...tpl];
   }, [showTemplates, input, skills]);
@@ -3258,10 +3065,7 @@ ${(f.content ?? "").slice(0, 8000)}
   }
 
   // Files + collaborators filtered by @mention query
-  type MentionItem =
-    | { kind: "file"; path: string }
-    | { kind: "user"; display: string; email: string }
-    | { kind: "xproject"; projectName: string; projectId: string; filePath: string };
+  type MentionItem = LovableMentionItem;
 
   // Detect @project:name/path pattern
   const isCrossProjectQuery = mentionQuery !== null && mentionQuery.startsWith("project:");
@@ -3297,6 +3101,15 @@ ${(f.content ?? "").slice(0, 8000)}
             )
             .slice(0, 4)
             .map((c): MentionItem => ({ kind: "user", display: c.display, email: c.email })),
+          // App connectors (Lovable parity: "@" references a connector)
+          ...CONNECTORS
+            .filter((c) =>
+              mentionQuery.length > 0 &&
+              (c.name.toLowerCase().includes(mentionQuery.toLowerCase()) ||
+               c.id.toLowerCase().includes(mentionQuery.toLowerCase())),
+            )
+            .slice(0, 4)
+            .map((c): MentionItem => ({ kind: "connector", id: c.id, name: c.name, emoji: c.emoji })),
           // Hint to trigger cross-project mode
           ...(!mentionQuery || "project".startsWith(mentionQuery.toLowerCase()) ? [{ kind: "xproject" as const, projectName: "Other project…", projectId: "", filePath: "" }] : []),
         ]
@@ -3338,7 +3151,9 @@ ${(f.content ?? "").slice(0, 8000)}
     }
     const insertText = typeof item === "string"
       ? item
-      : item.kind === "file" ? item.path : item.display;
+      : item.kind === "file" ? item.path
+      : item.kind === "connector" ? `connector:${item.id}`
+      : item.display;
     const val = input;
     const cursor = textareaRef.current?.selectionStart ?? val.length;
     const before = val.slice(0, cursor);
@@ -3384,6 +3199,222 @@ ${(f.content ?? "").slice(0, 8000)}
     [messages],
   );
 
+  // Debounced message search (keyword + semantic via API).
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) {
+      setSearchHitIds(null);
+      setSearchMatchCount(0);
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/projects/${project.id}/messages/search?q=${encodeURIComponent(q)}&mode=${searchMode}`,
+        );
+        const data = (await res.json()) as { hits?: Array<{ id: string }> };
+        const ids = new Set((data.hits ?? []).map((h) => h.id));
+        setSearchHitIds(ids);
+        setSearchMatchCount(ids.size);
+      } catch {
+        setSearchHitIds(null);
+        setSearchMatchCount(0);
+      } finally {
+        setSearchLoading(false);
+      }
+    }, 320);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery, searchMode, project.id]);
+
+  // Lovable-parity per-message versions: the newest assistant message carrying
+  // a pre-build snapshot represents the CURRENT version — its Revert action is
+  // disabled ("This is the current version"), mirroring Lovable's editor.
+  const latestSnapshotMessageId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "assistant" && (m.metadata as { snapshot_id?: string } | null)?.snapshot_id) {
+        return m.id;
+      }
+    }
+    return null;
+  }, [messages]);
+
+  // AFTER-state semantics (exact Lovable behavior) at zero storage cost:
+  // each snapshot_id captures the state BEFORE its own message, which is
+  // identical to the state AFTER the PREVIOUS build. So message N's version
+  // ("this version") = message N+1's pre-build snapshot. Map: messageId →
+  // the NEXT build message's snapshot_id. The latest build message has no
+  // successor — its after-state IS the current files (Revert disabled).
+  const afterSnapshotByMessageId = useMemo(() => {
+    const map = new Map<string, string>();
+    let pending: string[] = [];
+    for (const m of messages) {
+      const snapId = (m.metadata as { snapshot_id?: string } | null)?.snapshot_id;
+      if (m.role === "assistant" && snapId) {
+        for (const prevId of pending) map.set(prevId, snapId);
+        pending = [m.id];
+      }
+    }
+    return map;
+  }, [messages]);
+
+  // Follow-up suggestion chips (Lovable parity): static, zero-cost pool keyed
+  // to the last build prompt + current files. Only shown once a build exists.
+  const followUpChips = useMemo(() => {
+    if (!latestSnapshotMessageId) return [];
+    let lastPrompt = "";
+    const buildIdx = messages.findIndex((m) => m.id === latestSnapshotMessageId);
+    for (let i = buildIdx; i >= 0; i--) {
+      if (messages[i]?.role === "user") { lastPrompt = messages[i].content; break; }
+    }
+    return suggestFollowUps(lastPrompt, files.map((f) => f.path), 4);
+  }, [latestSnapshotMessageId, messages, files]);
+
+  const composerLineRefs = useMemo(() => parseLineRefs(input), [input]);
+
+  const { count: guestCommentCount } = useGuestCommentCount(project.id);
+
+  const streamingReasoning = useMemo(
+    () => (streaming ? extractStreamingReasoning(streamingContent) : null),
+    [streaming, streamingContent],
+  );
+
+  const showGuestCommentsBanner = useMemo(
+    () =>
+      !guestCommentsBannerDismissed &&
+      !streaming &&
+      guestCommentCount > 0 &&
+      !!project.is_public,
+    [guestCommentsBannerDismissed, streaming, guestCommentCount, project.is_public],
+  );
+
+  const showPublishBanner = useMemo(
+    () =>
+      !publishBannerDismissed &&
+      !streaming &&
+      !previewError &&
+      !isLocked &&
+      files.length > 0 &&
+      !!latestSnapshotMessageId,
+    [publishBannerDismissed, streaming, previewError, isLocked, files.length, latestSnapshotMessageId],
+  );
+
+  const showSharePreview = files.length > 0 && !streaming;
+
+  useEffect(() => {
+    if (!secretBanner) return;
+    const t = window.setTimeout(() => setSecretBanner(null), 12_000);
+    return () => window.clearTimeout(t);
+  }, [secretBanner]);
+
+  useEffect(() => {
+    if (latestSnapshotMessageId) setPublishBannerDismissed(false);
+  }, [latestSnapshotMessageId]);
+
+  useEffect(() => {
+    if (guestCommentCount > 0) setGuestCommentsBannerDismissed(false);
+  }, [guestCommentCount]);
+
+  useEffect(() => {
+    if (previewRuntimeErrors.length > 0) setRuntimeErrorsDismissed(false);
+  }, [previewRuntimeErrors.length]);
+
+  async function handlePublishFromChat() {
+    setPublishBusy(true);
+    try {
+      const res = await fetch("/api/deploy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: project.id }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error ?? "Deploy failed");
+      }
+      toast({
+        title: project.deployed_url ? "Update queued" : "Deployment started",
+        description: "Your project is being deployed.",
+      });
+      setPublishBannerDismissed(true);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Deploy failed";
+      toast({ title: "Deploy error", description: msg, variant: "destructive" });
+    } finally {
+      setPublishBusy(false);
+    }
+  }
+
+  async function handleFixGuestComments() {
+    try {
+      const res = await fetch(`/api/projects/${project.id}/comments`);
+      if (!res.ok) throw new Error("Failed to load comments");
+      const rows = await res.json() as Array<{
+        content: string;
+        resolved?: boolean;
+        is_guest?: boolean;
+        parent_id?: string | null;
+        guest_name?: string | null;
+        page_path?: string | null;
+        element_preview?: string | null;
+        element_tag?: string | null;
+      }>;
+      const unresolved = rows.filter((c) => !c.resolved && c.is_guest && !c.parent_id);
+      if (!unresolved.length) {
+        toast({ title: "No unresolved guest comments" });
+        return;
+      }
+      setInput(formatGuestCommentsForAi(unresolved));
+      setGuestCommentsBannerDismissed(true);
+      if (mode === "chat" || mode === "plan") onModeChange?.("build");
+      setTimeout(() => textareaRef.current?.focus(), 0);
+    } catch {
+      toast({ title: "Could not load guest comments", variant: "destructive" });
+    }
+  }
+
+  function handleFixRuntimeErrors() {
+    const formatted = formatErrorsForHealing(previewRuntimeErrors);
+    if (!formatted) return;
+    setInput(
+      `Fix these preview errors without breaking unrelated features:\n\n${formatted}\n\nAfter fixing, summarize what changed.`,
+    );
+    setRuntimeErrorsDismissed(true);
+    if (mode === "chat" || mode === "plan") onModeChange?.("build");
+    setTimeout(() => textareaRef.current?.focus(), 0);
+  }
+
+  const handleOpenLineRefAtLine = useCallback((path: string, line: number) => {
+    window.dispatchEvent(
+      new CustomEvent("lifemark-open-file-at-line", { detail: { path, line } }),
+    );
+  }, []);
+
+  async function handleAddToKnowledge(msg: Message) {
+    const excerpt = msg.content.trim().slice(0, 2000);
+    if (!excerpt) return;
+    const existing = (project.knowledge ?? "").trim();
+    const stamp = new Date().toISOString().slice(0, 10);
+    const block = `\n\n---\n\n## From chat (${stamp})\n${excerpt}`;
+    const next = (existing ? existing + block : excerpt).slice(0, 10_000);
+    try {
+      const res = await fetch(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ knowledge: next }),
+      });
+      if (!res.ok) throw new Error("Save failed");
+      onProjectUpdate?.({ knowledge: next });
+      toast({
+        title: "Added to knowledge",
+        description: "AI will use this context in future messages.",
+      });
+    } catch {
+      toast({ title: "Failed to add to knowledge", variant: "destructive" });
+    }
+  }
+
   async function copyMessage(content: string, id: string) {
     await navigator.clipboard.writeText(content);
     setCopiedId(id);
@@ -3428,47 +3459,20 @@ ${(f.content ?? "").slice(0, 8000)}
     toast({ description: "Chat exported ✓" });
   }
 
-  // ⌘⇧K — clear chat after confirmation
-  useEffect(() => {
-    function handler(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "K") {
-        e.preventDefault();
-        void handleClearChat();
-      }
-    }
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
-
-  // ⌘F — open/close chat search
-  useEffect(() => {
-    function handler(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "f") {
-        e.preventDefault();
-        setShowSearch((v) => {
-          if (!v) setTimeout(() => searchInputRef.current?.focus(), 50);
-          return !v;
-        });
-      }
-    }
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, []);
-
-  // Alt+P — toggle between Build and Plan (matches Lovable's "Toggle with Alt P")
-  useEffect(() => {
-    function handler(e: KeyboardEvent) {
-      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-      // Ignore when the user is typing in an input/textarea/contenteditable
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
-      if (e.key.toLowerCase() !== "p") return;
-      e.preventDefault();
-      onModeChange?.(mode === "plan" ? "build" : "plan");
-    }
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [mode, onModeChange]);
+  // ⌘⇧K — clear chat; ⌘F — search; Alt+P — toggle Plan/Build; Esc — stop generation
+  useChatKeyboardShortcuts({
+    mode,
+    streaming,
+    onModeChange,
+    onClearChat: () => void handleClearChat(),
+    onSearchShortcut: () => {
+      setShowSearch((v) => {
+        if (!v) setTimeout(() => searchInputRef.current?.focus(), 50);
+        return !v;
+      });
+    },
+    onStopGeneration: stopGeneration,
+  });
 
   const noCredits = credits <= 0;
 
@@ -3482,2831 +3486,515 @@ ${(f.content ?? "").slice(0, 8000)}
     return null;
   }, [messages]);
 
+  const chatThreads = useMemo(() => {
+    const filtered = showBookmarks
+      ? visibleMessages.filter((m) => bookmarkedIds.has(m.id))
+      : searchQuery && searchHitIds
+        ? visibleMessages.filter((m) => searchHitIds.has(m.id))
+        : searchQuery
+          ? visibleMessages.filter((m) =>
+              m.content.toLowerCase().includes(searchQuery.toLowerCase()),
+            )
+          : visibleMessages;
+    return groupIntoThreads(filtered);
+  }, [visibleMessages, showBookmarks, bookmarkedIds, searchQuery, searchHitIds]);
+
+  const getMessageProps = useThreadMessageProps({
+    searchQuery,
+    streaming,
+    showBookmarks,
+    lastAssistantMsgId,
+    copiedId,
+    pinnedMsgId,
+    ratings,
+    editingMessageId,
+    editInput,
+    bookmarkedIds,
+    expandedDiffs,
+    reactions,
+    messageDiffs,
+    messageChangedPaths,
+    messageScreenshots,
+    messageBuildActivity,
+    messageSkills,
+    messageCredits,
+    genTimes,
+    suggestions,
+    roleTestChips,
+    approvedSteps,
+    fileStates,
+    afterSnapshotByMessageId,
+    latestSnapshotMessageId,
+    visibleMessages,
+    onCopy: copyMessage,
+    onStartEdit: startEditMessage,
+    onTogglePin: (msgId) => setPinnedMsgId((prev) => (prev === msgId ? null : msgId)),
+    onRate: rateMessage,
+    onEditInputChange: setEditInput,
+    onSubmitEdit: submitEditedMessage,
+    onCancelEdit: () => setEditingMessageId(null),
+    onRegenerate: handleRegenerate,
+    onToggleBookmark: toggleBookmark,
+    onToggleDiffDetails: (msgId) =>
+      setExpandedDiffs((prev) => {
+        const next = new Set(prev);
+        if (next.has(msgId)) next.delete(msgId);
+        else next.add(msgId);
+        return next;
+      }),
+    onPreviewChanges: (msgId) =>
+      setExpandedDiffs((prev) => {
+        const next = new Set(prev);
+        next.delete(msgId);
+        return next;
+      }),
+    onFocusPreview,
+    onToggleReaction: toggleReaction,
+    onRevertFile: handleRevertFile,
+    onReApplyFile: handleReApplyFile,
+    onAcceptFile: (msgId, path) =>
+      setFileStates((prev) => ({
+        ...prev,
+        [msgId]: { ...(prev[msgId] ?? {}), [path]: "accepted" },
+      })),
+    onRevertToVersion: handleRevertToVersion,
+    onSaveAsSkill: (msg) => {
+      const idx = visibleMessages.findIndex((m) => m.id === msg.id);
+      const prevUser =
+        idx > 0 ? [...visibleMessages.slice(0, idx)].reverse().find((m) => m.role === "user") : null;
+      setSaveSkillDraft({
+        sourceMessageId: msg.id,
+        name: prevUser?.content?.slice(0, 60).trim() || "Saved skill",
+        description: prevUser?.content?.slice(0, 200) ?? "",
+        prompt: msg.content,
+      });
+    },
+    onAddToKnowledge: (msg) => void handleAddToKnowledge(msg),
+    onSendMessage: (text, m) => void sendMessage(text, m),
+    onApprovePlan,
+    onModeChange,
+    onToggleStep: toggleStepApproval,
+    onSelectAllSteps: (msgId, stepCount) => {
+      if (!stepCount) return;
+      setApprovedSteps((prev) => ({ ...prev, [msgId]: new Set(Array.from({ length: stepCount }, (_, i) => i)) }));
+    },
+    onClearSteps: (msgId) => setApprovedSteps((prev) => ({ ...prev, [msgId]: new Set() })),
+    onBuildSteps: executeApprovedSteps,
+    onSelectSuggestion: (msgId, chip) => {
+      setSuggestions((prev) => {
+        const n = { ...prev };
+        delete n[msgId];
+        return n;
+      });
+      void sendMessage(chip);
+    },
+    onSelectRoleTestChip: (msgId, chip) => {
+      setRoleTestChips((prev) => {
+        const n = { ...prev };
+        delete n[msgId];
+        return n;
+      });
+      const role = chip.replace(/^Test the new changes as the\s+/i, "").replace(/\s+role$/i, "");
+      const framed = `Generate browser tests (Playwright-style) that validate the recent changes for the ${role} role specifically. Cover: 1) login/auth scenarios for ${role}, 2) which routes ${role} can/cannot reach, 3) UI elements that should be visible/hidden for ${role}, 4) any role-specific actions. After writing the tests, summarize what to run them against.`;
+      void sendMessage(framed);
+    },
+    onOpenTestingPanel: () => onOpenPanel?.("testing"),
+    onSaveAnalyzeFile: saveGeneratedFileToProject,
+  });
+
+  const composerDock = useComposerDockController({
+    textareaRef,
+    previewError,
+    previewRuntimeErrors,
+    noCredits,
+    streaming,
+    messagesLength: messages.length,
+    contextualEmptyPrompts,
+    autoFixing,
+    autoFixAttempts,
+    maxAutoFixAttempts: MAX_AUTO_FIX_ATTEMPTS,
+    fileGenResults,
+    activeClarifySession,
+    promptQueue,
+    queuePaused,
+    editingQueueId,
+    editingQueueText,
+    clarifyFirst,
+    onModeChange,
+    onOpenPanel,
+    setInput,
+    setAutoFixAttempts,
+    setFileGenResults,
+    setActiveClarifySession,
+    setClarifyFirst,
+    setPromptQueue,
+    setQueuePaused,
+    setEditingQueueId,
+    setEditingQueueText,
+    sendMessage,
+    runtimeErrorsDismissed,
+    onFixRuntimeErrors: handleFixRuntimeErrors,
+    onDismissRuntimeErrors: () => setRuntimeErrorsDismissed(true),
+  });
 
   return (
-    <div
-      className="flex flex-col h-full bg-background"
+    <LovableChatPanelShell
       // Lift the chat panel above the on-screen keyboard on mobile. inset is 0
       // on desktop, ~250-300px on iOS/Android when the keyboard is up. The
       // padding-bottom approach (vs. translateY) preserves scroll position
       // and keeps the most-recent messages visible.
       style={{ paddingBottom: keyboardInset }}
     >
-      {/* ── Minimal top strip: current mode label + utilities. Mode switching
-          lives in the compact dropdown next to the input (Lovable pattern), so
-          the old 5-tab bar is gone. ── */}
-      <div className="flex items-center gap-0.5 px-3 py-2 border-b border-border/60 flex-shrink-0">
-        <span className="text-xs font-medium text-foreground/80 px-1">
-          {mode === "patch" ? "Quick Edit" : mode.charAt(0).toUpperCase() + mode.slice(1)}
-        </span>
-        <div className="flex-1" />
-        {/* Credit cost badge */}
-        <span className="text-[10px] text-muted-foreground/50 pr-1 pb-1.5 flex-shrink-0">
-          {mode === "build" || mode === "agent" ? "2" : "1"} credit{mode === "patch" ? " · patch" : ""} / msg
-        </span>
-        {/* Export chat as Markdown */}
-        <button
-          onClick={exportChatAsMarkdown}
-                  disabled={visibleMessages.length === 0}
-          className="mb-1 p-1 rounded text-muted-foreground/40 hover:text-foreground hover:bg-muted/60 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
-          title="Export conversation as Markdown"
-        >
-          <Download className="w-3.5 h-3.5" />
-        </button>
-        {/* Copy all messages */}
-        <button
-          onClick={async () => {
-            const text = visibleMessages.map((m) => `${m.role === "user" ? "You" : "AI"}: ${m.content}`).join("\n\n");
-            await navigator.clipboard.writeText(text);
-            setCopiedAll(true);
-            setTimeout(() => setCopiedAll(false), 2000);
-          }}
-          disabled={visibleMessages.length === 0}
-          className="mb-1 p-1 rounded text-muted-foreground/40 hover:text-foreground hover:bg-muted/60 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
-          title="Copy all messages"
-        >
-          {copiedAll ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
-        </button>
-        {/* Clear chat button */}
-        <button
-          onClick={() => void handleClearChat()}
-          disabled={messages.length === 0}
-          className="mb-1 p-1 rounded text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-20 disabled:cursor-not-allowed"
-          title="Clear conversation (⌘⇧K)"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
-        {/* Search messages button */}
-        <button
-          onClick={() => {
-            setShowSearch((v) => {
-              if (!v) setTimeout(() => searchInputRef.current?.focus(), 50);
-              return !v;
-            });
-          }}
-          disabled={messages.length === 0}
-          className={`mb-1 p-1 rounded transition-colors disabled:opacity-20 disabled:cursor-not-allowed ${
-            showSearch
-              ? "text-violet-400 bg-violet-500/10"
-              : "text-muted-foreground/40 hover:text-foreground hover:bg-muted/60"
-          }`}
-          title="Search messages (⌘F)"
-        >
-          <Search className="w-3.5 h-3.5" />
-        </button>
-        {/* Bookmarks filter button */}
-        <button
-          onClick={() => setShowBookmarks((v) => !v)}
-          disabled={messages.length === 0}
-          className={`mb-1 p-1 rounded transition-colors disabled:opacity-20 disabled:cursor-not-allowed relative ${
-            showBookmarks
-              ? "text-amber-400 bg-amber-500/10"
-              : "text-muted-foreground/40 hover:text-foreground hover:bg-muted/60"
-          }`}
-          title={showBookmarks ? "Show all messages" : "Show bookmarked messages only"}
-        >
-          <Bookmark className={`w-3.5 h-3.5 ${showBookmarks ? "fill-amber-400" : ""}`} />
-          {bookmarkedIds.size > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400" />
-          )}
-        </button>
-        {/* Collapse / expand all code blocks */}
-        <button
-          onClick={() => {
-            const next = !allCodeBlocksCollapsed;
-            setAllCodeBlocksCollapsed(next);
-            window.dispatchEvent(new CustomEvent("chat-codeblock-set-all", { detail: { collapsed: next } }));
-          }}
-          disabled={messages.length === 0}
-          className={`mb-1 p-1 rounded transition-colors disabled:opacity-20 disabled:cursor-not-allowed ${
-            allCodeBlocksCollapsed
-              ? "text-violet-400 bg-violet-500/10"
-              : "text-muted-foreground/40 hover:text-foreground hover:bg-muted/60"
-          }`}
-          title={allCodeBlocksCollapsed ? "Expand all code blocks" : "Collapse all code blocks"}
-        >
-          <Minimize2 className="w-3.5 h-3.5" />
-        </button>
-      </div>
+      <LovableChatHeader
+        mode={mode}
+        queueCount={promptQueue.length}
+        queuePaused={queuePaused}
+        creditLabel={`${mode === "build" || mode === "agent" ? "2" : "1"} credit${mode === "patch" ? " · patch" : ""} / msg`}
+        hasMessages={visibleMessages.length > 0}
+        showSearch={showSearch}
+        showBookmarks={showBookmarks}
+        bookmarkCount={bookmarkedIds.size}
+        allCodeBlocksCollapsed={allCodeBlocksCollapsed}
+        copiedAll={copiedAll}
+        onExportMarkdown={exportChatAsMarkdown}
+        onCopyAll={async () => {
+          const text = visibleMessages.map((m) => `${m.role === "user" ? "You" : "AI"}: ${m.content}`).join("\n\n");
+          await navigator.clipboard.writeText(text);
+          setCopiedAll(true);
+          setTimeout(() => setCopiedAll(false), 2000);
+        }}
+        onClearChat={() => void handleClearChat()}
+        onToggleSearch={() => {
+          setShowSearch((v) => {
+            if (!v) setTimeout(() => searchInputRef.current?.focus(), 50);
+            return !v;
+          });
+        }}
+        onToggleBookmarks={() => setShowBookmarks((v) => !v)}
+        onToggleCodeBlocks={() => {
+          const next = !allCodeBlocksCollapsed;
+          setAllCodeBlocksCollapsed(next);
+          window.dispatchEvent(new CustomEvent("chat-codeblock-set-all", { detail: { collapsed: next } }));
+        }}
+      />
 
-      {/* Message search bar */}
+      <LovableChatHeaderStatus />
+
       <AnimatePresence>
         {showSearch && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="overflow-hidden border-b border-border/60"
-          >
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/20">
-              <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-              <input
-                ref={searchInputRef}
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  // Filtered matches render from the top — jump there so the
-                  // first match is immediately visible.
-                  if (e.target.value.trim()) {
-                    scrollContainerRef.current?.scrollTo({ top: 0 });
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") { setShowSearch(false); setSearchQuery(""); }
-                }}
-                placeholder="Search messages…"
-                className="flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/50 text-foreground"
-              />
-              {searchQuery && (() => {
-                const matchCount = visibleMessages.filter((m) =>
-                  m.content.toLowerCase().includes(searchQuery.toLowerCase())
-                ).length;
-                return (
-                  <span className="text-[10px] text-muted-foreground/60 shrink-0">
-                    {matchCount} match{matchCount === 1 ? "" : "es"}
-                  </span>
-                );
-              })()}
-              <button
-                onClick={() => { setShowSearch(false); setSearchQuery(""); }}
-                className="text-muted-foreground/50 hover:text-foreground transition-colors"
-              >
-                <XCircle className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </motion.div>
+          <LovableChatSearchBar
+            ref={searchInputRef}
+            query={searchQuery}
+            mode={searchMode}
+            loading={searchLoading}
+            matchCount={searchMatchCount}
+            onQueryChange={(value) => {
+              setSearchQuery(value);
+              if (value.trim()) {
+                scrollContainerRef.current?.scrollTo({ top: 0 });
+              }
+            }}
+            onModeChange={setSearchMode}
+            onClose={() => {
+              setShowSearch(false);
+              setSearchQuery("");
+              setSearchHitIds(null);
+              setSearchMatchCount(0);
+            }}
+          />
         )}
       </AnimatePresence>
 
-      {/* Context summary banner — shown when older messages have been compressed */}
       {!!privateContext?.context_summary && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-violet-500/5 border-b border-violet-500/15 text-[11px] text-muted-foreground">
-          <Brain className="w-3 h-3 text-violet-400 flex-shrink-0" />
-          <span>
-            <span className="text-violet-400 font-medium">Context summarised</span>
-            {" · "}
-            {privateContext.context_summary_covers ?? "Earlier"} messages compressed to keep AI focused
-          </span>
-        </div>
+        <LovableContextSummaryBanner coversLabel={privateContext.context_summary_covers} />
       )}
 
-      {/* Messages */}
+      {/* Messages — Lovable virtualized timeline */}
       <div className="flex-1 relative min-h-0 flex flex-col">
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-5 space-y-5 bg-[#faf8f5] dark:bg-background">
-        {isMessagesLoading && (
-          <div className="flex flex-col gap-5 px-4 py-5">
-            {/* AI message skeleton */}
-            <div className="flex flex-col gap-2">
-              <Skeleton className="h-3.5 w-24 rounded-full" />
-              <Skeleton className="h-16 w-full rounded-xl" />
-              <Skeleton className="h-3 w-3/4 rounded-full" />
-            </div>
-            {/* User message skeleton — right-aligned */}
-            <div className="flex flex-col items-end gap-2">
-              <Skeleton className="h-10 w-2/3 rounded-2xl" />
-            </div>
-            {/* AI message skeleton */}
-            <div className="flex flex-col gap-2">
-              <Skeleton className="h-3.5 w-20 rounded-full" />
-              <Skeleton className="h-24 w-full rounded-xl" />
-              <Skeleton className="h-3 w-1/2 rounded-full" />
-              <Skeleton className="h-3 w-2/3 rounded-full" />
-            </div>
-            {/* User message skeleton — right-aligned */}
-            <div className="flex flex-col items-end gap-2">
-              <Skeleton className="h-10 w-1/2 rounded-2xl" />
-            </div>
-          </div>
+      <LovableChatTimeline
+        projectId={project.id}
+        scrollRef={scrollContainerRef}
+        items={chatThreads}
+        header={
+          <LovableChatTimelineHeader
+            loadingOlderMessages={loadingOlderMessages}
+            isMessagesLoading={isMessagesLoading}
+            messagesLength={messages.length}
+            streaming={streaming}
+            contextualEmptyPrompts={contextualEmptyPrompts}
+            onSelectEmptyPrompt={(prompt) => {
+              setInput(prompt);
+              textareaRef.current?.focus();
+            }}
+            pinnedMsgId={pinnedMsgId}
+            visibleMessages={visibleMessages}
+            onUnpin={() => setPinnedMsgId(null)}
+            showBookmarks={showBookmarks}
+            bookmarkCount={bookmarkedIds.size}
+          />
+        }
+        renderItem={(thread, threadIdx) => (
+          <LovableThreadItem
+            key={thread[0]?.id ?? `thread-${threadIdx}`}
+            thread={thread}
+            threadIdx={threadIdx}
+            searchQuery={searchQuery}
+            collapsed={!searchQuery && collapsedThreads.has(threadIdx)}
+            onToggleCollapse={() =>
+              setCollapsedThreads((prev) => {
+                const n = new Set(prev);
+                if (n.has(threadIdx)) n.delete(threadIdx);
+                else n.add(threadIdx);
+                return n;
+              })
+            }
+            getMessageProps={getMessageProps}
+          />
         )}
+        footer={
+          <LovableChatStreamingFooter
+            streaming={streaming}
+            thoughtSeconds={thoughtSeconds}
+            reasoningText={streamingReasoning}
+            streamingContent={streamingContent}
+            streamingFiles={streamingFiles}
+            pendingSkills={pendingSkills}
+            agentSteps={agentSteps}
+            subagentSteps={subagentSteps}
+            previewVerify={previewVerify}
+            buildActivitySteps={buildActivitySteps}
+            mode={mode}
+            buildStatus={buildStatus}
+            postBuildStatus={postBuildStatus}
+            messagesEndRef={messagesEndRef}
+          />
+        }
+      />
 
-        {!isMessagesLoading && messages.length === 0 && !streaming && (
-          <div className="flex flex-col items-center justify-center h-full py-10 px-4">
-            {/* Star/sparkle icon */}
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-600/20 to-purple-600/10 border border-violet-500/20 flex items-center justify-center mb-5 shadow-sm">
-              <Sparkles className="w-7 h-7 text-violet-400" />
-            </div>
-            <h3 className="text-base font-semibold mb-1.5 text-foreground">Start building with AI</h3>
-            <p className="text-xs text-muted-foreground mb-7 text-center max-w-[220px] leading-relaxed">
-              Describe what you want to build, fix, or improve and watch it come to life.
-            </p>
-            {/* Suggestion chips — Lovable-style bordered cards */}
-            <div className="w-full space-y-2">
-              {contextualEmptyPrompts.map((prompt) => (
-                <button
-                  key={prompt}
-                  onClick={() => {
-                    setInput(prompt);
-                    textareaRef.current?.focus();
-                  }}
-                  className="w-full text-left text-xs px-3.5 py-2.5 rounded-xl border border-border/60 bg-muted/30 hover:bg-muted hover:border-border transition-all text-muted-foreground hover:text-foreground group"
-                >
-                  <span className="flex items-start gap-2">
-                    <span className="mt-0.5 text-violet-400/60 group-hover:text-violet-400 transition-colors">→</span>
-                    <span>{prompt}</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Pinned message banner */}
-        {pinnedMsgId && (() => {
-          const pinned = visibleMessages.find((m) => m.id === pinnedMsgId);
-          if (!pinned) return null;
-          const preview = pinned.content.replace(/\s+/g, " ").slice(0, 90) + (pinned.content.length > 90 ? "…" : "");
-          return (
-            <div className="flex items-center gap-2 px-3 py-2 mx-3 mb-1 rounded-lg bg-violet-500/10 border border-violet-500/20 text-xs">
-              <Pin className="w-3 h-3 text-violet-400 shrink-0" />
-              <span className="flex-1 text-muted-foreground truncate">{preview}</span>
-              <button
-                onClick={() => setPinnedMsgId(null)}
-                className="shrink-0 p-0.5 rounded hover:bg-white/10 transition-colors text-muted-foreground hover:text-foreground"
-                title="Unpin"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          );
-        })()}
-
-        {showBookmarks && bookmarkedIds.size === 0 && (
-          <div className="flex flex-col items-center justify-center py-12 text-center">
-            <Bookmark className="w-8 h-8 text-muted-foreground/30 mb-3" />
-            <p className="text-sm text-muted-foreground/60">No bookmarks yet</p>
-            <p className="text-xs text-muted-foreground/40 mt-1">Click the bookmark icon on any message card</p>
-          </div>
-        )}
-
-        {groupIntoThreads(
-          showBookmarks
-            ? visibleMessages.filter((m) => bookmarkedIds.has(m.id))
-            : searchQuery
-            ? visibleMessages.filter((m) =>
-                m.content.toLowerCase().includes(searchQuery.toLowerCase())
-              )
-            : visibleMessages
-        ).map((thread, threadIdx) => {
-          const isCollapsed = !searchQuery && collapsedThreads.has(threadIdx);
-          const userMsg = thread.find((m) => m.role === "user");
-          const preview = userMsg
-            ? userMsg.content.replace(/\s+/g, " ").slice(0, 65) +
-              (userMsg.content.length > 65 ? "…" : "")
-            : "";
-          return (
-            <div key={thread[0]?.id ?? `thread-${threadIdx}`}>
-              {/* Thread divider (not for the very first turn) */}
-              {!searchQuery && threadIdx > 0 && (
-                <div className="flex items-center gap-2 my-3">
-                  <div className="flex-1 h-px bg-border/40" />
-                  <button
-                    onClick={() =>
-                      setCollapsedThreads((prev) => {
-                        const n = new Set(prev);
-                        if (n.has(threadIdx)) n.delete(threadIdx);
-                        else n.add(threadIdx);
-                        return n;
-                      })
-                    }
-                    className="flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-full border border-border/50 bg-muted/30 hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-colors shrink-0 max-w-[220px]"
-                  >
-                    <span className="font-medium text-violet-400/80 shrink-0">
-                      Turn {threadIdx + 1}
-                    </span>
-                    {isCollapsed && preview && (
-                      <span className="truncate opacity-70 text-[10px]">{preview}</span>
-                    )}
-                    {isCollapsed ? (
-                      <ChevronDown className="w-3 h-3 shrink-0" />
-                    ) : (
-                      <ChevronUp className="w-3 h-3 shrink-0" />
-                    )}
-                  </button>
-                  <div className="flex-1 h-px bg-border/40" />
-                </div>
-              )}
-              <AnimatePresence initial={false}>
-                {!isCollapsed && thread.map((msg, msgIdx) => {
-                  const prevMsg = msgIdx > 0 ? thread[msgIdx - 1] : null;
-                  const showDateSep = !sameCalendarDay(msg.created_at, prevMsg?.created_at);
-                  return (
-                  <div key={msg.id}>
-                    {showDateSep && (
-                      <div className="flex items-center gap-3 my-4 px-1">
-                        <div className="flex-1 h-px bg-border/40" />
-                        <span className="text-[11px] text-muted-foreground/70 whitespace-nowrap shrink-0">
-                          {formatDateSeparator(msg.created_at)}
-                        </span>
-                        <div className="flex-1 h-px bg-border/40" />
-                      </div>
-                    )}
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-            >
-              <div className={`group relative ${msg.role === "user" ? "max-w-[80%] items-end" : "w-full items-start"} flex flex-col gap-1`}>
-                {/* Step Plan card — shown when AI returns a numbered step-by-step plan */}
-                {msg.role === "assistant" && msg.content.includes("<!-- STEP_PLAN -->") ? (() => {
-                  const steps = parseStepPlan(msg.content);
-                  const approved = approvedSteps[msg.id] ?? new Set(steps.map((_, i) => i));
-                  return (
-                    <div className="w-full rounded-xl border border-violet-500/30 bg-card overflow-hidden">
-                      <div className="flex items-center gap-2 px-3 py-2 bg-violet-500/10 border-b border-violet-500/20">
-                        <ListChecks className="w-3.5 h-3.5 text-violet-400" />
-                        <span className="text-xs font-semibold">Step-by-Step Plan</span>
-                        <span className="ml-auto text-[10px] text-muted-foreground">{approved.size}/{steps.length} steps selected</span>
-                      </div>
-                      <div className="px-3 py-2 space-y-1.5">
-                        {steps.map((step, idx) => (
-                          <button
-                            key={idx}
-                            onClick={() => toggleStepApproval(msg.id, idx)}
-                            className={`w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left text-xs transition-all border ${
-                              approved.has(idx)
-                                ? "border-violet-500/40 bg-violet-500/10 text-foreground"
-                                : "border-border bg-muted/30 text-muted-foreground line-through"
-                            }`}
-                          >
-                            <span className={`mt-0.5 w-4 h-4 rounded flex items-center justify-center shrink-0 text-[10px] font-bold border ${
-                              approved.has(idx) ? "border-violet-400 bg-violet-400 text-white" : "border-border text-muted-foreground"
-                            }`}>
-                              {approved.has(idx) ? <Check className="w-2.5 h-2.5" /> : idx + 1}
-                            </span>
-                            <span>{step}</span>
-                          </button>
-                        ))}
-                      </div>
-                      <div className="flex items-center gap-2 px-3 py-2 border-t border-border bg-muted/20">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 text-xs gap-1"
-                          onClick={() => {
-                            const all = new Set(steps.map((_, i) => i));
-                            setApprovedSteps((prev) => ({ ...prev, [msg.id]: all }));
-                          }}
-                        >
-                          <CheckCheck className="w-3 h-3" /> Select all
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 text-xs gap-1 text-muted-foreground"
-                          onClick={() => setApprovedSteps((prev) => ({ ...prev, [msg.id]: new Set() }))}
-                        >
-                          Clear
-                        </Button>
-                        <Button
-                          size="sm"
-                          className="ml-auto h-7 text-xs gap-1.5 bg-violet-600 hover:bg-violet-700 text-white"
-                          disabled={approved.size === 0}
-                          onClick={() => executeApprovedSteps(msg.id, steps)}
-                        >
-                          <Zap className="w-3 h-3" />
-                          Build {approved.size} step{approved.size !== 1 ? "s" : ""}
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })() : null}
-
-                {/* Plan card — shown when AI response includes a formal plan */}
-                {msg.role === "assistant" && msg.content.includes("<!-- PLAN_READY -->") ? (
-                  <div className="w-full rounded-xl border border-border bg-card overflow-hidden">
-                    {/* Plan header */}
-                    <div className="flex items-center gap-2 px-3 py-2 bg-muted/40 border-b border-border">
-                      <FileText className="w-3.5 h-3.5 text-violet-400" />
-                      <span className="text-xs font-semibold">Implementation Plan</span>
-                      <span className="ml-auto text-[10px] text-muted-foreground">Plan mode · no code changed</span>
-                    </div>
-                    {/* Plan body */}
-                    <div className="px-4 py-3 text-sm leading-relaxed text-foreground">
-                      <MessageContent
-                        content={msg.content.replace("<!-- PLAN_READY -->", "").trim()}
-                        mode="plan"
-                      />
-                    </div>
-                    {/* Approve / build actions */}
-                    <div className="flex items-center gap-2 px-3 py-2 border-t border-border bg-muted/20">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 text-xs gap-1.5"
-                        onClick={() => sendMessage(`Continue refining this plan. Ask me any clarifying questions.`)}
-                      >
-                        <Pencil className="w-3 h-3" />
-                        Refine
-                      </Button>
-                      <Button
-                        size="sm"
-                        className="ml-auto h-7 text-xs gap-1.5 bg-[#0066FF] hover:bg-[#0052cc] text-white"
-                        onClick={() => {
-                          const planMarkdown = msg.content.replace("<!-- PLAN_READY -->", "").trim();
-                          onApprovePlan?.(planMarkdown);
-                          // Also switch mode to build and send as a build message
-                          onModeChange?.("build");
-                          void sendMessage(`Implement this approved plan:\n\n${planMarkdown}`, "build");
-                        }}
-                      >
-                        <CheckCheck className="w-3 h-3" />
-                        Approve &amp; Build
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className={`text-sm leading-relaxed ${
-                    msg.role === "user"
-                      ? "px-3.5 py-2.5 rounded-2xl rounded-br-sm bg-muted text-foreground"
-                      : "text-foreground py-0.5"
-                  }`}>
-                    {(() => {
-                      const analyzeMeta = msg.role === "assistant" ? parseAnalyzeMetadata(msg.metadata) : null;
-                      if (analyzeMeta) {
-                        return (
-                          <AnalyzeMessageCard
-                            meta={analyzeMeta}
-                            createdAt={new Date(msg.created_at).toLocaleTimeString()}
-                            onSaveToProject={saveGeneratedFileToProject}
-                          />
-                        );
-                      }
-                      if (
-                        msg.role === "assistant" &&
-                        (msg.mode === "build" || msg.mode === "agent" || msg.mode === "patch")
-                      ) {
-                        // Never render raw JSON/code in the chat panel — show a short,
-                        // Cowork/Codex-style description; the Code tab + preview hold the
-                        // actual result, and the "Edited …" cards below list the files.
-                        const diffCount = messageDiffs[msg.id]?.length ?? 0;
-                        const changedCount = messageChangedPaths[msg.id]?.length ?? 0;
-                        const c = (msg.content ?? "").trim();
-                        const looksRaw =
-                          !c || c.startsWith("```") || c.startsWith("{") || c.startsWith("[");
-                        let summary: string;
-                        if (looksRaw) {
-                          summary = diffCount > 0
-                            ? `Updated ${diffCount} file${diffCount === 1 ? "" : "s"}. Open the Code tab or preview to see the result.`
-                            : changedCount > 0
-                              ? `Updated ${changedCount} file${changedCount === 1 ? "" : "s"}. Preview refreshed.`
-                              : "Changes applied. Open the Code tab or preview to see the result.";
-                        } else {
-                          const prose = c.split("```")[0].trim(); // drop any trailing code block
-                          summary =
-                            prose
-                              .split(/(?<=[.!?])\s+/)
-                              .slice(0, 2)
-                              .join(" ")
-                              .replace(/[*_`]/g, "")
-                              .slice(0, 240) ||
-                            (diffCount > 0 ? `Updated ${diffCount} file${diffCount === 1 ? "" : "s"}.` : "Done.");
-                        }
-                        return <p className="text-sm text-foreground/90 leading-relaxed">{summary}</p>;
-                      }
-                      // While searching, render plain text with the matched
-                      // substrings highlighted instead of markdown.
-                      if (searchQuery.trim()) {
-                        return <HighlightedText text={msg.content} query={searchQuery} />;
-                      }
-                      return <MessageContent content={msg.content} mode={msg.mode ?? "chat"} />;
-                    })()}
-                  </div>
-                )}
-
-                {/* Persisted build activity — Lovable-style Complete card in message history */}
-                {msg.role === "assistant" && (() => {
-                  const steps =
-                    messageBuildActivity[msg.id] ??
-                    ((msg.metadata as { build_activity?: BuildActivityStep[] } | null)?.build_activity ?? null);
-                  if (!steps?.length) return null;
-                  return (
-                    <div className="w-full mt-1">
-                      <BuildActivityCard steps={steps} title="Complete" />
-                    </div>
-                  );
-                })()}
-
-                {/* Server self-verification result (persisted on message metadata) */}
-                {msg.role === "assistant" && (() => {
-                  const v = (msg.metadata as {
-                    verification?: { passed?: boolean; engine?: string; fixesApplied?: number; errors?: string[] };
-                  } | null)?.verification;
-                  if (!v) return null;
-                  const ok = v.passed !== false;
-                  return (
-                    <div className={`w-full mt-1 rounded-xl border overflow-hidden ${ok ? "border-green-500/30 bg-green-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
-                      <div className="px-3 py-2 text-xs font-semibold">
-                        {ok ? "Preview verified" : "Preview check — fixes applied"}
-                        {v.engine ? <span className="text-muted-foreground font-normal ml-1">({v.engine})</span> : null}
-                      </div>
-                      {(v.errors ?? []).length > 0 && (
-                        <div className="px-3 pb-2 space-y-0.5">
-                          {v.errors!.map((e) => (
-                            <div key={e} className="text-[10px] text-muted-foreground flex gap-1.5">
-                              <span className="text-amber-400">!</span>
-                              <span>{e}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()}
-
-                {/* Commit-title card for build/agent messages with file changes */}
-                {msg.role === "assistant" && messageDiffs[msg.id] && messageDiffs[msg.id].length > 0 && (() => {
-                  const diffs = messageDiffs[msg.id];
-
-                  // Compute rich diff summary
-                  const added   = diffs.filter((d) => !d.oldContent.trim()).length;
-                  const modified = diffs.length - added;
-                  let linesAdded = 0, linesRemoved = 0;
-                  for (const d of diffs) {
-                    const oldLines = d.oldContent ? d.oldContent.split("\n").length : 0;
-                    const newLines = d.newContent ? d.newContent.split("\n").length : 0;
-                    if (newLines > oldLines) linesAdded += newLines - oldLines;
-                    else linesRemoved += oldLines - newLines;
-                  }
-
-                  // Build human-readable title
-                  const parts: string[] = [];
-                  if (added > 0)    parts.push(`${added} new`);
-                  if (modified > 0) parts.push(`${modified} updated`);
-                  const title = diffs.length === 1
-                    ? (added ? `Created ${diffs[0].path.split("/").pop()}` : `Updated ${diffs[0].path.split("/").pop()}`)
-                    : `${parts.join(", ")} file${diffs.length !== 1 ? "s" : ""}`;
-
-                  // Build stat string
-                  const statParts: string[] = [];
-                  if (linesAdded > 0)   statParts.push(`+${linesAdded}`);
-                  if (linesRemoved > 0) statParts.push(`-${linesRemoved}`);
-                  const statStr = statParts.join(" ");
-
-                  return (
-                    <div className="w-full mt-1 rounded-lg border border-border/60 bg-muted/20 overflow-hidden">
-                      <div className="flex items-center justify-between px-3 py-2">
-                        <div className="flex-1 min-w-0">
-                          <span className="text-xs font-medium truncate block">{title}</span>
-                          {statStr && (
-                            <span className="text-[10px] text-muted-foreground font-mono">{statStr} lines</span>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => toggleBookmark(msg.id)}
-                          className={`shrink-0 ml-2 transition-colors ${
-                            bookmarkedIds.has(msg.id)
-                              ? "text-amber-400 hover:text-amber-300"
-                              : "text-muted-foreground hover:text-amber-400"
-                          }`}
-                          title={bookmarkedIds.has(msg.id) ? "Remove bookmark" : "Bookmark this response"}
-                        >
-                          <Bookmark className={`w-3.5 h-3.5 ${bookmarkedIds.has(msg.id) ? "fill-amber-400" : ""}`} />
-                        </button>
-                      </div>
-                      {/* Details / Preview tabs */}
-                      <div className="flex border-t border-border/40">
-                        <button
-                          onClick={() =>
-                            setExpandedDiffs((prev) => {
-                              const next = new Set(prev);
-                              next.has(msg.id) ? next.delete(msg.id) : next.add(msg.id);
-                              return next;
-                            })
-                          }
-                          className={`flex-1 py-1.5 text-[11px] font-medium transition-colors ${
-                            expandedDiffs.has(msg.id)
-                              ? "bg-background text-foreground"
-                              : "text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          Details
-                        </button>
-                        <button
-                          onClick={() => {
-                            setExpandedDiffs((prev) => { const next = new Set(prev); next.delete(msg.id); return next; });
-                            onFocusPreview?.();
-                          }}
-                          className={`flex-1 py-1.5 text-[11px] font-medium transition-colors border-l border-border/40 ${
-                            !expandedDiffs.has(msg.id)
-                              ? "bg-background text-foreground"
-                              : "text-muted-foreground hover:text-foreground"
-                          }`}
-                        >
-                          Preview
-                        </button>
-                      </div>
-                      <AnimatePresence>
-                        {expandedDiffs.has(msg.id) && (
-                          <motion.div
-                            initial={{ height: 0, opacity: 0 }}
-                            animate={{ height: "auto", opacity: 1 }}
-                            exit={{ height: 0, opacity: 0 }}
-                            transition={{ duration: 0.2 }}
-                            className="overflow-hidden border-t border-border/40"
-                          >
-                            <DiffViewer
-                              diffs={messageDiffs[msg.id].map((d) =>
-                                computeFileDiff(d.path, d.oldContent, d.newContent)
-                              )}
-                              compact
-                              fileStates={fileStates[msg.id]}
-                              onAccept={(path) =>
-                                setFileStates((prev) => ({
-                                  ...prev,
-                                  [msg.id]: { ...(prev[msg.id] ?? {}), [path]: "accepted" },
-                                }))
-                              }
-                              onRevert={(path, oldContent) => {
-                                const diff = messageDiffs[msg.id].find((d) => d.path === path);
-                                if (diff) void handleRevertFile(msg.id, { ...diff, oldContent });
-                              }}
-                              onReApply={(path, newContent) => {
-                                const diff = messageDiffs[msg.id].find((d) => d.path === path);
-                                if (diff) void handleReApplyFile(msg.id, { ...diff, newContent });
-                              }}
-                            />
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-                  );
-                })()}
-
-                {/* Preview snapshot thumbnail — shown after build/agent generations */}
-                {msg.role === "assistant" &&
-                  (!messageDiffs[msg.id] || messageDiffs[msg.id].length === 0) &&
-                  messageChangedPaths[msg.id] &&
-                  messageChangedPaths[msg.id].length > 0 && (
-                    <div className="w-full mt-1 rounded-lg border border-border/60 bg-muted/20 overflow-hidden">
-                      <div className="px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-medium block">
-                            Updated {messageChangedPaths[msg.id].length} file{messageChangedPaths[msg.id].length === 1 ? "" : "s"}
-                          </span>
-                          {onFocusPreview && (
-                            <button
-                              onClick={onFocusPreview}
-                              className="ml-auto text-[10px] px-2 py-0.5 rounded-full border border-border/60 bg-background/70 text-muted-foreground hover:text-foreground hover:bg-background transition-colors"
-                            >
-                              Preview
-                            </button>
-                          )}
-                        </div>
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                          {messageChangedPaths[msg.id].slice(0, 6).map((path) => (
-                            <span key={path} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-background/70 text-muted-foreground border border-border/40">
-                              {path}
-                            </span>
-                          ))}
-                          {messageChangedPaths[msg.id].length > 6 && (
-                            <span className="text-[10px] text-muted-foreground">
-                              +{messageChangedPaths[msg.id].length - 6} more
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                {msg.role === "assistant" && messageScreenshots[msg.id] && (
-                  <div className="w-full mt-1.5 rounded-lg overflow-hidden border border-border/50 bg-muted/10 group/thumb">
-                    <div className="flex items-center justify-between px-3 py-1.5 border-b border-border/30">
-                      <span className="text-[10px] text-muted-foreground/60 flex items-center gap-1.5">
-                        <Globe className="w-3 h-3" />
-                        Preview snapshot
-                      </span>
-                      <button
-                        onClick={() =>
-                          window.dispatchEvent(
-                            new CustomEvent("lifemark-request-screenshot", { detail: { messageId: msg.id } })
-                          )
-                        }
-                        className="text-[10px] text-muted-foreground/40 hover:text-foreground transition-colors px-1.5 py-0.5 rounded hover:bg-white/10"
-                        title="Re-capture current preview"
-                      >
-                        Refresh
-                      </button>
-                    </div>
-                    <div className="relative overflow-hidden max-h-36 group-hover/thumb:max-h-64 transition-all duration-300">
-                      <img
-                        src={messageScreenshots[msg.id]}
-                        alt="App preview at this point in time"
-                        className="w-full h-auto object-cover object-top"
-                        style={{ imageRendering: "crisp-edges" }}
-                      />
-                      <div className="absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-background/80 to-transparent group-hover/thumb:opacity-0 transition-opacity pointer-events-none" />
-                    </div>
-                  </div>
-                )}
-
-                {/* Action bar — hover-only for both roles */}
-                <div className={`flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity ${
-                  msg.role === "assistant" ? "self-start" : "self-end"
-                }`}>
-                  {/* Timestamp */}
-                  {msg.created_at && (
-                    <span className="text-[10px] text-muted-foreground/50 px-1 select-none mr-1">
-                      {formatMsgTime(msg.created_at)}
-                    </span>
-                  )}
-                  {/* AI model badge */}
-                  {msg.role === "assistant" && msg.model && (
-                    <span
-                      className="text-[10px] text-muted-foreground/40 px-1.5 py-0.5 rounded border border-border/30 select-none font-mono"
-                      title={`Generated by ${msg.model}`}
-                    >
-                      {getOpenRouterModelLabel(msg.model)}
-                    </span>
-                  )}
-                  {/* Auto-attached skills — matches Lovable's "using skill: X" chip */}
-                  {msg.role === "assistant" && messageSkills[msg.id]?.length > 0 && messageSkills[msg.id].map((s) => (
-                    <span
-                      key={s.id}
-                      className="text-[10px] px-1.5 py-0.5 rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-300 select-none"
-                      title={s.reason ? `Auto-attached skill — ${s.reason}` : "Auto-attached skill"}
-                    >
-                      ⚡ {s.name}
-                    </span>
-                  ))}
-                  {/* Credit cost badge — Lovable-style per-message cost */}
-                  {msg.role === "assistant" && messageCredits[msg.id] != null && (
-                    <span
-                      className="text-[10px] text-muted-foreground/50 px-1.5 py-0.5 rounded border border-border/30 select-none"
-                      title="Credits used for this message"
-                    >
-                      {messageCredits[msg.id]} credit{messageCredits[msg.id] === 1 ? "" : "s"}
-                    </span>
-                  )}
-                  {/* AI thinking time badge */}
-                  {msg.role === "assistant" && genTimes[msg.id] != null && (
-                    <span className="text-[10px] text-muted-foreground/40 px-0.5 select-none" title="AI generation time">
-                      ⚡ {genTimes[msg.id]}s
-                    </span>
-                  )}
-                  {/* Token usage badge */}
-                  {msg.role === "assistant" && msg.tokens_used != null && msg.tokens_used > 0 && (
-                    <span
-                      className="text-[10px] text-muted-foreground/35 px-1 select-none font-mono"
-                      title={`${msg.tokens_used.toLocaleString()} tokens used`}
-                    >
-                      {msg.tokens_used >= 1000
-                        ? `${(msg.tokens_used / 1000).toFixed(1)}k tok`
-                        : `${msg.tokens_used} tok`}
-                    </span>
-                  )}
-                  {/* Edit message (user messages only) */}
-                  {msg.role === "user" && !streaming && editingMessageId !== msg.id && (
-                    <button
-                      onClick={() => startEditMessage(msg)}
-                      className="p-1 rounded hover:bg-white/10 transition-colors"
-                      title="Edit message"
-                    >
-                      <Pencil className="w-3 h-3 text-muted-foreground hover:text-foreground" />
-                    </button>
-                  )}
-                  <button
-                    onClick={() => copyMessage(msg.content, msg.id)}
-                    className="p-1 rounded hover:bg-white/10 transition-colors"
-                    title="Copy"
-                  >
-                    {copiedId === msg.id
-                      ? <Check className="w-3.5 h-3.5 text-green-500" />
-                      : <Copy className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
-                    }
-                  </button>
-                  {/* Thumbs up/down (assistant messages only) */}
-                  {msg.role === "assistant" && (
-                    <>
-                      {/* Pin / unpin */}
-                      <button
-                        onClick={() => setPinnedMsgId((prev) => prev === msg.id ? null : msg.id)}
-                        className="p-1 rounded hover:bg-white/10 transition-colors"
-                        title={pinnedMsgId === msg.id ? "Unpin message" : "Pin message"}
-                      >
-                        {pinnedMsgId === msg.id
-                          ? <PinOff className="w-3.5 h-3.5 text-violet-400" />
-                          : <Pin className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
-                        }
-                      </button>
-                      <button
-                        onClick={() => void rateMessage(msg.id, 1)}
-                        className="p-1 rounded hover:bg-white/10 transition-colors"
-                        title="Good response"
-                      >
-                        <ThumbsUp className={`w-3.5 h-3.5 transition-colors ${ratings[msg.id] === 1 ? "text-green-400 fill-green-400" : "text-muted-foreground hover:text-foreground"}`} />
-                      </button>
-                      <button
-                        onClick={() => void rateMessage(msg.id, -1)}
-                        className="p-1 rounded hover:bg-white/10 transition-colors"
-                        title="Poor response"
-                      >
-                        <ThumbsDown className={`w-3.5 h-3.5 transition-colors ${ratings[msg.id] === -1 ? "text-red-400 fill-red-400" : "text-muted-foreground hover:text-foreground"}`} />
-                      </button>
-                      {/* Save as skill — turns a useful answer into a reusable playbook */}
-                      <button
-                        onClick={() => {
-                          // Find the preceding user message so we can suggest a description.
-                          const idx = visibleMessages.findIndex((m) => m.id === msg.id);
-                          const prevUser = idx > 0
-                            ? [...visibleMessages.slice(0, idx)].reverse().find((m) => m.role === "user")
-                            : null;
-                          // Derive a name from the first 60 chars of the user prompt, falling
-                          // back to "Saved skill" so the modal always has a sensible default.
-                          const suggestedName = prevUser?.content?.slice(0, 60).trim() || "Saved skill";
-                          setSaveSkillDraft({
-                            sourceMessageId: msg.id,
-                            name: suggestedName,
-                            description: prevUser?.content?.slice(0, 200) ?? "",
-                            prompt: msg.content,
-                          });
-                        }}
-                        className="p-1 rounded hover:bg-white/10 transition-colors"
-                        title="Save as a reusable skill"
-                      >
-                        <Sparkles className="w-3.5 h-3.5 text-muted-foreground hover:text-violet-400 transition-colors" />
-                      </button>
-                      {/* Quick emoji reactions */}
-                      {msg.role === "assistant" && (
-                        <div className="flex items-center gap-0.5 ml-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {QUICK_EMOJI.map((emoji) => (
-                            <button
-                              key={emoji}
-                              onClick={() => toggleReaction(msg.id, emoji)}
-                              className={`text-[13px] px-0.5 rounded transition-all hover:scale-125 ${
-                                reactions[msg.id]?.has(emoji) ? "opacity-100" : "opacity-40 hover:opacity-100"
-                              }`}
-                              title={`React with ${emoji}`}
-                            >
-                              {emoji}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-
-                {/* Active reactions display */}
-                {msg.role === "assistant" && reactions[msg.id] && reactions[msg.id].size > 0 && (
-                  <div className="flex items-center gap-1 mt-1 flex-wrap">
-                    {QUICK_EMOJI.filter((e) => reactions[msg.id]?.has(e)).map((emoji) => (
-                      <button
-                        key={emoji}
-                        onClick={() => toggleReaction(msg.id, emoji)}
-                        className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-xs bg-muted/60 border border-border/60 hover:bg-muted transition-colors"
-                        title="Click to remove"
-                      >
-                        <span>{emoji}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {/* Inline edit input */}
-                {editingMessageId === msg.id && (
-                  <div className="mt-2 space-y-1.5 w-full">
-                    <Textarea
-                      value={editInput}
-                      onChange={(e) => setEditInput(e.target.value)}
-                      className="text-xs bg-muted/50 border-white/10 resize-none min-h-[60px]"
-                      autoFocus
-                    />
-                    <div className="flex gap-1.5">
-                      <Button size="sm" className="h-6 text-xs px-2 bg-violet-600 hover:bg-violet-500 text-white" onClick={submitEditedMessage}>
-                        Regenerate
-                      </Button>
-                      <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => setEditingMessageId(null)}>
-                        Cancel
-                      </Button>
-                    </div>
-                  </div>
-                )}
-                {/* Regenerate button — only on the last assistant message */}
-                {msg.role === "assistant" && lastAssistantMsgId === msg.id && !streaming && !showBookmarks && !searchQuery && (
-                  <button
-                    onClick={() => void handleRegenerate()}
-                    className="flex items-center gap-1.5 mt-1 px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground border border-border/40 hover:border-border rounded-full bg-muted/20 hover:bg-muted/40 transition-colors"
-                    title="Regenerate response"
-                  >
-                    <RefreshCw className="w-3 h-3" />
-                    Regenerate
-                  </button>
-                )}
-
-                {/* Follow-up suggestion chips */}
-                {msg.role === "assistant" && suggestions[msg.id] && suggestions[msg.id].length > 0 && !streaming && (
-                  <AnimatePresence>
-                    {/* Multi-role re-check chips — show when build touched 5+ files and project has multiple roles */}
-                    {roleTestChips[msg.id] && roleTestChips[msg.id].length > 0 && (
-                      <motion.div
-                        initial={{ opacity: 0, y: 6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: 0.1 }}
-                        className="mt-2 rounded-lg border border-emerald-500/25 bg-emerald-500/[0.04] px-2.5 py-2"
-                      >
-                        <div className="text-[10px] text-emerald-300 font-semibold mb-1.5 flex items-center gap-1">
-                          <Sparkles className="w-2.5 h-2.5" />
-                          Big change — re-test by role
-                        </div>
-                        <div className="flex flex-wrap gap-1.5">
-                          {roleTestChips[msg.id].map((chip) => (
-                            <button
-                              key={chip}
-                              onClick={() => {
-                                setRoleTestChips((prev) => { const n = { ...prev }; delete n[msg.id]; return n; });
-                                // Frame the message so the AI generates real test code targeting the named role
-                                const role = chip.replace(/^Test the new changes as the\s+/i, "").replace(/\s+role$/i, "");
-                                const framed = `Generate browser tests (Playwright-style) that validate the recent changes for the ${role} role specifically. Cover: 1) login/auth scenarios for ${role}, 2) which routes ${role} can/cannot reach, 3) UI elements that should be visible/hidden for ${role}, 4) any role-specific actions. After writing the tests, summarize what to run them against.`;
-                                void sendMessage(framed);
-                              }}
-                              className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-200 transition-colors"
-                              title="Generates Playwright test code for this role, then opens the Browser Testing panel"
-                            >
-                              {chip}
-                            </button>
-                          ))}
-                          <button
-                            onClick={() => {
-                              setRoleTestChips((prev) => { const n = { ...prev }; delete n[msg.id]; return n; });
-                              onOpenPanel?.("testing");
-                            }}
-                            className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-emerald-500/20 bg-transparent hover:bg-emerald-500/5 text-emerald-300/70 hover:text-emerald-200 transition-colors"
-                            title="Skip the chips — open the Browser Testing panel directly"
-                          >
-                            ↗ Open testing panel
-                          </button>
-                        </div>
-                      </motion.div>
-                    )}
-                    <motion.div
-                      initial={{ opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: 0.15 }}
-                      className="flex flex-wrap gap-1.5 mt-2"
-                    >
-                      {suggestions[msg.id].map((chip) => (
-                        <button
-                          key={chip}
-                          onClick={() => {
-                            setSuggestions((prev) => { const n = { ...prev }; delete n[msg.id]; return n; });
-                            void sendMessage(chip);
-                          }}
-                          className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-border bg-muted/40 hover:bg-muted hover:border-primary/30 text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          <Sparkles className="w-2.5 h-2.5 text-violet-400 flex-shrink-0" />
-                          {chip}
-                        </button>
-                      ))}
-                    </motion.div>
-                  </AnimatePresence>
-                )}
-              </div>
-            </motion.div>
-                  </div>
-                );
-                })}
-              </AnimatePresence>
-            </div>
-          );
-        })}
-
-        {/* Analyze-data result cards — now persisted as assistant messages with metadata.kind=analyze */}
-
-        {/* Streaming message — Lovable-style thought trace + prose + Working/Edited cards */}
-        {streaming && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex justify-start">
-            <div className="w-full space-y-2">
-              {thoughtSeconds > 0 && !extractStreamingProse(streamingContent) && streamingFiles.length === 0 && (
-                <p className="text-xs text-muted-foreground/70 px-1">
-                  Thought for {thoughtSeconds}s
-                </p>
-              )}
-
-              {pendingSkills.length > 0 && (
-                <div className="flex flex-wrap items-center gap-1">
-                  {pendingSkills.map((s) => (
-                    <span
-                      key={s.id}
-                      className="text-[10px] px-2 py-0.5 rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-300"
-                      title={s.reason ? `Auto-attached skill — ${s.reason}` : "Auto-attached skill"}
-                    >
-                      ⚡ Using skill: {s.name}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {/* Agent task step visibility card */}
-              <AnimatePresence>
-                {agentSteps.length > 0 && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="rounded-xl border border-border/60 bg-muted/20 overflow-hidden mb-1">
-                      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/40 bg-gradient-to-r from-violet-500/10 to-transparent">
-                        <Sparkles className="w-3.5 h-3.5 text-violet-400 shrink-0" />
-                        <span className="text-xs font-semibold text-foreground">Building your app</span>
-                        <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">
-                          {agentSteps.filter((s) => s.status === "done").length}/{agentSteps.length}
-                        </span>
-                      </div>
-                      <div className="px-2 py-1.5 space-y-0.5 max-h-64 overflow-y-auto">
-                        {agentSteps.map((step, i) => (
-                          <div
-                            key={step.key + i}
-                            className="flex items-center gap-2 px-1.5 py-1 rounded-lg text-xs"
-                          >
-                            <span className="shrink-0">
-                              {step.status === "done"
-                                ? <Check className="w-3.5 h-3.5 text-green-400" />
-                                : <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-400" />}
-                            </span>
-                            <AgentStepGlyph kind={step.kind} />
-                            <span className={step.status === "done" ? "text-muted-foreground truncate" : "text-foreground font-medium truncate"}>
-                              {step.label}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Subagent investigation card */}
-              {subagentSteps.length > 0 && (
-                <SubagentActivityCard steps={subagentSteps} />
-              )}
-
-              {/* Preview verification after build */}
-              {previewVerify && (
-                <div className={`rounded-xl border overflow-hidden mb-1 ${previewVerify.ok ? "border-green-500/30 bg-green-500/5" : "border-amber-500/30 bg-amber-500/5"}`}>
-                  <div className="px-3 py-2 text-xs font-semibold">
-                    {previewVerify.ok ? "Preview verified" : "Preview check — review suggested"}
-                  </div>
-                  <div className="px-3 pb-2 space-y-0.5">
-                    {previewVerify.checks.map((c) => (
-                      <div key={c.name} className="text-[10px] text-muted-foreground flex gap-1.5">
-                        <span className={c.pass ? "text-green-400" : "text-amber-400"}>{c.pass ? "✓" : "!"}</span>
-                        <span>{c.name}{c.detail ? ` — ${c.detail}` : ""}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Conversational intro — visible during build (Lovable shows prose before Working card) */}
-              {extractStreamingProse(streamingContent) && (
-                <p className="text-sm text-foreground/90 leading-relaxed px-1">
-                  {extractStreamingProse(streamingContent)}
-                </p>
-              )}
-
-              {/* Lovable-style build activity steps — real progress, not rotating placeholders */}
-              {buildActivitySteps.length > 0 && (
-                <BuildActivityCard steps={buildActivitySteps} />
-              )}
-
-              {/* Lovable-style per-file "Edited …" cards */}
-              {streamingFiles.length > 0 && (
-                <div className="rounded-xl border border-border/60 bg-muted/20 overflow-hidden mb-1">
-                  <div className="px-3 py-2 border-b border-border/40 bg-muted/30 flex items-center gap-2">
-                    <FileCode2 className="w-3.5 h-3.5 text-violet-300 shrink-0" />
-                    <span className="text-sm font-semibold text-foreground">
-                      Editing {streamingFiles.length} file{streamingFiles.length === 1 ? "" : "s"}
-                    </span>
-                    <span className="ml-auto text-[10px] text-muted-foreground">live</span>
-                  </div>
-                  <div className="px-3 py-2 flex flex-wrap gap-1.5">
-                    {streamingFiles.slice(0, 8).map((path) => (
-                      <span key={path} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-background/70 text-muted-foreground border border-border/40">
-                        {path.split("/").pop() ?? path}
-                      </span>
-                    ))}
-                    {streamingFiles.length > 8 && (
-                      <span className="text-[10px] text-muted-foreground py-0.5">
-                        +{streamingFiles.length - 8} more
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Hide raw JSON stream in build mode — chat stays conversational like Lovable */}
-              <div className="text-sm leading-relaxed py-0.5">
-                {(mode === "build" || mode === "patch" || mode === "agent" || buildStatus) ? null : streamingContent ? (
-                  <MessageContent content={streamingContent} mode={mode} />
-                ) : (
-                  <div className="flex items-center gap-1.5 py-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50 typing-dot" />
-                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50 typing-dot" />
-                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50 typing-dot" />
-                  </div>
-                )}
-              </div>
-              {/* Backend wiring + self-verification progress (Lovable-style) */}
-              {postBuildStatus && (
-                <div className="flex items-center gap-1.5 py-1 text-[11px] text-violet-300">
-                  <Loader2 className="w-3 h-3 animate-spin shrink-0" />
-                  <span>{postBuildStatus}</span>
-                </div>
-              )}
-              {/* Real-time file generation progress (chat/agent modes) */}
-              <AnimatePresence>
-                {streamingFiles.length > 0 && agentSteps.length === 0 && mode !== "build" && mode !== "patch" && !buildStatus && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="overflow-hidden"
-                  >
-                    <div className="px-2 py-1.5 rounded-lg bg-violet-500/10 border border-violet-500/20 font-mono text-[10px] space-y-0.5">
-                      <div className="text-violet-400 flex items-center gap-1 mb-1">
-                        <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                        Generating files…
-                      </div>
-                      {streamingFiles.map((path) => (
-                        <div key={path} className="flex items-center gap-1 text-violet-300/70">
-                          <span className="text-violet-500">+</span>
-                          <span className="truncate">{path}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          </motion.div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Scroll-to-bottom floating button */}
-      {!isAtBottom && (
-        <motion.button
-          initial={{ opacity: 0, scale: 0.8 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.8 }}
-          transition={{ duration: 0.15 }}
-          onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })}
-          className="absolute bottom-3 right-4 z-10 w-8 h-8 rounded-full bg-card border border-border shadow-md flex items-center justify-center hover:bg-accent transition-colors"
-          title="Scroll to bottom"
-        >
-          <ChevronDown className="w-4 h-4 text-muted-foreground" />
-        </motion.button>
-      )}
+      <LovableScrollToBottom
+        visible={!isAtBottom}
+        onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })}
+      />
       </div>{/* end messages wrapper */}
 
-      {/* Auto-fix banner */}
-      {autoFixing && (
-        <div className="mx-3 mb-2 px-3 py-2 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center gap-2 text-xs text-violet-400">
-          <Wand2 className="w-3.5 h-3.5 shrink-0 animate-pulse" />
-          Auto-fixing preview error… (attempt {autoFixAttempts}/{MAX_AUTO_FIX_ATTEMPTS})
-        </div>
-      )}
-
-      {/* Loop-detection nudge (when max attempts reached) — Lovable's recovery flow */}
-      {previewError && !noCredits && autoFixAttempts >= MAX_AUTO_FIX_ATTEMPTS && !autoFixing && (
-        <div className="mx-3 mb-2 px-3 py-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs">
-          <div className="flex items-start gap-2 mb-2">
-            <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-400" />
-            <div className="flex-1">
-              <div className="font-semibold text-amber-200 mb-0.5">Looks like we are in a fix loop.</div>
-              <div className="text-amber-200/70 leading-snug">
-                Switch to Plan mode, share the error, and ask the AI to investigate without breaking other features.
-              </div>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-1.5 pl-5">
-            <button
-              onClick={() => {
-                onModeChange?.("plan");
-                setInput(`Please investigate this error without breaking other features. If needed, revert to the last working version and fix from there.\n\nError:\n${(previewError ?? "").slice(0, 600)}`);
-                setTimeout(() => textareaRef.current?.focus(), 50);
-                setAutoFixAttempts(0);
-              }}
-              className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 transition-colors"
-            >
-              📋 Switch to Plan mode
-            </button>
-            <button
-              onClick={() => onOpenPanel?.("history")}
-              className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300/80 border border-amber-500/30 hover:bg-amber-500/20 transition-colors"
-            >
-              ⏪ Restore last snapshot
-            </button>
-            <button
-              onClick={() => {
-                setInput(`Suggest 3 ways to solve this without changing anything yet:\n\n${(previewError ?? "").slice(0, 600)}`);
-                setTimeout(() => textareaRef.current?.focus(), 50);
-                setAutoFixAttempts(0);
-              }}
-              className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300/80 border border-amber-500/30 hover:bg-amber-500/20 transition-colors"
-            >
-              💡 Suggest 3 ways
-            </button>
-            <button
-              onClick={() => setAutoFixAttempts(0)}
-              className="text-[10px] px-2 py-0.5 rounded-full text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* No credits warning */}
-      {noCredits && (
-        <div className="mx-3 mb-2 px-3 py-2 rounded-lg bg-destructive/10 border border-destructive/20 flex items-center gap-2 text-xs text-destructive">
-          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-          No credits remaining. Upgrade your plan or wait until tomorrow.
-        </div>
-      )}
-
-      {/* Generated standalone files — download cards (styling mirrors file-attachment-card.tsx) */}
-      {fileGenResults.length > 0 && (
-        <div className="mx-3 mb-2 space-y-1.5">
-          {fileGenResults.map((f) => (
-            <motion.div
-              key={f.id}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="flex items-stretch gap-3 rounded-xl border border-border/60 bg-muted/20 p-3 max-w-full"
-            >
-              <div className="w-10 h-10 rounded-lg bg-background border border-border/60 flex items-center justify-center flex-shrink-0">
-                <FileDown className="w-4 h-4 text-violet-400" />
-              </div>
-              <div className="flex-1 min-w-0 flex flex-col justify-center">
-                <p className="text-xs font-medium text-foreground truncate" title={f.filename}>
-                  {f.filename}
-                </p>
-                <p className="text-[10px] text-muted-foreground truncate" title={f.prompt}>
-                  {genFileSize(f.content)} · {f.prompt}
-                </p>
-              </div>
-              <div className="flex items-center gap-1 flex-shrink-0">
-                <button
-                  onClick={() => downloadGeneratedFile(f)}
-                  className="h-7 px-2 inline-flex items-center gap-1 text-[11px] rounded-lg border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-                  title="Download file"
-                >
-                  <Download className="w-3 h-3" />
-                  Download
-                </button>
-                <button
-                  onClick={() => setFileGenResults((prev) => prev.filter((g) => g.id !== f.id))}
-                  className="h-7 w-7 inline-flex items-center justify-center rounded-lg text-muted-foreground/50 hover:text-foreground hover:bg-muted/60 transition-colors"
-                  title="Dismiss"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            </motion.div>
-          ))}
-        </div>
-      )}
-
-      {/* ── Prompt queue — shown above input when AI is busy ── */}
-      <AnimatePresence>
-        {/* ── Clarify Session Cards ── */}
-        {activeClarifySession && (
-          <div className="mx-3 mb-2 rounded-xl border border-violet-500/30 bg-violet-500/5 overflow-hidden">
-            <div className="flex items-center gap-2 px-3 py-2 border-b border-violet-500/20">
-              <Brain className="w-3.5 h-3.5 text-violet-400" />
-              <span className="text-xs font-medium text-violet-300">A few quick questions before building</span>
-              <button
-                onClick={() => setActiveClarifySession(null)}
-                className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-            <div className="p-3 space-y-3">
-              {activeClarifySession.questions.map((q, qi) => (
-                <div key={q.id} className="space-y-1.5">
-                  <label className="text-[11px] font-medium text-foreground/80">
-                    {qi + 1}. {q.question}
-                  </label>
-                  {q.type === "choice" && q.options ? (
-                    <div className="flex flex-wrap gap-1.5">
-                      {q.options.map((opt) => (
-                        <button
-                          key={opt}
-                          onClick={() => setActiveClarifySession((prev) =>
-                            prev ? {
-                              ...prev,
-                              questions: prev.questions.map((cq) =>
-                                cq.id === q.id ? { ...cq, answer: opt } : cq
-                              ),
-                            } : null
-                          )}
-                          className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${
-                            q.answer === opt
-                              ? "border-violet-500 bg-violet-500/20 text-violet-300"
-                              : "border-border text-muted-foreground hover:border-violet-500/50 hover:text-foreground"
-                          }`}
-                        >
-                          {opt}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <input
-                      type="text"
-                      value={q.answer}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setActiveClarifySession((prev) =>
-                          prev ? {
-                            ...prev,
-                            questions: prev.questions.map((cq) =>
-                              cq.id === q.id ? { ...cq, answer: val } : cq
-                            ),
-                          } : null
-                        );
-                      }}
-                      placeholder="Your answer…"
-                      className="w-full text-xs bg-background border border-border rounded-md px-2.5 py-1.5 text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-violet-500/50"
-                    />
-                  )}
-                </div>
-              ))}
-              <div className="flex gap-2 pt-1">
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    if (!activeClarifySession) return;
-                    const answersBlock = activeClarifySession.questions
-                      .filter((q) => q.answer.trim())
-                      .map((q) => `- ${q.question}: ${q.answer}`)
-                      .join("\n");
-                    const enrichedPrompt = answersBlock
-                      ? activeClarifySession.originalPrompt + "\n\nAdditional context:\n" + answersBlock
-                      : activeClarifySession.originalPrompt;
-                    setActiveClarifySession(null);
-                    setClarifyFirst(false);
-                    void sendMessage(enrichedPrompt, "build");
-                  }}
-                  className="h-7 text-xs gap-1.5 bg-violet-600 hover:bg-violet-500 text-white"
-                >
-                  <Sparkles className="w-3 h-3" />
-                  Build now
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    if (!activeClarifySession) return;
-                    setActiveClarifySession(null);
-                    setClarifyFirst(false);
-                    void sendMessage(activeClarifySession.originalPrompt, "build");
-                  }}
-                  className="h-7 text-xs text-muted-foreground"
-                >
-                  Skip & build
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-
-                {promptQueue.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            className="overflow-hidden border-t border-border"
-          >
-            <div className="mx-3 mt-2 mb-1 rounded-xl border border-border bg-muted/10 overflow-hidden">
-              {/* Queue header */}
-              <div className="flex items-center gap-2 px-3 py-1.5 bg-muted/30 border-b border-border/50">
-                <span className="text-[11px] font-semibold text-muted-foreground">
-                  Queue · {promptQueue.length} waiting
-                </span>
-                {streaming && (
-                  <span className="flex items-center gap-1 text-[10px] text-violet-400">
-                    <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                    Processing…
-                  </span>
-                )}
-                <div className="ml-auto flex items-center gap-1">
-                  <button
-                    onClick={() => setQueuePaused((v) => !v)}
-                    className="flex items-center gap-1 h-5 px-2 rounded text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                    title={queuePaused ? "Resume queue" : "Pause queue"}
-                  >
-                    {queuePaused
-                      ? <><Play className="w-2.5 h-2.5" />Resume</>
-                      : <><Pause className="w-2.5 h-2.5" />Pause</>
-                    }
-                  </button>
-                  <button
-                    onClick={() => { setPromptQueue([]); setEditingQueueId(null); }}
-                    className="h-5 px-2 rounded text-[10px] text-muted-foreground hover:text-destructive hover:bg-muted transition-colors"
-                    title="Clear all queued prompts"
-                  >
-                    Clear all
-                  </button>
-                </div>
-              </div>
-              {/* Queue items */}
-              <div className="divide-y divide-border/30 max-h-44 overflow-y-auto">
-                {promptQueue.map((item, idx) => (
-                  <div key={item.id} className="flex items-start gap-1.5 px-2 py-2 group">
-                    {/* Reorder buttons */}
-                    <div className="flex flex-col gap-0.5 mt-0.5 shrink-0">
-                      <button
-                        onClick={() => setPromptQueue((prev) => {
-                          if (idx === 0) return prev;
-                          const next = [...prev];
-                          [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
-                          return next;
-                        })}
-                        disabled={idx === 0}
-                        className="p-0.5 rounded hover:bg-muted disabled:opacity-20 transition-colors"
-                        title="Move up"
-                      >
-                        <ChevronUp className="w-2.5 h-2.5 text-muted-foreground" />
-                      </button>
-                      <button
-                        onClick={() => setPromptQueue((prev) => {
-                          if (idx === prev.length - 1) return prev;
-                          const next = [...prev];
-                          [next[idx], next[idx + 1]] = [next[idx + 1], next[idx]];
-                          return next;
-                        })}
-                        disabled={idx === promptQueue.length - 1}
-                        className="p-0.5 rounded hover:bg-muted disabled:opacity-20 transition-colors"
-                        title="Move down"
-                      >
-                        <ChevronDown className="w-2.5 h-2.5 text-muted-foreground" />
-                      </button>
-                    </div>
-
-                    {/* Prompt text or inline editor */}
-                    <div className="flex-1 min-w-0">
-                      {editingQueueId === item.id ? (
-                        <div className="space-y-1">
-                          <Textarea
-                            value={editingQueueText}
-                            onChange={(e) => setEditingQueueText(e.target.value)}
-                            className="text-xs bg-background border-border resize-none min-h-[40px] py-1 px-2"
-                            autoFocus
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && !e.shiftKey) {
-                                e.preventDefault();
-                                if (editingQueueText.trim()) {
-                                  setPromptQueue((prev) => prev.map((q) => q.id === item.id ? { ...q, text: editingQueueText.trim() } : q));
-                                }
-                                setEditingQueueId(null);
-                              }
-                              if (e.key === "Escape") setEditingQueueId(null);
-                            }}
-                          />
-                          <div className="flex gap-1">
-                            <Button size="sm" className="h-5 text-[10px] px-2 bg-violet-600 hover:bg-violet-500 text-white"
-                              onClick={() => {
-                                if (editingQueueText.trim()) {
-                                  setPromptQueue((prev) => prev.map((q) => q.id === item.id ? { ...q, text: editingQueueText.trim() } : q));
-                                }
-                                setEditingQueueId(null);
-                              }}>
-                              Save
-                            </Button>
-                            <Button size="sm" variant="ghost" className="h-5 text-[10px] px-2"
-                              onClick={() => setEditingQueueId(null)}>
-                              Cancel
-                            </Button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex items-start gap-1">
-                          <span className="text-[11px] text-muted-foreground leading-relaxed line-clamp-2 flex-1">{item.text}</span>
-                          {item.repeat > 1 && (
-                            <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-400 font-mono">
-                              &times;{item.remaining}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Action buttons — visible on hover */}
-                    <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity mt-0.5">
-                      <button
-                        onClick={() => { setEditingQueueId(item.id); setEditingQueueText(item.text); }}
-                        className="p-1 rounded hover:bg-muted transition-colors"
-                        title="Edit prompt"
-                      >
-                        <Pencil className="w-2.5 h-2.5 text-muted-foreground" />
-                      </button>
-                      {/* Repeat — cycle through 1→2→3→5→10 */}
-                      <button
-                        onClick={() => setPromptQueue((prev) => prev.map((q) => {
-                          if (q.id !== item.id) return q;
-                          const nextRepeat = q.repeat === 1 ? 2 : q.repeat === 2 ? 3 : q.repeat === 3 ? 5 : q.repeat === 5 ? 10 : 1;
-                          return { ...q, repeat: nextRepeat, remaining: nextRepeat };
-                        }))}
-                        className="p-1 rounded hover:bg-muted transition-colors"
-                        title={`Repeat: x${item.repeat} — click to cycle`}
-                      >
-                        <RefreshCw className={`w-2.5 h-2.5 ${item.repeat > 1 ? "text-violet-400" : "text-muted-foreground"}`} />
-                      </button>
-                      <button
-                        onClick={() => void navigator.clipboard.writeText(item.text)}
-                        className="p-1 rounded hover:bg-muted transition-colors"
-                        title="Copy prompt"
-                      >
-                        <Copy className="w-2.5 h-2.5 text-muted-foreground" />
-                      </button>
-                      <button
-                        onClick={() => setPromptQueue((prev) => prev.filter((q) => q.id !== item.id))}
-                        className="p-1 rounded hover:bg-muted transition-colors"
-                        title="Remove from queue"
-                      >
-                        <XCircle className="w-2.5 h-2.5 text-muted-foreground hover:text-destructive" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ── Quick prompt pills — shown above input when chat is empty ── */}
-      {messages.length === 0 && !streaming && (
-        <div className="px-3 pt-2 pb-1 flex gap-1.5 flex-wrap shrink-0">
-          {contextualEmptyPrompts.slice(0, 4).map((label) => (
-            <button
-              key={label}
-              onClick={() => { setInput(label); setTimeout(() => textareaRef.current?.focus(), 0); }}
-              className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-border/60 bg-muted/20 hover:bg-muted/60 hover:border-violet-500/40 text-muted-foreground hover:text-foreground transition-all"
-            >
-              <span>→</span>
-              <span>{label.length > 28 ? `${label.slice(0, 28)}…` : label}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* ── Stuck? guarded-prompt chips — hidden when out of credits (can't run AI fixes) ── */}
-      {!streaming && !noCredits && (
-        <div className="px-3 pt-1 pb-1 flex gap-1.5 flex-wrap shrink-0">
-          {[
-            {
-              label: "Investigate, don't code",
-              icon: "🔍",
-              prompt: "Investigate this without writing code yet. Walk me through what you find before suggesting changes.",
-              tooltip: "Keeps the AI in read-only mode while you diagnose",
-            },
-            {
-              label: "Suggest 3 ways",
-              icon: "💡",
-              prompt: "Suggest 3 ways to solve this without changing anything. Compare trade-offs for each.",
-              tooltip: "Explore options before committing to one",
-            },
-            {
-              label: "Revert + fix",
-              icon: "↩️",
-              prompt: "Please investigate this without breaking other features. If needed, revert to the last working version and fix from there.",
-              tooltip: "Use after 2+ failed fix attempts",
-            },
-            {
-              label: "Role-isolated",
-              icon: "👤",
-              prompt: "Implement this for the [ROLE] role only. Do not reuse shared components unless clearly scoped. Other roles must not be affected.",
-              tooltip: "Replace [ROLE] with your role name (Admin, User, etc.)",
-            },
-            {
-              label: "Break it down",
-              icon: "🧩",
-              prompt: `Break this feature into small, testable steps. Use this template:
-
-1. Create the new page (route + skeleton)
-2. Add UI layout (no logic yet)
-3. Connect the data (queries/mutations)
-4. Add logic + edge cases
-5. Test per role
-
-Feature: [DESCRIBE YOUR FEATURE HERE]
-
-Please confirm the breakdown before implementing anything.`,
-              tooltip: "Lovable feature-breakdown template — keeps the AI from doing everything at once",
-            },
-          ].map(({ label, icon, prompt, tooltip }) => (
-            <button
-              key={label}
-              title={tooltip}
-              onClick={() => {
-                setInput(prompt);
-                setTimeout(() => textareaRef.current?.focus(), 0);
-              }}
-              className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-amber-500/25 bg-amber-500/[0.04] hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-200/80 hover:text-amber-100 transition-all"
-            >
-              <span>{icon}</span>
-              <span>{label}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      <LovableComposerDock
+        {...composerDock}
+        projectId={project.id}
+        showSharePreview={showSharePreview}
+        showPublishBanner={showPublishBanner}
+        deployedUrl={project.deployed_url ?? null}
+        publishBusy={publishBusy}
+        onPublish={() => void handlePublishFromChat()}
+        onOpenPublishPanel={() => onOpenPanel?.("publishpanel")}
+        onDismissPublishBanner={() => setPublishBannerDismissed(true)}
+        guestCommentCount={guestCommentCount}
+        showGuestCommentsBanner={showGuestCommentsBanner}
+        onOpenCommentsPanel={() => onOpenPanel?.("comments")}
+        onFixGuestComments={() => void handleFixGuestComments()}
+        onDismissGuestCommentsBanner={() => setGuestCommentsBannerDismissed(true)}
+      />
 
       {/* ── Lovable-style input area ── */}
-      <div
-        className="px-3 pb-4 pt-2 border-t border-border/50 shrink-0 relative bg-background/50"
+      <LovableChatComposerShell
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragging(false);
         }}
         onDrop={handleDrop}
+        onPasteCapture={handleSecretPaste}
       >
-        {/* Drag-and-drop overlay */}
-        {isDragging && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl border-2 border-dashed border-violet-500 bg-violet-500/10 backdrop-blur-[1px] pointer-events-none">
-            <div className="flex flex-col items-center gap-1.5 text-violet-400">
-              <Wand2 className="w-6 h-6" />
-              <span className="text-xs font-semibold">Drop mockup or file</span>
-              <span className="text-[10px] text-violet-400/70">Image → AI generates matching UI</span>
-            </div>
-          </div>
-        )}
+        <LovableComposerPreInput
+          isDragging={isDragging}
+          projectId={project.id}
+          connectorApproval={connectorApproval}
+          onConnectorApprovalClear={() => setConnectorApproval(null)}
+          cloudAction={cloudAction}
+          onCloudActionClear={() => setCloudAction(null)}
+          cloudTierPick={cloudTierPick}
+          onCloudTierPick={setCloudTierPick}
+          onRetryAgent={(prompt) => void sendMessage(prompt, "agent")}
+          streaming={streaming}
+          followUpChips={followUpChips}
+          onSelectFollowUp={(chip) => {
+            setInput(chip);
+            setTimeout(() => textareaRef.current?.focus(), 0);
+          }}
+          attachedImage={attachedImage}
+          attachedImageName={attachedImageName}
+          onRemoveAttachedImage={() => { setAttachedImage(null); setAttachedImageName(null); }}
+          onAnnotateAttachedImage={() => setChatAnnotateOpen(true)}
+          onAttachedImagePreset={(prompt) => {
+            setInput(prompt);
+            setTimeout(() => textareaRef.current?.focus(), 50);
+          }}
+          attachedText={attachedText}
+          onRemoveAttachedText={() => setAttachedText(null)}
+          detectedUrl={detectedUrl}
+          isScraping={isScraping}
+          scrapedMeta={scrapedMeta}
+          onDismissUrlScrape={() => {
+            setDetectedUrl(null);
+            setScrapedMeta(null);
+            setIsScraping(false);
+          }}
+          onUrlQuickAction={(prompt) => {
+            setInput(prompt);
+            setTimeout(() => textareaRef.current?.focus(), 50);
+          }}
+          fileInputRef={fileInputRef}
+          onImageAttach={handleImageAttach}
+          contextFiles={contextFiles}
+          onRemoveContextFile={(id) => setContextFiles((prev) => prev.filter((cf) => cf.id !== id))}
+          lineRefs={composerLineRefs}
+          onRemoveLineRef={(raw) => setInput((prev) => removeLineRefFromInput(prev, raw))}
+          onOpenLineRefAtLine={handleOpenLineRefAtLine}
+          secretBanner={secretBanner}
+          onDismissSecretBanner={() => setSecretBanner(null)}
+          onOpenSecrets={() => onOpenPanel?.("secrets")}
+        />
 
-        {/* Attached image preview — mockup-to-code panel */}
-        {attachedImage && (
-          <motion.div
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 6 }}
-            className="mb-2 rounded-xl border border-violet-500/30 bg-violet-500/5 overflow-hidden"
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between px-3 py-1.5 border-b border-violet-500/20 bg-violet-500/10">
-              <div className="flex items-center gap-1.5">
-                <Wand2 className="w-3 h-3 text-violet-400" />
-                <span className="text-[11px] font-semibold text-violet-300">Mockup detected</span>
-                {attachedImageName && (
-                  <span className="text-[10px] text-violet-400/60 font-mono truncate max-w-[120px]">{attachedImageName}</span>
-                )}
-              </div>
-              <button
-                onClick={() => { setAttachedImage(null); setAttachedImageName(null); }}
-                className="text-violet-400/60 hover:text-violet-300 transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            {/* Body */}
-            <div className="flex gap-3 p-2.5">
-              {/* Thumbnail */}
-              <div className="relative flex-shrink-0">
-                <img
-                  src={attachedImage}
-                  alt="Mockup"
-                  className="h-20 w-auto max-w-[120px] rounded-lg border border-violet-500/20 object-cover shadow-sm"
-                />
-              </div>
-              {/* Actions */}
-              <div className="flex flex-col justify-center gap-1.5 flex-1 min-w-0">
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  AI will recreate this UI as React + Tailwind code. You can add instructions below or send as-is.
-                </p>
-                <div className="flex flex-wrap gap-1">
-                  <button
-                    onClick={() => setChatAnnotateOpen(true)}
-                    className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 hover:bg-rose-500/30 transition-colors"
-                  >
-                    ✏️ Draw on image
-                  </button>
-                  <button
-                    onClick={() => {
-                      setInput("Recreate this UI exactly. Match every layout detail, color, typography, spacing, and component.");
-                      setTimeout(() => textareaRef.current?.focus(), 50);
-                    }}
-                    className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 hover:bg-violet-500/30 transition-colors"
-                  >
-                    ✦ Clone exactly
-                  </button>
-                  <button
-                    onClick={() => {
-                      setInput("Recreate this design but make it mobile-responsive and accessible. Use shadcn/ui components where appropriate.");
-                      setTimeout(() => textareaRef.current?.focus(), 50);
-                    }}
-                    className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors"
-                  >
-                    📱 Mobile-first
-                  </button>
-                  <button
-                    onClick={() => {
-                      setInput("Take inspiration from this design and create a modern, polished version with animations and dark mode support.");
-                      setTimeout(() => textareaRef.current?.focus(), 50);
-                    }}
-                    className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors"
-                  >
-                    ✨ Modernize
-                  </button>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        {/* Attached text/code file preview */}
-        {attachedText && (
-          <div className="mb-2 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-border bg-muted/50 max-w-full">
-            <FileCode className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-            <span className="text-xs text-foreground font-mono truncate flex-1">{attachedText.name}</span>
-            <span className="text-[10px] text-muted-foreground shrink-0">
-              {attachedText.content.split("\n").length} lines
-            </span>
-            <button
-              onClick={() => setAttachedText(null)}
-              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <XCircle className="w-3 h-3" />
-            </button>
-          </div>
-        )}
-
-        {/* URL scrape banner — shown when a URL is detected in the input */}
-        {detectedUrl && (
-          <motion.div
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 6 }}
-            className="mb-2 rounded-xl border border-blue-500/30 bg-blue-500/5 overflow-hidden"
-          >
-            {/* Header */}
-            <div className="flex items-center justify-between px-3 py-1.5 border-b border-blue-500/20 bg-blue-500/10">
-              <div className="flex items-center gap-1.5">
-                {isScraping ? (
-                  <Loader2 className="w-3 h-3 text-blue-400 animate-spin" />
-                ) : (
-                  <Globe className="w-3 h-3 text-blue-400" />
-                )}
-                <span className="text-[11px] font-semibold text-blue-300">
-                  {isScraping ? "Reading page…" : scrapedMeta ? "Page loaded" : "URL detected"}
-                </span>
-                <span className="text-[10px] text-blue-400/60 font-mono truncate max-w-[140px]">{detectedUrl}</span>
-              </div>
-              <button
-                onClick={() => { setDetectedUrl(null); setScrapedMeta(null); setIsScraping(false); }}
-                className="text-blue-400/60 hover:text-blue-300 transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            {/* Body */}
-            <div className="p-2.5 flex gap-3">
-              {scrapedMeta?.ogImage && (
-                <img
-                  src={scrapedMeta.ogImage}
-                  alt="Page preview"
-                  className="h-14 w-auto max-w-[80px] rounded-lg border border-blue-500/20 object-cover shadow-sm flex-shrink-0"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                />
-              )}
-              <div className="flex flex-col justify-center gap-1.5 flex-1 min-w-0">
-                {scrapedMeta ? (
-                  <>
-                    {scrapedMeta.title && (
-                      <p className="text-[11px] font-medium text-foreground truncate">{scrapedMeta.title}</p>
-                    )}
-                    {scrapedMeta.description && (
-                      <p className="text-[10px] text-muted-foreground line-clamp-2 leading-relaxed">{scrapedMeta.description}</p>
-                    )}
-                  </>
-                ) : isScraping ? (
-                  <p className="text-[11px] text-muted-foreground">Fetching page content…</p>
-                ) : (
-                  <p className="text-[11px] text-muted-foreground">Add a prompt or use a quick action below.</p>
-                )}
-                {scrapedMeta && (
-                  <div className="flex flex-wrap gap-1 mt-0.5">
-                    <button
-                      onClick={() => {
-                        setInput(`Clone this website as a React + Tailwind app. Match the layout, design, colors, and content exactly: ${detectedUrl}`);
-                        setTimeout(() => textareaRef.current?.focus(), 50);
-                      }}
-                      className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors"
-                    >
-                      🌐 Clone page
-                    </button>
-                    <button
-                      onClick={() => {
-                        setInput(`Analyze the design and content of this page and build an improved, modern version with better UX: ${detectedUrl}`);
-                        setTimeout(() => textareaRef.current?.focus(), 50);
-                      }}
-                      className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 hover:bg-violet-500/30 transition-colors"
-                    >
-                      ✨ Redesign
-                    </button>
-                    <button
-                      onClick={() => {
-                        setInput(`Based on this page, extract the key content and structure, then build a landing page for the same product/service: ${detectedUrl}`);
-                        setTimeout(() => textareaRef.current?.focus(), 50);
-                      }}
-                      className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors"
-                    >
-                      📄 Landing page
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </motion.div>
-        )}
-
-        <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageAttach} />
-
-        {/* Context file chips */}
-        {contextFiles.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 px-3 pt-2">
-            {contextFiles.map((f) => (
-              <div key={f.id} className="flex items-center gap-1 bg-violet-500/10 border border-violet-500/20 text-violet-300 text-[10px] rounded-md px-2 py-0.5">
-                <Paperclip className="w-2.5 h-2.5 shrink-0" />
-                <span className="font-mono max-w-[120px] truncate">{f.path.split("/").pop()}</span>
-                <button
-                  onClick={() => setContextFiles((prev) => prev.filter((cf) => cf.id !== f.id))}
-                  className="ml-0.5 text-violet-400/60 hover:text-violet-300 transition-colors"
-                >
-                  <X className="w-2.5 h-2.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Input box — Lovable style */}
-        <div className="relative rounded-2xl border border-border/60 bg-card shadow-[0_1px_6px_rgba(0,0,0,0.08)] focus-within:border-border focus-within:shadow-[0_2px_12px_rgba(0,0,0,0.12)] transition-all duration-150">
-          {/* @mention autocomplete — files + collaborators */}
-          <AnimatePresence>
-            {mentionQuery !== null && mentionItems.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 4 }}
-                className="absolute bottom-full left-0 right-0 mb-1 z-50 bg-popover border border-border rounded-xl shadow-xl overflow-hidden"
-              >
-                <div className="px-2 py-1 border-b border-border">
-                  <span className="text-[10px] text-muted-foreground font-mono">
-                    {isCrossProjectQuery ? "@ reference from another project" : "@ mention file or collaborator"}
-                  </span>
-                </div>
-                {mentionItems.map((item, idx) => (
-                  <button
-                    key={idx}
-                    onMouseDown={(e) => { e.preventDefault(); insertMention(item); }}
-                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors ${
-                      idx === mentionCursor ? "bg-accent text-accent-foreground" : "hover:bg-muted"
-                    }`}
-                  >
-                    {item.kind === "file" ? (
-                      <>
-                        <span className="text-muted-foreground/50">📄</span>
-                        <span className="font-mono truncate text-violet-400">{item.path}</span>
-                      </>
-                    ) : item.kind === "xproject" ? (
-                      <>
-                        <span className="text-muted-foreground/50">{item.filePath ? "📄" : "📁"}</span>
-                        <span className="font-medium truncate text-amber-400">{item.projectName}</span>
-                        {item.filePath && (
-                          <span className="font-mono text-muted-foreground/70 text-[10px] truncate ml-auto">{item.filePath}</span>
-                        )}
-                        {!item.filePath && (
-                          <span className="text-muted-foreground/50 text-[10px] ml-auto">click to browse files →</span>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <span className="text-muted-foreground/50">👤</span>
-                        <span className="font-medium truncate">{item.display}</span>
-                        <span className="text-muted-foreground/50 text-[10px] truncate ml-auto">{item.email}</span>
-                      </>
-                    )}
-                  </button>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Prompt template picker (shown when "/" typed or toolbar button clicked) */}
-          <AnimatePresence>
-            {showTemplates && (
-              <motion.div
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 6 }}
-                className="absolute bottom-full left-0 right-0 mb-1 z-50 bg-popover border border-border rounded-xl shadow-xl overflow-hidden"
-              >
-                <div className="flex items-center justify-between px-3 py-1.5 border-b border-border">
-                  <span className="text-[11px] font-semibold text-muted-foreground">Prompt templates & skills</span>
-                  <span className="text-[10px] text-muted-foreground/50">Type / to open · Esc to close</span>
-                </div>
-                <div className="max-h-72 overflow-y-auto">
-                  {/* Skills section — shown when query matches a skill name */}
-                  {(() => {
-                    const slashQuery = input.startsWith("/") ? input.slice(1).toLowerCase().trim() : "";
-                    const allSkills = [...(skills.custom ?? []), ...(skills.builtin ?? [])];
-                    const matchedSkills = allSkills.filter((s) =>
-                      !slashQuery ||
-                      s.name.toLowerCase().includes(slashQuery) ||
-                      (s.description ?? "").toLowerCase().includes(slashQuery) ||
-                      (s.tags ?? []).some((t: string) => t.toLowerCase().includes(slashQuery))
-                    );
-                    if (matchedSkills.length === 0) return null;
-                    return (
-                      <div>
-                        <div className="px-3 py-1 bg-violet-500/5 border-b border-border/40 flex items-center gap-1.5">
-                          <Sparkles className="w-3 h-3 text-violet-400" />
-                          <span className="text-[10px] font-semibold text-violet-400 uppercase tracking-wider">Skills</span>
-                        </div>
-                        {matchedSkills.slice(0, 8).map((skill) => (
-                          <button
-                            key={skill.id}
-                            onMouseDown={(e) => { e.preventDefault(); applySkill(skill.prompt, skill.id); setShowTemplates(false); }}
-                            className={`w-full flex items-start gap-2.5 px-3 py-2 text-xs text-left hover:bg-accent hover:text-accent-foreground transition-colors ${slashSelectedKey === `skill:${skill.id}` ? "bg-accent text-accent-foreground" : ""}`}
-                          >
-                            <span className="text-lg leading-none shrink-0 mt-0.5">{skill.icon ?? "✨"}</span>
-                            <div className="flex-1 min-w-0">
-                              <div className="font-medium truncate">{skill.name}</div>
-                              {skill.description && (
-                                <div className="text-[10px] text-muted-foreground truncate mt-0.5">{skill.description}</div>
-                              )}
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  })()}
-                  {/* Prompt templates */}
-                  {input === "/" || !input.startsWith("/") ? (
-                    PROMPT_TEMPLATES.map((group) => (
-                      <div key={group.category}>
-                        <div className="px-3 py-1 bg-muted/30 border-b border-border/40">
-                          <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
-                            {group.category}
-                          </span>
-                        </div>
-                        {group.prompts.map((prompt) => (
-                          <button
-                            key={prompt}
-                            onMouseDown={(e) => { e.preventDefault(); insertTemplate(prompt); }}
-                            className={`w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-accent hover:text-accent-foreground transition-colors ${slashSelectedKey === `tpl:${prompt}` ? "bg-accent text-accent-foreground" : ""}`}
-                          >
-                            <span className="text-muted-foreground/40 font-mono text-[10px] shrink-0">/</span>
-                            <span className="truncate">{prompt}</span>
-                          </button>
-                        ))}
-                      </div>
-                    ))
-                  ) : null}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Snippet picker */}
-          <AnimatePresence>
-            {showSnippets && (
-              <SnippetPicker
-                currentUserId={currentUserId}
-                onInsert={(content) => {
-                  setInput((prev) => prev ? `${prev}\n${content}` : content);
-                  setShowSnippets(false);
-                  setTimeout(() => textareaRef.current?.focus(), 50);
-                }}
-                onClose={() => setShowSnippets(false)}
-              />
-            )}
-          </AnimatePresence>
-
-          {/* Analyze-data modal — instruction + optional file → POST /api/ai/analyze */}
-          <AnimatePresence>
-            {analyzeOpen && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-                onClick={() => !analyzeRunning && setAnalyzeOpen(false)}
-              >
-                <motion.div
-                  initial={{ scale: 0.95, y: 8 }}
-                  animate={{ scale: 1, y: 0 }}
-                  exit={{ scale: 0.95, y: 8 }}
-                  onClick={(e) => e.stopPropagation()}
-                  className="w-full max-w-lg rounded-2xl border border-border bg-background shadow-2xl overflow-hidden"
-                >
-                  <div className="px-5 pt-4 pb-3 border-b border-border/60">
-                    <div className="flex items-center gap-2">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-violet-400"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 5-5"/></svg>
-                      <h3 className="text-sm font-semibold">Analyze data</h3>
-                    </div>
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                      Drop a CSV / Excel / image / JSON file and tell the AI what to do. It writes a Python script, runs it in a sandbox, and returns the generated files (PDF, XLSX, charts, etc.).
-                    </p>
-                  </div>
-                  <div className="px-5 py-3 space-y-3">
-                    <div>
-                      <label className="text-[11px] font-medium text-muted-foreground mb-1 block">Instruction</label>
-                      <textarea
-                        value={analyzeInstruction}
-                        onChange={(e) => setAnalyzeInstruction(e.target.value)}
-                        rows={3}
-                        placeholder="e.g. Summarize this CSV, generate a bar chart of the top 10 rows by revenue, and produce a PDF report."
-                        className="w-full px-2.5 py-1.5 rounded-lg border border-border bg-muted/30 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/30 resize-none"
-                        maxLength={2000}
-                        autoFocus
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-medium text-muted-foreground mb-1 block">
-                        Input file <span className="text-muted-foreground/50">(optional, ≤ 20 MB)</span>
-                      </label>
-                      {analyzeFile ? (
-                        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border bg-muted/30 text-xs">
-                          <span className="flex-1 truncate font-mono">{analyzeFile.name}</span>
-                          <button
-                            type="button"
-                            onClick={() => setAnalyzeFile(null)}
-                            className="text-muted-foreground hover:text-foreground text-[11px]"
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ) : (
-                        <input
-                          type="file"
-                          accept=".csv,.tsv,.json,.xlsx,.xls,.txt,.png,.jpg,.jpeg,.pdf"
-                          onChange={(e) => {
-                            const file = e.target.files?.[0];
-                            if (!file) return;
-                            if (file.size > 20 * 1024 * 1024) {
-                              toast({ title: "File too large (max 20 MB)", variant: "destructive" });
-                              return;
-                            }
-                            const reader = new FileReader();
-                            reader.onload = () => {
-                              const result = reader.result as string;
-                              // result is "data:<mime>;base64,<body>" — peel the prefix
-                              const idx = result.indexOf(",");
-                              const base64 = idx >= 0 ? result.slice(idx + 1) : result;
-                              setAnalyzeFile({
-                                name: file.name,
-                                base64,
-                                mimeType: file.type || "application/octet-stream",
-                              });
-                            };
-                            reader.readAsDataURL(file);
-                          }}
-                          className="w-full text-xs text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-border file:bg-muted/30 file:text-xs file:cursor-pointer hover:file:bg-muted/50"
-                        />
-                      )}
-                    </div>
-                  </div>
-                  <div className="px-5 py-3 border-t border-border/60 flex items-center justify-end gap-2 bg-muted/10">
-                    <button
-                      onClick={() => setAnalyzeOpen(false)}
-                      disabled={analyzeRunning}
-                      className="h-8 px-3 text-xs rounded-lg border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-40"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={async () => {
-                        if (!analyzeInstruction.trim() || analyzeRunning) return;
-                        setAnalyzeRunning(true);
-                        try {
-                          const res = await fetch("/api/ai/analyze", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                              instruction: analyzeInstruction.trim(),
-                              projectId: project.id,
-                              inputFile: analyzeFile ?? undefined,
-                            }),
-                          });
-                          const data = await res.json() as {
-                            ok?: boolean;
-                            error?: string;
-                            script?: string;
-                            stdout?: string;
-                            stderr?: string;
-                            files?: GeneratedFile[];
-                            messages?: Message[];
-                          };
-                          if (!res.ok || !data.ok) {
-                            throw new Error(data.error ?? data.stderr ?? "Analysis failed");
-                          }
-                          if (data.messages?.length) {
-                            onMessagesUpdate([...messages, ...data.messages]);
-                          }
-                          toast({
-                            title: `Analysis complete · ${(data.files ?? []).length} file${(data.files ?? []).length === 1 ? "" : "s"}`,
-                          });
-                          setAnalyzeOpen(false);
-                          setAnalyzeInstruction("");
-                          setAnalyzeFile(null);
-                        } catch (err) {
-                          toast({
-                            title: "Analysis failed",
-                            description: err instanceof Error ? err.message : "Try again with a smaller file or simpler request.",
-                            variant: "destructive",
-                          });
-                        } finally {
-                          setAnalyzeRunning(false);
-                        }
-                      }}
-                      disabled={!analyzeInstruction.trim() || analyzeRunning}
-                      className="h-8 px-3 text-xs rounded-lg bg-violet-600 hover:bg-violet-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
-                    >
-                      {analyzeRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                      {analyzeRunning ? "Running…" : "Analyze"}
-                    </button>
-                  </div>
-                </motion.div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Save-as-skill modal — opens when user clicks ⚡ on an assistant message */}
-          <AnimatePresence>
-            {saveSkillDraft && (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-                onClick={() => !savingSkill && setSaveSkillDraft(null)}
-              >
-                <motion.div
-                  initial={{ scale: 0.95, y: 8 }}
-                  animate={{ scale: 1, y: 0 }}
-                  exit={{ scale: 0.95, y: 8 }}
-                  onClick={(e) => e.stopPropagation()}
-                  className="w-full max-w-md rounded-2xl border border-border bg-background shadow-2xl overflow-hidden"
-                >
-                  <div className="px-5 pt-4 pb-3 border-b border-border/60">
-                    <div className="flex items-center gap-2">
-                      <Sparkles className="w-4 h-4 text-violet-400" />
-                      <h3 className="text-sm font-semibold">Save as skill</h3>
-                    </div>
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                      Reuse this answer as a named playbook. It will be auto-attached when future prompts match its description.
-                    </p>
-                  </div>
-                  <div className="px-5 py-3 space-y-3">
-                    <div>
-                      <label className="text-[11px] font-medium text-muted-foreground mb-1 block">Name</label>
-                      <input
-                        value={saveSkillDraft.name}
-                        onChange={(e) => setSaveSkillDraft((d) => d ? { ...d, name: e.target.value } : d)}
-                        placeholder="e.g. Add Stripe checkout"
-                        className="w-full h-8 px-2.5 rounded-lg border border-border bg-muted/30 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/30"
-                        maxLength={120}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-medium text-muted-foreground mb-1 block">
-                        Description <span className="text-muted-foreground/50">(used for matching)</span>
-                      </label>
-                      <textarea
-                        value={saveSkillDraft.description}
-                        onChange={(e) => setSaveSkillDraft((d) => d ? { ...d, description: e.target.value } : d)}
-                        rows={2}
-                        placeholder="A short summary of when this skill applies"
-                        className="w-full px-2.5 py-1.5 rounded-lg border border-border bg-muted/30 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/30 resize-none"
-                        maxLength={500}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-medium text-muted-foreground mb-1 block">Playbook body</label>
-                      <textarea
-                        value={saveSkillDraft.prompt}
-                        onChange={(e) => setSaveSkillDraft((d) => d ? { ...d, prompt: e.target.value } : d)}
-                        rows={8}
-                        className="w-full px-2.5 py-1.5 rounded-lg border border-border bg-muted/30 text-[11px] font-mono focus:outline-none focus:ring-2 focus:ring-violet-500/30 resize-none"
-                      />
-                      <p className="text-[10px] text-muted-foreground/70 mt-1">
-                        This will be appended to the AI system prompt whenever the skill matches.
-                      </p>
-                    </div>
-                  </div>
-                  <div className="px-5 py-3 border-t border-border/60 flex items-center justify-end gap-2 bg-muted/10">
-                    <button
-                      onClick={() => setSaveSkillDraft(null)}
-                      disabled={savingSkill}
-                      className="h-8 px-3 text-xs rounded-lg border border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors disabled:opacity-40"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={async () => {
-                        if (!saveSkillDraft || savingSkill) return;
-                        const draft = saveSkillDraft;
-                        if (!draft.name.trim() || !draft.prompt.trim()) {
-                          toast({ title: "Name and playbook are required", variant: "destructive" });
-                          return;
-                        }
-                        setSavingSkill(true);
-                        try {
-                          const res = await fetch("/api/skills", {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({
-                              name: draft.name.trim(),
-                              description: draft.description.trim() || null,
-                              prompt: draft.prompt.trim(),
-                              icon: "⚡",
-                              tags: [],
-                            }),
-                          });
-                          if (!res.ok) {
-                            const err = await res.json().catch(() => ({}));
-                            throw new Error((err as { error?: string }).error ?? "Failed to save skill");
-                          }
-                          toast({ title: "Skill saved", description: `"${draft.name}" will auto-attach when future prompts match.` });
-                          setSaveSkillDraft(null);
-                        } catch (err) {
-                          toast({
-                            title: "Save failed",
-                            description: err instanceof Error ? err.message : "Try again.",
-                            variant: "destructive",
-                          });
-                        } finally {
-                          setSavingSkill(false);
-                        }
-                      }}
-                      disabled={savingSkill || !saveSkillDraft.name.trim() || !saveSkillDraft.prompt.trim()}
-                      className="h-8 px-3 text-xs rounded-lg bg-violet-600 hover:bg-violet-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
-                    >
-                      {savingSkill ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
-                      Save skill
-                    </button>
-                  </div>
-                </motion.div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Context file picker popover */}
-          <AnimatePresence>
-            {showFilePicker && (
-              <motion.div
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 6 }}
-                className="absolute bottom-full left-0 right-0 mb-1 z-50 bg-popover border border-border rounded-xl shadow-xl overflow-hidden"
-              >
-                <div className="flex items-center justify-between px-3 py-1.5 border-b border-border">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-semibold text-muted-foreground">Attach files as context</span>
-                    <span className={`text-[10px] tabular-nums px-1.5 py-0.5 rounded-full font-medium ${
-                      contextFiles.length >= MAX_CONTEXT_FILES
-                        ? "bg-amber-500/15 text-amber-400"
-                        : "bg-muted text-muted-foreground"
-                    }`}>
-                      {contextFiles.length}/{MAX_CONTEXT_FILES}
-                    </span>
-                  </div>
-                  <button onClick={() => { setShowFilePicker(false); setFilePickerSearch(""); }} className="text-muted-foreground/50 hover:text-foreground">
-                    <XCircle className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                {/* Search input */}
-                <div className="px-3 py-1.5 border-b border-border/60">
-                  <input
-                    autoFocus
-                    value={filePickerSearch}
-                    onChange={(e) => setFilePickerSearch(e.target.value)}
-                    placeholder="Filter files…"
-                    className="w-full bg-transparent text-xs text-foreground placeholder:text-muted-foreground/50 outline-none font-mono"
-                  />
-                </div>
-                {contextFiles.length >= MAX_CONTEXT_FILES && (
-                  <div className="px-3 py-1.5 text-[10px] text-amber-400 bg-amber-500/5 border-b border-border/40 flex items-center gap-1.5">
-                    <Zap className="w-3 h-3 shrink-0" />
-                    Max {MAX_CONTEXT_FILES} files — remove one to add another
-                  </div>
-                )}
-                <div className="max-h-48 overflow-y-auto">
-                  {files.length === 0 && (
-                    <p className="text-xs text-muted-foreground px-3 py-3">No project files available</p>
-                  )}
-                  {files.length > 0 && files.filter((f) =>
-                    !filePickerSearch || f.path.toLowerCase().includes(filePickerSearch.toLowerCase())
-                  ).length === 0 && (
-                    <p className="text-xs text-muted-foreground px-3 py-3">No files match &quot;{filePickerSearch}&quot;</p>
-                  )}
-                  {files.filter((f) =>
-                    !filePickerSearch || f.path.toLowerCase().includes(filePickerSearch.toLowerCase())
-                  ).map((f) => {
-                    const attached = contextFiles.some((cf) => cf.id === f.id);
-                    const atLimit = contextFiles.length >= MAX_CONTEXT_FILES && !attached;
-                    return (
-                      <button
-                        key={f.id}
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          if (atLimit) return;
-                          setContextFiles((prev) =>
-                            attached ? prev.filter((cf) => cf.id !== f.id) : [...prev, f]
-                          );
-                        }}
-                        disabled={atLimit}
-                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors ${
-                          attached
-                            ? "bg-violet-500/10 text-violet-300"
-                            : atLimit
-                            ? "opacity-40 cursor-not-allowed"
-                            : "hover:bg-muted text-foreground"
-                        }`}
-                      >
-                        <FileCode2 className={`w-3 h-3 shrink-0 ${attached ? "text-violet-400" : "text-muted-foreground"}`} />
-                        <span className="font-mono truncate flex-1">{f.path}</span>
-                        {attached && <span className="text-[10px] text-violet-400 shrink-0">✓ attached</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-                {contextFiles.length > 0 && (
-                  <div className="px-3 py-1.5 border-t border-border/60 flex items-center justify-between">
-                    <span className="text-[10px] text-muted-foreground">{contextFiles.length} file{contextFiles.length !== 1 ? "s" : ""} selected</span>
-                    <button
-                      onMouseDown={(e) => { e.preventDefault(); setContextFiles([]); }}
-                      className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      Clear all
-                    </button>
-                  </div>
-                )}
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Security issues bar — Lovable "N issues · Try to fix all" (above input) */}
-          {securityIssueCount > 0 && !isLocked && (
-            <div className="flex items-center gap-2 px-3 py-2 border-t border-[color:var(--border-default)] bg-[var(--bg-secondary-pulse)]">
-              <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-amber-500"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-              <span className="text-xs font-medium text-[var(--fg-primary)]">Security</span>
-              <span className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums bg-amber-500/15 text-amber-500">
-                {securityIssueCount} {securityIssueCount === 1 ? "issue" : "issues"}
-              </span>
-              <div className="flex-1" />
-              <button
-                type="button"
-                onClick={() => onOpenPanel?.("security")}
-                className="h-7 rounded-full px-3 text-xs font-normal text-[var(--fg-primary)] transition-colors hover:bg-[var(--bg-muted)]"
-              >
-                View issues
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  // Route through the multi-agent Editor Intelligence lenses (Security
-                  // Engineer + AI CTO) rather than a single-model chat send: open the
-                  // Intelligence panel and kick off a durable initiative.
-                  onOpenPanel?.("intelligence");
-                  window.dispatchEvent(new CustomEvent("lifemark-intelligence-run", {
-                    detail: { goal: "Fix all security issues in this project. Review every finding, apply the safest fix for each, and verify the app still builds." },
-                  }));
-                }}
-                disabled={noCredits}
-                className="h-7 rounded-full px-3 text-xs font-medium text-[var(--fg-inverse)] bg-[var(--bg-inverse)] transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Try to fix all
-              </button>
-            </div>
-          )}
-
-          {/* Live environment lock banner */}
-          {isLocked && (
-            <div className="flex items-center gap-2 px-4 py-2.5 bg-emerald-500/10 border-t border-emerald-500/20">
-              <Globe className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-              <span className="text-[11px] text-emerald-300 leading-snug">
-                <span className="font-semibold">Live environment</span> — AI edits are locked.
-                Switch back to <span className="font-semibold">Test</span> in the top bar to make changes.
-              </span>
-            </div>
-          )}
-
-          {/* Textarea — not disabled while streaming so users can queue messages */}
-          <ChatTiptapInput
-            ref={textareaRef as unknown as React.Ref<ChatInputHandle>}
-            value={input}
-            onChange={handleInputChange}
+        <LovableChatInputCard>
+          <LovableComposerInputArea
+            textareaRef={textareaRef}
+            input={input}
+            onInputChange={handleInputChange}
             onKeyDown={handleKeyDown}
             onPasteText={handlePromptPaste}
             placeholder={smartPlaceholder}
-            className={`min-h-[60px] max-h-40 ${input.length > CHAT_INPUT_CAPABILITIES.maxMessageLength ? "ring-1 ring-red-500/50 rounded" : input.length > CHAT_INPUT_CAPABILITIES.warnMessageLength ? "ring-1 ring-amber-500/40 rounded" : ""}`}
-            disabled={noCredits || isLocked}
+            noCredits={noCredits}
+            isLocked={isLocked}
+            securityIssueCount={securityIssueCount}
+            onOpenPanel={onOpenPanel}
+            onViewSecurityIssues={() => onOpenPanel?.("security")}
+            onFixAllSecurityIssues={() => {
+              onOpenPanel?.("intelligence");
+              window.dispatchEvent(new CustomEvent("lifemark-intelligence-run", {
+                detail: {
+                  goal: "Fix all security issues in this project. Review every finding, apply the safest fix for each, and verify the app still builds.",
+                },
+              }));
+            }}
+            hasAttachments={!!attachedImage || !!attachedText}
+            contextFileCount={contextFiles.length}
+            mentionOpen={mentionQuery !== null}
+            isCrossProjectQuery={isCrossProjectQuery}
+            mentionItems={mentionItems}
+            mentionCursor={mentionCursor}
+            onMentionSelect={insertMention}
+            showSkillPicker={showSkillPicker}
+            skills={[...(skills.custom ?? []), ...(skills.builtin ?? [])]}
+            skillSearch={skillSearch}
+            onSkillSearchChange={setSkillSearch}
+            onSkillSelect={applySkill}
+            onSkillPickerClose={() => {
+              setShowSkillPicker(false);
+              setSkillSearch("");
+            }}
+            showTemplates={showTemplates}
+            slashSelectedKey={slashSelectedKey}
+            onTemplateSkillSelect={applySkill}
+            onTemplateSelect={insertTemplate}
+            onTemplatesClose={() => setShowTemplates(false)}
+            showSnippets={showSnippets}
+            currentUserId={currentUserId}
+            onSnippetInsert={(content) => {
+              setInput((prev) => prev ? `${prev}\n${content}` : content);
+            }}
+            onSnippetsClose={() => setShowSnippets(false)}
+            analyzeOpen={analyzeOpen}
+            analyzeInstruction={analyzeInstruction}
+            analyzeFile={analyzeFile}
+            analyzeRunning={analyzeRunning}
+            onAnalyzeInstructionChange={setAnalyzeInstruction}
+            onAnalyzeFileSelect={setAnalyzeFile}
+            onAnalyzeClose={() => setAnalyzeOpen(false)}
+            onAnalyzeRun={() => void handleRunAnalyze()}
+            onAnalyzeFileTooLarge={() => toast({ title: "File too large (max 20 MB)", variant: "destructive" })}
+            saveSkillDraft={saveSkillDraft}
+            savingSkill={savingSkill}
+            onSaveSkillDraftChange={(d) => setSaveSkillDraft(d)}
+            onSaveSkillClose={() => setSaveSkillDraft(null)}
+            onSaveSkill={() => void handleSaveSkill()}
+            showFilePicker={showFilePicker}
+            files={files}
+            contextFiles={contextFiles}
+            filePickerSearch={filePickerSearch}
+            maxContextFiles={MAX_CONTEXT_FILES}
+            onFilePickerSearchChange={setFilePickerSearch}
+            onFilePickerClose={() => {
+              setShowFilePicker(false);
+              setFilePickerSearch("");
+            }}
+            onToggleContextFile={(f) =>
+              setContextFiles((prev) =>
+                prev.some((cf) => cf.id === f.id) ? prev.filter((cf) => cf.id !== f.id) : [...prev, f],
+              )
+            }
+            onClearContextFiles={() => setContextFiles([])}
+            onScreenshot={() => window.dispatchEvent(new CustomEvent("lifemark-request-screenshot", { detail: { messageId: "manual" } }))}
+            onAddReference={() => setShowFilePicker((v) => !v)}
+            onAddSkill={() => setShowSkillPicker((v) => !v)}
+            onAnalyzeData={() => setAnalyzeOpen(true)}
+            onAttach={() => fileInputRef.current?.click()}
+            isVisualEditActive={isVisualEditActive}
+            onVisualEditToggle={onVisualEditToggle}
+            onFocusPreview={onFocusPreview}
+            onToggleTemplates={() => setShowTemplates((v) => !v)}
+            mobileMode={mobileMode}
+            onToggleMobileMode={() => setMobileMode((v) => !v)}
+            mobileDisabled={noCredits || isLocked || streaming}
+            mode={mode}
+            clarifyFirst={clarifyFirst}
+            showClarifyToggle={(mode === "build" || mode === "agent") && files.length === 0}
+            onModeChange={onModeChange}
+            onToggleClarify={() => setClarifyFirst((v) => !v)}
+            multiAgent={multiAgent}
+            onMultiAgentChange={setMultiAgent}
+            modelManuallySelectedRef={modelManuallySelectedRef}
+            selectedModel={selectedModel}
+            onSelectModel={(model, manual) => {
+              modelManuallySelectedRef.current = manual;
+              setSelectedModel(model);
+            }}
+            autoModel={autoModel}
+            activeModelLabel={activeModelLabel}
+            onTranscript={(t) => setInput((prev) => prev + (prev ? " " : "") + t)}
+            showFileGenPicker={showFileGenPicker}
+            fileGenBusy={fileGenBusy}
+            fileGenDisabled={!input.trim() || !!fileGenBusy || noCredits || isLocked || streaming}
+            onToggleFileGenPicker={() => setShowFileGenPicker((v) => !v)}
+            onGenerateFile={(fmt) => void handleGenerateFile(fmt)}
+            streaming={streaming}
+            canSend={(!input.trim() && !attachedImage) ? false : !noCredits && !isLocked}
+            canQueue={!!input.trim() && !noCredits && !isLocked && !attachedImage && !attachedText}
+            queueDisabledReason={attachedImage || attachedText ? "Remove attachments before queueing a follow-up" : undefined}
+            onSend={() => void handleSend()}
+            onStop={stopGeneration}
           />
+        </LovableChatInputCard>
+      </LovableChatComposerShell>
 
-          {/* Character counter — shown when input has content */}
-          {input.length > 0 && (
-            <div className="flex items-center justify-between gap-3 px-4 pb-0.5">
-              {/* Patience microcopy — gentle nudge to break long prompts into smaller blocks */}
-              {input.length > 800 ? (
-                <span className="text-[10px] text-amber-300/80 leading-snug">
-                  Tip: break large requests into smaller, testable blocks — try Plan mode first.
-                </span>
-              ) : (
-                <span />
-              )}
-              <span className={`text-[10px] tabular-nums transition-colors ${
-                input.length > CHAT_INPUT_CAPABILITIES.maxMessageLength ? "text-red-400" :
-                input.length > CHAT_INPUT_CAPABILITIES.warnMessageLength ? "text-amber-400" :
-                "text-muted-foreground/40"
-              }`}>
-                {input.length} / {CHAT_INPUT_CAPABILITIES.maxMessageLength.toLocaleString()}
-              </span>
-            </div>
-          )}
-          {/* ── Bottom action row — Lovable style ── */}
-          <div className="flex items-center gap-1.5 px-3 pb-3 pt-1 safe-area-bottom safe-area-x">
-
-            {/* + context menu — matches Lovable exactly */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  className="flex items-center justify-center w-7 h-7 rounded-lg border border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors flex-shrink-0 text-base font-light"
-                  title="Add context or attach"
-                >
-                  +
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" side="top" className="w-52 p-1">
-                <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => onOpenPanel?.("settings")}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 0-14.14 0"/><path d="M4.93 19.07a10 10 0 0 0 14.14 0"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
-                  <span className="flex-1">Settings</span>
-                  <span className="text-[10px] text-muted-foreground/60">Ctrl+.</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => onOpenPanel?.("history")}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-                  <span>History</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => onOpenPanel?.("knowledge")}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-                  <span>Knowledge</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => onOpenPanel?.("github")}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 3.165 19.489c-.501-.1-.687-.217-.687-.482v-1.69c0-.574-.192-1.004-.507-1.267 1.662-.184 3.408-.81 3.408-3.668 0-.812-.29-1.476-.764-1.993.077-.188.33-.944-.073-1.968 0 0-.623-.199-2.04.762A7.147 7.147 0 0 0 12 10.9a7.11 7.11 0 0 0-1.5.202c-1.415-.962-2.04-.762-2.04-.762-.4 1.024-.148 1.78-.072 1.968-.474.517-.764 1.181-.764 1.993 0 2.849 1.742 3.487 3.398 3.677-.213.187-.406.515-.473.997-.425.19-1.504.52-2.166-.62 0 0-.394-.714-1.14-.766 0 0-.726-.009-.05.452 0 0 .487.228.824 1.082 0 0 .436 1.325 2.503.876v1.208c0 .263-.183.38-.68.483A10 10 0 0 1 12 2z"/></svg>
-                  <span>GitHub</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => onOpenPanel?.("connectors")}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2H2v10l9.29 9.29c.94.94 2.48.94 3.42 0l6.58-6.58c.94-.94.94-2.48 0-3.42L12 2Z"/><path d="M7 7h.01"/></svg>
-                  <span className="flex-1">Connectors</span>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-                </DropdownMenuItem>
-                <div className="h-px bg-border/60 my-1" />
-                <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => window.dispatchEvent(new CustomEvent("lifemark-request-screenshot", { detail: { messageId: "manual" } }))}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-                  <span>Take a screenshot</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => setShowFilePicker((v) => !v)}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  <span>Add reference</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => setShowSnippets((v) => !v)}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-                  <span>Add skill</span>
-                </DropdownMenuItem>
-                {/* Analyze data — runs /api/ai/analyze in a Python sandbox and renders generated files inline */}
-                <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => setAnalyzeOpen(true)}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 5-5"/></svg>
-                  <span>Analyze data</span>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => fileInputRef.current?.click()}>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-                  <span>Attach</span>
-                </DropdownMenuItem>
-                {/* Matches Lovable's "Connectors have moved" footnote at the bottom of the + menu */}
-                <div className="h-px bg-border/60 my-1" />
-                <div className="px-2 py-2">
-                  <p className="text-[10px] font-medium text-foreground/80">Connectors have moved</p>
-                  <p className="text-[10px] text-muted-foreground leading-snug">
-                    Find the new connector experience on the homepage.
-                  </p>
-                </div>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            {/* @ Visual edits button — Lovable style */}
-            <button
-              className="flex items-center gap-1.5 h-7 px-2.5 rounded-lg border border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors text-xs flex-shrink-0"
-              onClick={() => setShowTemplates((v) => !v)}
-              title="Visual edits & prompt templates"
-            >
-              <span className="text-muted-foreground/60 font-medium">@</span>
-              <span>Visual edits</span>
-            </button>
-
-            <div className="flex-1" />
-
-            {/* Chat / Plan / Build toggle - Lovable primary modes */}
-            <div className="flex items-center rounded-lg border border-border/70 overflow-hidden flex-shrink-0">
-              <button
-                type="button"
-                onClick={() => onModeChange?.("chat")}
-                className={`h-7 px-2.5 text-xs font-medium transition-colors ${
-                  mode === "chat"
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
-                }`}
-                title="Short Q&A"
-              >
-                Chat
-              </button>
-              <button
-                type="button"
-                onClick={() => onModeChange?.("plan")}
-                className={`h-7 px-2.5 text-xs font-medium transition-colors border-l border-border/70 ${
-                  mode === "plan"
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
-                }`}
-              >
-                Plan
-              </button>
-              <button
-                type="button"
-                onClick={() => onModeChange?.("build")}
-                className={`h-7 px-2.5 text-xs font-medium transition-colors border-l border-border/70 ${
-                  mode === "build" || mode === "agent" || mode === "patch"
-                    ? "bg-muted text-foreground"
-                    : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
-                }`}
-              >
-                Build
-              </button>
-            </div>
-
-            {(mode === "build" || mode === "agent") && files.length === 0 && (
-              <button
-                type="button"
-                onClick={() => setClarifyFirst((v) => !v)}
-                className={`h-7 px-2.5 rounded-lg border text-xs font-medium transition-colors flex-shrink-0 ${
-                  clarifyFirst
-                    ? "border-violet-500/50 bg-violet-500/15 text-violet-300"
-                    : "border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/40"
-                }`}
-                title="Ask clarifying questions before the first build"
-              >
-                Clarify
-              </button>
-            )}
-
-            {/* Advanced: extra modes + model, folded into ONE compact control.
-                Lovable-simple rule for this row: [+] [@ Visual edits] [Plan|Build] [⋯] [send].
-                The old row also showed a cyan "Auto <model>" badge AND a second
-                mode label ("Build ▾") next to the Plan/Build toggle — three
-                controls saying overlapping things. The badge's info now lives
-                inside this menu; the trigger is icon-only, with a dot when a
-                non-primary mode (Chat/Agent/Quick Edit) or manual model is active. */}
-            <div className="flex items-center gap-1.5 min-w-0">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    className="relative flex items-center justify-center h-7 w-7 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors flex-shrink-0 border border-border/70"
-                    title={`Modes & model — ${mode === "patch" ? "Quick Edit" : mode.charAt(0).toUpperCase() + mode.slice(1)} · ${modelManuallySelectedRef.current ? "" : "Auto: "}${activeModelLabel}`}
-                  >
-                    <ChevronDown className="w-3.5 h-3.5" />
-                    {(mode === "chat" || mode === "agent" || mode === "patch" || modelManuallySelectedRef.current) && (
-                      <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-cyan-400" />
-                    )}
-                  </button>
-                </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" side="top" className="w-52 p-1">
-                <DropdownMenuItem className="text-xs gap-2 py-2.5" onClick={() => onModeChange?.("chat")}>
-                  <div className="w-4 h-4 flex items-center justify-center">{mode === "chat" && <Check className="w-3 h-3" />}</div>
-                  <div>
-                    <p className="font-medium">Chat</p>
-                    <p className="text-[10px] text-muted-foreground">Q&amp;A without code changes</p>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-xs gap-2 py-2.5" onClick={() => onModeChange?.("build")}>
-                  <div className="w-4 h-4 flex items-center justify-center">{mode === "build" && <Check className="w-3 h-3" />}</div>
-                  <div>
-                    <p className="font-medium">Build</p>
-                    <p className="text-[10px] text-muted-foreground">Make changes directly</p>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-xs gap-2 py-2.5" onClick={() => onModeChange?.("plan")}>
-                  <div className="w-4 h-4 flex items-center justify-center">{mode === "plan" && <Check className="w-3 h-3" />}</div>
-                  <div>
-                    <p className="font-medium">Plan</p>
-                    <p className="text-[10px] text-muted-foreground">Discuss before building</p>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-xs gap-2 py-2.5" onClick={() => onModeChange?.("patch")}>
-                  <div className="w-4 h-4 flex items-center justify-center">{mode === "patch" && <Check className="w-3 h-3" />}</div>
-                  <div>
-                    <p className="font-medium">Quick Edit</p>
-                    <p className="text-[10px] text-muted-foreground">Small targeted patches</p>
-                  </div>
-                </DropdownMenuItem>
-                <DropdownMenuItem className="text-xs gap-2 py-2.5" onClick={() => onModeChange?.("agent")}>
-                  <div className="w-4 h-4 flex items-center justify-center">{mode === "agent" && <Check className="w-3 h-3" />}</div>
-                  <div>
-                    <p className="font-medium">Agent</p>
-                    <p className="text-[10px] text-muted-foreground">Autonomous AI agent</p>
-                  </div>
-                </DropdownMenuItem>
-                <div className="h-px bg-border/60 my-1" />
-                {/* Team (multi-agent) toggle — routes Agent sends through the lens orchestrator */}
-                <DropdownMenuItem
-                  className="text-xs gap-2 py-2.5"
-                  onSelect={(e) => { e.preventDefault(); setMultiAgent((v) => !v); }}
-                >
-                  <div className="w-4 h-4 flex items-center justify-center">{multiAgent && <Check className="w-3 h-3" />}</div>
-                  <div className="flex-1">
-                    <p className="font-medium flex items-center gap-1.5">
-                      Team
-                      <span className="rounded bg-fuchsia-500/15 px-1 py-px text-[9px] font-semibold text-fuchsia-300">MULTI-AGENT</span>
-                    </p>
-                    <p className="text-[10px] text-muted-foreground leading-snug">
-                      Agent mode runs the full lens team (debate + waves) in the Intelligence panel
-                    </p>
-                  </div>
-                </DropdownMenuItem>
-                {/* Matches Lovable's "Toggle with Alt P" hint below the mode list */}
-                <div className="flex items-center justify-between px-2 py-1.5 text-[10px] text-muted-foreground">
-                  <span>Toggle with</span>
-                  <span className="flex items-center gap-1">
-                    <kbd className="px-1.5 py-0.5 rounded border border-border/60 bg-muted/40 text-[10px] font-mono">Alt</kbd>
-                    <kbd className="px-1.5 py-0.5 rounded border border-border/60 bg-muted/40 text-[10px] font-mono">P</kbd>
-                  </span>
-                </div>
-                <div className="h-px bg-border/60 my-1" />
-                {/* Model selector inline */}
-                {/* Auto (smart routing): shows the model the catalog will pick for the current prompt */}
-                <DropdownMenuItem
-                  onClick={() => {
-                    modelManuallySelectedRef.current = false;
-                    setSelectedModel(DEFAULT_CODING_MODEL as AIModel);
-                  }}
-                  className={`text-xs gap-2 py-2 ${!modelManuallySelectedRef.current ? "bg-muted" : ""}`}
-                >
-                  <div className="w-4 h-4 flex items-center justify-center flex-shrink-0">
-                    {!modelManuallySelectedRef.current && <Check className="w-3 h-3 text-violet-400" />}
-                  </div>
-                  <span className="flex-1 font-medium">Auto</span>
-                  <span className="text-[10px] text-muted-foreground/70 flex-shrink-0 truncate max-w-[150px]">
-                    {getOpenRouterModelLabel(autoModel)}
-                  </span>
-                  <span className="text-[9px] px-1 py-0.5 rounded bg-violet-500/15 text-violet-400 border border-violet-500/25 flex-shrink-0">Smart</span>
-                </DropdownMenuItem>
-                {AI_MODELS.map((model) => (
-                  <DropdownMenuItem
-                    key={model.id}
-                    onClick={() => {
-                      modelManuallySelectedRef.current = true;
-                      setSelectedModel(model.id);
-                    }}
-                    className={`text-xs gap-2 py-2 ${selectedModel === model.id ? "bg-muted" : ""}`}
-                  >
-                    <div className="w-4 h-4 flex items-center justify-center flex-shrink-0">
-                      {selectedModel === model.id && <Check className="w-3 h-3 text-violet-400" />}
-                    </div>
-                    <span className="flex-1 font-medium">{model.label}</span>
-                    <span className="text-[10px] text-muted-foreground/70 flex-shrink-0">{model.badge}</span>
-                    {model.free && <span className="text-[9px] px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 flex-shrink-0">Free</span>}
-                    {model.best && <span className="text-[9px] px-1 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 flex-shrink-0">Best</span>}
-                    {model.fast && !model.best && !model.free && <span className="text-[9px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/25 flex-shrink-0">Fast</span>}
-                    {model.creditMultiplier && model.creditMultiplier >= 2 && <span className="text-[9px] px-1 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/25 flex-shrink-0">Premium</span>}
-                    {model.new && <span className="text-[9px] px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 flex-shrink-0">New</span>}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-
-            {/* Mic / voice mode */}
-            <VoiceMode onTranscript={(t) => setInput((prev) => prev + (prev ? " " : "") + t)} />
-
-            {/* Generate-as-file — turns the prompt into a standalone downloadable document */}
-            <div className="relative flex-shrink-0">
-              <AnimatePresence>
-                {showFileGenPicker && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 4 }}
-                    className="absolute bottom-full right-0 mb-2 z-50 w-48 bg-popover border border-border rounded-xl shadow-xl overflow-hidden"
-                  >
-                    <div className="px-3 py-1.5 border-b border-border">
-                      <span className="text-[10px] font-semibold text-muted-foreground">
-                        Generate prompt as file
-                      </span>
-                    </div>
-                    {FILE_GEN_FORMATS.map((fmt) => (
-                      <button
-                        key={fmt.id}
-                        onMouseDown={(e) => { e.preventDefault(); void handleGenerateFile(fmt.id); }}
-                        className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-muted transition-colors"
-                      >
-                        <span className="font-mono text-[10px] text-violet-400 w-9 shrink-0">.{fmt.id}</span>
-                        <span className="text-muted-foreground">{fmt.label}</span>
-                      </button>
-                    ))}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-              <button
-                type="button"
-                onClick={() => setShowFileGenPicker((v) => !v)}
-                disabled={!input.trim() || !!fileGenBusy || noCredits || isLocked || streaming}
-                className={`flex items-center justify-center w-7 h-7 rounded-lg border transition-colors ${
-                  showFileGenPicker || fileGenBusy
-                    ? "border-violet-500/50 bg-violet-500/15 text-violet-300"
-                    : /\b(as a file|\.md|\.csv|\.json|\.txt|\.html|csv|json|markdown|download|export|report|document)\b/i.test(input)
-                    ? "border-violet-500/40 text-violet-300 hover:bg-violet-500/10"
-                    : "border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/60"
-                } disabled:opacity-40 disabled:cursor-not-allowed`}
-                title="Generate as file — creates a downloadable .md / .csv / .json / .txt / .html from this prompt (1 credit)"
-              >
-                {fileGenBusy
-                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  : <FileDown className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-
-            {/* Send / Stop — Lovable uses square stop while generating */}
-            {streaming ? (
-              <>
-                {input.trim() && (
-                  <button
-                    type="button"
-                    onClick={() => void handleSend()}
-                    disabled={noCredits || isLocked || !!attachedImage || !!attachedText}
-                    className={`flex items-center justify-center w-7 h-7 rounded-lg border transition-all flex-shrink-0 ${
-                      !noCredits && !isLocked && !attachedImage && !attachedText
-                        ? "border-violet-500/50 bg-violet-500/15 text-violet-300 hover:bg-violet-500/25"
-                        : "border-border/70 bg-muted/40 text-muted-foreground/40 cursor-not-allowed"
-                    }`}
-                    title={attachedImage || attachedText ? "Remove attachments before queueing a follow-up" : "Add follow-up to queue"}
-                  >
-                    <ListChecks className="w-3.5 h-3.5" />
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={stopGeneration}
-                  className="flex items-center justify-center w-7 h-7 rounded-lg bg-foreground text-background hover:bg-foreground/90 transition-all flex-shrink-0"
-                  title="Stop generation"
-                >
-                  <Square className="w-3 h-3 fill-current" />
-                </button>
-              </>
-            ) : (
-              <button
-                onClick={() => void handleSend()}
-                disabled={(!input.trim() && !attachedImage) || noCredits || isLocked}
-                className={`flex items-center justify-center w-7 h-7 rounded-lg transition-all flex-shrink-0 ${
-                  (input.trim() || attachedImage) && !noCredits && !isLocked
-                    ? "bg-foreground text-background hover:bg-foreground/90"
-                    : "bg-muted/50 text-muted-foreground/40 cursor-not-allowed"
-                }`}
-                title="Send (Enter)"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {chatAnnotateOpen && attachedImage && (
-        <PreviewAnnotateModal
-          screenshotDataUrl={attachedImage}
-          onClose={() => setChatAnnotateOpen(false)}
-          onSend={(annotated, note) => {
-            setAttachedImage(annotated);
-            if (note?.trim()) setInput(note);
-            setChatAnnotateOpen(false);
-          }}
-        />
-      )}
-
-      {designPreviewOpen && pendingDesignPrompt && (
-        <DesignPreviewPicker
-          open={designPreviewOpen}
-          prompt={pendingDesignPrompt}
-          projectId={project.id}
-          fileCount={files.length}
-          onSelect={handleDesignPreviewSelect}
-          onSkip={handleDesignPreviewSkip}
-          onClose={() => {
-            setDesignPreviewOpen(false);
-            setPendingDesignPrompt(null);
-            if (pendingDesignPrompt) setInput(pendingDesignPrompt);
-          }}
-        />
-      )}
-    </div>
+      <LovableChatModals
+        annotateOpen={chatAnnotateOpen}
+        attachedImage={attachedImage}
+        onCloseAnnotate={() => setChatAnnotateOpen(false)}
+        onSendAnnotate={(annotated, note) => {
+          setAttachedImage(annotated);
+          if (note?.trim()) setInput(note);
+          setChatAnnotateOpen(false);
+        }}
+        designPreviewOpen={designPreviewOpen}
+        pendingDesignPrompt={pendingDesignPrompt}
+        projectId={project.id}
+        fileCount={files.length}
+        onDesignSelect={handleDesignPreviewSelect}
+        onDesignSkip={handleDesignPreviewSkip}
+        onDesignClose={() => {
+          setDesignPreviewOpen(false);
+          setPendingDesignPrompt(null);
+          if (pendingDesignPrompt) setInput(pendingDesignPrompt);
+        }}
+      />
+    </LovableChatPanelShell>
   );
 }

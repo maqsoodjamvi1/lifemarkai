@@ -2,7 +2,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
-import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
+import { getFastAiModel } from "@/lib/ai/model-defaults";
 import {
   cancelCreditReservation,
   reserveCredits,
@@ -147,7 +147,8 @@ export async function POST(req: NextRequest) {
   try {
     const aiRes = await generateAI(
       {
-        model: BALANCED_CODING_MODEL,
+        // Small analysis-script generation — fast tier is plenty.
+        model: getFastAiModel(),
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: userMsg },

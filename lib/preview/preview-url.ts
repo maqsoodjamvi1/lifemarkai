@@ -70,3 +70,47 @@ export function newLoadId(): string {
   }
   return `ld_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 }
+
+export interface PreviewBarLabelOpts {
+  projectId?: string;
+  previewPath: string;
+  deployedUrl?: string | null;
+  sandboxUrl?: string | null;
+}
+
+/**
+ * Lovable-parity address bar label — shows stable host when configured,
+ * otherwise the in-app route (fallback iframe) or sandbox host.
+ */
+export function getPreviewBarLabel(opts: PreviewBarLabelOpts): string {
+  const path = opts.previewPath.startsWith("/") ? opts.previewPath : `/${opts.previewPath}`;
+  if (opts.deployedUrl) {
+    try {
+      const u = new URL(opts.deployedUrl);
+      return u.host + (path !== "/" ? path : "");
+    } catch {
+      return opts.deployedUrl.replace(/^https?:\/\//, "");
+    }
+  }
+  if (opts.sandboxUrl) {
+    try {
+      const u = new URL(opts.sandboxUrl);
+      return u.host + (path !== "/" ? path : "");
+    } catch {
+      return opts.sandboxUrl;
+    }
+  }
+  const configured = process.env.NEXT_PUBLIC_PREVIEW_ORIGIN ?? "";
+  if (opts.projectId && configured.includes("{id}")) {
+    const host = configured
+      .replace(/^https?:\/\//, "")
+      .replace(/\{id\}/g, opts.projectId.slice(0, 12))
+      .replace(/\/$/, "");
+    return host + path;
+  }
+  if (opts.projectId && configured) {
+    const host = configured.replace(/^https?:\/\//, "").replace(/\/$/, "");
+    return `${host}/preview/${opts.projectId.slice(0, 8)}${path === "/" ? "" : path}`;
+  }
+  return path;
+}

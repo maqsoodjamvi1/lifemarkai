@@ -5,9 +5,9 @@ import { DESIGN_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import {
   DESIGN_PREVIEW_SYSTEM_PROMPT,
-  sanitizePreviewHtml,
+  buildFallbackDesignPreviews,
+  parseDesignPreviewResponse,
   shouldOfferDesignPreviews,
-  type DesignPreviewDirection,
 } from "@/lib/ai/design-previews";
 
 export const runtime = "nodejs";
@@ -53,35 +53,31 @@ export async function POST(req: NextRequest) {
           { role: "system", content: DESIGN_PREVIEW_SYSTEM_PROMPT },
           { role: "user", content: `Build request:\n${prompt}` },
         ],
-        maxTokens: 3500,
-        temperature: 0.7,
+        maxTokens: 2800,
+        temperature: 0.55,
         stream: false,
         jsonMode: true,
       },
       { projectId, userId: user.id, task: "design_previews" },
     );
 
-    const raw = result.content.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
-    const parsed = JSON.parse(raw) as { directions?: DesignPreviewDirection[] };
-    const directions = (parsed.directions ?? [])
-      .slice(0, 3)
-      .map((d) => ({
-        ...d,
-        previewHtml: sanitizePreviewHtml(d.previewHtml ?? ""),
-      }))
-      .filter((d) => d.id && d.label && d.previewHtml);
-
+    let directions = parseDesignPreviewResponse(result.content ?? "");
     if (directions.length < 3) {
-      return NextResponse.json({ error: "Could not generate three previews" }, { status: 500 });
+      // Model often breaks JSON on long previewHtml — never surface raw parse errors.
+      const fallback = buildFallbackDesignPreviews(prompt, projectId ?? user.id);
+      const byId = new Map(fallback.map((d) => [d.id, d]));
+      for (const d of directions) byId.set(d.id, d);
+      directions = [...byId.values()].slice(0, 3);
+      if (directions.length < 3) directions = fallback;
     }
-
-    // Lovable bundles design guidance into the build flow — no separate credit charge.
 
     return NextResponse.json({ directions });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Preview generation failed" },
-      { status: 500 },
-    );
+    // Soft-fail: still return usable direction cards so the user can pick/skip.
+    console.error("[design-previews]", err instanceof Error ? err.message : err);
+    return NextResponse.json({
+      directions: buildFallbackDesignPreviews(prompt, projectId ?? user.id),
+      degraded: true,
+    });
   }
 }

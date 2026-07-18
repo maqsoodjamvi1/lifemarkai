@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildHealingPrompt,
   formatErrorsForHealing,
@@ -57,6 +57,13 @@ export function usePreviewErrorGuard(
   const seenErrorsRef = useRef<Set<string>>(new Set());
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const healingRef = useRef(false);
+  // Keep heal callback in a ref so flushReport/startHealing stay referentially
+  // stable — an inline onHealRequest from PreviewPanel used to recreate the
+  // whole API object every render and thrash dependent effects.
+  const onHealRequestRef = useRef(onHealRequest);
+  onHealRequestRef.current = onHealRequest;
+  const autoHealRef = useRef(autoHeal);
+  autoHealRef.current = autoHeal;
 
   const buildReport = useCallback((): PreviewErrorReport => {
     const errors = [...errorsRef.current];
@@ -71,19 +78,31 @@ export function usePreviewErrorGuard(
     const r = buildReport();
     if (r.errors.length === 0) return;
 
-    setReport(r);
+    setReport((prev) => {
+      if (
+        prev &&
+        prev.errors.length === r.errors.length &&
+        prev.errors.every(
+          (err, i) =>
+            err.message === r.errors[i]?.message && err.kind === r.errors[i]?.kind,
+        )
+      ) {
+        return prev;
+      }
+      return r;
+    });
     if (healingRef.current) return;
 
     setPhase("frozen");
 
-    if (autoHeal && onHealRequest) {
+    if (autoHealRef.current && onHealRequestRef.current) {
       const prompt = buildHealingPrompt(r.errors);
       if (!prompt) return;
       healingRef.current = true;
       setPhase("healing");
-      onHealRequest(prompt, r);
+      onHealRequestRef.current(prompt, r);
     }
-  }, [autoHeal, buildReport, onHealRequest]);
+  }, [buildReport]);
 
   const pushError = useCallback(
     (err: PreviewRuntimeError) => {
@@ -140,19 +159,19 @@ export function usePreviewErrorGuard(
   const clearErrors = useCallback(() => {
     errorsRef.current = [];
     seenErrorsRef.current.clear();
-    setReport(null);
-    setPhase("healthy");
     healingRef.current = false;
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
+    setReport((prev) => (prev === null ? prev : null));
+    setPhase((prev) => (prev === "healthy" ? prev : "healthy"));
   }, []);
 
   const enterHealingPhase = useCallback(() => {
     if (healingRef.current) return;
     healingRef.current = true;
-    setPhase("healing");
+    setPhase((prev) => (prev === "healing" ? prev : "healing"));
   }, []);
 
   const startHealing = useCallback(() => {
@@ -160,8 +179,8 @@ export function usePreviewErrorGuard(
     const prompt = buildHealingPrompt(r.errors);
     if (!prompt) return;
     enterHealingPhase();
-    onHealRequest?.(prompt, r);
-  }, [buildReport, enterHealingPhase, onHealRequest]);
+    onHealRequestRef.current?.(prompt, r);
+  }, [buildReport, enterHealingPhase]);
 
   const completeHealing = useCallback(() => {
     healingRef.current = false;
@@ -170,19 +189,31 @@ export function usePreviewErrorGuard(
 
   const failHealing = useCallback(() => {
     healingRef.current = false;
-    setPhase("frozen");
+    setPhase((prev) => (prev === "frozen" ? prev : "frozen"));
   }, []);
 
   const freezePreview = phase === "frozen" || phase === "healing";
 
-  return {
-    phase,
-    report,
-    freezePreview,
-    clearErrors,
-    startHealing,
-    enterHealingPhase,
-    completeHealing,
-    failHealing,
-  };
+  return useMemo(
+    () => ({
+      phase,
+      report,
+      freezePreview,
+      clearErrors,
+      startHealing,
+      enterHealingPhase,
+      completeHealing,
+      failHealing,
+    }),
+    [
+      phase,
+      report,
+      freezePreview,
+      clearErrors,
+      startHealing,
+      enterHealingPhase,
+      completeHealing,
+      failHealing,
+    ],
+  );
 }

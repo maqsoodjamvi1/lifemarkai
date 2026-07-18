@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
-import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
+import { DESIGN_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import {
   cancelCreditReservation,
@@ -91,7 +91,8 @@ export async function POST(req: NextRequest) {
 
     const result = await generateAI(
       {
-        model: DEFAULT_CODING_MODEL,
+        // Design critique → design tier (aesthetics-tuned, cheaper).
+        model: DESIGN_MODEL,
         messages,
         maxTokens: 3000,
         temperature: 0.3,

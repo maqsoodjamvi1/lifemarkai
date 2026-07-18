@@ -117,6 +117,10 @@ const AppConnectorsPanel = dynamic(
   importWithRetry(() => import("./app-connectors-panel").then((m) => m.AppConnectorsPanel)),
   { ssr: false, loading: panelLoading }
 );
+const MediaGalleryPanel = dynamic(
+  importWithRetry(() => import("./media-gallery-panel").then((m) => m.MediaGalleryPanel)),
+  { ssr: false, loading: panelLoading }
+);
 const SeoPanel = dynamic(
   importWithRetry(() => import("./seo-panel").then((m) => m.SeoPanel)),
   { ssr: false, loading: panelLoading }
@@ -157,7 +161,7 @@ export interface LazyPanelContext {
   setEditorMode: (mode: EditorMode) => void;
   setPendingCrossRefPrompt: (p: string | null) => void;
   handleProjectUpdate: (updates: Partial<Project>) => void;
-  handleFilesUpdate: (files: ProjectFile[]) => void;
+  handleFilesUpdate: (files: ProjectFile[], opts?: { replace?: boolean }) => void;
   handleFileUpdate: (file: ProjectFile) => void;
   handleEnvUpdateFile: (path: string, content: string) => void;
   handleCreditsUpdate: (credits: number) => void;
@@ -427,10 +431,11 @@ export function SecondaryPanelContent(ctx: LazyPanelContext) {
   if (rightPanel === "e2e") return <BrowserTestingPanel project={currentProject} files={files} onFilesUpdate={handleFilesUpdate} onOpenFile={setActiveFile} />;
   if (rightPanel === "packages") return <PackagesPanel projectId={pid} files={files} onFileChange={handleFileUpdate} />;
   if (rightPanel === "email") return <EmailPanel projectId={pid} files={files} onFilesUpdate={handleFilesUpdate} />;
-  if (rightPanel === "comments") return <CommentsPanel projectId={pid} currentUserId={profile?.id ?? ""} />;
+  if (rightPanel === "comments") return <CommentsPanel projectId={pid} currentUserId={profile?.id ?? ""} isPublic={currentProject.is_public} />;
   if (rightPanel === "mcpcontext") return <McpContextPanel projectId={pid} />;
   if (rightPanel === "aeo") return <AeoPanel files={files} onGenerateSchema={sendPromptToChat} />;
   if (rightPanel === "appconnectors") return <AppConnectorsPanel projectId={pid} />;
+  if (rightPanel === "media") return <MediaGalleryPanel files={files} onSendToChat={sendPromptToChat} onFilesUpdate={handleFilesUpdate} />;
   if (rightPanel === "components") return <ComponentsPanel onInsertPrompt={sendPromptToChat} />;
   if (rightPanel === "designpanel") return <DesignSystemPanel projectId={pid} files={files} onFilesUpdate={handleFilesUpdate} />;
   return null;

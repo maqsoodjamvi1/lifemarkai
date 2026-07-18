@@ -8,6 +8,8 @@ import { sendDeploymentEmail } from "@/lib/email/resend";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { enqueueDeployJob, getDeployQueue } from "@/lib/queue/client";
 import { logger } from "@/lib/logger";
+import { scanProject } from "@/lib/security/scan";
+import { auditDependencies } from "@/lib/security/deps";
 
 // ── Netlify helpers ────────────────────────────────────────────────────────
 
@@ -222,7 +224,11 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const { projectId, provider = "netlify" } = await req.json();
+  const {
+    projectId,
+    provider = "netlify",
+    allowCriticalSecurityFindings = false,
+  } = await req.json();
 
   // Fetch project + files
   const { data: project } = await (supabase as any)
@@ -271,6 +277,25 @@ export async function POST(req: NextRequest) {
     });
 
   const projectFiles = (project.project_files as Array<{ path: string; content: string; language?: string }>) ?? [];
+
+  // Publish-time security gate. The project security panel remains the place
+  // to investigate and fix issues, but deployments must make an explicit
+  // decision when a scan finds critical risks.
+  const securityFindings = [
+    ...scanProject(projectFiles).findings,
+    ...auditDependencies(projectFiles),
+  ];
+  const criticalSecurityFindings = securityFindings.filter((finding) => finding.severity === "critical");
+  if (criticalSecurityFindings.length > 0 && !allowCriticalSecurityFindings) {
+    return NextResponse.json(
+      {
+        error: "Critical security findings must be reviewed before publishing.",
+        requiresSecurityReview: true,
+        findings: criticalSecurityFindings,
+      },
+      { status: 412 },
+    );
+  }
 
   // Auto-snapshot current files for rollback capability
   const snapshotFiles = projectFiles.map((f) => ({
@@ -429,4 +454,3 @@ export async function POST(req: NextRequest) {
     message: `Deploying to ${providerLabel}… this takes ~30 seconds.`,
   });
 }
-

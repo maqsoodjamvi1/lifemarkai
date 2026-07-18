@@ -17,6 +17,8 @@ import { createClient } from "@/lib/supabase/client";
 import { NotificationBell } from "@/components/dashboard/notification-bell";
 import type { Profile } from "@/types/database";
 import type { User } from "@supabase/supabase-js";
+import { usePlatformLocale } from "@/hooks/use-platform-locale";
+import type { PlatformStringKey } from "@/lib/platform-locale";
 
 interface DashboardSidebarProps {
   user: User;
@@ -24,15 +26,15 @@ interface DashboardSidebarProps {
   recentProjects?: { id: string; name: string; updated_at?: string | null }[];
 }
 
-const navItems = [
-  { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard", shortcut: "" },
+const navItems: Array<{ icon: typeof LayoutDashboard; label: string; href: string; shortcut: string; tKey?: PlatformStringKey }> = [
+  { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard", shortcut: "", tKey: "nav.dashboard" },
   { icon: Inbox, label: "Inbox", href: "/dashboard/inbox", shortcut: "" },
-  { icon: FolderOpen, label: "Projects", href: "/dashboard/projects", shortcut: "" },
-  { icon: BookTemplate, label: "Templates", href: "/templates", shortcut: "" },
+  { icon: FolderOpen, label: "Projects", href: "/dashboard/projects", shortcut: "", tKey: "nav.projects" },
+  { icon: BookTemplate, label: "Templates", href: "/templates", shortcut: "", tKey: "nav.templates" },
   { icon: BarChart3, label: "Analytics", href: "/dashboard/analytics", shortcut: "" },
-  { icon: Users, label: "Team", href: "/dashboard/team", shortcut: "" },
-  { icon: CreditCard, label: "Billing", href: "/dashboard/billing", shortcut: "" },
-  { icon: Settings, label: "Settings", href: "/dashboard/settings", shortcut: "" },
+  { icon: Users, label: "Team", href: "/dashboard/team", shortcut: "", tKey: "nav.team" },
+  { icon: CreditCard, label: "Billing", href: "/dashboard/billing", shortcut: "", tKey: "nav.billing" },
+  { icon: Settings, label: "Settings", href: "/dashboard/settings", shortcut: "", tKey: "nav.settings" },
   { icon: Users, label: "People", href: "/dashboard/people", shortcut: "" },
   { icon: ClipboardList, label: "Audit Logs", href: "/dashboard/audit-logs", shortcut: "" },
   { icon: BarChart3, label: "AI Metrics", href: "/dashboard/ai-evals", shortcut: "" },
@@ -65,6 +67,7 @@ export function DashboardSidebar({ user, profile, recentProjects = [] }: Dashboa
   const pathname = usePathname();
   const router = useRouter();
   const supabase = createClient();
+  const { t } = usePlatformLocale();
 
   const initials = (profile?.full_name ?? user.email ?? "U")
     .split(" ")
@@ -136,7 +139,7 @@ export function DashboardSidebar({ user, profile, recentProjects = [] }: Dashboa
               }`}
             >
               <item.icon className={`w-4 h-4 ${active ? "text-sidebar-primary" : "text-muted-foreground group-hover:text-foreground"}`} />
-              {item.label}
+              {item.tKey ? t(item.tKey) : item.label}
               {active && <ChevronRight className="w-3 h-3 ml-auto opacity-50" />}
             </Link>
           );
@@ -197,7 +200,7 @@ export function DashboardSidebar({ user, profile, recentProjects = [] }: Dashboa
               }`}
             >
               <item.icon className={`w-4 h-4 ${active ? "text-sidebar-primary" : "text-muted-foreground group-hover:text-foreground"}`} />
-              {item.label}
+              {item.tKey ? t(item.tKey) : item.label}
               {active && <ChevronRight className="w-3 h-3 ml-auto opacity-50" />}
             </Link>
           );

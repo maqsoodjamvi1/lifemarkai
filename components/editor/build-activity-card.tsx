@@ -15,8 +15,8 @@ export function BuildActivityCard({ steps, title = "Working…" }: BuildActivity
   const running = steps.some((s) => s.status === "running");
 
   return (
-    <div className="rounded-xl border border-border/60 bg-muted/20 overflow-hidden mb-1">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-border/40 bg-muted/30">
+    <div className="rounded-[var(--radius-3)] border border-[color:var(--border-default)] bg-[var(--bg-secondary-pulse)] shadow-surface-xs overflow-hidden mb-1">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-[color:var(--border-default)] bg-[var(--bg-muted)]/30">
         {running ? (
           <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-400 shrink-0" />
         ) : (

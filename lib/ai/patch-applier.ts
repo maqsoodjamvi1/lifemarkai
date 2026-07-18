@@ -48,8 +48,11 @@ export interface PatchResult {
 /**
  * Apply a list of patches to the given project files.
  *
- * Files not present in `existingFiles` are created with `replace` as their
- * full content.  Returns the patched file entries so callers can upsert them.
+ * Patches to the same path are applied sequentially (later patches see earlier
+ * results). Files not present in `existingFiles` are created with `replace`
+ * as their full content. Returns one result per patch attempt; for upserts
+ * prefer `collapsePatchResults()` so intermediate same-path states are not
+ * written over the final content.
  */
 export function applyPatches(
   patches: FilePatch[],
@@ -108,6 +111,19 @@ export function applyPatches(
   }
 
   return results;
+}
+
+/**
+ * Collapse per-patch results to the final content per path.
+ * Only includes paths that had at least one successful apply.
+ */
+export function collapsePatchResults(results: PatchResult[]): PatchResult[] {
+  const byPath = new Map<string, PatchResult>();
+  for (const r of results) {
+    if (!r.applied) continue;
+    byPath.set(r.path, r); // last successful write wins (already sequential)
+  }
+  return [...byPath.values()];
 }
 
 /**

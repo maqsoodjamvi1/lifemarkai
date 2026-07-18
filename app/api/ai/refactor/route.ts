@@ -68,6 +68,7 @@ export async function POST(req: NextRequest) {
       model: getFastAiModel(),
       messages: [{ role: "user" as const, content: prompt }],
       temperature: 0.15,
+      maxTokens: 4000, // input snippet ≤8k chars — output can't legitimately exceed this
     }, { userId: user.id, task: "refactor" });
 
     let refactored = result.content.trim();

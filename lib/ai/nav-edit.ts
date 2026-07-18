@@ -229,6 +229,176 @@ function slugHref(label: string): string {
   return `/${slug}`;
 }
 
+/** Regions that own real menu labels — never page section headings outside nav. */
+export function extractNavHaystack(content: string): string {
+  const parts: string[] = [];
+  const navBlocks = content.match(/<nav\b[\s\S]*?<\/nav>/gi) ?? [];
+  parts.push(...navBlocks);
+
+  // Desktop menu containers that aren't always <nav>
+  const menuDivs = content.match(
+    /<(?:div|ul)\b[^>]*(?:className|class)=["'][^"']*(?:nav|menu|links)[^"']*["'][^>]*>[\s\S]*?<\/(?:div|ul)>/gi,
+  ) ?? [];
+  parts.push(...menuDivs);
+
+  // Data-driven link arrays
+  const arrayBlocks = content.match(
+    /\b(?:const|let|var)\s+(?:SHOP_QUICK_LINKS|MOCK_CATEGORIES|navItems|menuItems|NAV_LINKS|NAVIGATION|navigationLinks|headerLinks)\s*=\s*\[[\s\S]*?\];/g,
+  ) ?? [];
+  parts.push(...arrayBlocks);
+
+  if (parts.length > 0) return parts.join("\n");
+  // Fallback: header element only (still better than whole App with <h2>About</h2>)
+  const header = content.match(/<header\b[\s\S]*?<\/header>/i)?.[0];
+  return header ?? "";
+}
+
+/**
+ * Visible desktop nav only — excludes mobile drawers (`lg:hidden`, `md:hidden`, sheets).
+ * Used to decide whether labels are "already present" for the user-visible header.
+ */
+export function extractDesktopNavHaystack(content: string): string {
+  const parts: string[] = [];
+  const navBlocks = content.match(/<nav\b[\s\S]*?<\/nav>/gi) ?? [];
+  for (const block of navBlocks) {
+    if (isMobileOnlyChrome(block)) continue;
+    parts.push(block);
+  }
+
+  const desktopContainers = content.match(
+    /<(?:div|ul)\b[^>]*(?:className|class)=["'][^"']*(?:hidden\s+(?:sm|md|lg|xl):flex|(?:sm|md|lg|xl):flex)[^"']*(?:nav|menu|links)?[^"']*["'][^>]*>[\s\S]*?<\/(?:div|ul)>/gi,
+  ) ?? [];
+  for (const block of desktopContainers) {
+    if (isMobileOnlyChrome(block)) continue;
+    if (/\b(nav|menu|links)\b/i.test(block) || /<(?:a|Link)\b/i.test(block)) {
+      parts.push(block);
+    }
+  }
+
+  const arrayBlocks = content.match(
+    /\b(?:const|let|var)\s+(?:SHOP_QUICK_LINKS|navItems|menuItems|NAV_LINKS|NAVIGATION|navigationLinks|headerLinks)\s*=\s*\[[\s\S]*?\];/g,
+  ) ?? [];
+  parts.push(...arrayBlocks);
+
+  if (parts.length > 0) return parts.join("\n");
+  // Empty desktop <nav> still counts as the target region (labels absent → insert)
+  const emptyDesktopNav = content.match(
+    /<nav\b[^>]*(?:className|class)=["'][^"']*hidden\s+(?:sm|md|lg|xl):flex[^"']*["'][^>]*>\s*<\/nav>/i,
+  );
+  if (emptyDesktopNav) return emptyDesktopNav[0];
+  return "";
+}
+
+function isMobileOnlyChrome(markup: string): boolean {
+  const openTag = markup.slice(0, Math.min(240, markup.indexOf(">") + 1 || 240));
+  // Drawer / sheet / mobile menu containers
+  if (/\b(lg|md|sm|xl):hidden\b/i.test(openTag) && !/\bhidden\s+(?:sm|md|lg|xl):flex\b/i.test(openTag)) {
+    return true;
+  }
+  if (/\b(mobile-menu|mobileNav|drawer|sheet|hamburger)\b/i.test(openTag)) return true;
+  if (/\bmd:hidden\b/i.test(openTag) && /\bflex\s+flex-col\b/i.test(openTag)) return true;
+  return false;
+}
+
+/** Find the best empty/thin desktop <nav> to synthesize links into. */
+function findDesktopNavInsertTarget(
+  content: string,
+): { openTag: string; index: number; empty: boolean } | null {
+  const re = /<nav\b[^>]*>/gi;
+  let m: RegExpExecArray | null;
+  let best: { openTag: string; index: number; empty: boolean; score: number } | null = null;
+  while ((m = re.exec(content)) !== null) {
+    const openTag = m[0];
+    const index = m.index ?? 0;
+    if (isMobileOnlyChrome(openTag)) continue;
+    const after = content.slice(index);
+    const closeIdx = after.search(/<\/nav>/i);
+    const inner = closeIdx > 0 ? after.slice(openTag.length, closeIdx) : "";
+    const empty = !/<(?:a|Link)\b/i.test(inner);
+    let score = 50;
+    if (/\bhidden\s+(?:sm|md|lg|xl):flex\b/i.test(openTag)) score += 40;
+    if (empty) score += 60;
+    if (inner.trim().length < 40) score += 20;
+    if (!best || score > best.score) {
+      best = { openTag, index, empty, score };
+    }
+  }
+  return best ? { openTag: best.openTag, index: best.index, empty: best.empty } : null;
+}
+
+export function navContainsLabel(haystack: string, label: string): boolean {
+  if (!haystack) return false;
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`>\\s*${escaped}\\s*<`, "i");
+  if (re.test(haystack)) return true;
+  if (haystack.toLowerCase().includes(`>${label.toLowerCase()}<`)) return true;
+  // Array form: { label: "About" } / { name: "About" } / "About"
+  const propRe = new RegExp(
+    `(?:label|name|title)\\s*:\\s*["'\`]${escaped}["'\`]|["'\`]${escaped}["'\`]\\s*,\\s*(?:href|to|path)\\s*:`,
+    "i",
+  );
+  return propRe.test(haystack);
+}
+
+/** Prefer appending to a nav/link data array when the project uses one. */
+function buildNavArrayPatches(
+  file: ProjectFileLike,
+  missing: string[],
+): Array<{ path: string; find: string; replace: string; description: string }> {
+  if (missing.length === 0) return [];
+  const content = file.content ?? "";
+  const arrayRe =
+    /\b((?:const|let|var)\s+(?:SHOP_QUICK_LINKS|navItems|menuItems|NAV_LINKS|NAVIGATION|navigationLinks|headerLinks)\s*=\s*\[)([\s\S]*?)(\];)/;
+  const m = content.match(arrayRe);
+  if (!m) return [];
+
+  const head = m[1]!;
+  const body = m[2]!;
+  const tail = m[3]!;
+  const usesNameSlug = /name\s*:/.test(body) && /slug\s*:/.test(body);
+
+  const entries = missing.map((label) => {
+    const href = slugHref(label);
+    if (usesNameSlug) {
+      const slug = href.replace(/^\//, "") || "home";
+      return `{ name: ${JSON.stringify(label)}, slug: ${JSON.stringify(slug)} }`;
+    }
+    return `{ label: ${JSON.stringify(label)}, href: ${JSON.stringify(href)} }`;
+  });
+
+  const trimmed = body.replace(/\s+$/, "");
+  const needsComma = trimmed.length > 0 && !/,\s*$/.test(trimmed);
+  const indent = (trimmed.match(/\n([ \t]+)\S/)?.[1] ?? "  ");
+  const addition =
+    (trimmed.length === 0 ? "\n" + indent : (needsComma ? "," : "") + "\n" + indent) +
+    entries.join(",\n" + indent) +
+    "\n";
+
+  const find = head + body + tail;
+  const replace = head + trimmed + addition + tail;
+  if (find === replace) return [];
+  return [
+    {
+      path: file.path,
+      find,
+      replace,
+      description: `Add menu items to link array: ${missing.join(", ")}`,
+    },
+  ];
+}
+
+function synthesizeNavLinks(content: string, missing: string[], indent: string): string {
+  const usesLink = /\bLink\b/.test(content) && /from\s+['"]react-router/.test(content);
+  return missing
+    .map((label) => {
+      const href = slugHref(label);
+      return usesLink
+        ? `<Link to="${href}" className="text-sm text-muted-foreground hover:text-foreground transition-colors">${label}</Link>`
+        : `<a href="${href}" className="text-sm text-muted-foreground hover:text-foreground transition-colors">${label}</a>`;
+    })
+    .join(`\n${indent}`);
+}
+
 /**
  * Last-resort surgical edit: insert missing menu links into the real Header/Navbar
  * using the project's existing link markup style. Returns [] if nothing to do.
@@ -239,47 +409,122 @@ export function buildDeterministicMenuPatches(
 ): Array<{ path: string; find: string; replace: string; description: string }> {
   if (!isMenuNavEditIntent(prompt)) return [];
   const labels = extractMenuLabelsFromPrompt(prompt);
+  if (labels.length === 0) return [];
   const navFiles = findNavSourceFiles(files, 4);
   if (navFiles.length === 0) return [];
 
   for (const file of navFiles) {
     const content = file.content;
+    // CRITICAL: desktop-visible nav only — mobile drawer labels must NOT skip inserts.
+    const desktopHaystack = extractDesktopNavHaystack(content);
+    const haystack = desktopHaystack || extractNavHaystack(content);
     const visibilityPatches = buildResponsiveNavVisibilityPatches(prompt, file);
-    const missing = labels.filter((label) => {
-      const re = new RegExp(`>\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*<`, "i");
-      return !re.test(content) && !content.toLowerCase().includes(`>${label.toLowerCase()}<`);
-    });
-    if (missing.length === 0) {
+
+    const missing = labels.filter((label) => !navContainsLabel(desktopHaystack || haystack, label));
+    // If desktop has no labels but mobile does, still treat as missing (desktopHaystack empty/thin).
+    const desktopMissing =
+      desktopHaystack
+        ? labels.filter((label) => !navContainsLabel(desktopHaystack, label))
+        : labels;
+    const toInsert = desktopMissing.length > 0 ? desktopMissing : missing;
+    if (toInsert.length === 0) {
       if (visibilityPatches.length > 0) return visibilityPatches;
       continue;
     }
 
-    // Prefer a real nav/menu link — never clone the brand/logo Link (often first).
-    const sample = pickNavLinkSample(content);
-    if (!sample) {
-      if (visibilityPatches.length > 0) return visibilityPatches;
-      continue;
+    // Prefer data-array append (SHOP_QUICK_LINKS / navItems) when present
+    const arrayPatches = buildNavArrayPatches(file, toInsert);
+    if (arrayPatches.length > 0) {
+      return [...visibilityPatches, ...arrayPatches];
     }
 
-    const { markup: sampleMarkup, index: sampleIndex } = sample;
-    const indentMatch = content.slice(0, sampleIndex).match(/(?:^|\n)([ \t]*)$/);
-    const indent = indentMatch?.[1] ?? "        ";
+    // 1) Prefer synthesizing into an empty/thin desktop <nav> (Volta-style empty center).
+    const desktopNav = findDesktopNavInsertTarget(content);
+    if (desktopNav) {
+      const indent = "          ";
+      const newLinks = synthesizeNavLinks(content, toInsert, indent);
+      // Ensure the nav is visible at editor widths
+      let openTag = desktopNav.openTag;
+      let findOpen = openTag;
+      if (/\bhidden\s+lg:flex\b/i.test(openTag)) {
+        openTag = openTag.replace(/\bhidden\s+lg:flex\b/i, "hidden sm:flex");
+      } else if (/\bhidden\s+md:flex\b/i.test(openTag)) {
+        openTag = openTag.replace(/\bhidden\s+md:flex\b/i, "hidden sm:flex");
+      }
+      const find = findOpen;
+      const replace = `${openTag}\n${indent}${newLinks}`;
+      return [
+        ...visibilityPatches.filter((p) => p.find !== "hidden lg:flex" && p.find !== "hidden md:flex"),
+        {
+          path: file.path,
+          find,
+          replace,
+          description: `Add menu items to desktop nav: ${toInsert.join(", ")}`,
+        },
+      ];
+    }
 
-    const newLinks = missing
-      .map((label) => cloneNavLink(sampleMarkup, label))
-      .join(`\n${indent}`);
+    // 2) Clone a desktop <nav> sample only (never mobile drawer / lg:hidden).
+    const sample = pickNavLinkSample(content, { desktopOnly: true });
+    if (sample) {
+      const { markup: sampleMarkup, index: sampleIndex } = sample;
+      const indentMatch = content.slice(0, sampleIndex).match(/(?:^|\n)([ \t]*)$/);
+      const indent = indentMatch?.[1] ?? "        ";
+      const newLinks = toInsert
+        .map((label) => cloneNavLink(sampleMarkup, label))
+        .join(`\n${indent}`);
+      return [
+        ...visibilityPatches,
+        {
+          path: file.path,
+          find: sampleMarkup,
+          replace: `${sampleMarkup}\n${indent}${newLinks}`,
+          description: `Add menu items: ${toInsert.join(", ")}`,
+        },
+      ];
+    }
 
-    const find = sampleMarkup;
-    const replace = `${sampleMarkup}\n${indent}${newLinks}`;
-    return [
-      ...visibilityPatches,
-      {
-        path: file.path,
-        find,
-        replace,
-        description: `Add menu items: ${missing.join(", ")}`,
-      },
-    ];
+    // 3) Logo-only header: inject a desktop <nav> after the brand / first header child.
+    const headerOpen = content.match(/<header\b[^>]*>/i);
+    if (headerOpen && headerOpen.index != null) {
+      const indent = "        ";
+      const newLinks = synthesizeNavLinks(content, toInsert, indent + "  ");
+      const navBlock =
+        `\n${indent}<nav className="hidden sm:flex items-center gap-6">\n${indent}  ${newLinks}\n${indent}</nav>`;
+      // Prefer inserting after a brand Link/div if we can find a short one near header start
+      const headerSlice = content.slice(headerOpen.index, headerOpen.index + 1200);
+      const brand = headerSlice.match(
+        /<(?:Link|a|div)\b[^>]*(?:className|class)=["'][^"']*(?:logo|brand|font-bold|font-semibold)[^"']*["'][^>]*>[\s\S]{0,200}?<\/(?:Link|a|div)>/i,
+      );
+      if (brand && brand.index != null) {
+        const absIndex = headerOpen.index + brand.index;
+        const find = brand[0];
+        const replace = `${brand[0]}${navBlock}`;
+        // ensure find is unique enough
+        if (content.includes(find)) {
+          return [
+            ...visibilityPatches,
+            {
+              path: file.path,
+              find,
+              replace,
+              description: `Create header nav with: ${toInsert.join(", ")}`,
+            },
+          ];
+        }
+      }
+      const find = headerOpen[0];
+      const replace = `${headerOpen[0]}${navBlock}`;
+      return [
+        ...visibilityPatches,
+        {
+          path: file.path,
+          find,
+          replace,
+          description: `Create header nav with: ${toInsert.join(", ")}`,
+        },
+      ];
+    }
   }
 
   return [];
@@ -296,19 +541,34 @@ function buildResponsiveNavVisibilityPatches(
   }
 
   const patches: Array<{ path: string; find: string; replace: string; description: string }> = [];
+  // Editor preview panes are often <768px — bump lg→sm so menu items are actually visible.
   if (content.includes("hidden lg:flex")) {
     patches.push({
       path: file.path,
       find: "hidden lg:flex",
-      replace: "hidden md:flex",
-      description: "Show desktop header navigation at standard editor preview widths",
+      replace: "hidden sm:flex",
+      description: "Show desktop header navigation at editor preview widths",
+    });
+  } else if (content.includes("hidden md:flex")) {
+    patches.push({
+      path: file.path,
+      find: "hidden md:flex",
+      replace: "hidden sm:flex",
+      description: "Show desktop header navigation at editor preview widths",
     });
   }
   if (content.includes("lg:hidden")) {
     patches.push({
       path: file.path,
       find: "lg:hidden",
-      replace: "md:hidden",
+      replace: "sm:hidden",
+      description: "Keep the mobile header menu for narrow screens only",
+    });
+  } else if (content.includes("md:hidden")) {
+    patches.push({
+      path: file.path,
+      find: "md:hidden",
+      replace: "sm:hidden",
       description: "Keep the mobile header menu for narrow screens only",
     });
   }
@@ -330,12 +590,19 @@ function scoreNavLinkCandidate(markup: string, surrounding: string): number {
   if (/className=["'][^"']*flex items-center[^"']*["']/i.test(markup) && /font-bold/i.test(markup)) {
     score -= 40;
   }
+  // Mobile drawers must not win over desktop nav
+  if (isMobileOnlyChrome(surrounding)) score -= 200;
+  if (/\b(lg|md|sm):hidden\b/i.test(surrounding) && !/\bhidden\s+(?:sm|md|lg):flex\b/i.test(surrounding)) {
+    score -= 150;
+  }
   return score;
 }
 
 function pickNavLinkSample(
   content: string,
+  opts?: { desktopOnly?: boolean },
 ): { markup: string; index: number } | null {
+  const desktopOnly = opts?.desktopOnly === true;
   const candidates: Array<{ markup: string; index: number; score: number }> = [];
   const re = /<(Link|a)\b[^>]*>[\s\S]*?<\/\1>/g;
   let m: RegExpExecArray | null;
@@ -345,7 +612,24 @@ function pickNavLinkSample(
     if (markup.length > 400) continue;
     const start = Math.max(0, (m.index ?? 0) - 200);
     const surrounding = content.slice(start, (m.index ?? 0) + markup.length + 80);
-    const score = scoreNavLinkCandidate(markup, surrounding);
+    let score = scoreNavLinkCandidate(markup, surrounding);
+    // Prefer desktop <nav> samples over mobile drawer links
+    const before = content.slice(0, m.index ?? 0);
+    const lastNavOpen = before.lastIndexOf("<nav");
+    const lastNavClose = before.lastIndexOf("</nav>");
+    const insideNav = lastNavOpen > lastNavClose;
+    if (insideNav) {
+      score += 100;
+      // Check the open tag of that nav for mobile-only classes
+      const navOpenMatch = content.slice(lastNavOpen, lastNavOpen + 200).match(/<nav\b[^>]*>/i);
+      if (navOpenMatch && isMobileOnlyChrome(navOpenMatch[0])) {
+        score -= 250;
+        if (desktopOnly) continue;
+      }
+    } else if (desktopOnly) {
+      continue; // desktop-only: require in-nav sample
+    }
+    if (desktopOnly && isMobileOnlyChrome(surrounding)) continue;
     candidates.push({ markup, index: m.index ?? 0, score });
   }
   if (candidates.length === 0) return null;

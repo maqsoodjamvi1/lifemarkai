@@ -1,6 +1,7 @@
 import type { ProjectFile } from "@/types/database";
 import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { generateFallbackUtilityCss } from "@/lib/preview/generate-fallback-utilities";
+import { healPreviewContractGaps } from "@/lib/preview/heal-preview-contract";
 import {
   isNextAppProject,
   nextAppDirName,
@@ -13,7 +14,7 @@ import {
 } from "@/lib/preview/next-app-preview";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "35";
+export const PREVIEW_ENGINE_REV = "43";
 
 /** Strip PostCSS-only directives — invalid in a raw <style> tag. */
 export function sanitizePreviewCss(css: string): string {
@@ -22,6 +23,41 @@ export function sanitizePreviewCss(css: string): string {
     .replace(/@import\s+["'][^"']*tailwindcss[^"']*["']\s*;?/gi, "")
     .replace(/@apply\s+[^;]+;/g, "")
     .trim();
+}
+
+/**
+ * Rewrite `expr.charAt(` so a missing/undefined receiver cannot white-screen
+ * the preview (`Cannot read properties of undefined (reading 'charAt')`).
+ */
+export function hardenCharAtCalls(src: string): string {
+  // Already wrapped — leave alone
+  if (!src.includes(".charAt(")) return src;
+
+  let out = src;
+  // (…expr…).charAt(
+  out = out.replace(
+    /\(([^()\n]+)\)\.charAt\s*\(/g,
+    (full, expr: string) => {
+      if (/^\s*String\s*\(/.test(expr)) return full;
+      return `String((${expr}) ?? "").charAt(`;
+    },
+  );
+  // foo.bar.baz.charAt(  /  foo?.bar.charAt( — skip if already String((
+  out = out.replace(
+    /(?<![\w$])([A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+)\.charAt\s*\(/g,
+    'String(($1) ?? "").charAt(',
+  );
+  // bareIdent.charAt( — not after String(
+  out = out.replace(
+    /(?<![\w$])([A-Za-z_$][\w$]*)\.charAt\s*\(/g,
+    (full, id: string, offset: number, whole: string) => {
+      const before = whole.slice(Math.max(0, offset - 16), offset);
+      if (/String\s*\(\s*\(?\s*$/.test(before)) return full;
+      if (id === "String") return full;
+      return `String((${id}) ?? "").charAt(`;
+    },
+  );
+  return out;
 }
 
 export function projectUsesTailwindV4(files: ProjectFile[]): boolean {
@@ -92,7 +128,9 @@ tailwind.config = {
 };`;
 
 export function buildFallbackHtml(files: ProjectFile[]): string {
-  files = ensureCommonGeneratedSupportFiles(files);
+  // Heal missing imports/exports first (so Navbar→Header aliases win), then
+  // fill remaining UI support stubs.
+  files = ensureCommonGeneratedSupportFiles(healPreviewContractGaps(files));
   // Static HTML project — serve as-is
   const indexHtml = files.find(
     (f) => f.path === "index.html" || f.path === "/index.html"
@@ -801,6 +839,9 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
       }
     }
 
+    // Guard against undefined.charAt — the #1 white-screen crash for generated UIs.
+    src = hardenCharAtCalls(src);
+
     // Inert script type — the browser ignores it and Babel's auto-runner skips
     // it. The bootstrap below compiles it explicitly with isTSX/allExtensions
     // (which `data-presets="typescript"` does NOT enable — that was the
@@ -986,7 +1027,16 @@ window.__Mrequire = function(path) {
   // reports exactly which symbol was pulled from which missing file, ONCE per
   // symbol. Behaviour is unchanged (the value is still undefined) — but the
   // failure is now self-describing, both in the console and in the error overlay.
-  var looksLikeProjectModule = /^(src\/|\.\/|\.\.\/)/.test(path) || path.indexOf('/') !== -1;
+  //
+  // IMPORTANT: do NOT use a regex literal with escaped slashes here. This block
+  // lives inside a TS template literal; a single backslash-slash collapses to a
+  // bare slash in the emitted HTML and the browser parses an unterminated group
+  // (aborts the whole script, so window.__Mrequire is never assigned).
+  var looksLikeProjectModule =
+    path.indexOf('src/') === 0 ||
+    path.indexOf('./') === 0 ||
+    path.indexOf('../') === 0 ||
+    path.indexOf('/') !== -1;
   if (!looksLikeProjectModule) return {};
 
   if (!window.__lmMissingExports) window.__lmMissingExports = [];
@@ -1197,7 +1247,7 @@ window.__reactRouterDom = (function() {
   function currentVirtualPath() {
     var h = window.location.hash || '';
     if (h.length > 1) {
-      var raw = h.slice(1); // drop leading '#'
+      var raw = String(h.slice(1) || ''); // drop leading '#'
       return raw.charAt(0) === '/' ? raw : '/' + raw;
     }
     return '/';
@@ -1215,8 +1265,11 @@ window.__reactRouterDom = (function() {
   function notify() { listeners.forEach(function(fn) { fn(); }); }
 
   function navigate(to) {
-    var path = typeof to === 'string' ? to : (to && to.pathname ? to.pathname : '/');
-    if (!path.startsWith('/')) path = '/' + path;
+    var path = typeof to === 'string'
+      ? to
+      : (to && typeof to.pathname === 'string' ? to.pathname : '/');
+    path = String(path || '/');
+    if (path.charAt(0) !== '/') path = '/' + path;
     try {
       window.history.pushState({}, '', '#' + path);
       notify();
@@ -1224,7 +1277,9 @@ window.__reactRouterDom = (function() {
   }
 
   function matchRoute(pattern, pathname) {
-    if (pattern == null || pattern === '*') return pathname === '/' || pathname === '';
+    pattern = String(pattern == null ? '' : pattern);
+    pathname = String(pathname == null ? '' : pathname);
+    if (pattern == null || pattern === '*' || pattern === '') return pathname === '/' || pathname === '';
     if (pattern === '/') return pathname === '/' || pathname === '';
     if (pattern.endsWith('/*')) {
       var base = pattern.slice(0, -2);
@@ -1273,9 +1328,12 @@ window.__reactRouterDom = (function() {
 
   function Link(props) {
     var p = Object.assign({}, props);
-    var to = p.to || '/';
+    var to = p.to != null && p.to !== '' ? p.to : '/';
     delete p.to;
-    var hrefTo = typeof to === 'string' ? to : (to && to.pathname ? to.pathname : '/');
+    var hrefTo = typeof to === 'string'
+      ? to
+      : (to && typeof to.pathname === 'string' ? to.pathname : '/');
+    hrefTo = String(hrefTo || '/');
     return React.createElement('a', Object.assign({
       href: '#' + (hrefTo.charAt(0) === '/' ? hrefTo : '/' + hrefTo),
       onClick: function(e) {
@@ -1287,13 +1345,16 @@ window.__reactRouterDom = (function() {
 
   function NavLink(props) {
     var p = Object.assign({}, props);
-    var to = p.to || '/';
+    var to = p.to != null && p.to !== '' ? p.to : '/';
     var cls = p.className;
     delete p.to; delete p.className;
     var loc = useLocation();
-    var active = matchRoute(to, loc.pathname || '/');
+    var toPath = typeof to === 'string'
+      ? to
+      : (to && typeof to.pathname === 'string' ? to.pathname : '/');
+    var active = matchRoute(String(toPath || '/'), loc.pathname || '/');
     var merged = typeof cls === 'function' ? cls({ isActive: active }) : ((cls || '') + (active ? ' active' : ''));
-    return React.createElement(Link, Object.assign({}, p, { to: to, className: merged }));
+    return React.createElement(Link, Object.assign({}, p, { to: toPath, className: merged }));
   }
 
   return {
@@ -1460,7 +1521,70 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
           window.__lmMissingCount = function() { return __lmMissingCount; };
         }
         var root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(React.createElement(React.StrictMode, null, React.createElement(AppComp)));
+        // Catch render-time crashes (e.g. foo.bar.charAt on undefined) so the
+        // iframe shows a fixable overlay instead of a white blank page.
+        var PreviewErrorBoundary = (function() {
+          function Boundary(props) {
+            this.props = props;
+            this.state = { error: null };
+          }
+          Boundary.prototype = Object.create(React.Component.prototype);
+          Boundary.prototype.constructor = Boundary;
+          Boundary.prototype.getDerivedStateFromError = function(error) {
+            return { error: error };
+          };
+          // React 17/18 class API
+          Boundary.getDerivedStateFromError = function(error) {
+            return { error: error };
+          };
+          Boundary.prototype.componentDidCatch = function(error, info) {
+            var extra = (info && info.componentStack) ? ('\\n' + String(info.componentStack)) : '';
+            try {
+              showError('${entryPath}', ((error && error.message) || String(error)) + extra, error);
+            } catch (e) {}
+          };
+          Boundary.prototype.render = function() {
+            if (this.state && this.state.error) {
+              var msg = (this.state.error && this.state.error.message) || String(this.state.error);
+              return React.createElement('div', {
+                style: {
+                  minHeight: '100vh',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 24,
+                  background: '#0f172a',
+                  color: '#e2e8f0',
+                  fontFamily: 'ui-sans-serif, system-ui, sans-serif'
+                }
+              }, React.createElement('div', { style: { maxWidth: 560 } },
+                React.createElement('div', { style: { color: '#f87171', fontWeight: 600, marginBottom: 8 } }, 'Preview crashed'),
+                React.createElement('pre', {
+                  style: {
+                    whiteSpace: 'pre-wrap',
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                    background: '#1e293b',
+                    padding: 12,
+                    borderRadius: 8,
+                    color: '#fecaca'
+                  }
+                }, msg),
+                React.createElement('p', { style: { marginTop: 12, fontSize: 12, color: '#94a3b8' } },
+                  'Ask the AI to fix this runtime error, or check the console for details.')
+              ));
+            }
+            return this.props.children;
+          };
+          return Boundary;
+        })();
+        root.render(
+          React.createElement(React.StrictMode, null,
+            React.createElement(PreviewErrorBoundary, null,
+              React.createElement(AppComp)
+            )
+          )
+        );
         function refreshTailwind() {
           try {
             if (typeof tailwind !== 'undefined' && typeof tailwind.refresh === 'function') {
@@ -1539,7 +1663,7 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
         var h = window.location.hash || '';
         var path = '/';
         if (h.length > 1) {
-          var raw = h.slice(1);
+          var raw = String(h.slice(1) || '');
           path = raw.charAt(0) === '/' ? raw : '/' + raw;
         }
         window.parent.postMessage({
@@ -1578,6 +1702,7 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
         }
         if (next.indexOf('#') >= 0) next = next.slice(next.indexOf('#') + 1);
         if (!next) next = '/';
+        next = String(next || '/');
         if (next.charAt(0) !== '/') next = '/' + next;
         if (window.location.hash !== '#' + next) {
           window.location.hash = next; // fires hashchange → router re-renders
@@ -1588,6 +1713,36 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
     // Initial report — small delay so React has mounted and any redirects
     // settled before we send the first pathname.
     setTimeout(reportLocation, 50);
+  })();
+  </script>
+
+  <!-- Network panel — fetch interceptor for preview devtools -->
+  <script>
+  (function() {
+    if (window.parent === window) return;
+    var _fetch = window.fetch;
+    window.fetch = function(input, init) {
+      var method = ((init && init.method) || 'GET').toUpperCase();
+      var url = typeof input === 'string' ? input : (input && input.url) || String(input);
+      var start = Date.now();
+      function postNet(extra) {
+        try {
+          window.parent.postMessage(Object.assign({
+            source: 'lifemark-preview-network',
+            method: method,
+            url: url,
+            durationMs: Date.now() - start
+          }, extra || {}), '*');
+        } catch (e) {}
+      }
+      return _fetch.apply(this, arguments).then(function(res) {
+        postNet({ status: res.status, ok: res.ok });
+        return res;
+      }).catch(function(err) {
+        postNet({ status: 0, ok: false, error: String((err && err.message) || err) });
+        throw err;
+      });
+    };
   })();
   </script>
 

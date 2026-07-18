@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
-import { getDefaultAiModel } from "@/lib/ai/model-defaults";
+import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import {
   cancelCreditReservation,
@@ -80,7 +80,8 @@ Return only the JSON object.`;
 
     const result = await generateAI(
       {
-        model: getDefaultAiModel(),
+        // Single-file test generation — balanced tier is enough.
+        model: BALANCED_CODING_MODEL,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: userMessage },

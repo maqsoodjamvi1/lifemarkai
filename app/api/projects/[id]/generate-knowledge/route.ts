@@ -2,7 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
-import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
+import { ECONOMY_CHAT_MODEL } from "@/lib/ai/model-defaults";
 import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
 
 interface Params { params: Promise<{ id: string }> }
@@ -103,7 +103,8 @@ Generate the Knowledge file now.`;
 
   try {
     const aiRes = await generateAI({
-      model: BALANCED_CODING_MODEL,
+      // Knowledge docs are summarization — economy chat tier, not frontier.
+      model: ECONOMY_CHAT_MODEL,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },

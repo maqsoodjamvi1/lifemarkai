@@ -7,7 +7,10 @@ import {
   X, Save, Loader2, FileCode, FilePlus, Copy, Check, Download,
   Maximize2, Minimize2, MessageSquare, Wand2, Sparkles,
   ChevronDown, ChevronUp, Palette, Settings2, Columns2, Clock, Search,
+  BookOpen,
 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { EDITOR_THEMES, DEFAULT_THEME_ID, THEME_STORAGE_KEY } from "@/lib/editor/themes";
 import { loadEditorSettings, saveEditorSettings, DEFAULT_EDITOR_SETTINGS, type EditorSettings } from "@/lib/editor/settings";
 import { Button } from "@/components/ui/button";
@@ -124,6 +127,8 @@ export function CodePanel({
     return DEFAULT_THEME_ID;
   });
   const [showThemePicker, setShowThemePicker] = useState(false);
+  // Rendered-markdown preview for .md/.mdx tabs (Lovable parity, Jun 8 2026)
+  const [mdPreview, setMdPreview] = useState(false);
   const [showSettingsPopover, setShowSettingsPopover] = useState(false);
   const [editorSettings, setEditorSettings] = useState<EditorSettings>(loadEditorSettings);
   const themesRegisteredRef = useRef(false);
@@ -1183,6 +1188,19 @@ export function CodePanel({
               <span>Ask AI</span>
             </Button>
           )}
+          {/* Markdown preview toggle (Lovable parity, Jun 8 2026) */}
+          {activeTab && /\.(md|mdx|markdown)$/i.test(activeTab.path) && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className={`h-6 px-2 text-[11px] gap-1 hover:bg-[#313244] ${mdPreview ? "text-[#89b4fa]" : "text-[#585b70] hover:text-[#cdd6f4]"}`}
+              onClick={() => setMdPreview((v) => !v)}
+              title={mdPreview ? "Back to source" : "Preview rendered markdown"}
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>{mdPreview ? "Source" : "Preview"}</span>
+            </Button>
+          )}
           <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-[#585b70] hover:text-[#cdd6f4] hover:bg-[#313244]" onClick={formatActiveFile} disabled={!activeTab} title="Format document (⇧⌥F)">
             <Wand2 className="w-3.5 h-3.5" />
           </Button>
@@ -1537,6 +1555,24 @@ export function CodePanel({
                 Ask AI
               </button>
               <button
+                onClick={() => {
+                  const tab = activeTabRef.current;
+                  const ed = tab ? editorInstancesRef.current.get(tab.id) : null;
+                  const sel = ed?.getSelection();
+                  if (tab?.path && sel) {
+                    window.dispatchEvent(new CustomEvent("monaco-line-ref", {
+                      detail: { path: tab.path, startLine: sel.startLineNumber, endLine: Math.max(sel.startLineNumber, sel.endLineNumber) },
+                    }));
+                  }
+                  setSelBar(null);
+                }}
+                className="flex items-center gap-1 px-2 py-1 text-[10px] text-[#94e2d5] hover:bg-[#313244] rounded transition-colors"
+                title="Reference these lines in chat (⌘⇧L)"
+              >
+                <MessageSquare className="w-3 h-3" />
+                Ref line
+              </button>
+              <button
                 onClick={() => { explainCode(); setSelBar(null); }}
                 className="flex items-center gap-1 px-2 py-1 text-[10px] text-[#89b4fa] hover:bg-[#313244] rounded transition-colors"
                 title="Explain this code (⌘E)"
@@ -1597,6 +1633,27 @@ export function CodePanel({
           )}
           {/* Left pane wrapper — takes full width or 50% in split mode */}
           <div className={splitEnabled ? "flex-1 overflow-hidden relative" : "h-full relative"}>
+          {/* Rendered-markdown overlay (Lovable parity) */}
+          {mdPreview && activeTab && /\.(md|mdx|markdown)$/i.test(activeTab.path) && (
+            <div className="absolute inset-0 z-10 overflow-auto bg-[#1e1e2e] px-6 py-5">
+              <div className="prose prose-invert prose-sm max-w-3xl mx-auto
+                [&_h1]:text-xl [&_h1]:font-bold [&_h1]:mb-3 [&_h1]:mt-4
+                [&_h2]:text-lg [&_h2]:font-semibold [&_h2]:mb-2 [&_h2]:mt-4
+                [&_h3]:text-base [&_h3]:font-medium [&_h3]:mb-2 [&_h3]:mt-3
+                [&_p]:text-sm [&_p]:leading-relaxed [&_p]:mb-3 [&_p]:text-[#cdd6f4]
+                [&_li]:text-sm [&_li]:text-[#cdd6f4] [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:mb-3
+                [&_code]:bg-[#313244] [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.85em]
+                [&_pre]:bg-[#181825] [&_pre]:border [&_pre]:border-[#313244] [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:overflow-x-auto [&_pre]:mb-3
+                [&_a]:text-[#89b4fa] [&_a]:underline
+                [&_blockquote]:border-l-2 [&_blockquote]:border-[#45475a] [&_blockquote]:pl-3 [&_blockquote]:italic [&_blockquote]:text-[#a6adc8]
+                [&_table]:text-sm [&_th]:border [&_th]:border-[#313244] [&_th]:px-2 [&_th]:py-1 [&_td]:border [&_td]:border-[#313244] [&_td]:px-2 [&_td]:py-1
+                [&_hr]:border-[#313244] [&_hr]:my-4">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                  {contentRef.current.get(activeTab.id) ?? activeTab.content ?? ""}
+                </ReactMarkdown>
+              </div>
+            </div>
+          )}
           {openTabs.map((tab) => (
             <div key={tab.id} className={`h-full ${tab.id === activeTabId ? "block" : "hidden"}`}>
               <MonacoEditor
@@ -1607,6 +1664,27 @@ export function CodePanel({
                 theme={themeId}
                 onMount={(editor, monaco) => {
                   editorInstancesRef.current.set(tab.id, editor as unknown as Monaco.editor.IStandaloneCodeEditor);
+                  // Lovable parity: reference the exact line(s) in chat as
+                  // `path:12` / `path:12-34` pills (Ctrl/Cmd+Shift+L).
+                  editor.addAction({
+                    id: "lifemarkai.referenceLinesInChat",
+                    label: "Reference Line(s) in Chat",
+                    keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyL],
+                    contextMenuGroupId: "navigation",
+                    contextMenuOrder: 1.4,
+                    run(ed) {
+                      const sel = ed.getSelection();
+                      const path = activeTabRef.current?.path ?? "";
+                      if (!sel || !path) return;
+                      window.dispatchEvent(new CustomEvent("monaco-line-ref", {
+                        detail: {
+                          path,
+                          startLine: sel.startLineNumber,
+                          endLine: Math.max(sel.startLineNumber, sel.endLineNumber - (sel.endColumn === 1 && sel.endLineNumber > sel.startLineNumber ? 1 : 0)),
+                        },
+                      }));
+                    },
+                  });
                   // Register duplicate-line actions so they appear in command palette
                   editor.addAction({
                     id: "lifemarkai.duplicateLineDown",

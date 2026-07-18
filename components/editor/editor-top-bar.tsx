@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -32,6 +32,8 @@ import { toast } from "@/hooks/use-toast";
 import { createClient } from "@/lib/supabase/client";
 import { ViewSwitcherPill, type ViewSwitcherTab } from "./view-switcher-pill";
 import { UrlBarPill } from "./url-bar-pill";
+import { LovableUpgradeDialog } from "./lovable/upgrade-dialog";
+import { cn } from "@/lib/utils";
 import { usePreviewToken } from "@/hooks/use-preview-token";
 
 interface PresenceUser {
@@ -74,9 +76,13 @@ interface EditorTopBarProps {
   onRightPanelChange?: (panel: LeftPanel | null) => void;
   /** Number of static-scan security findings (used for the publish dropdown's red badge) */
   securityIssueCount?: number;
+  /** Critical-severity findings — gates publish (Lovable's publishing gate). */
+  criticalSecurityCount?: number;
   /** Toggle Lovable-style history overlay on the chat column */
   onChatOverlayToggle?: () => void;
   chatOverlayActive?: boolean;
+  /** Compact top bar on mobile — hides URL bar cluster */
+  isMobile?: boolean;
 }
 
 function openSecondaryPanel(
@@ -136,8 +142,10 @@ export function EditorTopBar({
   rightPanel,
   onRightPanelChange,
   securityIssueCount = 0,
+  criticalSecurityCount = 0,
   onChatOverlayToggle,
   chatOverlayActive = false,
+  isMobile = false,
 }: EditorTopBarProps) {
   const router = useRouter();
   const savedLabel = useRelativeTime(lastSaved);
@@ -146,10 +154,46 @@ export function EditorTopBar({
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
-  const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
+  const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile" | "tablet">("desktop");
+  const [previewRoutePath, setPreviewRoutePath] = useState("/");
+  const [routeCanBack, setRouteCanBack] = useState(false);
+  const [routeCanForward, setRouteCanForward] = useState(false);
   // Short-lived signed preview URL (falls back to the plain path when tokens
   // aren't configured server-side).
   const { url: signedPreviewUrl } = usePreviewToken(project.id);
+
+  const [previewStatusText, setPreviewStatusText] = useState<string | null>(null);
+
+  useEffect(() => {
+    function onStatus(e: Event) {
+      const text = (e as CustomEvent<{ text?: string | null }>).detail?.text ?? null;
+      setPreviewStatusText(text);
+    }
+    window.addEventListener("lifemark-preview-status", onStatus);
+    return () => window.removeEventListener("lifemark-preview-status", onStatus);
+  }, []);
+
+  useEffect(() => {
+    function onPath(e: Event) {
+      const detail = (e as CustomEvent<{ path?: string; device?: string; canGoBack?: boolean; canGoForward?: boolean }>).detail;
+      if (typeof detail?.path === "string" && detail.path.length > 0) {
+        setPreviewRoutePath(detail.path);
+      }
+      if (detail?.device === "desktop" || detail?.device === "mobile" || detail?.device === "tablet") {
+        setPreviewDevice(detail.device);
+      }
+      if (typeof detail?.canGoBack === "boolean") setRouteCanBack(detail.canGoBack);
+      if (typeof detail?.canGoForward === "boolean") setRouteCanForward(detail.canGoForward);
+    }
+    window.addEventListener("lifemark-preview-path", onPath);
+    return () => window.removeEventListener("lifemark-preview-path", onPath);
+  }, []);
+
+  const previewPageLabel = useMemo(() => {
+    if (!previewRoutePath || previewRoutePath === "/") return "Homepage";
+    const seg = previewRoutePath.replace(/^\//, "").split("/").filter(Boolean)[0];
+    return seg ? seg.replace(/[-_]/g, " ") : "Homepage";
+  }, [previewRoutePath]);
 
   // ── Environment (Test / Live) toggle ─────────────────────────────────────
   const [environment, setEnvironment] = useState<"test" | "live">(
@@ -249,12 +293,21 @@ export function EditorTopBar({
     project.deployed_url ? "deployed" : "idle"
   );
 
+  // Unpublished-changes dot (Lovable parity): shown when the project was
+  // saved after the latest deployment. Cleared by publishing.
+  const [lastDeployedAt, setLastDeployedAt] = useState<Date | null>(null);
+  const hasUnpublishedChanges =
+    deployStatus === "deployed" &&
+    !!lastSaved && !!lastDeployedAt &&
+    lastSaved.getTime() > lastDeployedAt.getTime();
+
   // Sync deploy status from DB on mount (SSR project may be stale)
   useEffect(() => {
     void fetch(`/api/deploy/status?projectId=${project.id}`, { credentials: "include" })
       .then(async (res) => {
-        const data = (await res.json().catch(() => ({}))) as { status?: string; url?: string | null };
+        const data = (await res.json().catch(() => ({}))) as { status?: string; url?: string | null; deployedAt?: string | null };
         if (!res.ok) return;
+        if (data.deployedAt) setLastDeployedAt(new Date(data.deployedAt));
         const isLive =
           data.status === "live" ||
           data.status === "deployed" ||
@@ -275,6 +328,8 @@ export function EditorTopBar({
   const [isSharing, setIsSharing] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
   // Inline rename
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(project.name);
@@ -327,6 +382,30 @@ export function EditorTopBar({
       toast({ title: "Failed to rename project", variant: "destructive" });
     }
   }, [renameValue, project.name, project.id, onRename]);
+
+  async function handleInviteByEmail() {
+    const email = inviteEmail.trim().toLowerCase();
+    if (!email) return;
+    setInviteBusy(true);
+    try {
+      const res = await fetch("/api/projects/invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: project.id, email, role: "editor" }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        toast({ title: "Invite failed", description: data.error ?? "Could not send invite", variant: "destructive" });
+        return;
+      }
+      setInviteEmail("");
+      toast({ title: "Invite sent", description: `Collaboration invite emailed to ${email}` });
+    } catch {
+      toast({ title: "Invite failed", variant: "destructive" });
+    } finally {
+      setInviteBusy(false);
+    }
+  }
 
   const appUrl = typeof window !== "undefined" ? window.location.origin : "https://lifemarkai.com";
   const username = profile?.username ?? profile?.email?.split("@")[0] ?? "user";
@@ -383,6 +462,7 @@ export function EditorTopBar({
           (data.status === "active" && !!data.url);
         if (isLive) {
           setDeployStatus("deployed");
+          setLastDeployedAt(new Date()); // clears the unpublished-changes dot
           if (data.url) setLiveUrl(data.url);
           clearInterval(interval);
           toast({ title: "Deployment live!", description: data.url ?? undefined });
@@ -397,6 +477,19 @@ export function EditorTopBar({
   }, [deployStatus, project.id]);
 
   async function handleDeploy(provider = deployProvider) {
+    // Publishing gate (Lovable parity): a pre-publish security check runs on
+    // every publish; CRITICAL findings pause for explicit confirmation.
+    if (criticalSecurityCount > 0) {
+      const proceed = window.confirm(
+        `Security check: ${criticalSecurityCount} CRITICAL finding${criticalSecurityCount === 1 ? "" : "s"} in your code (exposed keys or similar).\n\n` +
+        `Publishing now would ship ${criticalSecurityCount === 1 ? "it" : "them"} to the public internet. ` +
+        `Open the Security panel to review and fix first (Cancel), or publish anyway (OK).`,
+      );
+      if (!proceed) {
+        openSecondaryPanel("security", onRightPanelChange);
+        return;
+      }
+    }
     setIsDeploying(true);
     setDeployStatus("deploying");
     try {
@@ -509,24 +602,24 @@ export function EditorTopBar({
                   <Settings className="w-3.5 h-3.5" />
                   Project settings
                 </DropdownMenuItem>
-                {onDelete && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={onDelete} className="text-xs gap-2 text-destructive focus:text-destructive">
-                      <Trash2 className="w-3.5 h-3.5" />
-                      Delete project
-                    </DropdownMenuItem>
-                  </>
-                )}
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-xs gap-2 text-destructive focus:text-destructive">
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Delete project
+                  </DropdownMenuItem>
+                </>
               </DropdownMenuContent>
             </DropdownMenu>
           )}
         </div>
 
         {/* ── Center: exact Lovable icon toolbar ── */}
-        <div className="flex items-center gap-0.5 flex-1 justify-center min-w-0">
+        <div className={cn("flex items-center gap-0.5 flex-1 justify-center min-w-0", isMobile && "justify-start gap-1")}>
 
-          {/* History clock */}
+          {/* History + split — desktop only (mobile uses bottom nav) */}
+          {!isMobile && (
+          <>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon"
@@ -549,9 +642,10 @@ export function EditorTopBar({
             </TooltipTrigger>
             <TooltipContent>Split view (⌘3)</TooltipContent>
           </Tooltip>
+          </>
+          )}
 
-          {/* Preview / Files / Code / More — Lovable-parity animated view switcher */}
-          <DropdownMenu>
+          {/* Preview / Files / Code — Lovable-parity animated view switcher */}
           <ViewSwitcherPill
             tabs={[
               { id: "preview", label: "Preview", icon: Eye },
@@ -559,49 +653,65 @@ export function EditorTopBar({
               { id: "code", label: "Code", icon: Code2 },
             ] as ViewSwitcherTab[]}
             activeId={
-              viewMode === "code" ? "code" : showFileTree ? "files" : "preview"
+              viewMode === "files" ? "files" : viewMode === "code" ? "code" : "preview"
             }
             onSelect={(id) => {
-              if (id === "preview") { onRightPanelChange?.(null); onViewChange("preview"); return; }
-              if (id === "files") { onToggleFileTree(); return; }
-              if (id === "code") {
-                const isPro = profile?.plan && profile.plan !== "free";
-                if (!isPro) { setShowUpgradeDialog(true); return; }
+              if (id === "preview") {
                 onRightPanelChange?.(null);
-                if (!devMode) { onDevModeToggle?.(); onViewChange("code"); }
-                else { onViewChange(viewMode === "code" ? "preview" : "code"); }
+                onViewChange("preview");
+                return;
+              }
+              if (id === "files") {
+                onRightPanelChange?.(null);
+                onViewChange("files");
+                return;
+              }
+              if (id === "code") {
+                onRightPanelChange?.(null);
+                onViewChange(viewMode === "code" ? "preview" : "code");
+                return;
               }
             }}
-          >
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                aria-label="More"
-                className="relative z-10 flex h-6 shrink-0 cursor-pointer items-center gap-1 rounded-full px-2 text-[var(--fg-tertiary)] outline-none transition-colors hover:text-[var(--fg-primary)] active:scale-[0.97]"
-              >
-                <MoreHorizontal className="h-4 w-4 shrink-0" />
-                <span className="text-sm font-[450] leading-none">More</span>
-              </button>
-            </DropdownMenuTrigger>
-          </ViewSwitcherPill>
+          />
 
-          {/* Center URL bar — device · refresh · page · open-in-new-tab */}
+          {/* Center URL bar — Lovable parity: editable route on desktop + mobile */}
           <UrlBarPill
-            className="flex-1"
+            className={cn("flex-1", isMobile ? "max-w-full px-2" : "max-w-md")}
             device={previewDevice}
-            onDeviceToggle={() => {
-              const next = previewDevice === "desktop" ? "mobile" : "desktop";
+            routePath={previewRoutePath.startsWith("/") ? previewRoutePath : `/${previewRoutePath}`}
+            pageLabel={previewPageLabel}
+            canGoBack={routeCanBack}
+            canGoForward={routeCanForward}
+            onBack={() => window.dispatchEvent(new CustomEvent("lifemark-preview-history", { detail: { dir: "back" } }))}
+            onForward={() => window.dispatchEvent(new CustomEvent("lifemark-preview-history", { detail: { dir: "forward" } }))}
+            onDeviceChange={(next) => {
               setPreviewDevice(next);
               window.dispatchEvent(new CustomEvent("lifemark-preview-device", { detail: next }));
             }}
+            onNavigate={(path) => {
+              setPreviewRoutePath(path);
+              window.dispatchEvent(new CustomEvent("lifemark-preview-navigate", { detail: { pathname: path } }));
+            }}
             onRefresh={() => window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"))}
+            statusText={previewStatusText}
             onOpenNewTab={() => {
               if (liveUrl) window.open(liveUrl, "_blank", "noopener,noreferrer");
               else window.open(signedPreviewUrl || `/preview/${project.id}`, "_blank", "noopener,noreferrer");
             }}
           />
 
-            {/* More menu content — anchored to the pill's "More" segment trigger above */}
+          {/* More menu — separate from view switcher (fixes Radix portal nesting) */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="More"
+                className="relative inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-[var(--fg-tertiary)] outline-none transition-colors hover:text-[var(--fg-primary)] hover:bg-[var(--glow-neutral-hover)] active:scale-[0.97] border border-[color:var(--border-translucent)]"
+              >
+                <MoreHorizontal className="h-4 w-4 shrink-0" />
+                {!isMobile && <span className="text-sm font-[450] leading-none">More</span>}
+              </button>
+            </DropdownMenuTrigger>
             <DropdownMenuContent align="center" className="w-52 p-1">
               {([
                 { id: "analytics" as LeftPanel, label: "Analytics",        icon: BarChart2 },
@@ -638,14 +748,10 @@ export function EditorTopBar({
               <DropdownMenuItem onClick={onOpenShortcuts} className="text-xs gap-2">
                 <Zap className="w-3.5 h-3.5" /> Keyboard shortcuts
               </DropdownMenuItem>
-              {onDelete && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={onDelete} className="text-xs gap-2 text-destructive focus:text-destructive">
-                    <Trash2 className="w-3.5 h-3.5" /> Delete project
-                  </DropdownMenuItem>
-                </>
-              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-xs gap-2 text-destructive focus:text-destructive">
+                <Trash2 className="w-3.5 h-3.5" /> Delete project
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -806,13 +912,28 @@ export function EditorTopBar({
 
               {/* Add people */}
               <div className="px-4 py-3 border-b border-border/60">
-                <div className="flex items-center gap-2 h-8 px-3 rounded-lg border border-border bg-muted/30">
+                <form
+                  className="flex items-center gap-2 h-8 px-3 rounded-lg border border-border bg-muted/30"
+                  onSubmit={(e) => { e.preventDefault(); void handleInviteByEmail(); }}
+                >
                   <UserPlus className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                   <input
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
                     placeholder="Add people by email…"
+                    disabled={inviteBusy}
                     className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground/50 outline-none"
                   />
-                </div>
+                  {inviteEmail.trim() && (
+                    <button
+                      type="submit"
+                      disabled={inviteBusy}
+                      className="text-[10px] font-medium text-[var(--fg-accent)] hover:opacity-80 disabled:opacity-50"
+                    >
+                      {inviteBusy ? "…" : "Invite"}
+                    </button>
+                  )}
+                </form>
               </div>
 
               {/* Access list */}
@@ -900,9 +1021,15 @@ export function EditorTopBar({
                 size="sm"
                 disabled={isDeploying}
                 onClick={() => { void handleDeploy(deployProvider); }}
-                className="h-7 gap-1.5 text-xs font-semibold bg-[#0066FF] hover:bg-[#0052cc] text-white border-0 rounded-r-none px-3"
+                className="relative h-7 gap-1.5 text-xs font-semibold bg-[#0066FF] hover:bg-[#0052cc] text-white border-0 rounded-r-none px-3"
               >
                 {isDeploying ? <><Loader2 className="h-3 w-3 animate-spin" />Publishing…</> : <><Rocket className="h-3 w-3" />Publish</>}
+                {hasUnpublishedChanges && !isDeploying && (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-background"
+                    title="You have unpublished changes"
+                  />
+                )}
               </Button>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -1012,6 +1139,8 @@ export function EditorTopBar({
                 >
                   {isDeploying ? (
                     <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Publishing…</>
+                  ) : hasUnpublishedChanges ? (
+                    <><Rocket className="h-4 w-4 mr-2" />Publish changes</>
                   ) : deployStatus === "deployed" ? (
                     <><CheckCircle2 className="h-4 w-4 mr-2" />Up to date</>
                   ) : (
@@ -1077,6 +1206,12 @@ export function EditorTopBar({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <LovableUpgradeDialog
+        open={showUpgradeDialog}
+        onOpenChange={setShowUpgradeDialog}
+        feature="Code editor"
+      />
     </TooltipProvider>
   );
 }

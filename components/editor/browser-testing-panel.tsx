@@ -219,6 +219,8 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
   const [liveSteps, setLiveSteps] = useState<LiveStep[]>([]);
   const [liveScreenshots, setLiveScreenshots] = useState<LiveScreenshot[]>([]);
   const [liveDone, setLiveDone] = useState<{ pass: number; fail: number; url: string; note?: string; engine?: "playwright" | "fetch" } | null>(null);
+  // Core Web Vitals from the Playwright engine (Lovable perf-profiling parity)
+  const [liveVitals, setLiveVitals] = useState<Array<{ metric: string; value: string; rating: string }> | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
   const [liveStatusMsg, setLiveStatusMsg] = useState<string>("");
   const liveAbortRef = useRef<(() => void) | null>(null);
@@ -285,6 +287,7 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
     setLiveSteps([]);
     setLiveScreenshots([]);
     setLiveDone(null);
+    setLiveVitals(null);
     setLiveError(null);
     setLiveStatusMsg("Connecting…");
 
@@ -356,6 +359,9 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
                 dataUrl: payload.dataUrl as string,
               }]);
             }
+            if (evtType === "vitals") {
+              setLiveVitals(payload.metrics as Array<{ metric: string; value: string; rating: string }>);
+            }
             if (evtType === "done") {
               setLiveDone({
                 pass: payload.pass as number,
@@ -364,6 +370,9 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
                 note: payload.note as string | undefined,
                 engine: payload.engine as "playwright" | "fetch" | undefined,
               });
+              if (Array.isArray(payload.vitalsRated)) {
+                setLiveVitals(payload.vitalsRated as Array<{ metric: string; value: string; rating: string }>);
+              }
               setLiveStatusMsg("");
             }
             if (evtType === "error") {
@@ -794,6 +803,31 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
                   {liveDone.fail > 0 && <span className="text-red-400">{liveDone.fail} failed</span>}
                 </div>
                 {liveDone.note && <p className="text-[10px] text-muted-foreground mt-1">{liveDone.note}</p>}
+              </div>
+            )}
+            {/* Core Web Vitals (Playwright runs only) */}
+            {liveVitals && (
+              <div className="mx-3 mb-2 rounded-lg border border-border/60 px-3 py-2">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Core Web Vitals</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {liveVitals.map((v) => (
+                    <span
+                      key={v.metric}
+                      className={`text-[10px] px-1.5 py-0.5 rounded-md border tabular-nums ${
+                        v.rating === "good"
+                          ? "bg-emerald-500/10 border-emerald-500/25 text-emerald-400"
+                          : v.rating === "needs-improvement"
+                            ? "bg-amber-500/10 border-amber-500/25 text-amber-400"
+                            : v.rating === "poor"
+                              ? "bg-red-500/10 border-red-500/25 text-red-400"
+                              : "border-border/60 text-muted-foreground"
+                      }`}
+                      title={`${v.metric}: ${v.rating}`}
+                    >
+                      {v.metric} {v.value}
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
             {liveSteps.length > 0 && (

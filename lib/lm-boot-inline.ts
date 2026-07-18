@@ -8,6 +8,11 @@ export const LM_BOOT_INLINE = `(function(){
   var KEY="lifemark-chunk-reload",MAX_RELOAD=3,RETRY_MS=2000,RETRY_MAX=90;
   function isChunkMsg(m){return m&&(m.indexOf("Loading chunk")>=0||m.indexOf("ChunkLoadError")>=0||m.indexOf("Failed to load chunk")>=0||m.indexOf("Failed to fetch dynamically imported module")>=0);}
   function isChunkUrl(src){return src&&src.indexOf("/_next/static/chunks/")>=0;}
+  function isAuthFetchNoise(v){
+    var m=v instanceof Error?(v.name+" "+v.message):String(v||"");
+    if(/Failed to fetch dynamically imported module/i.test(m))return false;
+    return /failed to fetch/i.test(m)||/fetch failed/i.test(m)||/networkerror/i.test(m)||/connect timeout/i.test(m)||/load failed/i.test(m)||/network request failed/i.test(m)||(v&&v.name==="TypeError"&&/fetch|network|load/i.test(m));
+  }
   function clearSw(){
     if("serviceWorker" in navigator){navigator.serviceWorker.getRegistrations().then(function(r){r.forEach(function(x){x.unregister().catch(function(){});});});}
     if("caches" in window){caches.keys().then(function(k){k.filter(function(n){return n.indexOf("lifemarkai-")===0;}).forEach(function(n){caches.delete(n).catch(function(){});});});}
@@ -32,6 +37,15 @@ export const LM_BOOT_INLINE = `(function(){
       s.async=true;if(script.id)s.id=script.id;document.head.appendChild(s);
     },RETRY_MS);
   }
+  // Suppress Supabase/GoTrue "TypeError: Failed to fetch" before Next overlay patches console.
+  if(!window.__lmOrigConsoleError){
+    window.__lmOrigConsoleError=console.error.bind(console);
+    console.error=function(){
+      var args=Array.prototype.slice.call(arguments);
+      for(var i=0;i<args.length;i++){if(isAuthFetchNoise(args[i])){if(DEV)console.warn("[supabase] transient fetch error (boot suppressed)");return;}}
+      return window.__lmOrigConsoleError.apply(console,args);
+    };
+  }
   addEventListener("error",function(e){
     var t=e.target;
     if(t&&t.tagName==="SCRIPT"&&t.src&&isChunkUrl(t.src)){
@@ -40,10 +54,12 @@ export const LM_BOOT_INLINE = `(function(){
     }
     if(t&&t.tagName==="SCRIPT")return;
     var m=e.error instanceof Error?e.error.message:String(e.message||e.error||"");
+    if(isAuthFetchNoise(e.error||m)){e.preventDefault();e.stopImmediatePropagation();return;}
     if(isChunkMsg(m))delayedReload();
   },true);
   addEventListener("unhandledrejection",function(e){
     var m=e.reason instanceof Error?e.reason.message:String(e.reason||"");
+    if(isAuthFetchNoise(e.reason)){e.preventDefault();return;}
     if(isChunkMsg(m))delayedReload();
   });
   function patchWebpack(){

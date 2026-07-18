@@ -570,6 +570,20 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
   const orMessages = withOpenRouterCacheControl(model, options.messages);
   const openrouter = createOpenAIClient(model);
 
+  // Provider routing: OpenRouter serves the same model from multiple backends
+  // and does NOT optimize for speed by default — big builds (15-25k output
+  // tokens) can land on a slow provider and take 5+ minutes. "throughput"
+  // sorts providers by measured tokens/sec, which is the right default for an
+  // interactive builder. Env-tunable: OPENROUTER_PROVIDER_SORT=price to
+  // optimize cost instead, =off to restore OpenRouter's default balancing.
+  // (Unknown body fields pass through the OpenAI SDK untouched; OpenRouter
+  // reads `provider` and non-OpenRouter backends never see it.)
+  const providerSort = process.env.OPENROUTER_PROVIDER_SORT ?? "throughput";
+  const orProviderPrefs =
+    providerSort === "off" || model.endsWith(":free")
+      ? {}
+      : ({ provider: { sort: providerSort } } as Record<string, unknown>);
+
   // One structured line per call: model, tokens in/out, CACHED tokens (proves
   // the cache_control work is hitting in production — watch for cached>0 from
   // turn 2 of a session), and wall time. OpenRouter surfaces Anthropic cache
@@ -595,6 +609,7 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
     const response = await openrouter.chat.completions.create({
       model,
       messages: orMessages as typeof options.messages,
+      ...orProviderPrefs,
       ...openAiTokenArg(options.model, options.maxTokens ?? 4000),
       temperature: options.temperature ?? 0.3,
       tools: oaiTools,
@@ -624,6 +639,7 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
     const stream = await openrouter.chat.completions.create({
       model: model,
       messages: orMessages as typeof options.messages,
+      ...orProviderPrefs,
       ...openAiTokenArg(options.model, options.maxTokens ?? 8000),
       temperature: options.temperature ?? 0.7,
       stream: true,
@@ -662,6 +678,7 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
   const response = await openrouter.chat.completions.create({
     model: model,
     messages: orMessages as typeof options.messages,
+    ...orProviderPrefs,
     max_tokens: options.maxTokens ?? 8000,
     temperature: options.temperature ?? 0.7,
     ...(options.jsonMode ? { response_format: { type: "json_object" as const } } : {}),

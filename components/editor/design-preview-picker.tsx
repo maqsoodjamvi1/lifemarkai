@@ -91,13 +91,41 @@ export function DesignPreviewPicker({
           {error && (
             <div className="text-center py-12 space-y-3">
               <p className="text-sm text-destructive">{error}</p>
-              <button
-                type="button"
-                onClick={onSkip}
-                className="text-xs text-blue-500 hover:underline"
-              >
-                Skip and build anyway
-              </button>
+              <div className="flex items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setLoading(true);
+                    void fetch("/api/ai/design-previews", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ prompt, projectId, fileCount, force: true }),
+                    })
+                      .then(async (res) => {
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.error ?? "Failed to load previews");
+                        if (data.skip) {
+                          onSkip();
+                          return;
+                        }
+                        setDirections(data.directions ?? []);
+                      })
+                      .catch((e: Error) => setError(e.message))
+                      .finally(() => setLoading(false));
+                  }}
+                  className="text-xs text-foreground hover:underline"
+                >
+                  Try again
+                </button>
+                <button
+                  type="button"
+                  onClick={onSkip}
+                  className="text-xs text-blue-500 hover:underline"
+                >
+                  Skip and build anyway
+                </button>
+              </div>
             </div>
           )}
 

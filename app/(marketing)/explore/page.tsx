@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { getPastIsoTimestamp } from "@/lib/utils";
 import { ExploreClient } from "@/components/marketing/explore-client";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? "https://lifemarkai.app";
@@ -31,6 +32,7 @@ export default async function ExplorePage({
   const query = searchParams.q ?? "";
   const framework = searchParams.framework ?? "";
   const sort = searchParams.sort ?? "recent";
+  const sevenDaysAgo = getPastIsoTimestamp(7);
 
   // Fetch public projects
   let projectsQuery = (supabase as any)
@@ -54,7 +56,6 @@ export default async function ExplorePage({
   // For popular sort: also fetch 7-day view counts to display alongside star count
   const viewCountMap: Record<string, number> = {};
   if (sort === "popular") {
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data: recentViews } = await (supabase as any)
       .from("project_views")
       .select("project_id")
@@ -72,7 +73,6 @@ export default async function ExplorePage({
     .limit(12);
 
   // Fetch trending projects — top 3 by view count in past 7 days
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
   const { data: recentViews } = await (supabase as any)
     .from("project_views")
     .select("project_id")

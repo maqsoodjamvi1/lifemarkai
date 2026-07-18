@@ -58,6 +58,17 @@ export function finalizeBuildActivity(
     ];
   }
 
+  if (fileCount > 0 && !next.some((s) => s.id === "preview")) {
+    next = [
+      ...next,
+      {
+        id: "preview",
+        label: "Preview ready",
+        status: "done",
+      },
+    ];
+  }
+
   if (opts?.githubRepo && !next.some((s) => s.id === "github")) {
     const shortRepo = opts.githubRepo.replace(/^gitlab:/, "").split("/").slice(-2).join("/");
     next = [

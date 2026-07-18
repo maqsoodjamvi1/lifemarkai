@@ -334,11 +334,15 @@ function isCodeChangeIntent(prompt: string): boolean {
   if (CHAT_KEYWORDS.test(prompt) || PLAN_KEYWORDS.test(prompt) || INVESTIGATE_KEYWORDS.test(prompt)) {
     return false;
   }
-  return /\b(add|create|implement|integrate|update|change|fix|remove|delete|build|make|refactor|wire|connect)\b/i.test(prompt);
+  return /\b(add|create|implement|integrate|update|change|fix|remove|delete|build|make|refactor|wire|connect|rename|replace|move|hide|show|enable|disable|set|swap|tweak|adjust)\b/i.test(
+    prompt,
+  );
 }
 
 /**
  * Chat-tab escape hatch: edits that should write files without requiring /build.
+ * Lovable default: if the project already has files and the user asks to change
+ * the UI/code, promote out of Chat so the preview actually updates.
  * Excludes greenfield "build/create a … app/site" (those stay Chat unless /build).
  */
 function isSurgicalEditFromChat(prompt: string): boolean {
@@ -347,16 +351,39 @@ function isSurgicalEditFromChat(prompt: string): boolean {
     return false;
   }
   if (PATCH_KEYWORDS.test(prompt)) return true;
-  if (/\b(add|insert|include|put)\b.+\b(menu|nav|item|link|button|section|header|footer|tab|page|card|modal|form|field)\b/i.test(prompt)) {
+  // Imperative UI chrome — "add About to the header", "put Contact in the nav"
+  if (
+    /\b(add|insert|include|put|place|append)\b.+\b(menu|nav|navbar|item|link|button|section|header|footer|tab|page|card|modal|form|field|logo|hero|title|heading|text|label|color|theme|style)\b/i.test(
+      prompt,
+    )
+  ) {
+    return true;
+  }
+  // "make the header blue", "remove Premium from the hero"
+  if (
+    /\b(make|turn|set|remove|delete|hide|show|rename|replace|swap|update|change|fix|tweak|adjust)\b.+\b(header|footer|nav|navbar|menu|hero|button|title|heading|text|color|theme|style|font|logo|card|section|page|link)\b/i.test(
+      prompt,
+    )
+  ) {
     return true;
   }
   return isCodeChangeIntent(prompt) && !/\b(build|create|make|generate|scaffold)\b/i.test(prompt);
 }
 
+/** True when the prompt looks like an edit but Chat mode would only answer in prose. */
+export function looksLikeEditRequest(prompt: string): boolean {
+  const trimmed = prompt.trim();
+  if (!trimmed) return false;
+  if (CHAT_KEYWORDS.test(trimmed) || PLAN_KEYWORDS.test(trimmed) || INVESTIGATE_KEYWORDS.test(trimmed)) {
+    return false;
+  }
+  return isSurgicalEditFromChat(trimmed) || isCodeChangeIntent(trimmed);
+}
+
 /** Small chrome edits that should use patch even from the Build tab. */
 function isQuickUiChromeEdit(prompt: string): boolean {
   if (PATCH_KEYWORDS.test(prompt)) return true;
-  return /\b(add|insert|include|put|update|change|fix|remove)\b.+\b(menu|nav|navbar|item|link|button|header|footer|tab)\b/i.test(
+  return /\b(add|insert|include|put|update|change|fix|remove|make|set|rename|replace)\b.+\b(menu|nav|navbar|item|link|button|header|footer|tab|hero|title|color|theme|logo)\b/i.test(
     prompt,
   );
 }

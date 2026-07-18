@@ -4,6 +4,8 @@ import { stripe } from "@/lib/stripe/client";
 import { PLANS, CREDIT_PACKS, getPlanByPriceId } from "@/lib/stripe/plans";
 import { createAdminClient } from "@/lib/supabase/server";
 import { sendCreditsPurchasedEmail } from "@/lib/email/resend";
+import { completeDomainPurchase } from "@/lib/domains/complete-domain-purchase";
+import type { RegistrantContact } from "@/lib/domains/registrar";
 import type Stripe from "stripe";
 
 export const runtime = "nodejs";
@@ -257,7 +259,35 @@ export async function POST(req: NextRequest) {
       if (session.mode !== "payment") break;
       if (session.payment_status !== "paid") break;
 
-      const meta    = session.metadata ?? {};
+      const meta = session.metadata ?? {};
+
+      // Domain purchase (Lovable parity: pay → register → wire DNS)
+      if (meta.kind === "domain_purchase") {
+        const userId = meta.userId;
+        const projectId = meta.projectId;
+        const domain = meta.domain;
+        const years = parseInt(meta.years ?? "1", 10);
+        let contact: RegistrantContact | null = null;
+        try {
+          contact = JSON.parse(meta.contactJson ?? "null") as RegistrantContact;
+        } catch {
+          contact = null;
+        }
+        if (userId && projectId && domain && contact) {
+          const amount = session.amount_total ?? 0;
+          await completeDomainPurchase({
+            projectId,
+            userId,
+            domain,
+            contact,
+            years,
+            priceCents: amount,
+            stripeRef: session.id,
+          });
+        }
+        break;
+      }
+
       const userId  = meta.userId;
       const teamId  = meta.teamId || null;
       const packKey = meta.packKey;

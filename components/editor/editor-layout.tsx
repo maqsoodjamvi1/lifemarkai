@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { countFindings } from "@/lib/security/static-scan";
+import { useRouter } from "next/navigation";
+import { countFindings, staticScan } from "@/lib/security/static-scan";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import dynamic from "next/dynamic";
 import { importWithRetry } from "@/lib/import-with-retry";
@@ -19,6 +20,8 @@ import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { EditorTopBar } from "./editor-top-bar";
+import { LovableFilesViewPane } from "./lovable/files-view-pane";
+import { LovableLiveTasksDock } from "./lovable/live-tasks-dock";
 import { EditorPaymentBanner } from "./editor-payment-banner";
 import {
   LovableToolsOverlay,
@@ -30,13 +33,16 @@ import { useShortcutsModal } from "@/hooks/use-shortcuts-modal";
 import type { CommandPaletteActions } from "@/components/command-palette";
 import { useRecordProjectVisit } from "@/hooks/use-recent-projects";
 import type { Project, ProjectFile, Message, Profile } from "@/types/database";
-import type { PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
+import type { PreviewErrorReport, PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
+import { saveApprovedPlan } from "@/lib/editor/save-approved-plan";
 import {
   pickActiveFileAfterUpdate,
   resolvePromptMode,
   shouldFocusPreviewAfterGeneration,
   inferProjectStage,
 } from "@/lib/ai/editor-intelligence";
+
+const EMPTY_PREVIEW_ERRORS: PreviewRuntimeError[] = [];
 
 const CommandPalette = dynamic(
   importWithRetry(() => import("@/components/command-palette").then((m) => m.CommandPalette)),
@@ -117,8 +123,8 @@ const PreviewPanel = dynamic(
 );
 
 export type EditorMode = "chat" | "plan" | "build" | "agent" | "patch";
-export type ViewMode = "preview" | "code" | "both";
-export type LeftPanel = "chat" | "plan" | "agent" | "intelligence" | "healing" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "dbmanager" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "code";
+export type ViewMode = "preview" | "code" | "both" | "files";
+export type LeftPanel = "chat" | "plan" | "agent" | "intelligence" | "healing" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "dbmanager" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "media" | "code";
 
 interface EditorLayoutProps {
   project: Project;
@@ -131,15 +137,90 @@ interface EditorLayoutProps {
 }
 
 export function EditorLayout({ project, initialFiles, initialMessages, profile, starterPrompt, starterMode, autoDeploy }: EditorLayoutProps) {
+  const router = useRouter();
   // Record this project visit for the dashboard "Recently visited" rail
   useRecordProjectVisit({ id: project.id, name: project.name, framework: project.framework ?? "react" });
 
   const [files, setFiles] = useState<ProjectFile[]>(initialFiles);
+  const filesRef = useRef(files);
+  filesRef.current = files;
+
+  // Pull latest files from the API once on mount so DB-side repairs (and other
+  // tabs' edits) aren't stuck behind a stale SSR snapshot.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/projects/${project.id}/files`, { cache: "no-store" });
+        if (!res.ok || cancelled) return;
+        const payload = await res.json();
+        const next = (Array.isArray(payload) ? payload : payload.files) as ProjectFile[] | undefined;
+        if (!next || next.length === 0 || cancelled) return;
+        setFiles(next);
+        window.dispatchEvent(
+          new CustomEvent("lifemark-refresh-preview", {
+            detail: { files: next, reason: "editor-mount-refetch" },
+          }),
+        );
+      } catch {
+        // Keep SSR files if refetch fails.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
+
+  // Auto-deploy when arriving from dashboard with ?deploy=true
+  const autoDeployRan = useRef(false);
+  useEffect(() => {
+    if (!autoDeploy || autoDeployRan.current) return;
+    autoDeployRan.current = true;
+    void (async () => {
+      try {
+        const res = await fetch("/api/deploy", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ projectId: project.id, provider: "netlify" }),
+        });
+        if (res.ok) {
+          window.dispatchEvent(new CustomEvent("lifemark-deploy-started"));
+        }
+      } catch {
+        // Non-fatal — user can publish manually from the top bar.
+      }
+    })();
+  }, [autoDeploy, project.id]);
+
+  // Refresh message batch client-side when SSR hit the cap.
+  useEffect(() => {
+    if (initialMessages.length < 500) return;
+    setMessagesHydrating(true);
+    void (async () => {
+      try {
+        const res = await fetch(`/api/projects/${project.id}/messages?limit=500`);
+        if (!res.ok) return;
+        const data = await res.json() as { messages?: Message[] };
+        if (data.messages?.length) setMessages(data.messages);
+      } finally {
+        setMessagesHydrating(false);
+      }
+    })();
+  }, [project.id, initialMessages.length]);
+
   // Static security-issue count for the publish dropdown's "Review security" badge
   // (matches Lovable's red number badge). Recomputes whenever files change; cheap
   // enough to run inline since staticScan is a single linear regex pass.
   const securityIssueCount = useMemo(() => countFindings(files), [files]);
+  // Critical-only count gates publishing (Lovable's "block publish on
+  // critical findings"). Same static scan, severity-filtered.
+  const criticalSecurityCount = useMemo(
+    () => staticScan(files).filter((f) => f.severity === "critical").length,
+    [files],
+  );
   const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [messagesHydrating, setMessagesHydrating] = useState(false);
   const [activeFile, setActiveFile] = useState<ProjectFile | null>(
     initialFiles.find((f) => f.path === "app/page.tsx" || f.path === "src/App.tsx" || f.path === "index.html") ||
       initialFiles[0] ||
@@ -161,6 +242,9 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     return "build";
   });
   const [viewMode, setViewMode] = useState<ViewMode>("preview");
+  // Lovable-parity "Preview this version": when set, the preview panel renders
+  // this snapshot's files (read-only banner) instead of the live project files.
+  const [previewVersion, setPreviewVersion] = useState<{ files: ProjectFile[]; label: string } | null>(null);
   const [leftPanel, setLeftPanel] = useState<LeftPanel>("chat");
   // Right-side secondary panel (null = show preview/code)
   const [rightPanel, setRightPanel] = useState<LeftPanel | null>(null);
@@ -230,12 +314,27 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   const [showFileTree, setShowFileTree] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  const [previewRuntimeErrors, setPreviewRuntimeErrors] = useState<PreviewRuntimeError[]>([]);
+  const [previewRuntimeErrors, setPreviewRuntimeErrors] = useState<PreviewRuntimeError[]>(EMPTY_PREVIEW_ERRORS);
+
+  // Stable callback — inline `setPreviewRuntimeErrors(report?.errors ?? [])` created a
+  // new [] every effect run and re-rendered forever (Maximum update depth → editor crash).
+  const handlePreviewErrorReport = useCallback((report: PreviewErrorReport | null) => {
+    setPreviewRuntimeErrors((prev) => {
+      const next = report?.errors ?? EMPTY_PREVIEW_ERRORS;
+      if (prev === next) return prev;
+      if (prev.length === 0 && next.length === 0) return prev;
+      if (
+        prev.length === next.length &&
+        prev.every((err, i) => err.message === next[i]?.message && err.kind === next[i]?.kind)
+      ) {
+        return prev;
+      }
+      return next.length === 0 ? EMPTY_PREVIEW_ERRORS : next;
+    });
+  }, []);
   const [pendingFix, setPendingFix] = useState<string | null>(null);
-  const [pendingComponentPrompt, setPendingComponentPrompt] = useState<string | null>(null);
   const [pendingCrossRefPrompt, setPendingCrossRefPrompt] = useState<string | null>(null);
   const [pendingBuildFromFile, setPendingBuildFromFile] = useState<{ prompt: string; imageBase64?: string } | null>(null);
-  const [pendingConnectorPrompt, setPendingConnectorPrompt] = useState<string | null>(null);
   const [pendingFileRef, setPendingFileRef] = useState<import("@/types/database").ProjectFile | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatingFileCount, setGeneratingFileCount] = useState(0);
@@ -275,14 +374,21 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     ((project as Record<string, unknown>).environment as "test" | "live") ?? "test"
   );
   const isLiveLocked = environment === "live";
-  // Mobile: which pane is visible — "left" | "code" | "preview"
-  const [mobilePaneActive, setMobilePaneActive] = useState<"left" | "code" | "preview">("left");
+  // Mobile: which pane is visible — "left" | "files" | "preview"
+  const [mobilePaneActive, setMobilePaneActive] = useState<"left" | "files" | "preview">("left");
   // useIsMobile() replaces the inline window.innerWidth check that used to live
   // here. Same 768px breakpoint, but the hook also reports pointer:coarse and
   // standalone-PWA state for downstream consumers.
   const { isMobile } = useIsMobile();
   const [annotateOpen, setAnnotateOpen] = useState(false);
   const [annotateImage, setAnnotateImage] = useState<string | null>(null);
+
+  const handleFixWithAI = useCallback((err: string) => {
+    window.dispatchEvent(new CustomEvent("lifemark-preview-heal-start"));
+    setMobilePaneActive("left");
+    setLeftPanel("chat");
+    setPendingFix(err);
+  }, []);
 
   // Mobile detection now lives in the useIsMobile() hook above.
 
@@ -302,12 +408,20 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   }, []);
 
   const handleFocusPreview = useCallback(() => {
+    // Focus only — do NOT fire bare lifemark-refresh-preview here.
+    // A bare refresh falls back to a stale `files` prop and remounts the OLD
+    // preview right after a good files-bearing refresh (Lovable: edit → live preview).
     setRightPanel(null);
     setLeftChatOverlay(null);
     setViewMode("preview");
     if (isMobile) setMobilePaneActive("preview");
-    window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"));
   }, [isMobile]);
+
+  // Mobile: Files tab routes to the dedicated files layout.
+  useEffect(() => {
+    if (!isMobile) return;
+    if (viewMode === "files" || viewMode === "code") setMobilePaneActive("files");
+  }, [isMobile, viewMode]);
 
   const commandPaletteActions: CommandPaletteActions = {
     onOpenFile: (file) => setActiveFile(files.find(f => f.id === file.id) || null),
@@ -351,13 +465,14 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
       const mod = e.metaKey || e.ctrlKey;
       if (!mod) return;
 
-      // View mode: ⌘1 preview, ⌘2 code, ⌘3 both
-      if (e.key === "1") { e.preventDefault(); setViewMode("preview"); }
-      if (e.key === "2") { e.preventDefault(); setViewMode("code"); }
-      if (e.key === "3") { e.preventDefault(); setViewMode("both"); }
+      // View mode: ⌘1 preview, ⌘2 code, ⌘3 both, ⌘4 files
+      if (e.key === "1") { e.preventDefault(); setViewMode("preview"); setShowFileTree(false); }
+      if (e.key === "2") { e.preventDefault(); setViewMode("code"); setShowFileTree(false); }
+      if (e.key === "3") { e.preventDefault(); setViewMode("both"); setShowFileTree(false); }
+      if (e.key === "4") { e.preventDefault(); setViewMode("files"); setShowFileTree(false); setRightPanel(null); }
 
-      // Toggle file tree: ⌘\
-      if (e.key === "\\") { e.preventDefault(); setShowFileTree((v) => !v); }
+      // Toggle file tree: ⌘\ → Files view (Lovable parity)
+      if (e.key === "\\") { e.preventDefault(); setShowFileTree(false); setViewMode("files"); setRightPanel(null); }
 
       // AI mode switching: ⌘⇧C/P/B/A
       if (e.shiftKey) {
@@ -380,10 +495,76 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     };
   }, []);
 
+  // Per-message version preview (Lovable parity). The chat panel dispatches
+  // "lifemark-preview-version" with a snapshotId; we reconstruct that snapshot's
+  // full file list via GET /api/projects/snapshots?id=… and show it in the
+  // preview panel until "lifemark-exit-version-preview" (banner's Back to latest).
+  useEffect(() => {
+    function handlePreviewVersion(e: Event) {
+      const detail = (e as CustomEvent).detail as { snapshotId?: string; label?: string } | undefined;
+      if (!detail?.snapshotId) return;
+      const { snapshotId, label } = detail;
+      void (async () => {
+        try {
+          const res = await fetch(`/api/projects/snapshots?id=${snapshotId}`);
+          if (!res.ok) throw new Error(`Snapshot fetch failed (${res.status})`);
+          const { files: snapFiles } = (await res.json()) as {
+            files?: Array<{ path: string; content: string; language?: string }>;
+          };
+          if (!snapFiles || snapFiles.length === 0) throw new Error("Snapshot is empty");
+          const now = new Date().toISOString();
+          const mapped = snapFiles.map((f, i) => ({
+            id: `version-preview-${snapshotId}-${i}`,
+            project_id: project.id,
+            path: f.path,
+            content: f.content,
+            language: f.language ?? "plaintext",
+            created_at: now,
+            updated_at: now,
+          })) as ProjectFile[];
+          setPreviewVersion({ files: mapped, label: label || "Earlier version" });
+          setViewMode("preview");
+          if (isMobile) setMobilePaneActive("preview");
+        } catch {
+          // best-effort — leave the live preview untouched
+        }
+      })();
+    }
+    function handleExitVersionPreview() { setPreviewVersion(null); }
+    window.addEventListener("lifemark-preview-version", handlePreviewVersion);
+    window.addEventListener("lifemark-exit-version-preview", handleExitVersionPreview);
+    return () => {
+      window.removeEventListener("lifemark-preview-version", handlePreviewVersion);
+      window.removeEventListener("lifemark-exit-version-preview", handleExitVersionPreview);
+    };
+  }, [project.id, isMobile]);
+
+  // Chat line-reference pills (Lovable parity): clicking `@file.tsx:42` in a
+  // sent message opens the file in Code view and reveals the line.
+  useEffect(() => {
+    function handleOpenFileAtLine(e: Event) {
+      const { path, line } = (e as CustomEvent<{ path: string; line: number }>).detail ?? {};
+      if (!path) return;
+      const file = files.find((f) => f.path === path) ?? files.find((f) => f.path.endsWith(path));
+      if (!file) return;
+      setActiveFile(file);
+      setViewMode("files");
+      if (isMobile) setMobilePaneActive("files");
+      // Let the code panel mount/switch tabs before revealing the line.
+      if (line > 0) {
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent("monaco-reveal-line", { detail: { line } }));
+        }, 450);
+      }
+    }
+    window.addEventListener("lifemark-open-file-at-line", handleOpenFileAtLine);
+    return () => window.removeEventListener("lifemark-open-file-at-line", handleOpenFileAtLine);
+  }, [files, isMobile]);
+
   const handleFileSelect = useCallback((file: ProjectFile) => {
     setActiveFile(file);
     // On mobile, open code pane when a file is selected
-    if (isMobile) setMobilePaneActive("code");
+    if (isMobile) setMobilePaneActive("files");
   }, [isMobile]);
 
   const handleFileUpdate = useCallback((updatedFile: ProjectFile) => {
@@ -404,31 +585,83 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     }
   }, [project.id]);
 
-  const handleFilesUpdate = useCallback((updatedFiles: ProjectFile[]) => {
-    setFiles((prev) => {
+  /** Lovable-style file sync: full project listings REPLACE (drop orphans);
+   *  single-file panel edits MERGE so we don't wipe the tree.
+   *  Never replace with an empty payload when we already have files — that
+   *  blanked the editor/preview after a failed refresh. */
+  const handleFilesUpdate = useCallback((
+    updatedFiles: ProjectFile[],
+    opts?: { replace?: boolean },
+  ) => {
+    const prev = filesRef.current;
+    if (!Array.isArray(updatedFiles)) return;
+
+    // Guard: empty array must not wipe a live project (failed fetch / bad payload).
+    if (updatedFiles.length === 0 && prev.length > 0) {
+      return;
+    }
+
+    // Full DB refresh / agent refetch / multi-file snapshots → replace.
+    // Single-file panel updates (design system, email, etc.) → merge.
+    const replace =
+      opts?.replace === true ||
+      (updatedFiles.length > 1 && updatedFiles.length >= Math.max(1, prev.length - 2));
+
+    const changedPaths: string[] = [];
+    let next: ProjectFile[];
+
+    if (replace) {
+      const prevByPath = new Map(prev.map((f) => [f.path, f]));
+      for (const f of updatedFiles) {
+        const existing = prevByPath.get(f.path);
+        if (!existing || existing.content !== f.content) changedPaths.push(f.path);
+      }
+      for (const f of prev) {
+        if (!updatedFiles.some((u) => u.path === f.path)) changedPaths.push(f.path);
+      }
+      next = updatedFiles;
+      if (changedPaths.length === 0 && next.length === prev.length) {
+        let identical = true;
+        for (let i = 0; i < prev.length; i++) {
+          if (prev[i]?.path !== next[i]?.path || prev[i]?.content !== next[i]?.content) {
+            identical = false;
+            break;
+          }
+        }
+        if (identical) return;
+      }
+    } else {
       const map = new Map(prev.map((f) => [f.path, f]));
-      const changedPaths: string[] = [];
       updatedFiles.forEach((f) => {
         const existing = map.get(f.path);
         if (!existing || existing.content !== f.content) changedPaths.push(f.path);
         map.set(f.path, f);
       });
-      const next = Array.from(map.values());
-
-      if (changedPaths.length > 0) {
-        queueMicrotask(() => {
-          setActiveFile((current) => pickActiveFileAfterUpdate(next, changedPaths, current) ?? current);
-          window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
-            detail: { files: next, reason: "files-updated" },
-          }));
-          if (shouldFocusPreviewAfterGeneration(editorMode, changedPaths.length)) {
-            handleFocusPreview();
-          }
-        });
+      if (changedPaths.length === 0) {
+        let identical = true;
+        for (const f of prev) {
+          if (map.get(f.path) !== f) { identical = false; break; }
+        }
+        if (identical) return;
       }
+      next = Array.from(map.values());
+    }
 
-      return next;
-    });
+    filesRef.current = next;
+    setFiles(next);
+
+    if (changedPaths.length > 0 || replace) {
+      queueMicrotask(() => {
+        setPreviewVersion(null);
+        setActiveFile((current) => pickActiveFileAfterUpdate(next, changedPaths, current) ?? current);
+        window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
+          detail: { files: next, reason: replace ? "files-replaced" : "files-updated" },
+        }));
+        if (shouldFocusPreviewAfterGeneration(editorMode, changedPaths.length)) {
+          handleFocusPreview();
+        }
+      });
+    }
     if (isMobile && updatedFiles.length > 0) setMobilePaneActive("preview");
   }, [editorMode, handleFocusPreview, isMobile]);
 
@@ -561,14 +794,36 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   const pid = currentProject.id;
   const projectSlug = (currentProject as { slug?: string | null }).slug ?? pid;
   const sendPromptToChat = useCallback((p: string) => {
-    setPendingCrossRefPrompt(p);
+    // Mid-session prompts must land in the composer even when chat already has messages.
+    // pendingBuildFromFile is consumed by ChatPanel regardless of message count.
+    setPendingBuildFromFile({ prompt: p });
     setRightPanel(null);
+    setLeftPanel("chat");
   }, []);
+
+  const handleApprovePlan = useCallback(
+    async (markdown: string) => {
+      await saveApprovedPlan(currentProject.id, markdown);
+      setEditorMode("build");
+      sendPromptToChat(`Implement this approved plan:\n\n${markdown}`);
+    },
+    [currentProject.id, sendPromptToChat],
+  );
+
+  // Secondary tools still use the legacy cross-reference setter. Convert
+  // those values into the composer payload, which works in existing chats.
+  useEffect(() => {
+    if (!pendingCrossRefPrompt) return;
+    setPendingBuildFromFile({ prompt: pendingCrossRefPrompt });
+    setPendingCrossRefPrompt(null);
+    setRightPanel(null);
+    setLeftPanel("chat");
+  }, [pendingCrossRefPrompt]);
 
   // Sync top-bar preview/code toggles with mobile bottom-nav panes
   useEffect(() => {
     if (!isMobile || rightPanel || leftChatOverlay) return;
-    if (viewMode === "code") setMobilePaneActive("code");
+    if (viewMode === "code" || viewMode === "files") setMobilePaneActive("files");
     else setMobilePaneActive("preview");
   }, [isMobile, viewMode, rightPanel, leftChatOverlay]);
 
@@ -580,6 +835,30 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   const handleMessagesUpdate = useCallback((newMessages: Message[]) => {
     setMessages(newMessages);
   }, []);
+
+  const handleDuplicateProject = useCallback(async () => {
+    try {
+      const filesRes = await fetch(`/api/projects/${project.id}/files`);
+      const payload = filesRes.ok ? await filesRes.json() : [];
+      const forkFiles = (Array.isArray(payload) ? payload : payload.files ?? []) as ProjectFile[];
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: `Copy of ${project.name}`,
+          description: project.description ?? "",
+          framework: project.framework,
+          forkFiles,
+        }),
+      });
+      if (res.ok) {
+        const newProject = await res.json() as { id: string };
+        router.push(`/editor/${newProject.id}`);
+      }
+    } catch {
+      // User can duplicate from dashboard if this fails.
+    }
+  }, [project, router]);
 
   const handleCreditsUpdate = useCallback((newCredits: number) => {
     setCredits(newCredits);
@@ -636,6 +915,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     { id: "cloud",         label: "Cloud",     emoji: "☁️" },
     { id: "dbmanager",     label: "Data",      emoji: "🗃️" },
     { id: "storage",       label: "Storage",   emoji: "🗄️" },
+    { id: "media",         label: "Media",     emoji: "🖼️" },
     { id: "appconnectors", label: "Connectors", emoji: "🔌" },
     { id: "mcpcontext",    label: "Context",    emoji: "🧠" },
     { id: "aeo",           label: "AEO",        emoji: "✨" },
@@ -712,20 +992,36 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
           credits={uiCredits}
           leftPanel={leftPanel}
           onModeChange={setEditorMode}
-          onViewChange={(v) => { if (devMode || v === "preview") setViewMode(v); }}
+          onViewChange={(v) => {
+            if (v === "files") {
+              setShowFileTree(false);
+              setRightPanel(null);
+              setViewMode("files");
+              return;
+            }
+            // Lovable parity: Preview / Files / Code always one click — no dev-mode gate.
+            setViewMode(v);
+          }}
           onLeftPanelChange={setLeftPanel}
-          onToggleFileTree={() => setShowFileTree((v) => !v)}
+          onToggleFileTree={() => {
+            setShowFileTree(false);
+            setViewMode("files");
+            setRightPanel(null);
+          }}
+          isMobile={isMobile}
           onOpenShortcuts={() => setShortcutsOpen(true)}
           showFileTree={showFileTree}
           profile={profile}
           lastSaved={lastSaved}
           onRename={(name) => handleProjectUpdate({ name })}
+          onDuplicate={() => void handleDuplicateProject()}
           devMode={devMode}
           onDevModeToggle={handleDevModeToggle}
           onEnvironmentChange={setEnvironment}
           rightPanel={rightPanel}
           onRightPanelChange={(p) => setRightPanel(p)}
           securityIssueCount={securityIssueCount}
+          criticalSecurityCount={criticalSecurityCount}
           chatOverlayActive={leftChatOverlay === "history"}
           onChatOverlayToggle={() => {
             setLeftChatOverlay((h) => (h === "history" ? null : "history"));
@@ -758,21 +1054,25 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
         </div>
       )}
 
-      {/* ── Mobile layout (Lovable-style: chat-only left, tools via overlays) ─ */}
-      {isMobile && (
+      {/* ── Mobile layout (Lovable-style: chat-only left, tools via overlays) ─
+          Mount ONLY one tree — keeping desktop mounted under `hidden` on mobile
+          doubled ChatPanel/PreviewPanel (abort races + duplicate refresh listeners). */}
+      {isMobile ? (
         <>
           <div className="flex-1 overflow-hidden relative">
             {/* Chat pane — always chat-only, no emoji tab strip */}
             <div className={`absolute inset-0 flex flex-col ${mobilePaneActive === "left" ? "" : "hidden"}`}>
               <div className="relative flex-1 overflow-hidden">
                 <ChatPanel
-                  project={project}
+                  project={currentProject}
                   files={files}
                   messages={messages}
                   activeFile={activeFile}
                   mode={editorMode}
                   credits={uiCredits}
-                  starterPrompt={pendingConnectorPrompt ?? pendingComponentPrompt ?? starterPrompt}
+                  starterPrompt={starterPrompt}
+                  hasMoreMessages={initialMessages.length >= 500}
+                  isMessagesLoading={messagesHydrating}
                   previewError={previewError}
                   previewRuntimeErrors={previewRuntimeErrors}
                   pendingFixPrompt={pendingFix}
@@ -780,9 +1080,10 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                   onMessagesUpdate={handleMessagesUpdate}
                   onFilesUpdate={handleFilesUpdate}
                   onCreditsUpdate={handleCreditsUpdate}
+                  onProjectUpdate={handleProjectUpdate}
                   onAutoFixComplete={() => {
                     setPreviewError(null);
-                    setPreviewRuntimeErrors([]);
+                    setPreviewRuntimeErrors(EMPTY_PREVIEW_ERRORS);
                   }}
                   onPendingFixConsumed={() => setPendingFix(null)}
                   onPendingFileRefConsumed={() => setPendingFileRef(null)}
@@ -791,12 +1092,11 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                   pendingBuildFromFile={pendingBuildFromFile}
                   onPendingBuildFromFileConsumed={() => setPendingBuildFromFile(null)}
                   isLocked={isLiveLocked}
-                  onApprovePlan={() => {
-                    setEditorMode("build");
-                    handleFocusPreview();
-                  }}
+                  onApprovePlan={handleApprovePlan}
                   onOpenPanel={handleOpenPanel}
                   onFocusPreview={handleFocusPreview}
+                  onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
+                  isVisualEditActive={isVisualEditActive}
                   securityIssueCount={securityIssueCount}
                 />
                 {leftChatOverlay === "history" && (
@@ -807,8 +1107,12 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                         projectId={currentProject.id}
                         onRestore={(snapshotFiles) => {
                           setFiles(snapshotFiles);
+                          filesRef.current = snapshotFiles;
                           setActiveFile(snapshotFiles[0] ?? null);
                           setLeftChatOverlay(null);
+                          window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
+                            detail: { files: snapshotFiles, reason: "history-restore" },
+                          }));
                           handleFocusPreview();
                         }}
                         onCompare={(oldId, newId) => {
@@ -825,8 +1129,21 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
               </div>
             </div>
 
-            {/* Code pane */}
-            <div className={`absolute inset-0 ${mobilePaneActive === "code" ? "" : "hidden"}`}>
+            {/* Code / Files pane */}
+            <div className={`absolute inset-0 ${mobilePaneActive === "files" ? "" : "hidden"}`}>
+              {viewMode === "files" ? (
+                <LovableFilesViewPane
+                  files={files}
+                  activeFile={activeFile}
+                  projectId={project.id}
+                  onFileSelect={setActiveFile}
+                  onFilesChange={handleFilesUpdate}
+                  onSave={handleCodeSave}
+                  onChange={handleCodeChange}
+                  collabUser={collabUser}
+                  onCollaboratorsChange={setYjsCollaborators}
+                />
+              ) : (
               <CodePanel
                 file={activeFile} files={files} projectId={project.id}
                 onSave={handleCodeSave} onChange={handleCodeChange}
@@ -835,25 +1152,26 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 onCollaboratorsChange={setYjsCollaborators}
                 onReferenceInChat={(f) => { setPendingFileRef(f); setMobilePaneActive("left"); setLeftPanel("chat"); }}
               />
+              )}
             </div>
 
             {/* Preview pane */}
             <div className={`absolute inset-0 ${mobilePaneActive === "preview" ? "" : "hidden"}`}>
               <PreviewPanel
-                files={files}
+                files={previewVersion?.files ?? files}
+                versionPreviewLabel={previewVersion?.label ?? null}
+                hideTopChrome
                 activeFile={activeFile}
                 isVisualEditActive={isVisualEditActive}
                 onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
                 onFileUpdate={handleFileUpdate}
                 onError={setPreviewError}
-                onErrorReport={(report) => setPreviewRuntimeErrors(report?.errors ?? [])}
-                onFixWithAI={(err) => {
-                  window.dispatchEvent(new CustomEvent("lifemark-preview-heal-start"));
+                onErrorReport={handlePreviewErrorReport}
+                onFixWithAI={handleFixWithAI}
+                onSendPromptToChat={(p) => {
                   setMobilePaneActive("left");
-                  setLeftPanel("chat");
-                  setPendingFix(err);
+                  sendPromptToChat(p);
                 }}
-                onSendPromptToChat={(p) => { setMobilePaneActive("left"); setLeftPanel("chat"); setPendingCrossRefPrompt(p); }}
                 isGenerating={isGenerating}
                 generatingFileCount={generatingFileCount}
                 deployedUrl={project.deployed_url ?? undefined}
@@ -933,11 +1251,11 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
 
           {/* Mobile bottom nav */}
           <div className="flex items-stretch border-t border-border bg-background/95 backdrop-blur shrink-0 h-14 safe-area-pb">
-            {(["left", "code", "preview"] as const).map((pane) => {
+            {(["left", "files", "preview"] as const).map((pane) => {
               const config = {
-                left:    { icon: "💬", label: "Chat" },
-                code:    { icon: "⌨️",  label: "Code" },
-                preview: { icon: "▶",  label: "Preview" },
+                left:    { label: "Chat" },
+                files:   { label: "Files" },
+                preview: { label: "Preview" },
               }[pane];
               const isActive = mobilePaneActive === pane;
               return (
@@ -949,7 +1267,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                     setLeftChatOverlay(null);
                     setMobilePaneActive(pane);
                     if (pane === "left") setLeftPanel("chat");
-                    if (pane === "code") setViewMode("code");
+                    if (pane === "files") setViewMode("files");
                     if (pane === "preview") setViewMode("preview");
                   }}
                   className={`flex-1 flex flex-col items-center justify-center gap-0.5 py-1.5 text-[11px] font-medium transition-all relative ${
@@ -959,37 +1277,37 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                   {isActive && (
                     <span className="absolute top-0 left-1/4 right-1/4 h-0.5 rounded-full bg-primary" />
                   )}
-                  <span className={`text-lg leading-none transition-transform ${isActive ? "scale-110" : ""}`}>
-                    {config.icon}
+                  <span className={`leading-none transition-transform ${isActive ? "font-semibold" : ""}`}>
+                    {config.label}
                   </span>
-                  <span>{config.label}</span>
                 </button>
               );
             })}
           </div>
         </>
-      )}
-
-      {/* ── Desktop layout ──────────────────────────────────────────────────── */}
-      <div className={`flex-1 overflow-hidden ${isMobile ? "hidden" : ""}`}>
-        <PanelGroup direction="horizontal" className="h-full">
+      ) : (
+      /* ── Desktop layout ──────────────────────────────────────────────────── */
+      <div className="flex-1 overflow-hidden">
+        <PanelGroup direction="horizontal" autoSaveId={`lifemark-editor-split-${pid}`} className="h-full">
           {/* Left Panel — Chat only (Lovable-style) */}
           <Panel
-            defaultSize={35}
+            defaultSize={28}
             minSize={22}
-            maxSize={55}
+            maxSize={50}
             id="leftpanel"
             style={focusMode ? { display: "none" } : undefined}
           >
             <div className="relative flex flex-col h-full border-r border-border bg-background">
               <ChatPanel
-                project={project}
+                project={currentProject}
                 files={files}
                 messages={messages}
                 activeFile={activeFile}
                 mode={editorMode}
                 credits={uiCredits}
-                starterPrompt={pendingConnectorPrompt ?? pendingCrossRefPrompt ?? starterPrompt}
+                starterPrompt={starterPrompt}
+                hasMoreMessages={initialMessages.length >= 500}
+                isMessagesLoading={messagesHydrating}
                 previewError={previewError}
                 previewRuntimeErrors={previewRuntimeErrors}
                 pendingFixPrompt={pendingFix}
@@ -997,9 +1315,10 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 onMessagesUpdate={handleMessagesUpdate}
                 onFilesUpdate={handleFilesUpdate}
                 onCreditsUpdate={handleCreditsUpdate}
+                onProjectUpdate={handleProjectUpdate}
                 onAutoFixComplete={() => {
                   setPreviewError(null);
-                  setPreviewRuntimeErrors([]);
+                  setPreviewRuntimeErrors(EMPTY_PREVIEW_ERRORS);
                 }}
                 onPendingFixConsumed={() => setPendingFix(null)}
                 onPendingFileRefConsumed={() => setPendingFileRef(null)}
@@ -1008,9 +1327,11 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 pendingBuildFromFile={pendingBuildFromFile}
                 onPendingBuildFromFileConsumed={() => setPendingBuildFromFile(null)}
                 isLocked={isLiveLocked}
-                onApprovePlan={() => setEditorMode("build")}
+                onApprovePlan={handleApprovePlan}
                 onOpenPanel={handleOpenPanel}
                 onFocusPreview={handleFocusPreview}
+                onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
+                isVisualEditActive={isVisualEditActive}
                 securityIssueCount={securityIssueCount}
               />
               {leftChatOverlay === "history" && (
@@ -1021,8 +1342,12 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                       projectId={currentProject.id}
                       onRestore={(snapshotFiles) => {
                         setFiles(snapshotFiles);
+                        filesRef.current = snapshotFiles;
                         setActiveFile(snapshotFiles[0] ?? null);
                         setLeftChatOverlay(null);
+                        window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
+                          detail: { files: snapshotFiles, reason: "history-restore" },
+                        }));
                         handleFocusPreview();
                       }}
                       onCompare={(oldId, newId) => {
@@ -1040,7 +1365,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
           </Panel>
 
           {/* File tree (collapsible) */}
-          {showFileTree && !focusMode && (
+          {showFileTree && !focusMode && viewMode !== "files" && false && (
             <>
               <PanelResizeHandle className="w-px bg-border hover:bg-primary/50 transition-colors cursor-col-resize" />
               <Panel defaultSize={15} minSize={10} maxSize={30} id="filetreepanel">
@@ -1060,7 +1385,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
           <PanelResizeHandle className="w-px bg-border hover:bg-primary/50 transition-colors cursor-col-resize" />
 
           {/* Right panel — preview/code or secondary panel */}
-          <Panel defaultSize={65} minSize={30} id="rightpanel">
+          <Panel defaultSize={72} minSize={30} id="rightpanel">
             <div className="flex flex-col h-full relative">
               {/* Secondary panel overlay — shown when a tool panel is active */}
               {rightPanel && (
@@ -1127,104 +1452,101 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 </div>
               )}
 
-              {/* Preview / Code view (always rendered, hidden by secondary panel overlay) */}
-              {viewMode === "both" ? (
-                <PanelGroup direction="horizontal" className="flex-1">
-                  <Panel defaultSize={50} minSize={20} id="previewpanel">
-                    <PreviewPanel
-                      files={files}
-                      projectId={pid}
-                      activeFile={activeFile}
-                      isVisualEditActive={isVisualEditActive}
-                      onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
-                      onFileUpdate={handleFileUpdate}
-                      isGenerating={isGenerating}
-                      generatingFileCount={generatingFileCount}
-                      onError={setPreviewError}
-                      onErrorReport={(report) => setPreviewRuntimeErrors(report?.errors ?? [])}
-                      onFixWithAI={(err) => {
-                        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-start"));
-                        setLeftPanel("chat");
-                        setPendingFix(err);
-                      }}
-                      onSendPromptToChat={(p) => { setLeftPanel("chat"); setPendingCrossRefPrompt(p); }}
-                      deployedUrl={currentProject.deployed_url ?? undefined}
-                      badgeHidden={(currentProject as { badge_hidden?: boolean }).badge_hidden ?? false}
-                      credits={uiCredits}
-                      useWebContainers
-                      onSendAnnotatedToChat={(prompt, img) => {
-                        setPendingBuildFromFile({ prompt, imageBase64: img });
-                        setLeftPanel("chat");
-                      }}
-                    />
-                  </Panel>
-                  <PanelResizeHandle className="w-px bg-border hover:bg-primary/50 transition-colors cursor-col-resize" />
-                  <Panel defaultSize={50} minSize={20} id="codepanel">
-                    <div className="h-full flex flex-col">
-                      <FileTreePanel files={files} activeFile={activeFile} projectId={project.id} onFileSelect={setActiveFile} onFilesChange={handleFilesUpdate} />
-                      <div className="flex-1 min-h-0">
-                        <CodePanel
-                          file={activeFile}
-                          files={files}
-                          projectId={project.id}
-                          onSave={handleCodeSave}
-                          onChange={handleCodeChange}
-                          onFileChange={setActiveFile}
-                          collabUser={collabUser}
-                          onCollaboratorsChange={setYjsCollaborators}
-                        />
-                      </div>
-                    </div>
-                  </Panel>
-                </PanelGroup>
-              ) : viewMode === "code" ? (
-                <div className="flex flex-col h-full">
-                  <FileTreePanel files={files} activeFile={activeFile} projectId={project.id} onFileSelect={setActiveFile} onFilesChange={handleFilesUpdate} />
-                  <div className="flex-1 min-h-0">
-                    <CodePanel
-                      file={activeFile}
-                      files={files}
-                      projectId={project.id}
-                      onSave={handleCodeSave}
-                      onChange={handleCodeChange}
-                      onFileChange={setActiveFile}
-                      collabUser={collabUser}
-                      onCollaboratorsChange={setYjsCollaborators}
-                    />
-                  </div>
-                </div>
-              ) : (
-                <PreviewPanel
+              {/* Preview / code / files — panes stay mounted; visibility toggled via CSS */}
+              {viewMode === "files" ? (
+                <LovableFilesViewPane
                   files={files}
-                  projectId={pid}
                   activeFile={activeFile}
-                  isVisualEditActive={isVisualEditActive}
-                  onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
-                  onFileUpdate={handleFileUpdate}
-                  isGenerating={isGenerating}
-                  generatingFileCount={generatingFileCount}
-                  onError={setPreviewError}
-                  onErrorReport={(report) => setPreviewRuntimeErrors(report?.errors ?? [])}
-                  onFixWithAI={(err) => {
-                    window.dispatchEvent(new CustomEvent("lifemark-preview-heal-start"));
-                    setLeftPanel("chat");
-                    setPendingFix(err);
-                  }}
-                  onSendPromptToChat={(p) => { setLeftPanel("chat"); setPendingCrossRefPrompt(p); }}
-                  deployedUrl={currentProject.deployed_url ?? undefined}
-                  badgeHidden={(currentProject as { badge_hidden?: boolean }).badge_hidden ?? false}
-                  credits={uiCredits}
-                  useWebContainers
-                  onSendAnnotatedToChat={(prompt, img) => {
-                    setPendingBuildFromFile({ prompt, imageBase64: img });
-                    setLeftPanel("chat");
-                  }}
+                  projectId={project.id}
+                  onFileSelect={setActiveFile}
+                  onFilesChange={handleFilesUpdate}
+                  onSave={handleCodeSave}
+                  onChange={handleCodeChange}
+                  collabUser={collabUser}
+                  onCollaboratorsChange={setYjsCollaborators}
                 />
+              ) : (
+              <PanelGroup direction="horizontal" className="min-h-0 flex-1">
+                <Panel
+                  defaultSize={50}
+                  minSize={20}
+                  id="previewpanel"
+                  style={viewMode === "code" ? { display: "none" } : undefined}
+                >
+                  <PreviewPanel
+                    files={previewVersion?.files ?? files}
+                    versionPreviewLabel={previewVersion?.label ?? null}
+                    hideTopChrome
+                    projectId={pid}
+                    activeFile={activeFile}
+                    isVisualEditActive={isVisualEditActive}
+                    onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
+                    onFileUpdate={handleFileUpdate}
+                    isGenerating={isGenerating}
+                    generatingFileCount={generatingFileCount}
+                    onError={setPreviewError}
+                    onErrorReport={handlePreviewErrorReport}
+                    onFixWithAI={handleFixWithAI}
+                    onSendPromptToChat={sendPromptToChat}
+                    deployedUrl={currentProject.deployed_url ?? undefined}
+                    badgeHidden={(currentProject as { badge_hidden?: boolean }).badge_hidden ?? false}
+                    credits={uiCredits}
+                    useWebContainers
+                    onSendAnnotatedToChat={(prompt, img) => {
+                      setPendingBuildFromFile({ prompt, imageBase64: img });
+                      setLeftPanel("chat");
+                    }}
+                  />
+                </Panel>
+                <PanelResizeHandle
+                  className={`w-px bg-border transition-colors hover:bg-primary/50 ${
+                    viewMode === "both" ? "cursor-col-resize" : "hidden"
+                  }`}
+                />
+                <Panel
+                  defaultSize={50}
+                  minSize={20}
+                  id="codepanel"
+                  style={viewMode === "preview" ? { display: "none" } : undefined}
+                >
+                  <div className="flex h-full min-h-0 min-w-0 flex-col">
+                    {activeFile && (
+                      <div className="flex items-center gap-2 px-3 h-8 border-b border-border shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowFileTree(false);
+                            setViewMode("files");
+                            setRightPanel(null);
+                          }}
+                          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                          Browse files
+                        </button>
+                        <span className="text-[10px] font-mono text-muted-foreground truncate">{activeFile.path}</span>
+                      </div>
+                    )}
+                    <div className="flex-1 min-h-0">
+                      <CodePanel
+                        file={activeFile}
+                        files={files}
+                        projectId={project.id}
+                        onSave={handleCodeSave}
+                        onChange={handleCodeChange}
+                        onFileChange={setActiveFile}
+                        collabUser={collabUser}
+                        onCollaboratorsChange={setYjsCollaborators}
+                      />
+                    </div>
+                  </div>
+                </Panel>
+              </PanelGroup>
               )}
             </div>
           </Panel>
         </PanelGroup>
       </div>
+      )}
 
       {/* Shortcuts modal */}
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
@@ -1247,6 +1569,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
         files={files}
         actions={commandPaletteActions}
       />
+      <LovableLiveTasksDock />
     </div>
   );
 }

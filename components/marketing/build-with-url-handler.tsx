@@ -26,7 +26,7 @@ import {
   type BuildWithUrlPayload,
 } from "@/lib/build-with-url";
 
-function parseHash(): { prompt?: string; images: string[] } | null {
+function parseHash(): { prompt?: string; images: string[]; pages: string[] } | null {
   if (typeof window === "undefined") return null;
   const raw = window.location.hash.replace(/^#/, "");
   if (!raw) return null;
@@ -37,8 +37,13 @@ function parseHash(): { prompt?: string; images: string[] } | null {
     .flatMap((value) => value.split(","))
     .map((value) => value.trim())
     .filter(Boolean);
-  if (!prompt && images.length === 0) return null;
-  return { prompt, images };
+  // Lovable parity: html= references public web pages for layout/content/style
+  const pages = [...params.getAll("html"), ...params.getAll("pages")]
+    .flatMap((value) => value.split(","))
+    .map((value) => value.trim())
+    .filter((value) => /^https?:\/\//i.test(value));
+  if (!prompt && images.length === 0 && pages.length === 0) return null;
+  return { prompt, images, pages };
 }
 
 export function BuildWithUrlHandler() {
@@ -60,8 +65,8 @@ export function BuildWithUrlHandler() {
       setError("Prompt is too long (max 50,000 characters).");
       return;
     }
-    if (parsed.images.length > 10) {
-      setError("Too many image references (max 10).");
+    if (parsed.images.length + parsed.pages.length > 10) {
+      setError("Too many references (max 10 total, images + pages).");
       return;
     }
 
@@ -73,6 +78,7 @@ export function BuildWithUrlHandler() {
       const payload: BuildWithUrlPayload = {
         prompt: parsed.prompt,
         images: parsed.images,
+        pages: parsed.pages,
         at: Date.now(),
       };
       sessionStorage.setItem(BUILD_WITH_URL_STORAGE_KEY, JSON.stringify(payload));
@@ -94,6 +100,7 @@ export function BuildWithUrlHandler() {
       if (!stored) {
         dashboardSearch.set("prompt", parsed.prompt!);
         parsed.images.forEach((image) => dashboardSearch.append("images", image));
+        parsed.pages.forEach((page) => dashboardSearch.append("pages", page));
       }
       router.push(`/dashboard?${dashboardSearch.toString()}`);
     })();

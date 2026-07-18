@@ -239,14 +239,24 @@ export function EdgeFunctionsPanel({ projectId }: EdgeFunctionsPanelProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: fnName, code }),
       });
-      if (!res.ok) throw new Error();
-      toast({ title: `Deployed ${fnName}`, description: "Edge Function is now live on Supabase." });
+      const result = await res.json() as { deployed?: boolean; error?: string; message?: string };
+      if (!res.ok) throw new Error(result.error ?? "Deployment failed");
+      toast({
+        title: result.deployed ? `Deployed ${fnName}` : `Saved ${fnName}`,
+        description: result.deployed
+          ? "Edge Function is now live on Supabase."
+          : result.message ?? "Enable managed Lifemark Cloud to deploy this function.",
+      });
       // Refresh list
       const updated = await fetch(`/api/projects/${projectId}/edge-functions`).then((r) => r.json()) as { functions: EdgeFunction[] };
       setFunctions(updated.functions ?? []);
       setActiveTab("list");
-    } catch {
-      toast({ title: "Deploy failed", description: "Check your Supabase project is linked.", variant: "destructive" });
+    } catch (error) {
+      toast({
+        title: "Deploy failed",
+        description: error instanceof Error ? error.message : "Check your Supabase project is linked.",
+        variant: "destructive",
+      });
     } finally {
       setDeploying(false);
     }

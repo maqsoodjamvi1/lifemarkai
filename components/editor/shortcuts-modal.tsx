@@ -79,6 +79,8 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
       { keys: ["⌘", "1"], description: "Preview only" },
       { keys: ["⌘", "2"], description: "Code only" },
       { keys: ["⌘", "3"], description: "Split view (both)" },
+      { keys: ["⌘", "4"], description: "Files view (tree + editor)" },
+      { keys: ["⌥", "P"], description: "Toggle Plan / Build mode" },
       { keys: ["⌘", "⇧", "M"], description: "Toggle fullscreen editor" },
     ],
   },

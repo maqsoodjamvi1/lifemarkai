@@ -76,6 +76,219 @@ const fixSrc = readFileSync("app/api/ai/fix/route.ts", "utf8");
 const agentSrc = readFileSync("app/api/ai/agent/route.ts", "utf8");
 const streamHookSrc = readFileSync("hooks/use-ai-stream-chat.ts", "utf8");
 const previewSrc = readFileSync("components/editor/preview-panel.tsx", "utf8");
+const layoutSrc = readFileSync("components/editor/editor-layout.tsx", "utf8");
+const topBarSrc = readFileSync("components/editor/editor-top-bar.tsx", "utf8");
+
+check(
+  "lovable: virtual chat timeline",
+  chatSrc.includes("LovableChatTimeline"),
+);
+check(
+  "lovable: files view pane",
+  layoutSrc.includes("LovableFilesViewPane") && layoutSrc.includes('viewMode === "files"'),
+);
+check(
+  "lovable: upgrade dialog rendered",
+  topBarSrc.includes("LovableUpgradeDialog") && topBarSrc.includes("showUpgradeDialog"),
+);
+check(
+  "lovable: unified preview chrome",
+  previewSrc.includes("hideTopChrome") && previewSrc.includes("LovablePreviewInteractionToolbar"),
+);
+const lovableIndexSrc = readFileSync("components/editor/lovable/index.ts", "utf8");
+const messageRowSrc = readFileSync("components/editor/lovable/message-row.tsx", "utf8");
+const composerDockSrc = readFileSync("components/editor/lovable/composer-dock.tsx", "utf8");
+const composerBottomRowSrc = readFileSync("components/editor/lovable/composer-bottom-row.tsx", "utf8");
+const composerPreInputSrc = readFileSync("components/editor/lovable/composer-pre-input.tsx", "utf8");
+const composerOverlaysSrc = readFileSync("components/editor/lovable/composer-overlays.tsx", "utf8");
+const composerInputAreaSrc = readFileSync("components/editor/lovable/composer-input-area.tsx", "utf8");
+const streamingFooterSrc = readFileSync("components/editor/lovable/streaming-footer.tsx", "utf8");
+
+check(
+  "lovable: extracted chat primitives",
+  chatSrc.includes("LovableScrollToBottom") &&
+    chatSrc.includes("LovableComposerDock") &&
+    lovableIndexSrc.includes("LovableAgentTrace") &&
+    lovableIndexSrc.includes("LovableMessageActions") &&
+    lovableIndexSrc.includes("LovableChatEmptyState") &&
+    lovableIndexSrc.includes("LovableRecoveryChips") &&
+    lovableIndexSrc.includes("formatLovableDateSeparator") &&
+    lovableIndexSrc.includes("LovablePinnedMessageBanner") &&
+    lovableIndexSrc.includes("LovableLoopRecoveryBanner") &&
+    readFileSync("components/editor/lovable/message-timestamp.tsx", "utf8").includes("formatLovableMessageTime"),
+);
+check(
+  "lovable: version preview banner",
+  previewSrc.includes("LovableVersionPreviewBanner"),
+);
+check(
+  "layout: file tree redirects to files view",
+  layoutSrc.includes('viewMode !== "files"') && layoutSrc.includes('setViewMode("files")'),
+);
+check(
+  "sandbox: cloud status API",
+  readFileSync("app/api/sandbox/status/route.ts", "utf8").includes("isSandboxEnabled"),
+);
+check(
+  "preview: skip WebContainer when cloud sandbox enabled",
+  previewSrc.includes("sandboxEnabled") && previewSrc.includes("if (sandboxEnabled) return"),
+);
+check(
+  "lovable: composer Plan|Build row",
+  chatSrc.includes("LovableComposerInputArea") &&
+    composerBottomRowSrc.includes("LovableComposerModeRow"),
+);
+check(
+  "lovable: clarify session card",
+  chatSrc.includes("LovableComposerDock") &&
+    composerDockSrc.includes("LovableClarifySessionCard"),
+);
+check(
+  "lovable: composer context menu wired",
+  chatSrc.includes("LovableComposerInputArea") &&
+    composerBottomRowSrc.includes("LovableComposerContextMenu") &&
+    composerBottomRowSrc.includes("LovableVisualEditsButton"),
+);
+check(
+  "lovable: composer send controls wired",
+  chatSrc.includes("LovableComposerInputArea") &&
+    composerBottomRowSrc.includes("LovableComposerSendControls"),
+);
+check(
+  "lovable: connector + cloud approval cards",
+  chatSrc.includes("LovableComposerPreInput") &&
+    composerPreInputSrc.includes("LovableComposerApprovalSlot"),
+);
+check(
+  "lovable: streaming footer + message utils extracted",
+  chatSrc.includes("LovableChatStreamingFooter") &&
+    chatSrc.includes("getDisplayMessageContent") &&
+    chatSrc.includes("mergeAgentStep") &&
+    readFileSync("components/editor/lovable/message-utils.ts", "utf8").includes("groupIntoThreads"),
+);
+check(
+  "lovable: composer input stack extracted",
+  chatSrc.includes("LovableComposerPreInput") &&
+    chatSrc.includes("LovableComposerInputArea") &&
+    lovableIndexSrc.includes("LovableComposerBottomRow"),
+);
+check(
+  "lovable: composer dock controller + keyboard shortcuts",
+  chatSrc.includes("useComposerDockController") &&
+    chatSrc.includes("useChatKeyboardShortcuts") &&
+    chatSrc.includes("LovableChatModals") &&
+    lovableIndexSrc.includes("use-composer-dock-controller"),
+);
+check(
+  "lovable: new composer UX (line refs, secret banner, publish, share)",
+  chatSrc.includes("composerLineRefs") &&
+    chatSrc.includes("secretBanner") &&
+    chatSrc.includes("handlePublishFromChat") &&
+    readFileSync("components/editor/lovable/composer-line-ref-chips.tsx", "utf8").includes("onOpenAtLine") &&
+    readFileSync("components/editor/lovable/composer-line-ref-chips.tsx", "utf8").includes("LovableComposerLineRefChips") &&
+    readFileSync("components/editor/lovable/post-build-publish-banner.tsx", "utf8").includes("LovablePostBuildPublishBanner") &&
+    readFileSync("components/editor/lovable/composer-share-preview.tsx", "utf8").includes("LovableComposerSharePreview"),
+);
+check(
+  "sandbox: VEB bridge patched into sync + preview boot",
+  readFileSync("app/api/projects/[id]/sandbox-preview/sync/route.ts", "utf8").includes("patchSandboxPreviewFiles") &&
+    readFileSync("app/api/projects/[id]/sandbox-preview/route.ts", "utf8").includes("patchSandboxPreviewFiles") &&
+    previewSrc.includes("previewEngine === \"sandbox\"") &&
+    previewSrc.includes("VebBridgePopover"),
+);
+check(
+  "lovable: guest comments banner + reasoning stream",
+  chatSrc.includes("useGuestCommentCount") &&
+    chatSrc.includes("showGuestCommentsBanner") &&
+    chatSrc.includes("handleFixGuestComments") &&
+    chatSrc.includes("formatGuestCommentsForAi") &&
+    chatSrc.includes("extractStreamingReasoning") &&
+    readFileSync("components/editor/lovable/composer-dock.tsx", "utf8").includes("onFixGuestComments") &&
+    readFileSync("components/editor/lovable/composer-dock.tsx", "utf8").includes("LovableComposerGuestCommentsBanner") &&
+    readFileSync("hooks/use-guest-comment-count.ts", "utf8").includes("useGuestCommentCount"),
+);
+check(
+  "lovable: header status + credit estimate + add to knowledge",
+  chatSrc.includes("LovableChatHeaderStatus") &&
+    chatSrc.includes("handleAddToKnowledge") &&
+    chatSrc.includes("handleOpenLineRefAtLine") &&
+    readFileSync("components/editor/lovable/composer-input-area.tsx", "utf8").includes("LovableComposerEstimatedCredits") &&
+    readFileSync("components/editor/lovable/message-actions.tsx", "utf8").includes("onAddToKnowledge") &&
+    readFileSync("lib/ai/estimate-message-credits.ts", "utf8").includes("estimateMessageCredits"),
+);
+check(
+  "preview: guest comments injected for public sandbox",
+  readFileSync("lib/preview/inject-guest-comments.ts", "utf8").includes("injectGuestCommentsIntoHtml") &&
+    readFileSync("app/api/projects/[id]/sandbox-preview/route.ts", "utf8").includes("is_public"),
+);
+check(
+  "lovable: composer dock + timeline header extracted",
+  chatSrc.includes("LovableComposerDock") &&
+    chatSrc.includes("LovableChatTimelineHeader") &&
+    chatSrc.includes("useThreadMessageProps") &&
+    readFileSync("components/editor/lovable/composer-dock.tsx", "utf8").includes("LovablePromptQueue"),
+);
+check(
+  "lovable: message content + search + model menu",
+  chatSrc.includes("LovableChatSearchBar") &&
+    composerBottomRowSrc.includes("LovableComposerModelMenu") &&
+    messageRowSrc.includes("LovableMessageContent") &&
+    readFileSync("components/editor/lovable/message-content.tsx", "utf8").includes("LovableHighlightedText"),
+);
+check(
+  "lovable: message row + thread item",
+  chatSrc.includes("LovableThreadItem") &&
+    chatSrc.includes("useThreadMessageProps") &&
+    messageRowSrc.includes("LovableVerificationCard"),
+);
+check(
+  "lovable: composer overlays wired",
+  chatSrc.includes("LovableComposerInputArea") &&
+    composerOverlaysSrc.includes("LovableComposerContextFilePicker") &&
+    composerOverlaysSrc.includes("LovableComposerSaveSkillModal") &&
+    composerOverlaysSrc.includes("LovableComposerAnalyzeModal") &&
+    composerOverlaysSrc.includes("LovableComposerTemplatePicker"),
+);
+check(
+  "lovable: runtime errors banner + header queue pill",
+  chatSrc.includes("handleFixRuntimeErrors") &&
+    chatSrc.includes("formatErrorsForHealing") &&
+    composerDockSrc.includes("LovableComposerRuntimeErrorsBanner") &&
+    readFileSync("components/editor/lovable/chat-header.tsx", "utf8").includes("LovableChatHeaderQueuePill") &&
+    readFileSync("components/editor/lovable/use-chat-keyboard-shortcuts.ts", "utf8").includes("onStopGeneration"),
+);
+check(
+  "lovable: plan approve persists plan.md + preview bridges",
+  layoutSrc.includes("saveApprovedPlan") &&
+    layoutSrc.includes("handleApprovePlan") &&
+    readFileSync("lib/preview/veb-bridge.ts", "utf8").includes("lifemark-comment-pin-mode") &&
+    readFileSync("lib/preview/veb-bridge.ts", "utf8").includes("lifemark-capture") &&
+    readFileSync("components/editor/lovable/preview-interaction-toolbar.tsx", "utf8").includes("onCaptureAnnotate") &&
+    readFileSync("components/editor/preview-annotations.tsx", "utf8").includes("formatAnnotationsForAi") &&
+    previewSrc.includes("onSendToChat={onSendPromptToChat}"),
+);
+check(
+  "sandbox: Modal provider (Lovable parity)",
+  readFileSync("lib/sandbox/modal.ts", "utf8").includes("ModalSandboxProvider") &&
+    readFileSync("lib/sandbox/index.ts", "utf8").includes("modal.isEnabled()"),
+);
+check(
+  "sandbox: warm reconnect API",
+  readFileSync("app/api/projects/[id]/sandbox-preview/route.ts", "utf8").includes("export async function GET") &&
+    readFileSync("lib/sandbox/index.ts", "utf8").includes("reconnect(sandboxId"),
+);
+check(
+  "preview: soft refresh avoids remount on warm engines",
+  previewSrc.includes("sandbox file sync") && previewSrc.includes("webcontainer file sync"),
+);
+check(
+  "lovable: message pagination API",
+  readFileSync("app/api/projects/[id]/messages/route.ts", "utf8").includes("hasMore"),
+);
+check(
+  "layout: auto deploy wired",
+  layoutSrc.includes("autoDeploy") && layoutSrc.includes("/api/deploy"),
+);
 
 check(
   "chat: consumeAIStream uses effectiveMode for applyFileUpdates",
@@ -113,7 +326,29 @@ check(
 );
 check(
   "preview: calmer debounce while generating",
-  previewSrc.includes("isGenerating ? 900 : 350"),
+  previewSrc.includes("isGenerating ? 180 : 120"),
+);
+check(
+  "lovable: streaming build card wired",
+  streamingFooterSrc.includes("LovableStreamingMessageShell") &&
+    lovableIndexSrc.includes("LovableStreamingBuildCard"),
+);
+check(
+  "lovable: prompt queue extracted",
+  composerDockSrc.includes("LovablePromptQueue") &&
+    readFileSync("components/editor/lovable/prompt-queue.tsx", "utf8").includes("LovablePromptQueue"),
+);
+check(
+  "layout: mobile files nav",
+  layoutSrc.includes('"files"') && layoutSrc.includes('mobilePaneActive === "files"'),
+);
+check(
+  "layout: wider chat column",
+  layoutSrc.includes("defaultSize={28}"),
+);
+check(
+  "top bar: preview status listener",
+  topBarSrc.includes("lifemark-preview-status") && topBarSrc.includes("previewStatusText"),
 );
 check(
   "preview: recovery overlay actions",
@@ -123,7 +358,7 @@ check(
 );
 check(
   "chat: compact streaming file event",
-  chatSrc.includes("Editing {streamingFiles.length} file") &&
+  readFileSync("components/editor/lovable/streaming-files-card.tsx", "utf8").includes("Editing {paths.length} file") &&
     !chatSrc.includes("Edited {fileName}"),
 );
 check(
@@ -133,9 +368,61 @@ check(
     fixSrc.includes("runtimeErrors"),
 );
 check(
+  "preview: stable hostname label helper",
+  readFileSync("lib/preview/preview-url.ts", "utf8").includes("getPreviewBarLabel") &&
+    previewSrc.includes("getPreviewBarLabel"),
+);
+check(
   "preview engine rev present",
   Number.parseInt(PREVIEW_ENGINE_REV, 10) >= 17,
   { rev: PREVIEW_ENGINE_REV },
+);
+
+check(
+  "lovable: semantic chat search API + UI",
+  chatSrc.includes("messages/search") &&
+    chatSrc.includes("searchMode") &&
+    chatSrc.includes("searchHitIds") &&
+    readFileSync("app/api/projects/[id]/messages/search/route.ts", "utf8").includes("rankMessagesByEmbedding") &&
+    readFileSync("components/editor/lovable/chat-search-bar.tsx", "utf8").includes("semantic") &&
+    readFileSync("lib/editor/search-chat-messages.ts", "utf8").includes("rankMessagesByKeyword"),
+);
+check(
+  "lovable: binary file-gen (pdf/xlsx/pptx)",
+  chatSrc.includes("/api/ai/analyze") &&
+    readFileSync("components/editor/lovable/composer-file-gen-picker.tsx", "utf8").includes('"pdf"') &&
+    composerDockSrc.includes("base64: f.base64"),
+);
+check(
+  "preview: network panel bridge + UI",
+  readFileSync("lib/preview/veb-bridge.ts", "utf8").includes("lifemark-preview-network") &&
+    readFileSync("lib/preview/build-fallback-html.ts", "utf8").includes("lifemark-preview-network") &&
+    previewSrc.includes("networkLines") &&
+    previewSrc.includes("previewBottomTab"),
+);
+check(
+  "preview: cross-origin dblclick inline edit + live tasks dock",
+  readFileSync("lib/preview/veb-bridge.ts", "utf8").includes("lifemark-veb-inline") &&
+    previewSrc.includes("lifemark-veb-inline") &&
+    layoutSrc.includes("LovableLiveTasksDock") &&
+    chatSrc.includes("lifemark-live-tasks") &&
+    readFileSync("components/editor/lovable/live-tasks-dock.tsx", "utf8").includes("Live tasks"),
+);
+check(
+  "platform: domain buy modal + interface language picker",
+  readFileSync("components/editor/domains-panel.tsx", "utf8").includes("DomainBuyModal") &&
+    readFileSync("components/editor/domain-buy-modal.tsx", "utf8").includes("/api/domains/search") &&
+    readFileSync("lib/platform-locale.ts", "utf8").includes("PLATFORM_LOCALES") &&
+    readFileSync("components/dashboard/settings-page.tsx", "utf8").includes("platform-locale") &&
+    readFileSync("hooks/use-platform-locale.ts", "utf8").includes("lifemark-platform-locale"),
+);
+check(
+  "enterprise: workspace SSO/SCIM API + domain Stripe checkout",
+  readFileSync("app/api/workspace/identity/route.ts", "utf8").includes("workspace_identity_settings") &&
+    readFileSync("app/api/scim/v2/Users/route.ts", "utf8").includes("workspace_scim_users") &&
+    readFileSync("app/api/domains/checkout/route.ts", "utf8").includes("domain_purchase") &&
+    readFileSync("app/api/billing/webhook/route.ts", "utf8").includes("completeDomainPurchase") &&
+    readFileSync("hooks/use-workspace-identity.ts", "utf8").includes("/api/workspace/identity"),
 );
 
 // ── Preview engine matrix ───────────────────────────────────────────────────

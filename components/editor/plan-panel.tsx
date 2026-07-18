@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { saveApprovedPlan } from "@/lib/editor/save-approved-plan";
 import { createClient } from "@/lib/supabase/client";
 import type { Project, ProjectFile } from "@/types/database";
 
@@ -204,19 +205,7 @@ Based on your request, here's a structured approach for implementing this featur
     setApprovedPlan(markdown);
 
     // Save plan to project files via API
-    try {
-      await fetch(`/api/projects/${project.id}/files`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          path: ".lovable/plan.md",
-          content: markdown,
-          language: "markdown",
-        }),
-      });
-    } catch {
-      // Non-critical — plan still approved in memory
-    }
+    await saveApprovedPlan(project.id, markdown);
 
     onApprovePlan(markdown);
     toast({ title: "Plan approved — switching to Agent mode" });

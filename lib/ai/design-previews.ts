@@ -25,9 +25,10 @@ export const DESIGN_PREVIEW_SYSTEM_PROMPT = `You are a senior product designer. 
 
 Rules:
 - Exactly 3 directions — meaningfully different (e.g. minimal vs bold vs warm editorial).
-- previewHtml: a SINGLE self-contained mini hero section (navbar strip + headline + CTA + 2-3 feature cards) using ONLY inline styles. Max ~1200 chars per preview. No <script>, no external URLs, no class names.
+- previewHtml: a SINGLE self-contained mini hero (navbar + headline + CTA + 2 feature cards) using ONLY inline styles. Max 800 chars per preview. No <script>, no external URLs, no class names.
+- CRITICAL JSON safety: escape every double-quote inside previewHtml as \\". Do not use raw newlines inside any string — use <br/> or spaces instead. No trailing commas.
 - colors: 4 hex swatches that match the preview.
-- Tailor copy, palette, and layout to the user's niche — never generic "Lorem ipsum".
+- Tailor copy and palette to the user's niche — never "Lorem ipsum".
 - Return raw JSON only — no markdown fences.`;
 
 /** Offer Lovable-style 3-preview picker before first build on visual-forward apps. */
@@ -200,4 +201,184 @@ export function sanitizePreviewHtml(html: string): string {
     .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
     .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "")
     .slice(0, 4000);
+}
+
+function buildArchetypePreviewHtml(a: StyleArchetype, headline: string): string {
+  const [primary, accent, bg, text] = a.palette;
+  const safeHeadline = headline.replace(/[<>&"]/g, "").slice(0, 48) || "Your product";
+  return [
+    `<div style="font-family:system-ui,sans-serif;background:${bg};color:${text};padding:16px;border-radius:12px;min-height:180px">`,
+    `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;font-size:11px;opacity:.7">`,
+    `<span style="font-weight:700;letter-spacing:.04em">${a.label}</span>`,
+    `<span style="padding:4px 10px;border-radius:999px;background:${primary};color:#fff;font-size:10px">Get started</span>`,
+    `</div>`,
+    `<div style="font-size:22px;font-weight:700;line-height:1.2;margin-bottom:8px;color:${text}">${safeHeadline}</div>`,
+    `<div style="font-size:12px;opacity:.7;margin-bottom:14px;max-width:280px">${a.desc}</div>`,
+    `<div style="display:flex;gap:8px">`,
+    `<div style="flex:1;padding:10px;border-radius:10px;background:${accent}22;border:1px solid ${accent}55;font-size:11px">Feature one</div>`,
+    `<div style="flex:1;padding:10px;border-radius:10px;background:${primary}18;border:1px solid ${primary}44;font-size:11px">Feature two</div>`,
+    `</div></div>`,
+  ].join("");
+}
+
+/** Three safe fallback cards when the model returns broken JSON. */
+export function buildFallbackDesignPreviews(
+  prompt: string,
+  seedKey = "fallback",
+): DesignPreviewDirection[] {
+  const seed = hashSeed(seedKey + prompt.slice(0, 80));
+  const headline =
+    prompt.replace(/\s+/g, " ").trim().slice(0, 60) || "Your new experience";
+  const seen = new Set<string>();
+  const unique: StyleArchetype[] = [];
+  for (let i = 0; unique.length < 3 && i < STYLE_ARCHETYPES.length * 2; i++) {
+    const a = STYLE_ARCHETYPES[(seed + i) % STYLE_ARCHETYPES.length];
+    if (seen.has(a.id)) continue;
+    seen.add(a.id);
+    unique.push(a);
+  }
+  return unique.slice(0, 3).map((a) => ({
+    id: a.id,
+    label: a.label,
+    desc: a.desc,
+    colors: a.palette,
+    previewHtml: sanitizePreviewHtml(buildArchetypePreviewHtml(a, headline)),
+  }));
+}
+
+function stripJsonFences(raw: string): string {
+  return raw
+    .replace(/^\uFEFF/, "")
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+}
+
+/** Light repair for common model JSON mistakes before JSON.parse. */
+export function repairDesignPreviewJson(raw: string): string {
+  let s = stripJsonFences(raw);
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start >= 0 && end > start) s = s.slice(start, end + 1);
+
+  // Walk the text: escape bare quotes inside strings, flatten newlines.
+  // Closing quote = `"` whose next non-ws char is , } ] or : (end of key).
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (inString) {
+      if (escaped) {
+        out += ch;
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        out += ch;
+        escaped = true;
+        continue;
+      }
+      if (ch === "\n" || ch === "\r" || ch === "\t") {
+        out += " ";
+        continue;
+      }
+      if (ch === '"') {
+        let j = i + 1;
+        while (j < s.length && /\s/.test(s[j]!)) j++;
+        const next = s[j];
+        if (next === "," || next === "}" || next === "]" || next === ":" || next === undefined) {
+          inString = false;
+          out += ch;
+        } else {
+          // Unescaped quote inside an HTML/value string
+          out += '\\"';
+        }
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    out += ch;
+  }
+
+  if (inString) out += '"';
+  out = out.replace(/,\s*([}\]])/g, "$1");
+  return out;
+}
+
+function normalizeDirection(raw: unknown): DesignPreviewDirection | null {
+  if (!raw || typeof raw !== "object") return null;
+  const d = raw as Record<string, unknown>;
+  const id = typeof d.id === "string" ? d.id.trim() : "";
+  const label = typeof d.label === "string" ? d.label.trim() : "";
+  const desc =
+    typeof d.desc === "string"
+      ? d.desc.trim()
+      : typeof d.description === "string"
+        ? d.description.trim()
+        : "";
+  const colors = Array.isArray(d.colors)
+    ? d.colors
+        .filter((c): c is string => typeof c === "string" && /^#?[0-9a-fA-F]{3,8}$/.test(c))
+        .map((c) => (c.startsWith("#") ? c : `#${c}`))
+    : [];
+  const previewHtml =
+    typeof d.previewHtml === "string"
+      ? d.previewHtml
+      : typeof d.html === "string"
+        ? d.html
+        : "";
+  if (!id || !label || !previewHtml) return null;
+  return {
+    id,
+    label,
+    desc: desc || label,
+    colors: colors.length >= 2 ? colors.slice(0, 4) : ["#2563eb", "#0ea5e9", "#ffffff", "#0f172a"],
+    previewHtml: sanitizePreviewHtml(previewHtml),
+  };
+}
+
+/**
+ * Parse model output for design previews. Never throws — returns [] on total failure.
+ * Callers should fall back to `buildFallbackDesignPreviews` when length < 3.
+ */
+export function parseDesignPreviewResponse(content: string): DesignPreviewDirection[] {
+  const attempts = [stripJsonFences(content), repairDesignPreviewJson(content)];
+  for (const attempt of attempts) {
+    try {
+      const parsed = JSON.parse(attempt) as { directions?: unknown };
+      const list = Array.isArray(parsed?.directions) ? parsed.directions : [];
+      const dirs = list.map(normalizeDirection).filter((d): d is DesignPreviewDirection => !!d);
+      if (dirs.length > 0) return dirs.slice(0, 3);
+    } catch {
+      // try next strategy
+    }
+  }
+
+  // Regex extraction when JSON is badly broken but fields are still visible
+  const dirs: DesignPreviewDirection[] = [];
+  const blockRe =
+    /\{\s*"id"\s*:\s*"([^"]+)"\s*,\s*"label"\s*:\s*"([^"]+)"\s*,\s*"desc(?:ription)?"\s*:\s*"((?:\\.|[^"\\])*)"[\s\S]*?"previewHtml"\s*:\s*"((?:\\.|[^"\\])*)"/g;
+  for (const m of content.matchAll(blockRe)) {
+    const previewHtml = m[4]
+      .replace(/\\"/g, '"')
+      .replace(/\\n/g, " ")
+      .replace(/\\r/g, "");
+    const dir = normalizeDirection({
+      id: m[1],
+      label: m[2],
+      desc: m[3].replace(/\\"/g, '"'),
+      colors: ["#2563eb", "#0ea5e9", "#ffffff", "#0f172a"],
+      previewHtml,
+    });
+    if (dir) dirs.push(dir);
+    if (dirs.length >= 3) break;
+  }
+  return dirs;
 }

@@ -1,16 +1,17 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   History, Plus, RotateCcw, Trash2, Loader2,
-  Clock, Camera, ImageOff,
+  Clock, Camera, Eye,
   GitBranch, Pin, PinOff, GitCompareArrows,
   Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
+import { formatRelative } from "@/lib/utils";
 import type { ProjectFile } from "@/types/database";
 
 interface Snapshot {
@@ -29,20 +30,76 @@ interface HistoryPanelProps {
   onCompare?: (oldSnapshotId: string, newSnapshotId: string) => void;
 }
 
-function relativeTime(ts: string): string {
-  const diff = Date.now() - new Date(ts).getTime();
-  const s = Math.floor(diff / 1000);
-  if (s < 60) return "just now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return new Date(ts).toLocaleDateString();
+type HistoryFilter = "all" | "pinned" | "branches";
+
+/** Strip auto-prefix noise so the row reads like Lovable change titles. */
+function displayLabel(label: string): string {
+  return label
+    .replace(/^Before edit —\s*/i, "")
+    .replace(/^Auto-save before:\s*/i, "")
+    .replace(/^Before:\s*/i, "")
+    .replace(/^Snapshot\s+/i, "")
+    .trim() || "Untitled change";
 }
 
-/** A single snapshot card with screenshot thumbnail */
-function SnapshotCard({
+function isBranchSnapshot(snap: Snapshot): boolean {
+  return snap.label.startsWith("Before edit — ");
+}
+
+function isAutoChange(snap: Snapshot): boolean {
+  return (
+    /^(Before:|Auto-save before:|Before edit —)/i.test(snap.label) ||
+    /^(Deploy|Publish) snapshot/i.test(snap.label)
+  );
+}
+
+/** Absolute clock for the row — Lovable shows both relative + time. */
+function formatClock(ts: string): string {
+  try {
+    return new Date(ts).toLocaleTimeString(undefined, {
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch {
+    return "";
+  }
+}
+
+function dayGroupLabel(ts: string): string {
+  const d = new Date(ts);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return d.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: d.getFullYear() !== today.getFullYear() ? "numeric" : undefined,
+  });
+}
+
+function groupByDay(snaps: Snapshot[]): { label: string; items: Snapshot[] }[] {
+  const groups: { label: string; items: Snapshot[] }[] = [];
+  const index = new Map<string, number>();
+  for (const snap of snaps) {
+    const label = dayGroupLabel(snap.created_at);
+    const existing = index.get(label);
+    if (existing == null) {
+      index.set(label, groups.length);
+      groups.push({ label, items: [snap] });
+    } else {
+      groups[existing]!.items.push(snap);
+    }
+  }
+  return groups;
+}
+
+/** Compact Lovable-style change row (not a heavy 16:9 card). */
+function ChangeRow({
   snap,
+  isLatest,
   restoring,
   deleting,
   togglingPin,
@@ -53,10 +110,11 @@ function SnapshotCard({
   onDelete,
   onTogglePin,
   onCompareToPrevious,
+  onPreview,
   onCardClick,
-  isBranch = false,
 }: {
   snap: Snapshot;
+  isLatest: boolean;
   restoring: boolean;
   deleting: boolean;
   togglingPin: boolean;
@@ -67,125 +125,150 @@ function SnapshotCard({
   onDelete: () => void;
   onTogglePin: () => void;
   onCompareToPrevious: () => void;
+  onPreview: () => void;
   onCardClick?: () => void;
-  isBranch?: boolean;
 }) {
   const [imgErr, setImgErr] = useState(false);
+  const branch = isBranchSnapshot(snap);
+  const title = displayLabel(snap.label);
   const hasThumb = !!snap.screenshot_url && !imgErr;
+  const relative = formatRelative(snap.created_at);
+  const clock = formatClock(snap.created_at);
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: -6 }}
+      initial={{ opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, x: -20 }}
+      exit={{ opacity: 0, x: -12 }}
       onClick={selectMode ? onCardClick : undefined}
-      className={`group rounded-xl border ${isSelected ? "border-blue-500/60 ring-2 ring-blue-500/40" : snap.is_pinned ? "border-amber-500/40 ring-1 ring-amber-500/20" : "border-border"} ${isBranch ? "hover:border-emerald-500/30" : "hover:border-violet-500/30"} bg-card hover:bg-accent/30 overflow-hidden transition-all relative ${selectMode ? "cursor-pointer" : ""}`}
+      className={[
+        "group flex items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors",
+        isSelected
+          ? "border-blue-500/60 bg-blue-500/10 ring-1 ring-blue-500/30"
+          : snap.is_pinned
+            ? "border-amber-500/35 bg-amber-500/[0.04]"
+            : "border-border/80 bg-card/40 hover:bg-accent/40",
+        selectMode ? "cursor-pointer" : "",
+      ].join(" ")}
     >
-      {snap.is_pinned && (
-        <div className="absolute top-2 right-2 z-10 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/90 text-amber-950 text-[9px] font-semibold shadow-sm">
-          <Pin className="w-2.5 h-2.5" />
-          Pinned
-        </div>
-      )}
-      {/* Screenshot thumbnail */}
-      {hasThumb ? (
-        <div
-          className="w-full relative overflow-hidden bg-muted/30 border-b border-border/50"
-          style={{ aspectRatio: "16/9" }}
-        >
+      {/* Tiny thumb or icon */}
+      <div className="relative mt-0.5 h-10 w-14 shrink-0 overflow-hidden rounded-md border border-border/60 bg-muted/40">
+        {hasThumb ? (
           <img
             src={snap.screenshot_url!}
-            alt={snap.label}
-            className="w-full h-full object-cover"
+            alt=""
+            className="h-full w-full object-cover"
             onError={() => setImgErr(true)}
           />
-          <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent pointer-events-none" />
-        </div>
-      ) : (
-        <div
-          className="w-full flex items-center justify-center bg-muted/20 border-b border-border/40"
-          style={{ aspectRatio: "16/9" }}
-        >
-          <div className="flex flex-col items-center gap-1 text-muted-foreground/30">
-            <ImageOff className="w-5 h-5" />
-            <span className="text-[9px]">No preview</span>
-          </div>
-        </div>
-      )}
-
-      {/* Info row */}
-      <div className="flex items-center gap-2 px-2.5 py-2">
-        {isBranch ? (
-          <div className="w-4 h-4 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center shrink-0">
-            <GitBranch className="w-2.5 h-2.5 text-emerald-400" />
-          </div>
         ) : (
-          <div className="w-4 h-4 rounded-full bg-violet-500/20 border border-violet-500/40 flex items-center justify-center shrink-0">
-            <div className="w-1.5 h-1.5 rounded-full bg-violet-400" />
+          <div className="flex h-full w-full items-center justify-center text-muted-foreground/40">
+            {branch ? <GitBranch className="h-3.5 w-3.5" /> : <History className="h-3.5 w-3.5" />}
           </div>
         )}
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium truncate leading-snug">
-            {isBranch ? snap.label.replace("Before edit — ", "") : snap.label}
+        {isLatest && (
+          <span className="absolute bottom-0.5 left-0.5 rounded bg-emerald-500/90 px-1 text-[8px] font-semibold text-white">
+            Now
+          </span>
+        )}
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start gap-2">
+          <p className="min-w-0 flex-1 truncate text-[13px] font-medium leading-snug text-foreground">
+            {title}
           </p>
-          {isBranch && (
-            <p className="text-[10px] text-emerald-400/80 flex items-center gap-1">
-              <GitBranch className="w-2.5 h-2.5" />
-              Branch checkpoint
+          <div className="shrink-0 text-right leading-tight">
+            <p className="text-[11px] font-medium text-muted-foreground tabular-nums">
+              {relative}
             </p>
-          )}
-          <p className="text-[10px] text-muted-foreground flex items-center gap-1 mt-0.5">
-            <Clock className="w-2.5 h-2.5" />
-            {relativeTime(snap.created_at)}
-          </p>
+            <p className="text-[10px] text-muted-foreground/70 tabular-nums flex items-center justify-end gap-0.5">
+              <Clock className="h-2.5 w-2.5" />
+              {clock}
+            </p>
+          </div>
         </div>
-        <div className={`flex items-center gap-1 shrink-0 transition-opacity ${snap.is_pinned ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
-          {canCompare && (
+
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
+          {snap.is_pinned && (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-amber-600 dark:text-amber-400">
+              <Pin className="h-2.5 w-2.5" />
+              Pinned
+            </span>
+          )}
+          {branch && (
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-600 dark:text-emerald-400">
+              <GitBranch className="h-2.5 w-2.5" />
+              Branch
+            </span>
+          )}
+          {isAutoChange(snap) && !branch && (
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[9px] text-muted-foreground">
+              Auto
+            </span>
+          )}
+        </div>
+
+        {/* Actions — always visible on touch; hover-reveal on desktop */}
+        {!selectMode && (
+          <div className="mt-2 flex items-center gap-0.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-[11px] text-muted-foreground hover:text-foreground"
+              onClick={(e) => { e.stopPropagation(); onPreview(); }}
+              title="Preview this version"
+            >
+              <Eye className="h-3 w-3" />
+              Preview
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-[11px] text-muted-foreground hover:text-violet-400"
+              onClick={(e) => { e.stopPropagation(); onRestore(); }}
+              disabled={restoring}
+              title="Restore to this version"
+            >
+              {restoring ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+              Restore
+            </Button>
             <Button
               variant="ghost"
               size="icon"
-              className="w-6 h-6 text-muted-foreground hover:text-blue-400"
-              onClick={onCompareToPrevious}
-              title="Compare this snapshot with the next-newer one"
+              className={`h-7 w-7 ${snap.is_pinned ? "text-amber-400" : "text-muted-foreground hover:text-amber-400"}`}
+              onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
+              disabled={togglingPin}
+              title={snap.is_pinned ? "Unpin" : "Pin as stable"}
             >
-              <GitCompareArrows className="w-3 h-3" />
+              {togglingPin
+                ? <Loader2 className="h-3 w-3 animate-spin" />
+                : snap.is_pinned
+                  ? <PinOff className="h-3 w-3" />
+                  : <Pin className="h-3 w-3" />}
             </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            className={`w-6 h-6 ${snap.is_pinned ? "text-amber-400 hover:text-amber-300" : "text-muted-foreground hover:text-amber-400"}`}
-            onClick={onTogglePin}
-            disabled={togglingPin}
-            title={snap.is_pinned ? "Unpin snapshot" : "Pin as stable version"}
-          >
-            {togglingPin
-              ? <Loader2 className="w-3 h-3 animate-spin" />
-              : snap.is_pinned
-                ? <PinOff className="w-3 h-3" />
-                : <Pin className="w-3 h-3" />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="w-6 h-6 text-muted-foreground hover:text-violet-400"
-            onClick={onRestore}
-            disabled={restoring}
-            title="Restore to this snapshot"
-          >
-            {restoring ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="w-6 h-6 text-muted-foreground hover:text-destructive"
-            onClick={onDelete}
-            disabled={deleting}
-            title="Delete snapshot"
-          >
-            {deleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
-          </Button>
-        </div>
+            {canCompare && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 text-muted-foreground hover:text-blue-400"
+                onClick={(e) => { e.stopPropagation(); onCompareToPrevious(); }}
+                title="Compare with newer version"
+              >
+                <GitCompareArrows className="h-3 w-3" />
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+              onClick={(e) => { e.stopPropagation(); onDelete(); }}
+              disabled={deleting}
+              title="Delete"
+            >
+              {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+            </Button>
+          </div>
+        )}
       </div>
     </motion.div>
   );
@@ -194,7 +277,7 @@ function SnapshotCard({
 export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelProps) {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<"snapshots" | "branches">("snapshots");
+  const [filter, setFilter] = useState<HistoryFilter>("all");
   const [creating, setCreating] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -202,31 +285,35 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
   const [comparing, setComparing] = useState(false);
   const [label, setLabel] = useState("");
   const [showInput, setShowInput] = useState(false);
-  // Snapshot-pair selection mode — click two cards to pick a pair to compare.
   const [pairSelectMode, setPairSelectMode] = useState(false);
   const [selectedForCompare, setSelectedForCompare] = useState<string[]>([]);
   const { toast } = useToast();
 
-  // Branches are snapshots auto-created before chat edits, prefixed with "Before edit — ".
-  // Manual + AI-restore snapshots show in the Snapshots tab; pinned float to the top.
-  const branchSnapshots = snapshots.filter((s) => s.label.startsWith("Before edit — "));
-  const manualSnapshots = snapshots
-    .filter((s) => !s.label.startsWith("Before edit — "))
-    .sort((a, b) => {
-      if (!!a.is_pinned !== !!b.is_pinned) return a.is_pinned ? -1 : 1;
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    });
-  // Split pinned from regular so the History tab can render a dedicated "Pinned" group.
-  const pinnedSnapshots = manualSnapshots.filter((s) => s.is_pinned);
-  const unpinnedSnapshots = manualSnapshots.filter((s) => !s.is_pinned);
-  const displaySnapshots = activeTab === "branches" ? branchSnapshots : manualSnapshots;
+  const sorted = useMemo(
+    () =>
+      [...snapshots].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      ),
+    [snapshots],
+  );
+
+  const filtered = useMemo(() => {
+    if (filter === "pinned") return sorted.filter((s) => s.is_pinned);
+    if (filter === "branches") return sorted.filter(isBranchSnapshot);
+    // All: pinned float to top within their day group via separate pinned strip
+    return sorted;
+  }, [sorted, filter]);
+
+  const pinned = useMemo(() => sorted.filter((s) => s.is_pinned), [sorted]);
+  const dayGroups = useMemo(() => groupByDay(filtered), [filtered]);
+  const latestId = sorted[0]?.id ?? null;
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/projects/snapshots?projectId=${projectId}`);
       if (res.ok) {
-        const data = await res.json() as Snapshot[];
+        const data = (await res.json()) as Snapshot[];
         setSnapshots(data);
       }
     } finally {
@@ -234,7 +321,9 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
     }
   }, [projectId]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   async function createSnapshot() {
     if (!label.trim()) return;
@@ -245,7 +334,7 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId, label: label.trim() }),
       });
-      const data = await res.json() as Snapshot & { error?: string };
+      const data = (await res.json()) as Snapshot & { error?: string };
       if (!res.ok) {
         toast({ title: "Error", description: data.error ?? "Failed to create snapshot", variant: "destructive" });
         return;
@@ -262,13 +351,12 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
   async function restoreSnapshot(snap: Snapshot) {
     setRestoring(snap.id);
     try {
-      // ── 1) Dry-run first — detect schema-changing files ─────────────────────
       const dryRes = await fetch("/api/projects/snapshots/restore", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ snapshotId: snap.id, projectId, dryRun: true }),
       });
-      const dry = await dryRes.json() as {
+      const dry = (await dryRes.json()) as {
         ok: boolean;
         hasSchemaChanges?: boolean;
         schemaChanges?: { schemaPaths: string[]; addedTables: string[]; removedTables: string[] };
@@ -283,17 +371,13 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
           ...schemaPaths.slice(0, 6).map((p) => `  • ${p}`),
           schemaPaths.length > 6 ? `  • …and ${schemaPaths.length - 6} more` : "",
           "",
-          removedTables.length > 0
-            ? `Tables that would be REMOVED: ${removedTables.join(", ")}`
-            : "",
-          addedTables.length > 0
-            ? `Tables that would be ADDED: ${addedTables.join(", ")}`
-            : "",
-          "",
-          "Supabase does NOT revert cleanly. Make sure your database schema can handle this change.",
+          removedTables.length > 0 ? `Tables that would be REMOVED: ${removedTables.join(", ")}` : "",
+          addedTables.length > 0 ? `Tables that would be ADDED: ${addedTables.join(", ")}` : "",
           "",
           "Continue with the restore?",
-        ].filter(Boolean).join("\n");
+        ]
+          .filter(Boolean)
+          .join("\n");
         if (!window.confirm(lines)) {
           toast({ title: "Restore cancelled", description: "No changes were applied." });
           return;
@@ -301,13 +385,12 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
         confirmSchema = true;
       }
 
-      // ── 2) Real restore ─────────────────────────────────────────────────────
       const res = await fetch("/api/projects/snapshots/restore", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ snapshotId: snap.id, projectId, confirmSchema }),
       });
-      const data = await res.json() as { ok: boolean; files: ProjectFile[]; message: string; error?: string };
+      const data = (await res.json()) as { ok: boolean; files: ProjectFile[]; message: string; error?: string };
       if (!res.ok) {
         toast({ title: "Restore failed", description: data.error, variant: "destructive" });
         return;
@@ -325,7 +408,7 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
     try {
       await fetch(`/api/projects/snapshots?id=${snap.id}`, { method: "DELETE" });
       setSnapshots((prev) => prev.filter((s) => s.id !== snap.id));
-      toast({ title: "Snapshot deleted" });
+      toast({ title: "Version deleted" });
     } finally {
       setDeleting(null);
     }
@@ -334,13 +417,12 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
   async function togglePin(snap: Snapshot) {
     const willPin = !snap.is_pinned;
     setTogglingPin(snap.id);
-    // Optimistic update
     setSnapshots((prev) =>
       prev.map((s) =>
         s.id === snap.id
           ? { ...s, is_pinned: willPin, pinned_at: willPin ? new Date().toISOString() : null }
-          : s
-      )
+          : s,
+      ),
     );
     try {
       const res = await fetch("/api/projects/snapshots", {
@@ -349,89 +431,87 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
         body: JSON.stringify({ snapshotId: snap.id, isPinned: willPin }),
       });
       if (!res.ok) {
-        // Revert on failure
         setSnapshots((prev) =>
-          prev.map((s) => (s.id === snap.id ? { ...s, is_pinned: !willPin } : s))
+          prev.map((s) => (s.id === snap.id ? { ...s, is_pinned: !willPin } : s)),
         );
         toast({ title: "Pin update failed", variant: "destructive" });
         return;
       }
       toast({
         title: willPin ? "Pinned as stable" : "Unpinned",
-        description: willPin
-          ? `"${snap.label}" stays at the top until unpinned.`
-          : undefined,
+        description: willPin ? `"${displayLabel(snap.label)}" stays easy to find.` : undefined,
       });
     } finally {
       setTogglingPin(null);
     }
   }
 
-  /** Fire the compare flow for an arbitrary snapshot pair. */
+  function previewSnapshot(snap: Snapshot) {
+    window.dispatchEvent(
+      new CustomEvent("lifemark-preview-version", {
+        detail: { snapshotId: snap.id, label: displayLabel(snap.label) },
+      }),
+    );
+    toast({
+      title: "Previewing version",
+      description: `${displayLabel(snap.label)} · ${formatRelative(snap.created_at)}`,
+    });
+  }
+
   function fireCompare(olderId: string, newerId: string, olderLabel?: string, newerLabel?: string) {
     if (onCompare) {
       onCompare(olderId, newerId);
     } else {
-      window.dispatchEvent(new CustomEvent("lifemark-open-diff", {
-        detail: { oldSnapshotId: olderId, newSnapshotId: newerId },
-      }));
+      window.dispatchEvent(
+        new CustomEvent("lifemark-open-diff", {
+          detail: { oldSnapshotId: olderId, newSnapshotId: newerId },
+        }),
+      );
       toast({
         title: "Opening diff…",
-        description: olderLabel && newerLabel
-          ? `Comparing "${olderLabel}" → "${newerLabel}"`
-          : undefined,
+        description:
+          olderLabel && newerLabel
+            ? `Comparing "${displayLabel(olderLabel)}" → "${displayLabel(newerLabel)}"`
+            : undefined,
       });
     }
   }
 
   async function compareLastTwo() {
-    if (manualSnapshots.length < 2) {
-      toast({ title: "Need at least 2 snapshots to compare", variant: "destructive" });
+    if (sorted.length < 2) {
+      toast({ title: "Need at least 2 versions to compare", variant: "destructive" });
       return;
     }
     setComparing(true);
     try {
-      const newer = manualSnapshots[0];
-      const older = manualSnapshots[1];
+      const newer = sorted[0]!;
+      const older = sorted[1]!;
       fireCompare(older.id, newer.id, older.label, newer.label);
     } finally {
       setComparing(false);
     }
   }
 
-  /** Compare a single snapshot to the next-newer one (or to T-0 if it IS the newest). */
   function compareSnapshotToNewer(snap: Snapshot) {
-    const all = activeTab === "branches" ? branchSnapshots : manualSnapshots;
-    const idx = all.findIndex((s) => s.id === snap.id);
+    const idx = sorted.findIndex((s) => s.id === snap.id);
     if (idx <= 0) {
-      const newest = manualSnapshots[0];
-      if (!newest || newest.id === snap.id) {
-        toast({ title: "No newer snapshot to compare against", variant: "destructive" });
-        return;
-      }
-      fireCompare(snap.id, newest.id, snap.label, newest.label);
+      toast({ title: "No newer version to compare against", variant: "destructive" });
       return;
     }
-    const newer = all[idx - 1];
+    const newer = sorted[idx - 1]!;
     fireCompare(snap.id, newer.id, snap.label, newer.label);
   }
 
-  /** Toggle a snapshot in/out of the compare-pair selection. */
   function togglePairSelect(snap: Snapshot) {
     setSelectedForCompare((prev) => {
-      if (prev.includes(snap.id)) {
-        return prev.filter((id) => id !== snap.id);
-      }
-      const next = [...prev, snap.id].slice(-2); // keep only the two most recent picks
+      if (prev.includes(snap.id)) return prev.filter((id) => id !== snap.id);
+      const next = [...prev, snap.id].slice(-2);
       if (next.length === 2) {
-        // Fire compare with older=first selected, newer=second
-        // Order them by created_at so the diff makes chronological sense.
         const a = snapshots.find((s) => s.id === next[0]);
         const b = snapshots.find((s) => s.id === next[1]);
         if (a && b) {
-          const [older, newer] = new Date(a.created_at).getTime() <= new Date(b.created_at).getTime()
-            ? [a, b] : [b, a];
-          // Defer so React processes the state update first
+          const [older, newer] =
+            new Date(a.created_at).getTime() <= new Date(b.created_at).getTime() ? [a, b] : [b, a];
           setTimeout(() => {
             fireCompare(older.id, newer.id, older.label, newer.label);
             setPairSelectMode(false);
@@ -443,15 +523,18 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
     });
   }
 
+  const branchCount = sorted.filter(isBranchSnapshot).length;
+  const pinnedCount = pinned.length;
+
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className="flex h-full min-h-0 flex-col bg-background">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
         <div className="flex items-center gap-2">
-          <History className="w-4 h-4 text-muted-foreground" />
-          <span className="text-sm font-semibold">Version History</span>
+          <History className="h-4 w-4 text-muted-foreground" />
+          <span className="text-sm font-semibold">Change history</span>
           {snapshots.length > 0 && (
-            <span className="text-xs px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground tabular-nums">
               {snapshots.length}
             </span>
           )}
@@ -462,10 +545,10 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
             size="sm"
             className="h-7 gap-1.5 text-xs"
             onClick={() => void compareLastTwo()}
-            disabled={comparing || manualSnapshots.length < 2}
-            title="Compare the most recent two snapshots (T-1 → T-0)"
+            disabled={comparing || sorted.length < 2}
+            title="Compare the two most recent versions"
           >
-            {comparing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <GitCompareArrows className="w-3.5 h-3.5" />}
+            {comparing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitCompareArrows className="h-3.5 w-3.5" />}
             Compare
           </Button>
           <Button
@@ -476,10 +559,9 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
               setPairSelectMode((v) => !v);
               setSelectedForCompare([]);
             }}
-            disabled={manualSnapshots.length < 2}
-            title="Pick any two snapshots to compare"
+            disabled={sorted.length < 2}
           >
-            {pairSelectMode ? "Cancel pick" : "Pick…"}
+            {pairSelectMode ? "Cancel" : "Pick…"}
           </Button>
           <Button
             variant="ghost"
@@ -487,57 +569,53 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
             className="h-7 gap-1.5 text-xs"
             onClick={() => setShowInput((v) => !v)}
           >
-            <Camera className="w-3.5 h-3.5" />
-            Snapshot
+            <Camera className="h-3.5 w-3.5" />
+            Save
           </Button>
         </div>
       </div>
 
-      {/* Pair-select hint banner */}
       {pairSelectMode && (
-        <div className="px-3 py-2 border-b border-blue-500/20 bg-blue-500/[0.06] text-[11px] text-blue-200 flex items-center gap-2">
-          <GitCompareArrows className="w-3 h-3" />
+        <div className="flex items-center gap-2 border-b border-blue-500/20 bg-blue-500/[0.06] px-3 py-2 text-[11px] text-blue-200">
+          <GitCompareArrows className="h-3 w-3" />
           <span className="flex-1">
             {selectedForCompare.length === 0
-              ? "Click a snapshot to start picking, then click a second one to compare."
-              : `Picked 1 of 2 — click another snapshot to compare.`}
+              ? "Click a version, then another to compare."
+              : "Picked 1 of 2 — click another version."}
           </span>
         </div>
       )}
 
-      {/* Tab bar */}
-      <div className="flex border-b border-border">
-        <button
-          onClick={() => setActiveTab("snapshots")}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors border-b-2 ${
-            activeTab === "snapshots"
-              ? "border-primary text-primary"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <History className="w-3.5 h-3.5" />
-          Snapshots
-          {manualSnapshots.length > 0 && (
-            <span className="text-[10px] bg-muted rounded-full px-1.5">{manualSnapshots.length}</span>
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab("branches")}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors border-b-2 ${
-            activeTab === "branches"
-              ? "border-primary text-primary"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <GitBranch className="w-3.5 h-3.5" />
-          Branches
-          {branchSnapshots.length > 0 && (
-            <span className="text-[10px] bg-muted rounded-full px-1.5">{branchSnapshots.length}</span>
-          )}
-        </button>
+      {/* Lovable-style filter chips */}
+      <div className="flex shrink-0 gap-1.5 border-b border-border px-3 py-2">
+        {(
+          [
+            { id: "all" as const, label: "All", count: sorted.length },
+            { id: "pinned" as const, label: "Pinned", count: pinnedCount },
+            { id: "branches" as const, label: "Branches", count: branchCount },
+          ] as const
+        ).map((chip) => (
+          <button
+            key={chip.id}
+            type="button"
+            onClick={() => setFilter(chip.id)}
+            className={[
+              "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
+              filter === chip.id
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground",
+            ].join(" ")}
+          >
+            {chip.id === "pinned" && <Pin className="h-2.5 w-2.5" />}
+            {chip.id === "branches" && <GitBranch className="h-2.5 w-2.5" />}
+            {chip.label}
+            {chip.count > 0 && (
+              <span className="tabular-nums opacity-80">{chip.count}</span>
+            )}
+          </button>
+        ))}
       </div>
 
-      {/* Snapshot label input */}
       <AnimatePresence>
         {showInput && (
           <motion.div
@@ -546,147 +624,139 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
             exit={{ height: 0, opacity: 0 }}
             className="overflow-hidden border-b border-border"
           >
-            <div className="p-3 flex gap-2">
+            <div className="flex gap-2 p-3">
               <Input
-                placeholder="Label this snapshot…"
+                placeholder="Label this version…"
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && void createSnapshot()}
-                className="h-8 text-sm flex-1"
+                className="h-8 flex-1 text-sm"
                 autoFocus
               />
               <Button
                 size="sm"
-                className="h-8 px-3 text-xs bg-gradient-to-r from-violet-500 to-blue-500 text-white hover:opacity-90"
-                onClick={createSnapshot}
+                className="h-8 px-3 text-xs"
+                onClick={() => void createSnapshot()}
                 disabled={creating || !label.trim()}
               >
-                {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                {creating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
               </Button>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Snapshot / Branch list */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+      {/* Chronological list */}
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-3">
         {loading ? (
-          <div className="space-y-3 pt-1">
-            {[...Array(3)].map((_, i) => (
-              <div key={i} className="rounded-xl border border-border overflow-hidden animate-pulse">
-                <div className="w-full bg-muted/40" style={{ aspectRatio: "16/9" }} />
-                <div className="flex items-center gap-2 p-2.5">
-                  <div className="w-4 h-4 rounded-full bg-muted shrink-0" />
-                  <div className="flex-1 space-y-1.5">
-                    <div className="h-3 bg-muted rounded w-3/4" />
-                    <div className="h-2.5 bg-muted rounded w-1/3" />
-                  </div>
+          <div className="space-y-2 pt-1">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="flex animate-pulse gap-3 rounded-lg border border-border/60 p-2.5">
+                <div className="h-10 w-14 shrink-0 rounded-md bg-muted" />
+                <div className="flex-1 space-y-2 py-0.5">
+                  <div className="h-3 w-3/4 rounded bg-muted" />
+                  <div className="h-2.5 w-1/3 rounded bg-muted" />
                 </div>
               </div>
             ))}
           </div>
-        ) : displaySnapshots.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
-            {activeTab === "branches" ? (
+            {filter === "branches" ? (
               <>
-                <GitBranch className="w-8 h-8 text-muted-foreground/30 mb-3" />
+                <GitBranch className="mb-3 h-8 w-8 text-muted-foreground/30" />
                 <p className="text-sm text-muted-foreground">No branches yet</p>
-                <p className="text-xs text-muted-foreground mt-1 max-w-[200px]">
-                  Edit a past message in the chat to create an alternate branch. Each edit is auto-saved here so you can always switch back.
+                <p className="mt-1 max-w-[220px] text-xs text-muted-foreground">
+                  Edit a past chat message to create a branch. Each edit is saved here with a timestamp.
+                </p>
+              </>
+            ) : filter === "pinned" ? (
+              <>
+                <Pin className="mb-3 h-8 w-8 text-muted-foreground/30" />
+                <p className="text-sm text-muted-foreground">No pinned versions</p>
+                <p className="mt-1 max-w-[220px] text-xs text-muted-foreground">
+                  Pin a stable build so you can find it quickly.
                 </p>
               </>
             ) : (
               <>
-                <History className="w-8 h-8 text-muted-foreground/30 mb-3" />
-                <p className="text-sm text-muted-foreground">No snapshots yet</p>
-                <p className="text-xs text-muted-foreground mt-1 max-w-[200px]">
-                  Click "Snapshot" to save the current state before making changes.
-                </p>
-                <p className="text-xs text-muted-foreground mt-2 opacity-60">
-                  Snapshots auto-save before each AI restore.
+                <History className="mb-3 h-8 w-8 text-muted-foreground/30" />
+                <p className="text-sm text-muted-foreground">No changes yet</p>
+                <p className="mt-1 max-w-[220px] text-xs text-muted-foreground">
+                  Versions appear automatically before each AI edit, with time — like Lovable.
                 </p>
               </>
             )}
           </div>
         ) : (
           <AnimatePresence initial={false}>
-            {activeTab === "snapshots" && pinnedSnapshots.length > 0 && (
-              <>
-                <div className="flex items-center gap-1.5 px-1 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-amber-400/80">
-                  <Pin className="w-2.5 h-2.5" />
-                  Pinned ({pinnedSnapshots.length})
+            {filter === "all" && pinned.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 px-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-500/90">
+                  <Pin className="h-2.5 w-2.5" />
+                  Pinned
                 </div>
-                {pinnedSnapshots.map((snap, idx) => (
-                  <SnapshotCard
-                    key={snap.id}
+                {pinned.map((snap) => (
+                  <ChangeRow
+                    key={`pin-${snap.id}`}
                     snap={snap}
+                    isLatest={snap.id === latestId}
                     restoring={restoring === snap.id}
                     deleting={deleting === snap.id}
                     togglingPin={togglingPin === snap.id}
-                    canCompare={manualSnapshots.length > 1 && manualSnapshots.findIndex((s) => s.id === snap.id) < manualSnapshots.length - 1}
+                    canCompare={sorted.length > 1}
+                    selectMode={pairSelectMode}
+                    isSelected={selectedForCompare.includes(snap.id)}
                     onRestore={() => void restoreSnapshot(snap)}
                     onDelete={() => void deleteSnapshot(snap)}
                     onTogglePin={() => void togglePin(snap)}
                     onCompareToPrevious={() => compareSnapshotToNewer(snap)}
-                selectMode={pairSelectMode}
-                isSelected={selectedForCompare.includes(snap.id)}
-                onCardClick={() => togglePairSelect(snap)}
-                    isBranch={false}
+                    onPreview={() => previewSnapshot(snap)}
+                    onCardClick={() => togglePairSelect(snap)}
                   />
                 ))}
-                {unpinnedSnapshots.length > 0 && (
-                  <div className="flex items-center gap-1.5 px-1 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/60">
-                    <History className="w-2.5 h-2.5" />
-                    All snapshots
-                  </div>
-                )}
-                {unpinnedSnapshots.map((snap, idx) => (
-                  <SnapshotCard
-                    key={snap.id}
-                    snap={snap}
-                    restoring={restoring === snap.id}
-                    deleting={deleting === snap.id}
-                    togglingPin={togglingPin === snap.id}
-                    canCompare={manualSnapshots.length > 1 && manualSnapshots.findIndex((s) => s.id === snap.id) < manualSnapshots.length - 1}
-                    onRestore={() => void restoreSnapshot(snap)}
-                    onDelete={() => void deleteSnapshot(snap)}
-                    onTogglePin={() => void togglePin(snap)}
-                    onCompareToPrevious={() => compareSnapshotToNewer(snap)}
-                selectMode={pairSelectMode}
-                isSelected={selectedForCompare.includes(snap.id)}
-                onCardClick={() => togglePairSelect(snap)}
-                    isBranch={false}
-                  />
-                ))}
-              </>
+              </div>
             )}
-            {(activeTab === "branches" || pinnedSnapshots.length === 0) && displaySnapshots.map((snap, idx) => (
-              <SnapshotCard
-                key={snap.id}
-                snap={snap}
-                restoring={restoring === snap.id}
-                deleting={deleting === snap.id}
-                togglingPin={togglingPin === snap.id}
-                canCompare={displaySnapshots.length > 1 && idx < displaySnapshots.length - 1}
-                onRestore={() => void restoreSnapshot(snap)}
-                onDelete={() => void deleteSnapshot(snap)}
-                onTogglePin={() => void togglePin(snap)}
-                onCompareToPrevious={() => compareSnapshotToNewer(snap)}
-                selectMode={pairSelectMode}
-                isSelected={selectedForCompare.includes(snap.id)}
-                onCardClick={() => togglePairSelect(snap)}
-                isBranch={activeTab === "branches"}
-              />
+
+            {dayGroups.map((group) => (
+              <div key={group.label} className="space-y-2">
+                <div className="sticky top-0 z-[1] -mx-1 bg-background/95 px-1 py-1 backdrop-blur-sm">
+                  <p className="text-[11px] font-semibold text-muted-foreground">
+                    {group.label}
+                  </p>
+                </div>
+                {group.items
+                  .filter((s) => !(filter === "all" && s.is_pinned))
+                  .map((snap) => (
+                    <ChangeRow
+                      key={snap.id}
+                      snap={snap}
+                      isLatest={snap.id === latestId}
+                      restoring={restoring === snap.id}
+                      deleting={deleting === snap.id}
+                      togglingPin={togglingPin === snap.id}
+                      canCompare={sorted.length > 1 && snap.id !== latestId}
+                      selectMode={pairSelectMode}
+                      isSelected={selectedForCompare.includes(snap.id)}
+                      onRestore={() => void restoreSnapshot(snap)}
+                      onDelete={() => void deleteSnapshot(snap)}
+                      onTogglePin={() => void togglePin(snap)}
+                      onCompareToPrevious={() => compareSnapshotToNewer(snap)}
+                      onPreview={() => previewSnapshot(snap)}
+                      onCardClick={() => togglePairSelect(snap)}
+                    />
+                  ))}
+              </div>
             ))}
           </AnimatePresence>
         )}
       </div>
 
       {snapshots.length > 0 && (
-        <div className="px-4 py-2 border-t border-border shrink-0">
-          <p className="text-[10px] text-muted-foreground text-center flex items-center justify-center gap-1.5">
-            <Sparkles className="w-2.5 h-2.5" />
-            Pin stable versions • Compare to spot what broke • Hover to restore
+        <div className="shrink-0 border-t border-border px-4 py-2">
+          <p className="flex items-center justify-center gap-1.5 text-center text-[10px] text-muted-foreground">
+            <Sparkles className="h-2.5 w-2.5" />
+            Each change is saved with time · Preview · Restore · Pin
           </p>
         </div>
       )}

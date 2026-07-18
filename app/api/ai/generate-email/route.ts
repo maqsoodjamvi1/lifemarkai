@@ -1,7 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
-import { getDefaultAiModel } from "@/lib/ai/model-defaults";
+import { CONTENT_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import {
   cancelCreditReservation,
@@ -81,7 +81,8 @@ Return only the JSON object with the generated files.`;
 
     const result = await generateAI(
       {
-        model: getDefaultAiModel(),
+        // Email templates are writing work — content tier, not the coder.
+        model: CONTENT_MODEL,
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: userMessage },

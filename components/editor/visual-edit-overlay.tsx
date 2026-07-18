@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AlignLeft, AlignCenter, AlignRight, X, Check, Wand2, Sparkles,
@@ -59,6 +59,23 @@ function applyChangeToFiles(
 
 // ── Shared popover UI ─────────────────────────────────────────────────────────
 
+/** Fetch + cache today's free inline-edit quota (Lovable parity counter). */
+function useFreeEditQuota() {
+  const [quota, setQuota] = useState<{ used: number; limit: number; remaining: number } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/ai/inline-edit")
+      .then(async (res) => {
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled && typeof data.remaining === "number") setQuota(data);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+  return quota;
+}
+
 export function VebEditPopover({
   selection,
   position,
@@ -74,6 +91,7 @@ export function VebEditPopover({
   aiFallbackAvailable?: boolean;
 }) {
   const [activeTab, setActiveTab] = useState<"text" | "colors" | "spacing">("text");
+  const quota = useFreeEditQuota();
   const [editText, setEditText] = useState(selection.textContent);
   const [editClasses, setEditClasses] = useState(selection.classList.join(" "));
 
@@ -281,11 +299,23 @@ export function VebEditPopover({
             </div>
           )}
 
-          {aiFallbackAvailable && (
-            <p className="text-[10px] text-muted-foreground/60 flex items-center gap-1 pt-1 border-t border-border/60">
-              <Sparkles className="w-3 h-3 shrink-0" />
-              Edits that can&apos;t be matched in code are sent to the AI automatically.
-            </p>
+          {(aiFallbackAvailable || quota) && (
+            <div className="pt-1 border-t border-border/60 space-y-1">
+              {quota && (
+                <p className="text-[10px] text-muted-foreground/70 flex items-center gap-1">
+                  <Check className="w-3 h-3 shrink-0 text-emerald-500/80" />
+                  {quota.remaining > 0
+                    ? `Free today: ${quota.remaining} of ${quota.limit} edits left`
+                    : `Daily free edits used — further edits cost 1 credit`}
+                </p>
+              )}
+              {aiFallbackAvailable && (
+                <p className="text-[10px] text-muted-foreground/60 flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 shrink-0" />
+                  Edits that can&apos;t be matched in code are sent to the AI automatically.
+                </p>
+              )}
+            </div>
           )}
         </div>
       </motion.div>
@@ -308,6 +338,13 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled, onR
   const [selected, setSelected] = useState<SelectedElement | null>(null);
   const [popoverPos, setPopoverPos] = useState({ x: 0, y: 0 });
 
+  // In-place edit commit — kept in a ref so the injected dblclick handler
+  // (deps: [enabled, iframeRef]) never closes over stale files/props.
+  const inlineCommitRef = useRef<((sel: SelectedElement, text: string) => void) | null>(null);
+  inlineCommitRef.current = (sel, text) => {
+    applyChangeToFiles(files, sel, { text }, onFileChange, onRequestAiEdit);
+  };
+
   const injectOverlayScript = useCallback(() => {
     const iframe = iframeRef.current;
     if (!iframe?.contentDocument) return;
@@ -322,6 +359,7 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled, onR
     style.textContent = `
       .lifemark-hover { outline: 2px solid #7c3aed !important; outline-offset: 2px; cursor: pointer !important; }
       .lifemark-selected { outline: 2px solid #0e90e8 !important; outline-offset: 2px; }
+      .lifemark-inline-editing { outline: 2px dashed #22c55e !important; outline-offset: 2px; cursor: text !important; }
       * { transition: outline 0.1s ease; }
     `;
     doc.head.appendChild(style);
@@ -368,14 +406,74 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled, onR
       el.classList.add("lifemark-selected");
     };
 
+    // True in-place text editing (Lovable parity): double-click a text
+    // element → edit it directly in the preview (contentEditable); Enter or
+    // clicking away commits the change to source, Escape cancels.
+    const handleDblClick = (e: MouseEvent) => {
+      if (!enabled) return;
+      const el = e.target as HTMLElement;
+      if (el.id === "lifemark-overlay" || el.isContentEditable) return;
+      // Only leaf-ish text elements: no element children beyond inline markup
+      const text = el.textContent ?? "";
+      if (!text.trim() || el.children.length > 2 || text.length > 500) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const original = text;
+      const snapshot: SelectedElement = {
+        tagName: el.tagName.toLowerCase(),
+        textContent: original,
+        classList: Array.from(el.classList).filter((c) => !c.startsWith("lifemark-")),
+        xpath: getXPath(el, doc),
+        rect: { top: 0, left: 0, width: 0, height: 0 },
+      };
+      el.setAttribute("contenteditable", "plaintext-only");
+      el.classList.add("lifemark-inline-editing");
+      el.focus();
+      // Select all so typing replaces (Lovable behavior)
+      const range = doc.createRange();
+      range.selectNodeContents(el);
+      const sel = iframe.contentWindow?.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+
+      const commit = () => {
+        cleanupEditing();
+        const next = (el.textContent ?? "").trim();
+        if (next && next !== original) {
+          inlineCommitRef.current?.(snapshot, next);
+        } else if (!next) {
+          el.textContent = original; // never commit an emptied element
+        }
+      };
+      const cancel = () => {
+        cleanupEditing();
+        el.textContent = original;
+      };
+      const onKey = (ke: KeyboardEvent) => {
+        if (ke.key === "Enter" && !ke.shiftKey) { ke.preventDefault(); commit(); }
+        if (ke.key === "Escape") { ke.preventDefault(); cancel(); }
+      };
+      const cleanupEditing = () => {
+        el.removeAttribute("contenteditable");
+        el.classList.remove("lifemark-inline-editing");
+        el.removeEventListener("blur", commit);
+        el.removeEventListener("keydown", onKey);
+      };
+      el.addEventListener("blur", commit);
+      el.addEventListener("keydown", onKey);
+    };
+
     doc.addEventListener("mouseover", handleMouseOver);
     doc.addEventListener("mouseout", handleMouseOut);
     doc.addEventListener("click", handleClick, true);
+    doc.addEventListener("dblclick", handleDblClick, true);
 
     return () => {
       doc.removeEventListener("mouseover", handleMouseOver);
       doc.removeEventListener("mouseout", handleMouseOut);
       doc.removeEventListener("click", handleClick, true);
+      doc.removeEventListener("dblclick", handleDblClick, true);
     };
   }, [enabled, iframeRef]);
 

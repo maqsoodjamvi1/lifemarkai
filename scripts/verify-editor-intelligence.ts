@@ -78,6 +78,30 @@ const cases = [
   },
   {
     hypothesisId: "H1",
+    name: "chat tab menu edit → patch (Lovable write)",
+    prompt: "Add About, Services, and Contact to the header menu",
+    ctx: {
+      ...baseCtx,
+      currentMode: "chat" as const,
+      fileCount: 8,
+      files: [{ path: "src/App.tsx" }, { path: "src/components/Header.tsx" }],
+    },
+    expect: "patch" as const,
+  },
+  {
+    hypothesisId: "H1",
+    name: "chat tab remove hero text → patch",
+    prompt: "Remove Premium from the hero",
+    ctx: {
+      ...baseCtx,
+      currentMode: "chat" as const,
+      fileCount: 8,
+      files: [{ path: "src/App.tsx" }, { path: "src/components/Hero.tsx" }],
+    },
+    expect: "patch" as const,
+  },
+  {
+    hypothesisId: "H1",
     name: "small patch on patch tab → patch",
     prompt: "Change the header color to blue",
     ctx: {

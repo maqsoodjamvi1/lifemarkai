@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { MessageSquarePlus, X, ChevronDown, ChevronUp, Pin, Pencil, Check, Trash2 } from "lucide-react";
+import { MessageSquarePlus, X, ChevronDown, ChevronUp, Pin, Pencil, Check, Trash2, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { formatAnnotationsForAi } from "@/lib/editor/format-annotations-for-ai";
 
 export interface Annotation {
   id: string;
@@ -18,6 +19,7 @@ interface PreviewAnnotationsProps {
   projectId: string;
   enabled: boolean;
   containerRef?: React.RefObject<HTMLElement>;
+  onSendToChat?: (prompt: string) => void;
 }
 
 const COLORS = [
@@ -52,7 +54,7 @@ interface NewAnnotationDraft {
   colorId: string;
 }
 
-export function PreviewAnnotations({ projectId, enabled }: PreviewAnnotationsProps) {
+export function PreviewAnnotations({ projectId, enabled, onSendToChat }: PreviewAnnotationsProps) {
   const [annotations, setAnnotations] = useState<Annotation[]>(() => loadAnnotations(projectId));
   const [draft, setDraft] = useState<NewAnnotationDraft | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -120,6 +122,13 @@ export function PreviewAnnotations({ projectId, enabled }: PreviewAnnotationsPro
   }
 
   const visible = annotations.filter((a) => showResolved || !a.resolved);
+  const openCount = annotations.filter((a) => !a.resolved).length;
+
+  function sendOpenToChat() {
+    const prompt = formatAnnotationsForAi(annotations);
+    if (!prompt) return;
+    onSendToChat?.(prompt);
+  }
 
   if (!enabled && annotations.length === 0) return null;
 
@@ -289,8 +298,18 @@ export function PreviewAnnotations({ projectId, enabled }: PreviewAnnotationsPro
           )}
           {annotations.length > 0 && (
             <span className="text-[10px] font-medium text-foreground bg-muted px-1.5 py-0.5 rounded-full ml-0.5">
-              {annotations.filter((a) => !a.resolved).length}
+              {openCount}
             </span>
+          )}
+          {openCount > 0 && onSendToChat && (
+            <button
+              type="button"
+              onClick={sendOpenToChat}
+              className="flex items-center gap-1 text-[10px] font-medium text-violet-300 hover:text-violet-100 border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/20 px-2 py-0.5 rounded-full ml-1 transition-colors"
+            >
+              <Wand2 className="w-3 h-3" />
+              Fix with AI
+            </button>
           )}
         </div>
       )}

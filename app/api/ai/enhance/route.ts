@@ -11,7 +11,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { generateAI } from "@/lib/ai/generate";
-import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
+import { ECONOMY_CHAT_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
@@ -48,7 +48,8 @@ export async function POST(req: NextRequest) {
   try {
     const result = await generateAI(
       {
-        model: BALANCED_CODING_MODEL,
+        // Prompt rewriting is a cosmetic chat task — economy tier, not frontier.
+        model: ECONOMY_CHAT_MODEL,
         messages: [
           { role: "system", content: ENHANCER_SYSTEM },
           { role: "user", content: `<original_prompt>\n${prompt.trim()}\n</original_prompt>` },

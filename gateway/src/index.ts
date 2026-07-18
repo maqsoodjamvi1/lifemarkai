@@ -360,7 +360,15 @@ function authenticate(request: Request, env: Env): boolean {
 
 async function logUsage(usage: UsagePayload, env: Env): Promise<void> {
   const aiCents = computeAiCents(usage.model, usage.promptTokens, usage.completionTokens);
+  return logUsageCents(aiCents, usage.projectId, usage.userId, env);
+}
+
+/** Insert a usage row + debit the unified credit balance by raw cents.
+ *  Used by token-billed chat (via logUsage) and duration/character-billed
+ *  audio endpoints. */
+async function logUsageCents(aiCents: number, projectId: string, userId: string, env: Env): Promise<void> {
   if (aiCents === 0) return;
+  const usage = { projectId, userId };
 
   try {
     // Insert a usage record
@@ -724,6 +732,134 @@ function handleHealth(env: Env, origin: string | null): Response {
   );
 }
 
+// ── Audio: TTS + STT (voice features for built apps) ─────────────────────────
+//
+// Billing:
+//   TTS — per character: ceil(chars / 1000) × 2¢  (≈ $15–20 / 1M chars retail)
+//   STT — per upload MB: ceil(MB) × 2¢, min 1¢    (≈ $0.006/min retail; 1 MB
+//         of compressed speech ≈ 1 minute, so this tracks provider cost)
+// Both debit the unified credit balance exactly like chat usage.
+
+const TTS_CENTS_PER_1K_CHARS = 2;
+const STT_CENTS_PER_MB = 2;
+const TTS_MAX_CHARS = 4096;
+const STT_MAX_BYTES = 25 * 1024 * 1024; // OpenAI's own limit
+
+async function handleTextToSpeech(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  const projectId = request.headers.get("X-Lifemark-Project-Id") ?? "";
+  const userId = request.headers.get("X-Lifemark-User-Id") ?? "";
+
+  let body: { model?: string; input?: string; voice?: string; response_format?: string; speed?: number };
+  try {
+    body = await request.json();
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
+      status: 400, headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
+  }
+  const input = (body.input ?? "").slice(0, TTS_MAX_CHARS);
+  if (!input) {
+    return new Response(JSON.stringify({ error: "input (text) is required" }), {
+      status: 400, headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
+  }
+  if (userId) {
+    const balance = await checkAiBalance(userId, env);
+    if (balance !== null && balance <= 0) {
+      return new Response(JSON.stringify({ error: "Insufficient credits" }), {
+        status: 402, headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+      });
+    }
+  }
+
+  const upstream = await fetch("https://api.openai.com/v1/audio/speech", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+    body: JSON.stringify({
+      model: body.model ?? "gpt-4o-mini-tts",
+      input,
+      voice: body.voice ?? "alloy",
+      response_format: body.response_format ?? "mp3",
+      ...(body.speed ? { speed: body.speed } : {}),
+    }),
+  });
+  if (!upstream.ok) {
+    const errText = await upstream.text().catch(() => "");
+    return new Response(errText || JSON.stringify({ error: "TTS upstream failed" }), {
+      status: upstream.status, headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
+  }
+
+  if (projectId && userId) {
+    const cents = Math.max(1, Math.ceil(input.length / 1000) * TTS_CENTS_PER_1K_CHARS);
+    ctx.waitUntil(logUsageCents(cents, projectId, userId, env));
+  }
+  return new Response(upstream.body, {
+    status: 200,
+    headers: {
+      "Content-Type": upstream.headers.get("content-type") ?? "audio/mpeg",
+      ...corsHeaders(origin),
+    },
+  });
+}
+
+async function handleTranscription(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  const projectId = request.headers.get("X-Lifemark-Project-Id") ?? "";
+  const userId = request.headers.get("X-Lifemark-User-Id") ?? "";
+
+  if (userId) {
+    const balance = await checkAiBalance(userId, env);
+    if (balance !== null && balance <= 0) {
+      return new Response(JSON.stringify({ error: "Insufficient credits" }), {
+        status: 402, headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+      });
+    }
+  }
+
+  // Pass the multipart form through, defaulting the model when absent.
+  let form: FormData;
+  try {
+    form = await request.formData();
+  } catch {
+    return new Response(JSON.stringify({ error: "multipart/form-data with a `file` field is required" }), {
+      status: 400, headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
+  }
+  const file = form.get("file");
+  if (!(file instanceof File)) {
+    return new Response(JSON.stringify({ error: "`file` field is required" }), {
+      status: 400, headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
+  }
+  if (file.size > STT_MAX_BYTES) {
+    return new Response(JSON.stringify({ error: "Audio file too large (max 25 MB)" }), {
+      status: 413, headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
+  }
+  if (!form.get("model")) form.set("model", "gpt-4o-mini-transcribe");
+
+  const upstream = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+    body: form,
+  });
+  const text = await upstream.text();
+
+  if (upstream.ok && projectId && userId) {
+    const cents = Math.max(1, Math.ceil(file.size / (1024 * 1024)) * STT_CENTS_PER_MB);
+    ctx.waitUntil(logUsageCents(cents, projectId, userId, env));
+  }
+  return new Response(text, {
+    status: upstream.status,
+    headers: {
+      "Content-Type": upstream.headers.get("content-type") ?? "application/json",
+      ...corsHeaders(origin),
+    },
+  });
+}
+
 // ── Main fetch handler ────────────────────────────────────────────────────────
 
 export default {
@@ -752,6 +888,15 @@ export default {
     // Route dispatch
     if ((url.pathname === "/v1/chat" || url.pathname === "/v1/chat/completions") && request.method === "POST") {
       return handleChat(request, env, ctx);
+    }
+
+    // Voice for built apps (Lovable AI-gateway parity): text-to-speech and
+    // speech-to-text without a separate provider or API key in the app.
+    if (url.pathname === "/v1/audio/speech" && request.method === "POST") {
+      return handleTextToSpeech(request, env, ctx);
+    }
+    if (url.pathname === "/v1/audio/transcriptions" && request.method === "POST") {
+      return handleTranscription(request, env, ctx);
     }
 
     if (url.pathname === "/inject-secret" && request.method === "POST") {

@@ -31,15 +31,30 @@ export async function GET(req: NextRequest) {
 
   const { data: projects, error: projErr } = await supabase
     .from("projects")
-    .select("id, user_id, name")
+    .select("id, user_id, name, metadata")
     .gte("updated_at", since)
     .order("updated_at", { ascending: false })
     .limit(MAX_PROJECTS_PER_RUN);
   if (projErr) return NextResponse.json({ error: projErr.message }, { status: 500 });
 
+  // Project monitoring (Lovable parity, Jun 30 2026 "Project monitoring
+  // (Beta)"): monitored projects are scanned on their schedule even when
+  // they haven't been edited within the lookback window.
+  const scanList = [...(projects ?? [])];
+  try {
+    const { data: monitored } = await supabase
+      .from("projects")
+      .select("id, user_id, name, metadata")
+      .eq("metadata->monitoring->>enabled", "true")
+      .limit(MAX_PROJECTS_PER_RUN);
+    for (const m of monitored ?? []) {
+      if (!scanList.some((p) => p.id === m.id)) scanList.push(m);
+    }
+  } catch { /* monitoring roll-call is best-effort */ }
+
   const results: Array<{ project: string; status: string; findings?: number; note?: string }> = [];
 
-  for (const project of (projects ?? [])) {
+  for (const project of scanList) {
     try {
       const { findings } = await runHealthScan({
         supabase,
@@ -47,6 +62,56 @@ export async function GET(req: NextRequest) {
         userId: project.user_id,
       });
       results.push({ project: project.name, status: "ok", findings });
+
+      // ── Monitoring digest: when due, email the owner about important
+      // (high/critical) open findings. Editors already see findings above
+      // chat via the security bar; the email covers time-sensitive issues.
+      const monitoring = (project.metadata as { monitoring?: { enabled?: boolean; cadence?: string; last_run_at?: string } } | null)?.monitoring;
+      if (monitoring?.enabled) {
+        const cadenceMs = monitoring.cadence === "weekly" ? 7 * 86_400_000 : 86_400_000;
+        const lastRun = monitoring.last_run_at ? new Date(monitoring.last_run_at).getTime() : 0;
+        if (Date.now() - lastRun >= cadenceMs - 60_000) {
+          const { data: important } = await supabase
+            .from("health_findings")
+            .select("title, severity, category")
+            .eq("project_id", project.id)
+            .in("status", ["open", "fix_proposed"])
+            .in("severity", ["critical", "error"])
+            .limit(10);
+          if ((important?.length ?? 0) > 0) {
+            try {
+              const { data: owner } = await supabase
+                .from("profiles").select("email, full_name").eq("id", project.user_id).single();
+              if (owner?.email) {
+                const { sendEmail } = await import("@/lib/email/resend");
+                const list = (important ?? [])
+                  .map((f) => `<li><strong>[${f.severity}]</strong> ${f.title} <em>(${f.category})</em></li>`)
+                  .join("");
+                await sendEmail({
+                  to: owner.email,
+                  subject: `⚠️ ${project.name}: ${important.length} important finding${important.length === 1 ? "" : "s"} from project monitoring`,
+                  html: `<p>Hi ${owner.full_name ?? "there"},</p>
+<p>LifemarkAI's scheduled monitoring checked <strong>${project.name}</strong> and found ${important.length} important issue${important.length === 1 ? "" : "s"}:</p>
+<ul>${list}</ul>
+<p>Open the project's Self-Heal panel to review proposed fixes, or ask the AI in chat to fix them.</p>
+<p style="color:#888;font-size:12px">You get this email because project monitoring is enabled (${monitoring.cadence ?? "daily"}). Turn it off in the Self-Heal panel.</p>`,
+                });
+              }
+            } catch (mailErr) {
+              console.warn("[health-scan] monitoring email failed:", mailErr instanceof Error ? mailErr.message : mailErr);
+            }
+          }
+          await supabase
+            .from("projects")
+            .update({
+              metadata: {
+                ...((project.metadata ?? {}) as Record<string, unknown>),
+                monitoring: { ...monitoring, last_run_at: new Date().toISOString() },
+              },
+            })
+            .eq("id", project.id);
+        }
+      }
     } catch (err) {
       results.push({
         project: project.name,

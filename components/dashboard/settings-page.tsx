@@ -19,6 +19,8 @@ import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
 import { formatDate } from "@/lib/utils";
+import { usePlatformLocale } from "@/hooks/use-platform-locale";
+import { PLATFORM_LOCALES } from "@/lib/platform-locale";
 import type { Profile } from "@/types/database";
 import type { User as SupabaseUser } from "@supabase/supabase-js";
 
@@ -432,8 +434,28 @@ const SECTIONS = [
   { id: "danger", label: "Danger Zone", icon: Trash2 },
 ];
 
+/** Search synonyms (Lovable parity, Jul 8 2026: "Search your settings" —
+ *  typing `sso` surfaces identity, `env` surfaces secrets, etc.). */
+const SECTION_KEYWORDS: Record<string, string> = {
+  profile: "name avatar email account picture photo",
+  privacy: "public visibility profile hidden private community",
+  appearance: "theme dark light mode color colours ui look language locale idioma langue",
+  notifications: "email alerts digest updates telegram notify",
+  integrations: "github gitlab connect oauth telegram stripe connectors apps",
+  security: "password 2fa mfa two-factor sso identity sessions login sign-in auth",
+  api: "api keys token secret env credentials developer",
+  danger: "delete account remove close data sign out",
+};
+
 export function SettingsPage({ user, profile }: SettingsPageProps) {
   const [active, setActive] = useState("profile");
+  const [sectionSearch, setSectionSearch] = useState("");
+  const visibleSections = sectionSearch.trim()
+    ? SECTIONS.filter(({ id, label }) => {
+        const q = sectionSearch.trim().toLowerCase();
+        return label.toLowerCase().includes(q) || (SECTION_KEYWORDS[id] ?? "").includes(q);
+      })
+    : SECTIONS;
   const [name, setName] = useState(profile?.full_name ?? "");
   const [saving, setSaving] = useState(false);
   const [isPublic, setIsPublic] = useState<boolean>(profile?.is_public ?? false);
@@ -442,6 +464,7 @@ export function SettingsPage({ user, profile }: SettingsPageProps) {
   const router = useRouter();
   const supabase = createClient();
   const confirm = useConfirm();
+  const { locale, setLocale, t } = usePlatformLocale();
 
   const initials = (profile?.full_name ?? user.email ?? "U")
     .split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
@@ -494,13 +517,24 @@ export function SettingsPage({ user, profile }: SettingsPageProps) {
   return (
     <div className="flex-1 overflow-auto">
       <div className="max-w-4xl mx-auto px-6 py-8">
-        <h1 className="text-2xl font-bold mb-8">Settings</h1>
+        <h1 className="text-2xl font-bold mb-8">{t("settings.title")}</h1>
 
         <div className="flex gap-8">
           {/* Sidebar */}
           <nav className="w-48 shrink-0">
+            {/* Search settings (Lovable parity, Jul 8 2026) */}
+            <input
+              value={sectionSearch}
+              onChange={(e) => setSectionSearch(e.target.value)}
+              placeholder="Search settings"
+              className="w-full mb-2 px-3 py-1.5 rounded-lg bg-muted/40 border border-border/60 text-sm outline-none focus:border-border placeholder:text-muted-foreground/60"
+              aria-label="Search settings"
+            />
+            {visibleSections.length === 0 && (
+              <p className="px-3 py-2 text-xs text-muted-foreground">No matching settings</p>
+            )}
             <ul className="space-y-1">
-              {SECTIONS.map(({ id, label, icon: Icon }) => (
+              {visibleSections.map(({ id, label, icon: Icon }) => (
                 <li key={id}>
                   <button
                     onClick={() => setActive(id)}
@@ -584,9 +618,27 @@ export function SettingsPage({ user, profile }: SettingsPageProps) {
               )}
 
               {active === "appearance" && (
-                <div className="bg-card border border-border rounded-2xl p-6 space-y-3">
-                  <h2 className="font-semibold text-lg">Appearance</h2>
-                  <p className="text-sm text-muted-foreground">Theme follows your system preference. Use the theme toggle in the dashboard header to override.</p>
+                <div className="bg-card border border-border rounded-2xl p-6 space-y-5">
+                  <h2 className="font-semibold text-lg">{t("settings.appearance")}</h2>
+                  <p className="text-sm text-muted-foreground">
+                    Theme follows your system preference. Use the theme toggle in the dashboard header to override.
+                  </p>
+                  <div className="space-y-2 pt-2 border-t border-border/60">
+                    <Label htmlFor="platform-locale">{t("settings.language")}</Label>
+                    <p className="text-xs text-muted-foreground">{t("settings.languageHint")}</p>
+                    <select
+                      id="platform-locale"
+                      value={locale}
+                      onChange={(e) => setLocale(e.target.value as typeof locale)}
+                      className="w-full max-w-xs h-9 rounded-md border border-border bg-background px-3 text-sm"
+                    >
+                      {PLATFORM_LOCALES.map((l) => (
+                        <option key={l.code} value={l.code}>
+                          {l.native} ({l.label})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               )}
 

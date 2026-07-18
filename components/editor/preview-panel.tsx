@@ -5,7 +5,8 @@ import {
   RefreshCw, Smartphone, Tablet, Monitor,
   ExternalLink, MousePointer, Terminal, Loader2,
   Check, X, Wand2, AlignLeft, AlignCenter, AlignRight,
-  AlertTriangle, Wrench, Frame, MessageSquarePlus, Pencil, Pin, Globe,
+  AlertTriangle, Wrench, Frame, MessageSquarePlus, Pencil, Pin, Globe, History,
+  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Maximize2, Minimize2,
 } from "lucide-react";
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
@@ -21,16 +22,22 @@ import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
 import dynamic from "next/dynamic";
-import { buildFallbackHtml, PREVIEW_ENGINE_REV } from "@/lib/preview/build-fallback-html";
+import { buildFallbackHtml, EMPTY_PREVIEW_HTML, PREVIEW_ENGINE_REV } from "@/lib/preview/build-fallback-html";
 import { buildEsbuildHtml } from "@/lib/preview/esbuild-engine";
 import { filesContentSignature } from "@/lib/preview/files-signature";
 import { resolvePreviewEngine, shouldUseWebContainer, WC_UNAVAILABLE_KEY, type PreviewEngine } from "@/lib/preview/resolve-preview-engine";
+import { sandboxUrlWithPath } from "@/lib/preview/sandbox-url";
+import { getPreviewBarLabel } from "@/lib/preview/preview-url";
 import { useSandboxPreview } from "@/lib/preview/use-sandbox-preview";
 import { usePreviewErrorGuard } from "@/hooks/use-preview-error-guard";
 import { isNoisePreviewError, type PreviewErrorReport } from "@/lib/preview/preview-error-bridge";
 import { appendPreviewDiagnosis, buildPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
+import { applyVisualEdit, buildVisualEditPrompt } from "@/lib/editor/apply-visual-edit";
 import { PreviewHealingOverlay } from "./preview-healing-overlay";
 import Link from "next/link";
+import { LovablePreviewInteractionToolbar } from "./lovable/preview-interaction-toolbar";
+import { LovablePreviewStatusPill } from "./lovable/preview-status-pill";
+import { LovableVersionPreviewBanner } from "./lovable/version-preview-banner";
 
 const WebContainerPreview = dynamic(() => import("./webcontainer-preview"), {
   ssr: false,
@@ -148,6 +155,12 @@ interface PreviewPanelProps {
   credits?: number;
   /** Send a plain prompt to the chat panel (visual-edit AI fallback) */
   onSendPromptToChat?: (prompt: string) => void;
+  /** When set, an older snapshot's files are being previewed (Lovable-parity
+   *  per-message "Preview this version") — shows an amber banner and disables
+   *  visual edits, since edits against stale files would be wrong. */
+  versionPreviewLabel?: string | null;
+  /** When true, hide the internal URL/device toolbar — top bar owns chrome. */
+  hideTopChrome?: boolean;
 }
 
 function OutOfCreditsPreviewPaused() {
@@ -248,7 +261,8 @@ function isEsbuildPreviewEnabled(): boolean {
 }
 
 function shouldAutoStartVitePreview(): boolean {
-  return process.env.NEXT_PUBLIC_PREVIEW_AUTO_VITE === "1";
+  // Lovable parity: real Vite dev server by default. Set NEXT_PUBLIC_PREVIEW_AUTO_VITE=0 to disable.
+  return process.env.NEXT_PUBLIC_PREVIEW_AUTO_VITE !== "0";
 }
 
 function detectTemplate(files: ProjectFile[]): "react-ts" | "react" | "static" {
@@ -389,10 +403,27 @@ export function PreviewPanel({
   onSendAnnotatedToChat,
   credits,
   onSendPromptToChat,
+  versionPreviewLabel = null,
+  hideTopChrome = false,
 }: PreviewPanelProps) {
   const outOfCredits = credits !== undefined && credits <= 0;
   const [device, setDevice] = useState<DeviceSize>("desktop");
   const [showFrame, setShowFrame] = useState(true);
+  // Compact toolbar toggle (Lovable parity, Jun 23 2026) — persisted
+  const [toolbarCollapsed, setToolbarCollapsed] = useState(() => {
+    try { return localStorage.getItem("lifemark-preview-toolbar-collapsed") === "1"; } catch { return false; }
+  });
+  // In-app fullscreen preview (Esc exits)
+  const [previewFullscreen, setPreviewFullscreen] = useState(false);
+  useEffect(() => {
+    if (!previewFullscreen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPreviewFullscreen(false); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [previewFullscreen]);
+  // Route navigation history for the address bar's back/forward buttons
+  const [routeNav, setRouteNav] = useState<{ stack: string[]; idx: number }>({ stack: ["/"], idx: 0 });
+  const navSuppressRef = useRef(false);
   const [refreshKey, setRefreshKey] = useState(0);
   // Tracks the in-iframe pathname so the URL bar reflects React Router
   // navigations inside the preview. Updated by `lifemark-preview-location`
@@ -405,7 +436,11 @@ export function PreviewPanel({
   const [urlInput, setUrlInput] = useState<string>("/");
   const [urlEditing, setUrlEditing] = useState(false);
   const [visualEdit, setVisualEdit] = useState(isVisualEditActive ?? false);
+  // Visual edits are suppressed while previewing an older version — edits
+  // against stale files would target code that no longer exists.
+  const visualEditEnabled = visualEdit && !versionPreviewLabel;
   const [showConsole, setShowConsole] = useState(false);
+  const [previewBottomTab, setPreviewBottomTab] = useState<"console" | "network">("console");
   const [annotateScreenshot, setAnnotateScreenshot] = useState<string | null>(null);
   const [commentPinMode, setCommentPinMode] = useState(false);
   const [pendingComment, setPendingComment] = useState<VebElement | null>(null);
@@ -421,8 +456,19 @@ export function PreviewPanel({
   const [backgroundViteActive, setBackgroundViteActive] = useState(false);
   const [backgroundViteKey, setBackgroundViteKey] = useState(0);
   const [consoleLines, setConsoleLines] = useState<{ type: string; text: string }[]>([]);
+  const [networkLines, setNetworkLines] = useState<
+    { method: string; url: string; status?: number; ok?: boolean; durationMs?: number; error?: string }[]
+  >([]);
+  const clearPreviewLogs = useCallback(() => {
+    setConsoleLines([]);
+    setNetworkLines([]);
+  }, []);
   const [previewMachineState, setPreviewMachineState] = useState<PreviewMachineState>("idle");
   const previewBuildShaRef = useRef<string>("");
+  const previewEngineRef = useRef(previewEngine);
+  previewEngineRef.current = previewEngine;
+  // Stable forever — never put this in effect deps that also setState, or a
+  // new callback identity + always-new routeNav object causes Maximum update depth.
   const transitionPreviewMachine = useCallback((next: PreviewMachineState, reason: string) => {
     setPreviewMachineState((prev) => {
       if (prev === next) return prev;
@@ -430,21 +476,44 @@ export function PreviewPanel({
         from: prev,
         to: next,
         reason,
-        engine: previewEngine,
+        engine: previewEngineRef.current,
         buildSha: previewBuildShaRef.current,
         at: Date.now(),
       };
-      window.dispatchEvent(new CustomEvent("lifemark-preview-machine-transition", { detail: payload }));
-      setConsoleLines((lines) => [
-        ...lines.slice(-99),
-        { type: "log", text: `[preview] ${prev} -> ${next}: ${reason}` },
-      ]);
+      // Defer side effects — calling setState inside a setState updater can cascade
+      // into Maximum update depth with parent error-report handlers.
+      queueMicrotask(() => {
+        window.dispatchEvent(new CustomEvent("lifemark-preview-machine-transition", { detail: payload }));
+        setConsoleLines((lines) => [
+          ...lines.slice(-99),
+          { type: "log", text: `[preview] ${payload.from} -> ${payload.to}: ${payload.reason}` },
+        ]);
+      });
       return next;
     });
-  }, [previewEngine]);
-  // Real sandbox preview (E2B). Resolves to a live URL when configured; otherwise
-  // the hook stays empty and we fall back to WebContainers / srcdoc.
-  const { previewUrl: sandboxUrl, requestPreview: requestSandboxPreview, stopPreview: stopSandboxPreview } = useSandboxPreview(projectId ?? "");
+  }, []);
+  // Real cloud sandbox preview (Modal — Lovable parity; E2B fallback).
+  const {
+    previewUrl: sandboxUrl,
+    enabled: sandboxEnabled,
+    provider: sandboxProvider,
+    stopPreview: stopSandboxPreview,
+    syncFiles: syncSandboxFiles,
+    sandboxId,
+    loading: sandboxLoading,
+  } = useSandboxPreview(projectId ?? "");
+  const sandboxIdLiveRef = useRef(sandboxId);
+  sandboxIdLiveRef.current = sandboxId;
+  const previewBarLabel = useMemo(
+    () =>
+      getPreviewBarLabel({
+        projectId: projectId ?? undefined,
+        previewPath,
+        deployedUrl: deployedUrl ?? null,
+        sandboxUrl: previewEngine === "sandbox" ? sandboxUrl : null,
+      }),
+    [projectId, previewPath, deployedUrl, previewEngine, sandboxUrl],
+  );
   const [vebSelected, setVebSelected] = useState<VebElement | null>(null);
   const [activeError, setActiveError] = useState<string | null>(null);
   const [errorDismissed, setErrorDismissed] = useState(false);
@@ -452,15 +521,26 @@ export function PreviewPanel({
   const [previewCompileOk, setPreviewCompileOk] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const sandpackContainerRef = useRef<HTMLDivElement>(null);
+  const sandboxIframeRef = useRef<HTMLIFrameElement>(null);
   const unifiedIframeRef = useRef<HTMLIFrameElement | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(false);
 
+  const onFixWithAIRef = useRef(onFixWithAI);
+  onFixWithAIRef.current = onFixWithAI;
+  const onFileUpdateRef = useRef(onFileUpdate);
+  onFileUpdateRef.current = onFileUpdate;
+  const onSendPromptToChatRef = useRef(onSendPromptToChat);
+  onSendPromptToChatRef.current = onSendPromptToChat;
+  const filesRef = useRef(files);
+  filesRef.current = files;
+  const onHealRequestStable = useCallback((prompt: string, report: PreviewErrorReport) => {
+    onFixWithAIRef.current?.(appendPreviewDiagnosis(prompt, filesRef.current, report.errors));
+  }, []);
+
   const errorGuard = usePreviewErrorGuard({
     iframeRef: unifiedIframeRef,
-    onHealRequest: (prompt, report) => {
-      onFixWithAI?.(appendPreviewDiagnosis(prompt, files, report.errors));
-    },
+    onHealRequest: onHealRequestStable,
   });
 
   const previewDiagnosis = useMemo(
@@ -468,23 +548,25 @@ export function PreviewPanel({
     [files, errorGuard.report],
   );
 
+  const onErrorReportRef = useRef(onErrorReport);
+  onErrorReportRef.current = onErrorReport;
   useEffect(() => {
-    onErrorReport?.(errorGuard.report);
-  }, [errorGuard.report, onErrorReport]);
+    onErrorReportRef.current?.(errorGuard.report);
+  }, [errorGuard.report]);
 
   const handleFixWithAI = useCallback(
     (error: string) => {
       if (errorGuard.report?.errors.length) {
         errorGuard.startHealing();
       } else if (!isNoisePreviewError(error)) {
-        onFixWithAI?.(appendPreviewDiagnosis(
+        onFixWithAIRef.current?.(appendPreviewDiagnosis(
           `Fix this preview error:\n\n${error}`,
-          files,
+          filesRef.current,
           [{ kind: "runtime", message: error, timestamp: Date.now() }],
         ));
       }
     },
-    [errorGuard, files, onFixWithAI],
+    [errorGuard.report, errorGuard.startHealing],
   );
 
   useEffect(() => {
@@ -500,32 +582,49 @@ export function PreviewPanel({
       window.removeEventListener("lifemark-preview-heal-start", onHealStart);
       window.removeEventListener("lifemark-preview-heal-failed", onHealFailed);
     };
-  }, [errorGuard]);
+  }, [errorGuard.enterHealingPhase, errorGuard.failHealing]);
 
   useEffect(() => {
     if (isVisualEditActive !== undefined) setVisualEdit(isVisualEditActive);
   }, [isVisualEditActive]);
 
   useEffect(() => {
-    if (!visualEdit) setVebSelected(null);
-  }, [visualEdit]);
+    if (!visualEditEnabled) setVebSelected(null);
+  }, [visualEditEnabled]);
 
-  // Keep the WebContainer iframe's visual-edit picker in sync with the toggle.
-  // The bridge script (lib/preview/veb-bridge.ts) is injected dormant at mount
-  // and activates on this message.
-  useEffect(() => {
-    if (previewEngine !== "webcontainer") return;
-    const iframe = sandpackContainerRef.current?.querySelector("iframe");
-    iframe?.contentWindow?.postMessage({ type: "lifemark-veb-mode", enabled: visualEdit }, "*");
-    if (!visualEdit) {
-      iframe?.contentWindow?.postMessage({ type: "lifemark-veb-clear" }, "*");
+  const getPreviewContentWindow = useCallback((): Window | null => {
+    if (previewEngine === "webcontainer") {
+      return sandpackContainerRef.current?.querySelector("iframe")?.contentWindow ?? null;
     }
-  }, [visualEdit, previewEngine]);
+    if (previewEngine === "sandbox") {
+      return sandboxIframeRef.current?.contentWindow ?? null;
+    }
+    return iframeRef.current?.contentWindow ?? null;
+  }, [previewEngine]);
+
+  // Keep cross-origin preview iframes' visual-edit picker in sync with the toggle.
+  useEffect(() => {
+    if (previewEngine !== "webcontainer" && previewEngine !== "sandbox") return;
+    const win = getPreviewContentWindow();
+    win?.postMessage({ type: "lifemark-veb-mode", enabled: visualEditEnabled }, "*");
+    if (!visualEditEnabled) {
+      win?.postMessage({ type: "lifemark-veb-clear" }, "*");
+    }
+  }, [visualEditEnabled, previewEngine, getPreviewContentWindow]);
+
+  // Comment-pin mode on sandbox / WebContainer (VEB bridge handles clicks).
+  useEffect(() => {
+    if (previewEngine !== "webcontainer" && previewEngine !== "sandbox") return;
+    getPreviewContentWindow()?.postMessage(
+      { type: "lifemark-comment-pin-mode", enabled: commentPinMode },
+      "*",
+    );
+  }, [commentPinMode, previewEngine, getPreviewContentWindow]);
 
   // Pick WebContainers (Lovable-style Vite runtime) or srcdoc fallback.
   useEffect(() => {
     if (files.length === 0) {
-      setPreviewEngine("fallback");
+      setPreviewEngine((prev) => (prev === "fallback" ? prev : "fallback"));
       return;
     }
 
@@ -534,7 +633,7 @@ export function PreviewPanel({
     const wcBlocked = isWcBlocked();
 
     if (wcBlocked) {
-      setPreviewEngine("fallback");
+      setPreviewEngine((prev) => (prev === "fallback" ? prev : "fallback"));
       return;
     }
 
@@ -544,34 +643,76 @@ export function PreviewPanel({
       crossOriginIsolated: isolated,
       sandboxUrl,
     });
-    setPreviewEngine(engine);
+    setPreviewEngine((prev) => (prev === engine ? prev : engine));
   }, [files, useWebContainers, vitePreviewRequested, projectId, sandboxUrl]);
+
+  const getActivePreviewIframe = useCallback((): HTMLIFrameElement | null => {
+    if (previewEngine === "webcontainer") {
+      return sandpackContainerRef.current?.querySelector("iframe") ?? null;
+    }
+    if (previewEngine === "sandbox") {
+      return sandboxIframeRef.current;
+    }
+    return iframeRef.current;
+  }, [previewEngine]);
 
   // The engines report different location shapes (srcdoc: virtual hash path;
   // WebContainer: real URL path). Reset the shared address-bar state on engine
   // switch so a stale path from the previous engine doesn't linger.
+  // IMPORTANT: only depend on previewEngine (not transitionPreviewMachine). An
+  // always-new routeNav object + unstable callback deps = Maximum update depth.
   useEffect(() => {
-    setPreviewPath("/");
-    setUrlInput("/");
-    setUrlEditing(false);
+    setPreviewPath((prev) => (prev === "/" ? prev : "/"));
+    setUrlInput((prev) => (prev === "/" ? prev : "/"));
+    setUrlEditing((prev) => (prev ? false : prev));
+    setRouteNav((prev) =>
+      prev.stack.length === 1 && prev.stack[0] === "/" && prev.idx === 0
+        ? prev
+        : { stack: ["/"], idx: 0 },
+    );
     transitionPreviewMachine("loading", `engine switched to ${previewEngine}`);
-  }, [previewEngine, transitionPreviewMachine]);
-
-  // Attempt a real sandbox preview once files are present. Gated behind an env
-  // flag (default OFF) so there's no extra request unless E2B preview is enabled.
-  // No-ops cheaply when E2B isn't configured; when it returns a live URL, the
-  // resolver effect above switches the engine to "sandbox".
-  useEffect(() => {
-    if (process.env.NEXT_PUBLIC_ENABLE_SANDBOX_PREVIEW !== "1") return;
-    if (!projectId || files.length === 0 || sandboxUrl) return;
-    void requestSandboxPreview();
+    // transitionPreviewMachine is stable (empty deps) — omit from deps on purpose.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, files.length]);
+  }, [previewEngine]);
 
-  // Tear down the running sandbox when the panel unmounts (E2B bills per minute).
+  // Lovable parity: sandbox boot handled by useSandboxPreview (reconnect → POST).
+  // Do not duplicate cold-start here.
+
+  // Auto-warm Vite preview on open — only when cloud sandbox is NOT configured.
+  // Lovable never runs browser npm install when Modal is available.
   useEffect(() => {
-    return () => stopSandboxPreview();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (sandboxEnabled) return;
+    if (!useWebContainers || files.length === 0 || isWcBlocked()) return;
+    if (!shouldUseWebContainer(files)) return;
+    setVitePreviewRequested(true);
+    setBackgroundViteActive(true);
+  }, [sandboxEnabled, useWebContainers, projectId, files.length]);
+
+  // Top-bar URL bar → in-preview navigation (hideTopChrome mode).
+  useEffect(() => {
+    function onExternalNavigate(e: Event) {
+      const pathname = (e as CustomEvent<{ pathname?: string }>).detail?.pathname;
+      if (!pathname || typeof pathname !== "string") return;
+      const target = pathname.startsWith("/") ? pathname : `/${pathname}`;
+      if (previewEngine !== "sandbox") {
+        getPreviewContentWindow()?.postMessage({ type: "lifemark-preview-navigate", pathname: target }, "*");
+      }
+      setPreviewPath(target);
+      setUrlInput(target);
+      setUrlEditing(false);
+      setRouteNav((prev) =>
+        prev.stack[prev.idx] === target
+          ? prev
+          : { stack: [...prev.stack.slice(0, prev.idx + 1), target], idx: prev.idx + 1 },
+      );
+    }
+    window.addEventListener("lifemark-preview-navigate", onExternalNavigate);
+    return () => window.removeEventListener("lifemark-preview-navigate", onExternalNavigate);
+  }, [previewEngine, getPreviewContentWindow]);
+  useEffect(() => {
+    // Lovable parity: keep Modal sandboxes warm across editor navigation — do not
+    // kill on panel unmount (they reconnect by name on next open).
+    return undefined;
   }, []);
 
   useEffect(() => {
@@ -599,14 +740,25 @@ export function PreviewPanel({
         rect: d.rect,
       };
     }
+    function asVebInlineElement(d: Record<string, unknown>): VebElement | null {
+      if (typeof d.tagName !== "string" || typeof d.xpath !== "string") return null;
+      return {
+        tagName: d.tagName,
+        textContent: typeof d.textContent === "string" ? d.textContent : "",
+        classList: Array.isArray(d.classList)
+          ? d.classList.filter((c): c is string => typeof c === "string")
+          : [],
+        xpath: d.xpath,
+        rect: { top: 0, left: 0, width: 0, height: 0 },
+      };
+    }
     function handler(e: MessageEvent) {
       const d = e.data as Record<string, unknown> | null;
       if (!d || typeof d !== "object") return;
-      if (d.source === "lifemark-veb" && visualEdit) {
+      if (d.source === "lifemark-veb" && visualEditEnabled) {
         const data = asVebElement(d);
         if (!data) return;
-        // Get the sandpack iframe's position to offset the rect
-        const iframe = sandpackContainerRef.current?.querySelector("iframe");
+        const iframe = getActivePreviewIframe();
         const iframeRect = iframe?.getBoundingClientRect();
         setVebSelected({
           ...data,
@@ -618,11 +770,33 @@ export function PreviewPanel({
           },
         });
       }
-      // WC bridge announces readiness (initial load + HMR reloads) — push the
-      // current visual-edit mode so the picker stays in sync.
+      if (d.source === "lifemark-veb-inline" && visualEditEnabled) {
+        const data = asVebInlineElement(d);
+        const text = typeof d.text === "string" ? d.text : null;
+        if (!data || !text) return;
+        const result = applyVisualEdit(filesRef.current, data, { text });
+        if (result) {
+          const file = filesRef.current.find((f) => f.path === result.path);
+          if (file && onFileUpdateRef.current) {
+            onFileUpdateRef.current({ ...file, content: result.content });
+          }
+        } else {
+          onSendPromptToChatRef.current?.(buildVisualEditPrompt(data, { text }));
+        }
+        getPreviewContentWindow()?.postMessage(
+          { type: "lifemark-veb-apply", xpath: data.xpath, text },
+          "*",
+        );
+      }
       if (d.type === "lifemark-veb-ready") {
-        const iframe = sandpackContainerRef.current?.querySelector("iframe");
-        iframe?.contentWindow?.postMessage({ type: "lifemark-veb-mode", enabled: visualEdit }, "*");
+        getPreviewContentWindow()?.postMessage(
+          { type: "lifemark-veb-mode", enabled: visualEditEnabled },
+          "*",
+        );
+        getPreviewContentWindow()?.postMessage(
+          { type: "lifemark-comment-pin-mode", enabled: commentPinMode },
+          "*",
+        );
       }
       if (d.source === "lifemark-comment-pin" && commentPinMode) {
         const data = asVebElement(d);
@@ -636,7 +810,7 @@ export function PreviewPanel({
         const text = typeof d.text === "string" ? d.text : String(d.text ?? "");
         setConsoleLines((prev) => [...prev.slice(-99), { type, text }]);
         if (type === "success") {
-          errorGuard.clearErrors();
+          // completeHealing already clears errors — don't call both.
           errorGuard.completeHealing();
           window.dispatchEvent(new CustomEvent("lifemark-preview-heal-done"));
           setActiveError(null);
@@ -658,6 +832,18 @@ export function PreviewPanel({
           transitionPreviewMachine("error", "preview runtime error");
         }
       }
+      if (d.source === "lifemark-preview-network") {
+        const method = typeof d.method === "string" ? d.method : "GET";
+        const url = typeof d.url === "string" ? d.url : String(d.url ?? "");
+        const status = typeof d.status === "number" ? d.status : undefined;
+        const ok = typeof d.ok === "boolean" ? d.ok : undefined;
+        const durationMs = typeof d.durationMs === "number" ? d.durationMs : undefined;
+        const error = typeof d.error === "string" ? d.error : undefined;
+        setNetworkLines((prev) => [
+          ...prev.slice(-99),
+          { method, url, status, ok, durationMs, error },
+        ]);
+      }
       if (d.type === "lifemark-screenshot") {
         const messageId = typeof d.messageId === "string" ? d.messageId : "";
         const dataUrl = typeof d.dataUrl === "string" ? d.dataUrl : null;
@@ -674,6 +860,17 @@ export function PreviewPanel({
           setPreviewPath(pathname);
           // Don't clobber whatever the user is typing into the address bar.
           if (!urlEditing) setUrlInput(pathname);
+          // Record in the back/forward history — unless this location change
+          // was caused by a back/forward click itself.
+          if (navSuppressRef.current) {
+            navSuppressRef.current = false;
+          } else {
+            setRouteNav((prev) =>
+              prev.stack[prev.idx] === pathname
+                ? prev
+                : { stack: [...prev.stack.slice(0, prev.idx + 1), pathname], idx: prev.idx + 1 },
+            );
+          }
         }
       }
     }
@@ -681,7 +878,8 @@ export function PreviewPanel({
     return () => window.removeEventListener("message", handler);
     // urlEditing MUST be a dep: without it the listener kept a stale
     // urlEditing=false and location reports overwrote the user's typing.
-  }, [onError, visualEdit, commentPinMode, outOfCredits, errorGuard, urlEditing, transitionPreviewMachine]);
+    // Depend on stable errorGuard methods — never the whole API object.
+  }, [onError, visualEditEnabled, commentPinMode, outOfCredits, errorGuard.completeHealing, urlEditing, transitionPreviewMachine, getActivePreviewIframe, getPreviewContentWindow]);
 
   useEffect(() => {
     if (outOfCredits) {
@@ -698,26 +896,110 @@ export function PreviewPanel({
   useEffect(() => {
     function handleCaptureRequest(e: Event) {
       const { messageId } = (e as CustomEvent<{ messageId: string }>).detail;
-      iframeRef.current?.contentWindow?.postMessage({ type: "lifemark-capture", messageId }, "*");
+      getPreviewContentWindow()?.postMessage({ type: "lifemark-capture", messageId }, "*");
     }
     window.addEventListener("lifemark-request-screenshot", handleCaptureRequest);
     return () => window.removeEventListener("lifemark-request-screenshot", handleCaptureRequest);
-  }, []);
+  }, [getPreviewContentWindow]);
+
+  // Declared before refreshPreview so the callback can write the signature safely.
+  // IMPORTANT: only ONE previewFiles useState in this file — a duplicate declaration
+  // breaks the PreviewPanel dynamic import and blanks the whole editor.
+  const [previewFiles, setPreviewFiles] = useState<ProjectFile[]>(() => previewRelevantFiles(files));
+  const previewFilesSigRef = useRef<string>(filesContentSignature(previewRelevantFiles(files)));
+  const filesDebounceTimerRef = useRef<number | null>(null);
+  /** Always the latest `files` prop — bare toolbar refreshes must not use a stale closure. */
+  const filesPropRef = useRef(files);
+  filesPropRef.current = files;
+
+  /** Coalesce duplicate remounts (chat + layout both dispatch refresh). */
+  const lastRefreshAtRef = useRef(0);
+  const lastRefreshSigRef = useRef("");
 
   const refreshPreview = useCallback((nextFiles?: ProjectFile[]) => {
-    if (Array.isArray(nextFiles)) {
-      const relevantFiles = previewRelevantFiles(nextFiles);
-      const sig = filesContentSignature(relevantFiles);
-      previewFilesSigRef.current = sig;
-      setPreviewFiles(relevantFiles);
+    if (filesDebounceTimerRef.current != null) {
+      window.clearTimeout(filesDebounceTimerRef.current);
+      filesDebounceTimerRef.current = null;
     }
+
+    const hasExplicit = Array.isArray(nextFiles) && nextFiles.length > 0;
+    const now = Date.now();
+
+    if (!hasExplicit) {
+      // Bare refresh (toolbar): remount current preview, or adopt latest prop if ahead.
+      // Never use a stale React closure — that wiped live AI edits from the iframe.
+      const propRelevant = previewRelevantFiles(filesPropRef.current);
+      const propSig = filesContentSignature(propRelevant);
+      // Drop duplicate bare remounts within 120ms (double-dispatch from chat + layout).
+      if (now - lastRefreshAtRef.current < 120 && lastRefreshSigRef.current === `bare:${propSig}`) {
+        return;
+      }
+      lastRefreshAtRef.current = now;
+      lastRefreshSigRef.current = `bare:${propSig}`;
+      if (propRelevant.length > 0 && propSig !== previewFilesSigRef.current) {
+        previewFilesSigRef.current = propSig;
+        setPreviewFiles(propRelevant);
+      } else if (propRelevant.length > 0 && previewFilesSigRef.current === "") {
+        // First content after empty — always adopt
+        previewFilesSigRef.current = propSig;
+        setPreviewFiles(propRelevant);
+      }
+      setRefreshKey((k) => k + 1);
+      clearPreviewLogs();
+      setVebSelected(null);
+      errorGuard.clearErrors();
+      previewBuildShaRef.current = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      transitionPreviewMachine("loading", "refresh remount");
+      return;
+    }
+
+    const relevantFiles = previewRelevantFiles(nextFiles!);
+    // Never blank a good preview with an empty payload (failed refresh / race).
+    if (relevantFiles.length === 0) {
+      const propRelevant = previewRelevantFiles(filesPropRef.current);
+      if (propRelevant.length > 0) {
+        const propSig = filesContentSignature(propRelevant);
+        previewFilesSigRef.current = propSig;
+        setPreviewFiles(propRelevant);
+      }
+      setRefreshKey((k) => k + 1);
+      transitionPreviewMachine("loading", "refresh keep previous");
+      return;
+    }
+    const sig = filesContentSignature(relevantFiles);
+    // Prefer files-bearing refresh over a bare remount that just fired.
+    if (now - lastRefreshAtRef.current < 120 && lastRefreshSigRef.current === sig) {
+      return;
+    }
+    lastRefreshAtRef.current = now;
+    lastRefreshSigRef.current = sig;
+    previewFilesSigRef.current = sig;
+    setPreviewFiles(relevantFiles);
+
+    // Lovable parity: warm runtimes sync in place — never cold-boot npm on every AI edit.
+    const engine = previewEngineRef.current;
+    if (engine === "sandbox" && sandboxIdLiveRef.current) {
+      clearPreviewLogs();
+      setVebSelected(null);
+      errorGuard.clearErrors();
+      transitionPreviewMachine("loading", "sandbox file sync");
+      return;
+    }
+    if (engine === "webcontainer") {
+      clearPreviewLogs();
+      setVebSelected(null);
+      errorGuard.clearErrors();
+      transitionPreviewMachine("loading", "webcontainer file sync");
+      return;
+    }
+
     setRefreshKey((k) => k + 1);
-    setConsoleLines([]);
+    clearPreviewLogs();
     setVebSelected(null);
     errorGuard.clearErrors();
     previewBuildShaRef.current = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     transitionPreviewMachine("loading", "refresh requested");
-  }, [errorGuard, transitionPreviewMachine]);
+  }, [errorGuard.clearErrors, transitionPreviewMachine]);
 
   useEffect(() => {
     function handleRefresh(event: Event) {
@@ -727,6 +1009,66 @@ export function PreviewPanel({
     window.addEventListener("lifemark-refresh-preview", handleRefresh);
     return () => window.removeEventListener("lifemark-refresh-preview", handleRefresh);
   }, [refreshPreview]);
+
+  // Top-bar UrlBarPill device toggle → this panel (single source of truth for iframe).
+  useEffect(() => {
+    function handleDevice(event: Event) {
+      const next = (event as CustomEvent<string>).detail;
+      if (next === "desktop" || next === "mobile" || next === "tablet") {
+        setDevice(next);
+      }
+    }
+    window.addEventListener("lifemark-preview-device", handleDevice);
+    return () => window.removeEventListener("lifemark-preview-device", handleDevice);
+  }, []);
+
+  // Broadcast route so top-bar UrlBarPill stays in sync with in-iframe navigation.
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("lifemark-preview-path", {
+        detail: {
+          path: previewPath,
+          device,
+          canGoBack: routeNav.idx > 0,
+          canGoForward: routeNav.idx < routeNav.stack.length - 1,
+        },
+      }),
+    );
+  }, [previewPath, device, routeNav.idx, routeNav.stack.length]);
+
+  // Top-bar back/forward → in-preview history navigation.
+  useEffect(() => {
+    function onHistoryNav(e: Event) {
+      const dir = (e as CustomEvent<{ dir?: string }>).detail?.dir;
+      if (dir !== "back" && dir !== "forward") return;
+      setRouteNav((prev) => {
+        const idx = dir === "back" ? prev.idx - 1 : prev.idx + 1;
+        const target = prev.stack[idx];
+        if (target === undefined) return prev;
+        navSuppressRef.current = true;
+        setTimeout(() => { navSuppressRef.current = false; }, 1000);
+        if (previewEngine !== "sandbox") {
+          getPreviewContentWindow()?.postMessage({ type: "lifemark-preview-navigate", pathname: target }, "*");
+        }
+        setPreviewPath(target);
+        setUrlInput(target);
+        setUrlEditing(false);
+        return { ...prev, idx };
+      });
+    }
+    window.addEventListener("lifemark-preview-history", onHistoryNav);
+    return () => window.removeEventListener("lifemark-preview-history", onHistoryNav);
+  }, [previewEngine, getPreviewContentWindow]);
+
+  // Sandbox live sync — push debounced file changes into the running E2B VM.
+  useEffect(() => {
+    if (previewEngine !== "sandbox" || !sandboxId || previewFiles.length === 0) return;
+    const payload = previewFiles.map((f) => ({ path: f.path, content: f.content ?? "" }));
+    const timer = window.setTimeout(() => {
+      void syncSandboxFiles(payload);
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [previewEngine, sandboxId, previewFiles, syncSandboxFiles]);
 
   const captureForAnnotation = useCallback(() => {
     const msgId = `ann-${Date.now()}`;
@@ -746,39 +1088,71 @@ export function PreviewPanel({
   // Every keystroke / AI stream chunk produces a new `files` array, and each one
   // used to rebuild the srcdoc HTML AND remount the iframe (key includes the
   // files signature), forcing a full in-iframe Babel recompile of every file —
-  // the single biggest preview perf cost. Debounce content changes ~500ms;
-  // the first non-empty set applies immediately so project open isn't delayed.
-  // Raw `files` still flow to the visual-edit overlays and engine resolution,
-  // which need the latest content and are cheap.
-  const [previewFiles, setPreviewFiles] = useState<ProjectFile[]>(() => previewRelevantFiles(files));
-  const previewFilesSigRef = useRef<string>(filesContentSignature(previewRelevantFiles(files)));
+  // the single biggest preview perf cost. Debounce content changes lightly;
+  // explicit lifemark-refresh-preview cancels the timer and applies immediately.
   useEffect(() => {
     const relevantFiles = previewRelevantFiles(files);
     const sig = filesContentSignature(relevantFiles);
     if (sig === previewFilesSigRef.current) return; // identity churn, same content
+    // Never clear a populated preview with an empty file list.
+    if (relevantFiles.length === 0) return;
     previewBuildShaRef.current = sig.slice(0, 12) || `${Date.now()}`;
     transitionPreviewMachine("building", "project files changed");
     if (previewFilesSigRef.current === "") {
       // Leading edge: empty → first real content renders without delay.
       previewFilesSigRef.current = sig;
       setPreviewFiles(relevantFiles);
+      const engine = previewEngineRef.current;
+      if (engine === "fallback" || engine === "detecting") {
+        setRefreshKey((k) => k + 1);
+      }
       return;
     }
-    const timer = window.setTimeout(() => {
+    if (filesDebounceTimerRef.current != null) {
+      window.clearTimeout(filesDebounceTimerRef.current);
+    }
+    // Lovable-feel: short debounce so AI edits show nearly live (was 900ms while generating).
+    filesDebounceTimerRef.current = window.setTimeout(() => {
+      filesDebounceTimerRef.current = null;
       previewFilesSigRef.current = sig;
       setPreviewFiles(relevantFiles);
-    }, isGenerating ? 900 : 350);
-    return () => window.clearTimeout(timer);
+      const engine = previewEngineRef.current;
+      // Warm sandbox/WC: sync in place — never remount iframe on every AI edit.
+      if (engine === "fallback" || engine === "detecting") {
+        setRefreshKey((k) => k + 1);
+      }
+    }, isGenerating ? 180 : 120);
+    return () => {
+      if (filesDebounceTimerRef.current != null) {
+        window.clearTimeout(filesDebounceTimerRef.current);
+        filesDebounceTimerRef.current = null;
+      }
+    };
   }, [files, isGenerating, transitionPreviewMachine]);
+
+  // Recovery: if previewFiles went empty while the editor still has files, adopt them.
+  useEffect(() => {
+    if (previewFiles.length > 0) return;
+    const relevant = previewRelevantFiles(files);
+    if (relevant.length === 0) return;
+    const sig = filesContentSignature(relevant);
+    previewFilesSigRef.current = sig;
+    setPreviewFiles(relevant);
+    setRefreshKey((k) => k + 1);
+    transitionPreviewMachine("loading", "recover empty previewFiles");
+  }, [files, previewFiles.length, transitionPreviewMachine]);
 
   const template = useMemo(() => detectTemplate(files), [files]);
   const sandpackFiles = useMemo(() => {
     const base = toSandpackFiles(files);
-    return visualEdit ? addVebBridge(base) : base;
-  }, [files, visualEdit]);
+    return visualEditEnabled ? addVebBridge(base) : base;
+  }, [files, visualEditEnabled]);
   const fallbackHtml = useMemo(
-    () => (previewEngine === "fallback" ? buildFallbackHtml(previewFiles) : ""),
-    [previewFiles, previewEngine]
+    // Always build srcdoc HTML. Gating on `previewEngine === "fallback"` left
+    // srcDoc="" (white blank) when the engine was briefly sandbox/webcontainer
+    // without a live URL — the catch-all iframe branch still mounts.
+    () => buildFallbackHtml(previewFiles.length > 0 ? previewFiles : previewRelevantFiles(files)),
+    [previewFiles, files],
   );
   // ── esbuild preview engine (flagged) ────────────────────────────────────────
   // When NEXT_PUBLIC_PREVIEW_ESBUILD is on, compile the fallback preview with the
@@ -839,7 +1213,8 @@ export function PreviewPanel({
     };
   }, [previewFiles, previewEngine, transitionPreviewMachine]);
   /** Rendered HTML: the esbuild bundle when ready, else the regex-engine result. */
-  const effectivePreviewHtml = esbuildHtml || fallbackHtml;
+  // Never feed the iframe an empty string — that paints a white blank pane.
+  const effectivePreviewHtml = esbuildHtml || fallbackHtml || EMPTY_PREVIEW_HTML;
   const filesSignature = useMemo(() => filesContentSignature(previewFiles), [previewFiles]);
 
   // Foreground reliability guard: WebContainer can occasionally stall while its
@@ -848,6 +1223,8 @@ export function PreviewPanel({
   // looks blank after code generation.
   useEffect(() => {
     if (previewEngine !== "webcontainer") return;
+    // Lovable parity: wait on "Loading preview…" — never flash srcdoc mid-install.
+    if (hideTopChrome) return;
     const timer = window.setTimeout(() => {
       const frames = Array.from(sandpackContainerRef.current?.querySelectorAll("iframe") ?? []);
       const hasLivePreviewFrame = frames.some((frame) => {
@@ -887,13 +1264,9 @@ export function PreviewPanel({
       ]);
       setPreviewEngine("fallback");
       transitionPreviewMachine("fallback", "vite still warming — demoted to background");
-      toast({
-        title: "Standard preview loaded",
-        description: "The Vite runtime is still starting and will take over once it's ready.",
-      });
     }, 12_000);
     return () => window.clearTimeout(timer);
-  }, [previewEngine, refreshKey, filesSignature, toast, transitionPreviewMachine]);
+  }, [previewEngine, refreshKey, filesSignature, toast, transitionPreviewMachine, hideTopChrome]);
 
   // Backstop for background warming. This must OUTLAST the container's own phase
   // budgets (boot 18s + install 75s + start 35s ≈ 128s) — at the old 12s it killed
@@ -936,24 +1309,39 @@ export function PreviewPanel({
   const iframeVisible = !outOfCredits || previewCompileOk;
   const showPausedOverlay = outOfCredits && !previewCompileOk && !showDeployedPreview;
   const showEsbuildBadge =
+    !hideTopChrome &&
     isEsbuildPreviewEnabled() &&
     previewEngine === "fallback" &&
     !showDeployedPreview &&
     (esbuildBuilding || !!esbuildHtml);
   const previewStatusText =
-    previewMachineState === "building"
-      ? "Preparing preview"
-      : previewMachineState === "loading"
-        ? "Loading update"
-        : previewMachineState === "fallback"
-          ? "Standard preview active"
-          : previewMachineState === "error"
-            ? "Preview needs repair"
-            : null;
+    hideTopChrome
+      ? (previewMachineState === "building" || previewMachineState === "loading" || sandboxLoading
+          ? "Loading preview"
+          : null)
+      : previewMachineState === "building"
+        ? "Preparing preview"
+        : previewMachineState === "loading"
+          ? "Loading update"
+          : previewMachineState === "fallback"
+            ? "Standard preview active"
+            : previewMachineState === "error"
+              ? "Preview needs repair"
+              : null;
+
+  // Broadcast preview boot status to top-bar UrlBarPill (Lovable parity).
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("lifemark-preview-status", { detail: { text: previewStatusText } }),
+    );
+  }, [previewStatusText]);
+
   const showRecoveryOverlay =
     !showDeployedPreview &&
     !errorGuard.freezePreview &&
-    previewMachineState === "error";
+    (previewMachineState === "error" ||
+      errorGuard.phase === "frozen" ||
+      (!!activeError && !errorDismissed && !outOfCredits));
 
   async function submitElementComment() {
     if (!projectId || !pendingComment || !commentDraft.trim()) return;
@@ -1037,16 +1425,25 @@ export function PreviewPanel({
     }
     setBackgroundViteActive(true);
     setBackgroundViteKey((k) => k + 1);
-    setConsoleLines([]);
+    clearPreviewLogs();
   }, [toast, viteCapable]);
 
   function refresh() {
+    if (previewEngine === "sandbox" && sandboxIframeRef.current?.contentWindow) {
+      try {
+        sandboxIframeRef.current.contentWindow.location.reload();
+        clearPreviewLogs();
+        return;
+      } catch {
+        /* fall through */
+      }
+    }
     if (previewEngine === "webcontainer") {
       const iframe = sandpackContainerRef.current?.querySelector("iframe");
       if (iframe?.contentWindow) {
         try {
           iframe.contentWindow.location.reload();
-          setConsoleLines([]);
+          clearPreviewLogs();
           setVebSelected(null);
           return;
         } catch {
@@ -1054,9 +1451,7 @@ export function PreviewPanel({
         }
       }
     }
-    setRefreshKey((k) => k + 1);
-    setConsoleLines([]);
-    setVebSelected(null);
+    refreshPreview(files);
   }
 
   function openInNewTab() {
@@ -1130,9 +1525,31 @@ export function PreviewPanel({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="relative flex flex-col h-full bg-background">
-        {/* Toolbar — Lovable style */}
-        <div className="flex items-center gap-1.5 px-2.5 h-9 border-b border-border bg-background shrink-0">
+      <div className={`relative flex flex-col bg-background ${previewFullscreen ? "fixed inset-0 z-[100] h-screen" : "h-full"} ${!previewFullscreen ? "rounded-[var(--radius-4)] shadow-surface-xl overflow-hidden m-1" : ""}`}>
+        {/* Version-preview banner (Lovable parity) — shown while an older
+            snapshot's files are loaded via "Preview this version" */}
+        {versionPreviewLabel && (
+          <LovableVersionPreviewBanner
+            label={versionPreviewLabel}
+            onExit={() => window.dispatchEvent(new CustomEvent("lifemark-exit-version-preview"))}
+          />
+        )}
+        {/* Collapsed-toolbar pill (Lovable parity: compact "Show toolbar") */}
+        {toolbarCollapsed && !hideTopChrome && (
+          <button
+            onClick={() => {
+              setToolbarCollapsed(false);
+              try { localStorage.setItem("lifemark-preview-toolbar-collapsed", "0"); } catch { /* private mode */ }
+            }}
+            className="absolute top-2 right-2 z-30 flex items-center gap-1 px-2 py-1 rounded-full bg-background/90 border border-border shadow-md text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+            title="Show toolbar"
+          >
+            <ChevronDown className="w-3 h-3" />
+            Show toolbar
+          </button>
+        )}
+        {/* Toolbar — Lovable style (hidden when top bar owns chrome) */}
+        <div className={`items-center gap-1.5 px-2.5 h-9 border-b border-border bg-background shrink-0 ${toolbarCollapsed || hideTopChrome ? "hidden" : "flex"}`}>
           {/* Device switcher */}
           <div className="flex items-center gap-0.5 p-0.5 rounded-md bg-muted/50 shrink-0">
             {([
@@ -1143,7 +1560,10 @@ export function PreviewPanel({
               <Tooltip key={d}>
                 <TooltipTrigger asChild>
                   <button
-                    onClick={() => setDevice(d)}
+                    onClick={() => {
+                      setDevice(d);
+                      window.dispatchEvent(new CustomEvent("lifemark-preview-device", { detail: d }));
+                    }}
                     className={`p-1.5 rounded transition-all ${
                       device === d ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
                     }`}
@@ -1155,6 +1575,54 @@ export function PreviewPanel({
               </Tooltip>
             ))}
           </div>
+
+          {/* Back / forward through visited routes */}
+          {!deployedUrl && (
+            <div className="flex items-center gap-0 shrink-0">
+              <button
+                disabled={routeNav.idx <= 0}
+                onClick={() => {
+                  const idx = routeNav.idx - 1;
+                  const target = routeNav.stack[idx];
+                  if (target === undefined) return;
+                  setRouteNav((prev) => ({ ...prev, idx }));
+                  navSuppressRef.current = true;
+                  setTimeout(() => { navSuppressRef.current = false; }, 1000);
+                  const targetWin = previewEngine === "webcontainer"
+                    ? sandpackContainerRef.current?.querySelector("iframe")?.contentWindow
+                    : iframeRef.current?.contentWindow;
+                  targetWin?.postMessage({ type: "lifemark-preview-navigate", pathname: target }, "*");
+                  setPreviewPath(target);
+                  setUrlInput(target);
+                }}
+                className="p-1 rounded text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                title="Back"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                disabled={routeNav.idx >= routeNav.stack.length - 1}
+                onClick={() => {
+                  const idx = routeNav.idx + 1;
+                  const target = routeNav.stack[idx];
+                  if (target === undefined) return;
+                  setRouteNav((prev) => ({ ...prev, idx }));
+                  navSuppressRef.current = true;
+                  setTimeout(() => { navSuppressRef.current = false; }, 1000);
+                  const targetWin = previewEngine === "webcontainer"
+                    ? sandpackContainerRef.current?.querySelector("iframe")?.contentWindow
+                    : iframeRef.current?.contentWindow;
+                  targetWin?.postMessage({ type: "lifemark-preview-navigate", pathname: target }, "*");
+                  setPreviewPath(target);
+                  setUrlInput(target);
+                }}
+                className="p-1 rounded text-muted-foreground hover:text-foreground disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                title="Forward"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* URL bar — Lovable style center address bar. Editable when the
               preview is the local Babel iframe so users can type a route and
@@ -1172,7 +1640,7 @@ export function PreviewPanel({
                 </span>
               ) : (
                 <input
-                  value={urlEditing ? urlInput : previewPath}
+                  value={urlEditing ? urlInput : previewBarLabel}
                   onChange={(e) => { setUrlInput(e.target.value); setUrlEditing(true); }}
                   onFocus={() => { setUrlInput(previewPath); setUrlEditing(true); }}
                   onBlur={() => setUrlEditing(false)}
@@ -1250,9 +1718,12 @@ export function PreviewPanel({
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
-                  onClick={() => { setVisualEdit(!visualEdit); onVisualEditToggle?.(); }}
+                  disabled={!!versionPreviewLabel}
+                  onClick={() => { if (versionPreviewLabel) return; setVisualEdit(!visualEdit); onVisualEditToggle?.(); }}
                   className={`p-1.5 rounded-md transition-all ${
-                    visualEdit
+                    versionPreviewLabel
+                      ? "opacity-40 cursor-not-allowed text-muted-foreground"
+                      : visualEdit
                       ? "bg-violet-500/20 text-violet-400 border border-violet-500/30"
                       : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
                   }`}
@@ -1260,7 +1731,9 @@ export function PreviewPanel({
                   <MousePointer className="w-3.5 h-3.5" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent>Visual Edit {visualEdit ? "(on)" : "(off)"}</TooltipContent>
+              <TooltipContent>
+                {versionPreviewLabel ? "Visual edits disabled while previewing an older version" : `Visual Edit ${visualEdit ? "(on)" : "(off)"}`}
+              </TooltipContent>
             </Tooltip>
 
             <Tooltip>
@@ -1311,7 +1784,7 @@ export function PreviewPanel({
                   <Terminal className="w-3.5 h-3.5" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent>Console</TooltipContent>
+              <TooltipContent>Console &amp; Network</TooltipContent>
             </Tooltip>
 
             {/* Device-frame toggle: only meaningful for mobile/tablet — hidden
@@ -1341,6 +1814,33 @@ export function PreviewPanel({
                 </button>
               </TooltipTrigger>
               <TooltipContent>Refresh preview</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => setPreviewFullscreen((v) => !v)}
+                  className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-all"
+                >
+                  {previewFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>{previewFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen preview"}</TooltipContent>
+            </Tooltip>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => {
+                    setToolbarCollapsed(true);
+                    try { localStorage.setItem("lifemark-preview-toolbar-collapsed", "1"); } catch { /* private mode */ }
+                  }}
+                  className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-all"
+                >
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>Hide toolbar</TooltipContent>
             </Tooltip>
 
             {previewEngine === "fallback" && viteCapable && !showDeployedPreview && (
@@ -1403,17 +1903,51 @@ export function PreviewPanel({
               <p className="text-xs text-muted-foreground/40">Loading preview…</p>
             </div>
           </div>
+        ) : previewEngine === "sandbox" && !sandboxUrl ? (
+          <div className="flex-1 flex items-center justify-center bg-[#0a0a0a]">
+            <div className="text-center">
+              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground/50 mx-auto mb-2" />
+              <p className="text-xs text-muted-foreground/40">Loading preview…</p>
+            </div>
+          </div>
         ) : previewEngine === "sandbox" && sandboxUrl ? (
-          /* Real sandbox (E2B) — live dev server running server-side */
+          /* Real sandbox (Modal/E2B) — live dev server running server-side */
           <div className={`flex flex-col flex-1 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}>
             {withDeviceFrame(
               <iframe
-                key={`sandbox-${refreshKey}`}
-                src={sandboxUrl}
+                key={`sandbox-${sandboxId ?? projectId ?? "warm"}`}
+                ref={sandboxIframeRef}
+                src={sandboxUrlWithPath(sandboxUrl, previewPath)}
                 className="w-full h-full border-0"
                 title="Live sandbox preview"
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
                 onLoad={() => transitionPreviewMachine("ready", "sandbox iframe loaded")}
+              />
+            )}
+            {visualEditEnabled && vebSelected && (
+              <VebBridgePopover
+                selection={vebSelected}
+                files={files}
+                onFileChange={handleVebFileChange}
+                onLiveApply={(payload) => {
+                  sandboxIframeRef.current?.contentWindow?.postMessage(
+                    { type: "lifemark-veb-apply", ...payload },
+                    "*",
+                  );
+                }}
+                onRequestAiEdit={onSendPromptToChat}
+                onClose={() => {
+                  setVebSelected(null);
+                  sandboxIframeRef.current?.contentWindow?.postMessage({ type: "lifemark-veb-clear" }, "*");
+                }}
+                onSelectionChange={setVebSelected}
+              />
+            )}
+            {projectId && (
+              <PreviewAnnotations
+                projectId={projectId}
+                enabled={annotationsEnabled}
+                onSendToChat={onSendPromptToChat}
               />
             )}
           </div>
@@ -1424,10 +1958,13 @@ export function PreviewPanel({
           >
             {withDeviceFrame(
               <WebContainerPreview
-                key={refreshKey}
+                key={`wc-${projectId ?? "preview"}`}
                 files={previewFiles}
                 projectId={projectId}
                 embedded
+                onReady={() => {
+                  transitionPreviewMachine("ready", "webcontainer dev server ready");
+                }}
                 onError={(msg) => {
                   transitionPreviewMachine("fallback", "webcontainer preview error");
                   if (typeof window !== "undefined") {
@@ -1447,7 +1984,7 @@ export function PreviewPanel({
             )}
 
             {/* Visual edits — cross-origin engine, driven via postMessage bridge */}
-            {visualEdit && vebSelected && (
+            {visualEditEnabled && vebSelected && (
               <VebBridgePopover
                 selection={vebSelected}
                 files={files}
@@ -1463,6 +2000,13 @@ export function PreviewPanel({
                   iframe?.contentWindow?.postMessage({ type: "lifemark-veb-clear" }, "*");
                 }}
                 onSelectionChange={setVebSelected}
+              />
+            )}
+            {projectId && (
+              <PreviewAnnotations
+                projectId={projectId}
+                enabled={annotationsEnabled}
+                onSendToChat={onSendPromptToChat}
               />
             )}
           </div>
@@ -1517,7 +2061,7 @@ export function PreviewPanel({
                     setVitePreviewRequested(true);
                     setPreviewEngine("webcontainer");
                     setRefreshKey((k) => k + 1);
-                    setConsoleLines([]);
+                    clearPreviewLogs();
                   }}
                   onError={(msg) => {
                     if (typeof window !== "undefined") {
@@ -1538,7 +2082,7 @@ export function PreviewPanel({
               iframeRef={iframeRef}
               files={files}
               onFileChange={handleVebFileChange}
-              enabled={visualEdit}
+              enabled={visualEditEnabled}
               onRequestAiEdit={onSendPromptToChat}
             />
 
@@ -1547,27 +2091,79 @@ export function PreviewPanel({
               <PreviewAnnotations
                 projectId={projectId}
                 enabled={annotationsEnabled}
+                onSendToChat={onSendPromptToChat}
               />
             )}
 
             {showConsole && (
-              <div className="h-40 border-t border-border bg-muted/30 overflow-y-auto p-2 font-mono text-xs space-y-0.5">
-                {consoleLines.length === 0 ? (
-                  <p className="text-muted-foreground">No console output yet…</p>
-                ) : (
-                  consoleLines.map((line, i) => (
-                    <div
-                      key={i}
-                      className={
-                        line.type === "error" ? "text-red-400"
-                          : line.type === "warn" ? "text-yellow-400"
-                          : "text-emerald-400"
-                      }
+              <div className="h-40 border-t border-border bg-muted/30 flex flex-col">
+                <div className="flex items-center gap-1 px-2 py-1 border-b border-border/60 shrink-0">
+                  {(["console", "network"] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => setPreviewBottomTab(tab)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                        previewBottomTab === tab
+                          ? "bg-muted text-foreground"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
                     >
-                      {line.text}
-                    </div>
-                  ))
-                )}
+                      {tab === "console" ? "Console" : "Network"}
+                      {tab === "network" && networkLines.length > 0 && (
+                        <span className="ml-1 text-muted-foreground/70">({networkLines.length})</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex-1 overflow-y-auto p-2 font-mono text-xs space-y-0.5">
+                  {previewBottomTab === "console" ? (
+                    consoleLines.length === 0 ? (
+                      <p className="text-muted-foreground">No console output yet…</p>
+                    ) : (
+                      consoleLines.map((line, i) => (
+                        <div
+                          key={i}
+                          className={
+                            line.type === "error" ? "text-red-400"
+                              : line.type === "warn" ? "text-yellow-400"
+                              : "text-emerald-400"
+                          }
+                        >
+                          {line.text}
+                        </div>
+                      ))
+                    )
+                  ) : networkLines.length === 0 ? (
+                    <p className="text-muted-foreground">No network requests yet…</p>
+                  ) : (
+                    networkLines.map((line, i) => (
+                      <div key={i} className="flex items-start gap-2 text-[11px] leading-snug">
+                        <span className="shrink-0 font-semibold text-violet-400 w-10">{line.method}</span>
+                        <span
+                          className={
+                            line.ok === false || (line.status != null && line.status >= 400)
+                              ? "text-red-400"
+                              : "text-emerald-400"
+                          }
+                        >
+                          {line.status ?? "—"}
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-muted-foreground" title={line.url}>
+                          {line.url}
+                        </span>
+                        {line.durationMs != null && (
+                          <span className="shrink-0 text-muted-foreground/70">{line.durationMs}ms</span>
+                        )}
+                        {line.error && (
+                          <span className="shrink-0 text-red-400 truncate max-w-[120px]" title={line.error}>
+                            {line.error}
+                          </span>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -1698,6 +2294,40 @@ export function PreviewPanel({
             </motion.div>
           )}
         </AnimatePresence>
+
+        {hideTopChrome && <LovablePreviewStatusPill label={previewStatusText} />}
+
+        {hideTopChrome && (
+          <LovablePreviewInteractionToolbar
+            visualEdit={visualEdit}
+            visualEditDisabled={!!versionPreviewLabel}
+            onVisualEditToggle={() => {
+              if (versionPreviewLabel) return;
+              setVisualEdit(!visualEdit);
+              onVisualEditToggle?.();
+            }}
+            commentPinMode={commentPinMode}
+            onCommentPinToggle={() => {
+              setCommentPinMode((v) => !v);
+              if (commentPinMode) setPendingComment(null);
+            }}
+            annotationsEnabled={annotationsEnabled}
+            onAnnotationsToggle={() => setAnnotationsEnabled((v) => !v)}
+            onCaptureAnnotate={captureForAnnotation}
+            showConsole={showConsole}
+            onConsoleToggle={() => setShowConsole((v) => !v)}
+            onRefresh={refresh}
+            previewFullscreen={previewFullscreen}
+            onFullscreenToggle={() => setPreviewFullscreen((v) => !v)}
+            showFrame={showFrame}
+            onFrameToggle={() => setShowFrame((v) => !v)}
+            device={device}
+            onDeviceChange={(d) => {
+              setDevice(d);
+              window.dispatchEvent(new CustomEvent("lifemark-preview-device", { detail: d }));
+            }}
+          />
+        )}
 
         {showDeployedPreview && (
           <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/15 border border-violet-500/25 text-[10px] text-violet-300">

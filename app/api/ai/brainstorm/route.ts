@@ -59,6 +59,7 @@ export async function POST(req: NextRequest) {
                 { role: "user",   content: `Generate 3 app concepts for: "${idea.trim()}"` },
               ],
               temperature: 0.9,
+              maxTokens: 700, // three short concepts
               stream: true,
               onChunk: (chunk: string) => {
                 fullText += chunk;

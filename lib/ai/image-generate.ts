@@ -134,11 +134,23 @@ export async function generateImage(opts: {
 }): Promise<ImageResult | null> {
   const size = opts.size ?? "1024x1024";
   const style = opts.style ?? "vivid";
-  return (
+  const result =
     (await generateWithGemini(opts.prompt, size)) ??
     (await generateWithOpenRouterImage(opts.prompt, size)) ??
-    (await generateWithDallE(opts.prompt, size, style))
-  );
+    (await generateWithDallE(opts.prompt, size, style));
+  if (!result) return null;
+
+  // AI-provenance labeling (Lovable parity): embed IPTC/XMP
+  // "trainedAlgorithmicMedia" metadata into PNG/JPEG data-URLs so platforms
+  // that read provenance can label the image as AI-generated. Hosted URLs
+  // (DALL-E) are left as-is — we can't rewrite OpenAI's file.
+  if (/^data:image\/(png|jpe?g);base64,/.test(result.url)) {
+    try {
+      const { addDataUrlAiProvenance } = await import("./image-provenance");
+      result.url = addDataUrlAiProvenance(result.url);
+    } catch { /* provenance is best-effort — never fail generation */ }
+  }
+  return result;
 }
 
 /** True when at least one image provider is configured. */

@@ -138,11 +138,15 @@ export async function POST(req: NextRequest) {
         .eq("cloud_status", "active");
       walletResults.push({ user: userId, balance, action: "paused" });
     } else if (balance > 0) {
+      // Top-up resume — but never wake projects the user paused manually
+      // (metadata.cloud_paused_manually) or that auto-paused for idleness.
       const { data: resumed } = await supabase
         .from("projects")
         .update({ cloud_status: "active" })
         .in("id", projectIds)
         .eq("cloud_status", "paused")
+        .or("metadata->>cloud_paused_manually.is.null,metadata->>cloud_paused_manually.eq.false")
+        .or("metadata->>cloud_paused_idle.is.null,metadata->>cloud_paused_idle.eq.false")
         .select("id");
       walletResults.push({
         user: userId,
@@ -154,5 +158,33 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ ok: true, projects: results, wallets: walletResults });
+  // ── Idle auto-pause (Lovable parity): Cloud projects untouched for 14+
+  // days stop burning compute. Only paid tiers (tiny is free anyway); the
+  // user wakes them from the Cloud panel or chat ("wake my backend up").
+  const idleResults: Array<{ project: string; action: string }> = [];
+  try {
+    const idleCutoff = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: idle } = await supabase
+      .from("projects")
+      .select("id, name, metadata")
+      .eq("cloud_enabled", true)
+      .eq("cloud_status", "active")
+      .neq("cloud_instance", "tiny")
+      .lt("updated_at", idleCutoff)
+      .limit(100);
+    for (const p of idle ?? []) {
+      await supabase
+        .from("projects")
+        .update({
+          cloud_status: "paused",
+          metadata: { ...((p.metadata ?? {}) as Record<string, unknown>), cloud_paused_idle: true, cloud_paused_at: new Date().toISOString() },
+        })
+        .eq("id", p.id);
+      idleResults.push({ project: p.name, action: "idle-paused" });
+    }
+  } catch (err) {
+    console.warn("[bill-usage] idle auto-pause failed:", err instanceof Error ? err.message : err);
+  }
+
+  return NextResponse.json({ ok: true, projects: results, wallets: walletResults, idle: idleResults });
 }

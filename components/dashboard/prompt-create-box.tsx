@@ -102,6 +102,7 @@ export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
         ? parseBuildWithUrlPayload(JSON.stringify({
             prompt: fallbackPrompt,
             images: search.getAll("images"),
+            pages: search.getAll("pages"),
             at: Date.now(),
           }))
         : null;

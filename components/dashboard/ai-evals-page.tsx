@@ -77,6 +77,10 @@ export function AiEvalsPage({ userId: _userId }: { userId: string }) {
   const [rows, setRows] = useState<EvalRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [range, setRange] = useState<RangeKey>("7d");
+  // Per-request drill-down filters
+  const [requestFilter, setRequestFilter] = useState<"all" | "failed">("all");
+  const [requestModel, setRequestModel] = useState("");
+  const [requestLimit, setRequestLimit] = useState(50);
 
   const fetchRows = useCallback(async () => {
     setLoading(true);
@@ -140,6 +144,14 @@ export function AiEvalsPage({ userId: _userId }: { userId: string }) {
     const recentErrors = rows.filter((r) => !r.success).slice(0, 12);
     return { totals, perModel, recentErrors };
   }, [rows]);
+
+  const filteredRequests = useMemo(
+    () => rows.filter((r) =>
+      (requestFilter === "all" || !r.success) &&
+      (!requestModel || r.model === requestModel),
+    ),
+    [rows, requestFilter, requestModel],
+  );
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8">
@@ -222,6 +234,76 @@ export function AiEvalsPage({ userId: _userId }: { userId: string }) {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+
+          {/* Per-request drill-down (Lovable AI-activity parity): every call
+              with status, model, task, tokens, latency, and route. */}
+          <div className="rounded-xl border border-border overflow-hidden mb-6">
+            <div className="px-4 py-2 border-b border-border bg-muted/30 flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Requests</span>
+              <div className="flex gap-1 ml-auto">
+                {(["all", "failed"] as const).map((f) => (
+                  <button
+                    key={f}
+                    onClick={() => setRequestFilter(f)}
+                    className={`px-2 py-0.5 rounded-md text-[11px] transition-colors ${requestFilter === f ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-muted"}`}
+                  >
+                    {f === "all" ? "All" : "Failed only"}
+                  </button>
+                ))}
+                <select
+                  value={requestModel}
+                  onChange={(e) => setRequestModel(e.target.value)}
+                  className="text-[11px] bg-muted/40 border border-border/60 rounded-md px-1.5 py-0.5 text-muted-foreground max-w-[180px]"
+                >
+                  <option value="">All models</option>
+                  {perModel.map((m) => <option key={m.model} value={m.model}>{m.model}</option>)}
+                </select>
+              </div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    <th className="text-left font-medium px-4 py-1.5">When</th>
+                    <th className="text-left font-medium px-4 py-1.5">Status</th>
+                    <th className="text-left font-medium px-4 py-1.5">Model</th>
+                    <th className="text-left font-medium px-4 py-1.5">Task</th>
+                    <th className="text-right font-medium px-4 py-1.5">Tokens</th>
+                    <th className="text-right font-medium px-4 py-1.5">Latency</th>
+                    <th className="text-right font-medium px-4 py-1.5">Route</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredRequests.slice(0, requestLimit).map((r) => (
+                    <tr key={r.id} className="border-t border-border/60 hover:bg-muted/20">
+                      <td className="px-4 py-1.5 text-muted-foreground whitespace-nowrap">{timeAgo(r.created_at)}</td>
+                      <td className="px-4 py-1.5">
+                        {r.success
+                          ? <span className="inline-flex items-center gap-1 text-green-400"><CheckCircle2 className="w-3 h-3" /> ok</span>
+                          : <span className="inline-flex items-center gap-1 text-red-400" title={r.error ?? ""}><AlertTriangle className="w-3 h-3" /> failed</span>}
+                      </td>
+                      <td className="px-4 py-1.5 font-mono truncate max-w-[200px]" title={r.model}>{r.model}</td>
+                      <td className="px-4 py-1.5 text-muted-foreground truncate max-w-[140px]" title={r.task ?? ""}>{r.task ?? "—"}</td>
+                      <td className="px-4 py-1.5 text-right tabular-nums text-muted-foreground">{fmtNum(r.tokens_used)}</td>
+                      <td className="px-4 py-1.5 text-right tabular-nums">{fmtMs(r.latency_ms)}</td>
+                      <td className="px-4 py-1.5 text-right text-muted-foreground">{r.via_gateway ? "gateway" : "direct"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {filteredRequests.length === 0 && (
+                <p className="px-4 py-4 text-xs text-muted-foreground text-center">No requests match the filter.</p>
+              )}
+              {filteredRequests.length > requestLimit && (
+                <button
+                  onClick={() => setRequestLimit((n) => n + 50)}
+                  className="w-full px-4 py-2 text-[11px] text-muted-foreground hover:bg-muted/40 border-t border-border/60 transition-colors"
+                >
+                  Show more ({filteredRequests.length - requestLimit} remaining)
+                </button>
+              )}
             </div>
           </div>
 

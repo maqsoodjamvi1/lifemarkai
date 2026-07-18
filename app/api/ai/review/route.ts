@@ -62,6 +62,7 @@ export async function POST(req: NextRequest) {
       ],
       jsonMode: true,
       temperature: 0.2,
+      maxTokens: 1500, // review JSON of one file — cap output spend
     }, { userId: user.id, task: "code_review" });
 
     const text = raw.content;

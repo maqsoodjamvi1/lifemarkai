@@ -24,13 +24,20 @@ declare global {
   var __lifemark_supabase_browser_client: ReturnType<typeof createBrowserClient<Database>> | undefined;
   var __lifemark_supabase_browser_client_rev: number | undefined;
   var __lifemark_supabase_auth_noise_guard: boolean | undefined;
+  var __lifemark_orig_console_error: typeof console.error | undefined;
 }
 
 /** Bump when client construction options change so HMR drops the stale singleton. */
-const CLIENT_REV = 2;
+const CLIENT_REV = 3;
 
 function isAuthNetworkNoise(reason: unknown): boolean {
-  const msg = reason instanceof Error ? reason.message : String(reason ?? "");
+  if (!reason) return false;
+  const msg =
+    reason instanceof Error
+      ? `${reason.name} ${reason.message}`
+      : typeof reason === "string"
+        ? reason
+        : String(reason);
   const name = reason instanceof Error ? reason.name : "";
   // GoTrue auto-refresh throws TypeError: Failed to fetch when Cloudflare/Supabase
   // times out — noisy in Next.js overlay but recoverable on the next tick.
@@ -41,12 +48,34 @@ function isAuthNetworkNoise(reason: unknown): boolean {
     /timeout/i.test(msg) ||
     /connect timeout/i.test(msg) ||
     /aborted/i.test(msg) ||
+    /load failed/i.test(msg) ||
+    /network request failed/i.test(msg) ||
     name === "AbortError" ||
-    (name === "TypeError" && /fetch/i.test(msg))
+    name === "ConnectTimeoutError" ||
+    (name === "TypeError" && /fetch|network|load/i.test(msg))
   );
 }
 
-function installAuthNoiseGuard(): void {
+/** True when a console.error arg is the transient auth/network TypeError overlay. */
+function consoleArgsAreAuthNoise(args: unknown[]): boolean {
+  return args.some((arg) => {
+    if (isAuthNetworkNoise(arg)) return true;
+    if (arg && typeof arg === "object") {
+      const o = arg as { message?: unknown; name?: unknown; cause?: unknown };
+      if (isAuthNetworkNoise(o)) return true;
+      if (o.cause && isAuthNetworkNoise(o.cause)) return true;
+      if (typeof o.message === "string" && isAuthNetworkNoise(o.message)) return true;
+    }
+    return typeof arg === "string" && isAuthNetworkNoise(arg);
+  });
+}
+
+/**
+ * Suppress Next.js "Console TypeError / Failed to fetch" overlay noise from
+ * GoTrue auto-refresh and other transient Supabase network flakes.
+ * Must run as early as possible in the browser.
+ */
+export function installAuthNoiseGuard(): void {
   if (typeof window === "undefined" || globalThis.__lifemark_supabase_auth_noise_guard) return;
   globalThis.__lifemark_supabase_auth_noise_guard = true;
 
@@ -57,6 +86,28 @@ function installAuthNoiseGuard(): void {
       console.warn("[supabase] transient auth network error (ignored)");
     }
   });
+
+  // Next.js overlays Console TypeError from console.error(TypeError), not only
+  // unhandledrejection — filter those auth/network flakes too.
+  if (!globalThis.__lifemark_orig_console_error) {
+    globalThis.__lifemark_orig_console_error = console.error.bind(console);
+    let reentering = false;
+    console.error = (...args: unknown[]) => {
+      if (reentering) return;
+      if (consoleArgsAreAuthNoise(args)) {
+        if (process.env.NODE_ENV === "development") {
+          console.warn("[supabase] transient fetch error (console suppressed)");
+        }
+        return;
+      }
+      reentering = true;
+      try {
+        globalThis.__lifemark_orig_console_error!(...args);
+      } finally {
+        reentering = false;
+      }
+    };
+  }
 }
 
 async function withAuthRetry<T>(fn: () => Promise<T>, retries = 2): Promise<T> {
@@ -118,6 +169,7 @@ export function createClient(): ReturnType<typeof createBrowserClient<Database>>
 
     let inflightUser: Promise<GetUserResult> | null = null;
     let cachedUser: { res: GetUserResult; at: number } | null = null;
+    let cachedSession: { res: GetSessionResult; at: number } | null = null;
     const CACHE_MS = 5000;
 
     client.auth.getUser = ((jwt?: string) => {
@@ -149,9 +201,14 @@ export function createClient(): ReturnType<typeof createBrowserClient<Database>>
 
     client.auth.getSession = (async () => {
       try {
-        return await withAuthRetry(() => origGetSession());
+        const res = await withAuthRetry(() => origGetSession());
+        cachedSession = { res, at: Date.now() };
+        return res;
       } catch (err) {
         if (isAuthNetworkNoise(err)) {
+          if (cachedSession && Date.now() - cachedSession.at < 60_000) {
+            return cachedSession.res;
+          }
           return { data: { session: null }, error: null } as GetSessionResult;
         }
         throw err;
@@ -160,12 +217,19 @@ export function createClient(): ReturnType<typeof createBrowserClient<Database>>
 
     client.auth.refreshSession = (async (currentSession?) => {
       try {
-        return await withAuthRetry(() => origRefreshSession(currentSession));
+        const res = await withAuthRetry(() => origRefreshSession(currentSession));
+        if (res.data.session) {
+          cachedSession = {
+            res: { data: { session: res.data.session }, error: null } as GetSessionResult,
+            at: Date.now(),
+          };
+        }
+        return res;
       } catch (err) {
         if (isAuthNetworkNoise(err)) {
           // Keep existing session if refresh fails transiently — don't sign the user out.
           try {
-            const current = await origGetSession();
+            const current = cachedSession?.res ?? (await origGetSession());
             return {
               data: {
                 session: current.data.session,

@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { lookup } from "node:dns/promises";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { generateAI } from "@/lib/ai/generate";
@@ -50,6 +51,41 @@ interface PageSnapshot {
   title: string;
   /** Which engine produced this snapshot — surfaced in the `done` event. */
   engine: "playwright" | "fetch";
+  /** Core Web Vitals (Playwright only — Lovable browser-perf parity). */
+  vitals?: WebVitals;
+  /** Browser runtime failures collected while the page loads. */
+  runtimeErrors?: string[];
+  /** A compressed, above-the-fold screenshot from the Chromium run. */
+  screenshotDataUrl?: string;
+}
+
+interface WebVitals {
+  /** Time to first byte (ms) */
+  ttfb: number | null;
+  /** First contentful paint (ms) */
+  fcp: number | null;
+  /** Largest contentful paint (ms) */
+  lcp: number | null;
+  /** Cumulative layout shift (unitless) */
+  cls: number | null;
+  /** DOMContentLoaded (ms) */
+  domContentLoaded: number | null;
+  /** Transferred bytes for the main document */
+  transferSize: number | null;
+}
+
+/** Rate a vitals metric against Google's thresholds. (Not exported — Next
+ *  route files may only export HTTP handlers/config.) */
+function rateVitals(v: WebVitals): Array<{ metric: string; value: string; rating: "good" | "needs-improvement" | "poor" | "n/a" }> {
+  const rate = (val: number | null, good: number, poor: number): "good" | "needs-improvement" | "poor" | "n/a" =>
+    val == null ? "n/a" : val <= good ? "good" : val <= poor ? "needs-improvement" : "poor";
+  return [
+    { metric: "TTFB", value: v.ttfb != null ? `${Math.round(v.ttfb)}ms` : "—", rating: rate(v.ttfb, 800, 1800) },
+    { metric: "FCP", value: v.fcp != null ? `${Math.round(v.fcp)}ms` : "—", rating: rate(v.fcp, 1800, 3000) },
+    { metric: "LCP", value: v.lcp != null ? `${Math.round(v.lcp)}ms` : "—", rating: rate(v.lcp, 2500, 4000) },
+    { metric: "CLS", value: v.cls != null ? v.cls.toFixed(3) : "—", rating: rate(v.cls, 0.1, 0.25) },
+    { metric: "DCL", value: v.domContentLoaded != null ? `${Math.round(v.domContentLoaded)}ms` : "—", rating: "n/a" },
+  ];
 }
 
 function sse(event: string, data: unknown): string {
@@ -69,6 +105,98 @@ function htmlToText(html: string): string {
     .replace(/&quot;/g, '"')
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function isPrivateIpAddress(address: string): boolean {
+  const normalized = address.toLowerCase();
+  if (normalized === "::" || normalized === "::1" || normalized.startsWith("fe80:") || normalized.startsWith("fc") || normalized.startsWith("fd")) {
+    return true;
+  }
+
+  const octets = normalized.split(".").map(Number);
+  if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return false;
+  const [first, second] = octets;
+  return (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    first >= 224 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168) ||
+    (first === 198 && (second === 18 || second === 19))
+  );
+}
+
+async function validateExternalUrl(value: string): Promise<{ url: string } | { error: string }> {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return { error: "url must be a valid http(s) URL" };
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return { error: "url must be http(s)" };
+  }
+
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (!hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || isPrivateIpAddress(hostname)) {
+    return { error: "Internal hosts are not allowed" };
+  }
+
+  try {
+    const addresses = await lookup(hostname, { all: true, verbatim: true });
+    if (!addresses.length || addresses.some(({ address }) => isPrivateIpAddress(address))) {
+      return { error: "Internal hosts are not allowed" };
+    }
+  } catch {
+    return { error: "The target host could not be resolved safely" };
+  }
+
+  return { url: parsed.toString() };
+}
+
+async function fetchExternalUrl(url: string): Promise<Response> {
+  let current = url;
+  for (let redirects = 0; redirects <= 5; redirects++) {
+    const response = await fetch(current, {
+      redirect: "manual",
+      headers: { "User-Agent": "LifemarkAI-Browser-Test/1.0" },
+    });
+    if (response.status < 300 || response.status >= 400) return response;
+
+    const location = response.headers.get("location");
+    if (!location) return response;
+    const next = await validateExternalUrl(new URL(location, current).toString());
+    if ("error" in next) throw new Error(next.error);
+    current = next.url;
+  }
+  throw new Error("Too many redirects while loading the target URL");
+}
+
+function normalizeTestPlan(value: unknown): TestStep[] {
+  if (!Array.isArray(value)) return [];
+  const allowedTypes = new Set<TestStep["type"]>(["navigate", "find", "assert", "info"]);
+  const normalizeText = (text: unknown, maxLength: number) =>
+    typeof text === "string" ? text.replace(/\s+/g, " ").trim().slice(0, maxLength) : undefined;
+
+  return value.slice(0, 6).flatMap((candidate, index) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const record = candidate as Record<string, unknown>;
+    const type = record.type;
+    if (typeof type !== "string" || !allowedTypes.has(type as TestStep["type"])) return [];
+    const expects = normalizeText(record.expects, 140);
+    const forbids = normalizeText(record.forbids, 140);
+    if ((type === "find" || type === "assert") && !expects && !forbids) return [];
+    return [{
+      id: normalizeText(record.id, 40)?.replace(/[^a-zA-Z0-9_-]/g, "-") || `s${index + 1}`,
+      name: normalizeText(record.name, 80) || `Browser check ${index + 1}`,
+      type: type as TestStep["type"],
+      ...(expects ? { expects } : {}),
+      ...(forbids ? { forbids } : {}),
+    }];
+  });
 }
 
 /**
@@ -114,6 +242,29 @@ async function snapshotViaPlaywright(playwright: { chromium: any }, url: string)
       viewport: { width: 1280, height: 800 },
     });
     const page = await ctx.newPage();
+    const runtimeErrors: string[] = [];
+    const addRuntimeError = (message: string) => {
+      const normalized = message.replace(/\s+/g, " ").trim();
+      if (normalized && !runtimeErrors.includes(normalized)) runtimeErrors.push(normalized.slice(0, 300));
+    };
+    page.on("pageerror", (error: Error) => addRuntimeError(error.message));
+    page.on("console", (message: { type: () => string; text: () => string }) => {
+      if (message.type() === "error") addRuntimeError(message.text());
+    });
+    await page.route("**/*", async (route: { request: () => { isNavigationRequest: () => boolean; frame: () => unknown; url: () => string }; abort: () => Promise<void>; continue: () => Promise<void> }) => {
+      const request = route.request();
+      if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) {
+        await route.continue();
+        return;
+      }
+      const validation = await validateExternalUrl(request.url());
+      if ("error" in validation) {
+        addRuntimeError(`Blocked unsafe navigation: ${validation.error}`);
+        await route.abort();
+        return;
+      }
+      await route.continue();
+    });
     let status = 200;
     page.on("response", (r: { url: () => string; status: () => number }) => {
       // First response only — the main document. Subsequent assets shouldn't
@@ -122,12 +273,60 @@ async function snapshotViaPlaywright(playwright: { chromium: any }, url: string)
         if (status === 200) status = r.status();
       }
     });
-    const resp = await page.goto(url, { waitUntil: "networkidle", timeout: 15_000 });
+    // Observe paint/LCP/CLS from document start — must be installed before goto.
+    await page.addInitScript(() => {
+      const w = window as unknown as { __lmVitals: { lcp: number | null; cls: number } };
+      w.__lmVitals = { lcp: null, cls: 0 };
+      try {
+        new PerformanceObserver((list) => {
+          const entries = list.getEntries();
+          const last = entries[entries.length - 1] as PerformanceEntry | undefined;
+          if (last) w.__lmVitals.lcp = last.startTime;
+        }).observe({ type: "largest-contentful-paint", buffered: true });
+        new PerformanceObserver((list) => {
+          for (const e of list.getEntries() as Array<PerformanceEntry & { value?: number; hadRecentInput?: boolean }>) {
+            if (!e.hadRecentInput) w.__lmVitals.cls += e.value ?? 0;
+          }
+        }).observe({ type: "layout-shift", buffered: true });
+      } catch { /* older engines — vitals stay null */ }
+    });
+    const resp = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 15_000 });
     if (resp) status = resp.status();
+    await page.waitForLoadState("networkidle", { timeout: 3_000 }).catch(() => {});
     // Grab the rendered body text (post-JS).
     const text = (await page.evaluate(() => document.body?.innerText ?? "")) as string;
     const title = await page.title();
-    return { status, text: text.toLowerCase(), title, engine: "playwright" };
+    // Core Web Vitals (Lovable browser-performance parity)
+    let vitals: WebVitals | undefined;
+    try {
+      vitals = (await page.evaluate(() => {
+        const w = window as unknown as { __lmVitals?: { lcp: number | null; cls: number } };
+        const nav = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+        const fcpEntry = performance.getEntriesByName("first-contentful-paint")[0];
+        return {
+          ttfb: nav ? nav.responseStart : null,
+          fcp: fcpEntry ? fcpEntry.startTime : null,
+          lcp: w.__lmVitals?.lcp ?? null,
+          cls: w.__lmVitals ? Math.round(w.__lmVitals.cls * 1000) / 1000 : null,
+          domContentLoaded: nav ? nav.domContentLoadedEventEnd : null,
+          transferSize: nav ? (nav as PerformanceNavigationTiming & { transferSize?: number }).transferSize ?? null : null,
+        };
+      })) as WebVitals;
+    } catch { /* vitals are best-effort */ }
+    let screenshotDataUrl: string | undefined;
+    try {
+      const screenshot = await page.screenshot({ type: "jpeg", quality: 60 });
+      screenshotDataUrl = `data:image/jpeg;base64,${screenshot.toString("base64")}`;
+    } catch { /* screenshots are best-effort */ }
+    return {
+      status,
+      text: text.toLowerCase(),
+      title,
+      engine: "playwright",
+      vitals,
+      runtimeErrors,
+      screenshotDataUrl,
+    };
   } finally {
     await browser.close().catch(() => {});
   }
@@ -135,10 +334,7 @@ async function snapshotViaPlaywright(playwright: { chromium: any }, url: string)
 
 /** Fallback path — plain fetch + HTML strip. */
 async function snapshotViaFetch(url: string): Promise<PageSnapshot> {
-  const r = await fetch(url, {
-    redirect: "follow",
-    headers: { "User-Agent": "LifemarkAI-Browser-Test/1.0" },
-  });
+  const r = await fetchExternalUrl(url);
   const status = r.status;
   const html = await r.text();
   const text = htmlToText(html).toLowerCase();
@@ -212,17 +408,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // Refuse private / internal targets — guards both the fetch path AND the
   // Playwright path. Without this a tester could probe internal services
   // from the deploy host's network.
-  const target = body.url.trim();
-  if (!/^https?:\/\//i.test(target)) {
-    return new Response(JSON.stringify({ error: "url must be http(s)" }), {
+  const targetValidation = await validateExternalUrl(body.url.trim());
+  if ("error" in targetValidation) {
+    return new Response(JSON.stringify({ error: targetValidation.error }), {
       status: 400, headers: { "Content-Type": "application/json" },
     });
   }
-  if (/localhost|127\.0\.0\.1|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\./.test(target)) {
-    return new Response(JSON.stringify({ error: "Internal hosts are not allowed" }), {
-      status: 400, headers: { "Content-Type": "application/json" },
-    });
-  }
+  const target = targetValidation.url;
 
   const scenario = (body.scenario ?? "Smoke-test the page: confirm it loads, has a visible heading, and shows no error state.").trim();
 
@@ -251,7 +443,7 @@ Each step must be an object with:
 - forbids: (optional) a plain-text snippet that must NOT appear on the page (e.g., "error", "undefined").
 
 Rules:
-- The FIRST step must always be type "navigate" with the target URL in expects.
+- The FIRST step must always be type "navigate". It does not need an expects value.
 - Mix "find" and "assert" steps. Use "info" sparingly for non-checking observations.
 - Pick expects/forbids snippets that would survive minor copy changes (avoid full sentences).
 - Respond with ONLY the JSON array. No prose, no code fences.`;
@@ -274,7 +466,7 @@ Return the JSON test plan now.`;
           const txt = (planRes.content ?? "").trim()
             .replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
           const parsed = JSON.parse(txt);
-          if (Array.isArray(parsed)) steps = parsed.slice(0, 8) as TestStep[];
+          steps = normalizeTestPlan(parsed);
         } catch { /* fall through */ }
         if (steps.length === 0) {
           // Minimal default plan
@@ -324,6 +516,23 @@ Return the JSON test plan now.`;
           return;
         }
 
+        if (snap.screenshotDataUrl) {
+          send("screenshot", {
+            index: 0,
+            label: "Initial page state",
+            dataUrl: snap.screenshotDataUrl,
+          });
+        }
+
+        if (snap.runtimeErrors?.length) {
+          steps.push({
+            id: "runtime-errors",
+            name: "No browser runtime errors",
+            type: "assert",
+            forbids: "__lifemark_runtime_errors__",
+          });
+        }
+
         // ── 3) Execute each step ───────────────────────────────────────────────
         // Emit both the new shape ({id, name, type, expects, forbids, status,
         // evidence}) AND legacy aliases ({index, action, error}) so the older
@@ -331,7 +540,13 @@ Return the JSON test plan now.`;
         // upgrade.
         for (let i = 0; i < steps.length; i++) {
           const step = steps[i];
-          const { status: stepStatus, evidence } = evaluateStep(step, snap);
+          const result = step.id === "runtime-errors"
+            ? {
+                status: "fail" as const,
+                evidence: snap.runtimeErrors?.join(" | ") ?? "Browser runtime errors detected",
+              }
+            : evaluateStep(step, snap);
+          const { status: stepStatus, evidence } = result;
           if (stepStatus === "pass") passed++;
           else if (stepStatus === "fail") failed++;
 
@@ -372,6 +587,12 @@ ${snap.text.slice(0, 800)}` },
           summary = (sumRes.content ?? summary).trim();
         } catch { /* keep default summary */ }
 
+        // Core Web Vitals (Playwright engine) — Lovable browser-performance
+        // parity: rated against Google's good/needs-improvement/poor bands.
+        if (snap.vitals) {
+          send("vitals", { metrics: rateVitals(snap.vitals), raw: snap.vitals });
+        }
+
         send("done", {
           passed, failed, total: steps.length,
           // Legacy aliases:
@@ -384,6 +605,7 @@ ${snap.text.slice(0, 800)}` },
           httpStatus: snap.status,
           pageTitle: snap.title,
           engine: snap.engine,
+          ...(snap.vitals ? { vitals: snap.vitals, vitalsRated: rateVitals(snap.vitals) } : {}),
         });
       } catch (err) {
         send("error", { message: (err as Error).message });

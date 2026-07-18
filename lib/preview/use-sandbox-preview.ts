@@ -1,27 +1,29 @@
 "use client";
 
 /**
- * Client hook that requests a real sandbox preview (E2B) for a project and
- * returns the live URL. Falls back transparently: when the sandbox backend
- * isn't configured the API returns { enabled: false } and `enabled` is false,
+ * Client hook that requests a real cloud sandbox preview (Modal — Lovable parity;
+ * E2B fallback) for a project and returns the live tunnel URL. When the sandbox
+ * backend isn't configured the API returns { enabled: false } and `enabled` is false,
  * so the caller should keep using the WebContainer / srcdoc engine
  * (see lib/preview/resolve-preview-engine.ts — pass `sandboxUrl` to prefer it).
  *
- * Usage:
- *   const { requestPreview, previewUrl, enabled, loading, error } = useSandboxPreview(projectId);
- *   // call requestPreview() after a build; then:
- *   const engine = resolvePreviewEngine(files, { sandboxUrl: previewUrl, ... });
- *   // if engine === "sandbox", render <iframe src={previewUrl} />
+ * Lovable parity: GET reconnect before cold POST; persist sandboxId in
+ * sessionStorage so reloads can reconnect quickly.
  */
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface SandboxPreviewState {
   enabled: boolean;
   previewUrl: string | null;
   sandboxId: string | null;
+  provider: string | null;
   loading: boolean;
   error: string | null;
   logs: string | null;
+}
+
+function storageKey(projectId: string) {
+  return `lifemark-sandbox-${projectId}`;
 }
 
 export function useSandboxPreview(projectId: string) {
@@ -29,13 +31,82 @@ export function useSandboxPreview(projectId: string) {
     enabled: false,
     previewUrl: null,
     sandboxId: null,
+    provider: null,
     loading: false,
     error: null,
     logs: null,
   });
-  // Mirror the live sandboxId in a ref so teardown works from unmount cleanup
-  // without re-subscribing effects on every state change.
   const sandboxIdRef = useRef<string | null>(null);
+  const bootedRef = useRef(false);
+  const statusCheckedRef = useRef(false);
+
+  const applyState = useCallback((next: SandboxPreviewState) => {
+    sandboxIdRef.current = next.sandboxId;
+    if (next.sandboxId && projectId) {
+      try {
+        sessionStorage.setItem(storageKey(projectId), next.sandboxId);
+      } catch { /* private mode */ }
+    }
+    setState(next);
+    return next;
+  }, [projectId]);
+
+  const reconnectPreview = useCallback(async (): Promise<SandboxPreviewState> => {
+    setState((s) => ({ ...s, loading: true, error: null }));
+    try {
+      let storedId: string | null = null;
+      try {
+        storedId = sessionStorage.getItem(storageKey(projectId));
+      } catch { /* private mode */ }
+      const qs = storedId ? `?sandboxId=${encodeURIComponent(storedId)}` : "";
+      const res = await fetch(`/api/projects/${projectId}/sandbox-preview${qs}`, { method: "GET" });
+      const data = await res.json();
+
+      if (!data.enabled) {
+        return applyState({
+          enabled: false,
+          previewUrl: null,
+          sandboxId: null,
+          provider: null,
+          loading: false,
+          error: null,
+          logs: null,
+        });
+      }
+
+      if (data.ok && data.previewUrl) {
+        return applyState({
+          enabled: true,
+          previewUrl: data.previewUrl,
+          sandboxId: data.sandboxId ?? null,
+          provider: typeof data.provider === "string" ? data.provider : null,
+          loading: false,
+          error: null,
+          logs: data.reconnected ? "Reconnected to warm sandbox" : null,
+        });
+      }
+
+      return applyState({
+        enabled: true,
+        previewUrl: null,
+        sandboxId: null,
+        provider: typeof data.provider === "string" ? data.provider : null,
+        loading: false,
+        error: null,
+        logs: null,
+      });
+    } catch (err) {
+      return applyState({
+        enabled: false,
+        previewUrl: null,
+        sandboxId: null,
+        provider: null,
+        loading: false,
+        error: err instanceof Error ? err.message : "Reconnect failed",
+        logs: null,
+      });
+    }
+  }, [applyState, projectId]);
 
   const requestPreview = useCallback(async (): Promise<SandboxPreviewState> => {
     setState((s) => ({ ...s, loading: true, error: null }));
@@ -43,53 +114,76 @@ export function useSandboxPreview(projectId: string) {
       const res = await fetch(`/api/projects/${projectId}/sandbox-preview`, { method: "POST" });
       const data = await res.json();
 
-      // Backend not configured → caller should use the in-browser engine.
       if (!data.enabled) {
-        const next: SandboxPreviewState = {
+        return applyState({
           enabled: false,
           previewUrl: null,
           sandboxId: null,
+          provider: null,
           loading: false,
           error: null,
           logs: null,
-        };
-        setState(next);
-        return next;
+        });
       }
 
-      sandboxIdRef.current = data.sandboxId ?? null;
-      const next: SandboxPreviewState = {
+      return applyState({
         enabled: true,
         previewUrl: data.previewUrl ?? null,
         sandboxId: data.sandboxId ?? null,
+        provider: typeof data.provider === "string" ? data.provider : null,
         loading: false,
         error: data.ok ? null : (data.error ?? "Sandbox failed"),
         logs: data.logs ?? null,
-      };
-      setState(next);
-      return next;
+      });
     } catch (err) {
-      const next: SandboxPreviewState = {
+      return applyState({
         enabled: false,
         previewUrl: null,
         sandboxId: null,
+        provider: null,
         loading: false,
         error: err instanceof Error ? err.message : "Request failed",
         logs: null,
-      };
-      setState(next);
-      return next;
+      });
     }
-  }, [projectId]);
+  }, [applyState, projectId]);
 
-  /**
-   * Tear down the running sandbox. Safe to call on unmount — uses sendBeacon so
-   * the request survives the page/panel teardown, with a fetch fallback.
-   */
+  /** Preflight: know cloud sandbox is configured before boot (skip WebContainer). */
+  useEffect(() => {
+    if (statusCheckedRef.current) return;
+    statusCheckedRef.current = true;
+    void fetch("/api/sandbox/status")
+      .then((r) => r.json())
+      .then((data: { enabled?: boolean; provider?: string }) => {
+        if (!data.enabled) return;
+        setState((s) => ({
+          ...s,
+          enabled: true,
+          provider: typeof data.provider === "string" ? data.provider : s.provider,
+          loading: true,
+        }));
+      })
+      .catch(() => {});
+  }, []);
+
+  /** Lovable parity: reconnect warm sandbox first, cold-provision only if needed. */
+  useEffect(() => {
+    if (!projectId || bootedRef.current) return;
+    bootedRef.current = true;
+    void (async () => {
+      const reconnected = await reconnectPreview();
+      if (reconnected.previewUrl) return;
+      await requestPreview();
+    })();
+  }, [projectId, reconnectPreview, requestPreview]);
+
   const stopPreview = useCallback(() => {
     const sandboxId = sandboxIdRef.current;
     if (!projectId || !sandboxId) return;
     sandboxIdRef.current = null;
+    try {
+      sessionStorage.removeItem(storageKey(projectId));
+    } catch { /* private mode */ }
     const url = `/api/projects/${projectId}/sandbox-preview/stop`;
     const payload = JSON.stringify({ sandboxId });
     try {
@@ -98,7 +192,7 @@ export function useSandboxPreview(projectId: string) {
         return;
       }
     } catch {
-      /* fall through to fetch */
+      /* fall through */
     }
     void fetch(url, {
       method: "POST",
@@ -108,5 +202,22 @@ export function useSandboxPreview(projectId: string) {
     }).catch(() => {});
   }, [projectId]);
 
-  return { ...state, requestPreview, stopPreview };
+  const syncFiles = useCallback(
+    async (files: Array<{ path: string; content: string }>): Promise<void> => {
+      const sandboxId = sandboxIdRef.current;
+      if (!projectId || !sandboxId || files.length === 0) return;
+      try {
+        await fetch(`/api/projects/${projectId}/sandbox-preview/sync`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sandboxId, files }),
+        });
+      } catch {
+        /* best-effort */
+      }
+    },
+    [projectId],
+  );
+
+  return { ...state, requestPreview, reconnectPreview, stopPreview, syncFiles };
 }

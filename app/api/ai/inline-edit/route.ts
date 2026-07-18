@@ -2,7 +2,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
-import { getDefaultAiModel } from "@/lib/ai/model-defaults";
+import { ECONOMY_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import {
   cancelCreditReservation,
@@ -21,6 +21,31 @@ export const maxDuration = 60;
  * restarts and is enforceable server-side. Edit #101+ costs 1 credit as before.
  */
 const FREE_INLINE_EDITS_PER_DAY = 100;
+
+/**
+ * GET — today's inline-edit quota (Lovable parity: the free-edit counter shown
+ * in the visual-edit popover). Returns { used, limit, remaining }.
+ */
+export async function GET() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const utcMidnight = new Date();
+  utcMidnight.setUTCHours(0, 0, 0, 0);
+  const { count } = await supabase
+    .from("credit_logs")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id)
+    .eq("action", "inline_edit")
+    .gte("created_at", utcMidnight.toISOString());
+  const used = count ?? 0;
+  return NextResponse.json({
+    used,
+    limit: FREE_INLINE_EDITS_PER_DAY,
+    remaining: Math.max(0, FREE_INLINE_EDITS_PER_DAY - used),
+  });
+}
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -132,7 +157,9 @@ Return ONLY the replacement code for lines ${startLine}-${endLine}:`;
   try {
     const result = await generateAI(
       {
-        model: model ?? getDefaultAiModel(),
+        // A few-line selection edit doesn't need the coding workhorse —
+        // economy coder by default; explicit model still wins.
+        model: model ?? ECONOMY_CODING_MODEL,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userMessage },

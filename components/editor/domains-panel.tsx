@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import type { Project } from "@/types/database";
+import { DomainBuyModal } from "./domain-buy-modal";
 
 interface DomainsPanelProps {
   project: Project;
@@ -198,6 +199,7 @@ export function DomainsPanel({ project, onProjectUpdate }: DomainsPanelProps) {
   const [connecting, setConnecting] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [showBuyModal, setShowBuyModal] = useState(false);
 
   // ── Clipboard ─────────────────────────────────────────────────────────────
   const [copied, setCopied] = useState<string | null>(null);
@@ -613,13 +615,21 @@ export function DomainsPanel({ project, onProjectUpdate }: DomainsPanelProps) {
             <Button
               size="sm"
               className="h-8 px-3 text-xs bg-foreground text-background hover:bg-foreground/90 shrink-0"
-              onClick={() => window.open(`https://www.namecheap.com/domains/registration/results/?domain=${slugify(project.name)}`, "_blank")}
+              onClick={() => setShowBuyModal(true)}
             >
               <ShoppingCart className="w-3 h-3 mr-1" />
               Buy domain
             </Button>
           </div>
         </div>
+
+        <DomainBuyModal
+          open={showBuyModal}
+          projectId={project.id}
+          defaultQuery={`${slugify(project.name)}.com`}
+          onClose={() => setShowBuyModal(false)}
+          onPurchased={() => void loadDomains()}
+        />
 
         {/* ── Connect existing domain ─────────────────────────────────────── */}
         <div className="rounded-xl border border-border/60 p-4">
