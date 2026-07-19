@@ -38,6 +38,7 @@ import Link from "next/link";
 import { LovablePreviewInteractionToolbar } from "./lovable/preview-interaction-toolbar";
 import { LovablePreviewStatusPill } from "./lovable/preview-status-pill";
 import { LovableVersionPreviewBanner } from "./lovable/version-preview-banner";
+import { ratePreviewMetric, type PreviewPerfSnapshot } from "@/lib/preview/preview-perf-bridge";
 
 const WebContainerPreview = dynamic(() => import("./webcontainer-preview"), {
   ssr: false,
@@ -440,7 +441,7 @@ export function PreviewPanel({
   // against stale files would target code that no longer exists.
   const visualEditEnabled = visualEdit && !versionPreviewLabel;
   const [showConsole, setShowConsole] = useState(false);
-  const [previewBottomTab, setPreviewBottomTab] = useState<"console" | "network">("console");
+  const [previewBottomTab, setPreviewBottomTab] = useState<"console" | "network" | "perf">("console");
   const [annotateScreenshot, setAnnotateScreenshot] = useState<string | null>(null);
   const [commentPinMode, setCommentPinMode] = useState(false);
   const [pendingComment, setPendingComment] = useState<VebElement | null>(null);
@@ -457,11 +458,21 @@ export function PreviewPanel({
   const [backgroundViteKey, setBackgroundViteKey] = useState(0);
   const [consoleLines, setConsoleLines] = useState<{ type: string; text: string }[]>([]);
   const [networkLines, setNetworkLines] = useState<
-    { method: string; url: string; status?: number; ok?: boolean; durationMs?: number; error?: string }[]
+    {
+      method: string;
+      url: string;
+      status?: number;
+      ok?: boolean;
+      durationMs?: number;
+      contentType?: string;
+      error?: string;
+    }[]
   >([]);
+  const [perfSnapshot, setPerfSnapshot] = useState<PreviewPerfSnapshot | null>(null);
   const clearPreviewLogs = useCallback(() => {
     setConsoleLines([]);
     setNetworkLines([]);
+    setPerfSnapshot(null);
   }, []);
   const [previewMachineState, setPreviewMachineState] = useState<PreviewMachineState>("idle");
   const previewBuildShaRef = useRef<string>("");
@@ -515,6 +526,11 @@ export function PreviewPanel({
     [projectId, previewPath, deployedUrl, previewEngine, sandboxUrl],
   );
   const [vebSelected, setVebSelected] = useState<VebElement | null>(null);
+  const [vebSelectedList, setVebSelectedList] = useState<VebElement[]>([]);
+  const clearVebSelection = useCallback(() => {
+    setVebSelected(null);
+    setVebSelectedList([]);
+  }, []);
   const [activeError, setActiveError] = useState<string | null>(null);
   const [errorDismissed, setErrorDismissed] = useState(false);
   const [previewCompileFailed, setPreviewCompileFailed] = useState(false);
@@ -589,8 +605,8 @@ export function PreviewPanel({
   }, [isVisualEditActive]);
 
   useEffect(() => {
-    if (!visualEditEnabled) setVebSelected(null);
-  }, [visualEditEnabled]);
+    if (!visualEditEnabled) clearVebSelection();
+  }, [visualEditEnabled, clearVebSelection]);
 
   const getPreviewContentWindow = useCallback((): Window | null => {
     if (previewEngine === "webcontainer") {
@@ -760,7 +776,7 @@ export function PreviewPanel({
         if (!data) return;
         const iframe = getActivePreviewIframe();
         const iframeRect = iframe?.getBoundingClientRect();
-        setVebSelected({
+        const next = {
           ...data,
           rect: {
             top: data.rect.top + (iframeRect?.top ?? 0),
@@ -768,6 +784,15 @@ export function PreviewPanel({
             width: data.rect.width,
             height: data.rect.height,
           },
+        };
+        const additive = d.additive === true;
+        setVebSelected(next);
+        setVebSelectedList((prev) => {
+          if (!additive) return [next];
+          if (prev.some((p) => p.xpath === next.xpath)) {
+            return prev.filter((p) => p.xpath !== next.xpath);
+          }
+          return [...prev, next];
         });
       }
       if (d.source === "lifemark-veb-inline" && visualEditEnabled) {
@@ -809,6 +834,13 @@ export function PreviewPanel({
         const type = d.type;
         const text = typeof d.text === "string" ? d.text : String(d.text ?? "");
         setConsoleLines((prev) => [...prev.slice(-99), { type, text }]);
+        if (projectId && (type === "log" || type === "warn" || type === "error" || type === "info")) {
+          void fetch(`/api/projects/${projectId}/preview-telemetry`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ console: [{ type, text }] }),
+          }).catch(() => {});
+        }
         if (type === "success") {
           // completeHealing already clears errors — don't call both.
           errorGuard.completeHealing();
@@ -838,11 +870,33 @@ export function PreviewPanel({
         const status = typeof d.status === "number" ? d.status : undefined;
         const ok = typeof d.ok === "boolean" ? d.ok : undefined;
         const durationMs = typeof d.durationMs === "number" ? d.durationMs : undefined;
+        const contentType = typeof d.contentType === "string" ? d.contentType : undefined;
         const error = typeof d.error === "string" ? d.error : undefined;
         setNetworkLines((prev) => [
           ...prev.slice(-99),
-          { method, url, status, ok, durationMs, error },
+          { method, url, status, ok, durationMs, contentType, error },
         ]);
+        // Buffer for agent tools (fire-and-forget).
+        if (projectId) {
+          void fetch(`/api/projects/${projectId}/preview-telemetry`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              network: [{ method, url, status, ok, durationMs, contentType, error }],
+            }),
+          }).catch(() => {});
+        }
+      }
+      if (d.source === "lifemark-preview-perf") {
+        setPerfSnapshot({
+          ttfb: typeof d.ttfb === "number" ? d.ttfb : null,
+          domContentLoaded: typeof d.domContentLoaded === "number" ? d.domContentLoaded : null,
+          load: typeof d.load === "number" ? d.load : null,
+          fcp: typeof d.fcp === "number" ? d.fcp : null,
+          lcp: typeof d.lcp === "number" ? d.lcp : null,
+          cls: typeof d.cls === "number" ? d.cls : null,
+          capturedAt: Date.now(),
+        });
       }
       if (d.type === "lifemark-screenshot") {
         const messageId = typeof d.messageId === "string" ? d.messageId : "";
@@ -879,7 +933,7 @@ export function PreviewPanel({
     // urlEditing MUST be a dep: without it the listener kept a stale
     // urlEditing=false and location reports overwrote the user's typing.
     // Depend on stable errorGuard methods — never the whole API object.
-  }, [onError, visualEditEnabled, commentPinMode, outOfCredits, errorGuard.completeHealing, urlEditing, transitionPreviewMachine, getActivePreviewIframe, getPreviewContentWindow]);
+  }, [onError, visualEditEnabled, commentPinMode, outOfCredits, errorGuard.completeHealing, urlEditing, transitionPreviewMachine, getActivePreviewIframe, getPreviewContentWindow, projectId]);
 
   useEffect(() => {
     if (outOfCredits) {
@@ -946,7 +1000,7 @@ export function PreviewPanel({
       }
       setRefreshKey((k) => k + 1);
       clearPreviewLogs();
-      setVebSelected(null);
+      clearVebSelection();
       errorGuard.clearErrors();
       previewBuildShaRef.current = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       transitionPreviewMachine("loading", "refresh remount");
@@ -980,14 +1034,14 @@ export function PreviewPanel({
     const engine = previewEngineRef.current;
     if (engine === "sandbox" && sandboxIdLiveRef.current) {
       clearPreviewLogs();
-      setVebSelected(null);
+      clearVebSelection();
       errorGuard.clearErrors();
       transitionPreviewMachine("loading", "sandbox file sync");
       return;
     }
     if (engine === "webcontainer") {
       clearPreviewLogs();
-      setVebSelected(null);
+      clearVebSelection();
       errorGuard.clearErrors();
       transitionPreviewMachine("loading", "webcontainer file sync");
       return;
@@ -995,11 +1049,11 @@ export function PreviewPanel({
 
     setRefreshKey((k) => k + 1);
     clearPreviewLogs();
-    setVebSelected(null);
+    clearVebSelection();
     errorGuard.clearErrors();
     previewBuildShaRef.current = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     transitionPreviewMachine("loading", "refresh requested");
-  }, [errorGuard.clearErrors, transitionPreviewMachine]);
+  }, [clearVebSelection, errorGuard.clearErrors, transitionPreviewMachine]);
 
   useEffect(() => {
     function handleRefresh(event: Event) {
@@ -1370,6 +1424,24 @@ export function PreviewPanel({
     }
   }
 
+  function sendElementCommentToChat() {
+    if (!pendingComment || !commentDraft.trim()) return;
+    const prompt =
+      `Fix this pinned preview comment on \`${previewPath}\`:\n\n` +
+      `Element: <${pendingComment.tagName}>${pendingComment.textContent ? ` — "${pendingComment.textContent.slice(0, 120)}"` : ""}\n` +
+      `XPath: ${pendingComment.xpath}\n\n` +
+      `Comment: ${commentDraft.trim()}`;
+    onSendPromptToChatRef.current?.(prompt);
+    setPendingComment(null);
+    setCommentDraft("");
+    setCommentPinMode(false);
+    toast({ title: "Comment sent to chat" });
+  }
+
+  function refreshPreviewPerf() {
+    getPreviewContentWindow()?.postMessage({ type: "lifemark-preview-perf-request" }, "*");
+  }
+
   // Inject element-pick script when comment pin mode is active (srcDoc iframe)
   useEffect(() => {
     if (!commentPinMode || !fallbackHtml) return;
@@ -1444,7 +1516,7 @@ export function PreviewPanel({
         try {
           iframe.contentWindow.location.reload();
           clearPreviewLogs();
-          setVebSelected(null);
+          clearVebSelection();
           return;
         } catch {
           /* cross-origin — fall through to remount */
@@ -1927,7 +1999,9 @@ export function PreviewPanel({
             {visualEditEnabled && vebSelected && (
               <VebBridgePopover
                 selection={vebSelected}
+                selections={vebSelectedList}
                 files={files}
+                projectId={projectId}
                 onFileChange={handleVebFileChange}
                 onLiveApply={(payload) => {
                   sandboxIframeRef.current?.contentWindow?.postMessage(
@@ -1937,10 +2011,15 @@ export function PreviewPanel({
                 }}
                 onRequestAiEdit={onSendPromptToChat}
                 onClose={() => {
-                  setVebSelected(null);
+                  clearVebSelection();
                   sandboxIframeRef.current?.contentWindow?.postMessage({ type: "lifemark-veb-clear" }, "*");
                 }}
-                onSelectionChange={setVebSelected}
+                onSelectionChange={(next) => {
+                  setVebSelected(next);
+                  setVebSelectedList((prev) =>
+                    prev.map((p) => (p.xpath === next.xpath ? next : p)),
+                  );
+                }}
               />
             )}
             {projectId && (
@@ -1987,7 +2066,9 @@ export function PreviewPanel({
             {visualEditEnabled && vebSelected && (
               <VebBridgePopover
                 selection={vebSelected}
+                selections={vebSelectedList}
                 files={files}
+                projectId={projectId}
                 onFileChange={handleVebFileChange}
                 onLiveApply={(payload) => {
                   const iframe = sandpackContainerRef.current?.querySelector("iframe");
@@ -1995,11 +2076,16 @@ export function PreviewPanel({
                 }}
                 onRequestAiEdit={onSendPromptToChat}
                 onClose={() => {
-                  setVebSelected(null);
+                  clearVebSelection();
                   const iframe = sandpackContainerRef.current?.querySelector("iframe");
                   iframe?.contentWindow?.postMessage({ type: "lifemark-veb-clear" }, "*");
                 }}
-                onSelectionChange={setVebSelected}
+                onSelectionChange={(next) => {
+                  setVebSelected(next);
+                  setVebSelectedList((prev) =>
+                    prev.map((p) => (p.xpath === next.xpath ? next : p)),
+                  );
+                }}
               />
             )}
             {projectId && (
@@ -2081,6 +2167,7 @@ export function PreviewPanel({
             <VisualEditOverlay
               iframeRef={iframeRef}
               files={files}
+              projectId={projectId}
               onFileChange={handleVebFileChange}
               enabled={visualEditEnabled}
               onRequestAiEdit={onSendPromptToChat}
@@ -2098,18 +2185,18 @@ export function PreviewPanel({
             {showConsole && (
               <div className="h-40 border-t border-border bg-muted/30 flex flex-col">
                 <div className="flex items-center gap-1 px-2 py-1 border-b border-border/60 shrink-0">
-                  {(["console", "network"] as const).map((tab) => (
+                  {(["console", "network", "perf"] as const).map((tab) => (
                     <button
                       key={tab}
                       type="button"
                       onClick={() => setPreviewBottomTab(tab)}
-                      className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
+                      className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors capitalize ${
                         previewBottomTab === tab
                           ? "bg-muted text-foreground"
                           : "text-muted-foreground hover:text-foreground"
                       }`}
                     >
-                      {tab === "console" ? "Console" : "Network"}
+                      {tab === "console" ? "Console" : tab === "network" ? "Network" : "Perf"}
                       {tab === "network" && networkLines.length > 0 && (
                         <span className="ml-1 text-muted-foreground/70">({networkLines.length})</span>
                       )}
@@ -2134,34 +2221,96 @@ export function PreviewPanel({
                         </div>
                       ))
                     )
-                  ) : networkLines.length === 0 ? (
-                    <p className="text-muted-foreground">No network requests yet…</p>
-                  ) : (
-                    networkLines.map((line, i) => (
-                      <div key={i} className="flex items-start gap-2 text-[11px] leading-snug">
-                        <span className="shrink-0 font-semibold text-violet-400 w-10">{line.method}</span>
-                        <span
-                          className={
-                            line.ok === false || (line.status != null && line.status >= 400)
-                              ? "text-red-400"
-                              : "text-emerald-400"
-                          }
-                        >
-                          {line.status ?? "—"}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-muted-foreground" title={line.url}>
-                          {line.url}
-                        </span>
-                        {line.durationMs != null && (
-                          <span className="shrink-0 text-muted-foreground/70">{line.durationMs}ms</span>
-                        )}
-                        {line.error && (
-                          <span className="shrink-0 text-red-400 truncate max-w-[120px]" title={line.error}>
-                            {line.error}
+                  ) : previewBottomTab === "network" ? (
+                    networkLines.length === 0 ? (
+                      <p className="text-muted-foreground">No network requests yet…</p>
+                    ) : (
+                      networkLines.map((line, i) => (
+                        <div key={i} className="flex items-start gap-2 text-[11px] leading-snug">
+                          <span className="shrink-0 font-semibold text-violet-400 w-10">{line.method}</span>
+                          <span
+                            className={
+                              line.ok === false || (line.status != null && line.status >= 400)
+                                ? "text-red-400"
+                                : "text-emerald-400"
+                            }
+                          >
+                            {line.status ?? "—"}
                           </span>
-                        )}
+                          <span className="min-w-0 flex-1 truncate text-muted-foreground" title={line.url}>
+                            {line.url}
+                          </span>
+                          {line.contentType && (
+                            <span
+                              className="shrink-0 text-muted-foreground/60 truncate max-w-[90px]"
+                              title={line.contentType}
+                            >
+                              {line.contentType.split(";")[0]}
+                            </span>
+                          )}
+                          {line.durationMs != null && (
+                            <span className="shrink-0 text-muted-foreground/70">{line.durationMs}ms</span>
+                          )}
+                          {line.error && (
+                            <span className="shrink-0 text-red-400 truncate max-w-[120px]" title={line.error}>
+                              {line.error}
+                            </span>
+                          )}
+                        </div>
+                      ))
+                    )
+                  ) : !perfSnapshot ? (
+                    <p className="text-muted-foreground">Reload preview to capture timing metrics…</p>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-muted-foreground">Core Web Vitals + navigation</span>
+                        <button
+                          type="button"
+                          onClick={refreshPreviewPerf}
+                          className="text-[10px] text-violet-400 hover:text-violet-300"
+                        >
+                          Refresh
+                        </button>
                       </div>
-                    ))
+                      {(["ttfb", "fcp", "lcp", "cls", "domContentLoaded", "load"] as const).map((key) => {
+                      const val = perfSnapshot[key];
+                      const rating = ratePreviewMetric(key, val);
+                      const color =
+                        rating === "good"
+                          ? "text-emerald-400"
+                          : rating === "needs"
+                            ? "text-amber-400"
+                            : rating === "poor"
+                              ? "text-red-400"
+                              : "text-muted-foreground";
+                      const label =
+                        key === "ttfb"
+                          ? "TTFB"
+                          : key === "fcp"
+                            ? "FCP"
+                            : key === "lcp"
+                              ? "LCP"
+                              : key === "cls"
+                                ? "CLS"
+                                : key === "domContentLoaded"
+                                  ? "DCL"
+                                  : "Load";
+                      return (
+                        <div key={key} className="flex items-center gap-3 text-[11px] py-0.5">
+                          <span className="w-10 shrink-0 text-muted-foreground">{label}</span>
+                          <span className={`w-16 shrink-0 font-semibold tabular-nums ${color}`}>
+                            {val == null
+                              ? "—"
+                              : key === "cls"
+                                ? String(val)
+                                : `${val}ms`}
+                          </span>
+                          <span className="text-muted-foreground/70 capitalize">{rating === "na" ? "pending" : rating}</span>
+                        </div>
+                      );
+                    })}
+                    </>
                   )}
                 </div>
               </div>
@@ -2412,6 +2561,14 @@ export function PreviewPanel({
           />
           <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setPendingComment(null)}>Cancel</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!commentDraft.trim()}
+              onClick={sendElementCommentToChat}
+            >
+              Send to AI
+            </Button>
             <Button size="sm" disabled={commentSaving || !commentDraft.trim()} onClick={() => void submitElementComment()}>
               {commentSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Post comment"}
             </Button>

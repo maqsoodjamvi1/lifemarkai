@@ -87,5 +87,26 @@ export async function persistChatTurnMessages(
   }
 
   const assistantMessageId = data?.find((row) => row.role === "assistant")?.id;
+
+  // Semantic-search cache — fire-and-forget; never block the chat turn.
+  void (async () => {
+    try {
+      const { upsertMessageEmbedding } = await import("@/lib/editor/message-embeddings");
+      const admin = await createAdminClient();
+      await Promise.all(
+        (data ?? []).map((row, i) =>
+          upsertMessageEmbedding(
+            admin,
+            context.projectId,
+            row.id,
+            payload[i]?.content ?? "",
+          ),
+        ),
+      );
+    } catch {
+      /* non-critical */
+    }
+  })();
+
   return { assistantMessageId };
 }

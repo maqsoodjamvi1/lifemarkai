@@ -28,18 +28,25 @@ import type { GeneratedFile } from "./file-attachment-card";
 import {
   LovableChatPanelShell,
   LovableChatComposerShell,
+  LovableComposerMobileSheet,
   LovableChatInputCard,
   LovableChatTimeline,
+  type LovableChatTimelineHandle,
   LovableChatHeader,
   LovableChatHeaderStatus,
   LovableScrollToBottom,
+  LovableContinueBanner,
+  LovableDraftRestoreBanner,
+  type ChatSearchMsgModeFilter,
   LovableStreamingFilesCard,
   LovableChatSearchBar,
+  type ChatSearchRoleFilter,
   LovableThreadItem,
   LovableContextSummaryBanner,
   type LovableFileDiffEntry,
   type LovableFileGenResult,
   LOVABLE_PROMPT_TEMPLATES,
+  LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY,
   type LovableMentionItem,
   mergeAgentStep,
   type AgentTaskStep,
@@ -63,6 +70,8 @@ import { parseLineRefs, removeLineRefFromInput } from "@/lib/editor/parse-line-r
 import { formatGuestCommentsForAi } from "@/lib/editor/format-guest-comments";
 import { formatErrorsForHealing } from "@/lib/preview/preview-error-bridge";
 import type { ChatSearchMode } from "@/lib/editor/search-chat-messages";
+import { printChatConversation } from "@/lib/editor/print-chat";
+import { buildLovableChatDayJumps, lovableChatDayKey } from "@/components/editor/lovable/chat-day-utils";
 import type { LovableFileGenFormat } from "./lovable/composer-file-gen-picker";
 import { useGuestCommentCount } from "@/hooks/use-guest-comment-count";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
@@ -157,6 +166,8 @@ interface ChatPanelProps {
   /** Toggle visual edit mode on the preview iframe */
   onVisualEditToggle?: () => void;
   isVisualEditActive?: boolean;
+  /** Narrow viewport — docks composer as a bottom sheet */
+  isMobile?: boolean;
   /** Show skeleton shimmer while messages are being fetched from the server */
   isMessagesLoading?: boolean;
   /** When true, older messages exist beyond the SSR batch */
@@ -203,6 +214,7 @@ export function ChatPanel({
   pendingBuildFromFile, onPendingBuildFromFileConsumed,
   isLocked = false, onOpenPanel, onFocusPreview, onProjectUpdate,
   onVisualEditToggle, isVisualEditActive = false,
+  isMobile = false,
   isMessagesLoading = false,
   hasMoreMessages: hasMoreMessagesInitial = false,
   securityIssueCount = 0,
@@ -228,6 +240,8 @@ export function ChatPanel({
   });
 
   const { toast } = useToast();
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
   const refreshProjectFiles = useCallback(async () => {
     const res = await fetch(`/api/projects/${project.id}/files`, { cache: "no-store" });
@@ -254,7 +268,10 @@ export function ChatPanel({
     return getEmptyProjectPrompts(inferProjectStage(files), project.framework);
   }, [files, previewError, credits, project.framework]);
 
+  const composerDraftKey = `lifemark-composer-draft-${project.id}`;
   const [input, setInput] = useState("");
+  const [showDraftBanner, setShowDraftBanner] = useState(false);
+  const draftHydratedRef = useRef(false);
   // "Team" toggle: when on, Agent-mode sends run the full multi-agent Editor
   // Intelligence orchestrator (in the Intelligence panel) instead of the
   // single-model /api/ai/agent route. Only affects Agent mode.
@@ -299,6 +316,7 @@ export function ChatPanel({
   const keyboardInset = useKeyboardInset();
   const [streamingContent, setStreamingContent] = useState("");
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [copiedAll, setCopiedAll] = useState(false);
   const [allCodeBlocksCollapsed, setAllCodeBlocksCollapsed] = useState(false);
   const [messageDiffs, setMessageDiffs] = useState<Record<string, FileDiffEntry[]>>({});
@@ -407,14 +425,55 @@ export function ChatPanel({
       .catch(() => {});
    
   }, [project.id]);
-  // Emoji reactions: { [messageId]: Set<emoji> }
-  const [reactions, setReactions] = useState<Record<string, Set<string>>>({});
-  function toggleReaction(messageId: string, emoji: string) {
-    setReactions((prev) => {
-      const set = new Set(prev[messageId] ?? []);
-      if (set.has(emoji)) { set.delete(emoji); } else { set.add(emoji); }
-      return { ...prev, [messageId]: set };
+  // Emoji reactions: { [messageId]: Set<emoji> } — persisted in message.metadata.reactions
+  const [reactions, setReactions] = useState<Record<string, Set<string>>>(() => {
+    const initial: Record<string, Set<string>> = {};
+    messages.forEach((m) => {
+      const raw = (m.metadata as { reactions?: string[] } | null)?.reactions;
+      if (Array.isArray(raw) && raw.length > 0) initial[m.id] = new Set(raw);
     });
+    return initial;
+  });
+
+  useEffect(() => {
+    setReactions((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      messages.forEach((m) => {
+        const raw = (m.metadata as { reactions?: string[] } | null)?.reactions;
+        if (Array.isArray(raw) && raw.length > 0 && !next[m.id]) {
+          next[m.id] = new Set(raw);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [messages]);
+
+  async function toggleReaction(messageId: string, emoji: string) {
+    const prevSet = reactions[messageId] ?? new Set<string>();
+    const nextSet = new Set(prevSet);
+    if (nextSet.has(emoji)) nextSet.delete(emoji);
+    else nextSet.add(emoji);
+    const arr = [...nextSet];
+    setReactions((prev) => {
+      const n = { ...prev };
+      if (arr.length === 0) delete n[messageId];
+      else n[messageId] = nextSet;
+      return n;
+    });
+    const msg = messages.find((m) => m.id === messageId);
+    const baseMeta = (msg?.metadata as Record<string, unknown> | null) ?? {};
+    const meta = { ...baseMeta, reactions: arr.length > 0 ? arr : undefined };
+    if (!meta.reactions) delete meta.reactions;
+    onMessagesUpdate(
+      messages.map((m) => (m.id === messageId ? { ...m, metadata: meta } : m)),
+    );
+    await fetch(`/api/projects/${project.id}/messages/${messageId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ metadata: { reactions: arr.length > 0 ? arr : null }, mergeMetadata: true }),
+    }).catch(() => {/* best-effort */});
   }
 
   // Message ratings: { [messageId]: 1 | -1 }
@@ -551,22 +610,135 @@ export function ChatPanel({
     }
   }, [project.id, toast]);
   const [showSearch, setShowSearch] = useState(false);
+  const [compactDensity, setCompactDensity] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try { return localStorage.getItem(`lifemark-chat-density-${project.id}`) === "compact"; }
+    catch { return false; }
+  });
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMode, setSearchMode] = useState<ChatSearchMode>("keyword");
+  const [searchRoleFilter, setSearchRoleFilter] = useState<ChatSearchRoleFilter>("all");
+  const [searchMsgModeFilter, setSearchMsgModeFilter] = useState<ChatSearchMsgModeFilter>("all");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchHitIds, setSearchHitIds] = useState<Set<string> | null>(null);
   const [searchMatchCount, setSearchMatchCount] = useState(0);
-  const [collapsedThreads, setCollapsedThreads] = useState<Set<number>>(new Set());
+  const [activeSearchHitIndex, setActiveSearchHitIndex] = useState(0);
+  const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const clearedSnapshotRef = useRef<Message[] | null>(null);
+  const deletedSnapshotRef = useRef<Message | null>(null);
+  const [recentSearchQueries, setRecentSearchQueries] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = localStorage.getItem(`lifemark-recent-searches-${project.id}`);
+      return raw ? (JSON.parse(raw) as string[]).slice(0, 6) : [];
+    } catch {
+      return [];
+    }
+  });
+  const collapsedThreadsKey = `lifemark-collapsed-threads-${project.id}`;
+  const [collapsedThreads, setCollapsedThreads] = useState<Set<number>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      const raw = sessionStorage.getItem(`lifemark-collapsed-threads-${project.id}`);
+      if (raw) return new Set(JSON.parse(raw) as number[]);
+    } catch { /* private mode */ }
+    return new Set();
+  });
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchStorageKey = `lifemark-chat-search-${project.id}`;
   const bookmarkKey = `lifemark-bookmarks-${project.id}`;
+  const chatStateReadyRef = useRef(false);
   const [bookmarkedIds, setBookmarkedIds] = useState<Set<string>>(() => {
     if (typeof window === "undefined") return new Set();
     try { return new Set(JSON.parse(localStorage.getItem(`lifemark-bookmarks-${project.id}`) ?? "[]")); }
     catch { return new Set(); }
   });
   const [showBookmarks, setShowBookmarks] = useState(false);
-  const [pinnedMsgId, setPinnedMsgId] = useState<string | null>(null);
-  // Generation timing: track elapsed seconds per assistant message
+  const [pinnedMsgId, setPinnedMsgId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try { return localStorage.getItem(`lifemark-pinned-${project.id}`); } catch { return null; }
+  });
+
+  // Hydrate pins / bookmarks / queue from server (localStorage is offline cache only).
+  useEffect(() => {
+    let cancelled = false;
+    chatStateReadyRef.current = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/projects/${project.id}/chat-state`);
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as {
+          pinned_message_id?: string | null;
+          bookmarked_ids?: string[];
+          prompt_queue?: QueueItem[];
+        };
+        if (cancelled) return;
+        if ("pinned_message_id" in data) {
+          setPinnedMsgId(data.pinned_message_id ?? null);
+        }
+        if (Array.isArray(data.bookmarked_ids)) {
+          setBookmarkedIds(new Set(data.bookmarked_ids));
+        }
+        if (Array.isArray(data.prompt_queue) && data.prompt_queue.length > 0) {
+          setPromptQueue(
+            data.prompt_queue.filter(
+              (q): q is QueueItem =>
+                !!q && typeof q.id === "string" && typeof q.text === "string",
+            ),
+          );
+        }
+      } catch {
+        /* offline — keep local cache */
+      } finally {
+        if (!cancelled) chatStateReadyRef.current = true;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id]);
+
+  // Persist chat state to server + local cache.
+  useEffect(() => {
+    try {
+      if (pinnedMsgId) localStorage.setItem(`lifemark-pinned-${project.id}`, pinnedMsgId);
+      else localStorage.removeItem(`lifemark-pinned-${project.id}`);
+      localStorage.setItem(bookmarkKey, JSON.stringify([...bookmarkedIds]));
+    } catch { /* private mode */ }
+
+    if (!chatStateReadyRef.current) return;
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/projects/${project.id}/chat-state`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          pinned_message_id: pinnedMsgId,
+          bookmarked_ids: [...bookmarkedIds],
+          prompt_queue: promptQueue.map((q) => ({
+            id: q.id,
+            text: q.text,
+            repeat: q.repeat,
+            remaining: q.remaining,
+          })),
+        }),
+      }).catch(() => {/* best-effort */});
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [pinnedMsgId, bookmarkedIds, promptQueue, project.id, bookmarkKey]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(collapsedThreadsKey, JSON.stringify([...collapsedThreads]));
+    } catch { /* private mode */ }
+  }, [collapsedThreads, collapsedThreadsKey]);
+
+  useEffect(() => {
+    if (pinnedMsgId && !messages.some((m) => m.id === pinnedMsgId)) {
+      setPinnedMsgId(null);
+    }
+  }, [messages, pinnedMsgId]);
+
   const genStartRef = useRef<number>(0);
   const [genTimes, setGenTimes] = useState<Record<string, number>>({});
   // Per-message preview screenshots (messageId → data URL)
@@ -631,13 +803,15 @@ export function ChatPanel({
   function toggleBookmark(messageId: string) {
     setBookmarkedIds((prev) => {
       const next = new Set(prev);
-      if (next.has(messageId)) { next.delete(messageId); } else { next.add(messageId); }
-      try { localStorage.setItem(bookmarkKey, JSON.stringify([...next])); } catch {}
+      if (next.has(messageId)) next.delete(messageId);
+      else next.add(messageId);
       return next;
     });
   }
 
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const lastSeenCountRef = useRef(0);
+  const [newMessageCount, setNewMessageCount] = useState(0);
   const abortControllerRef = useRef<AbortController | null>(null);
   /**
    * True while sendMessage is executing. `streaming` is React state, so two
@@ -646,12 +820,75 @@ export function ChatPanel({
    * synchronously and closes that race.
    */
   const sendingRef = useRef(false);
+
+  // Realtime shared chat — merge remote inserts/updates/deletes without clobbering temps.
+  useEffect(() => {
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`project-messages:${project.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "messages",
+          filter: `project_id=eq.${project.id}`,
+        },
+        (payload) => {
+          if (streaming || sendingRef.current) return;
+          const eventType = payload.eventType;
+          if (eventType === "INSERT") {
+            const row = payload.new as Message;
+            if (!row?.id) return;
+            const current = messagesRef.current;
+            if (current.some((m) => m.id === row.id)) return;
+            if (
+              row.role === "user" &&
+              current.some(
+                (m) =>
+                  m.id.startsWith("temp-") &&
+                  m.role === "user" &&
+                  m.content === row.content,
+              )
+            ) {
+              return;
+            }
+            onMessagesUpdate(
+              [...current, row].sort(
+                (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+              ),
+            );
+            return;
+          }
+          if (eventType === "UPDATE") {
+            const row = payload.new as Message;
+            if (!row?.id) return;
+            onMessagesUpdate(
+              messagesRef.current.map((m) => (m.id === row.id ? { ...m, ...row } : m)),
+            );
+            return;
+          }
+          if (eventType === "DELETE") {
+            const old = payload.old as { id?: string };
+            if (!old?.id) return;
+            onMessagesUpdate(messagesRef.current.filter((m) => m.id !== old.id));
+          }
+        },
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [project.id, onMessagesUpdate, streaming]);
+
   // Abort any in-flight stream when the panel unmounts so the response
   // reader is cancelled/released and no further work runs against an
   // unmounted component.
   useEffect(() => () => { abortControllerRef.current?.abort(); }, []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const timelineRef = useRef<LovableChatTimelineHandle>(null);
+  const deepLinkedRef = useRef(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(hasMoreMessagesInitial);
   const loadingOlderRef = useRef(false);
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
@@ -698,10 +935,24 @@ export function ChatPanel({
     return () => clearInterval(id);
   }, [streaming]);
 
+  const [stoppedDraft, setStoppedDraft] = useState<string | null>(null);
+
   function stopGeneration() {
+    const partial = streamingContent.trim();
+    if (partial.length > 20) setStoppedDraft(partial);
     abortControllerRef.current?.abort();
     setStreamingWithCallback(false);
     setStreamingContent("");
+  }
+
+  function continueAfterStop() {
+    const draft = stoppedDraft;
+    setStoppedDraft(null);
+    if (!draft) return;
+    const snippet = draft.length > 1200 ? `${draft.slice(0, 1200)}…` : draft;
+    void sendMessage(
+      `Continue from where you left off. Here is the unfinished output so far:\n\n\`\`\`\n${snippet}\n\`\`\`\n\nPick up cleanly and finish.`,
+    );
   }
 
   async function rateMessage(messageId: string, value: 1 | -1) {
@@ -715,10 +966,28 @@ export function ChatPanel({
     // Keep the messages prop in sync so the ratings hydration effect never
     // re-adds a rating the user just toggled off.
     onMessagesUpdate(messages.map((m) => (m.id === messageId ? { ...m, rating: next ?? null } : m)));
-    // Supabase generated types have a known drift on the messages table update; suppress safely
-    const db = createClient();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (db.from("messages") as any).update({ rating: next ?? null }).eq("id", messageId);
+    await fetch(`/api/projects/${project.id}/messages/${messageId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rating: next ?? null }),
+    }).catch(() => {/* best-effort */});
+  }
+
+  async function persistPendingBranchMeta(userMessageId: string) {
+    const branch = pendingBranchRef.current;
+    if (!branch || userMessageId.startsWith("temp-")) return;
+    pendingBranchRef.current = null;
+    await fetch(`/api/projects/${project.id}/messages/${userMessageId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mergeMetadata: true,
+        metadata: {
+          branched_at: branch.branchedAt,
+          branch_from_snapshot_id: branch.snapshotId,
+        },
+      }),
+    }).catch(() => {/* best-effort */});
   }
 
   async function handleRevertFile(messageId: string, diff: FileDiffEntry) {
@@ -927,42 +1196,125 @@ export function ChatPanel({
     setEditInput(getDisplayMessageContent(msg));
   }
 
-  async function submitEditedMessage() {
-    if (!editingMessageId || !editInput.trim()) return;
-    // Auto-snapshot the current state before truncating so the user can always revert
-    void fetch("/api/projects/snapshots", {
+  const pendingBranchRef = useRef<{
+    snapshotId: string | null;
+    branchedAt: string;
+  } | null>(null);
+
+  async function truncateChatFromMessage(messageId: string, includePivot: boolean) {
+    const res = await fetch(`/api/projects/${project.id}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        projectId: project.id,
-        label: `Before edit — ${new Date().toLocaleTimeString()}`,
+        truncate: true,
+        afterMessageId: messageId,
+        includePivot,
       }),
-    }).catch(() => {/* non-blocking — ignore errors */});
-    // Truncate messages up to (not including) the edited message, then resend
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(
+        typeof (err as { error?: string }).error === "string"
+          ? (err as { error: string }).error
+          : "Failed to truncate chat history",
+      );
+    }
+  }
+
+  async function submitEditedMessage() {
+    if (!editingMessageId || !editInput.trim()) return;
     const idx = messages.findIndex((m) => m.id === editingMessageId);
-    const truncated = idx >= 0 ? messages.slice(0, idx) : messages;
+    if (idx < 0) return;
+
+    let snapshotId: string | null = null;
+    try {
+      const snapRes = await fetch("/api/projects/snapshots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: project.id,
+          label: `Before edit — ${new Date().toLocaleTimeString()}`,
+        }),
+      });
+      if (snapRes.ok) {
+        const snap = (await snapRes.json()) as { id?: string; snapshot?: { id?: string } };
+        snapshotId = snap.id ?? snap.snapshot?.id ?? null;
+      }
+    } catch {
+      /* non-blocking */
+    }
+
+    try {
+      await truncateChatFromMessage(editingMessageId, true);
+    } catch (e) {
+      toast({
+        title: "Couldn't branch chat",
+        description: e instanceof Error ? e.message : "Truncate failed",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const truncated = messages.slice(0, idx);
+    const branchedAt = new Date().toISOString();
+    pendingBranchRef.current = { snapshotId, branchedAt };
     setEditingMessageId(null);
     onMessagesUpdate(truncated);
     toast({
-      title: "Branch saved",
-      description: "Previous state saved to History → Branches.",
+      title: "Branched conversation",
+      description: snapshotId
+        ? "Earlier messages removed. File snapshot saved in History."
+        : "Earlier messages removed from this chat.",
     });
-    await sendMessage(editInput, undefined, truncated);
+    await sendMessage(editInput, undefined, truncated, { branchMeta: { snapshotId, branchedAt } });
     setEditInput("");
   }
 
   async function handleRegenerate() {
     if (streaming) return;
-    // Find the last assistant message index
-    const lastAsstIdx = [...messages].map((m, i) => ({ m, i })).filter(({ m }) => m.role === "assistant").pop()?.i ?? -1;
+    const lastAsstIdx =
+      [...messages].map((m, i) => ({ m, i })).filter(({ m }) => m.role === "assistant").pop()?.i ?? -1;
     if (lastAsstIdx < 0) return;
-    // Find the last user message before it
     const lastUserMsg = messages.slice(0, lastAsstIdx).filter((m) => m.role === "user").pop();
     if (!lastUserMsg) return;
-    // Truncate to just before the last assistant message
+
+    let snapshotId: string | null = null;
+    try {
+      const snapRes = await fetch("/api/projects/snapshots", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId: project.id,
+          label: `Before regenerate — ${new Date().toLocaleTimeString()}`,
+        }),
+      });
+      if (snapRes.ok) {
+        const snap = (await snapRes.json()) as { id?: string; snapshot?: { id?: string } };
+        snapshotId = snap.id ?? snap.snapshot?.id ?? null;
+      }
+    } catch {
+      /* non-blocking */
+    }
+
+    try {
+      // Drop the last assistant (and anything after); keep the user prompt.
+      await truncateChatFromMessage(messages[lastAsstIdx]!.id, true);
+    } catch (e) {
+      toast({
+        title: "Couldn't regenerate",
+        description: e instanceof Error ? e.message : "Truncate failed",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const truncated = messages.slice(0, lastAsstIdx);
+    const branchedAt = new Date().toISOString();
+    pendingBranchRef.current = { snapshotId, branchedAt };
     onMessagesUpdate(truncated);
-    await sendMessage(getDisplayMessageContent(lastUserMsg), undefined, truncated);
+    await sendMessage(getDisplayMessageContent(lastUserMsg), undefined, truncated, {
+      branchMeta: { snapshotId, branchedAt },
+    });
   }
 
   useEffect(() => {
@@ -1091,6 +1443,8 @@ export function ChatPanel({
   // failures, forever. The persistent ledger remembers that we already tried THIS
   // error on THIS project, so a reload no longer buys the user the same failure
   // twice. It's cleared whenever the code changes, so a real retry is still allowed.
+  const [freeFixesRemaining, setFreeFixesRemaining] = useState<number | null>(null);
+
   useEffect(() => {
     if (
       !previewError ||
@@ -1099,8 +1453,8 @@ export function ChatPanel({
       autoFixing ||
       streaming ||
       healActiveRef.current ||
-      autoFixAttempts >= MAX_AUTO_FIX_ATTEMPTS ||
-      credits < 1
+      autoFixAttempts >= MAX_AUTO_FIX_ATTEMPTS
+      // Allow at 0 credits — /api/ai/fix grants up to 20 free Try-to-fix/day.
     )
       return;
 
@@ -1145,42 +1499,98 @@ export function ChatPanel({
     return () => el.removeEventListener("scroll", handleScroll);
   }, []);
 
+  useEffect(() => {
+    if (draftHydratedRef.current) return;
+    draftHydratedRef.current = true;
+    try {
+      const draft = localStorage.getItem(composerDraftKey);
+      if (draft?.trim()) {
+        setInput(draft);
+        setShowDraftBanner(true);
+      }
+    } catch { /* private mode */ }
+  }, [composerDraftKey]);
+
+  useEffect(() => {
+    if (!draftHydratedRef.current) return;
+    const timer = window.setTimeout(() => {
+      try {
+        if (input.trim()) localStorage.setItem(composerDraftKey, input);
+        else localStorage.removeItem(composerDraftKey);
+      } catch { /* private mode */ }
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [input, composerDraftKey]);
+
+  useEffect(() => {
+    if (!showSearch) return;
+    try {
+      sessionStorage.setItem(
+        searchStorageKey,
+        JSON.stringify({
+          query: searchQuery,
+          mode: searchMode,
+          role: searchRoleFilter,
+          msgMode: searchMsgModeFilter,
+        }),
+      );
+    } catch { /* private mode */ }
+  }, [searchQuery, searchMode, searchRoleFilter, searchMsgModeFilter, showSearch, searchStorageKey]);
+
+  const rememberSearchQuery = useCallback(
+    (q: string) => {
+      const trimmed = q.trim();
+      if (trimmed.length < 2) return;
+      setRecentSearchQueries((prev) => {
+        const next = [trimmed, ...prev.filter((x) => x !== trimmed)].slice(0, 6);
+        try {
+          localStorage.setItem(`lifemark-recent-searches-${project.id}`, JSON.stringify(next));
+        } catch { /* private mode */ }
+        return next;
+      });
+    },
+    [project.id],
+  );
+
   // Load older messages when scrolling near the top (Lovable long-thread parity).
+  const loadOlderMessages = useCallback(async () => {
+    const el = scrollContainerRef.current;
+    if (!hasMoreMessages || loadingOlderRef.current || messages.length === 0 || !el) return;
+    const oldest = messages[0];
+    if (!oldest?.created_at) return;
+    loadingOlderRef.current = true;
+    setLoadingOlderMessages(true);
+    const prevHeight = el.scrollHeight;
+    try {
+      const res = await fetch(
+        `/api/projects/${project.id}/messages?before=${encodeURIComponent(oldest.created_at)}&limit=50`,
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as { messages?: Message[]; hasMore?: boolean };
+      const older = data.messages ?? [];
+      if (older.length > 0) {
+        onMessagesUpdate([...older, ...messages]);
+        requestAnimationFrame(() => {
+          el.scrollTop = el.scrollHeight - prevHeight;
+        });
+      }
+      setHasMoreMessages(Boolean(data.hasMore));
+    } finally {
+      loadingOlderRef.current = false;
+      setLoadingOlderMessages(false);
+    }
+  }, [hasMoreMessages, messages, onMessagesUpdate, project.id]);
+
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
     const onScroll = () => {
-      if (!hasMoreMessages || loadingOlderRef.current || messages.length === 0) return;
       if (el.scrollTop > 120) return;
-      const oldest = messages[0];
-      if (!oldest?.created_at) return;
-      loadingOlderRef.current = true;
-      setLoadingOlderMessages(true);
-      const prevHeight = el.scrollHeight;
-      void (async () => {
-        try {
-          const res = await fetch(
-            `/api/projects/${project.id}/messages?before=${encodeURIComponent(oldest.created_at)}&limit=50`,
-          );
-          if (!res.ok) return;
-          const data = await res.json() as { messages?: Message[]; hasMore?: boolean };
-          const older = data.messages ?? [];
-          if (older.length > 0) {
-            onMessagesUpdate([...older, ...messages]);
-            requestAnimationFrame(() => {
-              el.scrollTop = el.scrollHeight - prevHeight;
-            });
-          }
-          setHasMoreMessages(Boolean(data.hasMore));
-        } finally {
-          loadingOlderRef.current = false;
-          setLoadingOlderMessages(false);
-        }
-      })();
+      void loadOlderMessages();
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
-  }, [hasMoreMessages, messages, onMessagesUpdate, project.id]);
+  }, [loadOlderMessages]);
 
   // Follow new content (messages + streamed chunks), but ONLY while the user
   // is already at the bottom — isAtBottom flips false the moment they scroll
@@ -1190,14 +1600,25 @@ export function ChatPanel({
     messagesEndRef.current?.scrollIntoView({ block: "end" });
   }, [messages, streamingContent, streamingFiles, agentSteps, isAtBottom]);
 
-  // Broadcast live agent steps for the floating Tasks sidebar (Lovable parity).
+  // Broadcast live agent/build steps for the floating Tasks sidebar (Lovable parity).
+  const liveTaskSteps = useMemo((): AgentTaskStep[] => {
+    if (agentSteps.length > 0) return agentSteps;
+    if (!streaming || buildActivitySteps.length === 0) return [];
+    return buildActivitySteps.map((s) => ({
+      label: s.label,
+      status: s.status === "done" ? ("done" as const) : ("running" as const),
+      kind: "other" as const,
+      key: s.id,
+    }));
+  }, [agentSteps, buildActivitySteps, streaming]);
+
   useEffect(() => {
     window.dispatchEvent(
       new CustomEvent("lifemark-live-tasks", {
-        detail: { streaming, steps: agentSteps },
+        detail: { streaming, steps: liveTaskSteps },
       }),
     );
-  }, [streaming, agentSteps]);
+  }, [streaming, liveTaskSteps]);
 
   async function triggerAutoFix(error: string, runtimeErrors: PreviewRuntimeError[] = []) {
     setAutoFixing(true);
@@ -1253,6 +1674,16 @@ export function ChatPanel({
           onMessagesUpdate(messages);
           return;
         }
+        if (res.status === 402) {
+          toast({
+            title: "No free fixes left",
+            description: "Daily free Try-to-fix quota used. Add credits to keep auto-fixing.",
+            variant: "destructive",
+          });
+          setFreeFixesRemaining(0);
+          onMessagesUpdate(messages);
+          return;
+        }
         throw new Error(`Fix API ${res.status}`);
       }
 
@@ -1261,7 +1692,12 @@ export function ChatPanel({
         explanation: string;
         tokensUsed: number;
         free?: boolean;
+        freeFixesRemainingToday?: number;
       };
+
+      if (typeof data.freeFixesRemainingToday === "number") {
+        setFreeFixesRemaining(data.freeFixesRemainingToday);
+      }
 
       if (!data.free) {
         try {
@@ -1273,6 +1709,14 @@ export function ChatPanel({
         } catch {
           onCreditsUpdate(Math.max(0, credits - 1));
         }
+      } else {
+        toast({
+          title: "Free Try-to-fix applied",
+          description:
+            typeof data.freeFixesRemainingToday === "number"
+              ? `${data.freeFixesRemainingToday} free fixes left today`
+              : "Used a free daily fix — no credits charged",
+        });
       }
 
       // Refresh files from DB
@@ -1284,11 +1728,17 @@ export function ChatPanel({
 
       if (updatedFiles) onFilesUpdate(updatedFiles, { replace: true });
       // Show success message
+      const freeNote =
+        data.free && typeof data.freeFixesRemainingToday === "number"
+          ? ` _(free · ${data.freeFixesRemainingToday} left today)_`
+          : data.free
+            ? " _(free)_"
+            : "";
       const successMsg: Message = {
         id: `autofix-done-${Date.now()}`,
         project_id: project.id,
         role: "assistant",
-        content: `✅ **Auto-fix applied** — ${data.explanation ?? "Fixed the error, check the preview."}`,
+        content: `✅ **Auto-fix applied**${freeNote} — ${data.explanation ?? "Fixed the error, check the preview."}`,
         tokens_used: data.tokensUsed ?? null,
         model: DEFAULT_CODING_MODEL,
         mode: "build",
@@ -1483,7 +1933,12 @@ export function ChatPanel({
     void sendMessage(prompt, "build");
   }
 
-  async function sendMessage(userMessage: string, overrideMode?: EditorMode, historyOverride?: Message[]) {
+  async function sendMessage(
+    userMessage: string,
+    overrideMode?: EditorMode,
+    historyOverride?: Message[],
+    opts?: { branchMeta?: { snapshotId: string | null; branchedAt: string } },
+  ) {
     if ((!userMessage.trim() && !attachedImage) || streaming || sendingRef.current) return;
 
     // The user is giving a new instruction, so the code is about to change. Past
@@ -1574,6 +2029,9 @@ export function ChatPanel({
     }
     setStreamingWithCallback(true, 0);
     genStartRef.current = Date.now();
+    setStoppedDraft(null);
+    setShowDraftBanner(false);
+    try { localStorage.removeItem(composerDraftKey); } catch { /* private mode */ }
     setStreamingContent("");
     setStreamingFiles([]);
     setPendingSkills([]);
@@ -1629,6 +2087,7 @@ export function ChatPanel({
     }
 
     // Optimistically add user message
+    const branchMeta = opts?.branchMeta ?? pendingBranchRef.current;
     const tempUserMsg: Message = {
       id: `temp-${Date.now()}`,
       project_id: project.id,
@@ -1640,7 +2099,12 @@ export function ChatPanel({
       // not. "patch" is a transient client-only mode, so collapse it to
       // "build" for the optimistic user message.
       mode: (effectiveMode === "patch" ? "build" : effectiveMode) as "chat" | "plan" | "build" | "agent",
-      metadata: null,
+      metadata: branchMeta
+        ? ({
+            branched_at: branchMeta.branchedAt,
+            branch_from_snapshot_id: branchMeta.snapshotId,
+          } as Json)
+        : null,
       rating: null,
       created_at: new Date().toISOString(),
     };
@@ -1685,7 +2149,8 @@ ${(f.content ?? "").slice(0, 8000)}
       messageWithContext = `${buildProjectContextBlock({ ...intelCtx, lastPrompt: userMessage })}\n\n${messageWithContext}`;
 
       // Extract @file mentions (current project) and @ProjectName/path (cross-project)
-      const mentionedPaths = [...userMessageFinal.matchAll(/@([\w./\-]+)/g)].map((m) => m[1]);
+      // Include `:` so @chat:ProjectName and @project:… refs are captured.
+      const mentionedPaths = [...userMessageFinal.matchAll(/@([\w./\-:]+)/g)].map((m) => m[1]);
       const mentionedFiles = mentionedPaths.length > 0
         ? files.filter((f) => mentionedPaths.some((p) => f.path.includes(p)))
         : null;
@@ -1709,13 +2174,25 @@ ${(f.content ?? "").slice(0, 8000)}
         return { path: f.path, content: excerpts.join("\n// …\n") };
       }) ?? null;
 
-      // Extract cross-project references: @ProjectName/path/to/file
+      // Extract cross-project references: @ProjectName/path/to/file and @chat:ProjectName
       const crossProjectRefs = crossProjects.flatMap((p) => {
         const prefix = p.name + "/";
         return mentionedPaths
           .filter((mp) => mp.startsWith(prefix))
           .map((mp) => ({ projectId: p.id, projectName: p.name, filePath: mp.slice(prefix.length) }));
       });
+      const crossChatRefs = [
+        ...mentionedPaths
+          .filter((mp) => mp.startsWith("chat:"))
+          .map((mp) => {
+            const name = mp.slice("chat:".length).trim();
+            const p = crossProjects.find(
+              (cp) => cp.name === name || cp.slug === name || cp.name.replace(/\s+/g, "-") === name,
+            );
+            return p ? { projectId: p.id, projectName: p.name } : null;
+          })
+          .filter(Boolean) as Array<{ projectId: string; projectName: string }>,
+      ];
       let crossProjectContext = "";
       if (crossProjectRefs.length > 0) {
         const fetched = await Promise.all(
@@ -1736,6 +2213,31 @@ ${(f.content ?? "").slice(0, 8000)}
         const valid = fetched.filter(Boolean) as string[];
         if (valid.length > 0) {
           crossProjectContext = "\n\n--- Referenced files from other projects ---\n" + valid.join("\n\n---\n");
+        }
+      }
+      if (crossChatRefs.length > 0) {
+        const chatFetched = await Promise.all(
+          crossChatRefs.map(async (ref) => {
+            try {
+              const r = await fetch(`/api/projects/${ref.projectId}/messages?limit=30`);
+              if (!r.ok) return null;
+              const body = (await r.json()) as { messages?: Array<{ role: string; content: string }> };
+              const msgs = Array.isArray(body.messages) ? body.messages : [];
+              if (msgs.length === 0) return null;
+              const transcript = msgs
+                .slice(-20)
+                .map((m) => `${m.role === "user" ? "User" : "AI"}: ${(m.content ?? "").slice(0, 600)}`)
+                .join("\n");
+              return `--- Chat history from @chat:${ref.projectName} ---\n${transcript}`;
+            } catch {
+              return null;
+            }
+          }),
+        );
+        const chatValid = chatFetched.filter(Boolean) as string[];
+        if (chatValid.length > 0) {
+          crossProjectContext +=
+            (crossProjectContext ? "\n\n" : "\n\n") + chatValid.join("\n\n");
         }
       }
 
@@ -1839,7 +2341,7 @@ ${(f.content ?? "").slice(0, 8000)}
               if (data.done) {
                 setPostBuildStatus(null);
                 setAgentSteps((prev) => prev.map((s) => ({ ...s, status: "done" as const })));
-                setTimeout(() => setAgentSteps([]), 1800);
+                setTimeout(() => setAgentSteps([]), 5000);
 
                 const supabase = createClient();
                 const { data: updatedFiles } = await (supabase as any)
@@ -2177,6 +2679,14 @@ ${(f.content ?? "").slice(0, 8000)}
                 completedBuildActivity = data.build_activity as BuildActivityStep[];
               }
               if (completedBuildActivity) {
+                const mapped: AgentTaskStep[] = completedBuildActivity.map((s) => ({
+                  label: s.label,
+                  status: "done" as const,
+                  kind: "other" as const,
+                  key: s.id,
+                }));
+                setAgentSteps(mapped);
+                setTimeout(() => setAgentSteps([]), 5000);
                 applyBuildSteps([]);
                 setMessageBuildActivity((prev) => ({ ...prev, [assistantId]: completedBuildActivity! }));
               }
@@ -2341,6 +2851,31 @@ ${(f.content ?? "").slice(0, 8000)}
                 created_at: new Date().toISOString(),
               };
               onMessagesUpdate([...baseMessages, tempUserMsg, assistantMsg]);
+              {
+                const realUserId =
+                  typeof (data as { userMessageId?: string }).userMessageId === "string"
+                    ? (data as { userMessageId: string }).userMessageId
+                    : null;
+                if (realUserId) {
+                  void persistPendingBranchMeta(realUserId);
+                } else if (pendingBranchRef.current) {
+                  // Fallback: refresh latest user row and stamp branch metadata.
+                  void (async () => {
+                    try {
+                      const supabase = createClient();
+                      const { data: latestUser } = await (supabase as any)
+                        .from("messages")
+                        .select("id")
+                        .eq("project_id", project.id)
+                        .eq("role", "user")
+                        .order("created_at", { ascending: false })
+                        .limit(1)
+                        .maybeSingle();
+                      if (latestUser?.id) await persistPendingBranchMeta(latestUser.id);
+                    } catch { /* ignore */ }
+                  })();
+                }
+              }
               if (!data.assistantMessageId) {
                 console.warn(
                   "[chat] turn finished without assistantMessageId — persisting via client fallback",
@@ -2893,6 +3428,42 @@ ${(f.content ?? "").slice(0, 8000)}
     _event: ClipboardEvent,
     selection: { from: number; to: number },
   ): boolean {
+    // Lovable parity: bare API-key paste → project .env.local + {{TAG}} (same path as capture handler).
+    const pastedKey = detectPastedSecret(text);
+    if (pastedKey && !text.includes("=")) {
+      const redacted = redactSecret(text, pastedKey);
+      replaceInputRange(selection, redacted);
+      void fetch(`/api/projects/${project.id}/env`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: pastedKey.name, value: pastedKey.value }),
+      })
+        .then((res) => {
+          setSecretBanner({ key: pastedKey.name, label: pastedKey.label, ok: res.ok });
+          toast(
+            res.ok
+              ? {
+                  title: `${pastedKey.label} saved`,
+                  description: `Stored as ${pastedKey.name}. The chat message only carries the tag.`,
+                }
+              : {
+                  title: "Couldn't save the secret",
+                  description: "The key was redacted — add it manually in the Env panel.",
+                  variant: "destructive",
+                },
+          );
+        })
+        .catch(() => {
+          setSecretBanner({ key: pastedKey.name, label: pastedKey.label, ok: false });
+          toast({
+            title: "Couldn't save the secret",
+            description: "The key was redacted — add it manually in the Env panel.",
+            variant: "destructive",
+          });
+        });
+      return true;
+    }
+
     const redaction = redactPromptSecrets(text);
     if (redaction.assignments.length > 0) {
       if (redaction.hasUnsecuredSecret) {
@@ -2935,6 +3506,29 @@ ${(f.content ?? "").slice(0, 8000)}
 
     const secret = detectPromptSecret(text);
     if (secret) {
+      // Prefer auto-save when the pattern matches known key shapes (even with surrounding prose).
+      const known = detectPastedSecret(text);
+      if (known) {
+        const redacted = redactSecret(text, known);
+        replaceInputRange(selection, redacted);
+        void fetch(`/api/projects/${project.id}/env`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key: known.name, value: known.value }),
+        })
+          .then((res) => {
+            setSecretBanner({ key: known.name, label: known.label, ok: res.ok });
+            toast(
+              res.ok
+                ? { title: `${known.label} saved`, description: `Stored as ${known.name}.` }
+                : { title: "Couldn't save the secret", variant: "destructive" },
+            );
+          })
+          .catch(() => {
+            setSecretBanner({ key: known.name, label: known.label, ok: false });
+          });
+        return true;
+      }
       toast({
         title: "Secret-looking paste blocked",
         description: `Detected ${secret.label}. Paste as NAME=value so LifemarkAI can save it to Secrets Vault.`,
@@ -3060,6 +3654,7 @@ ${(f.content ?? "").slice(0, 8000)}
 
   function selectSlashItem(item: SlashItem) {
     if (item.kind === "skill") applySkill(item.prompt, item.skillId);
+    else if (item.prompt === LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY) openDesignDirections();
     else insertTemplate(item.prompt);
     setShowTemplates(false);
   }
@@ -3075,15 +3670,28 @@ ${(f.content ?? "").slice(0, 8000)}
     ? crossProjects.flatMap((p) => {
         const nameMatch = p.name.toLowerCase().includes(crossProjectQuery.toLowerCase());
         const filesForProject = crossProjectFiles[p.id] ?? [];
+        const wantsChat =
+          crossProjectQuery.toLowerCase().includes("chat") ||
+          crossProjectQuery.toLowerCase().endsWith("/chat");
         if (crossProjectQuery.includes("/") || filesForProject.length > 0) {
-          return filesForProject
+          const fileItems = filesForProject
             .filter((f) => !crossProjectQuery || f.path.toLowerCase().includes(crossProjectQuery.toLowerCase()) || nameMatch)
             .slice(0, 4)
             .map((f): MentionItem => ({ kind: "xproject", projectName: p.name, projectId: p.id, filePath: f.path }));
+          const chatItem: MentionItem[] =
+            nameMatch || wantsChat
+              ? [{ kind: "xchat", projectName: p.name, projectId: p.id }]
+              : [];
+          return [...chatItem, ...fileItems];
         }
-        // No files loaded yet — show the project itself as a clickable item to load files
-        return nameMatch ? [{ kind: "xproject" as const, projectName: p.name, projectId: p.id, filePath: "" }] : [];
-      }).slice(0, 6)
+        // No files loaded yet — show the project itself + chat history option
+        return nameMatch
+          ? [
+              { kind: "xproject" as const, projectName: p.name, projectId: p.id, filePath: "" },
+              { kind: "xchat" as const, projectName: p.name, projectId: p.id },
+            ]
+          : [];
+      }).slice(0, 8)
     : [];
 
   const mentionItems: MentionItem[] = mentionQuery !== null
@@ -3116,8 +3724,40 @@ ${(f.content ?? "").slice(0, 8000)}
     : [];
 
   function insertMention(item: MentionItem | string) {
+    if (typeof item !== "string" && item.kind === "xchat") {
+      // Prefer slug / hyphenated name so @chat:… matches the token regex.
+      const token =
+        crossProjects.find((p) => p.id === item.projectId)?.slug ||
+        item.projectName.replace(/\s+/g, "-");
+      const insertText = `chat:${token}`;
+      const val = input;
+      const cursor = textareaRef.current?.selectionStart ?? val.length;
+      const before = val.slice(0, cursor);
+      const atIdx = before.lastIndexOf("@");
+      const after = val.slice(cursor);
+      const newVal = val.slice(0, atIdx) + "@" + insertText + " " + after;
+      setInput(newVal);
+      setMentionQuery(null);
+      setTimeout(() => {
+        const newPos = atIdx + insertText.length + 2;
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(newPos, newPos);
+      }, 10);
+      return;
+    }
     // Handle cross-project project node — load files and switch query
     if (typeof item !== "string" && item.kind === "xproject") {
+      if (!item.projectId) {
+        void loadCrossProjects();
+        setMentionQuery("project:");
+        const val = input;
+        const cursor = textareaRef.current?.selectionStart ?? val.length;
+        const before = val.slice(0, cursor);
+        const atIdx = before.lastIndexOf("@");
+        const after = val.slice(cursor);
+        setInput(val.slice(0, atIdx) + "@project:" + after);
+        return;
+      }
       if (!item.filePath) {
         // Project-level click: load files and refine query
         void loadCrossProjectFiles(item.projectId);
@@ -3199,6 +3839,42 @@ ${(f.content ?? "").slice(0, 8000)}
     [messages],
   );
 
+  const searchHitMessageIds = useMemo(() => {
+    const q = searchQuery.trim();
+    if (!q) return [];
+    const qLower = q.toLowerCase();
+    let source = searchHitIds
+      ? visibleMessages.filter((m) => searchHitIds.has(m.id))
+      : visibleMessages.filter((m) => m.content.toLowerCase().includes(qLower));
+    if (searchRoleFilter !== "all") {
+      source = source.filter((m) => m.role === searchRoleFilter);
+    }
+    if (searchMsgModeFilter !== "all") {
+      source = source.filter((m) => (m.mode ?? "chat") === searchMsgModeFilter);
+    }
+    return source.map((m) => m.id);
+  }, [searchQuery, searchHitIds, visibleMessages, searchRoleFilter, searchMsgModeFilter]);
+
+  const activeSearchHitId = searchHitMessageIds[activeSearchHitIndex] ?? null;
+
+  useEffect(() => {
+    setActiveSearchHitIndex(0);
+  }, [searchQuery, searchMode, searchRoleFilter, searchMsgModeFilter]);
+
+  function navigateSearchHit(delta: number) {
+    if (searchHitMessageIds.length === 0) return;
+    setActiveSearchHitIndex(
+      (i) => (i + delta + searchHitMessageIds.length) % searchHitMessageIds.length,
+    );
+  }
+
+  function openDesignDirections(seed?: string) {
+    const prompt =
+      seed?.trim() || input.trim() || contextualEmptyPrompts[0] || "Build a modern web app";
+    setPendingDesignPrompt(prompt);
+    setDesignPreviewOpen(true);
+  }
+
   // Debounced message search (keyword + semantic via API).
   useEffect(() => {
     const q = searchQuery.trim();
@@ -3218,6 +3894,7 @@ ${(f.content ?? "").slice(0, 8000)}
         const ids = new Set((data.hits ?? []).map((h) => h.id));
         setSearchHitIds(ids);
         setSearchMatchCount(ids.size);
+        if (ids.size > 0) rememberSearchQuery(q);
       } catch {
         setSearchHitIds(null);
         setSearchMatchCount(0);
@@ -3226,7 +3903,7 @@ ${(f.content ?? "").slice(0, 8000)}
       }
     }, 320);
     return () => window.clearTimeout(timer);
-  }, [searchQuery, searchMode, project.id]);
+  }, [searchQuery, searchMode, project.id, rememberSearchQuery]);
 
   // Lovable-parity per-message versions: the newest assistant message carrying
   // a pre-build snapshot represents the CURRENT version — its Revert action is
@@ -3415,21 +4092,190 @@ ${(f.content ?? "").slice(0, 8000)}
     }
   }
 
-  async function copyMessage(content: string, id: string) {
-    await navigator.clipboard.writeText(content);
-    setCopiedId(id);
+  async function copyMessage(msg: Message) {
+    const role = msg.role === "user" ? "You" : "LifemarkAI";
+    const body = getDisplayMessageContent(msg);
+    await navigator.clipboard.writeText(`**${role}:**\n\n${body}`);
+    setCopiedId(msg.id);
     setTimeout(() => setCopiedId(null), 2000);
+    toast({ description: "Copied as Markdown" });
+  }
+
+  async function copyMessageLink(messageId: string) {
+    const url = `${window.location.origin}/editor/${project.id}?message=${encodeURIComponent(messageId)}`;
+    await navigator.clipboard.writeText(url);
+    setCopiedLinkId(messageId);
+    setTimeout(() => setCopiedLinkId(null), 2000);
+    toast({ description: "Message link copied" });
+  }
+
+  function exportMessage(msg: Message) {
+    const role = msg.role === "user" ? "You" : "LifemarkAI";
+    const body = getDisplayMessageContent(msg);
+    const md = `### ${role}\n\n${body}\n\n---\n_${new Date(msg.created_at).toLocaleString()}_\n`;
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${project.name.replace(/\s+/g, "-").toLowerCase()}-message-${msg.id.slice(0, 8)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({ description: "Message exported" });
+  }
+
+  function useMessageInComposer(msg: Message) {
+    const body = getDisplayMessageContent(msg);
+    const snippet = body.length > 600 ? `${body.slice(0, 600)}…` : body;
+    const quoted =
+      msg.role === "user"
+        ? snippet
+        : `Follow up on this:\n\n> ${snippet.replace(/\n/g, "\n> ")}\n\n`;
+    setInput((prev) => (prev.trim() ? `${prev.trim()}\n\n${quoted}` : quoted));
+    setTimeout(() => textareaRef.current?.focus(), 50);
+  }
+
+  async function restoreMessagesSnapshot(snapshot: Message[]) {
+    const res = await fetch(`/api/projects/${project.id}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        restore: true,
+        messages: snapshot.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          mode: m.mode,
+          tokens_used: m.tokens_used,
+          model: m.model,
+          metadata: m.metadata,
+          rating: m.rating,
+          created_at: m.created_at,
+        })),
+      }),
+    });
+    if (!res.ok) throw new Error("restore failed");
+  }
+
+  async function undoClearChat() {
+    const snapshot = clearedSnapshotRef.current;
+    if (!snapshot?.length) return;
+    if (messagesRef.current.length > 0) {
+      toast({
+        title: "Can't undo",
+        description: "New messages were sent after clearing.",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      await restoreMessagesSnapshot(snapshot);
+      onMessagesUpdate(snapshot);
+      clearedSnapshotRef.current = null;
+      toast({ description: "Conversation restored" });
+    } catch {
+      toast({ title: "Failed to restore conversation", variant: "destructive" });
+    }
+  }
+
+  async function undoDeleteMessage() {
+    const snapshot = deletedSnapshotRef.current;
+    if (!snapshot) return;
+    try {
+      await restoreMessagesSnapshot([snapshot]);
+      const current = messagesRef.current;
+      const next = current.some((m) => m.id === snapshot.id)
+        ? current
+        : [...current, snapshot].sort(
+            (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+          );
+      onMessagesUpdate(next);
+      deletedSnapshotRef.current = null;
+      toast({ description: "Message restored" });
+    } catch {
+      toast({ title: "Failed to restore message", variant: "destructive" });
+    }
+  }
+
+  function stripForSpeech(text: string): string {
+    return text
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`[^`]+`/g, " ")
+      .replace(/[#*_~>\[\]()]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function toggleReadAloud(msg: Message) {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      toast({ title: "Speech not supported in this browser", variant: "destructive" });
+      return;
+    }
+    if (speakingMessageId === msg.id) {
+      window.speechSynthesis.cancel();
+      setSpeakingMessageId(null);
+      return;
+    }
+    const text = stripForSpeech(getDisplayMessageContent(msg)).slice(0, 4000);
+    if (!text) {
+      toast({ description: "Nothing to read" });
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.onend = () => setSpeakingMessageId(null);
+    utterance.onerror = () => setSpeakingMessageId(null);
+    setSpeakingMessageId(msg.id);
+    window.speechSynthesis.speak(utterance);
+  }
+
+  async function deleteMessage(msg: Message) {
+    if (!window.confirm("Delete this message?")) return;
+    try {
+      const res = await fetch(`/api/projects/${project.id}/messages/${msg.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("delete failed");
+      deletedSnapshotRef.current = msg;
+      onMessagesUpdate(messages.filter((m) => m.id !== msg.id));
+      if (pinnedMsgId === msg.id) setPinnedMsgId(null);
+      if (speakingMessageId === msg.id) {
+        window.speechSynthesis?.cancel();
+        setSpeakingMessageId(null);
+      }
+      setBookmarkedIds((prev) => {
+        if (!prev.has(msg.id)) return prev;
+        const next = new Set(prev);
+        next.delete(msg.id);
+        try { localStorage.setItem(bookmarkKey, JSON.stringify([...next])); } catch { /* */ }
+        return next;
+      });
+      toast({
+        description: "Message deleted",
+        duration: 8000,
+        action: { label: "Undo", onClick: () => void undoDeleteMessage() },
+      });
+    } catch {
+      toast({ title: "Failed to delete message", variant: "destructive" });
+    }
   }
 
   async function handleClearChat() {
     if (!window.confirm("Clear this conversation?")) return;
+    const snapshot = [...messages];
+    clearedSnapshotRef.current = snapshot;
     try {
       await fetch(`/api/projects/${project.id}/messages`, { method: "DELETE" });
     } catch {
       // best-effort
     }
+    window.speechSynthesis?.cancel();
+    setSpeakingMessageId(null);
     onMessagesUpdate([]);
-    toast({ title: "Conversation cleared" });
+    toast({
+      title: "Conversation cleared",
+      duration: 10000,
+      action: { label: "Undo", onClick: () => void undoClearChat() },
+    });
   }
 
   function exportChatAsMarkdown() {
@@ -3459,20 +4305,38 @@ ${(f.content ?? "").slice(0, 8000)}
     toast({ description: "Chat exported ✓" });
   }
 
-  // ⌘⇧K — clear chat; ⌘F — search; Alt+P — toggle Plan/Build; Esc — stop generation
-  useChatKeyboardShortcuts({
-    mode,
-    streaming,
-    onModeChange,
-    onClearChat: () => void handleClearChat(),
-    onSearchShortcut: () => {
-      setShowSearch((v) => {
-        if (!v) setTimeout(() => searchInputRef.current?.focus(), 50);
-        return !v;
-      });
-    },
-    onStopGeneration: stopGeneration,
-  });
+  function exportChatAsJson() {
+    if (visibleMessages.length === 0) return;
+    const payload = {
+      project: { id: project.id, name: project.name },
+      exportedAt: new Date().toISOString(),
+      messages: visibleMessages.map((m) => ({
+        id: m.id,
+        role: m.role,
+        mode: m.mode ?? null,
+        content: getDisplayMessageContent(m),
+        model: m.model ?? null,
+        created_at: m.created_at,
+        metadata: m.metadata ?? null,
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${project.name.replace(/\s+/g, "-").toLowerCase()}-chat.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast({ description: "Chat exported as JSON ✓" });
+  }
+
+  function printChat() {
+    printChatConversation({
+      projectName: project.name,
+      messages: visibleMessages,
+      getDisplayContent: getDisplayMessageContent,
+    });
+  }
 
   const noCredits = credits <= 0;
 
@@ -3487,7 +4351,7 @@ ${(f.content ?? "").slice(0, 8000)}
   }, [messages]);
 
   const chatThreads = useMemo(() => {
-    const filtered = showBookmarks
+    let filtered = showBookmarks
       ? visibleMessages.filter((m) => bookmarkedIds.has(m.id))
       : searchQuery && searchHitIds
         ? visibleMessages.filter((m) => searchHitIds.has(m.id))
@@ -3496,15 +4360,183 @@ ${(f.content ?? "").slice(0, 8000)}
               m.content.toLowerCase().includes(searchQuery.toLowerCase()),
             )
           : visibleMessages;
+    if (searchQuery.trim() && searchRoleFilter !== "all") {
+      filtered = filtered.filter((m) => m.role === searchRoleFilter);
+    }
+    if (searchQuery.trim() && searchMsgModeFilter !== "all") {
+      filtered = filtered.filter((m) => (m.mode ?? "chat") === searchMsgModeFilter);
+    }
     return groupIntoThreads(filtered);
-  }, [visibleMessages, showBookmarks, bookmarkedIds, searchQuery, searchHitIds]);
+  }, [
+    visibleMessages,
+    showBookmarks,
+    bookmarkedIds,
+    searchQuery,
+    searchHitIds,
+    searchRoleFilter,
+    searchMsgModeFilter,
+  ]);
+
+  const scrollToMessage = useCallback((messageId: string) => {
+    const threadIdx = chatThreads.findIndex((t) => t.some((m) => m.id === messageId));
+    if (threadIdx < 0) return;
+
+    if (!searchQuery) {
+      setCollapsedThreads((prev) => {
+        if (!prev.has(threadIdx)) return prev;
+        const next = new Set(prev);
+        next.delete(threadIdx);
+        return next;
+      });
+    }
+
+    timelineRef.current?.scrollToThreadIndex(threadIdx, "center");
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        scrollContainerRef.current
+          ?.querySelector(`[data-message-id="${messageId}"]`)
+          ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+    });
+  }, [chatThreads, searchQuery]);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    setIsAtBottom(true);
+    lastSeenCountRef.current = visibleMessages.length + (streaming ? 1 : 0);
+    setNewMessageCount(0);
+  }, [visibleMessages.length, streaming]);
+
+  const scrollToTop = useCallback(() => {
+    scrollContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
+  const navigateFocusedMessage = useCallback((delta: number) => {
+    if (visibleMessages.length === 0) return;
+    setFocusedMessageId((current) => {
+      let idx = current ? visibleMessages.findIndex((m) => m.id === current) : -1;
+      if (idx < 0) idx = delta > 0 ? -1 : visibleMessages.length;
+      const nextIdx = Math.max(0, Math.min(visibleMessages.length - 1, idx + delta));
+      const nextId = visibleMessages[nextIdx]?.id ?? null;
+      if (nextId) {
+        window.setTimeout(() => scrollToMessage(nextId), 0);
+      }
+      return nextId;
+    });
+  }, [visibleMessages, scrollToMessage]);
+
+  const focusComposer = useCallback(() => {
+    setFocusedMessageId(null);
+    textareaRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      window.speechSynthesis?.cancel();
+    };
+  }, []);
+
+  const chatDays = useMemo(
+    () => buildLovableChatDayJumps(visibleMessages),
+    [visibleMessages],
+  );
+
+  useEffect(() => {
+    if (isAtBottom) {
+      lastSeenCountRef.current = visibleMessages.length + (streaming ? 1 : 0);
+      setNewMessageCount(0);
+    } else {
+      const pending = visibleMessages.length - lastSeenCountRef.current + (streaming ? 1 : 0);
+      setNewMessageCount(Math.max(0, pending));
+    }
+  }, [visibleMessages.length, isAtBottom, streaming]);
+
+  useEffect(() => {
+    if (!activeSearchHitId || !showSearch) return;
+    scrollToMessage(activeSearchHitId);
+  }, [activeSearchHitId, showSearch, scrollToMessage]);
+
+  useEffect(() => {
+    if (deepLinkedRef.current || messages.length === 0) return;
+    const params = new URLSearchParams(window.location.search);
+    const hashMatch = window.location.hash.match(/^#message=([^\s&]+)/);
+    const msgId = params.get("message") ?? (hashMatch ? decodeURIComponent(hashMatch[1]) : null);
+    if (!msgId || !messages.some((m) => m.id === msgId)) return;
+    deepLinkedRef.current = true;
+    const timer = window.setTimeout(() => scrollToMessage(msgId), 400);
+    return () => window.clearTimeout(timer);
+  }, [messages, scrollToMessage]);
+
+  // ⌘F search · Alt+B bookmarks · End jump to bottom · Alt+P Plan/Build · Esc stop
+  useChatKeyboardShortcuts({
+    mode,
+    streaming,
+    showSearch,
+    onModeChange,
+    onClearChat: () => void handleClearChat(),
+    onSearchShortcut: () => {
+      setShowSearch((v) => {
+        const next = !v;
+        if (next) {
+          try {
+            const raw = sessionStorage.getItem(searchStorageKey);
+            if (raw) {
+              const saved = JSON.parse(raw) as {
+                query?: string;
+                mode?: ChatSearchMode;
+                role?: ChatSearchRoleFilter;
+                msgMode?: ChatSearchMsgModeFilter;
+              };
+              if (saved.query) setSearchQuery(saved.query);
+              if (saved.mode === "keyword" || saved.mode === "semantic") setSearchMode(saved.mode);
+              if (saved.role === "all" || saved.role === "user" || saved.role === "assistant") {
+                setSearchRoleFilter(saved.role);
+              }
+              if (
+                saved.msgMode === "all" ||
+                saved.msgMode === "chat" ||
+                saved.msgMode === "plan" ||
+                saved.msgMode === "build" ||
+                saved.msgMode === "agent" ||
+                saved.msgMode === "patch"
+              ) {
+                setSearchMsgModeFilter(saved.msgMode);
+              }
+            }
+          } catch { /* private mode */ }
+          setTimeout(() => searchInputRef.current?.focus(), 50);
+        }
+        return next;
+      });
+    },
+    onNavigateSearchHit: (delta = 1) => navigateSearchHit(delta),
+    onBookmarksShortcut: () => {
+      setShowBookmarks((v) => {
+        const next = !v;
+        if (next && bookmarkedIds.size > 0) {
+          const first = visibleMessages.find((m) => bookmarkedIds.has(m.id));
+          if (first) setTimeout(() => scrollToMessage(first.id), 80);
+        }
+        return next;
+      });
+    },
+    onScrollToBottom: scrollToBottom,
+    onScrollToTop: scrollToTop,
+    onNavigateMessage: navigateFocusedMessage,
+    onFocusComposer: focusComposer,
+    onStopGeneration: stopGeneration,
+  });
 
   const getMessageProps = useThreadMessageProps({
     searchQuery,
+    activeSearchHitId,
+    focusedMessageId,
     streaming,
     showBookmarks,
     lastAssistantMsgId,
     copiedId,
+    copiedLinkId,
     pinnedMsgId,
     ratings,
     editingMessageId,
@@ -3527,6 +4559,12 @@ ${(f.content ?? "").slice(0, 8000)}
     latestSnapshotMessageId,
     visibleMessages,
     onCopy: copyMessage,
+    onCopyLink: copyMessageLink,
+    onExportMessage: exportMessage,
+    onUseInComposer: useMessageInComposer,
+    onDeleteMessage: deleteMessage,
+    onReadAloud: toggleReadAloud,
+    speakingMessageId,
     onStartEdit: startEditMessage,
     onTogglePin: (msgId) => setPinnedMsgId((prev) => (prev === msgId ? null : msgId)),
     onRate: rateMessage,
@@ -3600,6 +4638,14 @@ ${(f.content ?? "").slice(0, 8000)}
     },
     onOpenTestingPanel: () => onOpenPanel?.("testing"),
     onSaveAnalyzeFile: saveGeneratedFileToProject,
+    onOpenBranchSnapshot: (snapshotId) => {
+      onOpenPanel?.("history");
+      window.dispatchEvent(
+        new CustomEvent("lifemark-preview-version", {
+          detail: { snapshotId, label: "Before branch" },
+        }),
+      );
+    },
   });
 
   const composerDock = useComposerDockController({
@@ -3613,6 +4659,7 @@ ${(f.content ?? "").slice(0, 8000)}
     autoFixing,
     autoFixAttempts,
     maxAutoFixAttempts: MAX_AUTO_FIX_ATTEMPTS,
+    freeFixesRemaining,
     fileGenResults,
     activeClarifySession,
     promptQueue,
@@ -3644,6 +4691,7 @@ ${(f.content ?? "").slice(0, 8000)}
       // padding-bottom approach (vs. translateY) preserves scroll position
       // and keeps the most-recent messages visible.
       style={{ paddingBottom: keyboardInset }}
+      compactDensity={compactDensity}
     >
       <LovableChatHeader
         mode={mode}
@@ -3651,31 +4699,93 @@ ${(f.content ?? "").slice(0, 8000)}
         queuePaused={queuePaused}
         creditLabel={`${mode === "build" || mode === "agent" ? "2" : "1"} credit${mode === "patch" ? " · patch" : ""} / msg`}
         hasMessages={visibleMessages.length > 0}
+        messageCount={visibleMessages.length}
         showSearch={showSearch}
         showBookmarks={showBookmarks}
         bookmarkCount={bookmarkedIds.size}
         allCodeBlocksCollapsed={allCodeBlocksCollapsed}
         copiedAll={copiedAll}
+        compactDensity={compactDensity}
+        onToggleCompactDensity={() => {
+          setCompactDensity((v) => {
+            const next = !v;
+            try {
+              localStorage.setItem(
+                `lifemark-chat-density-${project.id}`,
+                next ? "compact" : "comfortable",
+              );
+            } catch { /* private mode */ }
+            return next;
+          });
+        }}
         onExportMarkdown={exportChatAsMarkdown}
+        onExportJson={exportChatAsJson}
+        onPrintChat={printChat}
         onCopyAll={async () => {
           const text = visibleMessages.map((m) => `${m.role === "user" ? "You" : "AI"}: ${m.content}`).join("\n\n");
           await navigator.clipboard.writeText(text);
           setCopiedAll(true);
           setTimeout(() => setCopiedAll(false), 2000);
+          toast({ description: "All messages copied" });
         }}
         onClearChat={() => void handleClearChat()}
         onToggleSearch={() => {
           setShowSearch((v) => {
-            if (!v) setTimeout(() => searchInputRef.current?.focus(), 50);
-            return !v;
+            const next = !v;
+            if (next) {
+              try {
+                const raw = sessionStorage.getItem(searchStorageKey);
+                if (raw) {
+                  const saved = JSON.parse(raw) as {
+                    query?: string;
+                    mode?: ChatSearchMode;
+                    role?: ChatSearchRoleFilter;
+                    msgMode?: ChatSearchMsgModeFilter;
+                  };
+                  if (saved.query) setSearchQuery(saved.query);
+                  if (saved.mode === "keyword" || saved.mode === "semantic") setSearchMode(saved.mode);
+                  if (saved.role === "all" || saved.role === "user" || saved.role === "assistant") {
+                    setSearchRoleFilter(saved.role);
+                  }
+                  if (
+                    saved.msgMode === "all" ||
+                    saved.msgMode === "chat" ||
+                    saved.msgMode === "plan" ||
+                    saved.msgMode === "build" ||
+                    saved.msgMode === "agent" ||
+                    saved.msgMode === "patch"
+                  ) {
+                    setSearchMsgModeFilter(saved.msgMode);
+                  }
+                }
+              } catch { /* private mode */ }
+              setTimeout(() => searchInputRef.current?.focus(), 50);
+            }
+            return next;
           });
         }}
-        onToggleBookmarks={() => setShowBookmarks((v) => !v)}
+        onToggleBookmarks={() => {
+          setShowBookmarks((v) => {
+            const next = !v;
+            if (next && bookmarkedIds.size > 0) {
+              const first = visibleMessages.find((m) => bookmarkedIds.has(m.id));
+              if (first) setTimeout(() => scrollToMessage(first.id), 80);
+            }
+            return next;
+          });
+        }}
         onToggleCodeBlocks={() => {
           const next = !allCodeBlocksCollapsed;
           setAllCodeBlocksCollapsed(next);
           window.dispatchEvent(new CustomEvent("chat-codeblock-set-all", { detail: { collapsed: next } }));
         }}
+        onCollapseAllThreads={() => {
+          if (chatThreads.length <= 1) return;
+          setCollapsedThreads(new Set(Array.from({ length: chatThreads.length - 1 }, (_, i) => i)));
+        }}
+        onExpandAllThreads={() => setCollapsedThreads(new Set())}
+        chatDays={chatDays}
+        onJumpToDay={(messageId) => scrollToMessage(messageId)}
       />
 
       <LovableChatHeaderStatus />
@@ -3686,20 +4796,50 @@ ${(f.content ?? "").slice(0, 8000)}
             ref={searchInputRef}
             query={searchQuery}
             mode={searchMode}
+            roleFilter={searchRoleFilter}
+            msgModeFilter={searchMsgModeFilter}
             loading={searchLoading}
-            matchCount={searchMatchCount}
+            matchCount={searchHitMessageIds.length || searchMatchCount}
+            activeIndex={searchHitMessageIds.length > 0 ? activeSearchHitIndex : undefined}
+            recentQueries={recentSearchQueries}
+            onNavigate={navigateSearchHit}
+            onJumpFirst={() => {
+              if (searchHitMessageIds.length === 0) return;
+              setActiveSearchHitIndex(0);
+            }}
+            onJumpLast={() => {
+              if (searchHitMessageIds.length === 0) return;
+              setActiveSearchHitIndex(searchHitMessageIds.length - 1);
+            }}
             onQueryChange={(value) => {
               setSearchQuery(value);
-              if (value.trim()) {
-                scrollContainerRef.current?.scrollTo({ top: 0 });
-              }
+            }}
+            onSelectRecent={(q) => {
+              setSearchQuery(q);
+              searchInputRef.current?.focus();
+            }}
+            onClearRecent={() => {
+              setRecentSearchQueries([]);
+              try {
+                localStorage.removeItem(`lifemark-recent-searches-${project.id}`);
+              } catch { /* private mode */ }
+            }}
+            onClearQuery={() => {
+              setSearchQuery("");
+              setSearchHitIds(null);
+              setSearchMatchCount(0);
+              setActiveSearchHitIndex(0);
+              searchInputRef.current?.focus();
             }}
             onModeChange={setSearchMode}
+            onRoleFilterChange={setSearchRoleFilter}
+            onMsgModeFilterChange={setSearchMsgModeFilter}
             onClose={() => {
               setShowSearch(false);
               setSearchQuery("");
               setSearchHitIds(null);
               setSearchMatchCount(0);
+              setActiveSearchHitIndex(0);
             }}
           />
         )}
@@ -3712,6 +4852,7 @@ ${(f.content ?? "").slice(0, 8000)}
       {/* Messages — Lovable virtualized timeline */}
       <div className="flex-1 relative min-h-0 flex flex-col">
       <LovableChatTimeline
+        ref={timelineRef}
         projectId={project.id}
         scrollRef={scrollContainerRef}
         items={chatThreads}
@@ -3726,11 +4867,22 @@ ${(f.content ?? "").slice(0, 8000)}
               setInput(prompt);
               textareaRef.current?.focus();
             }}
+            onExploreDesignDirections={() => openDesignDirections()}
             pinnedMsgId={pinnedMsgId}
             visibleMessages={visibleMessages}
             onUnpin={() => setPinnedMsgId(null)}
+            onJumpToPinned={
+              pinnedMsgId ? () => scrollToMessage(pinnedMsgId) : undefined
+            }
             showBookmarks={showBookmarks}
             bookmarkCount={bookmarkedIds.size}
+            hasMoreMessages={hasMoreMessages}
+            onLoadOlder={() => void loadOlderMessages()}
+            showSearch={showSearch}
+            searchQuery={searchQuery}
+            searchMode={searchMode}
+            searchLoading={searchLoading}
+            searchMatchCount={searchHitMessageIds.length || searchMatchCount}
           />
         }
         renderItem={(thread, threadIdx) => (
@@ -3748,6 +4900,26 @@ ${(f.content ?? "").slice(0, 8000)}
                 return n;
               })
             }
+            onDateSeparatorClick={(messageId) => {
+              const msg = visibleMessages.find((m) => m.id === messageId);
+              if (!msg) return;
+              if (chatDays.length > 1) {
+                const idx = chatDays.findIndex((d) => d.key === lovableChatDayKey(msg.created_at));
+                const next = chatDays[(idx >= 0 ? idx + 1 : 0) % chatDays.length];
+                if (next) scrollToMessage(next.messageId);
+                return;
+              }
+              void navigator.clipboard.writeText(new Date(msg.created_at).toLocaleString()).then(() => {
+                toast({ description: "Date copied" });
+              });
+            }}
+            onCopyThread={async (thread) => {
+              const text = thread
+                .map((m) => `**${m.role === "user" ? "You" : "LifemarkAI"}:**\n\n${getDisplayMessageContent(m)}`)
+                .join("\n\n---\n\n");
+              await navigator.clipboard.writeText(text);
+              toast({ description: "Turn copied" });
+            }}
             getMessageProps={getMessageProps}
           />
         )}
@@ -3773,9 +4945,30 @@ ${(f.content ?? "").slice(0, 8000)}
 
       <LovableScrollToBottom
         visible={!isAtBottom}
-        onClick={() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })}
+        newCount={newMessageCount}
+        onClick={scrollToBottom}
       />
       </div>{/* end messages wrapper */}
+
+      {stoppedDraft && !streaming && (
+        <LovableContinueBanner
+          preview={stoppedDraft.replace(/\s+/g, " ").slice(0, 72) + (stoppedDraft.length > 72 ? "…" : "")}
+          onContinue={continueAfterStop}
+          onDismiss={() => setStoppedDraft(null)}
+        />
+      )}
+
+      {showDraftBanner && input.trim() && !streaming && (
+        <LovableDraftRestoreBanner
+          preview={input.replace(/\s+/g, " ").slice(0, 72) + (input.length > 72 ? "…" : "")}
+          onKeep={() => setShowDraftBanner(false)}
+          onDiscard={() => {
+            setInput("");
+            setShowDraftBanner(false);
+            try { localStorage.removeItem(composerDraftKey); } catch { /* private mode */ }
+          }}
+        />
+      )}
 
       <LovableComposerDock
         {...composerDock}
@@ -3794,8 +4987,10 @@ ${(f.content ?? "").slice(0, 8000)}
         onDismissGuestCommentsBanner={() => setGuestCommentsBannerDismissed(true)}
       />
 
-      {/* ── Lovable-style input area ── */}
+      {/* ── Lovable-style input area (mobile = bottom sheet) ── */}
+      <LovableComposerMobileSheet enabled={isMobile}>
       <LovableChatComposerShell
+        className={isMobile ? "border-0 bg-transparent backdrop-blur-none px-2 pb-2 pt-0" : undefined}
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragging(false);
@@ -3894,6 +5089,7 @@ ${(f.content ?? "").slice(0, 8000)}
             slashSelectedKey={slashSelectedKey}
             onTemplateSkillSelect={applySkill}
             onTemplateSelect={insertTemplate}
+            onExploreDesignDirections={() => openDesignDirections()}
             onTemplatesClose={() => setShowTemplates(false)}
             showSnippets={showSnippets}
             currentUserId={currentUserId}
@@ -3935,6 +5131,7 @@ ${(f.content ?? "").slice(0, 8000)}
             onAddReference={() => setShowFilePicker((v) => !v)}
             onAddSkill={() => setShowSkillPicker((v) => !v)}
             onAnalyzeData={() => setAnalyzeOpen(true)}
+            onDesignDirections={() => openDesignDirections()}
             onAttach={() => fileInputRef.current?.click()}
             isVisualEditActive={isVisualEditActive}
             onVisualEditToggle={onVisualEditToggle}
@@ -3973,6 +5170,7 @@ ${(f.content ?? "").slice(0, 8000)}
           />
         </LovableChatInputCard>
       </LovableChatComposerShell>
+      </LovableComposerMobileSheet>
 
       <LovableChatModals
         annotateOpen={chatAnnotateOpen}

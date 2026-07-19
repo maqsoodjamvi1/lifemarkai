@@ -28,8 +28,9 @@ export function LovableLiveTasksDock() {
     return () => window.removeEventListener("lifemark-live-tasks", onTasks);
   }, []);
 
-  const visible = streaming && steps.length > 0;
+  const visible = steps.length > 0;
   const done = steps.filter((s) => s.status === "done").length;
+  const allDone = done === steps.length && steps.length > 0;
 
   return (
     <AnimatePresence>
@@ -48,7 +49,9 @@ export function LovableLiveTasksDock() {
               className="w-full flex items-center gap-2 px-3 py-2 border-b border-[color:var(--border-default)] bg-gradient-to-r from-violet-500/10 to-transparent text-left"
             >
               <Sparkles className="w-3.5 h-3.5 text-[var(--fg-accent)] shrink-0" />
-              <span className="text-xs font-medium text-[var(--fg-primary)]">Live tasks</span>
+              <span className="text-xs font-medium text-[var(--fg-primary)]">
+                {allDone && !streaming ? "Tasks complete" : "Live tasks"}
+              </span>
               <span className="ml-auto text-[10px] text-[var(--fg-tertiary)] tabular-nums">
                 {done}/{steps.length}
               </span>
@@ -61,7 +64,21 @@ export function LovableLiveTasksDock() {
             {open && (
               <div className="max-h-72 overflow-y-auto px-2 py-1.5 space-y-0.5">
                 {steps.map((step, i) => (
-                  <div key={step.key + i} className="flex items-center gap-2 px-1.5 py-1 rounded-lg text-xs">
+                  <button
+                    key={step.key + i}
+                    type="button"
+                    onClick={() => {
+                      const m = step.label.match(/(?:Editing|Reading|Checking|Removing)\s+(\S+)/);
+                      if (m?.[1]) {
+                        window.dispatchEvent(
+                          new CustomEvent("lifemark-open-file-at-line", {
+                            detail: { path: m[1], line: 1 },
+                          }),
+                        );
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-1.5 py-1 rounded-lg text-xs text-left hover:bg-[var(--glow-neutral-hover)] transition-colors"
+                  >
                     <span className="shrink-0">
                       {step.status === "done" ? (
                         <Check className="w-3.5 h-3.5 text-green-400" />
@@ -80,7 +97,7 @@ export function LovableLiveTasksDock() {
                     >
                       {step.label}
                     </span>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}

@@ -155,8 +155,8 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
         .from("messages")
         .select("*")
         .eq("project_id", projectId)
-        .order("created_at")
-        .limit(500),
+        .order("created_at", { ascending: false })
+        .limit(501),
       (accessClient as any)
         .from("profiles")
         .select("*")
@@ -173,11 +173,18 @@ export default async function EditorPage({ params, searchParams }: EditorPagePro
       profile = (await getDevProfile(user.id)) ?? profile;
     }
 
+    const rawMessages = (messagesResult.data ?? []) as import("@/types/database").Message[];
+    const initialHasMoreMessages = rawMessages.length > 500;
+    const initialMessages = (initialHasMoreMessages ? rawMessages.slice(0, 500) : rawMessages)
+      .slice()
+      .reverse();
+
     return (
       <EditorLayout
         project={project}
         initialFiles={filesResult.data ?? []}
-        initialMessages={messagesResult.data ?? []}
+        initialMessages={initialMessages}
+        initialHasMoreMessages={initialHasMoreMessages}
         profile={profile}
         starterPrompt={prompt}
         starterMode={starterMode as import("@/components/editor/editor-layout").EditorMode | undefined}

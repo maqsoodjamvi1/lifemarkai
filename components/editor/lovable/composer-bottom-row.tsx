@@ -22,6 +22,7 @@ export interface LovableComposerBottomRowProps {
   onAddReference: () => void;
   onAddSkill: () => void;
   onAnalyzeData: () => void;
+  onDesignDirections?: () => void;
   onAttach: () => void;
   isVisualEditActive?: boolean;
   onVisualEditToggle?: () => void;
@@ -64,6 +65,7 @@ export function LovableComposerBottomRow({
   onAddReference,
   onAddSkill,
   onAnalyzeData,
+  onDesignDirections,
   onAttach,
   isVisualEditActive,
   onVisualEditToggle,
@@ -104,6 +106,7 @@ export function LovableComposerBottomRow({
     onAddReference,
     onAddSkill,
     onAnalyzeData,
+    onDesignDirections,
     onAttach,
   };
 

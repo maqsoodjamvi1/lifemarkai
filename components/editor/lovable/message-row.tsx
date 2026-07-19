@@ -24,6 +24,8 @@ import { LovableMessageMetaBadges } from "./message-meta-badges";
 import { LovableMessageReactions } from "./message-reactions";
 import { LovableMessageEditInline } from "./message-edit-inline";
 import { LovableRoleTestBanner } from "./role-test-banner";
+import { LovableCollapsibleText } from "./collapsible-text";
+import { LovableBranchChip } from "./branch-chip";
 import { computeLovableChangeCardMeta, type LovableFileDiffEntry } from "./types";
 
 function buildAssistantSummary(
@@ -56,10 +58,14 @@ function buildAssistantSummary(
 export interface LovableMessageRowProps {
   msg: Message;
   searchQuery: string;
+  searchActive?: boolean;
+  /** Keyboard-focused message (Alt+↑/↓). */
+  keyboardFocused?: boolean;
   streaming: boolean;
   showBookmarks: boolean;
   isLastAssistant: boolean;
   copiedId: string | null;
+  copiedLinkId?: string | null;
   pinnedMsgId: string | null;
   rating: 1 | -1 | null;
   editingMessageId: string | null;
@@ -81,6 +87,12 @@ export interface LovableMessageRowProps {
   afterSnapshotId: string | null;
   isCurrentVersion: boolean;
   onCopy: () => void;
+  onCopyLink?: () => void;
+  onExport?: () => void;
+  onUseInComposer?: () => void;
+  onDelete?: () => void;
+  onReadAloud?: () => void;
+  speaking?: boolean;
   onEdit: () => void;
   onTogglePin: () => void;
   onThumbsUp: () => void;
@@ -112,16 +124,20 @@ export interface LovableMessageRowProps {
   onSelectRoleTestChip: (chip: string) => void;
   onOpenTestingPanel?: () => void;
   onSaveAnalyzeFile?: (file: GeneratedFile) => void | Promise<void>;
+  onOpenBranchSnapshot?: (snapshotId: string) => void;
 }
 
 /** Lovable-parity single message row — bubble, traces, change cards, actions. */
 export function LovableMessageRow({
   msg,
   searchQuery,
+  searchActive,
+  keyboardFocused,
   streaming,
   showBookmarks,
   isLastAssistant,
   copiedId,
+  copiedLinkId,
   pinnedMsgId,
   rating,
   editingMessageId,
@@ -143,6 +159,12 @@ export function LovableMessageRow({
   afterSnapshotId,
   isCurrentVersion,
   onCopy,
+  onCopyLink,
+  onExport,
+  onUseInComposer,
+  onDelete,
+  onReadAloud,
+  speaking,
   onEdit,
   onTogglePin,
   onThumbsUp,
@@ -174,6 +196,7 @@ export function LovableMessageRow({
   onSelectRoleTestChip,
   onOpenTestingPanel,
   onSaveAnalyzeFile,
+  onOpenBranchSnapshot,
 }: LovableMessageRowProps) {
   const verification = (msg.metadata as {
     verification?: { passed?: boolean; engine?: string; fixesApplied?: number; errors?: string[] };
@@ -185,6 +208,11 @@ export function LovableMessageRow({
     steps?: number;
   } | null)?.agent_trace;
 
+  const branchMeta = (msg.metadata as {
+    branched_at?: string;
+    branch_from_snapshot_id?: string | null;
+  } | null) ?? null;
+
   const hasStepPlan = msg.role === "assistant" && msg.content.includes("<!-- STEP_PLAN -->");
   const hasPlanReady = msg.role === "assistant" && msg.content.includes("<!-- PLAN_READY -->");
 
@@ -192,7 +220,14 @@ export function LovableMessageRow({
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+      data-message-id={msg.id}
+      className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} ${
+        searchActive
+          ? "ring-2 ring-violet-500/50 rounded-xl"
+          : keyboardFocused
+            ? "ring-2 ring-[var(--fg-tertiary)]/35 rounded-xl"
+            : ""
+      }`}
     >
       <div
         className={`group relative ${msg.role === "user" ? "max-w-[80%] items-end" : "w-full items-start"} flex flex-col gap-1`}
@@ -224,6 +259,13 @@ export function LovableMessageRow({
             }}
           />
         ) : (
+          {msg.role === "user" && (branchMeta?.branched_at || branchMeta?.branch_from_snapshot_id) && (
+            <LovableBranchChip
+              branchedAt={branchMeta.branched_at}
+              snapshotId={branchMeta.branch_from_snapshot_id}
+              onOpenSnapshot={onOpenBranchSnapshot}
+            />
+          )}
           <LovableMessageBubble role={msg.role}>
             {(() => {
               const analyzeMeta = msg.role === "assistant" ? parseAnalyzeMetadata(msg.metadata) : null;
@@ -243,7 +285,19 @@ export function LovableMessageRow({
                 return <p className="text-sm text-foreground/90 leading-relaxed">{summary}</p>;
               }
               if (searchQuery.trim()) {
-                return <LovableHighlightedText text={msg.content} query={searchQuery} />;
+                const highlighted = <LovableHighlightedText text={msg.content} query={searchQuery} />;
+                return msg.role === "user" ? (
+                  <LovableCollapsibleText text={msg.content}>{highlighted}</LovableCollapsibleText>
+                ) : (
+                  highlighted
+                );
+              }
+              if (msg.role === "user") {
+                return (
+                  <LovableCollapsibleText text={msg.content ?? ""}>
+                    <LovableMessageContent content={msg.content} mode={msg.mode ?? "chat"} />
+                  </LovableCollapsibleText>
+                );
               }
               return <LovableMessageContent content={msg.content} mode={msg.mode ?? "chat"} />;
             })()}
@@ -260,7 +314,15 @@ export function LovableMessageRow({
 
         {msg.role === "assistant" && buildActivity && buildActivity.length > 0 && (
           <div className="w-full mt-1">
-            <BuildActivityCard steps={buildActivity} title="Complete" />
+            {buildActivity.every((s) => s.status === "done") ? (
+              <LovableAgentTrace
+                trace={buildActivity.map((s) => ({ t: "action", c: s.label }))}
+                seconds={(msg.metadata as { work_seconds?: number }).work_seconds}
+                totalSteps={buildActivity.length}
+              />
+            ) : (
+              <BuildActivityCard steps={buildActivity} title="Working…" />
+            )}
           </div>
         )}
 
@@ -312,12 +374,22 @@ export function LovableMessageRow({
           <LovableMessageActions
             role={msg.role}
             createdAt={msg.created_at}
+            statsText={msg.content}
             copied={copiedId === msg.id}
+            linkCopied={copiedLinkId === msg.id}
+            bookmarked={bookmarked}
             pinned={pinnedMsgId === msg.id}
             rating={rating}
             canEdit={msg.role === "user" && !streaming && editingMessageId !== msg.id}
             onEdit={onEdit}
             onCopy={onCopy}
+            onCopyLink={onCopyLink}
+            onToggleBookmark={onToggleBookmark}
+            onExport={onExport}
+            onUseInComposer={onUseInComposer}
+            onDelete={onDelete}
+            onReadAloud={msg.role === "assistant" ? onReadAloud : undefined}
+            speaking={speaking}
             onTogglePin={msg.role === "assistant" ? onTogglePin : undefined}
             onThumbsUp={msg.role === "assistant" ? onThumbsUp : undefined}
             onThumbsDown={msg.role === "assistant" ? onThumbsDown : undefined}

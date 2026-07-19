@@ -34,14 +34,15 @@ usage-based pricing, up to 15 min per request).
 | Build | ✅ 2 credits flat (fractional 0.5–5 via `computeCreditCost()`) | ✅ Usage-based per message (0.5–2.0 typical) |
 | Agent loop | ✅ ReAct loop (`lib/ai/agent.ts`), file tools, max iterations | ✅ Build mode: explores code, reads logs/console/network, fetches docs |
 | Self-verification | ✅ `lib/ai/self-verify.ts` — headless Chromium render, pageerror/console capture, 2 auto-fix rounds, 55s budget | ✅ Browser testing: navigates, clicks, fills forms, screenshots, multi-viewport |
-| Task visibility | ⚠️ Stream events (`verify_status`, `wiring_status`) but no structured task UI | ✅ Tasks panel showing each step/files/tools |
-| Prompt queue | ❌ | ✅ Queue/pause/reorder/edit, repeat up to 50× |
+| Task visibility | ✅ Live tasks dock + agent trace + streamed build steps | ✅ Tasks panel showing each step/files/tools |
+| Prompt queue | ✅ Queue/pause/reorder/edit/repeat (persisted via `project_chat_state`) | ✅ Queue/pause/reorder/edit, repeat up to 50× |
 | Subagents | ⚠️ Different shape: Editor Intelligence lenses (10 roles + AI CTO, debate protocol, wave scheduler — wired into chat/agent/plan/fix routes) | ✅ Read-only parallel investigators (generic + Explore) |
-| Cross-project referencing | ❌ | ✅ `@other-project` read-only code/assets/history reuse |
-| Chat history search | ❌ | ✅ Keyword + semantic search of project conversation |
-| Code execution / file gen in chat | ❌ | ✅ Analyze uploads, run code, emit PDF/XLSX/PPTX |
+| Cross-project referencing | ⚠️ `@other-project` files only (not chat history/assets) | ✅ `@other-project` read-only code/assets/history reuse |
+| Chat history search | ✅ Keyword + semantic search + hit nav / filters | ✅ Keyword + semantic search of project conversation |
+| Edit-past / regenerate | ✅ Durable DB truncate + branch chip + file snapshot | ✅ Edit-past branching |
+| Code execution / file gen in chat | ⚠️ UI wired; analyze gated unless `ALLOW_UNSANDBOXED_ANALYZE` | ✅ Analyze uploads, run code, emit PDF/XLSX/PPTX |
 | "Try to fix" | ✅ `/api/ai/fix` recursive fix loop | ✅ Free, no credits |
-| Design previews before build | ❌ | ✅ Pick 1 of 3 design directions |
+| Design previews before build | ✅ Pick design directions before build | ✅ Pick 1 of 3 design directions |
 | Voice input | ✅ Whisper transcription | ✅ Voice mode (Oct 2025) |
 | Image generation | ✅ DALL-E 3 panel | ✅ In-agent image + video generation |
 | Knowledge files | ✅ Project + workspace knowledge | ✅ Project + workspace (10k chars each) + reads `AGENTS.md`/`CLAUDE.md` |
@@ -63,7 +64,7 @@ browser performance profiling (Core Web Vitals, CPU, memory). LifemarkAI has
 |---|---|---|
 | Default stack | React (also Next, Vue, Svelte) | **TanStack Start + SSR** (new projects since May 13, 2026); older = Vite+React with prerendering |
 | Preview engine | srcdoc fallback (Babel + Tailwind CDN, ~60 package stubs) — default; WebContainer engine (`@webcontainer/api` ^1.3.0) + optional real Vite build | Hosted preview, full toolchain |
-| Visual edits | ✅ `VisualEditOverlay` (srcdoc) + `veb-bridge.ts` postMessage bridge (WebContainer), persisted via `apply-visual-edit.ts` multi-file matcher w/ AI fallback | ✅ **Preview toolbar**: select elements (→prompt), inline text edit (free ≤100/day), **draw annotations**, pinned comments (@Lovable) |
+| Visual edits | ✅ Overlay + VEB bridge: multi-select (⌘/Ctrl), per-side margin/padding, image URL replace, AI image→composer, inline text, free quota | ✅ **Preview toolbar**: select elements (→prompt), inline text edit (free ≤100/day), **draw annotations**, pinned comments (@Lovable) |
 | Code editor | ✅ Monaco, all plans | ✅ Code mode — direct edit **paid only**; ZIP download paid |
 | Version history | ✅ Snapshots + restore + deploy rollback | ✅ Per-edit versioning, revert, edit-past-message branching, bookmarks |
 | npm packages | ⚠️ Allowlist in srcdoc engine | ✅ Broad (real toolchain) |
@@ -235,12 +236,12 @@ Version system (per-message revert + preview with after-state semantics, restore
 | Aikido pentest all plans (Jun 22) | ◑ Analog: vuln-scan + nightly security scans; no third-party pentest brand |
 | Pause Cloud manually / auto-pause idle (Jul 8) | ◑ Auto-pause exists on credit exhaustion (`bill-usage`); **manual pause + idle auto-pause missing** |
 | Resize instance from chat w/ approval card (Jul 8) | ◑ Tier resize exists in Cloud panel (`setManagedComputeTier`); **not offered from chat** |
-| Paste API key in chat → auto-secret (Jun 26) | ❌ Env panel exists; **no key auto-detection in composer** |
-| Reference exact code lines in chat (`file.tsx:42` pills) (Jun 10) | ❌ @file mentions exist; **no line-level references** |
-| Reference a connector via `@` in chat (Jul 8) | ❌ @-mentions are file-only |
-| Connector action approval cards in chat (Jul 9) | ❌ DB writes have allow/ask/never; **generic connector writes don't pause for approval** |
+| Paste API key in chat → auto-secret (Jun 26) | ✅ TipTap + capture paste → `/env` + `{{TAG}}` / Secrets Vault for `NAME=value` |
+| Reference exact code lines in chat (`file.tsx:42` pills) (Jun 10) | ✅ Line-ref chips, Monaco insert, open-at-line |
+| Reference a connector via `@` in chat (Jul 8) | ✅ `@connector:id` mentions + chat-route system block |
+| Connector action approval cards in chat (Jul 9) | ✅ `LovableConnectorApprovalCard` + connector-permissions API |
 | Build with URL (`html=` page references) (Jun 16) | ❌ Not present |
-| Unpublished-changes dot on Publish (Jun 16) | ❌ Not present (cheap win) |
+| Unpublished-changes dot on Publish (Jun 16) | ✅ Dirty-dot; seeded from max file `updated_at` across reloads |
 | Project monitoring beta (scheduled checks + email) (Jun 30) | ◑ Health scans + cron exist; **no per-project schedule opt-in / owner email digest** |
 | TTS/STT models in AI gateway for built apps (Jun 18) | ❌ Editor has voice input; **generated apps get no voice API via gateway** |
 | DB export (5 GB dump, emailed link) (Jul 3) | ◑ Snapshots/backups exist; **no user-facing full-dump export** |

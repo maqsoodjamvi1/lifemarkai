@@ -130,13 +130,24 @@ interface EditorLayoutProps {
   project: Project;
   initialFiles: ProjectFile[];
   initialMessages: Message[];
+  /** True when SSR truncated history (more messages exist older than the page). */
+  initialHasMoreMessages?: boolean;
   profile: Profile | null;
   starterPrompt?: string;
   starterMode?: EditorMode;
   autoDeploy?: boolean;
 }
 
-export function EditorLayout({ project, initialFiles, initialMessages, profile, starterPrompt, starterMode, autoDeploy }: EditorLayoutProps) {
+export function EditorLayout({
+  project,
+  initialFiles,
+  initialMessages,
+  initialHasMoreMessages = false,
+  profile,
+  starterPrompt,
+  starterMode,
+  autoDeploy,
+}: EditorLayoutProps) {
   const router = useRouter();
   // Record this project visit for the dashboard "Recently visited" rail
   useRecordProjectVisit({ id: project.id, name: project.name, framework: project.framework ?? "react" });
@@ -193,21 +204,24 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
     })();
   }, [autoDeploy, project.id]);
 
-  // Refresh message batch client-side when SSR hit the cap.
+  const [hasMoreMessages, setHasMoreMessages] = useState(initialHasMoreMessages);
+
+  // When SSR flagged older history, refresh via API so `hasMore` is authoritative.
   useEffect(() => {
-    if (initialMessages.length < 500) return;
+    if (!initialHasMoreMessages && initialMessages.length < 500) return;
     setMessagesHydrating(true);
     void (async () => {
       try {
         const res = await fetch(`/api/projects/${project.id}/messages?limit=500`);
         if (!res.ok) return;
-        const data = await res.json() as { messages?: Message[] };
+        const data = await res.json() as { messages?: Message[]; hasMore?: boolean };
         if (data.messages?.length) setMessages(data.messages);
+        if (typeof data.hasMore === "boolean") setHasMoreMessages(data.hasMore);
       } finally {
         setMessagesHydrating(false);
       }
     })();
-  }, [project.id, initialMessages.length]);
+  }, [project.id, initialHasMoreMessages, initialMessages.length]);
 
   // Static security-issue count for the publish dropdown's "Review security" badge
   // (matches Lovable's red number badge). Recomputes whenever files change; cheap
@@ -339,7 +353,18 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatingFileCount, setGeneratingFileCount] = useState(0);
   const [yjsCollaborators, setYjsCollaborators] = useState<import("@/hooks/use-yjs-editor").Collaborator[]>([]);
-  const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [lastSaved, setLastSaved] = useState<Date | null>(() => {
+    // Seed from file mtimes so the Publish dirty-dot works across reloads
+    // (not only after an edit in this session).
+    let max = 0;
+    for (const f of files) {
+      const raw = (f as { updated_at?: string | null }).updated_at;
+      if (!raw) continue;
+      const t = Date.parse(raw);
+      if (Number.isFinite(t) && t > max) max = t;
+    }
+    return max > 0 ? new Date(max) : null;
+  });
 
   // Dev Mode — Pro+ users can toggle the code editor; free users see an upgrade prompt
   const isPro = profile?.plan && profile.plan !== "free";
@@ -1071,7 +1096,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                   mode={editorMode}
                   credits={uiCredits}
                   starterPrompt={starterPrompt}
-                  hasMoreMessages={initialMessages.length >= 500}
+                  hasMoreMessages={hasMoreMessages}
                   isMessagesLoading={messagesHydrating}
                   previewError={previewError}
                   previewRuntimeErrors={previewRuntimeErrors}
@@ -1097,6 +1122,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                   onFocusPreview={handleFocusPreview}
                   onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
                   isVisualEditActive={isVisualEditActive}
+                  isMobile={isMobile}
                   securityIssueCount={securityIssueCount}
                 />
                 {leftChatOverlay === "history" && (
@@ -1306,7 +1332,7 @@ export function EditorLayout({ project, initialFiles, initialMessages, profile, 
                 mode={editorMode}
                 credits={uiCredits}
                 starterPrompt={starterPrompt}
-                hasMoreMessages={initialMessages.length >= 500}
+                hasMoreMessages={hasMoreMessages}
                 isMessagesLoading={messagesHydrating}
                 previewError={previewError}
                 previewRuntimeErrors={previewRuntimeErrors}

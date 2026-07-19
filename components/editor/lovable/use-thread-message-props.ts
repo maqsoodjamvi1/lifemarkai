@@ -12,10 +12,13 @@ import type { LovableFileDiffEntry } from "./types";
 
 export interface UseThreadMessagePropsArgs {
   searchQuery: string;
+  activeSearchHitId?: string | null;
+  focusedMessageId?: string | null;
   streaming: boolean;
   showBookmarks: boolean;
   lastAssistantMsgId: string | null;
   copiedId: string | null;
+  copiedLinkId?: string | null;
   pinnedMsgId: string | null;
   ratings: Record<string, 1 | -1>;
   editingMessageId: string | null;
@@ -37,7 +40,13 @@ export interface UseThreadMessagePropsArgs {
   afterSnapshotByMessageId: Map<string, string>;
   latestSnapshotMessageId: string | null;
   visibleMessages: Message[];
-  onCopy: (content: string, id: string) => void;
+  onCopy: (msg: Message) => void;
+  onCopyLink: (messageId: string) => void;
+  onExportMessage: (msg: Message) => void;
+  onUseInComposer: (msg: Message) => void;
+  onDeleteMessage: (msg: Message) => void;
+  onReadAloud?: (msg: Message) => void;
+  speakingMessageId?: string | null;
   onStartEdit: (msg: Message) => void;
   onTogglePin: (msgId: string) => void;
   onRate: (msgId: string, value: 1 | -1) => void;
@@ -67,6 +76,7 @@ export interface UseThreadMessagePropsArgs {
   onSelectRoleTestChip: (msgId: string, chip: string) => void;
   onOpenTestingPanel?: () => void;
   onSaveAnalyzeFile?: (file: GeneratedFile) => void | Promise<void>;
+  onOpenBranchSnapshot?: (snapshotId: string) => void;
 }
 
 /** Builds the per-message prop bag for LovableThreadItem without bloating chat-panel JSX. */
@@ -82,10 +92,13 @@ export function useThreadMessageProps(args: UseThreadMessagePropsArgs) {
 
       return {
         searchQuery: args.searchQuery,
+        searchActive: args.activeSearchHitId === msg.id,
+        keyboardFocused: args.focusedMessageId === msg.id,
         streaming: args.streaming,
         showBookmarks: args.showBookmarks,
         isLastAssistant: msg.id === args.lastAssistantMsgId,
         copiedId: args.copiedId,
+        copiedLinkId: args.copiedLinkId,
         pinnedMsgId: args.pinnedMsgId,
         rating: args.ratings[msg.id] ?? null,
         editingMessageId: args.editingMessageId,
@@ -110,7 +123,13 @@ export function useThreadMessageProps(args: UseThreadMessagePropsArgs) {
         fileStates: args.fileStates[msg.id],
         afterSnapshotId: preSnapshotId ? afterSnapshotId : null,
         isCurrentVersion,
-        onCopy: () => args.onCopy(msg.content, msg.id),
+        onCopy: () => args.onCopy(msg),
+        onCopyLink: () => args.onCopyLink(msg.id),
+        onExport: () => args.onExportMessage(msg),
+        onUseInComposer: () => args.onUseInComposer(msg),
+        onDelete: () => args.onDeleteMessage(msg),
+        onReadAloud: args.onReadAloud ? () => args.onReadAloud!(msg) : undefined,
+        speaking: args.speakingMessageId === msg.id,
         onEdit: () => args.onStartEdit(msg),
         onTogglePin: () => args.onTogglePin(msg.id),
         onThumbsUp: () => void args.onRate(msg.id, 1),
@@ -159,14 +178,18 @@ export function useThreadMessageProps(args: UseThreadMessagePropsArgs) {
         onSelectRoleTestChip: (chip) => args.onSelectRoleTestChip(msg.id, chip),
         onOpenTestingPanel: args.onOpenTestingPanel,
         onSaveAnalyzeFile: args.onSaveAnalyzeFile,
+        onOpenBranchSnapshot: args.onOpenBranchSnapshot,
       };
     },
     [
       args.searchQuery,
+      args.activeSearchHitId,
+      args.focusedMessageId,
       args.streaming,
       args.showBookmarks,
       args.lastAssistantMsgId,
       args.copiedId,
+      args.copiedLinkId,
       args.pinnedMsgId,
       args.ratings,
       args.editingMessageId,
@@ -188,6 +211,12 @@ export function useThreadMessageProps(args: UseThreadMessagePropsArgs) {
       args.afterSnapshotByMessageId,
       args.latestSnapshotMessageId,
       args.onCopy,
+      args.onCopyLink,
+      args.onExportMessage,
+      args.onUseInComposer,
+      args.onDeleteMessage,
+      args.onReadAloud,
+      args.speakingMessageId,
       args.onStartEdit,
       args.onTogglePin,
       args.onRate,
@@ -217,6 +246,7 @@ export function useThreadMessageProps(args: UseThreadMessagePropsArgs) {
       args.onSelectRoleTestChip,
       args.onOpenTestingPanel,
       args.onSaveAnalyzeFile,
+      args.onOpenBranchSnapshot,
     ],
   );
 }

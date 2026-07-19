@@ -23,6 +23,13 @@ export function LovableAgentTrace({ trace, seconds, totalSteps, className }: Lov
   const [open, setOpen] = useState(false);
   if (trace.length === 0) return null;
   const count = totalSteps ?? trace.length;
+
+  function openPath(path: string) {
+    window.dispatchEvent(
+      new CustomEvent("lifemark-open-file-at-line", { detail: { path, line: 1 } }),
+    );
+  }
+
   return (
     <div className={cn("mt-1.5", className)}>
       <button
@@ -45,7 +52,17 @@ export function LovableAgentTrace({ trace, seconds, totalSteps, className }: Lov
               </span>
               <span className="text-[var(--fg-secondary)] break-words min-w-0">
                 {s.tool && <span className="font-mono text-[var(--fg-primary)]">{s.tool}</span>}
-                {s.path && <span className="font-mono text-[var(--fg-tertiary)]"> {s.path}</span>}
+                {s.path && (
+                  <button
+                    type="button"
+                    onClick={() => openPath(s.path!)}
+                    className="font-mono text-[var(--fg-tertiary)] hover:text-violet-400 hover:underline transition-colors"
+                    title={`Open ${s.path}`}
+                  >
+                    {" "}
+                    {s.path}
+                  </button>
+                )}
                 {s.tool || s.path ? " — " : ""}
                 {s.c}
               </span>

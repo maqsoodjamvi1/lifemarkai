@@ -3,11 +3,16 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  AlignLeft, AlignCenter, AlignRight, X, Check, Wand2, Sparkles,
+  AlignLeft, AlignCenter, AlignRight, X, Check, Wand2, Sparkles, Image as ImageIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { applyVisualEdit, buildVisualEditPrompt, type VisualEditChange } from "@/lib/editor/apply-visual-edit";
+import {
+  applySpacingToken,
+  applyVisualEdit,
+  buildVisualEditPrompt,
+  type VisualEditChange,
+} from "@/lib/editor/apply-visual-edit";
 import type { ProjectFile } from "@/types/database";
 
 export interface SelectedElement {
@@ -82,6 +87,9 @@ export function VebEditPopover({
   onApply,
   onClose,
   aiFallbackAvailable,
+  selectionCount = 1,
+  onRequestAiImage,
+  onUploadImageFile,
 }: {
   selection: SelectedElement;
   position: { x: number; y: number };
@@ -89,11 +97,20 @@ export function VebEditPopover({
   onClose: () => void;
   /** Show a hint that unmatched edits are sent to the AI */
   aiFallbackAvailable?: boolean;
+  selectionCount?: number;
+  /** Send an AI image-gen prompt for the selected element into the composer */
+  onRequestAiImage?: (prompt: string) => void;
+  /** Persist an uploaded image into project files; returns a usable src (data URL or path). */
+  onUploadImageFile?: (file: File) => Promise<string | null>;
 }) {
-  const [activeTab, setActiveTab] = useState<"text" | "colors" | "spacing">("text");
+  const [activeTab, setActiveTab] = useState<"text" | "colors" | "spacing" | "image">("text");
   const quota = useFreeEditQuota();
   const [editText, setEditText] = useState(selection.textContent);
   const [editClasses, setEditClasses] = useState(selection.classList.join(" "));
+  const [imageUrl, setImageUrl] = useState("");
+  const [aiImagePrompt, setAiImagePrompt] = useState("");
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const imageFileRef = useRef<HTMLInputElement>(null);
 
   // Reset edit fields when a different element is selected — React's
   // "adjust state during render" pattern (no effect → no cascading render).
@@ -102,12 +119,20 @@ export function VebEditPopover({
     setPrevSelection(selection);
     setEditText(selection.textContent);
     setEditClasses(selection.classList.join(" "));
+    setImageUrl("");
+    setAiImagePrompt("");
   }
 
   function addClass(cls: string) {
     const updated = editClasses.includes(cls)
       ? editClasses.split(" ").filter((c) => c !== cls).join(" ")
       : (editClasses + " " + cls).trim();
+    setEditClasses(updated);
+    onApply({ classes: updated });
+  }
+
+  function setSpacing(kind: "m" | "p", side: "t" | "r" | "b" | "l" | "x" | "y" | "", scale: string) {
+    const updated = applySpacingToken(editClasses, kind, side, scale);
     setEditClasses(updated);
     onApply({ classes: updated });
   }
@@ -130,6 +155,7 @@ export function VebEditPopover({
             <Wand2 className="w-4 h-4 text-violet-400" />
             <span className="text-sm font-medium">
               &lt;{selection.tagName}&gt;
+              {selectionCount > 1 ? ` ×${selectionCount}` : ""}
             </span>
           </div>
           <Button variant="ghost" size="icon" className="w-6 h-6" onClick={onClose}>
@@ -139,7 +165,7 @@ export function VebEditPopover({
 
         {/* Tabs */}
         <div className="flex border-b border-border">
-          {(["text", "colors", "spacing"] as const).map((tab) => (
+          {(["text", "colors", "spacing", "image"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -280,22 +306,163 @@ export function VebEditPopover({
           )}
 
           {activeTab === "spacing" && (
-            <div>
-              <label className="text-xs text-muted-foreground mb-1 block">Tailwind classes</label>
-              <div className="flex gap-1">
-                <Input
-                  value={editClasses}
-                  onChange={(e) => setEditClasses(e.target.value)}
-                  className="h-8 text-xs font-mono"
-                  placeholder="e.g. p-4 m-2 rounded-xl"
-                />
-                <Button size="icon" className="w-8 h-8 shrink-0" onClick={() => onApply({ classes: editClasses })}>
-                  <Check className="w-3.5 h-3.5" />
-                </Button>
+            <div className="space-y-3">
+              {(
+                [
+                  { label: "Margin", kind: "m" as const },
+                  { label: "Padding", kind: "p" as const },
+                ] as const
+              ).map(({ label, kind }) => (
+                <div key={kind}>
+                  <label className="text-xs text-muted-foreground mb-1 block">{label}</label>
+                  <div className="grid grid-cols-4 gap-1 mb-1">
+                    {(
+                      [
+                        ["t", "Top"],
+                        ["r", "Right"],
+                        ["b", "Bottom"],
+                        ["l", "Left"],
+                      ] as const
+                    ).map(([side, sideLabel]) => (
+                      <div key={side} className="space-y-0.5">
+                        <span className="text-[9px] text-muted-foreground block text-center">{sideLabel}</span>
+                        <div className="flex flex-col gap-0.5">
+                          {["0", "2", "4", "8"].map((scale) => (
+                            <button
+                              key={scale}
+                              type="button"
+                              onClick={() => setSpacing(kind, side, scale)}
+                              className="text-[10px] py-0.5 rounded border border-border hover:bg-accent"
+                            >
+                              {scale}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-1">
+                    {(["0", "2", "4", "6", "8"] as const).map((scale) => (
+                      <button
+                        key={scale}
+                        type="button"
+                        onClick={() => setSpacing(kind, "", scale)}
+                        className="flex-1 text-[10px] py-1 rounded border border-border hover:bg-accent"
+                        title={`All sides ${kind}-${scale}`}
+                      >
+                        {kind}-{scale}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Raw classes</label>
+                <div className="flex gap-1">
+                  <Input
+                    value={editClasses}
+                    onChange={(e) => setEditClasses(e.target.value)}
+                    className="h-8 text-xs font-mono"
+                    placeholder="e.g. p-4 m-2 rounded-xl"
+                  />
+                  <Button size="icon" className="w-8 h-8 shrink-0" onClick={() => onApply({ classes: editClasses })}>
+                    <Check className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-2">
-                Enter any Tailwind CSS classes directly.
-              </p>
+            </div>
+          )}
+
+          {activeTab === "image" && (
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block flex items-center gap-1">
+                  <ImageIcon className="w-3 h-3" /> Image URL
+                </label>
+                <div className="flex gap-1">
+                  <Input
+                    value={imageUrl}
+                    onChange={(e) => setImageUrl(e.target.value)}
+                    className="h-8 text-xs"
+                    placeholder="https://… or /assets/hero.png"
+                    onKeyDown={(e) => e.key === "Enter" && imageUrl.trim() && onApply({ imageSrc: imageUrl.trim() })}
+                  />
+                  <Button
+                    size="icon"
+                    className="w-8 h-8 shrink-0"
+                    disabled={!imageUrl.trim()}
+                    onClick={() => onApply({ imageSrc: imageUrl.trim() })}
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+              </div>
+              {onUploadImageFile && (
+                <div>
+                  <label className="text-xs text-muted-foreground mb-1 block">Upload image file</label>
+                  <input
+                    ref={imageFileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      e.target.value = "";
+                      if (!file) return;
+                      setUploadingImage(true);
+                      void onUploadImageFile(file)
+                        .then((src) => {
+                          if (src) {
+                            setImageUrl(src);
+                            onApply({ imageSrc: src });
+                          }
+                        })
+                        .finally(() => setUploadingImage(false));
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8 w-full text-xs"
+                    disabled={uploadingImage}
+                    onClick={() => imageFileRef.current?.click()}
+                  >
+                    {uploadingImage ? "Uploading…" : "Choose image from disk"}
+                  </Button>
+                </div>
+              )}
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">AI image for this element</label>
+                <div className="flex gap-1">
+                  <Input
+                    value={aiImagePrompt}
+                    onChange={(e) => setAiImagePrompt(e.target.value)}
+                    className="h-8 text-xs"
+                    placeholder="e.g. soft product photo on marble"
+                  />
+                  <Button
+                    size="sm"
+                    className="h-8 shrink-0 text-xs"
+                    disabled={!aiImagePrompt.trim() || !onRequestAiImage}
+                    onClick={() => {
+                      const tag = selection.tagName;
+                      onRequestAiImage?.(
+                        `Generate an image for the selected <${tag}> element` +
+                          (selection.classList.length ? ` (classes: ${selection.classList.join(" ")})` : "") +
+                          `: ${aiImagePrompt.trim()}. Replace the image src with the generated asset URL.`,
+                      );
+                      onClose();
+                    }}
+                  >
+                    <Sparkles className="w-3 h-3 mr-1" />
+                    Send
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  Sends a prompt to the composer / Image panel flow.
+                </p>
+              </div>
             </div>
           )}
 
@@ -330,12 +497,48 @@ interface VisualEditOverlayProps {
   files: ProjectFile[];
   onFileChange: (path: string, content: string) => void;
   enabled: boolean;
+  projectId?: string;
   /** Optional: route unmatched edits to the AI chat as a precise prompt */
   onRequestAiEdit?: (prompt: string) => void;
 }
 
-export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled, onRequestAiEdit }: VisualEditOverlayProps) {
-  const [selected, setSelected] = useState<SelectedElement | null>(null);
+async function persistVisualEditImage(
+  file: File,
+  onFileChange: (path: string, content: string) => void,
+  projectId?: string,
+): Promise<string | null> {
+  if (!file.type.startsWith("image/")) return null;
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("read failed"));
+    reader.readAsDataURL(file);
+  });
+  if (!dataUrl.startsWith("data:image")) return null;
+  const ext = (file.name.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "") || "png";
+  const path = `public/uploads/veb-${Date.now()}.${ext}`;
+  onFileChange(path, dataUrl);
+  if (projectId) {
+    void fetch(`/api/projects/${projectId}/files`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path, content: dataUrl, language: "plaintext" }),
+    }).catch(() => {/* best-effort; local file already updated */});
+  }
+  // Prefer public URL path for Vite; data URL always works in preview.
+  return dataUrl;
+}
+
+export function VisualEditOverlay({
+  iframeRef,
+  files,
+  onFileChange,
+  enabled,
+  projectId,
+  onRequestAiEdit,
+}: VisualEditOverlayProps) {
+  const [selectedList, setSelectedList] = useState<SelectedElement[]>([]);
+  const selected = selectedList[selectedList.length - 1] ?? null;
   const [popoverPos, setPopoverPos] = useState({ x: 0, y: 0 });
 
   // In-place edit commit — kept in a ref so the injected dblclick handler
@@ -359,6 +562,7 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled, onR
     style.textContent = `
       .lifemark-hover { outline: 2px solid #7c3aed !important; outline-offset: 2px; cursor: pointer !important; }
       .lifemark-selected { outline: 2px solid #0e90e8 !important; outline-offset: 2px; }
+      .lifemark-multi { outline: 2px solid #38bdf8 !important; outline-offset: 2px; }
       .lifemark-inline-editing { outline: 2px dashed #22c55e !important; outline-offset: 2px; cursor: text !important; }
       * { transition: outline 0.1s ease; }
     `;
@@ -384,8 +588,7 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled, onR
       const el = e.target as HTMLElement;
       const rect = el.getBoundingClientRect();
       const iframeRect = iframe.getBoundingClientRect();
-
-      setSelected({
+      const next: SelectedElement = {
         tagName: el.tagName.toLowerCase(),
         textContent: el.textContent ?? "",
         classList: Array.from(el.classList).filter((c) => !c.startsWith("lifemark-")),
@@ -396,14 +599,29 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled, onR
           width: rect.width,
           height: rect.height,
         },
+      };
+      const additive = e.metaKey || e.ctrlKey;
+      setSelectedList((prev) => {
+        if (!additive) return [next];
+        if (prev.some((p) => p.xpath === next.xpath)) {
+          return prev.filter((p) => p.xpath !== next.xpath);
+        }
+        return [...prev, next];
       });
       setPopoverPos({
         x: rect.left + iframeRect.left + rect.width / 2,
         y: rect.top + iframeRect.top + rect.height + 8,
       });
 
-      doc.querySelectorAll(".lifemark-selected").forEach((el) => el.classList.remove("lifemark-selected"));
-      el.classList.add("lifemark-selected");
+      if (!additive) {
+        doc.querySelectorAll(".lifemark-selected, .lifemark-multi").forEach((n) => {
+          n.classList.remove("lifemark-selected", "lifemark-multi");
+        });
+        el.classList.add("lifemark-selected");
+      } else {
+        el.classList.toggle("lifemark-multi");
+        el.classList.add("lifemark-selected");
+      }
     };
 
     // True in-place text editing (Lovable parity): double-click a text
@@ -482,7 +700,7 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled, onR
   const [prevEnabled, setPrevEnabled] = useState(enabled);
   if (prevEnabled !== enabled) {
     setPrevEnabled(enabled);
-    if (!enabled) setSelected(null);
+    if (!enabled) setSelectedList([]);
   }
 
   useEffect(() => {
@@ -495,33 +713,38 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled, onR
 
   return (
     <>
-      {/* Selection border */}
-      <div
-        className="fixed pointer-events-none z-40 border-2 border-blue-500 rounded"
-        style={{
-          top: selected.rect.top,
-          left: selected.rect.left,
-          width: selected.rect.width,
-          height: selected.rect.height,
-        }}
-      />
+      {selectedList.map((sel) => (
+        <div
+          key={sel.xpath}
+          className="fixed pointer-events-none z-40 border-2 border-blue-500 rounded"
+          style={{
+            top: sel.rect.top,
+            left: sel.rect.left,
+            width: sel.rect.width,
+            height: sel.rect.height,
+          }}
+        />
+      ))}
 
       <VebEditPopover
         selection={selected}
+        selectionCount={selectedList.length}
         position={popoverPos}
-        onClose={() => setSelected(null)}
+        onClose={() => setSelectedList([])}
         aiFallbackAvailable={!!onRequestAiEdit}
+        onRequestAiImage={onRequestAiEdit}
+        onUploadImageFile={(file) => persistVisualEditImage(file, onFileChange, projectId)}
         onApply={(change) => {
-          applyChangeToFiles(files, selected, change, onFileChange, onRequestAiEdit);
-          // Keep local selection state in sync so follow-up edits chain correctly
-          setSelected((prev) =>
-            prev
-              ? {
-                  ...prev,
-                  textContent: change.text !== undefined ? change.text : prev.textContent,
-                  classList: change.classes !== undefined ? change.classes.split(" ").filter(Boolean) : prev.classList,
-                }
-              : prev
+          for (const sel of selectedList) {
+            applyChangeToFiles(files, sel, change, onFileChange, onRequestAiEdit);
+          }
+          setSelectedList((prev) =>
+            prev.map((p) => ({
+              ...p,
+              textContent: change.text !== undefined ? change.text : p.textContent,
+              classList:
+                change.classes !== undefined ? change.classes.split(" ").filter(Boolean) : p.classList,
+            })),
           );
         }}
       />
@@ -533,10 +756,18 @@ export function VisualEditOverlay({ iframeRef, files, onFileChange, enabled, onR
 
 interface VebBridgePopoverProps {
   selection: SelectedElement;
+  /** Additional multi-selected elements (⌘/Ctrl+click). Primary `selection` is last. */
+  selections?: SelectedElement[];
   files: ProjectFile[];
   onFileChange: (path: string, content: string) => void;
+  projectId?: string;
   /** Send a live-apply command to the preview iframe for instant feedback */
-  onLiveApply: (payload: { xpath: string; text?: string; classes?: string }) => void;
+  onLiveApply: (payload: {
+    xpath: string;
+    text?: string;
+    classes?: string;
+    imageSrc?: string;
+  }) => void;
   onRequestAiEdit?: (prompt: string) => void;
   onClose: () => void;
   onSelectionChange?: (next: SelectedElement) => void;
@@ -544,40 +775,52 @@ interface VebBridgePopoverProps {
 
 export function VebBridgePopover({
   selection,
+  selections,
   files,
   onFileChange,
+  projectId,
   onLiveApply,
   onRequestAiEdit,
   onClose,
   onSelectionChange,
 }: VebBridgePopoverProps) {
+  const targets = selections && selections.length > 0 ? selections : [selection];
   return (
     <>
-      {/* Selection border */}
-      <div
-        className="fixed pointer-events-none z-40 border-2 border-blue-500 rounded"
-        style={{
-          top: selection.rect.top,
-          left: selection.rect.left,
-          width: selection.rect.width,
-          height: selection.rect.height,
-        }}
-      />
+      {targets.map((sel) => (
+        <div
+          key={sel.xpath}
+          className="fixed pointer-events-none z-40 border-2 border-blue-500 rounded"
+          style={{
+            top: sel.rect.top,
+            left: sel.rect.left,
+            width: sel.rect.width,
+            height: sel.rect.height,
+          }}
+        />
+      ))}
 
       <VebEditPopover
         selection={selection}
+        selectionCount={targets.length}
         position={{
           x: selection.rect.left + selection.rect.width / 2,
           y: selection.rect.top + selection.rect.height + 8,
         }}
         onClose={onClose}
         aiFallbackAvailable={!!onRequestAiEdit}
+        onRequestAiImage={onRequestAiEdit}
+        onUploadImageFile={(file) => persistVisualEditImage(file, onFileChange, projectId)}
         onApply={(change) => {
-          // 1. Instant DOM feedback inside the (cross-origin) preview
-          onLiveApply({ xpath: selection.xpath, text: change.text, classes: change.classes });
-          // 2. Persist to source files (or AI fallback when not uniquely matchable)
-          applyChangeToFiles(files, selection, change, onFileChange, onRequestAiEdit);
-          // 3. Keep selection in sync for chained edits
+          for (const sel of targets) {
+            onLiveApply({
+              xpath: sel.xpath,
+              text: change.text,
+              classes: change.classes,
+              imageSrc: change.imageSrc,
+            });
+            applyChangeToFiles(files, sel, change, onFileChange, onRequestAiEdit);
+          }
           onSelectionChange?.({
             ...selection,
             textContent: change.text !== undefined ? change.text : selection.textContent,

@@ -6,6 +6,7 @@ export type LovableMentionItem =
   | { kind: "file"; path: string }
   | { kind: "user"; display: string; email: string }
   | { kind: "xproject"; projectName: string; projectId: string; filePath: string }
+  | { kind: "xchat"; projectName: string; projectId: string }
   | { kind: "connector"; id: string; name: string; emoji: string };
 
 interface LovableComposerMentionAutocompleteProps {
@@ -34,7 +35,9 @@ export function LovableComposerMentionAutocomplete({
         >
           <div className="px-2 py-1 border-b border-border">
             <span className="text-[10px] text-muted-foreground font-mono">
-              {isCrossProjectQuery ? "@ reference from another project" : "@ mention file or collaborator"}
+              {isCrossProjectQuery
+                ? "@ reference files or chat from another project"
+                : "@ mention file, connector, or collaborator"}
             </span>
           </div>
           {items.map((item, idx) => (
@@ -52,6 +55,12 @@ export function LovableComposerMentionAutocomplete({
                 <>
                   <span className="text-muted-foreground/50">📄</span>
                   <span className="font-mono truncate text-violet-400">{item.path}</span>
+                </>
+              ) : item.kind === "xchat" ? (
+                <>
+                  <span className="text-muted-foreground/50">💬</span>
+                  <span className="font-medium truncate text-sky-400">{item.projectName}</span>
+                  <span className="text-muted-foreground/50 text-[10px] ml-auto">chat history</span>
                 </>
               ) : item.kind === "xproject" ? (
                 <>

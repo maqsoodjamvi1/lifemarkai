@@ -23,6 +23,7 @@ interface LovableComposerDockProps {
   autoFixing: boolean;
   autoFixAttempts: number;
   maxAutoFixAttempts: number;
+  freeFixesRemaining?: number | null;
   previewError: string | null | undefined;
   previewRuntimeErrors?: PreviewRuntimeError[];
   runtimeErrorsDismissed?: boolean;
@@ -80,6 +81,7 @@ export function LovableComposerDock({
   autoFixing,
   autoFixAttempts,
   maxAutoFixAttempts,
+  freeFixesRemaining,
   previewError,
   previewRuntimeErrors = [],
   runtimeErrorsDismissed,
@@ -134,7 +136,11 @@ export function LovableComposerDock({
   return (
     <>
       {autoFixing && (
-        <LovableAutofixBanner attempt={autoFixAttempts} maxAttempts={maxAutoFixAttempts} />
+        <LovableAutofixBanner
+          attempt={autoFixAttempts}
+          maxAttempts={maxAutoFixAttempts}
+          freeRemaining={freeFixesRemaining}
+        />
       )}
 
       {previewError && !noCredits && autoFixAttempts >= maxAutoFixAttempts && !autoFixing && (

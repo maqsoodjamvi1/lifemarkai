@@ -62,10 +62,45 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
   const [editText, setEditText] = useState("");
   const [showResolved, setShowResolved] = useState(false);
   const draftInputRef = useRef<HTMLTextAreaElement>(null);
+  const serverReadyRef = useRef(false);
 
-  // Persist on change
+  // Hydrate from project chat-state (localStorage is offline cache).
+  useEffect(() => {
+    let cancelled = false;
+    serverReadyRef.current = false;
+    void (async () => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/chat-state`);
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { preview_annotations?: Annotation[] };
+        if (cancelled) return;
+        if (Array.isArray(data.preview_annotations) && data.preview_annotations.length > 0) {
+          setAnnotations(data.preview_annotations);
+          saveAnnotations(projectId, data.preview_annotations);
+        }
+      } catch {
+        /* keep local cache */
+      } finally {
+        if (!cancelled) serverReadyRef.current = true;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  // Persist on change — local cache + server
   useEffect(() => {
     saveAnnotations(projectId, annotations);
+    if (!serverReadyRef.current) return;
+    const timer = window.setTimeout(() => {
+      void fetch(`/api/projects/${projectId}/chat-state`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preview_annotations: annotations }),
+      }).catch(() => {/* best-effort */});
+    }, 500);
+    return () => window.clearTimeout(timer);
   }, [annotations, projectId]);
 
   // Focus draft textarea

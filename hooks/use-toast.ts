@@ -12,16 +12,25 @@ export interface Toast {
   description?: string;
   variant?: "default" | "destructive";
   duration?: number;
+  action?: { label: string; onClick: () => void };
 }
 
 /** Standalone toast — safe to call outside React components. */
 export function toast(props: Omit<Toast, "id">): void {
-  const { title, description, variant, duration } = props;
+  const { title, description, variant, duration, action } = props;
   const message = title ?? description ?? "";
   // When only a description was supplied, promote it to the message line.
   const options = {
     description: title ? description : undefined,
     duration,
+    ...(action
+      ? {
+          action: {
+            label: action.label,
+            onClick: action.onClick,
+          },
+        }
+      : {}),
   };
   if (variant === "destructive") {
     sonnerToast.error(message, options);

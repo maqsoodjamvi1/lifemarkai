@@ -394,10 +394,19 @@ check(
     composerDockSrc.includes("base64: f.base64"),
 );
 check(
+  "chat: build work_seconds persisted on assistant metadata",
+  readFileSync("app/api/ai/chat/route.ts", "utf8").includes("turnStartedAt") &&
+    readFileSync("app/api/ai/chat/route.ts", "utf8").includes("work_seconds"),
+);
+check(
   "preview: network panel bridge + UI",
   readFileSync("lib/preview/veb-bridge.ts", "utf8").includes("lifemark-preview-network") &&
     readFileSync("lib/preview/build-fallback-html.ts", "utf8").includes("lifemark-preview-network") &&
+    readFileSync("lib/preview/preview-perf-bridge.ts", "utf8").includes("lifemark-preview-perf") &&
+    readFileSync("lib/preview/preview-perf-bridge.ts", "utf8").includes("lifemark-preview-perf-request") &&
     previewSrc.includes("networkLines") &&
+    previewSrc.includes("perfSnapshot") &&
+    previewSrc.includes("refreshPreviewPerf") &&
     previewSrc.includes("previewBottomTab"),
 );
 check(
@@ -406,7 +415,164 @@ check(
     previewSrc.includes("lifemark-veb-inline") &&
     layoutSrc.includes("LovableLiveTasksDock") &&
     chatSrc.includes("lifemark-live-tasks") &&
-    readFileSync("components/editor/lovable/live-tasks-dock.tsx", "utf8").includes("Live tasks"),
+    chatSrc.includes("liveTaskSteps") &&
+    chatSrc.includes("buildActivitySteps") &&
+    readFileSync("components/editor/lovable/live-tasks-dock.tsx", "utf8").includes("Tasks complete"),
+);
+check(
+  "lovable: chat search hit navigation + design empty state",
+  chatSrc.includes("activeSearchHitIndex") &&
+    chatSrc.includes("navigateSearchHit") &&
+    chatSrc.includes("openDesignDirections") &&
+    chatSrc.includes("onJumpToPinned") &&
+    chatSrc.includes("lifemark-pinned-") &&
+    chatSrc.includes("metadata.reactions") &&
+    readFileSync("components/editor/lovable/chat-search-bar.tsx", "utf8").includes("onNavigate") &&
+    readFileSync("components/editor/lovable/use-chat-keyboard-shortcuts.ts", "utf8").includes("F3") &&
+    readFileSync("components/editor/lovable/empty-state.tsx", "utf8").includes("Explore 3 design directions") &&
+    readFileSync("components/editor/lovable/message-row.tsx", "utf8").includes("data-message-id") &&
+    readFileSync("components/editor/lovable/composer-toolbar.tsx", "utf8").includes("Design directions") &&
+    readFileSync("components/editor/lovable/live-tasks-dock.tsx", "utf8").includes("lifemark-open-file-at-line"),
+);
+check(
+  "lovable: virtual scroll + thread session + copy link + header shortcuts",
+  chatSrc.includes("timelineRef") &&
+    chatSrc.includes("scrollToThreadIndex") &&
+    chatSrc.includes("lifemark-collapsed-threads-") &&
+    chatSrc.includes("copyMessageLink") &&
+    chatSrc.includes("exportMessage") &&
+    chatSrc.includes("onCollapseAllThreads") &&
+    chatSrc.includes("onExpandAllThreads") &&
+    chatSrc.includes('params.get("message")') &&
+    readFileSync("components/editor/lovable/chat-timeline.tsx", "utf8").includes("LovableChatTimelineHandle") &&
+    readFileSync("components/editor/lovable/chat-header.tsx", "utf8").includes("chatSearchShortcutLabel") &&
+    readFileSync("components/editor/lovable/chat-header.tsx", "utf8").includes("chatBookmarksShortcutLabel") &&
+    readFileSync("components/editor/lovable/message-actions.tsx", "utf8").includes("onCopyLink") &&
+    readFileSync("components/editor/lovable/message-actions.tsx", "utf8").includes("onToggleBookmark") &&
+    readFileSync("components/editor/lovable/use-chat-keyboard-shortcuts.ts", "utf8").includes("onBookmarksShortcut") &&
+    readFileSync("components/editor/lovable/use-chat-keyboard-shortcuts.ts", "utf8").includes("onScrollToBottom") &&
+    readFileSync("components/editor/lovable/scroll-to-bottom.tsx", "utf8").includes("newCount") &&
+    readFileSync("components/editor/lovable/message-actions.tsx", "utf8").includes("onUseInComposer") &&
+    readFileSync("components/editor/lovable/message-timestamp.tsx", "utf8").includes("onCopyLink") &&
+    readFileSync("components/editor/shortcuts-modal.tsx", "utf8").includes('title: "Chat"') &&
+    readFileSync("app/api/projects/[id]/messages/[messageId]/route.ts", "utf8").includes(".delete()") &&
+    readFileSync("components/editor/lovable/search-empty.tsx", "utf8").includes("LovableSearchEmpty") &&
+    readFileSync("components/editor/lovable/load-older-button.tsx", "utf8").includes("Load earlier messages") &&
+    readFileSync("components/editor/lovable/chat-search-bar.tsx", "utf8").includes("onClearQuery") &&
+    readFileSync("components/editor/lovable/message-actions.tsx", "utf8").includes("onDelete") &&
+    readFileSync("components/editor/lovable/use-chat-keyboard-shortcuts.ts", "utf8").includes("onScrollToTop") &&
+    readFileSync("components/editor/lovable/thread-divider.tsx", "utf8").includes("searchMatchCount") &&
+    readFileSync("components/editor/lovable/preview-snapshot-card.tsx", "utf8").includes("lightboxOpen") &&
+    readFileSync("components/editor/lovable/prompt-templates.ts", "utf8").includes("LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY") &&
+    readFileSync("components/editor/lovable/chat-search-bar.tsx", "utf8").includes("roleFilter") &&
+    readFileSync("components/editor/lovable/chat-search-bar.tsx", "utf8").includes("recentQueries") &&
+    readFileSync("components/editor/lovable/message-edit-inline.tsx", "utf8").includes("metaKey") &&
+    readFileSync("components/editor/lovable/agent-trace.tsx", "utf8").includes("lifemark-open-file-at-line") &&
+    readFileSync("components/editor/lovable/chat-header.tsx", "utf8").includes("messageCount") &&
+    chatSrc.includes("searchRoleFilter") &&
+    chatSrc.includes("rememberSearchQuery") &&
+    chatSrc.includes("stoppedDraft") &&
+    chatSrc.includes("continueAfterStop") &&
+    chatSrc.includes("compactDensity") &&
+    chatSrc.includes("onCopyThread") &&
+    readFileSync("components/editor/lovable/collapsible-text.tsx", "utf8").includes("Show more") &&
+    readFileSync("components/editor/lovable/continue-banner.tsx", "utf8").includes("Continue") &&
+    readFileSync("components/editor/lovable/chat-search-bar.tsx", "utf8").includes("onJumpFirst") &&
+    readFileSync("components/editor/lovable/message-timestamp.tsx", "utf8").includes("formatLovableAbsoluteTime") &&
+    readFileSync("components/editor/lovable/thread-divider.tsx", "utf8").includes("onCopyThread") &&
+    chatSrc.includes("composerDraftKey") &&
+    chatSrc.includes("exportChatAsJson") &&
+    chatSrc.includes("searchMsgModeFilter") &&
+    chatSrc.includes("focusedMessageId") &&
+    chatSrc.includes("printChatConversation") &&
+    chatSrc.includes("onClearRecent") &&
+    readFileSync("components/editor/lovable/draft-restore-banner.tsx", "utf8").includes("Draft restored") &&
+    readFileSync("components/editor/lovable/chat-search-bar.tsx", "utf8").includes("onMsgModeFilterChange") &&
+    readFileSync("components/editor/lovable/chat-search-bar.tsx", "utf8").includes("onClearRecent") &&
+    readFileSync("components/editor/lovable/chat-header.tsx", "utf8").includes("onExportJson") &&
+    readFileSync("components/editor/lovable/chat-header.tsx", "utf8").includes("onPrintChat") &&
+    readFileSync("components/editor/lovable/message-stats.tsx", "utf8").includes("LovableMessageStats") &&
+    readFileSync("components/editor/lovable/message-actions.tsx", "utf8").includes("statsText") &&
+    readFileSync("lib/editor/print-chat.ts", "utf8").includes("printChatConversation") &&
+    readFileSync("components/editor/lovable/use-chat-keyboard-shortcuts.ts", "utf8").includes("onNavigateMessage") &&
+    readFileSync("components/editor/lovable/use-chat-keyboard-shortcuts.ts", "utf8").includes("onFocusComposer") &&
+    readFileSync("components/editor/lovable/message-actions.tsx", "utf8").includes("onReadAloud") &&
+    readFileSync("components/editor/lovable/chat-day-utils.ts", "utf8").includes("buildLovableChatDayJumps") &&
+    readFileSync("components/editor/lovable/chat-header.tsx", "utf8").includes("onJumpToDay") &&
+    chatSrc.includes("restore: true") &&
+    chatSrc.includes("toggleReadAloud") &&
+    chatSrc.includes("undoClearChat") &&
+    chatSrc.includes("undoDeleteMessage") &&
+    readFileSync("app/api/projects/[id]/messages/route.ts", "utf8").includes("restore === true"),
+);
+check(
+  "lovable: durable edit-past + collab chat APIs + chat-state",
+  chatSrc.includes("truncateChatFromMessage") &&
+    chatSrc.includes("pendingBranchRef") &&
+    chatSrc.includes("project-messages:") &&
+    chatSrc.includes("/chat-state") &&
+    chatSrc.includes("chatStateReadyRef") &&
+    readFileSync("app/api/projects/[id]/messages/route.ts", "utf8").includes("truncate === true") &&
+    readFileSync("app/api/projects/[id]/messages/route.ts", "utf8").includes("assertChatAccess") &&
+    readFileSync("app/api/projects/[id]/messages/search/route.ts", "utf8").includes("assertChatAccess") &&
+    readFileSync("app/api/projects/[id]/messages/[messageId]/route.ts", "utf8").includes("export async function PATCH") &&
+    readFileSync("app/api/projects/[id]/chat-state/route.ts", "utf8").includes("prompt_queue") &&
+    readFileSync("lib/project/chat-access.ts", "utf8").includes("canWriteChat") &&
+    readFileSync("supabase/migrations/091_project_chat_state.sql", "utf8").includes("project_chat_state") &&
+    readFileSync("components/editor/lovable/branch-chip.tsx", "utf8").includes("LovableBranchChip") &&
+    readFileSync("components/editor/lovable/message-row.tsx", "utf8").includes("LovableBranchChip"),
+);
+check(
+  "preview: visual-edit multi/spacing/image + console/network/perf depth",
+  readFileSync("components/editor/visual-edit-overlay.tsx", "utf8").includes("selectedList") &&
+    readFileSync("components/editor/visual-edit-overlay.tsx", "utf8").includes("applySpacingToken") &&
+    readFileSync("components/editor/visual-edit-overlay.tsx", "utf8").includes("imageSrc") &&
+    readFileSync("components/editor/visual-edit-overlay.tsx", "utf8").includes("onRequestAiImage") &&
+    readFileSync("lib/editor/apply-visual-edit.ts", "utf8").includes("imageSrc") &&
+    readFileSync("lib/editor/apply-visual-edit.ts", "utf8").includes("applySpacingToken") &&
+    readFileSync("lib/preview/veb-bridge.ts", "utf8").includes("additive") &&
+    readFileSync("lib/preview/veb-bridge.ts", "utf8").includes("console.warn") &&
+    readFileSync("lib/preview/veb-bridge.ts", "utf8").includes("console.log") &&
+    readFileSync("lib/preview/veb-bridge.ts", "utf8").includes("XMLHttpRequest") &&
+    readFileSync("lib/preview/veb-bridge.ts", "utf8").includes("contentType") &&
+    readFileSync("lib/preview/preview-perf-bridge.ts", "utf8").includes("largest-contentful-paint") &&
+    readFileSync("lib/preview/preview-perf-bridge.ts", "utf8").includes("layout-shift") &&
+    previewSrc.includes("contentType") &&
+    previewSrc.includes("lcp") &&
+    previewSrc.includes('"cls"'),
+);
+check(
+  "lovable: free try-to-fix + VEB multi-select + annotations sync + cross-chat",
+  chatSrc.includes("freeFixesRemaining") &&
+    chatSrc.includes("Free Try-to-fix applied") &&
+    chatSrc.includes("Allow at 0 credits") &&
+    chatSrc.includes('kind: "xchat"') &&
+    chatSrc.includes("@chat:") &&
+    chatSrc.includes("Chat history from @chat:") &&
+    previewSrc.includes("vebSelectedList") &&
+    previewSrc.includes("d.additive === true") &&
+    readFileSync("components/editor/visual-edit-overlay.tsx", "utf8").includes("selections?: SelectedElement[]") &&
+    readFileSync("components/editor/preview-annotations.tsx", "utf8").includes("preview_annotations") &&
+    readFileSync("app/api/projects/[id]/chat-state/route.ts", "utf8").includes("preview_annotations") &&
+    readFileSync("supabase/migrations/092_preview_annotations.sql", "utf8").includes("preview_annotations") &&
+    readFileSync("components/editor/lovable/composer-banners.tsx", "utf8").includes("freeRemaining") &&
+    readFileSync("components/editor/lovable/composer-mention-autocomplete.tsx", "utf8").includes('kind: "xchat"'),
+);
+check(
+  "lovable: embeddings cache + paste unify + publish dirty seed + mobile sheet + VEB clear",
+  readFileSync("supabase/migrations/093_message_embeddings.sql", "utf8").includes("message_embeddings") &&
+    readFileSync("lib/editor/message-embeddings.ts", "utf8").includes("getOrCreateMessageEmbeddings") &&
+    readFileSync("app/api/projects/[id]/messages/search/route.ts", "utf8").includes("getOrCreateMessageEmbeddings") &&
+    readFileSync("lib/ai/persist-chat-turn.ts", "utf8").includes("upsertMessageEmbedding") &&
+    chatSrc.includes("detectPastedSecret(text)") &&
+    chatSrc.includes("LovableComposerMobileSheet") &&
+    chatSrc.includes("isMobile") &&
+    readFileSync("components/editor/lovable/composer-mobile-sheet.tsx", "utf8").includes("data-composer-mobile-sheet") &&
+    readFileSync("components/editor/editor-layout.tsx", "utf8").includes("Publish dirty-dot") &&
+    previewSrc.includes("clearVebSelection") &&
+    readFileSync("components/editor/lovable/composer-mention-autocomplete.tsx", "utf8").includes(
+      "file, connector, or collaborator",
+    ),
 );
 check(
   "platform: domain buy modal + interface language picker",

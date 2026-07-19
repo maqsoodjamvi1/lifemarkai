@@ -5,15 +5,24 @@ export { LovableChatLoadingSkeleton } from "./chat-loading-skeleton";
 export { LovableChatHeader } from "./chat-header";
 export { LovableChatPanelShell } from "./chat-panel-shell";
 export { LovableChatComposerShell, LovableChatInputCard } from "./chat-composer-shell";
-export { LovableChatTimeline } from "./chat-timeline";
+export { LovableComposerMobileSheet } from "./composer-mobile-sheet";
+export { LovableChatTimeline, type LovableChatTimelineHandle } from "./chat-timeline";
 export {
   LovableDateSeparator,
   formatLovableDateSeparator,
   sameLovableCalendarDay,
 } from "./date-separator";
+export {
+  buildLovableChatDayJumps,
+  formatLovableChatDayLabel,
+  lovableChatDayKey,
+  type LovableChatDayJumpItem,
+} from "./chat-day-utils";
 export { LovableFilesViewPane } from "./files-view-pane";
 export { LovableLoopRecoveryBanner } from "./loop-recovery-banner";
 export { LovableMessageActions } from "./message-actions";
+export { LovableMessageStats } from "./message-stats";
+export { LovableBranchChip } from "./branch-chip";
 export { LovableMessageBubble } from "./message-bubble";
 export { LovableMessageTimestamp, formatLovableMessageTime } from "./message-timestamp";
 export { LovablePinnedMessageBanner } from "./pinned-message-banner";
@@ -46,7 +55,12 @@ export { LovableComposerDropOverlay } from "./composer-drop-overlay";
 export { LovableVersionPreviewBanner } from "./version-preview-banner";
 export { LovableMessageContent, LovableHighlightedText } from "./message-content";
 export { LovableComposerModelMenu, LOVABLE_AI_MODELS } from "./composer-model-menu";
-export { LovableChatSearchBar } from "./chat-search-bar";
+export {
+  LovableChatSearchBar,
+  type ChatSearchRoleFilter,
+  type ChatSearchMsgModeFilter,
+} from "./chat-search-bar";
+export { LovableDraftRestoreBanner } from "./draft-restore-banner";
 export { LovableComposerFileGenPicker, LOVABLE_FILE_GEN_FORMATS } from "./composer-file-gen-picker";
 export { LovableThreadDivider } from "./thread-divider";
 export {
@@ -55,6 +69,10 @@ export {
   parseLovableStepPlan,
 } from "./plan-cards";
 export { LovableBookmarksEmpty } from "./bookmarks-empty";
+export { LovableSearchEmpty } from "./search-empty";
+export { LovableLoadOlderButton } from "./load-older-button";
+export { LovableCollapsibleText } from "./collapsible-text";
+export { LovableContinueBanner } from "./continue-banner";
 export { LovableMessageRow, type LovableMessageRowProps } from "./message-row";
 export { LovableThreadItem } from "./thread-item";
 export { LovableVerificationCard } from "./verification-card";
@@ -75,7 +93,7 @@ export {
   computeLovableChangeCardMeta,
   type LovableFileDiffEntry,
 } from "./types";
-export { LOVABLE_PROMPT_TEMPLATES } from "./prompt-templates";
+export { LOVABLE_PROMPT_TEMPLATES, LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY } from "./prompt-templates";
 export { LovableComposerAttachedTextChip } from "./composer-attached-text-chip";
 export { LovableComposerContextChips } from "./composer-context-chips";
 export { LovableComposerUrlScrapeBanner, type LovableUrlScrapeMeta } from "./composer-url-scrape-banner";

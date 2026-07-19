@@ -20,6 +20,7 @@ export interface UseComposerDockControllerArgs {
   autoFixing: boolean;
   autoFixAttempts: number;
   maxAutoFixAttempts: number;
+  freeFixesRemaining?: number | null;
   fileGenResults: LovableFileGenResult[];
   activeClarifySession: ClarifySession | null;
   promptQueue: LovableQueueItem[];
@@ -61,6 +62,7 @@ export function useComposerDockController(args: UseComposerDockControllerArgs) {
     autoFixing,
     autoFixAttempts,
     maxAutoFixAttempts,
+    freeFixesRemaining = null,
     fileGenResults,
     activeClarifySession,
     promptQueue,
@@ -103,6 +105,7 @@ export function useComposerDockController(args: UseComposerDockControllerArgs) {
       autoFixing,
       autoFixAttempts,
       maxAutoFixAttempts,
+      freeFixesRemaining,
       previewError: previewError ?? null,
       previewRuntimeErrors,
       runtimeErrorsDismissed: args.runtimeErrorsDismissed,
@@ -204,6 +207,7 @@ export function useComposerDockController(args: UseComposerDockControllerArgs) {
       activeClarifySession,
       autoFixAttempts,
       autoFixing,
+      freeFixesRemaining,
       contextualEmptyPrompts,
       editingQueueId,
       editingQueueText,

@@ -87,7 +87,9 @@ export function LovablePreviewInteractionToolbar({
             </button>
           </TooltipTrigger>
           <TooltipContent>
-            {visualEditDisabled ? "Visual edits disabled for version preview" : `Visual edits ${visualEdit ? "(on)" : ""}`}
+            {visualEditDisabled
+              ? "Visual edits disabled for version preview"
+              : `Select elements · double-click text to edit inline ${visualEdit ? "(on)" : ""}`}
           </TooltipContent>
         </Tooltip>
 

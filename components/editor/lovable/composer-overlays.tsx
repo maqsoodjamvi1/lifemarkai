@@ -36,6 +36,7 @@ export interface LovableComposerOverlaysProps {
   slashSelectedKey: string | null;
   onTemplateSkillSelect: (prompt: string, skillId: string) => void;
   onTemplateSelect: (prompt: string) => void;
+  onExploreDesignDirections?: () => void;
   onTemplatesClose: () => void;
   showSnippets: boolean;
   currentUserId: string;
@@ -84,6 +85,7 @@ export function LovableComposerOverlays({
   slashSelectedKey,
   onTemplateSkillSelect,
   onTemplateSelect,
+  onExploreDesignDirections,
   onTemplatesClose,
   showSnippets,
   currentUserId,
@@ -146,6 +148,10 @@ export function LovableComposerOverlays({
         }}
         onSelectTemplate={(prompt) => {
           onTemplateSelect(prompt);
+          onTemplatesClose();
+        }}
+        onExploreDesignDirections={() => {
+          onExploreDesignDirections?.();
           onTemplatesClose();
         }}
       />

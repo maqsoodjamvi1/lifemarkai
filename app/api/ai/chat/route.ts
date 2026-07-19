@@ -1120,6 +1120,7 @@ The user has expressed frustration. Do the following:
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
+        const turnStartedAt = Date.now();
         const { safeEnqueue, safeClose, isClientGone } = createStreamSink(controller, encoder, req.signal);
         let fullContent = "";
         let tokensUsed = 0;
@@ -1805,10 +1806,15 @@ The user has expressed frustration. Do the following:
               ? {
                   files_changed: parsedFiles.map((f) => f.path),
                   snapshot_id: preBuildSnapshotId ?? undefined,
-                  ...(buildActivity ? { build_activity: buildActivity } : {}),
+                  work_seconds: Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000)),
+                  ...(buildActivity ? { build_activity: buildActivity, steps: buildActivity.length } : {}),
                 }
               : buildActivity
-                ? { build_activity: buildActivity }
+                ? {
+                    build_activity: buildActivity,
+                    steps: buildActivity.length,
+                    work_seconds: Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000)),
+                  }
                 : null;
 
           const creditCost = computeCreditCost({

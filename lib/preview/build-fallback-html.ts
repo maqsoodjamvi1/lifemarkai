@@ -12,9 +12,10 @@ import {
   NEXT_RUNTIME_SHIMS,
   NEXT_VIRTUAL_ENTRY_PATH,
 } from "@/lib/preview/next-app-preview";
+import { PREVIEW_PERF_SCRIPT } from "@/lib/preview/preview-perf-bridge";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "43";
+export const PREVIEW_ENGINE_REV = "46";
 
 /** Strip PostCSS-only directives — invalid in a raw <style> tag. */
 export function sanitizePreviewCss(css: string): string {
@@ -1736,14 +1737,55 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
         } catch (e) {}
       }
       return _fetch.apply(this, arguments).then(function(res) {
-        postNet({ status: res.status, ok: res.ok });
+        var ct = '';
+        try { ct = res.headers.get('content-type') || ''; } catch (e) {}
+        postNet({ status: res.status, ok: res.ok, contentType: ct });
         return res;
       }).catch(function(err) {
         postNet({ status: 0, ok: false, error: String((err && err.message) || err) });
         throw err;
       });
     };
+    if (window.XMLHttpRequest) {
+      var _XHR = window.XMLHttpRequest;
+      window.XMLHttpRequest = function() {
+        var xhr = new _XHR();
+        var method = 'GET';
+        var url = '';
+        var start = 0;
+        var _open = xhr.open;
+        xhr.open = function(m, u) {
+          method = String(m || 'GET').toUpperCase();
+          url = String(u || '');
+          return _open.apply(xhr, arguments);
+        };
+        xhr.addEventListener('loadend', function() {
+          try {
+            window.parent.postMessage({
+              source: 'lifemark-preview-network',
+              method: method,
+              url: url,
+              status: xhr.status,
+              ok: xhr.status >= 200 && xhr.status < 400,
+              durationMs: start ? (Date.now() - start) : 0,
+              contentType: xhr.getResponseHeader('content-type') || ''
+            }, '*');
+          } catch (e) {}
+        });
+        var _send = xhr.send;
+        xhr.send = function() {
+          start = Date.now();
+          return _send.apply(xhr, arguments);
+        };
+        return xhr;
+      };
+    }
   })();
+  </script>
+
+  <!-- Performance snapshot for preview devtools -->
+  <script>
+  ${PREVIEW_PERF_SCRIPT}
   </script>
 
   <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js" async></script>

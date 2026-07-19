@@ -71,6 +71,7 @@ export function LovableComposerInputArea({
     slashSelectedKey: rest.slashSelectedKey,
     onTemplateSkillSelect: rest.onTemplateSkillSelect,
     onTemplateSelect: rest.onTemplateSelect,
+    onExploreDesignDirections: rest.onExploreDesignDirections,
     onTemplatesClose: rest.onTemplatesClose,
     showSnippets: rest.showSnippets,
     currentUserId: rest.currentUserId,
@@ -144,6 +145,7 @@ export function LovableComposerInputArea({
         onAddReference={rest.onAddReference}
         onAddSkill={rest.onAddSkill}
         onAnalyzeData={rest.onAnalyzeData}
+        onDesignDirections={rest.onDesignDirections}
         onAttach={rest.onAttach}
         isVisualEditActive={rest.isVisualEditActive}
         onVisualEditToggle={rest.onVisualEditToggle}

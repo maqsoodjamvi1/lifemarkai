@@ -3,6 +3,7 @@
  */
 
 import { PREVIEW_ERROR_BRIDGE_SCRIPT } from "./preview-error-bridge";
+import { PREVIEW_PERF_SCRIPT } from "./preview-perf-bridge";
 export const VEB_BRIDGE_SCRIPT = `(function() {
   if (window.parent === window) return;
   var enabled = false;
@@ -10,7 +11,7 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
   var hovered = null;
   var style = document.createElement('style');
   style.id = 'lm-veb-style';
-  style.textContent = '.lm-hover{outline:2px solid #7c3aed!important;outline-offset:2px;cursor:pointer!important}.lm-selected{outline:2px solid #0e90e8!important;outline-offset:2px}.lm-inline-editing{outline:2px dashed #22c55e!important;outline-offset:2px;cursor:text!important}';
+  style.textContent = '.lm-hover{outline:2px solid #7c3aed!important;outline-offset:2px;cursor:pointer!important}.lm-selected{outline:2px solid #0e90e8!important;outline-offset:2px}.lm-multi{outline:2px solid #38bdf8!important;outline-offset:2px}.lm-inline-editing{outline:2px dashed #22c55e!important;outline-offset:2px;cursor:text!important}';
 
   function getXPath(el) {
     var parts = [], cur = el;
@@ -74,11 +75,20 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
     var el = e.target;
     if (!el || el === document.body) return;
     var rect = el.getBoundingClientRect();
-    document.querySelectorAll('.lm-selected').forEach(function(n){ n.classList.remove('lm-selected'); });
-    el.classList.remove('lm-hover');
-    el.classList.add('lm-selected');
+    var additive = !!(e.metaKey || e.ctrlKey);
+    if (!additive) {
+      document.querySelectorAll('.lm-selected,.lm-multi').forEach(function(n){
+        n.classList.remove('lm-selected'); n.classList.remove('lm-multi');
+      });
+      el.classList.remove('lm-hover');
+      el.classList.add('lm-selected');
+    } else {
+      el.classList.add('lm-selected');
+      el.classList.add('lm-multi');
+    }
     window.parent.postMessage({
       source: 'lifemark-veb',
+      additive: additive,
       tagName: el.tagName.toLowerCase(),
       textContent: (el.textContent || '').trim(),
       classList: Array.prototype.filter.call(el.classList, function(c){ return c.indexOf('lm-') !== 0; }),
@@ -188,6 +198,13 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
         var keep = Array.prototype.filter.call(el.classList, function(c){ return c.indexOf('lm-') === 0; });
         el.className = (d.classes + ' ' + keep.join(' ')).trim();
       }
+      if (typeof d.imageSrc === 'string' && d.imageSrc) {
+        if (el.tagName && el.tagName.toLowerCase() === 'img') {
+          el.setAttribute('src', d.imageSrc);
+        } else if (el.style) {
+          el.style.backgroundImage = 'url(' + JSON.stringify(d.imageSrc).slice(1, -1) + ')';
+        }
+      }
     }
     if (d.type === 'lifemark-veb-clear') clearMarks();
   });
@@ -238,17 +255,37 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
     }
     post('error', 'Unhandled promise rejection: ' + msg);
   });
-  var _err = console.error;
-  console.error = function(){
-    var parts = Array.prototype.map.call(arguments, function(a){
+  function fmtArgs(args) {
+    return Array.prototype.map.call(args, function(a){
       if (a && a.stack) return a.stack;
       if (typeof a === 'string') return a;
       if (a && a.message) return a.message;
-      return '';
-    }).filter(Boolean);
-    var text = parts.join(' ');
+      try { return JSON.stringify(a); } catch(e) { return String(a); }
+    }).filter(Boolean).join(' ');
+  }
+  var _err = console.error;
+  console.error = function(){
+    var text = fmtArgs(arguments);
     if (text && !isNoise(text)) post('error', text);
     return _err.apply(console, arguments);
+  };
+  var _warn = console.warn;
+  console.warn = function(){
+    var text = fmtArgs(arguments);
+    if (text && !isNoise(text)) post('log', '[warn] ' + text);
+    return _warn.apply(console, arguments);
+  };
+  var _log = console.log;
+  console.log = function(){
+    var text = fmtArgs(arguments);
+    if (text && !isNoise(text)) post('log', text);
+    return _log.apply(console, arguments);
+  };
+  var _info = console.info;
+  console.info = function(){
+    var text = fmtArgs(arguments);
+    if (text && !isNoise(text)) post('log', '[info] ' + text);
+    return _info.apply(console, arguments);
   };
   function maybePostSuccess() {
     var root = document.getElementById('root');
@@ -265,7 +302,7 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
   history.replaceState = function(){ var r = _replace.apply(this, arguments); loc(); return r; };
   window.addEventListener('popstate', loc);
   window.addEventListener('hashchange', loc);
-  // Network panel — intercept fetch for parent devtools (Lovable parity).
+  // Network panel — intercept fetch + XHR for parent devtools (Lovable parity).
   var _fetch = window.fetch;
   window.fetch = function(input, init) {
     var method = ((init && init.method) || 'GET').toUpperCase();
@@ -282,13 +319,49 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
       } catch(e) {}
     }
     return _fetch.apply(this, arguments).then(function(res) {
-      postNet({ status: res.status, ok: res.ok });
+      var ct = '';
+      try { ct = res.headers.get('content-type') || ''; } catch(e) {}
+      postNet({ status: res.status, ok: res.ok, contentType: ct });
       return res;
     }).catch(function(err) {
       postNet({ status: 0, ok: false, error: String((err && err.message) || err) });
       throw err;
     });
   };
+  if (window.XMLHttpRequest) {
+    var _XHR = window.XMLHttpRequest;
+    window.XMLHttpRequest = function() {
+      var xhr = new _XHR();
+      var method = 'GET';
+      var url = '';
+      var start = 0;
+      var _open = xhr.open;
+      xhr.open = function(m, u) {
+        method = String(m || 'GET').toUpperCase();
+        url = String(u || '');
+        return _open.apply(xhr, arguments);
+      };
+      xhr.addEventListener('loadend', function() {
+        try {
+          window.parent.postMessage({
+            source: 'lifemark-preview-network',
+            method: method,
+            url: url,
+            status: xhr.status,
+            ok: xhr.status >= 200 && xhr.status < 400,
+            durationMs: start ? (Date.now() - start) : 0,
+            contentType: xhr.getResponseHeader('content-type') || ''
+          }, '*');
+        } catch(e) {}
+      });
+      var _send = xhr.send;
+      xhr.send = function() {
+        start = Date.now();
+        return _send.apply(xhr, arguments);
+      };
+      return xhr;
+    };
+  }
   // Inbound: parent address-bar navigation (lifemark-preview-navigate). The WC
   // engine runs a REAL router on real URLs, so push the path and fire popstate
   // so react-router re-renders. Mirrors the srcdoc engine's navigate handler.
@@ -307,7 +380,7 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
 /** Inject both bridges into an index.html document (idempotent). */
 export function injectVebBridgeIntoHtml(html: string): string {
   if (html.includes("lifemark-veb-ready")) return html;
-  const tag = `<script>${VEB_BRIDGE_SCRIPT}</script>\n<script>${PREVIEW_RUNTIME_SCRIPT}</script>\n<script>${PREVIEW_ERROR_BRIDGE_SCRIPT}</script>`;
+  const tag = `<script>${VEB_BRIDGE_SCRIPT}</script>\n<script>${PREVIEW_RUNTIME_SCRIPT}</script>\n<script>${PREVIEW_ERROR_BRIDGE_SCRIPT}</script>\n<script>${PREVIEW_PERF_SCRIPT}</script>`;
   if (html.includes("</body>")) return html.replace("</body>", `${tag}\n</body>`);
   return `${html}\n${tag}`;
 }

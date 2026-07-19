@@ -6,6 +6,8 @@ import {
   rankMessagesByKeyword,
   type ChatSearchMode,
 } from "@/lib/editor/search-chat-messages";
+import { getOrCreateMessageEmbeddings } from "@/lib/editor/message-embeddings";
+import { assertChatAccess } from "@/lib/project/chat-access";
 
 export const runtime = "nodejs";
 
@@ -19,15 +21,8 @@ export async function GET(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data: project } = await (supabase as any)
-    .from("projects")
-    .select("id, user_id")
-    .eq("id", id)
-    .single();
-  if (!project) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  if (project.user_id !== user.id) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
+  const access = await assertChatAccess(supabase, id, user.id, "read");
+  if ("error" in access) return access.error;
 
   const url = new URL(req.url);
   const q = (url.searchParams.get("q") ?? "").trim();
@@ -45,22 +40,25 @@ export async function GET(
   const messages = (rows ?? []).reverse();
 
   if (mode === "semantic") {
-    const excerpts = messages.map((m: { id: string; content: string }) =>
-      (m.content ?? "").slice(0, 800),
-    );
-    const vectors = await embedTexts([q, ...excerpts]);
-    if (vectors && vectors.length === messages.length + 1) {
-      const queryVec = vectors[0]!;
-      const map = new Map<string, number[]>();
-      messages.forEach((m: { id: string }, i: number) => {
-        map.set(m.id, vectors[i + 1]!);
-      });
-      const hits = rankMessagesByEmbedding(messages, queryVec, map, 40);
-      return NextResponse.json({ hits, mode: "semantic" as const });
+    const queryVectors = await embedTexts([q]);
+    if (!queryVectors?.[0]) {
+      const hits = rankMessagesByKeyword(messages, q, 40);
+      return NextResponse.json({ hits, mode: "keyword" as const, fallback: true });
     }
-    // Fallback when embeddings unavailable
-    const hits = rankMessagesByKeyword(messages, q, 40);
-    return NextResponse.json({ hits, mode: "keyword" as const, fallback: true });
+
+    const map = await getOrCreateMessageEmbeddings(supabase, id, messages);
+    if (map.size === 0) {
+      const hits = rankMessagesByKeyword(messages, q, 40);
+      return NextResponse.json({ hits, mode: "keyword" as const, fallback: true });
+    }
+
+    const hits = rankMessagesByEmbedding(messages, queryVectors[0], map, 40);
+    return NextResponse.json({
+      hits,
+      mode: "semantic" as const,
+      cached: true,
+      embedded: map.size,
+    });
   }
 
   const hits = rankMessagesByKeyword(messages, q, 40);

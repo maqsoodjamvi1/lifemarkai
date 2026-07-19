@@ -74,6 +74,22 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     ],
   },
   {
+    title: "Chat",
+    shortcuts: [
+      { keys: ["⌘", "F"], description: "Search messages" },
+      { keys: ["Alt", "B"], description: "Toggle bookmarks filter" },
+      { keys: ["F3"], description: "Next search result" },
+      { keys: ["⇧", "F3"], description: "Previous search result" },
+      { keys: ["End"], description: "Jump to latest message" },
+      { keys: ["Home"], description: "Jump to top of chat" },
+      { keys: ["Alt", "↑"], description: "Previous message" },
+      { keys: ["Alt", "↓"], description: "Next message" },
+      { keys: ["⌘", "⇧", "K"], description: "Clear conversation (undoable)" },
+      { keys: ["Alt", "P"], description: "Toggle Plan / Build mode" },
+      { keys: ["Esc"], description: "Stop generation / focus composer" },
+    ],
+  },
+  {
     title: "View",
     shortcuts: [
       { keys: ["⌘", "1"], description: "Preview only" },

@@ -14,6 +14,9 @@ interface LovableComposerAnalyzeModalProps {
   instruction: string;
   file: LovableAnalyzeFileAttachment | null;
   running: boolean;
+  /** When false, sandbox analyze is unavailable on this deploy. */
+  analyzeEnabled?: boolean;
+  analyzeUnavailableReason?: string | null;
   onInstructionChange: (value: string) => void;
   onFileSelect: (file: LovableAnalyzeFileAttachment) => void;
   onFileClear: () => void;
@@ -27,6 +30,8 @@ export function LovableComposerAnalyzeModal({
   instruction,
   file,
   running,
+  analyzeEnabled = true,
+  analyzeUnavailableReason,
   onInstructionChange,
   onFileSelect,
   onFileClear,
@@ -60,6 +65,12 @@ export function LovableComposerAnalyzeModal({
                 Drop a CSV / Excel / image / JSON file and tell the AI what to do. It writes a Python script, runs it
                 in a sandbox, and returns the generated files (PDF, XLSX, charts, etc.).
               </p>
+              {!analyzeEnabled && (
+                <p className="text-[11px] text-amber-300/90 mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2">
+                  {analyzeUnavailableReason ??
+                    "Data analysis is unavailable until an isolated sandbox is configured on this server."}
+                </p>
+              )}
             </div>
             <div className="px-5 py-3 space-y-3">
               <div>
@@ -69,9 +80,10 @@ export function LovableComposerAnalyzeModal({
                   onChange={(e) => onInstructionChange(e.target.value)}
                   rows={3}
                   placeholder="e.g. Summarize this CSV, generate a bar chart of the top 10 rows by revenue, and produce a PDF report."
-                  className="w-full px-2.5 py-1.5 rounded-lg border border-border bg-muted/30 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/30 resize-none"
+                  className="w-full px-2.5 py-1.5 rounded-lg border border-border bg-muted/30 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/30 resize-none disabled:opacity-50"
                   maxLength={2000}
                   autoFocus
+                  disabled={!analyzeEnabled}
                 />
               </div>
               <div>
@@ -124,11 +136,11 @@ export function LovableComposerAnalyzeModal({
               </button>
               <button
                 onClick={onRun}
-                disabled={!instruction.trim() || running}
+                disabled={!analyzeEnabled || !instruction.trim() || running}
                 className="h-8 px-3 text-xs rounded-lg bg-violet-600 hover:bg-violet-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
               >
                 {running ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-                {running ? "Running…" : "Analyze"}
+                {running ? "Running…" : analyzeEnabled ? "Analyze" : "Unavailable"}
               </button>
             </div>
           </motion.div>

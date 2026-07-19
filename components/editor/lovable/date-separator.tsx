@@ -30,16 +30,30 @@ export function sameLovableCalendarDay(
 interface LovableDateSeparatorProps {
   label: string;
   className?: string;
+  /** Optional click — e.g. jump to other days / copy absolute date. */
+  onClick?: () => void;
+  title?: string;
 }
 
-export function LovableDateSeparator({ label, className }: LovableDateSeparatorProps) {
+export function LovableDateSeparator({ label, className, onClick, title }: LovableDateSeparatorProps) {
   if (!label) return null;
   return (
     <div className={cn("flex items-center gap-2 my-2", className)}>
       <div className="flex-1 h-px bg-[color:var(--border-default)]/40" />
-      <span className="text-[10px] text-[var(--fg-tertiary)] px-2 py-0.5 rounded-full border border-[color:var(--border-default)]/50 bg-[var(--bg-secondary-pulse)] shrink-0">
-        {label}
-      </span>
+      {onClick ? (
+        <button
+          type="button"
+          onClick={onClick}
+          title={title ?? label}
+          className="text-[10px] text-[var(--fg-tertiary)] px-2 py-0.5 rounded-full border border-[color:var(--border-default)]/50 bg-[var(--bg-secondary-pulse)] shrink-0 hover:text-[var(--fg-primary)] hover:border-[color:var(--border-default)] transition-colors"
+        >
+          {label}
+        </button>
+      ) : (
+        <span className="text-[10px] text-[var(--fg-tertiary)] px-2 py-0.5 rounded-full border border-[color:var(--border-default)]/50 bg-[var(--bg-secondary-pulse)] shrink-0">
+          {label}
+        </span>
+      )}
       <div className="flex-1 h-px bg-[color:var(--border-default)]/40" />
     </div>
   );

@@ -1,8 +1,8 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Sparkles } from "lucide-react";
-import { LOVABLE_PROMPT_TEMPLATES } from "./prompt-templates";
+import { Palette, Sparkles } from "lucide-react";
+import { LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY, LOVABLE_PROMPT_TEMPLATES } from "./prompt-templates";
 
 export interface LovableSkillOption {
   id: string;
@@ -20,6 +20,7 @@ interface LovableComposerTemplatePickerProps {
   selectedKey?: string | null;
   onSelectSkill: (prompt: string, skillId: string) => void;
   onSelectTemplate: (prompt: string) => void;
+  onExploreDesignDirections?: () => void;
 }
 
 export function LovableComposerTemplatePicker({
@@ -29,6 +30,7 @@ export function LovableComposerTemplatePicker({
   selectedKey,
   onSelectSkill,
   onSelectTemplate,
+  onExploreDesignDirections,
 }: LovableComposerTemplatePickerProps) {
   const slashQuery = input.startsWith("/") ? input.slice(1).toLowerCase().trim() : "";
   const matchedSkills = skills.filter(
@@ -90,21 +92,40 @@ export function LovableComposerTemplatePicker({
                       {group.category}
                     </span>
                   </div>
-                  {group.prompts.map((prompt) => (
-                    <button
-                      key={prompt}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        onSelectTemplate(prompt);
-                      }}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-accent hover:text-accent-foreground transition-colors ${
-                        selectedKey === `tpl:${prompt}` ? "bg-accent text-accent-foreground" : ""
-                      }`}
-                    >
-                      <span className="text-muted-foreground/40 font-mono text-[10px] shrink-0">/</span>
-                      <span className="truncate">{prompt}</span>
-                    </button>
-                  ))}
+                  {group.prompts.map((prompt) => {
+                    if (prompt === LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY) {
+                      return (
+                        <button
+                          key={prompt}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            onExploreDesignDirections?.();
+                          }}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-accent hover:text-accent-foreground transition-colors ${
+                            selectedKey === `tpl:${prompt}` ? "bg-accent text-accent-foreground" : ""
+                          }`}
+                        >
+                          <Palette className="w-3.5 h-3.5 text-violet-400 shrink-0" />
+                          <span className="truncate">Explore 3 design directions</span>
+                        </button>
+                      );
+                    }
+                    return (
+                      <button
+                        key={prompt}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          onSelectTemplate(prompt);
+                        }}
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-accent hover:text-accent-foreground transition-colors ${
+                          selectedKey === `tpl:${prompt}` ? "bg-accent text-accent-foreground" : ""
+                        }`}
+                      >
+                        <span className="text-muted-foreground/40 font-mono text-[10px] shrink-0">/</span>
+                        <span className="truncate">{prompt}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               ))}
           </div>

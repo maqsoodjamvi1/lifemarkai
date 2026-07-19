@@ -11,6 +11,8 @@ export interface VisualEditChange {
   text?: string;
   /** Full replacement className string */
   classes?: string;
+  /** Replace <img src> / background-image URL */
+  imageSrc?: string;
 }
 
 /**
@@ -47,6 +49,56 @@ export function applyVisualEdit(
               ),
             };
           }
+        }
+      }
+    }
+  }
+
+  // ── Image src change ───────────────────────────────────────────────────────
+  if (change.imageSrc !== undefined && change.imageSrc.trim()) {
+    const src = change.imageSrc.trim();
+    // Prefer matching an existing src that appears with this element's classes nearby
+    const classHint = selection.classList.join(" ");
+    for (const quote of ['"', "'"]) {
+      const srcRe = new RegExp(`src=${quote}([^${quote}]*)${quote}`, "g");
+      for (const file of sourceFiles) {
+        const content = file.content as string;
+        if (classHint && content.includes(classHint)) {
+          // Replace first src in the same file that also contains the class hint nearby
+          const idx = content.indexOf(classHint);
+          const windowStart = Math.max(0, idx - 200);
+          const windowEnd = Math.min(content.length, idx + classHint.length + 200);
+          const slice = content.slice(windowStart, windowEnd);
+          const m = slice.match(srcRe);
+          if (m?.[0]) {
+            const replacedSlice = slice.replace(m[0], `src=${quote}${src}${quote}`);
+            return {
+              path: file.path,
+              content: content.slice(0, windowStart) + replacedSlice + content.slice(windowEnd),
+            };
+          }
+        }
+      }
+    }
+    // Unique src= URL if selection looks like an image tag
+    if (selection.tagName === "img") {
+      for (const quote of ['"', "'"]) {
+        const matches = sourceFiles.flatMap((f) => {
+          const re = new RegExp(`src=${quote}([^${quote}]+)${quote}`, "g");
+          const found: Array<{ path: string; content: string; match: string }> = [];
+          let m: RegExpExecArray | null;
+          const c = f.content as string;
+          while ((m = re.exec(c))) {
+            found.push({ path: f.path, content: c, match: m[0] });
+          }
+          return found;
+        });
+        if (matches.length === 1) {
+          const only = matches[0]!;
+          return {
+            path: only.path,
+            content: only.content.replace(only.match, `src=${quote}${src}${quote}`),
+          };
         }
       }
     }
@@ -111,6 +163,22 @@ export function buildVisualEditPrompt(
   ];
   if (change.text !== undefined) parts.push(`Change its text to: "${change.text}".`);
   if (change.classes !== undefined) parts.push(`Change its className to: "${change.classes}".`);
+  if (change.imageSrc !== undefined) {
+    parts.push(`Replace its image source (src / background-image) with: "${change.imageSrc}".`);
+  }
   parts.push("Make only this change — do not modify anything else.");
   return parts.join(" ");
+}
+
+/** Merge per-side Tailwind spacing tokens into a class string. */
+export function applySpacingToken(
+  classes: string,
+  kind: "m" | "p",
+  side: "t" | "r" | "b" | "l" | "x" | "y" | "",
+  scale: string,
+): string {
+  const prefix = side ? `${kind}${side}-` : `${kind}-`;
+  const tokens = classes.split(/\s+/).filter(Boolean).filter((c) => !c.startsWith(prefix));
+  tokens.push(`${prefix}${scale}`);
+  return tokens.join(" ");
 }

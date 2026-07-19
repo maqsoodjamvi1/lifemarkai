@@ -12,6 +12,9 @@ export interface LovableThreadItemProps {
   searchQuery: string;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  onCopyThread?: (thread: Message[]) => void | Promise<void>;
+  /** Click a date separator to jump among chat days. */
+  onDateSeparatorClick?: (messageId: string) => void;
   getMessageProps: (msg: Message, msgIdx: number, thread: Message[]) => Omit<LovableMessageRowProps, "msg">;
 }
 
@@ -22,21 +25,26 @@ export function LovableThreadItem({
   searchQuery,
   collapsed,
   onToggleCollapse,
+  onCopyThread,
+  onDateSeparatorClick,
   getMessageProps,
 }: LovableThreadItemProps) {
   const userMsg = thread.find((m) => m.role === "user");
   const preview = userMsg
     ? userMsg.content.replace(/\s+/g, " ").slice(0, 65) + (userMsg.content.length > 65 ? "…" : "")
     : "";
+  const threadMatchCount = searchQuery.trim() ? thread.length : 0;
 
   return (
     <div>
-      {!searchQuery && threadIdx > 0 && (
+      {threadIdx > 0 && (
         <LovableThreadDivider
           turnNumber={threadIdx + 1}
           preview={preview}
-          collapsed={collapsed}
+          collapsed={searchQuery ? false : collapsed}
           onToggle={onToggleCollapse}
+          searchMatchCount={threadMatchCount}
+          onCopyThread={onCopyThread ? () => onCopyThread(thread) : undefined}
         />
       )}
       <AnimatePresence initial={false}>
@@ -46,7 +54,17 @@ export function LovableThreadItem({
             const showDateSep = !sameLovableCalendarDay(msg.created_at, prevMsg?.created_at);
             return (
               <div key={msg.id}>
-                {showDateSep && <LovableDateSeparator label={formatLovableDateSeparator(msg.created_at)} />}
+                {showDateSep && (
+                  <LovableDateSeparator
+                    label={formatLovableDateSeparator(msg.created_at)}
+                    title="Jump to next day · or copy date"
+                    onClick={
+                      onDateSeparatorClick
+                        ? () => onDateSeparatorClick(msg.id)
+                        : undefined
+                    }
+                  />
+                )}
                 <LovableMessageRow msg={msg} {...getMessageProps(msg, msgIdx, thread)} />
               </div>
             );

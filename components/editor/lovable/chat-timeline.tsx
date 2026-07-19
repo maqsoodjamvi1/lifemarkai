@@ -1,8 +1,18 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+} from "react";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { cn } from "@/lib/utils";
+
+export interface LovableChatTimelineHandle {
+  /** Scroll the virtual list to a thread row (no-op when virtualization is off). */
+  scrollToThreadIndex: (index: number, align?: "start" | "center" | "end" | "auto") => void;
+}
 
 export interface LovableChatTimelineProps<T> {
   projectId: string;
@@ -24,18 +34,22 @@ function scrollStorageKey(projectId: string) {
 /**
  * Lovable-parity virtualized chat timeline with session scroll persistence.
  */
-export function LovableChatTimeline<T>({
-  projectId,
-  items,
-  scrollRef,
-  renderItem,
-  header,
-  footer,
-  className,
-  estimateSize = 280,
-  enabled = true,
-}: LovableChatTimelineProps<T>) {
+function LovableChatTimelineInner<T>(
+  {
+    projectId,
+    items,
+    scrollRef,
+    renderItem,
+    header,
+    footer,
+    className,
+    estimateSize = 280,
+    enabled = true,
+  }: LovableChatTimelineProps<T>,
+  ref: React.ForwardedRef<LovableChatTimelineHandle>,
+) {
   const restoredRef = useRef(false);
+  const virtualizerRef = useRef<Virtualizer<HTMLDivElement, Element> | null>(null);
 
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -44,6 +58,20 @@ export function LovableChatTimeline<T>({
     overscan: 4,
     enabled: enabled && items.length > 8,
   });
+  virtualizerRef.current = virtualizer;
+
+  useImperativeHandle(ref, () => ({
+    scrollToThreadIndex(index, align = "center") {
+      if (index < 0 || index >= items.length) return;
+      const useVirtual = enabled && items.length > 8;
+      if (useVirtual) {
+        virtualizerRef.current?.scrollToIndex(index, { align, behavior: "smooth" });
+        return;
+      }
+      const el = scrollRef.current?.querySelector(`[data-thread-index="${index}"]`);
+      el?.scrollIntoView({ block: align === "start" ? "start" : "center", behavior: "smooth" });
+    },
+  }), [enabled, items.length, scrollRef]);
 
   // Restore scroll position once per mount.
   useEffect(() => {
@@ -106,6 +134,7 @@ export function LovableChatTimeline<T>({
                 <div
                   key={virtualRow.key}
                   data-index={virtualRow.index}
+                  data-thread-index={virtualRow.index}
                   ref={virtualizer.measureElement}
                   style={{
                     position: "absolute",
@@ -122,7 +151,9 @@ export function LovableChatTimeline<T>({
           </div>
         ) : (
           items.map((item, index) => (
-            <div key={index}>{renderItem(item, index)}</div>
+            <div key={index} data-thread-index={index}>
+              {renderItem(item, index)}
+            </div>
           ))
         )}
 
@@ -131,3 +162,7 @@ export function LovableChatTimeline<T>({
     </div>
   );
 }
+
+export const LovableChatTimeline = forwardRef(LovableChatTimelineInner) as <T>(
+  props: LovableChatTimelineProps<T> & { ref?: React.ForwardedRef<LovableChatTimelineHandle> },
+) => React.ReactElement;

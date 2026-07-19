@@ -14,6 +14,7 @@ export interface ComposerContextMenuActions {
   onAddReference: () => void;
   onAddSkill: () => void;
   onAnalyzeData: () => void;
+  onDesignDirections?: () => void;
   onAttach: () => void;
 }
 
@@ -60,6 +61,11 @@ export function LovableComposerContextMenu({ actions }: { actions: ComposerConte
         <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onAnalyzeData}>
           Analyze data
         </DropdownMenuItem>
+        {actions.onDesignDirections && (
+          <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onDesignDirections}>
+            Design directions…
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onAttach}>
           Attach
         </DropdownMenuItem>
