@@ -35,9 +35,14 @@ export function LovableThreadItem({
     : "";
   const threadMatchCount = searchQuery.trim() ? thread.length : 0;
 
+  // Dump chat is message cards, not a turn-label list. Only show the turn
+  // chrome when a turn is manually collapsed (or during search hit counts).
+  const showTurnChrome =
+    threadIdx > 0 && (collapsed || (searchQuery.trim().length > 0 && threadMatchCount > 0));
+
   return (
-    <div>
-      {threadIdx > 0 && (
+    <div data-thread-item data-thread-index={threadIdx}>
+      {showTurnChrome && (
         <LovableThreadDivider
           turnNumber={threadIdx + 1}
           preview={preview}
@@ -48,27 +53,26 @@ export function LovableThreadItem({
         />
       )}
       <AnimatePresence initial={false}>
-        {!collapsed &&
-          thread.map((msg, msgIdx) => {
-            const prevMsg = msgIdx > 0 ? thread[msgIdx - 1] : null;
-            const showDateSep = !sameLovableCalendarDay(msg.created_at, prevMsg?.created_at);
-            return (
-              <div key={msg.id}>
-                {showDateSep && (
-                  <LovableDateSeparator
-                    label={formatLovableDateSeparator(msg.created_at)}
-                    title="Jump to next day · or copy date"
-                    onClick={
-                      onDateSeparatorClick
-                        ? () => onDateSeparatorClick(msg.id)
-                        : undefined
-                    }
-                  />
-                )}
-                <LovableMessageRow msg={msg} {...getMessageProps(msg, msgIdx, thread)} />
-              </div>
-            );
-          })}
+        {thread.map((msg, msgIdx) => {
+          const prevMsg = msgIdx > 0 ? thread[msgIdx - 1] : null;
+          const showDateSep = !sameLovableCalendarDay(msg.created_at, prevMsg?.created_at);
+          return (
+            <div key={msg.id}>
+              {showDateSep && (
+                <LovableDateSeparator
+                  label={formatLovableDateSeparator(msg.created_at)}
+                  title="Jump to next day · or copy date"
+                  onClick={
+                    onDateSeparatorClick
+                      ? () => onDateSeparatorClick(msg.id)
+                      : undefined
+                  }
+                />
+              )}
+              <LovableMessageRow msg={msg} {...getMessageProps(msg, msgIdx, thread)} />
+            </div>
+          );
+        })}
       </AnimatePresence>
     </div>
   );

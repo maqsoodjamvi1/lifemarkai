@@ -90,6 +90,7 @@ function CommentCard({
   onReply,
   onResolve,
   onDelete,
+  onJumpToElement,
   depth = 0,
 }: {
   comment: Comment;
@@ -98,6 +99,7 @@ function CommentCard({
   onReply: (parentId: string) => void;
   onResolve: (id: string, resolved: boolean) => void;
   onDelete: (id: string) => void;
+  onJumpToElement?: (comment: Comment) => void;
   depth?: number;
 }) {
   const isOwn = !!comment.user_id && comment.user_id === currentUserId;
@@ -136,10 +138,16 @@ function CommentCard({
             </div>
 
             {comment.element_xpath && (
-              <p className="text-[10px] text-blue-400/80 mt-1 font-mono truncate" title={comment.element_xpath}>
+              <button
+                type="button"
+                onClick={() => onJumpToElement?.(comment)}
+                className="text-[10px] text-blue-400/90 hover:text-blue-300 mt-1 font-mono truncate text-left block w-full"
+                title={`Jump to ${comment.element_xpath}`}
+              >
                 📍 &lt;{comment.element_tag ?? "element"}&gt; on {comment.page_path ?? "/"}
                 {comment.element_preview ? ` — ${comment.element_preview}` : ""}
-              </p>
+                <span className="ml-1 not-italic font-sans text-blue-400/70">· Jump</span>
+              </button>
             )}
 
             {/* Content */}
@@ -155,6 +163,14 @@ function CommentCard({
                   className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <Reply className="w-3 h-3" />Reply
+                </button>
+              )}
+              {comment.element_xpath && onJumpToElement && (
+                <button
+                  onClick={() => onJumpToElement(comment)}
+                  className="flex items-center gap-1 text-[10px] text-blue-400/90 hover:text-blue-300 transition-colors ml-2"
+                >
+                  Jump to preview
                 </button>
               )}
 
@@ -218,6 +234,7 @@ export function CommentsPanel({ projectId, currentUserId, isPublic = false }: Co
   const { toast } = useToast();
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [text, setText] = useState("");
   const [replyTo, setReplyTo] = useState<string | null>(null);
@@ -228,9 +245,22 @@ export function CommentsPanel({ projectId, currentUserId, isPublic = false }: Co
 
   // Load comments
   const loadComments = useCallback(async () => {
-    const res = await fetch(`/api/projects/${projectId}/comments`);
-    if (res.ok) setComments(await res.json());
-    setLoading(false);
+    setLoadError(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/comments`);
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setLoadError(body.error || `Failed to load comments (${res.status})`);
+        setComments([]);
+      } else {
+        setComments(await res.json());
+      }
+    } catch {
+      setLoadError("Failed to load comments");
+      setComments([]);
+    } finally {
+      setLoading(false);
+    }
   }, [projectId]);
 
   useEffect(() => {
@@ -241,7 +271,7 @@ export function CommentsPanel({ projectId, currentUserId, isPublic = false }: Co
   useEffect(() => {
     const supabase = createClient();
     const channel = supabase
-      .channel(`comments:${projectId}`)
+      .channel(`comments:${projectId}:${crypto.randomUUID()}`)
       .on(
         "postgres_changes" as any,
         { event: "*", schema: "public", table: "project_comments", filter: `project_id=eq.${projectId}` },
@@ -386,6 +416,22 @@ export function CommentsPanel({ projectId, currentUserId, isPublic = false }: Co
           <div className="flex items-center justify-center h-32 text-muted-foreground">
             <Loader2 className="w-4 h-4 animate-spin" />
           </div>
+        ) : loadError ? (
+          <div className="flex flex-col items-center justify-center h-40 text-center gap-2 px-4">
+            <MessageSquare className="w-8 h-8 text-destructive/40" />
+            <p className="text-xs text-destructive">Couldn&apos;t load comments</p>
+            <p className="text-[10px] text-muted-foreground/70 break-words max-w-full">{loadError}</p>
+            <button
+              type="button"
+              onClick={() => {
+                setLoading(true);
+                void loadComments();
+              }}
+              className="text-[11px] text-primary hover:underline"
+            >
+              Retry
+            </button>
+          </div>
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-40 text-center gap-2">
             <MessageSquare className="w-8 h-8 text-muted-foreground/30" />
@@ -411,6 +457,18 @@ export function CommentsPanel({ projectId, currentUserId, isPublic = false }: Co
               }}
               onResolve={handleResolve}
               onDelete={handleDelete}
+              onJumpToElement={(c) => {
+                if (!c.element_xpath) return;
+                window.dispatchEvent(
+                  new CustomEvent("lifemark-jump-to-comment-element", {
+                    detail: {
+                      commentId: c.id,
+                      xpath: c.element_xpath,
+                      pagePath: c.page_path,
+                    },
+                  }),
+                );
+              }}
             />
           ))
         )}

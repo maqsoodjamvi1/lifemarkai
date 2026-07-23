@@ -45,7 +45,7 @@ export function LovableChatEmptyState({
         <button
           type="button"
           onClick={onExploreDesignDirections}
-          className="mt-5 flex items-center gap-2 text-xs px-3.5 py-2 rounded-[var(--radius-3)] border border-violet-500/30 bg-violet-500/10 text-violet-300 hover:bg-violet-500/15 hover:text-violet-200 transition-colors"
+          className="mt-5 flex items-center gap-2 text-xs px-3.5 py-2 rounded-[var(--radius-3)] border border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300 hover:bg-violet-500/15 hover:text-violet-200 transition-colors"
         >
           <Palette className="w-3.5 h-3.5" />
           Explore 3 design directions first

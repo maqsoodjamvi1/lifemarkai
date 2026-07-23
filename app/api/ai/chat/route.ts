@@ -35,7 +35,11 @@ import {
   navContainsLabel,
   remapInventedNavPatchPaths,
 } from "@/lib/ai/nav-edit";
-import { buildDeterministicTextPatches } from "@/lib/ai/text-edit";
+import {
+  buildDeterministicTextPatches,
+  parseTextReplacementIntent,
+  parseHeadingDescriptor,
+} from "@/lib/ai/text-edit";
 import { parseAIResponse, validateGeneratedFiles, assessGenerationQuality, shouldAutoFix, needsBuildContinuation, type ParsedFile } from "@/lib/ai/code-parser";
 import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { StreamingFileExtractor } from "@/lib/ai/streaming-file-extractor";
@@ -174,7 +178,6 @@ export async function POST(req: NextRequest) {
     const {
       projectId,
       message,
-      mode = "chat",
       model,
       files = [],
       imageBase64,
@@ -188,7 +191,35 @@ export async function POST(req: NextRequest) {
       modelManuallySelected = false,
       rawMessage,
     } = body;
+    type ChatRouteMode = "chat" | "plan" | "build" | "agent" | "patch";
+    let mode: ChatRouteMode = (["chat", "plan", "build", "agent", "patch"] as const).includes(body.mode)
+      ? (body.mode as ChatRouteMode)
+      : "chat";
     const costPrompt = typeof rawMessage === "string" && rawMessage.trim() ? rawMessage : message;
+
+    // ── Lovable-agent behavior: questions get ANSWERS, not rebuilds ────────
+    // In Build mode, "why is the cart empty?" / "explain how auth works" must
+    // NOT regenerate the app. Downgrade informational queries to chat (cheaper
+    // + prose answer); action requests ("add", "fix", "change"…) still build.
+    let autoRoutedPatch = false;
+    if (mode === "build" && body.forceBuild !== true && Array.isArray(files) && files.length > 0 && typeof message === "string") {
+      try {
+        const { isInformationalQuery, isSmallSurgicalEdit } = await import("@/lib/ai/build-intent");
+        if (isInformationalQuery(message)) {
+          mode = "chat";
+        } else if (files.length > 8 && isSmallSurgicalEdit(typeof rawMessage === "string" && rawMessage.trim() ? rawMessage : message)) {
+          // Micro-edit → surgical patch pipeline (find/replace + deterministic
+          // fallbacks) instead of a full regeneration: seconds, not minutes.
+          // If the patch misses, the client silently retries with forceBuild.
+          mode = "patch";
+          autoRoutedPatch = true;
+        }
+      } catch { /* non-fatal — keep build */ }
+    }
+    // The CLIENT's smart router may pre-select patch mode itself (its own
+    // surgical-edit detection). It tells us via body.autoRouted so a patch miss
+    // still triggers the silent patch→build fallback instead of "try rephrasing".
+    if (mode === "patch" && body.autoRouted === true) autoRoutedPatch = true;
 
     // Input validation
     if (!message || typeof message !== "string") {
@@ -897,6 +928,61 @@ export async function POST(req: NextRequest) {
       // Non-fatal
     }
 
+    // ── Design consistency + project memory (Lovable-agent parity) ────────
+    // Incremental builds see the project's REAL design system (tokens, fonts,
+    // ui kit) and the recent decision log, so edits stay visually coherent and
+    // earlier requests don't get silently undone.
+    if ((mode === "build" || mode === "patch") && Array.isArray(files) && files.length > 8) {
+      try {
+        const { buildDesignSystemBlock, buildDecisionLogBlock } = await import("@/lib/ai/design-system-context");
+        const dsBlock = buildDesignSystemBlock(files);
+        if (dsBlock) systemPrompt += `\n\n${dsBlock}`;
+        const decisions = (projectRes.data as { metadata?: { decision_log?: unknown } } | null)?.metadata?.decision_log;
+        const dlBlock = buildDecisionLogBlock(decisions);
+        if (dlBlock) systemPrompt += `\n\n${dlBlock}`;
+      } catch { /* non-fatal */ }
+
+      // Own-builds tuning flywheel: recurring failure classes from this
+      // project's health findings become prevention rules in the prompt.
+      try {
+        const { buildLearnedRulesBlock } = await import("@/lib/ai/learned-rules");
+        const { data: findings } = await (supabase as any)
+          .from("health_findings")
+          .select("title, detail")
+          .eq("project_id", projectId)
+          .order("created_at", { ascending: false })
+          .limit(30);
+        const lrBlock = buildLearnedRulesBlock(Array.isArray(findings) ? findings : []);
+        if (lrBlock) systemPrompt += `\n\n${lrBlock}`;
+      } catch { /* table may not exist yet — non-fatal */ }
+    }
+
+    // ── Live preview console context (Lovable-agent parity) ───────────────
+    // The client sends the CURRENT preview runtime errors with every message,
+    // so the AI knows the app's actual state before answering or editing —
+    // not only inside explicit "Try to fix" flows.
+    const previewErrors = Array.isArray(body.previewErrors) ? body.previewErrors.slice(0, 5) : [];
+    if (previewErrors.length > 0) {
+      const lines = previewErrors
+        .map((e: { kind?: string; message?: string; filename?: string; lineno?: number }, i: number) => {
+          const loc = e.filename ? ` (${e.filename}${typeof e.lineno === "number" ? `:${e.lineno}` : ""})` : "";
+          return `${i + 1}. [${e.kind ?? "runtime"}] ${String(e.message ?? "").slice(0, 400)}${loc}`;
+        })
+        .join("\n");
+      systemPrompt += `
+
+---
+# Current Preview Console Errors
+
+The running preview currently reports these errors. Factor them into your answer.
+If the user's request is unrelated, do NOT silently fix them — mention them briefly
+and offer to fix. If the request IS about broken behavior, treat these as the
+primary evidence and fix the root cause:
+
+${lines}
+---`;
+    }
+
     // ── Role-isolation guardrail ───────────────────────────────────────────
     // If the user mentions a role (Admin, User, Investor, etc.) and asks for a
     // role-specific change, remind the AI to isolate logic to that role and not
@@ -1010,11 +1096,13 @@ The user has expressed frustration. Do the following:
       }
 
       const clarifySystemPrompt = [
-        "You are an expert software architect helping a developer before they build a feature.",
-        "Given a user's build request, generate 2-4 targeted clarifying questions that would help produce better output.",
+        "You are an expert product designer + software architect asking a user a few quick questions before building, exactly like Lovable's pre-build questionnaire.",
+        "Given a user's build request, generate 2-4 targeted questions. Prefer CHOICE questions with 3-4 concrete options.",
         'Return ONLY a JSON array of question objects, no prose, no code fences.',
-        'Each object must have: id (string), question (string), type ("text" | "choice"), options (string[] only for choice type).',
-        "Keep questions specific and practical.",
+        'Each object: id (string), question (string), type ("text"|"choice"), kind ("palette"|"typography"|"layout"|"structure"|"database"|"general"), options (string[] for choice).',
+        "For NEW WEBSITE/APP builds ask design questions: one palette question (kind palette — each option is a named palette followed by 2-3 hex codes in parentheses, e.g. \"Cherry Blossom (#F8C8DC, #B03052)\"), one typography pairing question (kind typography, e.g. \"Outfit + Figtree\"), and one homepage layout structure question (kind layout, options like \"Hero + feature grid\", \"Full-width banner + columns\", \"Magazine\", \"Split rows\").",
+        "For DATABASE/BACKEND requests (schema, tables, auth, user accounts, admin, CRUD) ask kind database questions instead: which entities/tables, auth method (email / OAuth / both), roles & permissions, public vs private data.",
+        "Keep every question short and answerable in one tap.",
         "Respond ONLY with a valid JSON array.",
       ].join("\n");
 
@@ -1057,8 +1145,55 @@ The user has expressed frustration. Do the following:
             reservationFinalized = true;
 
             let questions: unknown[] = [];
-            try { questions = JSON.parse(questionsJson); } catch { questions = []; }
-            if (!Array.isArray(questions)) questions = [];
+            try {
+              const parsed: unknown = JSON.parse(questionsJson);
+              if (Array.isArray(parsed)) {
+                questions = parsed;
+              } else if (parsed && typeof parsed === "object") {
+                // jsonMode forces an OBJECT on many models — they wrap the
+                // array ({"questions":[...]}). Take the first array value.
+                const arr = Object.values(parsed as Record<string, unknown>).find(Array.isArray);
+                if (arr) questions = arr as unknown[];
+              }
+            } catch { questions = []; }
+            // Normalize — models rename fields ("text"/"prompt" for question,
+            // option objects instead of strings). Empty questions rendered a
+            // blank wizard (observed live: "1/4" with no visible question).
+            questions = questions
+              .map((raw, i) => {
+                if (!raw || typeof raw !== "object") return null;
+                const r = raw as Record<string, unknown>;
+                const text = [r.question, r.q, r.text, r.prompt, r.label].find(
+                  (v): v is string => typeof v === "string" && v.trim() !== "",
+                );
+                if (!text) return null;
+                const rawOpts = Array.isArray(r.options)
+                  ? r.options
+                  : Array.isArray(r.choices)
+                    ? r.choices
+                    : [];
+                const options = (rawOpts as unknown[])
+                  .map((o) =>
+                    typeof o === "string"
+                      ? o
+                      : o && typeof o === "object"
+                        ? [
+                            (o as Record<string, unknown>).label,
+                            (o as Record<string, unknown>).value,
+                            (o as Record<string, unknown>).text,
+                          ].find((v): v is string => typeof v === "string")
+                        : undefined,
+                  )
+                  .filter((s): s is string => !!s && s.trim() !== "");
+                return {
+                  id: typeof r.id === "string" ? r.id : `q${i + 1}`,
+                  question: text.trim(),
+                  type: options.length > 0 ? "choice" : "text",
+                  kind: typeof r.kind === "string" ? r.kind : "general",
+                  ...(options.length > 0 ? { options } : {}),
+                };
+              })
+              .filter((q): q is NonNullable<typeof q> => q !== null);
 
             const qPayload = JSON.stringify({
               clarifying_questions: questions,
@@ -1283,14 +1418,38 @@ The user has expressed frustration. Do the following:
             patches = remapInventedNavPatchPaths(patches, projectFiles);
             patches = filterUnsafeHeaderPatches(patches, costPrompt);
 
-            // Repair when empty OR when every patch misses (common for menu edits).
+            // Repair when empty OR when EVERY patch misses — for ANY edit, not
+            // just menu edits. Observed failure: "change the hero heading …"
+            // parsed one patch whose find-string missed and went straight to
+            // "try rephrasing" instead of retrying against real file content.
+            const firstPassResults =
+              patches.length > 0 ? applyPatches(patches, projectFiles) : [];
+            const allMissed =
+              patches.length > 0 && firstPassResults.every((r) => !r.applied);
             const needsRepair =
-              (patches.length === 0 && fullContent.trim().length > 0) ||
-              (menuIntent &&
-                patches.length > 0 &&
-                applyPatches(patches, projectFiles).every((r) => !r.applied));
+              (patches.length === 0 && fullContent.trim().length > 0) || allMissed;
 
+            // Deterministic shortcut first — instant and exact when it hits,
+            // saving the extra repair model round-trip entirely.
+            let repairHandled = false;
             if (needsRepair) {
+              const detShortcut = [
+                ...(menuIntent ? buildDeterministicMenuPatches(costPrompt, projectFiles) : []),
+                ...buildDeterministicTextPatches(costPrompt, projectFiles),
+              ];
+              if (
+                detShortcut.length > 0 &&
+                applyPatches(detShortcut, projectFiles).some((r) => r.applied)
+              ) {
+                logger.info("ai.chat.patch_deterministic_shortcut", {
+                  projectId,
+                  paths: detShortcut.map((p) => p.path),
+                });
+                patches = detShortcut;
+                repairHandled = true;
+              }
+            }
+            if (needsRepair && !repairHandled) {
               logger.warn("ai.chat.patch_empty_retry", {
                 projectId,
                 contentLen: fullContent.length,
@@ -1308,14 +1467,76 @@ The user has expressed frustration. Do the following:
               );
               try {
                 let repairContent = "";
+                // Give the retry the VERBATIM contents of the files the missed
+                // patches targeted — the first pass failed precisely because the
+                // model never had (or ignored) the real text to copy from.
+                // Reachability guard: if a missed target is an ORPHAN (imported
+                // nowhere), also hand the model the rendered pages that contain
+                // a heading — patching an unused duplicate changes nothing on
+                // screen (observed: unused Hero.tsx vs live pages/Home.tsx).
+                const { findReachablePaths, pickHeadingCandidateFiles } = await import(
+                  "@/lib/ai/text-edit"
+                );
+                const reachableSet = findReachablePaths(projectFiles);
+                const missedPaths = new Set(patches.map((p) => p.path));
+                const missedFiles = projectFiles.filter((f) => missedPaths.has(f.path));
+                const hasOrphanTarget = missedFiles.some((f) => !reachableSet.has(f.path));
+                const renderedAlternatives = hasOrphanTarget
+                  ? projectFiles
+                      .filter(
+                        (f) =>
+                          reachableSet.has(f.path) &&
+                          !missedPaths.has(f.path) &&
+                          /\.(tsx|jsx|vue|html?)$/i.test(f.path) &&
+                          /<(h1|h2)\b/i.test(f.content),
+                      )
+                      .sort((a, b) => {
+                        const rank = (p: string) =>
+                          /(pages|views)\//i.test(p) ? 0 : /(home|app|index|landing)/i.test(p) ? 1 : 2;
+                        return rank(a.path) - rank(b.path);
+                      })
+                      .slice(0, 2)
+                  : [];
+                let targetFiles = [
+                  ...missedFiles.filter((f) => reachableSet.has(f.path)),
+                  ...renderedAlternatives,
+                  ...missedFiles.filter((f) => !reachableSet.has(f.path)),
+                ].slice(0, 3);
+                // Heading-descriptor requests ("change the hero heading to X"):
+                // rank hero candidates OURSELVES and put them first — retries of
+                // the same prompt otherwise re-target whatever wrong file earlier
+                // attempts touched (observed: OrderSuccess.tsx patched twice
+                // while the real hero sat in pages/Home.tsx).
+                const repairIntent = parseTextReplacementIntent(costPrompt);
+                const repairDescriptor = repairIntent
+                  ? parseHeadingDescriptor(repairIntent.from)
+                  : null;
+                if (repairDescriptor) {
+                  const heroFiles = pickHeadingCandidateFiles(
+                    projectFiles,
+                    repairDescriptor.scope,
+                  );
+                  if (heroFiles.length > 0) {
+                    const heroPaths = new Set(heroFiles.map((f) => f.path));
+                    targetFiles = [
+                      ...heroFiles,
+                      ...targetFiles.filter((f) => !heroPaths.has(f.path)),
+                    ].slice(0, 3);
+                  }
+                }
+                const targetSnippet = targetFiles
+                  .map((f) => `### ${f.path}\n\`\`\`\n${f.content.slice(0, 8000)}\n\`\`\``)
+                  .join("\n\n");
                 const allowedPaths =
-                  navFiles.length > 0
-                    ? navFiles.map((f) => f.path).join(", ")
-                    : projectFiles
-                        .map((f) => f.path)
-                        .filter((p) => /\.(tsx|jsx|html)$/i.test(p))
-                        .slice(0, 12)
-                        .join(", ");
+                  targetFiles.length > 0
+                    ? targetFiles.map((f) => f.path).join(", ")
+                    : navFiles.length > 0
+                      ? navFiles.map((f) => f.path).join(", ")
+                      : projectFiles
+                          .map((f) => f.path)
+                          .filter((p) => /\.(tsx|jsx|html)$/i.test(p))
+                          .slice(0, 12)
+                          .join(", ");
                 await generateAI({
                   model: effectiveModel,
                   messages: [
@@ -1325,15 +1546,18 @@ The user has expressed frustration. Do the following:
                         'Return ONLY a JSON object: {"patches":[{"path","find","replace","description"}]}. ' +
                         "No markdown, no prose. find must be copied VERBATIM from the provided file. " +
                         `Allowed paths only: ${allowedPaths || "(paths from file contents below)"}. ` +
-                        'Never invent header.html. Never return {"patches":[]} for an add-menu request.',
+                        'Never invent header.html. Never return {"patches":[]} for an edit request.',
                     },
                     {
                       role: "user",
                       content:
                         `User request:\n${costPrompt}\n\n` +
                         `Previous invalid/empty response:\n${fullContent.slice(0, 1500)}\n\n` +
-                        `Real header/nav file contents to patch:\n${navSnippet || "(see project files — look for <header>/<nav> or Header/Navbar components)"}\n\n` +
-                        `Emit {"patches":[...]} that adds/updates the menu items in one of those files.`,
+                        `Real file contents to patch (copy find strings VERBATIM from here):\n${targetSnippet || navSnippet || "(see project files — look for the component that renders the text being changed)"}\n\n` +
+                        (hasOrphanTarget
+                          ? `IMPORTANT: the previously targeted file is NOT imported/rendered anywhere — editing it changes nothing on screen. Patch the RENDERED file (listed first) that actually contains the visible text.\n\n`
+                          : "") +
+                        `Emit {"patches":[...]} that applies the requested edit to one of those files.`,
                     },
                   ],
                   maxTokens: Math.max(outputMaxTokens, 3500),
@@ -1398,6 +1622,7 @@ The user has expressed frustration. Do the following:
                 encoder.encode(
                   `data: ${JSON.stringify({
                     status: "patches_failed",
+                    auto_routed: autoRoutedPatch,
                     message: menuIntent
                       ? `Could not patch the header/nav. Expected targets: ${navFiles.map((f) => f.path).join(", ") || "Header/Navbar/App"}. Try: "add About and Contact links to the header".`
                       : "Could not parse any file patches from the model response. Try Quick Edit or rephrase the change.",
@@ -1460,6 +1685,30 @@ The user has expressed frustration. Do the following:
                   }
                 }
               }
+              // Literal from→to requests: if the exact FROM text STILL exists
+              // after the model's patches, the model edited the wrong target
+              // (observed: 'change "Get a Quote" to "Get a Free Quote"' patched
+              // CTASection while the hero button kept the literal text).
+              // Deterministically fix the real occurrence too.
+              {
+                const literalIntent = parseTextReplacementIntent(costPrompt);
+                if (literalIntent && !parseHeadingDescriptor(literalIntent.from)) {
+                  const workingFiles = projectFiles.map((f) => {
+                    const hit = [...patchResults]
+                      .reverse()
+                      .find((r) => r.applied && r.path === f.path);
+                    return hit ? { path: f.path, content: hit.content } : f;
+                  });
+                  const correction = buildDeterministicTextPatches(costPrompt, workingFiles);
+                  if (correction.length > 0) {
+                    logger.info("ai.chat.patch_deterministic_text_correction", {
+                      projectId,
+                      paths: correction.map((p) => p.path),
+                    });
+                    patchResults = patchResults.concat(applyPatches(correction, workingFiles));
+                  }
+                }
+              }
               const applied = patchResults.filter((r) => r.applied);
               const failed = patchResults.filter((r) => !r.applied);
               if (applied.length > 0) patchOutcome = "applied";
@@ -1491,6 +1740,7 @@ The user has expressed frustration. Do the following:
                   encoder.encode(
                     `data: ${JSON.stringify({
                       status: "patches_failed",
+                      auto_routed: autoRoutedPatch,
                       message: `${failed.length} patch${failed.length === 1 ? "" : "es"} could not be applied (${failed.map((f) => f.path).join(", ")}).`,
                       failed: failed.map((f) => ({ path: f.path, error: f.error })),
                     })}\n\n`,
@@ -1662,14 +1912,34 @@ The user has expressed frustration. Do the following:
                 }
               }
 
+              // Project memory: append this build to the decision log (capped,
+              // zero AI cost) so future prompts know what was already asked.
+              try {
+                const { appendDecision } = await import("@/lib/ai/design-system-context");
+                const prevMeta = ((projectRes.data as { metadata?: Record<string, unknown> } | null)?.metadata ?? {}) as Record<string, unknown>;
+                const nextLog = appendDecision(prevMeta.decision_log, {
+                  at: new Date().toISOString(),
+                  req: String(costPrompt ?? message).slice(0, 140),
+                  files: parsedFiles.length,
+                  paths: parsedFiles.slice(0, 3).map((f) => f.path),
+                });
+                await (supabase as any)
+                  .from("projects")
+                  .update({ metadata: { ...prevMeta, decision_log: nextLog } })
+                  .eq("id", projectId);
+              } catch { /* best-effort — never fail the build */ }
+
               // Always upsert FINAL parsed/repaired content. Mid-stream upserts are
               // for UX only — skipping here left autofix/repair changes on disk out
               // of sync with what the model "finished" (Lovable: preview = latest).
+              const { sanitizeGeneratedFile } = await import("@/lib/ai/html-sanity");
               for (const file of parsedFiles) {
                 await (supabase as any).from("project_files").upsert({
                   project_id: projectId,
                   path: file.path,
-                  content: file.content,
+                  // Guards against continuation rounds appending a second full
+                  // document to html files (observed corruption in the wild).
+                  content: sanitizeGeneratedFile(file.path, file.content),
                   language: file.language,
                 }, { onConflict: "project_id,path" });
               }
@@ -1801,6 +2071,17 @@ The user has expressed frustration. Do the following:
                 )
               : null;
 
+          const skillsMeta =
+            attachedSkills.length > 0
+              ? {
+                  skills_attached: attachedSkills.map((m) => ({
+                    id: m.skill.id,
+                    name: m.skill.name,
+                    reason: m.reason,
+                  })),
+                }
+              : {};
+
           const assistantMetadata: Record<string, unknown> | null =
             (mode === "build" || mode === "patch") && parsedFiles.length > 0
               ? {
@@ -1808,12 +2089,18 @@ The user has expressed frustration. Do the following:
                   snapshot_id: preBuildSnapshotId ?? undefined,
                   work_seconds: Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000)),
                   ...(buildActivity ? { build_activity: buildActivity, steps: buildActivity.length } : {}),
+                  ...skillsMeta,
                 }
-              : buildActivity
+              : buildActivity || attachedSkills.length > 0
                 ? {
-                    build_activity: buildActivity,
-                    steps: buildActivity.length,
-                    work_seconds: Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000)),
+                    ...(buildActivity
+                      ? {
+                          build_activity: buildActivity,
+                          steps: buildActivity.length,
+                          work_seconds: Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000)),
+                        }
+                      : {}),
+                    ...skillsMeta,
                   }
                 : null;
 
@@ -1989,6 +2276,7 @@ The user has expressed frustration. Do the following:
                 build_activity: buildActivity ?? undefined,
                 backend_wired: backendWiring ?? undefined,
                 patch_failed: mode === "patch" && patchOutcome === "failed" ? true : undefined,
+                auto_routed: autoRoutedPatch || undefined,
                 verification: verification
                   ? {
                       engine: verification.engine,

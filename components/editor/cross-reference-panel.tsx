@@ -33,13 +33,13 @@ interface CrossReferencePanelProps {
 }
 
 const FW_BADGE: Record<string, { label: string; color: string }> = {
-  "next.js": { label: "Next", color: "bg-zinc-800 text-zinc-200" },
-  nextjs:    { label: "Next", color: "bg-zinc-800 text-zinc-200" },
-  react:     { label: "React", color: "bg-cyan-900 text-cyan-300" },
-  vue:       { label: "Vue",   color: "bg-emerald-900 text-emerald-300" },
-  svelte:    { label: "Svelte", color: "bg-orange-900 text-orange-300" },
-  astro:     { label: "Astro", color: "bg-purple-900 text-purple-300" },
-  vite:      { label: "Vite",  color: "bg-violet-900 text-violet-300" },
+  "next.js": { label: "Next", color: "bg-zinc-800 text-zinc-800 dark:text-zinc-200" },
+  nextjs:    { label: "Next", color: "bg-zinc-800 text-zinc-800 dark:text-zinc-200" },
+  react:     { label: "React", color: "bg-cyan-900 text-cyan-700 dark:text-cyan-300" },
+  vue:       { label: "Vue",   color: "bg-emerald-900 text-emerald-700 dark:text-emerald-300" },
+  svelte:    { label: "Svelte", color: "bg-orange-900 text-orange-700 dark:text-orange-300" },
+  astro:     { label: "Astro", color: "bg-purple-900 text-purple-700 dark:text-purple-300" },
+  vite:      { label: "Vite",  color: "bg-violet-900 text-violet-700 dark:text-violet-300" },
 };
 
 function fileIcon(path: string): string {

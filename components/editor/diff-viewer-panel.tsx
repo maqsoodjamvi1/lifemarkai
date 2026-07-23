@@ -227,7 +227,7 @@ export function DiffViewerPanel({ projectId, diffs: externalDiffs }: DiffViewerP
           <div className="flex items-start gap-2">
             <Sparkles className="w-3 h-3 text-violet-400 shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
-              <div className="text-[10px] font-semibold text-violet-300 mb-0.5">What changed (AI summary)</div>
+              <div className="text-[10px] font-semibold text-violet-700 dark:text-violet-300 mb-0.5">What changed (AI summary)</div>
               {pairLoading && !pairSummary ? (
                 <div className="text-[11px] text-muted-foreground flex items-center gap-1.5">
                   <Loader2 className="w-2.5 h-2.5 animate-spin" />
@@ -378,7 +378,7 @@ export function DiffViewerPanel({ projectId, diffs: externalDiffs }: DiffViewerP
       {allResolved && (
         <div className="shrink-0 px-3 py-2 bg-emerald-500/10 border-t border-emerald-500/20 flex items-center gap-2">
           <Check className="w-4 h-4 text-emerald-400" />
-          <p className="text-xs text-emerald-300 font-medium">All {total} files reviewed</p>
+          <p className="text-xs text-emerald-700 dark:text-emerald-300 font-medium">All {total} files reviewed</p>
           <div className="flex-1" />
           <button onClick={() => { setAccepted(new Set()); setRejected(new Set()); }} className="text-[10px] text-emerald-400/70 hover:text-emerald-300">
             Reset

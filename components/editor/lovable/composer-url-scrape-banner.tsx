@@ -39,7 +39,7 @@ export function LovableComposerUrlScrapeBanner({
           ) : (
             <Globe className="w-3 h-3 text-blue-400" />
           )}
-          <span className="text-[11px] font-semibold text-blue-300">
+          <span className="text-[11px] font-semibold text-blue-700 dark:text-blue-300">
             {isScraping ? "Reading page…" : meta ? "Page loaded" : "URL detected"}
           </span>
           <span className="text-[10px] text-blue-400/60 font-mono truncate max-w-[140px]">{url}</span>
@@ -80,7 +80,7 @@ export function LovableComposerUrlScrapeBanner({
                     `Clone this website as a React + Tailwind app. Match the layout, design, colors, and content exactly: ${url}`,
                   )
                 }
-                className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors"
+                className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-700 dark:text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors"
               >
                 🌐 Clone page
               </button>
@@ -90,7 +90,7 @@ export function LovableComposerUrlScrapeBanner({
                     `Analyze the design and content of this page and build an improved, modern version with better UX: ${url}`,
                   )
                 }
-                className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 hover:bg-violet-500/30 transition-colors"
+                className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-700 dark:text-violet-300 border border-violet-500/30 hover:bg-violet-500/30 transition-colors"
               >
                 ✨ Redesign
               </button>
@@ -100,7 +100,7 @@ export function LovableComposerUrlScrapeBanner({
                     `Based on this page, extract the key content and structure, then build a landing page for the same product/service: ${url}`,
                   )
                 }
-                className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors"
+                className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 transition-colors"
               >
                 📄 Landing page
               </button>

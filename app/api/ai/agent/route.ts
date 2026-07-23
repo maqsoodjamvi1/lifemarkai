@@ -51,7 +51,11 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const { projectId, task, rawTask, model, modelManuallySelected = false } = body;
+  const { projectId, task, rawTask, model, modelManuallySelected = false, previewUrl } = body;
+  const clientPreviewUrl =
+    typeof previewUrl === "string" && /^https?:\/\//i.test(previewUrl.trim())
+      ? previewUrl.trim()
+      : null;
   const costTask = typeof rawTask === "string" && rawTask.trim() ? rawTask : task;
   if (!projectId || typeof projectId !== "string") {
     return NextResponse.json({ error: "projectId is required" }, { status: 400 });
@@ -75,7 +79,7 @@ export async function POST(req: NextRequest) {
 
   const { data: projectRow } = await (supabase as any)
     .from("projects")
-    .select("name, knowledge, cloud_enabled, environment, disabled_skill_ids, metadata")
+    .select("name, knowledge, cloud_enabled, cloud_project_ref, environment, disabled_skill_ids, metadata, deployed_url, preview_url")
     .eq("id", projectId)
     .single();
 
@@ -113,11 +117,35 @@ export async function POST(req: NextRequest) {
   );
   if (skillBlock) knowledgeParts.push(skillBlock);
 
-  const knowledge = knowledgeParts.length > 0 ? knowledgeParts.join("\n\n---\n\n") : undefined;
-
   const { data: files } = await (supabase as any)
     .from("project_files").select("path, content").eq("project_id", projectId);
   const fileCount = Array.isArray(files) ? files.length : 0;
+
+  // ── Intelligence parity with chat builds (agent is the primary build path):
+  // design-system context, decision-log memory, learned-rules flywheel.
+  if (fileCount > 8) {
+    try {
+      const { buildDesignSystemBlock, buildDecisionLogBlock } = await import("@/lib/ai/design-system-context");
+      const dsBlock = buildDesignSystemBlock(files as Array<{ path: string; content?: string | null }>);
+      if (dsBlock) knowledgeParts.push(dsBlock);
+      const decisions = (projectRow as { metadata?: { decision_log?: unknown } } | null)?.metadata?.decision_log;
+      const dlBlock = buildDecisionLogBlock(decisions);
+      if (dlBlock) knowledgeParts.push(dlBlock);
+    } catch { /* non-fatal */ }
+    try {
+      const { buildLearnedRulesBlock } = await import("@/lib/ai/learned-rules");
+      const { data: findings } = await (supabase as any)
+        .from("health_findings")
+        .select("title, detail")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false })
+        .limit(30);
+      const lrBlock = buildLearnedRulesBlock(Array.isArray(findings) ? findings : []);
+      if (lrBlock) knowledgeParts.push(lrBlock);
+    } catch { /* table may not exist yet — non-fatal */ }
+  }
+
+  const knowledge = knowledgeParts.length > 0 ? knowledgeParts.join("\n\n---\n\n") : undefined;
   const serverAutoModel = modelManuallySelected === true
     ? model
     : resolveSmartModel("agent", { fileCount, hasPreviewError: false }, costTask);
@@ -244,6 +272,74 @@ export async function POST(req: NextRequest) {
     console.warn("[agent] connector_call tool setup failed:", err instanceof Error ? err.message : err);
   }
 
+  // ── web_search / fetch_url agent tools (Lovable-agent parity) ────────────
+  // Lets the agent consult the live web mid-task (library docs, API shapes,
+  // error messages). Keyless DuckDuckGo fallback so it works out of the box.
+  try {
+    const { searchWeb, fetchUrlAsText } = await import("@/lib/ai/agent-web-tools");
+    extraTools.push({
+      name: "web_search",
+      description:
+        "Search the web (returns up to 6 results with title, url, snippet). Use for current library docs, API references, or error messages you don't recognise. Follow up with fetch_url to read a promising result.",
+      inputSchema: {
+        type: "object",
+        properties: { query: { type: "string", description: "Search query" } },
+        required: ["query"],
+      },
+      execute: async (args: Record<string, unknown>) =>
+        JSON.stringify(await searchWeb(String(args.query ?? ""))),
+    });
+    extraTools.push({
+      name: "fetch_url",
+      description:
+        "Fetch a public http(s) page and return its readable text (capped at 6000 chars). Use after web_search, or when the user references a URL.",
+      inputSchema: {
+        type: "object",
+        properties: { url: { type: "string", description: "Absolute public URL" } },
+        required: ["url"],
+      },
+      execute: async (args: Record<string, unknown>) =>
+        JSON.stringify(await fetchUrlAsText(String(args.url ?? ""))),
+    });
+  } catch (err) {
+    console.warn("[agent] web tools setup failed:", err instanceof Error ? err.message : err);
+  }
+
+  // ── db_query agent tool (Lovable Cloud parity: agent can inspect the DB) ──
+  // Read-only SELECT/WITH/EXPLAIN against the project's managed Postgres.
+  // Gated on cloud_enabled + a provisioned ref + database permission != never.
+  try {
+    const cloudRef = (projectRow as { cloud_project_ref?: string | null } | null)?.cloud_project_ref;
+    const dbPermission = (cloudPermissions as { database?: string } | null)?.database ?? "ask";
+    if (projectRow?.cloud_enabled && cloudRef && dbPermission !== "never") {
+      const { isReadOnlySql } = await import("@/lib/ai/agent-web-tools");
+      const { queryManagedSql } = await import("@/lib/cloud/management");
+      extraTools.push({
+        name: "db_query",
+        description:
+          "Run a READ-ONLY SQL query (single SELECT/WITH/EXPLAIN statement) against this project's live Cloud Postgres. Use to inspect schema (information_schema.columns / pg_tables), check row counts, or debug data issues. Writes are rejected — propose schema changes as migration files instead.",
+        inputSchema: {
+          type: "object",
+          properties: { sql: { type: "string", description: "A single read-only SQL statement" } },
+          required: ["sql"],
+        },
+        execute: async (args: Record<string, unknown>) => {
+          const sql = String(args.sql ?? "");
+          if (!isReadOnlySql(sql)) {
+            return JSON.stringify({ error: "Rejected: only a single read-only SELECT/WITH/EXPLAIN statement is allowed. Propose writes as migration files." });
+          }
+          const res = await queryManagedSql(cloudRef, sql);
+          if (!res.ok) return JSON.stringify({ error: res.error ?? "query failed" });
+          const rows = res.rows.slice(0, 50);
+          const payload = JSON.stringify({ rowCount: res.rows.length, rows });
+          return payload.length > 8000 ? payload.slice(0, 8000) + "…(truncated)" : payload;
+        },
+      });
+    }
+  } catch (err) {
+    console.warn("[agent] db_query tool setup failed:", err instanceof Error ? err.message : err);
+  }
+
   const reservationAmount = maxCreditCostForMode("agent");
   const creditReservation = await reserveCredits(supabase, {
     userId: user.id,
@@ -280,6 +376,15 @@ export async function POST(req: NextRequest) {
           task,
           projectId,
           userId: user.id,
+          // Prefer the live Modal URL the editor is showing, then persisted preview_url, then deploy.
+          deployedUrl:
+            clientPreviewUrl ??
+            (typeof (projectRow as { preview_url?: string | null } | null)?.preview_url === "string" &&
+            /^https?:\/\//i.test((projectRow as { preview_url: string }).preview_url)
+              ? (projectRow as { preview_url: string }).preview_url
+              : null) ??
+            (projectRow as { deployed_url?: string | null } | null)?.deployed_url ??
+            null,
           files: files ?? [],
           model: effectiveModel,
           maxOutputTokens: maxOutputTokensForRequest({
@@ -370,6 +475,25 @@ export async function POST(req: NextRequest) {
           { projectId, label: "agent-turn" },
         );
         const assistantMessageId = persisted.assistantMessageId;
+
+        // Project memory: record this agent build in the decision log
+        // (parity with chat builds — capped, zero AI cost, best-effort).
+        if (filesChanged.length > 0) {
+          try {
+            const { appendDecision } = await import("@/lib/ai/design-system-context");
+            const prevMeta = ((projectRow as { metadata?: Record<string, unknown> } | null)?.metadata ?? {}) as Record<string, unknown>;
+            const nextLog = appendDecision(prevMeta.decision_log, {
+              at: new Date().toISOString(),
+              req: String(rawTask ?? task).slice(0, 140),
+              files: filesChanged.length,
+              paths: filesChanged.slice(0, 3),
+            });
+            await (supabase as any)
+              .from("projects")
+              .update({ metadata: { ...prevMeta, decision_log: nextLog } })
+              .eq("id", projectId);
+          } catch { /* best-effort */ }
+        }
 
         // ── Lovable parity: backend auto-wiring + self-verification ──────────
         let backendWiring = null;

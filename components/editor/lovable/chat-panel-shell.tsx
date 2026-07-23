@@ -20,12 +20,17 @@ export function LovableChatPanelShell({
 }: LovableChatPanelShellProps) {
   return (
     <div
-      data-chat-panel
+      data-chat-panel="true"
       data-lovable-editor-chat
       data-chat-density={compactDensity ? "compact" : "comfortable"}
-      style={style}
+      style={{
+        ["--chat-top-safe-padding" as string]: "12px",
+        ["--chat-nudge-overlay-px" as string]: "0px",
+        ...style,
+      }}
       className={cn(
-        "flex flex-col h-full min-h-0 bg-[var(--bg-base)] text-[var(--fg-primary)]",
+        // Dump: [data-chat-panel] flex min-h-0 w-full flex-1 flex-col
+        "flex min-h-0 w-full flex-1 flex-col h-full bg-[var(--bg-base)] text-[var(--fg-primary)]",
         compactDensity && [
           "[&_[data-chat-timeline]]:py-2",
           "[&_[data-chat-timeline]_.space-y-5]:space-y-3",

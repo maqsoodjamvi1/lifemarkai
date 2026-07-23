@@ -333,7 +333,7 @@ export function SecurityPanel({ project, files, onFilesUpdate }: SecurityPanelPr
                           <div className="p-3 space-y-3">
                             <p className="text-xs text-slate-400 leading-relaxed">{finding.description}</p>
                             {showSnippets && finding.snippet && (
-                              <pre className="text-xs font-mono bg-black/30 rounded-lg p-2 text-slate-300 overflow-x-auto whitespace-pre-wrap break-all">
+                              <pre className="text-xs font-mono bg-black/30 rounded-lg p-2 text-slate-700 dark:text-slate-300 overflow-x-auto whitespace-pre-wrap break-all">
                                 {finding.snippet}
                               </pre>
                             )}

@@ -59,12 +59,12 @@ const STATIC_FALLBACKS: DesignDirection[] = [
     </div>
     <div class="grid grid-cols-2 gap-2">
       <div class="rounded-lg p-2.5" style="background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.1)">
-        <div class="text-[10px] text-violet-200 mb-1">Users</div>
+        <div class="text-[10px] text-violet-800 dark:text-violet-200 mb-1">Users</div>
         <div class="text-lg font-black text-white">2,481</div>
       </div>
       <div class="rounded-lg p-2.5 bg-yellow-400/20" style="border:1px solid rgba(250,204,21,0.3)">
-        <div class="text-[10px] text-yellow-300 mb-1">Revenue</div>
-        <div class="text-lg font-black text-yellow-300">$12.4k</div>
+        <div class="text-[10px] text-yellow-700 dark:text-yellow-300 mb-1">Revenue</div>
+        <div class="text-lg font-black text-yellow-700 dark:text-yellow-300">$12.4k</div>
       </div>
     </div>
     <button class="w-full mt-2 text-xs py-1.5 px-3 rounded-lg bg-yellow-400 text-violet-900 font-bold">View report →</button>

@@ -455,7 +455,7 @@ export function VisualEditsPanel({ projectId: _projectId, onApply }: VisualEdits
                     <div key={i} className="flex items-start gap-1.5">
                       <Icon size={10} className="text-pink-400 mt-0.5 flex-shrink-0" />
                       <div>
-                        <span className="text-[9px] font-medium text-pink-300">{cap.label}</span>
+                        <span className="text-[9px] font-medium text-pink-700 dark:text-pink-300">{cap.label}</span>
                         <span className="text-[9px] text-pink-400/80"> — {cap.desc}</span>
                       </div>
                     </div>

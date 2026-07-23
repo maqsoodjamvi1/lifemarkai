@@ -57,12 +57,53 @@ async function tryLoadPlaywright(): Promise<{ chromium: any } | null> {
   }
 }
 
-/** Render the preview HTML in headless Chromium; return runtime errors. */
+/**
+ * Vision QA — send the rendered screenshot to a vision-capable model and get
+ * back at most 3 CRITICAL visual defects. Opt-in via VISION_REVIEW=true;
+ * model via VISION_REVIEW_MODEL (default: a cheap vision-capable slug).
+ */
+async function visionDesignReview(screenshotBase64: string): Promise<string[]> {
+  const { generateAI } = await import("@/lib/ai/generate");
+  const model = process.env.VISION_REVIEW_MODEL || "openai/gpt-4o-mini";
+  const res = await generateAI({
+    model,
+    maxTokens: 300,
+    jsonMode: true,
+    messages: [
+      {
+        role: "system",
+        content:
+          'You are a strict UI defect screener. Look at the app screenshot and return ONLY JSON: {"issues": ["..."]} with at most 3 CRITICAL visual defects. Critical = blank/empty sections, unreadable text contrast, overlapping or clipped elements, raw placeholder text (lorem ipsum, "undefined", "NaN", "[object Object]"), or obviously broken layout. Style/taste preferences are NOT defects. Return {"issues": []} when the page looks acceptable. Each issue must be a concrete, fixable instruction naming what and where.',
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Screen this rendered app for CRITICAL visual defects only." },
+          { type: "image_url", image_url: { url: `data:image/png;base64,${screenshotBase64}` } },
+        ] as unknown as string,
+      },
+    ],
+  });
+  try {
+    const parsed = JSON.parse(res.content.trim().replace(/^```(?:json)?|```$/g, "")) as { issues?: unknown };
+    if (!Array.isArray(parsed.issues)) return [];
+    return parsed.issues
+      .filter((i): i is string => typeof i === "string" && i.trim().length > 0)
+      .slice(0, 3)
+      .map((i) => `Visual: ${i.trim()}`);
+  } catch {
+    return [];
+  }
+}
+
+/** Render the preview HTML or navigate a live URL in headless Chromium. */
 async function renderAndCollectErrors(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   playwright: { chromium: any },
-  html: string
-): Promise<string[]> {
+  html: string,
+  liveUrl?: string | null,
+  wantScreenshot = false,
+): Promise<{ errors: string[]; screenshot: string | null }> {
   const browser = await playwright.chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
@@ -79,14 +120,27 @@ async function renderAndCollectErrors(
       errors.push(text);
     });
 
-    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15_000 });
+    if (liveUrl && /^https?:\/\//i.test(liveUrl)) {
+      await page.goto(liveUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
+    } else {
+      await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15_000 });
+    }
     await page.waitForTimeout(RENDER_SETTLE_MS);
 
     // Deeper blank-screen / undefined-component detection: not just "is #root
-    // empty" but "did anything meaningful actually render".
+    // empty" but "did anything meaningful actually render". Live Modal/Next
+    // previews may use #__next or body children instead of #root.
+    const isLive = !!(liveUrl && /^https?:\/\//i.test(liveUrl));
     const diag = await page.evaluate(() => {
-      const root = document.getElementById("root");
-      const childCount = root ? root.children.length : 0;
+      const root =
+        document.getElementById("root") ||
+        document.getElementById("__next") ||
+        document.querySelector("[data-reactroot]");
+      const childCount = root
+        ? root.children.length
+        : document.body
+          ? document.body.children.length
+          : 0;
       const text = ((document.body && document.body.innerText) || "").trim();
       const missing = (((document.body && document.body.innerText) || "").match(/missing component/gi) || []).length;
       // Symbols the app pulled out of modules that don't exist — recorded by the
@@ -102,7 +156,11 @@ async function renderAndCollectErrors(
     }));
 
     if (errors.length === 0) {
-      if (!diag.hasRoot || diag.childCount === 0) {
+      if (isLive) {
+        if (diag.textLen < 3 && diag.childCount === 0) {
+          errors.push("Live preview appears blank — no visible content after mount.");
+        }
+      } else if (!diag.hasRoot || diag.childCount === 0) {
         errors.push("App rendered an empty page — #root has no children after mount.");
       } else if (diag.textLen < 3 && diag.childCount <= 1) {
         errors.push("App appears to render a blank screen — no visible content after mount.");
@@ -125,7 +183,16 @@ async function renderAndCollectErrors(
       errors.push(`${diag.missing} component(s) failed to resolve (shown as "missing component" placeholders) — check imports/exports or create the missing file.`);
     }
 
-    return [...new Set(errors)].slice(0, 6);
+    // Optional vision-QA capture — only worth the bytes when the app rendered.
+    let screenshot: string | null = null;
+    if (wantScreenshot && errors.length === 0) {
+      try {
+        const buf = await page.screenshot({ type: "png", fullPage: false });
+        screenshot = Buffer.from(buf).toString("base64");
+      } catch { /* non-fatal */ }
+    }
+
+    return { errors: [...new Set(errors)].slice(0, 6), screenshot };
   } finally {
     await browser.close().catch(() => {});
   }
@@ -174,6 +241,8 @@ export async function runSelfVerification(opts: {
   userId?: string;
   maxRounds?: number;
   emit?: (status: string) => void;
+  /** Live Modal/WC/deploy URL — preferred over srcdoc fallback when Playwright is available. */
+  previewUrl?: string | null;
 }): Promise<SelfVerifyResult | null> {
   const { supabase, projectId } = opts;
   const emit = opts.emit ?? (() => {});
@@ -198,9 +267,31 @@ export async function runSelfVerification(opts: {
     let files = (rows ?? []) as ProjectFile[];
     if (files.length === 0) return null;
 
+    let liveUrl =
+      typeof opts.previewUrl === "string" && /^https?:\/\//i.test(opts.previewUrl.trim())
+        ? opts.previewUrl.trim()
+        : null;
+    if (!liveUrl) {
+      const { data: proj } = await supabase
+        .from("projects")
+        .select("preview_url, deployed_url")
+        .eq("id", projectId)
+        .maybeSingle();
+      const preview = (proj as { preview_url?: string | null } | null)?.preview_url;
+      const deployed = (proj as { deployed_url?: string | null } | null)?.deployed_url;
+      if (typeof preview === "string" && /^https?:\/\//i.test(preview)) liveUrl = preview;
+      else if (typeof deployed === "string" && /^https?:\/\//i.test(deployed)) liveUrl = deployed;
+    }
+
     const playwright = await tryLoadPlaywright();
     result.engine = playwright ? "browser" : "static";
-    emit(playwright ? "Testing your app in a real browser…" : "Verifying your app…");
+    emit(
+      playwright
+        ? liveUrl
+          ? "Testing your live preview in a real browser…"
+          : "Testing your app in a real browser…"
+        : "Verifying your app…",
+    );
 
     // Hybrid cross-model verify: each fix round uses a different, family-diverse
     // model so a stuck error gets a fresh perspective instead of the same model
@@ -228,11 +319,25 @@ export async function runSelfVerification(opts: {
       // trace that points into minified react-dom.
       const contractErrors = findContractErrors(files);
 
-      const runtimeErrors = playwright
-        ? await renderAndCollectErrors(playwright, html)
-        : staticVerify(html);
+      const visionEnabled = process.env.VISION_REVIEW === "true";
+      const rendered = playwright
+        ? await renderAndCollectErrors(playwright, html, liveUrl, visionEnabled && round === 0)
+        : { errors: staticVerify(html), screenshot: null };
+      const runtimeErrors = rendered.errors;
 
-      const errors = [...new Set([...contractErrors, ...runtimeErrors])].slice(0, 6);
+      let errors = [...new Set([...contractErrors, ...runtimeErrors])].slice(0, 6);
+
+      // ── Vision design review (env-gated, Lovable "agent looks at the result") ──
+      // Only when the app renders cleanly: a vision model screens the actual
+      // screenshot for CRITICAL visual defects (blank sections, unreadable
+      // contrast, overlap, raw placeholder text) — taste is out of scope.
+      if (errors.length === 0 && visionEnabled && rendered.screenshot) {
+        const visualIssues = await visionDesignReview(rendered.screenshot).catch(() => [] as string[]);
+        if (visualIssues.length > 0) {
+          emit(`Visual check found ${visualIssues.length} issue${visualIssues.length === 1 ? "" : "s"} — fixing…`);
+          errors = visualIssues.slice(0, 3);
+        }
+      }
 
       if (errors.length === 0) {
         result.passed = true;

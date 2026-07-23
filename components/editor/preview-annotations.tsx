@@ -63,6 +63,36 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
   const [showResolved, setShowResolved] = useState(false);
   const draftInputRef = useRef<HTMLTextAreaElement>(null);
   const serverReadyRef = useRef(false);
+  const pastRef = useRef<Annotation[][]>([]);
+  const futureRef = useRef<Annotation[][]>([]);
+
+  const publishMeta = useCallback((list: Annotation[], pastLen: number, futureLen: number) => {
+    window.dispatchEvent(
+      new CustomEvent("lifemark-preview-annotations-meta", {
+        detail: {
+          count: list.filter((a) => !a.resolved).length,
+          total: list.length,
+          canUndo: pastLen > 0,
+          canRedo: futureLen > 0,
+        },
+      }),
+    );
+  }, []);
+
+  const commitAnnotations = useCallback(
+    (updater: (prev: Annotation[]) => Annotation[], recordHistory = true) => {
+      setAnnotations((prev) => {
+        const next = updater(prev);
+        if (recordHistory && next !== prev) {
+          pastRef.current = [...pastRef.current.slice(-49), prev];
+          futureRef.current = [];
+        }
+        publishMeta(next, pastRef.current.length, futureRef.current.length);
+        return next;
+      });
+    },
+    [publishMeta],
+  );
 
   // Hydrate from project chat-state (localStorage is offline cache).
   useEffect(() => {
@@ -75,8 +105,11 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
         const data = (await res.json()) as { preview_annotations?: Annotation[] };
         if (cancelled) return;
         if (Array.isArray(data.preview_annotations) && data.preview_annotations.length > 0) {
+          pastRef.current = [];
+          futureRef.current = [];
           setAnnotations(data.preview_annotations);
           saveAnnotations(projectId, data.preview_annotations);
+          publishMeta(data.preview_annotations, 0, 0);
         }
       } catch {
         /* keep local cache */
@@ -87,7 +120,49 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, publishMeta]);
+
+  useEffect(() => {
+    publishMeta(annotations, pastRef.current.length, futureRef.current.length);
+  }, [annotations, publishMeta]);
+
+  useEffect(() => {
+    const onClear = () => {
+      commitAnnotations(() => [], true);
+      setDraft(null);
+      setExpandedId(null);
+    };
+    const onUndo = () => {
+      setAnnotations((prev) => {
+        const past = pastRef.current;
+        if (past.length === 0) return prev;
+        const snapshot = past[past.length - 1];
+        pastRef.current = past.slice(0, -1);
+        futureRef.current = [...futureRef.current, prev];
+        publishMeta(snapshot, pastRef.current.length, futureRef.current.length);
+        return snapshot;
+      });
+    };
+    const onRedo = () => {
+      setAnnotations((prev) => {
+        const future = futureRef.current;
+        if (future.length === 0) return prev;
+        const snapshot = future[future.length - 1];
+        futureRef.current = future.slice(0, -1);
+        pastRef.current = [...pastRef.current, prev];
+        publishMeta(snapshot, pastRef.current.length, futureRef.current.length);
+        return snapshot;
+      });
+    };
+    window.addEventListener("lifemark-preview-annotations-clear", onClear);
+    window.addEventListener("lifemark-preview-annotations-undo", onUndo);
+    window.addEventListener("lifemark-preview-annotations-redo", onRedo);
+    return () => {
+      window.removeEventListener("lifemark-preview-annotations-clear", onClear);
+      window.removeEventListener("lifemark-preview-annotations-undo", onUndo);
+      window.removeEventListener("lifemark-preview-annotations-redo", onRedo);
+    };
+  }, [commitAnnotations, publishMeta]);
 
   // Persist on change — local cache + server
   useEffect(() => {
@@ -131,17 +206,17 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
       createdAt: new Date().toISOString(),
       resolved: false,
     };
-    setAnnotations((prev) => [...prev, newAnnotation]);
+    commitAnnotations((prev) => [...prev, newAnnotation]);
     setDraft(null);
   }
 
   function deleteAnnotation(id: string) {
-    setAnnotations((prev) => prev.filter((a) => a.id !== id));
+    commitAnnotations((prev) => prev.filter((a) => a.id !== id));
     if (expandedId === id) setExpandedId(null);
   }
 
   function resolveAnnotation(id: string) {
-    setAnnotations((prev) => prev.map((a) => a.id === id ? { ...a, resolved: !a.resolved } : a));
+    commitAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, resolved: !a.resolved } : a)));
   }
 
   function startEdit(ann: Annotation) {
@@ -152,7 +227,10 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
 
   function commitEdit() {
     if (!editingId) return;
-    setAnnotations((prev) => prev.map((a) => a.id === editingId ? { ...a, text: editText.trim() || a.text } : a));
+    const id = editingId;
+    commitAnnotations((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, text: editText.trim() || a.text } : a)),
+    );
     setEditingId(null);
   }
 
@@ -200,7 +278,11 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
                   {COLORS.map((c) => (
                     <button
                       key={c.id}
-                      onClick={() => setAnnotations((prev) => prev.map((a) => a.id === ann.id ? { ...a, color: c.id } : a))}
+                      onClick={() =>
+                        commitAnnotations((prev) =>
+                          prev.map((a) => (a.id === ann.id ? { ...a, color: c.id } : a)),
+                        )
+                      }
                       className={`w-4 h-4 rounded-full border-2 transition-transform ${ann.color === c.id ? "scale-125 border-white" : "border-transparent"}`}
                       style={{ background: c.dot }}
                     />
@@ -340,7 +422,7 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
             <button
               type="button"
               onClick={sendOpenToChat}
-              className="flex items-center gap-1 text-[10px] font-medium text-violet-300 hover:text-violet-100 border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/20 px-2 py-0.5 rounded-full ml-1 transition-colors"
+              className="flex items-center gap-1 text-[10px] font-medium text-violet-700 dark:text-violet-300 hover:text-violet-100 border border-violet-500/30 bg-violet-500/10 hover:bg-violet-500/20 px-2 py-0.5 rounded-full ml-1 transition-colors"
             >
               <Wand2 className="w-3 h-3" />
               Fix with AI

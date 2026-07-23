@@ -66,7 +66,7 @@ export function LovableComposerAnalyzeModal({
                 in a sandbox, and returns the generated files (PDF, XLSX, charts, etc.).
               </p>
               {!analyzeEnabled && (
-                <p className="text-[11px] text-amber-300/90 mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2">
+                <p className="text-[11px] text-amber-700/90 dark:text-amber-300/90 mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2">
                   {analyzeUnavailableReason ??
                     "Data analysis is unavailable until an isolated sandbox is configured on this server."}
                 </p>

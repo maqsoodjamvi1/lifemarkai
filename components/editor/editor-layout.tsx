@@ -4,9 +4,10 @@ import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { countFindings, staticScan } from "@/lib/security/static-scan";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { useFaviconStatus } from "@/hooks/use-favicon-status";
 import dynamic from "next/dynamic";
 import { importWithRetry } from "@/lib/import-with-retry";
-import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
+import { PanelGroup, Panel, PanelResizeHandle, type ImperativePanelHandle } from "react-resizable-panels";
 import {
   ChevronDown, MessageSquare, Sparkles, Bot, FolderOpen, GitBranch,
   Brain, Database, FlaskConical, Rocket, BarChart2,
@@ -81,8 +82,19 @@ const ChatPanel = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex-1 flex items-center justify-center bg-background">
-        <div className="text-muted-foreground text-sm">Loading chat...</div>
+      // Lovable dump loading overlay: centered spinner, flex-col gap-2 text-sm bg-base-pulse
+      <div className="flex-1 flex flex-col items-center justify-center gap-2 text-sm bg-[var(--bg-base)] text-[var(--fg-tertiary)]">
+        <svg
+          className="size-5 animate-spin"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          aria-hidden
+        >
+          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+        </svg>
       </div>
     ),
   }
@@ -179,6 +191,48 @@ export function EditorLayout({
     })();
     return () => {
       cancelled = true;
+    };
+  }, [project.id]);
+
+  // Team / Intelligence file writes → refresh editor tree + preview.
+  useEffect(() => {
+    let timer: number | null = null;
+    const refetch = () => {
+      if (timer != null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        void (async () => {
+          try {
+            const res = await fetch(`/api/projects/${project.id}/files`, { cache: "no-store" });
+            if (!res.ok) return;
+            const payload = await res.json();
+            const next = (Array.isArray(payload) ? payload : payload.files) as ProjectFile[] | undefined;
+            if (!next || next.length === 0) return;
+            setFiles(next);
+            window.dispatchEvent(
+              new CustomEvent("lifemark-refresh-preview", {
+                detail: { files: next, reason: "intelligence-file-change" },
+              }),
+            );
+          } catch { /* keep current tree */ }
+        })();
+      }, 350);
+    };
+    const onFilesChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ projectId?: string }>).detail;
+      if (detail?.projectId && detail.projectId !== project.id) return;
+      refetch();
+    };
+    const onDone = (e: Event) => {
+      const detail = (e as CustomEvent<{ projectId?: string }>).detail;
+      if (detail?.projectId && detail.projectId !== project.id) return;
+      refetch();
+    };
+    window.addEventListener("lifemark-files-changed", onFilesChanged);
+    window.addEventListener("lifemark-intelligence-done", onDone);
+    return () => {
+      if (timer != null) window.clearTimeout(timer);
+      window.removeEventListener("lifemark-files-changed", onFilesChanged);
+      window.removeEventListener("lifemark-intelligence-done", onDone);
     };
   }, [project.id]);
 
@@ -327,6 +381,11 @@ export function EditorLayout({
   const [isVisualEditActive, setIsVisualEditActive] = useState(false);
   const [showFileTree, setShowFileTree] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
+  /** Lovable close-sidebar — hides chat column but keeps top nav */
+  const [chatSidebarCollapsed, setChatSidebarCollapsed] = useState(false);
+  /** Lovable dump: top-nav left cluster width syncs to chat panel % (~22.3). */
+  const [chatPanelSizePercent, setChatPanelSizePercent] = useState(22.3);
+  const chatPanelRef = useRef<ImperativePanelHandle>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewRuntimeErrors, setPreviewRuntimeErrors] = useState<PreviewRuntimeError[]>(EMPTY_PREVIEW_ERRORS);
 
@@ -352,6 +411,8 @@ export function EditorLayout({
   const [pendingFileRef, setPendingFileRef] = useState<import("@/types/database").ProjectFile | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatingFileCount, setGeneratingFileCount] = useState(0);
+  // Lovable parity: browser-tab favicon shows build status (amber → green flash).
+  useFaviconStatus(isGenerating);
   const [yjsCollaborators, setYjsCollaborators] = useState<import("@/hooks/use-yjs-editor").Collaborator[]>([]);
   const [lastSaved, setLastSaved] = useState<Date | null>(() => {
     // Seed from file mtimes so the Publish dirty-dot works across reloads
@@ -407,6 +468,43 @@ export function EditorLayout({
   const { isMobile } = useIsMobile();
   const [annotateOpen, setAnnotateOpen] = useState(false);
   const [annotateImage, setAnnotateImage] = useState<string | null>(null);
+
+  // Desktop: never boot with a collapsed/zero-width chat column.
+  useEffect(() => {
+    if (isMobile) return;
+    try {
+      const key = `react-resizable-panels:lifemark-editor-split-${project.id}`;
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          [group: string]: { layout?: number[] };
+        };
+        let dirty = false;
+        for (const group of Object.values(parsed)) {
+          const layout = group?.layout;
+          if (!Array.isArray(layout) || layout.length < 2) continue;
+          // Sidebar is the smaller chat column — if either slot is ~0, reset.
+          if (layout.some((n) => typeof n === "number" && n < 8)) {
+            dirty = true;
+            break;
+          }
+        }
+        if (dirty) localStorage.removeItem(key);
+      }
+    } catch { /* private mode */ }
+
+    const t = window.setTimeout(() => {
+      const panel = chatPanelRef.current;
+      if (panel?.isCollapsed?.()) {
+        panel.expand();
+        setChatSidebarCollapsed(false);
+      } else if (typeof panel?.getSize === "function" && panel.getSize() < 12) {
+        panel.resize?.(22.3);
+        setChatSidebarCollapsed(false);
+      }
+    }, 80);
+    return () => window.clearTimeout(t);
+  }, [isMobile, project.id]);
 
   const handleFixWithAI = useCallback((err: string) => {
     window.dispatchEvent(new CustomEvent("lifemark-preview-heal-start"));
@@ -687,7 +785,7 @@ export function EditorLayout({
         }
       });
     }
-    if (isMobile && updatedFiles.length > 0) setMobilePaneActive("preview");
+    // Keep chat visible on mobile after file sync — user can open Preview via bottom nav.
   }, [editorMode, handleFocusPreview, isMobile]);
 
   const handleFileCreate = useCallback((newFile: ProjectFile) => {
@@ -845,11 +943,11 @@ export function EditorLayout({
     setLeftPanel("chat");
   }, [pendingCrossRefPrompt]);
 
-  // Sync top-bar preview/code toggles with mobile bottom-nav panes
+  // Sync top-bar Files/Code with mobile panes. Do NOT force Preview on every
+  // mount — that hid the chat column (`mobilePaneActive` never stayed "left").
   useEffect(() => {
     if (!isMobile || rightPanel || leftChatOverlay) return;
     if (viewMode === "code" || viewMode === "files") setMobilePaneActive("files");
-    else setMobilePaneActive("preview");
   }, [isMobile, viewMode, rightPanel, leftChatOverlay]);
 
   const handleEnvUpdateFile = useCallback((path: string, content: string) => {
@@ -1039,6 +1137,7 @@ export function EditorLayout({
           profile={profile}
           lastSaved={lastSaved}
           onRename={(name) => handleProjectUpdate({ name })}
+          onProjectUpdate={handleProjectUpdate}
           onDuplicate={() => void handleDuplicateProject()}
           devMode={devMode}
           onDevModeToggle={handleDevModeToggle}
@@ -1052,11 +1151,28 @@ export function EditorLayout({
             setLeftChatOverlay((h) => (h === "history" ? null : "history"));
             setRightPanel(null);
           }}
+          chatCollapsed={chatSidebarCollapsed}
+          chatNavWidthPercent={chatSidebarCollapsed ? 0 : chatPanelSizePercent}
+          onToggleChatSidebar={() => {
+            const panel = chatPanelRef.current;
+            if (!panel) {
+              setChatSidebarCollapsed((v) => !v);
+              return;
+            }
+            if (panel.isCollapsed()) {
+              panel.expand();
+              setChatSidebarCollapsed(false);
+            } else {
+              panel.collapse();
+              setChatSidebarCollapsed(true);
+            }
+          }}
+          versionPreviewLabel={previewVersion?.label ?? null}
         />
       )}
       {!focusMode && <EditorPaymentBanner profile={profile} credits={uiCredits} />}
       {process.env.NODE_ENV === "development" && (
-        <div className="shrink-0 px-3 py-1.5 flex items-center justify-center gap-3 text-[11px] bg-amber-500/15 border-b border-amber-500/25 text-amber-300">
+        <div className="shrink-0 px-3 py-1.5 flex items-center justify-center gap-3 text-[11px] bg-amber-500/15 border-b border-amber-500/25 text-amber-800 dark:text-amber-300">
           {simulateZeroCredits ? (
             <span>Simulating 0 credits — preview/chat use zero-credit UX</span>
           ) : (
@@ -1065,14 +1181,14 @@ export function EditorLayout({
           <button
             type="button"
             onClick={grantDevCredits}
-            className="rounded px-2.5 py-0.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-200 font-medium transition-colors"
+            className="rounded px-2.5 py-0.5 bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-800 dark:text-emerald-200 font-medium transition-colors"
           >
             Grant 100 credits
           </button>
           <button
             type="button"
             onClick={toggleSimulateZeroCredits}
-            className="rounded px-2.5 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-200 font-medium transition-colors"
+            className="rounded px-2.5 py-0.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/30 text-amber-800 dark:text-amber-200 font-medium transition-colors"
           >
             {simulateZeroCredits ? "Exit simulation" : "Simulate 0 credits"}
           </button>
@@ -1136,6 +1252,7 @@ export function EditorLayout({
                           filesRef.current = snapshotFiles;
                           setActiveFile(snapshotFiles[0] ?? null);
                           setLeftChatOverlay(null);
+                          window.dispatchEvent(new CustomEvent("lifemark-preview-reverting"));
                           window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
                             detail: { files: snapshotFiles, reason: "history-restore" },
                           }));
@@ -1204,7 +1321,9 @@ export function EditorLayout({
                 badgeHidden={(project as { badge_hidden?: boolean }).badge_hidden ?? false}
                 projectId={project.id}
                 credits={uiCredits}
-                useWebContainers
+                useWebContainers={false}
+                isPublic={!!project.is_public}
+                onOpenPanel={handleOpenPanel}
                 onSendAnnotatedToChat={(prompt, img) => { setMobilePaneActive("left"); setLeftPanel("chat"); setPendingBuildFromFile({ prompt, imageBase64: img }); }}
               />
             </div>
@@ -1314,16 +1433,25 @@ export function EditorLayout({
       ) : (
       /* ── Desktop layout ──────────────────────────────────────────────────── */
       <div className="flex-1 overflow-hidden">
-        <PanelGroup direction="horizontal" autoSaveId={`lifemark-editor-split-${pid}`} className="h-full">
+        <PanelGroup direction="horizontal" autoSaveId={`lifemark-editor-split-v2-${pid}`} className="h-full">
           {/* Left Panel — Chat only (Lovable-style) */}
           <Panel
+            ref={chatPanelRef}
             defaultSize={28}
-            minSize={22}
+            minSize={14}
             maxSize={50}
-            id="leftpanel"
+            collapsedSize={0}
+            id="sidebar-panel"
             style={focusMode ? { display: "none" } : undefined}
+            collapsible
+            onCollapse={() => setChatSidebarCollapsed(true)}
+            onExpand={() => setChatSidebarCollapsed(false)}
+            onResize={(size) => setChatPanelSizePercent(size)}
           >
-            <div className="relative flex flex-col h-full border-r border-border bg-background">
+            <div
+              data-panel-id="sidebar-panel"
+              className="relative flex flex-col h-full border-r border-border bg-background"
+            >
               <ChatPanel
                 project={currentProject}
                 files={files}
@@ -1371,6 +1499,7 @@ export function EditorLayout({
                         filesRef.current = snapshotFiles;
                         setActiveFile(snapshotFiles[0] ?? null);
                         setLeftChatOverlay(null);
+                        window.dispatchEvent(new CustomEvent("lifemark-preview-reverting"));
                         window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
                           detail: { files: snapshotFiles, reason: "history-restore" },
                         }));
@@ -1411,8 +1540,8 @@ export function EditorLayout({
           <PanelResizeHandle className="w-px bg-border hover:bg-primary/50 transition-colors cursor-col-resize" />
 
           {/* Right panel — preview/code or secondary panel */}
-          <Panel defaultSize={72} minSize={30} id="rightpanel">
-            <div className="flex flex-col h-full relative">
+          <Panel defaultSize={77.7} minSize={30} id="preview-panel">
+            <div data-panel-id="preview-panel" className="flex flex-col h-full relative">
               {/* Secondary panel overlay — shown when a tool panel is active */}
               {rightPanel && (
                 <div className="absolute inset-0 z-10 flex flex-col bg-background border-l border-border">
@@ -1496,7 +1625,7 @@ export function EditorLayout({
                 <Panel
                   defaultSize={50}
                   minSize={20}
-                  id="previewpanel"
+                  id="preview-frame"
                   style={viewMode === "code" ? { display: "none" } : undefined}
                 >
                   <PreviewPanel
@@ -1517,7 +1646,9 @@ export function EditorLayout({
                     deployedUrl={currentProject.deployed_url ?? undefined}
                     badgeHidden={(currentProject as { badge_hidden?: boolean }).badge_hidden ?? false}
                     credits={uiCredits}
-                    useWebContainers
+                    useWebContainers={false}
+                    isPublic={!!currentProject.is_public}
+                    onOpenPanel={handleOpenPanel}
                     onSendAnnotatedToChat={(prompt, img) => {
                       setPendingBuildFromFile({ prompt, imageBase64: img });
                       setLeftPanel("chat");

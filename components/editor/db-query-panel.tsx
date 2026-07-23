@@ -252,7 +252,7 @@ export function DbQueryPanel({ projectId }: DbQueryPanelProps) {
                   <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
                   <span className="text-xs font-semibold text-red-400">Query Error</span>
                 </div>
-                <pre className="text-[10px] text-red-300 whitespace-pre-wrap font-mono">{result.error}</pre>
+                <pre className="text-[10px] text-red-700 dark:text-red-300 whitespace-pre-wrap font-mono">{result.error}</pre>
               </div>
             )}
 

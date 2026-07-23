@@ -36,7 +36,7 @@ export function LovableBranchChip({
       }
       className={cn(
         "inline-flex items-center gap-1 self-end text-[10px] px-1.5 py-0.5 rounded-full",
-        "border border-amber-500/30 bg-amber-500/10 text-amber-300/90",
+        "border border-amber-500/30 bg-amber-500/10 text-amber-700/90 dark:text-amber-300/90",
         snapshotId && onOpenSnapshot && "hover:bg-amber-500/20 cursor-pointer",
         !snapshotId && "cursor-default",
         className,

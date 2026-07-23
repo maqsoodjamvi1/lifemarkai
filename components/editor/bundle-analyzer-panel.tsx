@@ -291,8 +291,8 @@ export function BundleAnalyzerPanel({ files, onFixWithAI }: BundleAnalyzerPanelP
                   </div>
                   {pkg.isHeavy && pkg.alternative && (
                     <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-2 text-[10px]">
-                      <p className="font-medium text-amber-300 mb-0.5">💡 Alternative: {pkg.alternative}</p>
-                      <p className="text-amber-300/70">{pkg.alternativeNote}</p>
+                      <p className="font-medium text-amber-700 dark:text-amber-300 mb-0.5">💡 Alternative: {pkg.alternative}</p>
+                      <p className="text-amber-700/70 dark:text-amber-300/70">{pkg.alternativeNote}</p>
                     </div>
                   )}
                   <div className="flex gap-2">

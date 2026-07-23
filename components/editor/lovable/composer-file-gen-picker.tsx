@@ -25,6 +25,9 @@ interface LovableComposerFileGenPickerProps {
   busy: boolean;
   disabled: boolean;
   input: string;
+  /** When false, binary formats (pdf/xlsx/pptx) that need analyze sandbox are disabled. */
+  binaryEnabled?: boolean;
+  binaryDisabledReason?: string | null;
   onToggle: () => void;
   onGenerate: (format: LovableFileGenFormat) => void;
 }
@@ -35,6 +38,8 @@ export function LovableComposerFileGenPicker({
   busy,
   disabled,
   input,
+  binaryEnabled = true,
+  binaryDisabledReason = null,
   onToggle,
   onGenerate,
 }: LovableComposerFileGenPickerProps) {
@@ -55,22 +60,34 @@ export function LovableComposerFileGenPicker({
             <div className="px-3 py-1.5 border-b border-border">
               <span className="text-[10px] font-semibold text-muted-foreground">Generate prompt as file</span>
             </div>
-            {LOVABLE_FILE_GEN_FORMATS.map((fmt) => (
+            {LOVABLE_FILE_GEN_FORMATS.map((fmt) => {
+              const binaryBlocked = !!fmt.binary && !binaryEnabled;
+              return (
               <button
                 key={fmt.id}
+                disabled={binaryBlocked}
+                title={binaryBlocked ? (binaryDisabledReason ?? "Binary file generation needs an analyze sandbox") : undefined}
                 onMouseDown={(e) => {
                   e.preventDefault();
+                  if (binaryBlocked) return;
                   onGenerate(fmt.id);
                 }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-muted transition-colors"
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors ${
+                  binaryBlocked
+                    ? "opacity-40 cursor-not-allowed"
+                    : "hover:bg-muted"
+                }`}
               >
                 <span className="font-mono text-[10px] text-violet-400 w-9 shrink-0">.{fmt.id}</span>
                 <span className="text-muted-foreground flex-1">{fmt.label}</span>
                 {fmt.binary && (
-                  <span className="text-[9px] text-amber-400/80 shrink-0">sandbox</span>
+                  <span className={`text-[9px] shrink-0 ${binaryBlocked ? "text-muted-foreground" : "text-amber-400/80"}`}>
+                    {binaryBlocked ? "unavailable" : "sandbox"}
+                  </span>
                 )}
               </button>
-            ))}
+              );
+            })}
           </motion.div>
         )}
       </AnimatePresence>
@@ -80,9 +97,9 @@ export function LovableComposerFileGenPicker({
         disabled={disabled}
         className={`flex items-center justify-center w-7 h-7 rounded-lg border transition-colors ${
           open || busy
-            ? "border-violet-500/50 bg-violet-500/15 text-violet-300"
+            ? "border-violet-500/50 bg-violet-500/15 text-violet-700 dark:text-violet-300"
             : promptLooksLikeFile
-              ? "border-violet-500/40 text-violet-300 hover:bg-violet-500/10"
+              ? "border-violet-500/40 text-violet-700 dark:text-violet-300 hover:bg-violet-500/10"
               : "border-border/70 text-muted-foreground hover:text-foreground hover:bg-muted/60"
         } disabled:opacity-40 disabled:cursor-not-allowed`}
         title="Generate as file — .md/.csv/.json/.txt/.html or binary .pdf/.xlsx/.pptx via analyze sandbox (1 credit)"

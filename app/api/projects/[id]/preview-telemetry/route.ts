@@ -6,6 +6,8 @@ import {
   appendPreviewConsole,
   appendPreviewNetwork,
   getPreviewTelemetry,
+  loadPreviewTelemetryFromDb,
+  persistPreviewTelemetry,
 } from "@/lib/preview/preview-telemetry";
 
 /** GET — agent / debug read of buffered preview console + network. */
@@ -23,6 +25,7 @@ export async function GET(
   const access = await assertChatAccess(supabase, id, user.id, "read");
   if ("error" in access) return access.error;
 
+  await loadPreviewTelemetryFromDb(supabase, id).catch(() => {});
   return NextResponse.json(getPreviewTelemetry(id));
 }
 
@@ -59,12 +62,17 @@ export async function POST(
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
+  await loadPreviewTelemetryFromDb(supabase, id).catch(() => {});
+
   if (Array.isArray(body.console) && body.console.length > 0) {
     appendPreviewConsole(id, body.console.slice(-40));
   }
   if (Array.isArray(body.network) && body.network.length > 0) {
     appendPreviewNetwork(id, body.network.slice(-40));
   }
+
+  // Durable write — fire-and-forget so the preview UI stays snappy.
+  void persistPreviewTelemetry(supabase, id).catch(() => {});
 
   return NextResponse.json({ ok: true });
 }

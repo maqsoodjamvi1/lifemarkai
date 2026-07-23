@@ -397,6 +397,48 @@ export function buildUserDirective(intent: BuildIntent): string {
   ].join("\n");
 }
 
+/**
+ * Lovable-agent behavior: detect prompts that are QUESTIONS/investigations,
+ * not change requests — in Build mode these should be ANSWERED (chat), never
+ * trigger a regeneration. Conservative on purpose: any action verb wins.
+ */
+export function isInformationalQuery(prompt: string): boolean {
+  const p = prompt.trim();
+  if (!p) return false;
+  const ACTION =
+    /\b(add|create|build|make|fix|change|update|implement|remove|delete|refactor|redesign|improve|convert|rename|install|integrate|deploy|publish|generate|write|set ?up|enable|disable|replace|move|adjust|increase|decrease|restyle|style|translate|optimi[sz]e|clean ?up|revert|undo|apply|swap|hide|show more|redo|rewrite|migrate|connect|configure)\b/i;
+  if (ACTION.test(p)) return false;
+  const INTERROGATIVE =
+    /^(why|what|how|where|when|which|who|does|do|did|is|are|was|were|can|could|will|would|should|explain|describe|tell me|show me|walk me|summari[sz]e|list|compare|review|analy[sz]e|audit|investigate|check|inspect)\b/i;
+  return INTERROGATIVE.test(p) || /\?\s*$/.test(p);
+}
+
+/**
+ * Lovable-agent behavior: micro-edits get SURGICAL patches, not rebuilds.
+ * Detects small text/copy/color tweaks that patch mode handles reliably —
+ * a 5-minute full regeneration for "change the title to X" is the #1 speed
+ * complaint. VERY narrow on purpose: anything structural stays in build.
+ */
+export function isSmallSurgicalEdit(prompt: string): boolean {
+  const p = prompt.trim();
+  if (!p || p.length > 220) return false;
+  // Structural / additive work stays in build mode (incl. menu/nav edits,
+  // which have their own dedicated machinery in the build path).
+  if (
+    /\b(page|section|layout|redesign|restyle|rebuild|component|feature|module|screen|route|database|table|api|integration|form|animation|responsive|dark mode|theme|navbar|nav ?bar|header|footer|menu|add|create|new|remove|delete|implement|refactor|build|redo|rewrite)\b/i.test(p)
+  ) {
+    return false;
+  }
+  const SMALL_VERB = /\b(change|rename|replace|update|edit|correct|set|make)\b/i;
+  if (!SMALL_VERB.test(p)) return false;
+  const TEXT_TARGET =
+    /\b(text|title|heading|headline|label|copy|wording|word|typo|spelling|phone|email|address|price|number|name|tagline|slogan|caption|cta|button text|link text)\b/i;
+  const hasQuoted = /["'“”‘’][^"'“”‘’]{2,60}["'“”‘’]/.test(p);
+  const COLOR_TWEAK =
+    /\bcolou?r\b|\bto\s+(red|blue|green|black|white|purple|violet|orange|pink|teal|gray|grey|gold|navy|#[0-9a-fA-F]{3,8})\b/i;
+  return (TEXT_TARGET.test(p) && (hasQuoted || p.length < 120)) || (hasQuoted && p.length < 160) || COLOR_TWEAK.test(p);
+}
+
 /** Detect prompts that should run in build mode even if chat is selected. */
 export function shouldAutoBuildMode(prompt: string): boolean {
   return /\b(create|build|make|design|develop|rebrand|change)\b/i.test(prompt) &&

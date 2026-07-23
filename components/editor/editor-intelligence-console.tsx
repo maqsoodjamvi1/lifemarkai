@@ -37,17 +37,17 @@ import type {
 /* ── Role metadata (mirrors lib/ai/editor-lenses/roles.ts titles) ─────────── */
 
 export const ROLE_META: Record<AgentRoleId, { title: string; accent: string }> = {
-  pm:        { title: "Product Manager",     accent: "border-sky-500/25 bg-sky-500/10 text-sky-300" },
-  ba:        { title: "Business Analyst",    accent: "border-blue-500/25 bg-blue-500/10 text-blue-300" },
-  architect: { title: "Technical Architect", accent: "border-violet-500/25 bg-violet-500/10 text-violet-300" },
-  designer:  { title: "UI Designer",         accent: "border-pink-500/25 bg-pink-500/10 text-pink-300" },
-  frontend:  { title: "Frontend Engineer",   accent: "border-cyan-500/25 bg-cyan-500/10 text-cyan-300" },
-  backend:   { title: "Backend Engineer",    accent: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" },
-  database:  { title: "Database Engineer",   accent: "border-amber-500/25 bg-amber-500/10 text-amber-300" },
-  devops:    { title: "DevOps Engineer",     accent: "border-orange-500/25 bg-orange-500/10 text-orange-300" },
-  qa:        { title: "QA Engineer",         accent: "border-lime-500/25 bg-lime-500/10 text-lime-300" },
-  security:  { title: "Security Engineer",   accent: "border-red-500/25 bg-red-500/10 text-red-300" },
-  cto:       { title: "AI CTO",              accent: "border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-300" },
+  pm:        { title: "Product Manager",     accent: "border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300" },
+  ba:        { title: "Business Analyst",    accent: "border-blue-500/25 bg-blue-500/10 text-blue-700 dark:text-blue-300" },
+  architect: { title: "Technical Architect", accent: "border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300" },
+  designer:  { title: "UI Designer",         accent: "border-pink-500/25 bg-pink-500/10 text-pink-700 dark:text-pink-300" },
+  frontend:  { title: "Frontend Engineer",   accent: "border-cyan-500/25 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300" },
+  backend:   { title: "Backend Engineer",    accent: "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
+  database:  { title: "Database Engineer",   accent: "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300" },
+  devops:    { title: "DevOps Engineer",     accent: "border-orange-500/25 bg-orange-500/10 text-orange-700 dark:text-orange-300" },
+  qa:        { title: "QA Engineer",         accent: "border-lime-500/25 bg-lime-500/10 text-lime-700 dark:text-lime-300" },
+  security:  { title: "Security Engineer",   accent: "border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300" },
+  cto:       { title: "AI CTO",              accent: "border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300" },
 };
 
 export const CONSOLE_ROLE_IDS = Object.keys(ROLE_META) as AgentRoleId[];
@@ -279,11 +279,11 @@ export function TeamGrid({ state }: { state: ConsoleState }) {
 
 const TASK_STATUS_BADGE: Record<TaskStatus, string> = {
   pending: "bg-muted text-muted-foreground",
-  ready: "bg-sky-500/15 text-sky-300",
-  in_progress: "bg-violet-500/15 text-violet-300",
-  blocked: "bg-amber-500/15 text-amber-300",
-  done: "bg-emerald-500/15 text-emerald-300",
-  failed: "bg-red-500/15 text-red-300",
+  ready: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
+  in_progress: "bg-violet-500/15 text-violet-700 dark:text-violet-300",
+  blocked: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
+  done: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
+  failed: "bg-red-500/15 text-red-700 dark:text-red-300",
   skipped: "bg-muted text-muted-foreground/60",
 };
 
@@ -298,7 +298,7 @@ export function PlanTree({ state }: { state: ConsoleState }) {
   return (
     <div className="space-y-3">
       {state.currentWave !== null && (
-        <div className="flex items-center gap-2 text-[11px] text-violet-300">
+        <div className="flex items-center gap-2 text-[11px] text-violet-700 dark:text-violet-300">
           <Loader2 className={`h-3 w-3 ${state.done || state.error ? "" : "animate-spin"}`} />
           Wave {state.currentWave} {state.done ? "(finished)" : state.error ? "(stopped)" : "in progress"}
         </div>
@@ -316,7 +316,7 @@ export function PlanTree({ state }: { state: ConsoleState }) {
                     <p className="truncate text-xs text-foreground">{task.title}</p>
                     <p className="mt-0.5 text-[10px] text-muted-foreground">
                       {roleTitle(task.role)}
-                      {wave !== undefined && <span className="ml-1.5 text-violet-300/80">· wave {wave}</span>}
+                      {wave !== undefined && <span className="ml-1.5 text-violet-700/80 dark:text-violet-300/80">· wave {wave}</span>}
                     </p>
                   </div>
                   <span className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] ${TASK_STATUS_BADGE[status] ?? TASK_STATUS_BADGE.pending}`}>
@@ -381,7 +381,7 @@ export function DebateFeed({ state }: { state: ConsoleState }) {
       {threads.map((thread) => (
         <div key={thread.key} className="rounded-lg border border-border bg-muted/20">
           <div className="flex items-center gap-1.5 border-b border-border px-3 py-1.5 text-[11px] font-semibold">
-            {thread.isDebate && <Gavel className="h-3 w-3 text-amber-300" />}
+            {thread.isDebate && <Gavel className="h-3 w-3 text-amber-700 dark:text-amber-300" />}
             <span className="truncate">{thread.label}</span>
           </div>
           <div className="space-y-2 p-2.5">
@@ -396,7 +396,7 @@ export function DebateFeed({ state }: { state: ConsoleState }) {
               if (item.kind === "decision") {
                 return (
                   <div key={item.seq} className="rounded-md border border-amber-500/25 bg-amber-500/10 p-2.5">
-                    <div className="flex items-center gap-1.5 text-[11px] font-medium text-amber-300">
+                    <div className="flex items-center gap-1.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
                       <Gavel className="h-3 w-3" />
                       Decision · by {roleTitle(item.decidedBy)}
                     </div>
@@ -411,7 +411,7 @@ export function DebateFeed({ state }: { state: ConsoleState }) {
               }
               return (
                 <div key={item.seq} className="rounded-md border border-border bg-background/40 p-2.5">
-                  <div className="text-[11px] font-medium text-violet-300">
+                  <div className="text-[11px] font-medium text-violet-700 dark:text-violet-300">
                     {roleTitle(item.from)}
                     {item.to && <span className="text-muted-foreground"> → {roleTitle(item.to)}</span>}
                   </div>
@@ -449,7 +449,7 @@ export function GateApprovalCard({
 }) {
   return (
     <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
-      <div className="flex items-center gap-2 text-xs font-semibold text-amber-300">
+      <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 dark:text-amber-300">
         <ShieldQuestion className="h-3.5 w-3.5" />
         Approval needed — {gate.kind}
       </div>
@@ -476,7 +476,7 @@ export function RunFooter({ state, building }: { state: ConsoleState; building: 
   return (
     <div className="space-y-1.5">
       {state.error && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/10 p-2 text-[11px] text-red-300">
+        <div className="flex items-start gap-2 rounded-lg border border-red-500/25 bg-red-500/10 p-2 text-[11px] text-red-700 dark:text-red-300">
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
           <span className="leading-relaxed">{state.error}</span>
         </div>

@@ -151,7 +151,7 @@ function ProblemRow({
             title="Explain with AI"
             className={`flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
               open
-                ? "bg-violet-500/20 text-violet-300"
+                ? "bg-violet-500/20 text-violet-700 dark:text-violet-300"
                 : "text-muted-foreground hover:text-violet-300 hover:bg-violet-500/10"
             }`}
           >

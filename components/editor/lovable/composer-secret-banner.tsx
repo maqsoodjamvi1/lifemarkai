@@ -30,8 +30,8 @@ export function LovableComposerSecretBanner({
           exit={{ opacity: 0, y: 4 }}
           className={`mx-3 mt-2 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${
             state.ok
-              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-              : "border-amber-500/30 bg-amber-500/10 text-amber-200"
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200"
+              : "border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-200"
           }`}
         >
           <KeyRound className="w-3.5 h-3.5 shrink-0 mt-0.5" />

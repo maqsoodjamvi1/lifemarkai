@@ -47,10 +47,11 @@ export async function POST(req: NextRequest, { params }: Params) {
   const prev = (meta.monitoring ?? {}) as Record<string, unknown>;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const nextMonitoring = { ...prev, enabled, cadence: safeCadence };
   await (supabase as any)
     .from("projects")
-    .update({ metadata: { ...meta, monitoring: { ...prev, enabled, cadence: safeCadence } } })
+    .update({ metadata: { ...meta, monitoring: nextMonitoring } })
     .eq("id", projectId);
 
-  return NextResponse.json({ ok: true, monitoring: { enabled, cadence: safeCadence } });
+  return NextResponse.json({ ok: true, monitoring: nextMonitoring });
 }

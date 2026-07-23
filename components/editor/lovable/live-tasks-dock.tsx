@@ -68,14 +68,15 @@ export function LovableLiveTasksDock() {
                     key={step.key + i}
                     type="button"
                     onClick={() => {
-                      const m = step.label.match(/(?:Editing|Reading|Checking|Removing)\s+(\S+)/);
-                      if (m?.[1]) {
-                        window.dispatchEvent(
-                          new CustomEvent("lifemark-open-file-at-line", {
-                            detail: { path: m[1], line: 1 },
-                          }),
-                        );
-                      }
+                      const path =
+                        step.path ||
+                        step.label.match(/(?:Editing|Reading|Checking|Removing)\s+(\S+)/)?.[1];
+                      if (!path) return;
+                      window.dispatchEvent(
+                        new CustomEvent("lifemark-open-file-at-line", {
+                          detail: { path, line: 1 },
+                        }),
+                      );
                     }}
                     className="w-full flex items-center gap-2 px-1.5 py-1 rounded-lg text-xs text-left hover:bg-[var(--glow-neutral-hover)] transition-colors"
                   >

@@ -1,12 +1,16 @@
 "use client";
 
-import { Brain, Sparkles, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight, ChevronsDownUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 export interface ClarifyQuestion {
   id: string;
   question: string;
   type: "text" | "choice";
+  /** Semantic kind — drives visual option rendering (Lovable parity). */
+  kind?: "palette" | "typography" | "layout" | "structure" | "database" | "general";
   options?: string[];
   answer: string;
 }
@@ -24,7 +28,42 @@ interface LovableClarifySessionCardProps {
   onSkipAndBuild: (originalPrompt: string) => void;
 }
 
-/** Lovable-parity pre-build clarify questionnaire above the composer. */
+/** Pull hex swatches out of option labels like "Cherry Blossom (#F8C8DC, #B03052)". */
+function parseSwatches(option: string): { label: string; hexes: string[] } {
+  const hexes = option.match(/#[0-9a-fA-F]{3,8}\b/g) ?? [];
+  const label = option.replace(/\s*\(([^)]*#[^)]*)\)\s*/g, "").trim();
+  return { label, hexes: hexes.slice(0, 4) };
+}
+
+/** Grey-block skeleton thumbnails for layout options (Lovable-style). */
+const LAYOUT_SKELETONS: Array<Array<{ x: number; y: number; w: number; h: number }>> = [
+  // Hero left + sidebar
+  [{ x: 8, y: 6, w: 44, h: 22 }, { x: 56, y: 6, w: 22, h: 10 }, { x: 56, y: 18, w: 22, h: 10 }, { x: 8, y: 31, w: 14, h: 9 }, { x: 25, y: 31, w: 14, h: 9 }, { x: 42, y: 31, w: 14, h: 9 }],
+  // Full-width banner + 3 columns
+  [{ x: 8, y: 6, w: 70, h: 14 }, { x: 8, y: 24, w: 21, h: 16 }, { x: 32, y: 24, w: 21, h: 16 }, { x: 56, y: 24, w: 22, h: 16 }],
+  // Magazine: stacked rows + rail
+  [{ x: 8, y: 6, w: 30, h: 12 }, { x: 41, y: 6, w: 18, h: 8 }, { x: 41, y: 16, w: 18, h: 8 }, { x: 8, y: 21, w: 30, h: 8 }, { x: 8, y: 32, w: 22, h: 8 }, { x: 33, y: 32, w: 26, h: 8 }],
+  // Split rows
+  [{ x: 8, y: 6, w: 34, h: 10 }, { x: 45, y: 6, w: 33, h: 10 }, { x: 8, y: 19, w: 70, h: 8 }, { x: 8, y: 30, w: 20, h: 9 }, { x: 31, y: 30, w: 47, h: 9 }],
+];
+
+function LayoutThumb({ index }: { index: number }) {
+  const blocks = LAYOUT_SKELETONS[index % LAYOUT_SKELETONS.length];
+  return (
+    <svg viewBox="0 0 86 46" className="w-full h-auto" aria-hidden>
+      {blocks.map((b, i) => (
+        <rect key={i} x={b.x} y={b.y} width={b.w} height={b.h} rx="2"
+          className={i === 0 ? "fill-neutral-400/70" : "fill-neutral-300/70"} />
+      ))}
+    </svg>
+  );
+}
+
+/**
+ * Lovable-parity clarify wizard: ONE question per step with visual options
+ * (layout thumbnails, palette swatches), ‹ › navigation, "Write your own…",
+ * Skip all, and a final Review-answers step before submitting.
+ */
 export function LovableClarifySessionCard({
   session,
   onDismiss,
@@ -32,78 +71,148 @@ export function LovableClarifySessionCard({
   onBuildNow,
   onSkipAndBuild,
 }: LovableClarifySessionCardProps) {
+  const total = session.questions.length;
+  const [step, setStep] = useState(0); // total === review step
+  const reviewing = step >= total;
+  const q = reviewing ? null : session.questions[step];
+
+  const isCustomAnswer = useMemo(
+    () => !!q && q.answer.trim() !== "" && !(q.options ?? []).some((o) => o === q.answer || parseSwatches(o).label === q.answer),
+    [q],
+  );
+
+  const submit = () => {
+    const answersBlock = session.questions
+      .filter((x) => x.answer.trim())
+      .map((x) => `- ${x.question}: ${x.answer}`)
+      .join("\n");
+    onBuildNow(
+      answersBlock
+        ? `${session.originalPrompt}\n\nDesign & requirements decisions (apply throughout the build):\n${answersBlock}`
+        : session.originalPrompt,
+    );
+  };
+
   return (
-    <div className="mx-3 mb-2 rounded-[var(--radius-3)] border border-violet-500/30 bg-violet-500/5 overflow-hidden">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-violet-500/20">
-        <Brain className="w-3.5 h-3.5 text-violet-400" />
-        <span className="text-xs font-medium text-violet-300">A few quick questions before building</span>
+    <div
+      data-card-focusable
+      tabIndex={0}
+      className="mx-3 mb-2 max-w-md rounded-2xl border border-border bg-background shadow-surface-md overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-[#0066FF]/30"
+    >
+      {/* Header — the question itself, Lovable-style */}
+      <div className="flex items-center gap-2 px-4 pt-3.5 pb-3 border-b border-border/60">
+        <span className="text-sm font-medium text-foreground">
+          {reviewing ? "Review answers" : q?.question}
+        </span>
         <button
           type="button"
           onClick={onDismiss}
+          aria-label="Collapse questions"
           className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
         >
-          <X className="w-3 h-3" />
+          <ChevronsDownUp className="w-3.5 h-3.5" />
         </button>
       </div>
-      <div className="p-3 space-y-3">
-        {session.questions.map((q, qi) => (
-          <div key={q.id} className="space-y-1.5">
-            <label className="text-[11px] font-medium text-foreground/80">
-              {qi + 1}. {q.question}
-            </label>
-            {q.type === "choice" && q.options ? (
-              <div className="flex flex-wrap gap-1.5">
-                {q.options.map((opt) => (
+
+      {/* Body */}
+      {reviewing ? (
+        <div className="px-4 py-3 space-y-3">
+          {session.questions.map((x) => (
+            <div key={x.id} className="space-y-0.5">
+              <p className="text-xs text-muted-foreground">{x.question}</p>
+              <p className="text-[13px] font-semibold text-foreground flex items-center gap-1.5">
+                <span className="w-1 h-1 rounded-full bg-foreground/70 inline-block" />
+                {x.answer.trim() ? parseSwatches(x.answer).label || x.answer : "Skipped"}
+              </p>
+            </div>
+          ))}
+        </div>
+      ) : q ? (
+        <div className="px-4 py-3 space-y-3">
+          {q.type === "choice" && (q.options?.length ?? 0) > 0 && (
+            <div className={cn("grid gap-2", q.kind === "layout" ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-2")}>
+              {(q.options ?? []).map((opt, oi) => {
+                const { label, hexes } = parseSwatches(opt);
+                const selected = q.answer === opt || q.answer === label;
+                return (
                   <button
                     key={opt}
                     type="button"
-                    onClick={() => onUpdateQuestion(q.id, opt)}
-                    className={`text-[10px] px-2 py-1 rounded-full border transition-colors ${
-                      q.answer === opt
-                        ? "border-violet-500 bg-violet-500/20 text-violet-300"
-                        : "border-border text-muted-foreground hover:border-violet-500/50 hover:text-foreground"
-                    }`}
+                    onClick={() => onUpdateQuestion(q.id, label)}
+                    className={cn(
+                      "rounded-xl border text-left transition-all",
+                      q.kind === "layout" ? "p-2 bg-muted/40" : "px-3 py-2.5 bg-muted/30",
+                      selected
+                        ? "border-foreground ring-1 ring-foreground"
+                        : "border-border hover:border-foreground/40",
+                    )}
                   >
-                    {opt}
+                    {q.kind === "layout" && <LayoutThumb index={oi} />}
+                    <span className={cn("flex items-center gap-2", q.kind === "layout" && "mt-1.5")}>
+                      {hexes.length > 0 && (
+                        <span className="flex -space-x-1">
+                          {hexes.map((h) => (
+                            <span key={h} className="w-3.5 h-3.5 rounded-full ring-1 ring-black/10" style={{ backgroundColor: h }} />
+                          ))}
+                        </span>
+                      )}
+                      <span className="text-xs font-medium text-foreground">{label}</span>
+                    </span>
                   </button>
-                ))}
-              </div>
-            ) : (
-              <input
-                type="text"
-                value={q.answer}
-                onChange={(e) => onUpdateQuestion(q.id, e.target.value)}
-                placeholder="Your answer…"
-                className="w-full text-xs bg-background border border-border rounded-md px-2.5 py-1.5 text-foreground placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-violet-500/50"
-              />
-            )}
-          </div>
-        ))}
-        <div className="flex gap-2 pt-1">
-          <Button
-            size="sm"
-            onClick={() => {
-              const answersBlock = session.questions
-                .filter((q) => q.answer.trim())
-                .map((q) => `- ${q.question}: ${q.answer}`)
-                .join("\n");
-              const enrichedPrompt = answersBlock
-                ? `${session.originalPrompt}\n\nAdditional context:\n${answersBlock}`
-                : session.originalPrompt;
-              onBuildNow(enrichedPrompt);
-            }}
-            className="h-7 text-xs gap-1.5 bg-violet-600 hover:bg-violet-500 text-white"
-          >
-            <Sparkles className="w-3 h-3" />
-            Build now
-          </Button>
+                );
+              })}
+            </div>
+          )}
+          <input
+            type="text"
+            value={isCustomAnswer || q.type === "text" ? q.answer : ""}
+            onChange={(e) => onUpdateQuestion(q.id, e.target.value)}
+            placeholder="Write your own…"
+            className="w-full text-xs bg-background border border-border rounded-lg px-3 py-2 text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-[#0066FF]/50"
+          />
+        </div>
+      ) : null}
+
+      {/* Footer — ‹ › nav, Skip all, Review/Submit */}
+      <div className="flex items-center gap-1 px-3 py-2.5 border-t border-border/60">
+        <button
+          type="button"
+          disabled={step === 0}
+          onClick={() => setStep((s) => Math.max(0, s - 1))}
+          aria-label="Previous question"
+          className="w-7 h-7 rounded-full flex items-center justify-center text-foreground/70 hover:bg-muted disabled:opacity-30"
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        <button
+          type="button"
+          disabled={reviewing}
+          onClick={() => setStep((s) => Math.min(total, s + 1))}
+          aria-label="Next question"
+          className="w-7 h-7 rounded-full flex items-center justify-center text-foreground/70 hover:bg-muted disabled:opacity-30"
+        >
+          <ChevronRight className="w-4 h-4" />
+        </button>
+        {!reviewing && total > 1 && (
+          <span className="ml-1 text-[10px] text-muted-foreground tabular-nums">
+            {step + 1}/{total}
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-2">
           <Button
             size="sm"
             variant="ghost"
             onClick={() => onSkipAndBuild(session.originalPrompt)}
-            className="h-7 text-xs text-muted-foreground"
+            className="h-7 text-xs text-foreground/70 hover:text-foreground"
           >
-            Skip & build
+            Skip all
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => (reviewing ? submit() : setStep((s) => Math.min(total, s + 1)))}
+            className="h-7 px-3.5 text-xs font-semibold rounded-full bg-[#0066FF] hover:bg-[#0052cc] text-white"
+          >
+            {reviewing ? "Submit" : step === total - 1 ? "Review" : "Next"}
           </Button>
         </div>
       </div>

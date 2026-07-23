@@ -48,22 +48,22 @@ const STARTER_SNIPPETS: Omit<Snippet, "id" | "user_id" | "created_at"> [] = [
 // ─── Tag colours ─────────────────────────────────────────────────────────────
 
 const TAG_COLORS: Record<string, string> = {
-  ui: "bg-blue-500/20 text-blue-300",
-  payments: "bg-emerald-500/20 text-emerald-300",
-  auth: "bg-purple-500/20 text-purple-300",
-  supabase: "bg-green-500/20 text-green-300",
-  data: "bg-amber-500/20 text-amber-300",
-  forms: "bg-orange-500/20 text-orange-300",
-  mobile: "bg-pink-500/20 text-pink-300",
-  loading: "bg-slate-500/20 text-slate-300",
-  theme: "bg-indigo-500/20 text-indigo-300",
-  notifications: "bg-red-500/20 text-red-300",
-  responsive: "bg-teal-500/20 text-teal-300",
-  validation: "bg-yellow-500/20 text-yellow-300",
+  ui: "bg-blue-500/20 text-blue-700 dark:text-blue-300",
+  payments: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+  auth: "bg-purple-500/20 text-purple-700 dark:text-purple-300",
+  supabase: "bg-green-500/20 text-green-700 dark:text-green-300",
+  data: "bg-amber-500/20 text-amber-700 dark:text-amber-300",
+  forms: "bg-orange-500/20 text-orange-700 dark:text-orange-300",
+  mobile: "bg-pink-500/20 text-pink-700 dark:text-pink-300",
+  loading: "bg-slate-500/20 text-slate-700 dark:text-slate-300",
+  theme: "bg-indigo-500/20 text-indigo-700 dark:text-indigo-300",
+  notifications: "bg-red-500/20 text-red-700 dark:text-red-300",
+  responsive: "bg-teal-500/20 text-teal-700 dark:text-teal-300",
+  validation: "bg-yellow-500/20 text-yellow-700 dark:text-yellow-300",
 };
 
 function tagColor(tag: string) {
-  return TAG_COLORS[tag] ?? "bg-white/10 text-slate-300";
+  return TAG_COLORS[tag] ?? "bg-white/10 text-slate-700 dark:text-slate-300";
 }
 
 // ─── Snippet Card ─────────────────────────────────────────────────────────────
@@ -187,7 +187,7 @@ function SnippetForm({
       animate={{ opacity: 1, y: 0 }}
       className="p-4 rounded-xl border border-blue-500/20 bg-blue-500/[0.05] space-y-3"
     >
-      <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
+      <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase tracking-wider">
         {initial?.id ? "Edit snippet" : "New snippet"}
       </p>
 
@@ -219,7 +219,7 @@ function SnippetForm({
         <div className="flex items-center gap-2">
           <Switch checked={isPublic} onCheckedChange={setIsPublic} />
           <div>
-            <p className="text-xs font-medium text-slate-300">Share publicly</p>
+            <p className="text-xs font-medium text-slate-700 dark:text-slate-300">Share publicly</p>
             <p className="text-[10px] text-slate-500">Visible to all LifemarkAI users</p>
           </div>
         </div>
@@ -331,7 +331,7 @@ export function SnippetPicker({ currentUserId, onInsert, onClose }: SnippetPicke
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-white/[0.06]">
         <div className="flex items-center gap-2">
           <BookMarked className="w-3.5 h-3.5 text-blue-400" />
-          <span className="text-xs font-semibold text-slate-300">Prompt Library</span>
+          <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Prompt Library</span>
         </div>
         <div className="flex items-center gap-1">
           <button
@@ -357,7 +357,7 @@ export function SnippetPicker({ currentUserId, onInsert, onClose }: SnippetPicke
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 placeholder="Search snippets…"
-                className="w-full pl-7 pr-3 h-7 text-xs bg-white/[0.04] border border-white/[0.08] rounded-lg text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-blue-500/40"
+                className="w-full pl-7 pr-3 h-7 text-xs bg-white/[0.04] border border-white/[0.08] rounded-lg text-slate-800 dark:text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-blue-500/40"
               />
             </div>
             <div className="flex rounded-lg border border-white/[0.06] overflow-hidden text-[10px]">
@@ -410,7 +410,7 @@ export function SnippetPicker({ currentUserId, onInsert, onClose }: SnippetPicke
                   className="p-2.5 rounded-lg border border-white/[0.05] bg-white/[0.02] hover:bg-white/[0.05] cursor-pointer transition-all group"
                 >
                   <div className="flex items-center justify-between">
-                    <p className="text-xs font-medium text-slate-200 group-hover:text-white">{s.title}</p>
+                    <p className="text-xs font-medium text-slate-800 dark:text-slate-200 group-hover:text-white">{s.title}</p>
                     <div className="flex gap-1">
                       {s.tags.slice(0, 2).map((t) => (
                         <span key={t} className={`text-[9px] px-1.5 py-0.5 rounded-full font-medium ${tagColor(t)}`}>{t}</span>

@@ -7,13 +7,22 @@ export interface AgentTaskStep {
   kind: AgentStepKind;
   /** Dedupe key — repeated ops on the same target collapse into one row. */
   key: string;
+  /** Full project path when the step targets a file (for Live Tasks → open). */
+  path?: string;
+}
+
+/** Pull a full project path out of a step's args or content. */
+export function agentStepPath(step: AgentStep): string | undefined {
+  const fromArgs = (step.args?.path ?? step.args?.file ?? step.args?.filename) as string | undefined;
+  const raw = fromArgs ?? step.content?.match(/"(?:path|file|filename)"\s*:\s*"([^"]+)"/)?.[1];
+  if (!raw) return undefined;
+  return raw.replace(/\\/g, "/").replace(/^\/+/, "");
 }
 
 /** Pull a clean file name (basename) out of a step's args or content. */
 export function agentStepFile(step: AgentStep): string | undefined {
-  const fromArgs = (step.args?.path ?? step.args?.file ?? step.args?.filename) as string | undefined;
-  const raw = fromArgs ?? step.content?.match(/"(?:path|file|filename)"\s*:\s*"([^"]+)"/)?.[1];
-  return raw ? (raw.split("/").pop() || raw) : undefined;
+  const path = agentStepPath(step);
+  return path ? (path.split("/").pop() || path) : undefined;
 }
 
 /**
@@ -28,17 +37,36 @@ export function agentStepToTaskStep(step: AgentStep): AgentTaskStep | null {
   }
 
   const tool = step.tool ?? "";
-  const file = agentStepFile(step);
-  const fk = file ?? "";
+  const path = agentStepPath(step);
+  const file = path ? (path.split("/").pop() || path) : undefined;
+  const fk = path ?? file ?? "";
 
   switch (tool) {
     case "write_file":
     case "edit_file":
-      return { label: file ? `Editing ${file}` : "Editing files", status: "running", kind: "edit", key: `edit:${fk}` };
+      return {
+        label: file ? `Editing ${file}` : "Editing files",
+        status: "running",
+        kind: "edit",
+        key: `edit:${fk}`,
+        path,
+      };
     case "delete_file":
-      return { label: file ? `Removing ${file}` : "Removing files", status: "running", kind: "delete", key: `del:${fk}` };
+      return {
+        label: file ? `Removing ${file}` : "Removing files",
+        status: "running",
+        kind: "delete",
+        key: `del:${fk}`,
+        path,
+      };
     case "read_file":
-      return { label: file ? `Reading ${file}` : "Reading files", status: "running", kind: "read", key: `read:${fk}` };
+      return {
+        label: file ? `Reading ${file}` : "Reading files",
+        status: "running",
+        kind: "read",
+        key: `read:${fk}`,
+        path,
+      };
     case "list_files":
       return { label: "Exploring the project", status: "running", kind: "search", key: "list" };
     case "glob_search":
@@ -48,7 +76,13 @@ export function agentStepToTaskStep(step: AgentStep): AgentTaskStep | null {
     case "find_definition":
       return { label: "Tracing definitions", status: "running", kind: "search", key: "find" };
     case "analyze_code":
-      return { label: file ? `Checking ${file}` : "Checking the code", status: "running", kind: "analyze", key: `analyze:${fk}` };
+      return {
+        label: file ? `Checking ${file}` : "Checking the code",
+        status: "running",
+        kind: "analyze",
+        key: `analyze:${fk}`,
+        path,
+      };
     case "generate_image":
       return { label: "Generating an image", status: "running", kind: "image", key: `img:${step.timestamp}` };
     case "finish":

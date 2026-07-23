@@ -146,7 +146,7 @@ export function CloudSlowQueries({ projectId }: { projectId: string }) {
                     {q.query}
                   </pre>
                   <div className="flex items-center gap-3 mt-1.5 text-[10px] text-muted-foreground tabular-nums">
-                    <span className="text-amber-300">{q.mean_exec_time_ms} ms avg</span>
+                    <span className="text-amber-700 dark:text-amber-300">{q.mean_exec_time_ms} ms avg</span>
                     <span>{q.total_exec_time_ms} ms total</span>
                     <span>{q.calls} calls</span>
                     <span>{q.rows} rows</span>
@@ -172,17 +172,17 @@ export function CloudSlowQueries({ projectId }: { projectId: string }) {
                       ) : (
                         sug.indexes.map((i) => (
                           <div key={i.sql} className="space-y-1">
-                            <pre className="text-[10px] font-mono whitespace-pre-wrap break-all text-violet-200">{i.sql}</pre>
+                            <pre className="text-[10px] font-mono whitespace-pre-wrap break-all text-violet-800 dark:text-violet-200">{i.sql}</pre>
                             {i.reason && <p className="text-[10px] text-muted-foreground/70">{i.reason}</p>}
                             {i.applied ? (
-                              <span className="inline-flex items-center gap-1 text-[10px] text-emerald-300">
+                              <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 dark:text-emerald-300">
                                 <Check className="w-3 h-3" /> Applied
                               </span>
                             ) : sug.canApply ? (
                               <Button
                                 size="sm"
                                 variant="outline"
-                                className="h-6 text-[10px] gap-1 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10"
+                                className="h-6 text-[10px] gap-1 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10"
                                 onClick={() => void applyIndex(idx, i.sql)}
                                 disabled={applyingSql !== null}
                               >
@@ -190,7 +190,7 @@ export function CloudSlowQueries({ projectId }: { projectId: string }) {
                                 Apply
                               </Button>
                             ) : (
-                              <p className="text-[10px] text-amber-300/80">
+                              <p className="text-[10px] text-amber-700/80 dark:text-amber-300/80">
                                 Set Database to Allow in Cloud → Advanced to apply indexes from here.
                               </p>
                             )}

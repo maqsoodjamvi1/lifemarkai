@@ -35,6 +35,23 @@ export function formatLovableMessageTime(isoString: string | null | undefined): 
   return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " · " + time;
 }
 
+/**
+ * Lovable dump: centered stamp above user messages — "Today at 1:38 PM",
+ * "Yesterday at 1:38 PM", "Jul 6 at 1:38 PM".
+ */
+export function formatLovableStampTime(isoString: string | null | undefined): string {
+  if (!isoString) return "";
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return "";
+  const now = new Date();
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (d.toDateString() === now.toDateString()) return `Today at ${time}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `Yesterday at ${time}`;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })} at ${time}`;
+}
+
 export function formatLovableAbsoluteTime(isoString: string | null | undefined): string {
   if (!isoString) return "";
   const d = new Date(isoString);

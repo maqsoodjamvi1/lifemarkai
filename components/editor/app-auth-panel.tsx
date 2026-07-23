@@ -463,7 +463,7 @@ export function AppAuthPanel({ project }: AppAuthPanelProps) {
 
         <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 flex items-start gap-2">
           <AlertCircle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0 mt-0.5" />
-          <p className="text-[10px] text-amber-200/90">
+          <p className="text-[10px] text-amber-800/90 dark:text-amber-200/90">
             These providers are for end users of the deployed app — your own LifemarkAI workspace login is unaffected.
           </p>
         </div>

@@ -1,5 +1,7 @@
 /**
- * Runtime verification for preview engine resolution (WebContainers vs fallback).
+ * Runtime verification for preview engine resolution.
+ * Production: Modal sandbox → srcdoc fallback.
+ * Draft: WebContainer only with explicit allowWebContainer.
  */
 import { appendFileSync } from "fs";
 import {
@@ -41,27 +43,49 @@ const viteProject = [
 
 const staticProject = [{ path: "index.html" }];
 
-check("vite project eligible", shouldUseWebContainer(viteProject), "H7");
+check("vite project eligible (legacy WC check)", shouldUseWebContainer(viteProject), "H7");
 check("static html not eligible", !shouldUseWebContainer(staticProject), "H7");
 
 check(
-  "default (no opt-in) → fallback",
+  "default (no Modal, no WC draft) → fallback srcdoc",
   resolvePreviewEngine(viteProject, { crossOriginIsolated: true }) === "fallback",
   "H7",
 );
 check(
-  "preferWebContainers true + isolated + vite → webcontainer",
-  resolvePreviewEngine(viteProject, { crossOriginIsolated: true, preferWebContainers: true }) === "webcontainer",
+  "sandboxEnabled → sandbox (Modal)",
+  resolvePreviewEngine(viteProject, { sandboxEnabled: true }) === "sandbox",
   "H7",
 );
 check(
-  "not isolated → fallback",
-  resolvePreviewEngine(viteProject, { crossOriginIsolated: false }) === "fallback",
+  "sandboxUrl → sandbox",
+  resolvePreviewEngine(viteProject, { sandboxUrl: "https://tunnel.example" }) === "sandbox",
   "H7",
 );
 check(
-  "useWebContainers false → fallback",
-  resolvePreviewEngine(viteProject, { crossOriginIsolated: true, preferWebContainers: false }) === "fallback",
+  "draft WC opt-in + prefer + isolated → webcontainer",
+  resolvePreviewEngine(viteProject, {
+    crossOriginIsolated: true,
+    preferWebContainers: true,
+    allowWebContainer: true,
+  }) === "webcontainer",
+  "H7",
+);
+check(
+  "prefer without draft allow → fallback",
+  resolvePreviewEngine(viteProject, {
+    crossOriginIsolated: true,
+    preferWebContainers: true,
+    allowWebContainer: false,
+  }) === "fallback",
+  "H7",
+);
+check(
+  "not isolated draft WC → fallback",
+  resolvePreviewEngine(viteProject, {
+    crossOriginIsolated: false,
+    preferWebContainers: true,
+    allowWebContainer: true,
+  }) === "fallback",
   "H7",
 );
 

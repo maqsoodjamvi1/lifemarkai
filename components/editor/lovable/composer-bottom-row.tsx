@@ -1,6 +1,6 @@
 "use client";
 
-import type { MutableRefObject } from "react";
+import type { MutableRefObject, RefObject } from "react";
 import type { EditorMode, LeftPanel } from "@/components/editor/editor-layout";
 import type { OpenRouterModelId } from "@/lib/ai/openrouter-models";
 import { VoiceMode } from "@/components/editor/voice-mode";
@@ -9,7 +9,6 @@ import {
   LovableVisualEditsButton,
   type ComposerContextMenuActions,
 } from "./composer-toolbar";
-import { LovableComposerMobileToggle } from "./composer-mobile-toggle";
 import { LovableComposerModeRow } from "./composer-mode-row";
 import { LovableComposerModelMenu } from "./composer-model-menu";
 import { LovableComposerFileGenPicker } from "./composer-file-gen-picker";
@@ -24,6 +23,9 @@ export interface LovableComposerBottomRowProps {
   onAnalyzeData: () => void;
   onDesignDirections?: () => void;
   onAttach: () => void;
+  /** Hidden file input — Lovable dump places it in the bottom row before Chat actions. */
+  fileInputRef?: RefObject<HTMLInputElement | null>;
+  onImageAttach?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   isVisualEditActive?: boolean;
   onVisualEditToggle?: () => void;
   onFocusPreview?: () => void;
@@ -47,6 +49,8 @@ export interface LovableComposerBottomRowProps {
   showFileGenPicker: boolean;
   fileGenBusy: string | null;
   fileGenDisabled: boolean;
+  fileGenBinaryEnabled?: boolean;
+  fileGenBinaryReason?: string | null;
   input: string;
   onToggleFileGenPicker: () => void;
   onGenerateFile: (fmt: LovableFileGenFormat) => void;
@@ -58,7 +62,10 @@ export interface LovableComposerBottomRowProps {
   onStop: () => void;
 }
 
-/** Lovable-style bottom action row inside the composer input card. */
+/**
+ * Lovable dump bottom row:
+ * Attach (hidden file) → Chat actions → Build → Voice → Send
+ */
 export function LovableComposerBottomRow({
   onOpenPanel,
   onScreenshot,
@@ -67,13 +74,15 @@ export function LovableComposerBottomRow({
   onAnalyzeData,
   onDesignDirections,
   onAttach,
+  fileInputRef,
+  onImageAttach,
   isVisualEditActive,
   onVisualEditToggle,
   onFocusPreview,
   onToggleTemplates,
-  mobileMode,
+  mobileMode = false,
   onToggleMobileMode,
-  mobileDisabled,
+  mobileDisabled = false,
   mode,
   clarifyFirst,
   showClarifyToggle,
@@ -90,6 +99,8 @@ export function LovableComposerBottomRow({
   showFileGenPicker,
   fileGenBusy,
   fileGenDisabled,
+  fileGenBinaryEnabled = true,
+  fileGenBinaryReason = null,
   input,
   onToggleFileGenPicker,
   onGenerateFile,
@@ -102,70 +113,104 @@ export function LovableComposerBottomRow({
 }: LovableComposerBottomRowProps) {
   const contextActions: ComposerContextMenuActions = {
     onOpenPanel,
+    mode,
+    onModeChange,
     onScreenshot,
     onAddReference,
     onAddSkill,
     onAnalyzeData,
     onDesignDirections,
     onAttach,
+    onVisualEditToggle: () => {
+      if (onVisualEditToggle) {
+        onVisualEditToggle();
+        onFocusPreview?.();
+        return;
+      }
+      onToggleTemplates();
+    },
+    isVisualEditActive,
+    onToggleMobileMode,
+    mobileMode,
+    mobileDisabled,
+    onToggleFileGenPicker,
+    showFileGenPicker,
   };
 
   return (
-    <div className="flex items-center gap-1.5 px-3 pb-3 pt-1 safe-area-bottom safe-area-x">
+    // Lovable dump: @container flex flex-wrap items-center gap-1 (card provides p-3)
+    <div className="flex flex-wrap items-center gap-1 safe-area-bottom safe-area-x">
+      {fileInputRef && onImageAttach && (
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*,*/*"
+          className="hidden"
+          aria-label="Attach files"
+          onChange={onImageAttach}
+        />
+      )}
+
       <LovableComposerContextMenu actions={contextActions} />
 
-      <LovableVisualEditsButton
-        active={!!isVisualEditActive}
-        onClick={() => {
-          if (onVisualEditToggle) {
-            onVisualEditToggle();
-            onFocusPreview?.();
-            return;
-          }
-          onToggleTemplates();
-        }}
-      />
+      {/* Lovable dump footer: plus | spacer | mic | send. Visual edits, clarify,
+          model menu and file-gen live in the "+" menu / open on demand. */}
+      {isVisualEditActive && (
+        <LovableVisualEditsButton
+          active
+          onClick={() => {
+            if (onVisualEditToggle) {
+              onVisualEditToggle();
+              onFocusPreview?.();
+              return;
+            }
+            onToggleTemplates();
+          }}
+        />
+      )}
 
       <div className="flex-1" />
 
-      <LovableComposerMobileToggle
-        active={mobileMode}
-        disabled={mobileDisabled}
-        onToggle={onToggleMobileMode}
-      />
-
-      <LovableComposerModeRow
-        mode={mode}
-        clarifyFirst={clarifyFirst}
-        showClarifyToggle={showClarifyToggle}
-        onModeChange={(m) => onModeChange?.(m)}
-        onToggleClarify={onToggleClarify}
-      />
-
-      <div className="flex items-center gap-1.5 min-w-0">
-        <LovableComposerModelMenu
+      {(mode === "build" || mode === "agent") && showClarifyToggle && (
+        <LovableComposerModeRow
           mode={mode}
-          onModeChange={onModeChange}
-          multiAgent={multiAgent}
-          onMultiAgentChange={onMultiAgentChange}
-          modelManuallySelectedRef={modelManuallySelectedRef}
-          selectedModel={selectedModel}
-          onSelectModel={onSelectModel}
-          autoModel={autoModel}
-          activeModelLabel={activeModelLabel}
+          clarifyFirst={clarifyFirst}
+          showClarifyToggle={showClarifyToggle}
+          onModeChange={(m) => onModeChange?.(m)}
+          onToggleClarify={onToggleClarify}
         />
+      )}
+
+      {/* Model menu + file-gen appear only while engaged (opened from the + menu). */}
+      <div className="hidden sm:contents">
+        {(multiAgent || modelManuallySelectedRef.current) && (
+          <LovableComposerModelMenu
+            mode={mode}
+            onModeChange={onModeChange}
+            multiAgent={multiAgent}
+            onMultiAgentChange={onMultiAgentChange}
+            modelManuallySelectedRef={modelManuallySelectedRef}
+            selectedModel={selectedModel}
+            onSelectModel={onSelectModel}
+            autoModel={autoModel}
+            activeModelLabel={activeModelLabel}
+          />
+        )}
+        {showFileGenPicker && (
+          <LovableComposerFileGenPicker
+            open={showFileGenPicker}
+            busy={!!fileGenBusy}
+            disabled={fileGenDisabled}
+            input={input}
+            binaryEnabled={fileGenBinaryEnabled}
+            binaryDisabledReason={fileGenBinaryReason}
+            onToggle={onToggleFileGenPicker}
+            onGenerate={onGenerateFile}
+          />
+        )}
       </div>
 
       <VoiceMode onTranscript={onTranscript} />
-
-      <LovableComposerFileGenPicker
-        open={showFileGenPicker}
-        busy={!!fileGenBusy}
-        disabled={fileGenDisabled}
-        input={input}
-        onToggle={onToggleFileGenPicker}
-        onGenerate={onGenerateFile}
-      />
 
       <LovableComposerSendControls
         streaming={streaming}

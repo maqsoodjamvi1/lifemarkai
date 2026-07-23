@@ -12,7 +12,7 @@ export function LovableComposerCharacterCounter({ length }: LovableComposerChara
   return (
     <div className="flex items-center justify-between gap-3 px-4 pb-0.5">
       {length > 800 ? (
-        <span className="text-[10px] text-amber-300/80 leading-snug">
+        <span className="text-[10px] text-amber-700/80 dark:text-amber-300/80 leading-snug">
           Tip: break large requests into smaller, testable blocks — try Plan mode first.
         </span>
       ) : (

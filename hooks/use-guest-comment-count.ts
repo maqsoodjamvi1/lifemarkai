@@ -49,8 +49,10 @@ export function useGuestCommentCount(projectId: string | undefined): GuestCommen
   useEffect(() => {
     if (!projectId) return;
     const supabase = createClient();
+    // Unique topic per mount — chat + preview both use this hook and must not
+    // share a subscribed channel (Supabase rejects .on() after subscribe()).
     const channel = supabase
-      .channel(`guest-comments:${projectId}`)
+      .channel(`guest-comments:${projectId}:${crypto.randomUUID()}`)
       .on(
         "postgres_changes" as never,
         {

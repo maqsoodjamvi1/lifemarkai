@@ -75,12 +75,26 @@ export const PREVIEW_ERROR_BRIDGE_SCRIPT = `(function() {
     return _err.apply(console, args);
   };
 
-  setTimeout(function() {
-    var root = document.getElementById("root");
-    if (root && !root.innerHTML.trim()) {
-      emit("empty-root", "Preview root is empty — app may have crashed during mount", {});
+  // Empty-root detection with RETRIES — a one-shot 4s check false-positived
+  // on slow starts (remote Vite sandbox cold boot, dep optimization): the app
+  // mounted fine at ~6s but the preview was already frozen with a phantom
+  // crash. Only report when the root is STILL empty after three checks
+  // spanning 12s, and cancel the moment content appears.
+  (function() {
+    var checksLeft = 3;
+    function checkRoot() {
+      var root = document.getElementById("root");
+      if (!root) return; // no root at all — other signals will catch it
+      if (root.innerHTML.trim()) return; // mounted — all good, stop checking
+      checksLeft -= 1;
+      if (checksLeft <= 0) {
+        emit("empty-root", "Preview root is empty — app may have crashed during mount", {});
+        return;
+      }
+      setTimeout(checkRoot, 4000);
     }
-  }, 4000);
+    setTimeout(checkRoot, 4000);
+  })();
 
   window.parent.postMessage({ source: "lifemark-preview-errors", type: "preview-error-ready" }, "*");
 })();`;

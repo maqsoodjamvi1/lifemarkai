@@ -13,7 +13,6 @@ import {
   type LovableUrlScrapeMeta,
 } from "./composer-url-scrape-banner";
 import { LovableComposerContextChips } from "./composer-context-chips";
-import { LovableComposerDropOverlay } from "./composer-drop-overlay";
 import { LovableComposerLineRefChips } from "./composer-line-ref-chips";
 import {
   LovableComposerSecretBanner,
@@ -22,7 +21,8 @@ import {
 import type { ParsedLineRef } from "@/lib/editor/parse-line-refs";
 
 export interface LovableComposerPreInputProps {
-  isDragging: boolean;
+  /** Kept for API compat — drop overlay now mounts on form#chat-input. */
+  isDragging?: boolean;
   projectId: string;
   connectorApproval: ConnectorApprovalRequest | null;
   onConnectorApprovalClear: () => void;
@@ -46,8 +46,9 @@ export interface LovableComposerPreInputProps {
   scrapedMeta: LovableUrlScrapeMeta | null;
   onDismissUrlScrape: () => void;
   onUrlQuickAction: (prompt: string) => void;
-  fileInputRef: Ref<HTMLInputElement>;
-  onImageAttach: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  /** @deprecated Attach input lives in composer bottom row (dump order). */
+  fileInputRef?: Ref<HTMLInputElement>;
+  onImageAttach?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   contextFiles: ProjectFile[];
   onRemoveContextFile: (id: string) => void;
   lineRefs?: ParsedLineRef[];
@@ -60,7 +61,6 @@ export interface LovableComposerPreInputProps {
 
 /** Attachments, approvals, and contextual chips above the composer input card. */
 export function LovableComposerPreInput({
-  isDragging,
   projectId,
   connectorApproval,
   onConnectorApprovalClear,
@@ -84,8 +84,6 @@ export function LovableComposerPreInput({
   scrapedMeta,
   onDismissUrlScrape,
   onUrlQuickAction,
-  fileInputRef,
-  onImageAttach,
   contextFiles,
   onRemoveContextFile,
   lineRefs = [],
@@ -97,8 +95,6 @@ export function LovableComposerPreInput({
 }: LovableComposerPreInputProps) {
   return (
     <>
-      {isDragging && <LovableComposerDropOverlay />}
-
       <LovableComposerApprovalSlot
         projectId={projectId}
         connectorApproval={connectorApproval}
@@ -141,8 +137,6 @@ export function LovableComposerPreInput({
           onQuickAction={onUrlQuickAction}
         />
       )}
-
-      <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onImageAttach} />
 
       <LovableComposerContextChips
         files={contextFiles}

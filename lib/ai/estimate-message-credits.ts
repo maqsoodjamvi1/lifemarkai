@@ -1,4 +1,5 @@
 import type { EditorMode } from "@/components/editor/editor-layout";
+import { computeCreditCost, formatCredits } from "@/lib/ai/credit-cost";
 
 /** Pre-send credit estimate label for the composer (Lovable parity). */
 export function estimateMessageCredits(
@@ -7,18 +8,20 @@ export function estimateMessageCredits(
 ): string {
   const len = opts?.inputLength ?? 0;
   const files = opts?.fileCount ?? 0;
+  // Approximate tokens from prompt length; routes use real usage after the fact.
+  const tokensUsed = Math.max(200, Math.round(len / 3) + (opts?.hasAttachments ? 800 : 0));
+  // Context file count is the best pre-send stand-in for filesGenerated.
+  const filesGenerated =
+    mode === "chat" || mode === "plan"
+      ? 0
+      : Math.max(files, opts?.hasAttachments ? 2 : mode === "agent" ? 3 : 1);
 
-  if (mode === "chat" || mode === "plan") {
-    return len > 800 ? "~1 credit" : "~0.5 credit";
-  }
-  if (mode === "patch") {
-    return "~0.5–1 credit";
-  }
-  if (mode === "agent") {
-    return files > 8 ? "~3–5 credits" : "~2–3 credits";
-  }
-  // build
-  if (opts?.hasAttachments) return "~2–3 credits";
-  if (len > 400 || files > 5) return "~2 credits";
-  return "~1–2 credits";
+  const cost = computeCreditCost({
+    mode,
+    filesGenerated,
+    tokensUsed,
+    usedSubagents: mode === "agent" && files > 5,
+  });
+
+  return `~${formatCredits(cost)} credit${cost === 1 ? "" : "s"}`;
 }

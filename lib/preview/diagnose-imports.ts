@@ -75,10 +75,15 @@ function hasNamedExport(content: string, name: string): boolean {
     `export\\s+(?:async\\s+)?(?:function|const|let|var|class)\\s+${name}\\b`,
   );
   if (re.test(content)) return true;
-  // export { Name } / export { default as Name } / export { Foo as Name }
-  for (const match of content.matchAll(/\bexport\s*\{([^}]+)\}/g)) {
+  // Type-level exports are legitimate named-import targets in TS — without
+  // this, every `import { SomeType }` from a types module was flagged as
+  // "not exported" (false positive flooding the healing prompts).
+  const typeRe = new RegExp(`export\\s+(?:type|interface|enum)\\s+${name}\\b`);
+  if (typeRe.test(content)) return true;
+  // export { Name } / export type { Name } / export { Foo as Name }
+  for (const match of content.matchAll(/\bexport\s+(?:type\s+)?\{([^}]+)\}/g)) {
     for (const raw of match[1].split(",")) {
-      const parts = raw.trim().split(/\s+as\s+/i).map((s) => s.trim());
+      const parts = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/i).map((s) => s.trim());
       const exported = parts[parts.length - 1];
       if (exported === name) return true;
     }
@@ -117,7 +122,9 @@ function parseRelativeImports(file: DiagnosableFile): ParsedImport[] {
     if (!isProjectImportSpec(m[2])) continue;
     const named = m[1]
       .split(",")
-      .map((s) => s.trim().split(/\s+as\s+/)[0].trim())
+      // `import { type Foo, Bar }` — strip the inline type keyword so the
+      // symbol name (not "type Foo") is what we look up.
+      .map((s) => s.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim())
       .filter((s) => s !== "type")
       .filter(Boolean);
     out.push({ fromFile: file.path, spec: m[2], named });

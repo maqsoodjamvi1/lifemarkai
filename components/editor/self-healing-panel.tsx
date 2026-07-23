@@ -1,16 +1,20 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   HeartPulse, Loader2, RefreshCw, Wrench, Check, X,
   ShieldAlert, AlertTriangle, AlertCircle, Info, Sparkles, Lock,
+  ChevronDown, ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
+import { DiffViewer, computeFileDiff, type FileState } from "@/components/editor/diff-viewer";
+import type { ProjectFile } from "@/types/database";
 
 interface SelfHealingPanelProps {
   projectId: string;
+  files?: ProjectFile[];
   isLocked?: boolean; // Live environment — apply_fix blocked (migration 046)
   onFilesRefresh?: () => Promise<void> | void;
 }
@@ -64,27 +68,61 @@ const CATEGORY_LABEL: Record<HealthFinding["category"], string> = {
   accessibility: "A11y",
 };
 
-export function SelfHealingPanel({ projectId, isLocked, onFilesRefresh }: SelfHealingPanelProps) {
+export function SelfHealingPanel({ projectId, files = [], isLocked, onFilesRefresh }: SelfHealingPanelProps) {
   const [findings, setFindings] = useState<HealthFinding[]>([]);
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [showResolved, setShowResolved] = useState(false);
-  const [monitoring, setMonitoring] = useState<{ enabled: boolean; cadence: "daily" | "weekly" } | null>(null);
+  const [expandedDiffId, setExpandedDiffId] = useState<string | null>(null);
+  /** Per-finding accept/revert state for proposed fix files. */
+  const [fixFileStates, setFixFileStates] = useState<Record<string, Record<string, FileState>>>({});
+
+  const fileContentByPath = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const f of files) map.set(f.path, f.content ?? "");
+    return map;
+  }, [files]);
+  type MonitoringState = {
+    enabled: boolean;
+    cadence: "daily" | "weekly";
+    last_run_at?: string | null;
+    last_email_at?: string | null;
+    history?: Array<{ at: string; findings: number; emailed: boolean }>;
+  };
+  const [monitoring, setMonitoring] = useState<MonitoringState | null>(null);
 
   useEffect(() => {
     void fetch(`/api/projects/${projectId}/monitoring`)
       .then(async (res) => {
         if (!res.ok) return;
         const data = await res.json();
-        const m = data.monitoring as { enabled?: boolean; cadence?: string } | undefined;
-        setMonitoring({ enabled: !!m?.enabled, cadence: m?.cadence === "weekly" ? "weekly" : "daily" });
+        const m = data.monitoring as {
+          enabled?: boolean;
+          cadence?: string;
+          last_run_at?: string;
+          last_email_at?: string;
+          history?: Array<{ at: string; findings: number; emailed: boolean }>;
+        } | undefined;
+        setMonitoring({
+          enabled: !!m?.enabled,
+          cadence: m?.cadence === "weekly" ? "weekly" : "daily",
+          last_run_at: m?.last_run_at ?? null,
+          last_email_at: m?.last_email_at ?? null,
+          history: Array.isArray(m?.history) ? m.history.slice(0, 10) : [],
+        });
       })
       .catch(() => {});
   }, [projectId]);
 
   async function saveMonitoring(enabled: boolean, cadence: "daily" | "weekly") {
-    setMonitoring({ enabled, cadence }); // optimistic
+    setMonitoring((prev) => ({
+      enabled,
+      cadence,
+      last_run_at: prev?.last_run_at,
+      last_email_at: prev?.last_email_at,
+      history: prev?.history ?? [],
+    }));
     try {
       const res = await fetch(`/api/projects/${projectId}/monitoring`, {
         method: "POST",
@@ -96,6 +134,20 @@ export function SelfHealingPanel({ projectId, isLocked, onFilesRefresh }: SelfHe
     } catch {
       setMonitoring((m) => (m ? { ...m, enabled: !enabled } : m));
       toast({ title: "Couldn't update monitoring", variant: "destructive" });
+    }
+  }
+
+  function formatMonitorTime(iso?: string | null) {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return "—";
     }
   }
 
@@ -160,16 +212,42 @@ export function SelfHealingPanel({ projectId, isLocked, onFilesRefresh }: SelfHe
     }
   }
 
+  function ensureFixStates(finding: HealthFinding): Record<string, FileState> {
+    const existing = fixFileStates[finding.id];
+    if (existing) return existing;
+    const next: Record<string, FileState> = {};
+    for (const f of finding.proposed_fix?.files ?? []) next[f.path] = "accepted";
+    return next;
+  }
+
+  function setPathState(findingId: string, path: string, state: FileState) {
+    setFixFileStates((prev) => ({
+      ...prev,
+      [findingId]: { ...(prev[findingId] ?? {}), [path]: state },
+    }));
+  }
+
   async function applyFix(finding: HealthFinding) {
-    const fileList = (finding.proposed_fix?.files ?? []).map((f) => f.path).join(", ");
-    const confirmed = window.confirm(
-      `Apply this fix?\n\n${finding.proposed_fix?.summary ?? finding.title}\n\nFiles to be overwritten: ${fileList || "unknown"}`
-    );
-    if (!confirmed) return;
+    const states = ensureFixStates(finding);
+    const acceptedPaths = (finding.proposed_fix?.files ?? [])
+      .map((f) => f.path)
+      .filter((p) => (states[p] ?? "accepted") !== "reverted");
+    if (acceptedPaths.length === 0) {
+      toast({
+        title: "Nothing to apply",
+        description: "Accept at least one file in the diff, or dismiss the finding.",
+        variant: "destructive",
+      });
+      return;
+    }
 
     setBusyId(finding.id);
     try {
-      const res = await postAction({ action: "apply_fix", findingId: finding.id });
+      const res = await postAction({
+        action: "apply_fix",
+        findingId: finding.id,
+        paths: acceptedPaths,
+      });
       const data = await res.json();
       if (res.status === 423) {
         toast({
@@ -181,6 +259,12 @@ export function SelfHealingPanel({ projectId, isLocked, onFilesRefresh }: SelfHe
       }
       if (!res.ok) throw new Error(data.error ?? "Apply failed");
       toast({ title: `Fix applied — ${data.applied} file${data.applied !== 1 ? "s" : ""} updated` });
+      setExpandedDiffId(null);
+      setFixFileStates((prev) => {
+        const next = { ...prev };
+        delete next[finding.id];
+        return next;
+      });
       await loadFindings();
       await onFilesRefresh?.();
     } catch (err) {
@@ -288,16 +372,51 @@ export function SelfHealingPanel({ projectId, isLocked, onFilesRefresh }: SelfHe
                     )}
 
                     {finding.status === "fix_proposed" && finding.proposed_fix && (
-                      <div className="rounded-lg bg-muted/30 border border-border/60 px-2 py-1.5 space-y-0.5">
-                        <div className="flex items-center gap-1 text-[10px] font-medium text-sky-400">
-                          <Sparkles className="w-3 h-3" /> Proposed fix
-                        </div>
+                      <div className="rounded-lg bg-muted/30 border border-border/60 px-2 py-1.5 space-y-1.5">
+                        <button
+                          type="button"
+                          className="w-full flex items-center gap-1 text-[10px] font-medium text-sky-400 hover:text-sky-300 transition-colors"
+                          onClick={() => {
+                            setExpandedDiffId((id) => (id === finding.id ? null : finding.id));
+                            setFixFileStates((prev) =>
+                              prev[finding.id] ? prev : { ...prev, [finding.id]: ensureFixStates(finding) },
+                            );
+                          }}
+                        >
+                          {expandedDiffId === finding.id
+                            ? <ChevronDown className="w-3 h-3" />
+                            : <ChevronRight className="w-3 h-3" />}
+                          <Sparkles className="w-3 h-3" /> Review proposed fix
+                          <span className="text-muted-foreground font-normal ml-auto">
+                            {(finding.proposed_fix.files ?? []).length} file
+                            {(finding.proposed_fix.files ?? []).length === 1 ? "" : "s"}
+                          </span>
+                        </button>
                         {finding.proposed_fix.summary && (
                           <p className="text-[10px] text-muted-foreground">{finding.proposed_fix.summary}</p>
                         )}
-                        {(finding.proposed_fix.files ?? []).map((f) => (
-                          <code key={f.path} className="block text-[10px] font-mono text-muted-foreground truncate">→ {f.path}</code>
-                        ))}
+                        {expandedDiffId !== finding.id &&
+                          (finding.proposed_fix.files ?? []).map((f) => (
+                            <code key={f.path} className="block text-[10px] font-mono text-muted-foreground truncate">→ {f.path}</code>
+                          ))}
+                        {expandedDiffId === finding.id && (finding.proposed_fix.files ?? []).length > 0 && (
+                          <div className="max-h-64 overflow-auto rounded-md border border-border/50 bg-background/60 p-1">
+                            <DiffViewer
+                              compact
+                              diffs={(finding.proposed_fix.files ?? []).map((f) =>
+                                computeFileDiff(
+                                  f.path,
+                                  fileContentByPath.get(f.path) ?? "",
+                                  f.content,
+                                ),
+                              )}
+                              fileStates={ensureFixStates(finding)}
+                              onAccept={(path) => setPathState(finding.id, path, "accepted")}
+                              onRevert={(path) => setPathState(finding.id, path, "reverted")}
+                              onReApply={(path) => setPathState(finding.id, path, "accepted")}
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -319,11 +438,19 @@ export function SelfHealingPanel({ projectId, isLocked, onFilesRefresh }: SelfHe
                           size="sm"
                           className="h-6 px-2 text-[10px] gap-1"
                           disabled={busy || isLocked}
-                          title={isLocked ? "Switch to Test environment to apply" : undefined}
-                          onClick={() => applyFix(finding)}
+                          title={isLocked ? "Switch to Test environment to apply" : "Review the diff, then apply accepted files"}
+                          onClick={() => {
+                            if (expandedDiffId !== finding.id) {
+                              setExpandedDiffId(finding.id);
+                              setFixFileStates((prev) =>
+                                prev[finding.id] ? prev : { ...prev, [finding.id]: ensureFixStates(finding) },
+                              );
+                            }
+                            void applyFix(finding);
+                          }}
                         >
                           {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-                          Apply fix
+                          Apply accepted
                         </Button>
                       )}
                       <Button
@@ -399,6 +526,27 @@ export function SelfHealingPanel({ projectId, isLocked, onFilesRefresh }: SelfHe
             ? `Scheduled ${monitoring.cadence} checks — you'll get an email when important issues are found.`
             : "Turn on to have LifemarkAI check this app on a schedule and email you about important issues."}
         </p>
+        {monitoring?.enabled && (
+          <div className="mt-2 space-y-1.5">
+            <div className="flex gap-3 text-[10px] text-muted-foreground">
+              <span>Last check: {formatMonitorTime(monitoring.last_run_at)}</span>
+              <span>Last email: {formatMonitorTime(monitoring.last_email_at)}</span>
+            </div>
+            {(monitoring.history?.length ?? 0) > 0 && (
+              <ul className="rounded-lg border border-border/60 bg-muted/20 divide-y divide-border/40 max-h-28 overflow-y-auto">
+                {monitoring.history!.slice(0, 5).map((h) => (
+                  <li key={h.at} className="px-2 py-1 flex items-center gap-2 text-[10px]">
+                    <span className="text-muted-foreground shrink-0">{formatMonitorTime(h.at)}</span>
+                    <span className="flex-1">{h.findings} finding{h.findings === 1 ? "" : "s"}</span>
+                    <span className={h.emailed ? "text-emerald-400" : "text-muted-foreground/70"}>
+                      {h.emailed ? "emailed" : "no email"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Scan button */}

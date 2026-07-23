@@ -219,9 +219,20 @@ function FileDiffBlock({
               </>
             ) : (
               <>
-                <span className="text-green-400 flex items-center gap-1">
-                  <CheckCircle2 className="w-3 h-3" />
-                </span>
+                {fileState === "pending" && onAccept ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-5 px-1.5 text-[10px] text-green-400 hover:text-green-300 hover:bg-green-500/10"
+                    onClick={onAccept}
+                  >
+                    <CheckCircle2 className="w-2.5 h-2.5 mr-0.5" /> Accept
+                  </Button>
+                ) : (
+                  <span className="text-green-400 flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" />
+                  </span>
+                )}
                 {onRevert && (
                   <Button
                     size="sm"
@@ -279,10 +290,10 @@ function FileDiffBlock({
                   {/* Content */}
                   <span className={`flex-1 py-0.5 px-2 whitespace-pre overflow-hidden ${
                     line.type === "added"
-                      ? "text-green-300"
+                      ? "text-green-700 dark:text-green-300"
                       : line.type === "removed"
-                      ? "text-red-300 line-through opacity-70"
-                      : "text-slate-300"
+                      ? "text-red-700 dark:text-red-300 line-through opacity-70"
+                      : "text-slate-700 dark:text-slate-300"
                   }`}>
                     {line.content || " "}
                   </span>

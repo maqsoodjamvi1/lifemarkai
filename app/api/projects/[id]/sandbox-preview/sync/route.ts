@@ -1,7 +1,7 @@
 /**
  * PATCH /api/projects/:id/sandbox-preview/sync
  *
- * Incrementally writes updated project files into a running E2B sandbox so
+ * Incrementally writes updated project files into a running Modal sandbox so
  * preview stays live after AI edits (Lovable server-side model). No-ops when
  * sandbox backend isn't configured.
  *
@@ -101,12 +101,31 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   try {
     await provider.writeFiles(sandboxId, syncFiles);
 
-    const pkgChanged = syncFiles.some((f) => f.path.replace(/\\/g, "/") === "package.json");
-    if (pkgChanged) {
-      void provider.exec(sandboxId, "npm install").catch(() => {});
+    const norm = (p: string) => p.replace(/\\/g, "/");
+    const pkgChanged = syncFiles.some((f) => norm(f.path) === "package.json");
+    // Vite reads vite/tailwind/postcss config ONLY at startup — syncing a new
+    // config into a running sandbox silently does nothing (observed: Tailwind
+    // classes stayed inert until a manual restart). Restart the dev server.
+    const buildConfigChanged = syncFiles.some((f) =>
+      /(^|\/)(vite|tailwind|postcss)\.config\.(ts|js|cjs|mjs)$/.test(norm(f.path)),
+    );
+    if (pkgChanged || buildConfigChanged) {
+      const steps: string[] = [];
+      if (pkgChanged) steps.push("npm install");
+      if (buildConfigChanged) {
+        steps.push(
+          "(pkill -f vite || true); sleep 1; cd /workspace && nohup npm run dev -- --host 0.0.0.0 --port 5173 >> /tmp/lifemark-dev.log 2>&1 &",
+        );
+      }
+      void provider.exec(sandboxId, steps.join(" && ")).catch(() => {});
     }
 
-    return NextResponse.json({ enabled: true, ok: true, fileCount: syncFiles.length });
+    return NextResponse.json({
+      enabled: true,
+      ok: true,
+      fileCount: syncFiles.length,
+      installing: pkgChanged || buildConfigChanged,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Sync failed";
     return NextResponse.json({ enabled: true, ok: false, error: msg });

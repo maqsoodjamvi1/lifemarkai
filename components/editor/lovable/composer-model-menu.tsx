@@ -114,7 +114,7 @@ export function LovableComposerModelMenu({
           <div className="flex-1">
             <p className="font-medium flex items-center gap-1.5">
               Team
-              <span className="rounded bg-fuchsia-500/15 px-1 py-px text-[9px] font-semibold text-fuchsia-300">MULTI-AGENT</span>
+              <span className="rounded bg-fuchsia-500/15 px-1 py-px text-[9px] font-semibold text-fuchsia-700 dark:text-fuchsia-300">MULTI-AGENT</span>
             </p>
             <p className="text-[10px] text-muted-foreground leading-snug">
               Agent mode runs the full lens team (debate + waves) in the Intelligence panel

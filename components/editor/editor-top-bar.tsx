@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
-  Zap, ChevronLeft, ChevronDown, Bot, MessageSquare, Eye, Code2,
+  Zap, ChevronDown, Bot, MessageSquare, Eye, Code2,
   Columns, Rocket, Github, Settings, Sparkles, Loader2,
   PanelLeft, PanelsTopLeft, Download,
   Share2, Globe, Lock, Check, Copy, ExternalLink, Shield, Brain, Pencil,
@@ -13,6 +12,7 @@ import {
   MessageCircle, Users, Link2, MoreHorizontal, History, LayoutDashboard,
   ChevronRight, UserPlus, CheckCircle2, AlertCircle,
   Cloud, FolderOpen, CreditCard, Search, Pin,
+  ChevronsDownUp, ChevronsUpDown,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
@@ -32,9 +32,23 @@ import { toast } from "@/hooks/use-toast";
 import { createClient } from "@/lib/supabase/client";
 import { ViewSwitcherPill, type ViewSwitcherTab } from "./view-switcher-pill";
 import { UrlBarPill } from "./url-bar-pill";
+import { NotificationsBell } from "./notifications-bell";
 import { LovableUpgradeDialog } from "./lovable/upgrade-dialog";
+import { dispatchChatSettings } from "./lovable/chat-settings-events";
 import { cn } from "@/lib/utils";
 import { usePreviewToken } from "@/hooks/use-preview-token";
+import { sandboxUrlWithPath } from "@/lib/preview/sandbox-url";
+
+/** Open preview / live URL with the current in-app route preserved. */
+function buildOpenPreviewUrl(base: string, routePath: string): string {
+  const path = routePath.startsWith("/") ? routePath : `/${routePath}`;
+  if (/^https?:\/\//i.test(base)) {
+    return sandboxUrlWithPath(base, path || "/");
+  }
+  if (!path || path === "/") return base;
+  const sep = base.includes("?") ? "&" : "?";
+  return `${base}${sep}path=${encodeURIComponent(path)}`;
+}
 
 interface PresenceUser {
   id: string;
@@ -81,8 +95,18 @@ interface EditorTopBarProps {
   /** Toggle Lovable-style history overlay on the chat column */
   onChatOverlayToggle?: () => void;
   chatOverlayActive?: boolean;
+  /** Chat sidebar hidden (focus / preview-only) */
+  chatCollapsed?: boolean;
+  /** Close / reopen chat sidebar — Lovable parity next to History */
+  onToggleChatSidebar?: () => void;
+  /** Lovable dump: left nav width synced to chat panel % */
+  chatNavWidthPercent?: number;
+  /** Shown under project name when previewing an older snapshot */
+  versionPreviewLabel?: string | null;
   /** Compact top bar on mobile — hides URL bar cluster */
   isMobile?: boolean;
+  /** Sync project fields after Share / rename / visibility PATCH. */
+  onProjectUpdate?: (updates: Partial<Project>) => void;
 }
 
 function openSecondaryPanel(
@@ -145,22 +169,36 @@ export function EditorTopBar({
   criticalSecurityCount = 0,
   onChatOverlayToggle,
   chatOverlayActive = false,
+  chatCollapsed = false,
+  onToggleChatSidebar,
+  chatNavWidthPercent = 28,
+  versionPreviewLabel = null,
   isMobile = false,
+  onProjectUpdate,
 }: EditorTopBarProps) {
   const router = useRouter();
   const savedLabel = useRelativeTime(lastSaved);
+  const [recentProjects, setRecentProjects] = useState<{ id: string; name: string }[]>([]);
   const [showUpgradeDialog, setShowUpgradeDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [presenceUsers, setPresenceUsers] = useState<PresenceUser[]>([]);
+  const [shareCollaborators, setShareCollaborators] = useState<
+    Array<{
+      id: string;
+      role: string;
+      profile: { full_name: string | null; email: string | null; avatar_url: string | null } | null;
+    }>
+  >([]);
+  const [shareCollabLoading, setShareCollabLoading] = useState(false);
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile" | "tablet">("desktop");
   const [previewRoutePath, setPreviewRoutePath] = useState("/");
   const [routeCanBack, setRouteCanBack] = useState(false);
   const [routeCanForward, setRouteCanForward] = useState(false);
   // Short-lived signed preview URL (falls back to the plain path when tokens
   // aren't configured server-side).
-  const { url: signedPreviewUrl } = usePreviewToken(project.id);
+  const { url: _signedPreviewUrl } = usePreviewToken(project.id);
 
   const [previewStatusText, setPreviewStatusText] = useState<string | null>(null);
 
@@ -187,6 +225,17 @@ export function EditorTopBar({
     }
     window.addEventListener("lifemark-preview-path", onPath);
     return () => window.removeEventListener("lifemark-preview-path", onPath);
+  }, []);
+
+  // Lovable "switch pages" dropdown data — broadcast by PreviewPanel from files.
+  const [previewPages, setPreviewPages] = useState<Array<{ label: string; path: string }>>([]);
+  useEffect(() => {
+    function onPages(e: Event) {
+      const detail = (e as CustomEvent<Array<{ label: string; path: string }>>).detail;
+      if (Array.isArray(detail)) setPreviewPages(detail);
+    }
+    window.addEventListener("lifemark-preview-pages", onPages);
+    return () => window.removeEventListener("lifemark-preview-pages", onPages);
   }, []);
 
   const previewPageLabel = useMemo(() => {
@@ -325,6 +374,44 @@ export function EditorTopBar({
   }, [project.id]);
 
   const [liveUrl, setLiveUrl] = useState<string | null>(project.deployed_url ?? null);
+  /** Live Modal tunnel from preview-panel — preferred for Open in new tab (Lovable dump). */
+  const [modalPreviewUrl, setModalPreviewUrl] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const u = sessionStorage.getItem("lifemark-live-preview-url")?.trim() || "";
+      return /^https?:\/\//i.test(u) ? u : null;
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    function onLive(e: Event) {
+      const url = (e as CustomEvent<{ url?: string | null }>).detail?.url;
+      setModalPreviewUrl(
+        typeof url === "string" && /^https?:\/\//i.test(url) ? url : null,
+      );
+    }
+    window.addEventListener("lifemark-live-preview-url", onLive);
+    return () => window.removeEventListener("lifemark-live-preview-url", onLive);
+  }, []);
+
+  const openLivePreviewTab = useCallback(() => {
+    const base = modalPreviewUrl || (deployStatus === "deployed" ? liveUrl : null);
+    if (!base) {
+      toast({
+        title: "Modal preview not ready",
+        description: "Wait for the live sandbox, or set MODAL_TOKEN_ID / MODAL_TOKEN_SECRET.",
+        variant: "destructive",
+      });
+      return;
+    }
+    window.open(
+      buildOpenPreviewUrl(base, previewRoutePath),
+      "_blank",
+      "noopener,noreferrer",
+    );
+  }, [modalPreviewUrl, deployStatus, liveUrl, previewRoutePath]);
+
   const [isSharing, setIsSharing] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
@@ -383,6 +470,34 @@ export function EditorTopBar({
     }
   }, [renameValue, project.name, project.id, onRename]);
 
+  const loadShareCollaborators = useCallback(async () => {
+    setShareCollabLoading(true);
+    try {
+      const supabase = createClient();
+      const { data } = await (supabase as any)
+        .from("collaborators")
+        .select("id, role, profile:profiles(full_name, email, avatar_url)")
+        .eq("project_id", project.id)
+        .order("created_at", { ascending: true });
+      setShareCollaborators(
+        ((data ?? []) as Array<{
+          id: string;
+          role: string;
+          profile: { full_name: string | null; email: string | null; avatar_url: string | null } | null;
+        }>),
+      );
+    } catch {
+      /* ignore */
+    } finally {
+      setShareCollabLoading(false);
+    }
+  }, [project.id]);
+
+  useEffect(() => {
+    if (!shareOpen) return;
+    void loadShareCollaborators();
+  }, [shareOpen, loadShareCollaborators]);
+
   async function handleInviteByEmail() {
     const email = inviteEmail.trim().toLowerCase();
     if (!email) return;
@@ -400,6 +515,7 @@ export function EditorTopBar({
       }
       setInviteEmail("");
       toast({ title: "Invite sent", description: `Collaboration invite emailed to ${email}` });
+      void loadShareCollaborators();
     } catch {
       toast({ title: "Invite failed", variant: "destructive" });
     } finally {
@@ -416,10 +532,16 @@ export function EditorTopBar({
     try {
       const newPublic = !project.is_public;
       // Auto-generate slug if going public and no slug exists
-      await fetch(`/api/projects/${project.id}`, {
+      const res = await fetch(`/api/projects/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ is_public: newPublic, ...(newPublic && !project.slug ? { generate_slug: true } : {}) }),
+      });
+      if (!res.ok) throw new Error("patch failed");
+      const updated = (await res.json().catch(() => ({}))) as Partial<Project>;
+      onProjectUpdate?.({
+        is_public: typeof updated.is_public === "boolean" ? updated.is_public : newPublic,
+        ...(typeof updated.slug === "string" ? { slug: updated.slug } : {}),
       });
       toast({ title: newPublic ? "Project is now public" : "Project is now private" });
       router.refresh();
@@ -532,120 +654,252 @@ export function EditorTopBar({
 
   return (
     <TooltipProvider>
-      <div className="flex items-center gap-1 px-2 h-11 border-b border-border bg-background z-10 flex-shrink-0 safe-area-top safe-area-x">
+      <div className="sticky top-0 z-50 flex items-center gap-1 px-2 h-11 border-b border-border bg-background flex-shrink-0 safe-area-top safe-area-x">
 
-        {/* ── Left: logo + back + file-tree + project name dropdown ── */}
-        <div className="flex items-center gap-0.5 min-w-0 flex-shrink-0">
-          {/* LifemarkAI logo */}
-          <Link
-            href="/dashboard"
-            className="flex items-center justify-center w-7 h-7 rounded-lg bg-gradient-to-br from-violet-600 to-purple-700 mr-0.5 flex-shrink-0 hover:opacity-90 transition-opacity"
-            title="LifemarkAI"
+        {/* ── Left: width-synced to chat panel (Lovable [data-editor-chat-nav-container]) ── */}
+        <div
+          data-editor-chat-nav-container="true"
+          className="flex shrink-0 items-center gap-2 min-w-0 overflow-hidden"
+          style={
+            isMobile
+              ? undefined
+              : chatCollapsed
+                ? { width: "auto", minWidth: 88 }
+                : { width: `${Math.max(chatNavWidthPercent, 14)}%`, maxWidth: "50%" }
+          }
+        >
+          {/* Switch project — dump: square logo btn */}
+          <DropdownMenu
+            onOpenChange={(open) => {
+              if (!open) return;
+              void (async () => {
+                try {
+                  const supabase = createClient();
+                  const { data } = await supabase
+                    .from("projects")
+                    .select("id, name")
+                    .neq("id", project.id)
+                    .order("updated_at", { ascending: false })
+                    .limit(8);
+                  setRecentProjects((data as { id: string; name: string }[]) ?? []);
+                } catch {
+                  setRecentProjects([]);
+                }
+              })();
+            }}
           >
-            <Sparkles className="w-3.5 h-3.5 text-white" />
-          </Link>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={() => router.push("/dashboard")}>
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Back to dashboard</TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground" onClick={onToggleFileTree}>
-                <PanelsTopLeft className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Toggle file tree (⌘\)</TooltipContent>
-          </Tooltip>
-
-          {/* Project name — inline rename OR dropdown */}
-          {isRenaming ? (
-            <input
-              ref={renameInputRef}
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onBlur={commitRename}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitRename();
-                if (e.key === "Escape") setIsRenaming(false);
-              }}
-              className="text-sm font-semibold bg-muted border border-primary/40 rounded px-2 py-0.5 outline-none max-w-[180px] min-w-0"
-              maxLength={60}
-            />
-          ) : (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button className="flex items-center gap-1 hover:bg-muted/60 px-1.5 py-1 rounded-md transition-colors max-w-[200px] min-w-0">
-                  <span className="text-sm font-semibold truncate">{project.name}</span>
-                  <ChevronDown className="w-3 h-3 text-muted-foreground/60 shrink-0" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-52">
-                <DropdownMenuLabel className="text-xs font-normal text-muted-foreground truncate">{project.name}</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={startRename} className="text-xs gap-2">
-                  <Pencil className="w-3.5 h-3.5" />
-                  Rename
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label="Switch project"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-foreground hover:bg-muted/80 transition-colors"
+              >
+                <Sparkles className="size-[18px]" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                Switch project
+              </DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => router.push("/dashboard")} className="text-xs gap-2">
+                <LayoutDashboard className="w-3.5 h-3.5" />
+                All projects
+              </DropdownMenuItem>
+              {recentProjects.map((p) => (
+                <DropdownMenuItem
+                  key={p.id}
+                  onClick={() => router.push(`/editor/${p.id}`)}
+                  className="text-xs gap-2"
+                >
+                  <span className="truncate">{p.name}</span>
                 </DropdownMenuItem>
-                {onDuplicate && (
-                  <DropdownMenuItem onClick={onDuplicate} className="text-xs gap-2">
-                    <Copy className="w-3.5 h-3.5" />
-                    Duplicate project
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuItem onClick={() => openSecondaryPanel("settings", onRightPanelChange)} className="text-xs gap-2">
-                  <Settings className="w-3.5 h-3.5" />
-                  Project settings
-                </DropdownMenuItem>
-                <>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* #main-menu — title + subtitle + project/chat settings */}
+          <div id="main-menu" className="relative flex min-w-0 items-center gap-2 md:shrink">
+            {isRenaming ? (
+              <input
+                ref={renameInputRef}
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onBlur={commitRename}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") commitRename();
+                  if (e.key === "Escape") setIsRenaming(false);
+                }}
+                className="text-sm font-medium bg-muted border border-primary/40 rounded px-2 py-0.5 outline-none max-w-[200px] min-w-0"
+                maxLength={60}
+              />
+            ) : (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    aria-haspopup="menu"
+                    className="group flex min-w-0 items-center gap-2 border-none outline-none duration-150 hover:opacity-80 focus:outline-none text-left"
+                  >
+                    <div className="flex w-full min-w-0 flex-col items-start gap-0 truncate">
+                      <div className="flex min-w-0 items-center gap-2 truncate">
+                        <p className="hidden min-w-0 truncate text-sm leading-none font-medium md:block" translate="no">
+                          {project.name}
+                        </p>
+                        <ChevronDown className="size-4 shrink-0 text-muted-foreground/50 group-data-[state=open]:text-foreground" />
+                      </div>
+                      <p className="hidden w-full min-w-0 truncate text-left text-xs text-muted-foreground md:flex">
+                        {versionPreviewLabel
+                          ? `Previewing ${versionPreviewLabel}`
+                          : "Previewing last saved version"}
+                      </p>
+                    </div>
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56">
+                  <DropdownMenuLabel className="text-xs font-normal text-muted-foreground truncate">
+                    {project.name}
+                  </DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-xs gap-2 text-destructive focus:text-destructive">
+                  <DropdownMenuItem onClick={startRename} className="text-xs gap-2">
+                    <Pencil className="w-3.5 h-3.5" />
+                    Rename
+                  </DropdownMenuItem>
+                  {onDuplicate && (
+                    <DropdownMenuItem onClick={onDuplicate} className="text-xs gap-2">
+                      <Copy className="w-3.5 h-3.5" />
+                      Duplicate project
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem
+                    onClick={() => openSecondaryPanel("settings", onRightPanelChange)}
+                    className="text-xs gap-2"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                    Project settings
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={onToggleFileTree} className="text-xs gap-2">
+                    <PanelsTopLeft className="w-3.5 h-3.5" />
+                    {showFileTree ? "Hide file tree" : "Show file tree"}
+                  </DropdownMenuItem>
+                  {onOpenShortcuts && (
+                    <DropdownMenuItem onClick={onOpenShortcuts} className="text-xs gap-2">
+                      <AlignJustify className="w-3.5 h-3.5" />
+                      Keyboard shortcuts
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                    Chat
+                  </DropdownMenuLabel>
+                  <DropdownMenuItem onClick={() => dispatchChatSettings("search")} className="text-xs gap-2">
+                    <Search className="w-3.5 h-3.5" />
+                    Search messages
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => dispatchChatSettings("bookmarks")} className="text-xs gap-2">
+                    <Pin className="w-3.5 h-3.5" />
+                    Bookmarks
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => dispatchChatSettings("export-markdown")} className="text-xs gap-2">
+                    <Download className="w-3.5 h-3.5" />
+                    Export Markdown
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => dispatchChatSettings("export-json")} className="text-xs gap-2">
+                    <Download className="w-3.5 h-3.5" />
+                    Export JSON
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => dispatchChatSettings("copy-all")} className="text-xs gap-2">
+                    <Copy className="w-3.5 h-3.5" />
+                    Copy all messages
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => dispatchChatSettings("toggle-density")} className="text-xs gap-2">
+                    <AlignJustify className="w-3.5 h-3.5" />
+                    Toggle chat density
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => dispatchChatSettings("expand-threads")} className="text-xs gap-2">
+                    <ChevronsDownUp className="w-3.5 h-3.5" />
+                    Expand all turns
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => dispatchChatSettings("collapse-threads")} className="text-xs gap-2">
+                    <ChevronsUpDown className="w-3.5 h-3.5" />
+                    Collapse older turns
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => dispatchChatSettings("clear")}
+                    className="text-xs gap-2 text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Clear conversation
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => setShowDeleteDialog(true)}
+                    className="text-xs gap-2 text-destructive focus:text-destructive"
+                  >
                     <Trash2 className="w-3.5 h-3.5" />
                     Delete project
                   </DropdownMenuItem>
-                </>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
+
+          {/* History + close sidebar (Lovable dump: flex-row / ml-auto) */}
+          {!isMobile && (
+            <div className="flex flex-row-reverse gap-1 sm:mr-2 sm:ml-auto md:flex-row shrink-0">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="View history"
+                    className={`h-7 w-7 flex-shrink-0 transition-all ${chatOverlayActive ? "text-foreground bg-muted" : "text-foreground/70 hover:text-foreground hover:bg-muted/70"}`}
+                    onClick={() => onChatOverlayToggle?.()}
+                  >
+                    <History className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>View history</TooltipContent>
+              </Tooltip>
+              {onToggleChatSidebar && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={chatCollapsed ? "Open sidebar" : "Close sidebar"}
+                      className={`h-7 w-7 flex-shrink-0 transition-all ${chatCollapsed ? "text-foreground bg-muted" : "text-foreground/70 hover:text-foreground hover:bg-muted/70"}`}
+                      onClick={() => onToggleChatSidebar()}
+                    >
+                      <PanelLeft className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>{chatCollapsed ? "Open sidebar" : "Close sidebar"}</TooltipContent>
+                </Tooltip>
+              )}
+            </div>
           )}
         </div>
 
-        {/* ── Center: exact Lovable icon toolbar ── */}
-        <div className={cn("flex items-center gap-0.5 flex-1 justify-center min-w-0", isMobile && "justify-start gap-1")}>
+        {/* ── Center: [data-navbar] view switcher + URL bar ── */}
+        <div
+          data-navbar
+          className={cn("flex items-center gap-0.5 flex-1 justify-center min-w-0", isMobile && "justify-start gap-1")}
+        >
 
-          {/* History + split — desktop only (mobile uses bottom nav) */}
           {!isMobile && (
-          <>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon"
-                className={`h-7 w-7 flex-shrink-0 transition-all ${chatOverlayActive ? "text-foreground bg-muted" : "text-muted-foreground hover:text-foreground"}`}
-                onClick={() => onChatOverlayToggle?.()}>
-                <History className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>History</TooltipContent>
-          </Tooltip>
-
-          {/* Layout / split toggle */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon"
-                className={`h-7 w-7 flex-shrink-0 transition-all ${viewMode === "both" ? "text-foreground bg-muted" : "text-muted-foreground hover:text-foreground"}`}
+                className={`h-7 w-7 flex-shrink-0 transition-all ${viewMode === "both" ? "text-foreground bg-muted" : "text-foreground/70 hover:text-foreground hover:bg-muted/70"}`}
                 onClick={() => { onRightPanelChange?.(null); onViewChange(viewMode === "both" ? "preview" : "both"); }}>
-                <Columns className="h-3.5 w-3.5" />
+                <Columns className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>Split view (⌘3)</TooltipContent>
           </Tooltip>
-          </>
           )}
 
-          {/* Preview / Files / Code — Lovable-parity animated view switcher */}
+          {/* Preview / Files / Code / More — Lovable-parity animated view switcher */}
           <ViewSwitcherPill
             tabs={[
               { id: "preview", label: "Preview", icon: Eye },
@@ -672,7 +926,63 @@ export function EditorTopBar({
                 return;
               }
             }}
-          />
+          >
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-label="More"
+                  className="relative z-10 flex h-6 shrink-0 items-center gap-1 overflow-hidden rounded-full px-1.5 text-[var(--fg-tertiary)] outline-none transition-colors hover:text-[var(--fg-primary)] active:scale-[0.97]"
+                >
+                  <MoreHorizontal className="h-4 w-4 shrink-0" />
+                  {!isMobile && (
+                    <span className="text-sm font-[450] leading-none whitespace-nowrap">More</span>
+                  )}
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="center" className="w-52 p-1">
+                {([
+                  { id: "analytics" as LeftPanel, label: "Analytics",        icon: BarChart2 },
+                  { id: "intelligence" as LeftPanel, label: "Intelligence",  icon: Brain     },
+                  { id: "cloud" as LeftPanel,     label: "Cloud",            icon: Cloud     },
+                  { id: "code" as LeftPanel,      label: "Code",             icon: Code2     },
+                  { id: "search" as LeftPanel,    label: "Files",            icon: FolderOpen },
+                  { id: "payments" as LeftPanel,  label: "Payments",         icon: CreditCard },
+                  { id: "security" as LeftPanel,  label: "Security",         icon: Shield    },
+                  { id: "appauth" as LeftPanel,       label: "App sign-in",      icon: UserPlus  },
+                  { id: "designsystem" as LeftPanel,  label: "Design system",    icon: Sparkles  },
+                  { id: "seo" as LeftPanel,       label: "SEO & AI search",  icon: Search    },
+                ] as { id: LeftPanel; label: string; icon: React.ElementType }[]).map(({ id, label, icon: Icon }) => (
+                  <DropdownMenuItem
+                    key={id}
+                    onClick={() => {
+                      if (id === "code") {
+                        onViewChange("code");
+                        return;
+                      }
+                      onRightPanelChange?.(rightPanel === id ? null : id);
+                    }}
+                    className="text-xs gap-2.5 py-2"
+                  >
+                    <Icon className="w-3.5 h-3.5 text-muted-foreground" />
+                    <span className="flex-1">{label}</span>
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => { const a = document.createElement("a"); a.href = `/api/projects/${project.id}/export`; a.download = ""; a.click(); }} className="text-xs gap-2">
+                  <Download className="w-3.5 h-3.5" /> Download ZIP
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={onOpenShortcuts} className="text-xs gap-2">
+                  <Zap className="w-3.5 h-3.5" /> Keyboard shortcuts
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-xs gap-2 text-destructive focus:text-destructive">
+                  <Trash2 className="w-3.5 h-3.5" /> Delete project
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </ViewSwitcherPill>
 
           {/* Center URL bar — Lovable parity: editable route on desktop + mobile */}
           <UrlBarPill
@@ -680,6 +990,7 @@ export function EditorTopBar({
             device={previewDevice}
             routePath={previewRoutePath.startsWith("/") ? previewRoutePath : `/${previewRoutePath}`}
             pageLabel={previewPageLabel}
+            pages={previewPages}
             canGoBack={routeCanBack}
             canGoForward={routeCanForward}
             onBack={() => window.dispatchEvent(new CustomEvent("lifemark-preview-history", { detail: { dir: "back" } }))}
@@ -694,66 +1005,8 @@ export function EditorTopBar({
             }}
             onRefresh={() => window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"))}
             statusText={previewStatusText}
-            onOpenNewTab={() => {
-              if (liveUrl) window.open(liveUrl, "_blank", "noopener,noreferrer");
-              else window.open(signedPreviewUrl || `/preview/${project.id}`, "_blank", "noopener,noreferrer");
-            }}
+            onOpenNewTab={openLivePreviewTab}
           />
-
-          {/* More menu — separate from view switcher (fixes Radix portal nesting) */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                aria-label="More"
-                className="relative inline-flex h-7 shrink-0 items-center gap-1 rounded-full px-2.5 text-[var(--fg-tertiary)] outline-none transition-colors hover:text-[var(--fg-primary)] hover:bg-[var(--glow-neutral-hover)] active:scale-[0.97] border border-[color:var(--border-translucent)]"
-              >
-                <MoreHorizontal className="h-4 w-4 shrink-0" />
-                {!isMobile && <span className="text-sm font-[450] leading-none">More</span>}
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="center" className="w-52 p-1">
-              {([
-                { id: "analytics" as LeftPanel, label: "Analytics",        icon: BarChart2 },
-                { id: "intelligence" as LeftPanel, label: "Intelligence",  icon: Brain     },
-                { id: "cloud" as LeftPanel,     label: "Cloud",            icon: Cloud     },
-                { id: "code" as LeftPanel,      label: "Code",             icon: Code2     },
-                { id: "search" as LeftPanel,    label: "Files",            icon: FolderOpen },
-                { id: "payments" as LeftPanel,  label: "Payments",         icon: CreditCard },
-                { id: "security" as LeftPanel,  label: "Security",         icon: Shield    },
-                { id: "appauth" as LeftPanel,       label: "App sign-in",      icon: UserPlus  },
-                { id: "designsystem" as LeftPanel,  label: "Design system",    icon: Sparkles  },
-                { id: "seo" as LeftPanel,       label: "SEO & AI search",  icon: Search    },
-              ] as { id: LeftPanel; label: string; icon: React.ElementType }[]).map(({ id, label, icon: Icon }) => (
-                <DropdownMenuItem
-                  key={id}
-                  onClick={() => {
-                    if (id === "code") {
-                      onViewChange("code");
-                      return;
-                    }
-                    onRightPanelChange?.(rightPanel === id ? null : id);
-                  }}
-                  className="text-xs gap-2.5 py-2"
-                >
-                  <Icon className="w-3.5 h-3.5 text-muted-foreground" />
-                  <span className="flex-1">{label}</span>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-muted-foreground/50"><path d="M21 10V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5"/><polyline points="16 3 16 10 22 10 22 3"/></svg>
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => { const a = document.createElement("a"); a.href = `/api/projects/${project.id}/export`; a.download = ""; a.click(); }} className="text-xs gap-2">
-                <Download className="w-3.5 h-3.5" /> Download ZIP
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={onOpenShortcuts} className="text-xs gap-2">
-                <Zap className="w-3.5 h-3.5" /> Keyboard shortcuts
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-xs gap-2 text-destructive focus:text-destructive">
-                <Trash2 className="w-3.5 h-3.5" /> Delete project
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
         </div>
 
         {/* ── Right: Lovable-style compact action bar ── */}
@@ -761,10 +1014,13 @@ export function EditorTopBar({
 
           {/* Autosave indicator */}
           {savedLabel && (
-            <span className="hidden xl:flex items-center text-[10px] text-muted-foreground/40 select-none tabular-nums mr-1 flex-shrink-0">
+            <span className="hidden xl:flex items-center text-[10px] text-muted-foreground/80 select-none tabular-nums mr-1 flex-shrink-0">
               {savedLabel}
             </span>
           )}
+
+          {/* Notifications (Lovable dump: aria "Notifications alt+T") */}
+          <NotificationsBell projectId={project.id} className="hidden sm:flex" />
 
           {/* Test / Live environment switcher */}
           <Tooltip>
@@ -774,8 +1030,8 @@ export function EditorTopBar({
                 disabled={envSaving}
                 className={`hidden sm:flex items-center gap-1 mr-1 px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 border transition-all ${
                   environment === "live"
-                    ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25"
-                    : "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground"
+                    ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25"
+                    : "bg-muted/50 text-foreground/70 border-border hover:bg-muted hover:text-foreground"
                 }`}
               >
                 {envSaving
@@ -803,10 +1059,10 @@ export function EditorTopBar({
                     : undefined}
                   className={`hidden sm:flex items-center gap-1 mr-1 px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 transition-colors ${
                     deployStatus === "deployed"
-                      ? "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 cursor-pointer"
+                      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/25 cursor-pointer"
                       : deployStatus === "deploying"
-                      ? "bg-amber-500/15 text-amber-400"
-                      : "bg-red-500/15 text-red-400"
+                      ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
+                      : "bg-red-500/15 text-red-700 dark:text-red-400"
                   }`}
                 >
                   {deployStatus === "deploying"
@@ -844,9 +1100,9 @@ export function EditorTopBar({
           <Tooltip>
             <TooltipTrigger asChild>
               <div className={`flex items-center gap-1 px-2 h-7 rounded-full text-xs font-semibold tabular-nums cursor-default select-none flex-shrink-0 ${
-                creditsLow ? "bg-red-500/15 text-red-400 ring-1 ring-red-500/30"
-                : creditsMed ? "bg-yellow-500/15 text-yellow-400"
-                : "text-muted-foreground/60"
+                creditsLow ? "bg-red-500/15 text-red-700 dark:text-red-400 ring-1 ring-red-500/30"
+                : creditsMed ? "bg-yellow-500/15 text-yellow-700 dark:text-yellow-400"
+                : "text-foreground/70"
               }`}>
                 <Zap className="h-3 w-3" />
                 {creditsDisplay}
@@ -857,50 +1113,46 @@ export function EditorTopBar({
 
           <div className="h-4 w-px bg-border/60 mx-1 flex-shrink-0" />
 
-          {/* Expand preview in new tab */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground flex-shrink-0"
-                onClick={() => {
-                  if (liveUrl) window.open(liveUrl, "_blank", "noopener,noreferrer");
-                  else window.open(signedPreviewUrl || `/preview/${project.id}`, "_blank", "noopener,noreferrer");
-                }}>
-                <Maximize2 className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Open in new tab</TooltipContent>
-          </Tooltip>
-
-          {/* Refresh preview */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground flex-shrink-0"
-                onClick={() => window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"))}>
-                <RefreshCw className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Refresh preview</TooltipContent>
-          </Tooltip>
+          {/* Preview utilities — one compact, clearly-bounded cluster (Lovable-
+              style focused grouping instead of loose icons + double dividers) */}
+          <div className="hidden sm:flex items-center gap-0 rounded-full border border-border/60 bg-background shadow-sm p-0.5 flex-shrink-0">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full text-foreground/70 hover:text-foreground hover:bg-muted"
+                  onClick={openLivePreviewTab}>
+                  <Maximize2 className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Open in new tab</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full text-foreground/70 hover:text-foreground hover:bg-muted"
+                  onClick={() => window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"))}>
+                  <RefreshCw className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Refresh preview</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full text-foreground/70 hover:text-foreground hover:bg-muted"
+                  onClick={() => openSecondaryPanel("comments", onRightPanelChange)}>
+                  <MessageCircle className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Comments</TooltipContent>
+            </Tooltip>
+          </div>
 
           <div className="h-4 w-px bg-border/60 mx-1 flex-shrink-0" />
-
-          {/* Comments / chat icon */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-foreground flex-shrink-0"
-                onClick={() => openSecondaryPanel("comments", onRightPanelChange)}>
-                <MessageCircle className="h-3.5 w-3.5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Comments</TooltipContent>
-          </Tooltip>
 
           {/* ── Share panel — Lovable-style ── */}
           <DropdownMenu open={shareOpen} onOpenChange={setShareOpen}>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm"
-                className="h-7 gap-1.5 text-xs font-medium flex-shrink-0 border-border/60 text-foreground hover:bg-muted/60">
-                <Users className="h-3 w-3" />
+                className="h-8 gap-1.5 text-[13px] font-medium flex-shrink-0 rounded-full px-3.5 bg-background border-border text-foreground shadow-sm hover:bg-muted/60">
+                <Users className="h-3.5 w-3.5" />
                 Share
               </Button>
             </DropdownMenuTrigger>
@@ -940,12 +1192,6 @@ export function EditorTopBar({
               <div className="px-4 py-2">
                 <p className="text-[11px] font-semibold text-muted-foreground mb-2">Project access</p>
                 <div className="space-y-2">
-                  {/* Collaborators link */}
-                  <button onClick={() => { setShareOpen(false); openSecondaryPanel("collab", onRightPanelChange); }}
-                    className="w-full flex items-center justify-between text-xs py-1 hover:text-foreground text-muted-foreground transition-colors">
-                    <span>People you invited</span>
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
                   {/* Current user */}
                   <div className="flex items-center gap-2.5">
                     <div className="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0">
@@ -957,6 +1203,36 @@ export function EditorTopBar({
                     </div>
                     <span className="text-[11px] text-muted-foreground shrink-0">Owner</span>
                   </div>
+                  {shareCollabLoading && shareCollaborators.length === 0 && (
+                    <p className="text-[10px] text-muted-foreground py-1">Loading people…</p>
+                  )}
+                  {shareCollaborators.map((c) => {
+                    const name = c.profile?.full_name || c.profile?.email?.split("@")[0] || "Collaborator";
+                    const initial = name.slice(0, 1).toUpperCase();
+                    return (
+                      <div key={c.id} className="flex items-center gap-2.5">
+                        <div className="w-7 h-7 rounded-full bg-sky-600/80 flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0 overflow-hidden">
+                          {c.profile?.avatar_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={c.profile.avatar_url} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            initial
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium truncate">{name}</p>
+                          <p className="text-[10px] text-muted-foreground truncate">{c.profile?.email}</p>
+                        </div>
+                        <span className="text-[11px] text-muted-foreground shrink-0 capitalize">{c.role}</span>
+                      </div>
+                    );
+                  })}
+                  {/* Manage collaborators */}
+                  <button onClick={() => { setShareOpen(false); openSecondaryPanel("collab", onRightPanelChange); }}
+                    className="w-full flex items-center justify-between text-xs py-1 hover:text-foreground text-muted-foreground transition-colors">
+                    <span>{shareCollaborators.length > 0 ? "Manage people" : "People you invited"}</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
                   {/* Invite link */}
                   <div className="flex items-center justify-between py-1">
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -1021,7 +1297,7 @@ export function EditorTopBar({
                 size="sm"
                 disabled={isDeploying}
                 onClick={() => { void handleDeploy(deployProvider); }}
-                className="relative h-7 gap-1.5 text-xs font-semibold bg-[#0066FF] hover:bg-[#0052cc] text-white border-0 rounded-r-none px-3"
+                className="relative h-8 gap-1.5 text-[13px] font-semibold bg-[#0066FF] hover:bg-[#0052cc] text-white border-0 rounded-full rounded-r-none pl-3.5 pr-2.5 shadow-sm"
               >
                 {isDeploying ? <><Loader2 className="h-3 w-3 animate-spin" />Publishing…</> : <><Rocket className="h-3 w-3" />Publish</>}
                 {hasUnpublishedChanges && !isDeploying && (
@@ -1035,7 +1311,7 @@ export function EditorTopBar({
                 <Button
                   size="sm"
                   disabled={isDeploying}
-                  className="h-7 px-1.5 text-xs bg-[#0066FF] hover:bg-[#0052cc] text-white border-0 rounded-l-none border-l border-white/20"
+                  className="h-8 px-2 text-xs bg-[#0066FF] hover:bg-[#0052cc] text-white border-0 rounded-full rounded-l-none border-l border-white/20 shadow-sm"
                   aria-label="Publish options"
                 >
                   <ChevronDown className="h-3 w-3 opacity-70" />

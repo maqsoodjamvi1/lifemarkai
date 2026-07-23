@@ -357,7 +357,7 @@ export function StoragePanel({ projectId }: StoragePanelProps) {
         <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
           <div className="bg-violet-500/20 border-2 border-dashed border-violet-500/60 rounded-xl px-6 py-4 text-center">
             <Upload className="w-6 h-6 text-violet-400 mx-auto mb-1" />
-            <p className="text-sm font-medium text-violet-300">Drop files to upload</p>
+            <p className="text-sm font-medium text-violet-700 dark:text-violet-300">Drop files to upload</p>
           </div>
         </div>
       )}

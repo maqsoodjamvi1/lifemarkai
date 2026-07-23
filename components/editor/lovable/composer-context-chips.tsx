@@ -19,7 +19,7 @@ export function LovableComposerContextChips({ files, onRemove }: LovableComposer
       {files.map((f) => (
         <div
           key={f.id}
-          className="flex items-center gap-1 bg-violet-500/10 border border-violet-500/20 text-violet-300 text-[10px] rounded-md px-2 py-0.5"
+          className="flex items-center gap-1 bg-violet-500/10 border border-violet-500/20 text-violet-700 dark:text-violet-300 text-[10px] rounded-md px-2 py-0.5"
         >
           <Paperclip className="w-2.5 h-2.5 shrink-0" />
           <span className="font-mono max-w-[120px] truncate">{f.path.split("/").pop()}</span>

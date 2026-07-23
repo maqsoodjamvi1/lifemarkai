@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import { Check, CheckCheck, FileText, ListChecks, Pencil, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { LovableMessageContent } from "./message-content";
 
 export function parseLovableStepPlan(raw: string): string[] {
@@ -39,51 +41,55 @@ export function LovableStepPlanCard({
   onBuild,
 }: LovableStepPlanCardProps) {
   return (
-    <div className="w-full rounded-xl border border-violet-500/30 bg-card overflow-hidden">
-      <div className="flex items-center gap-2 px-3 py-2 bg-violet-500/10 border-b border-violet-500/20">
+    <div
+      data-card-focusable
+      tabIndex={0}
+      className="w-full max-w-sm rounded-[var(--radius-4)] border border-border bg-[var(--bg-secondary-pulse)] shadow-surface-md overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--border-accent)]"
+    >
+      <div className="flex items-center gap-2 px-3 py-2 bg-muted/40 border-b border-border">
         <ListChecks className="w-3.5 h-3.5 text-violet-400" />
-        <span className="text-xs font-semibold">Step-by-Step Plan</span>
+        <span className="text-xs font-semibold">Step plan</span>
         <span className="ml-auto text-[10px] text-muted-foreground">
-          {approved.size}/{steps.length} steps selected
+          {approved.size}/{steps.length} selected
         </span>
       </div>
-      <div className="px-3 py-2 space-y-1.5">
-        {steps.map((step, idx) => (
-          <button
-            key={idx}
-            onClick={() => onToggleStep(idx)}
-            className={`w-full flex items-start gap-2.5 px-2.5 py-2 rounded-lg text-left text-xs transition-all border ${
-              approved.has(idx)
-                ? "border-violet-500/40 bg-violet-500/10 text-foreground"
-                : "border-border bg-muted/30 text-muted-foreground line-through"
-            }`}
-          >
-            <span
-              className={`mt-0.5 w-4 h-4 rounded flex items-center justify-center shrink-0 text-[10px] font-bold border ${
-                approved.has(idx) ? "border-violet-400 bg-violet-400 text-white" : "border-border text-muted-foreground"
-              }`}
+      <div className="divide-y divide-border/60">
+        {steps.map((step, idx) => {
+          const on = approved.has(idx);
+          return (
+            <button
+              key={idx}
+              type="button"
+              onClick={() => onToggleStep(idx)}
+              className="w-full flex items-start gap-2.5 px-3 py-2.5 text-left hover:bg-muted/30 transition-colors"
             >
-              {approved.has(idx) ? <Check className="w-2.5 h-2.5" /> : idx + 1}
-            </span>
-            <span>{step}</span>
-          </button>
-        ))}
+              <span
+                className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 ${
+                  on ? "bg-violet-600 border-violet-500" : "border-border"
+                }`}
+              >
+                {on && <Check className="w-3 h-3 text-white" />}
+              </span>
+              <span className="text-xs leading-relaxed text-foreground/90">{step}</span>
+            </button>
+          );
+        })}
       </div>
       <div className="flex items-center gap-2 px-3 py-2 border-t border-border bg-muted/20">
-        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={onSelectAll}>
-          <CheckCheck className="w-3 h-3" /> Select all
+        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onSelectAll}>
+          Select all
         </Button>
-        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 text-muted-foreground" onClick={onClear}>
+        <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onClear}>
           Clear
         </Button>
         <Button
           size="sm"
-          className="ml-auto h-7 text-xs gap-1.5 bg-violet-600 hover:bg-violet-700 text-white"
+          className="ml-auto h-7 text-xs gap-1.5 bg-[#0066FF] hover:bg-[#0052cc] text-white"
           disabled={approved.size === 0}
           onClick={onBuild}
         >
           <Zap className="w-3 h-3" />
-          Build {approved.size} step{approved.size !== 1 ? "s" : ""}
+          Build selected
         </Button>
       </div>
     </div>
@@ -92,32 +98,86 @@ export function LovableStepPlanCard({
 
 interface LovablePlanReadyCardProps {
   content: string;
-  onRefine: () => void;
-  onApproveAndBuild: () => void;
+  onRefine: (editedMarkdown: string) => void;
+  onApproveAndBuild: (editedMarkdown: string) => void;
 }
 
 export function LovablePlanReadyCard({ content, onRefine, onApproveAndBuild }: LovablePlanReadyCardProps) {
-  const planBody = content.replace("<!-- PLAN_READY -->", "").trim();
+  const initial = content.replace("<!-- PLAN_READY -->", "").trim();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(initial);
 
   return (
-    <div className="w-full rounded-xl border border-border bg-card overflow-hidden">
+    <div
+      data-card-focusable
+      tabIndex={0}
+      className="w-full max-w-sm rounded-[var(--radius-4)] border border-border bg-[var(--bg-secondary-pulse)] shadow-surface-md overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--border-accent)]"
+    >
       <div className="flex items-center gap-2 px-3 py-2 bg-muted/40 border-b border-border">
         <FileText className="w-3.5 h-3.5 text-violet-400" />
         <span className="text-xs font-semibold">Implementation Plan</span>
         <span className="ml-auto text-[10px] text-muted-foreground">Plan mode · no code changed</span>
       </div>
-      <div className="px-4 py-3 text-sm leading-relaxed text-foreground">
-        <LovableMessageContent content={planBody} mode="plan" />
-      </div>
+      {editing ? (
+        <Textarea
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          className="min-h-[200px] max-h-[420px] rounded-none border-0 text-sm leading-relaxed resize-y focus-visible:ring-0"
+          autoFocus
+        />
+      ) : (
+        <div className="px-4 py-3 text-sm leading-relaxed text-foreground">
+          <LovableMessageContent content={draft} mode="plan" />
+        </div>
+      )}
       <div className="flex items-center gap-2 px-3 py-2 border-t border-border bg-muted/20">
-        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1.5" onClick={onRefine}>
-          <Pencil className="w-3 h-3" />
+        {editing ? (
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                setDraft(initial);
+                setEditing(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs gap-1.5"
+              onClick={() => setEditing(false)}
+              disabled={!draft.trim()}
+            >
+              Done editing
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-xs gap-1.5"
+            onClick={() => setEditing(true)}
+          >
+            <Pencil className="w-3 h-3" />
+            Edit
+          </Button>
+        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-7 text-xs gap-1.5"
+          onClick={() => onRefine(draft.trim() || initial)}
+        >
           Refine
         </Button>
         <Button
           size="sm"
           className="ml-auto h-7 text-xs gap-1.5 bg-[#0066FF] hover:bg-[#0052cc] text-white"
-          onClick={onApproveAndBuild}
+          onClick={() => onApproveAndBuild(draft.trim() || initial)}
+          disabled={!(draft.trim() || initial)}
         >
           <CheckCheck className="w-3 h-3" />
           Approve &amp; Build

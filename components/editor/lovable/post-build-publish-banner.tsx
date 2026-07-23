@@ -31,12 +31,12 @@ export function LovablePostBuildPublishBanner({
           exit={{ opacity: 0, y: 6 }}
           className="mx-3 mb-2 flex items-center gap-2 rounded-xl border border-violet-500/25 bg-violet-500/10 px-3 py-2.5"
         >
-          <Rocket className="w-4 h-4 text-violet-300 shrink-0" />
+          <Rocket className="w-4 h-4 text-violet-700 dark:text-violet-300 shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium text-violet-100">
+            <p className="text-xs font-medium text-violet-900 dark:text-violet-100">
               {isUpdate ? "Build complete — update your live site?" : "Build complete — ready to publish?"}
             </p>
-            <p className="text-[10px] text-violet-300/70 mt-0.5">
+            <p className="text-[10px] text-violet-700/70 dark:text-violet-300/70 mt-0.5">
               {isUpdate
                 ? "Deploy the latest snapshot so visitors see your changes."
                 : "Share a public URL when you're happy with the preview."}
@@ -54,7 +54,7 @@ export function LovablePostBuildPublishBanner({
             <button
               type="button"
               onClick={onOpenPublishPanel}
-              className="shrink-0 p-1.5 rounded-lg text-violet-300/70 hover:text-violet-100 hover:bg-violet-500/20 transition-colors"
+              className="shrink-0 p-1.5 rounded-lg text-violet-700/70 dark:text-violet-300/70 hover:text-violet-100 hover:bg-violet-500/20 transition-colors"
               title="Publish settings"
             >
               <ExternalLink className="w-3.5 h-3.5" />

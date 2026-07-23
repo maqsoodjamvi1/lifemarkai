@@ -2,14 +2,13 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { isManagementConfigured, queryManagedSql } from "@/lib/cloud/management";
+import { sendEmail } from "@/lib/email/resend";
 
 /**
- * GET /api/cloud/export?projectId=… — user-facing database export.
+ * GET  /api/cloud/export?projectId=… — download SQL dump
+ * POST /api/cloud/export { projectId, email: true } — email dump as attachment
  *
- * Lovable parity (Jul 3 2026: "Export or remove Lovable Cloud data"):
- * produces a portable SQL dump (schema + data as INSERTs) of the project's
- * managed database, streamed back as a .sql download. Caps keep it sane:
- * 200 tables, 5 000 rows/table, ~20 MB total.
+ * Caps: 200 tables, 5 000 rows/table, ~20 MB total.
  */
 export const maxDuration = 120;
 
@@ -25,57 +24,58 @@ function sqlLiteral(v: unknown): string {
   return `'${String(v).replace(/'/g, "''")}'`;
 }
 
-export async function GET(req: NextRequest) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const projectId = req.nextUrl.searchParams.get("projectId");
-  if (!projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 });
-
+async function loadOwnedCloudProject(supabase: any, userId: string, projectId: string) {
   const { data: project } = await supabase
     .from("projects")
     .select("id, name, cloud_enabled, cloud_project_ref, cloud_status")
     .eq("id", projectId)
-    .eq("user_id", user.id)
+    .eq("user_id", userId)
     .single();
-  if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  if (!project) return { error: NextResponse.json({ error: "Project not found" }, { status: 404 }) };
   if (!project.cloud_enabled || !project.cloud_project_ref || !isManagementConfigured()) {
-    return NextResponse.json(
-      { error: "Export needs a provisioned Cloud backend. Local-mode Cloud has no managed database to export." },
-      { status: 400 },
-    );
+    return {
+      error: NextResponse.json(
+        { error: "Export needs a provisioned Cloud backend. Local-mode Cloud has no managed database to export." },
+        { status: 400 },
+      ),
+    };
   }
   if (project.cloud_status === "paused") {
-    return NextResponse.json({ error: "The Cloud backend is paused — wake it up before exporting." }, { status: 409 });
+    return {
+      error: NextResponse.json(
+        { error: "The Cloud backend is paused — wake it up before exporting." },
+        { status: 409 },
+      ),
+    };
   }
+  return { project };
+}
 
-  const ref = project.cloud_project_ref as string;
+async function buildDumpSql(projectId: string, projectName: string, ref: string): Promise<string> {
   const chunks: string[] = [
     `-- LifemarkAI database export`,
-    `-- Project: ${project.name} (${projectId})`,
+    `-- Project: ${projectName} (${projectId})`,
     `-- Exported: ${new Date().toISOString()}`,
     `-- Note: data rows capped at ${MAX_ROWS_PER_TABLE} per table.`,
     ``,
   ];
   let totalBytes = 0;
 
-  // 1. Table list (public schema, ordinary tables)
   const tablesRes = await queryManagedSql<{ table_name: string }>(
     ref,
     `SELECT table_name FROM information_schema.tables
      WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
      ORDER BY table_name LIMIT ${MAX_TABLES}`,
   );
-  if (!tablesRes.ok) {
-    return NextResponse.json({ error: `Could not list tables: ${tablesRes.error}` }, { status: 502 });
-  }
+  if (!tablesRes.ok) throw new Error(`Could not list tables: ${tablesRes.error}`);
 
   for (const { table_name } of tablesRes.rows) {
-    if (!/^[a-zA-Z0-9_]+$/.test(table_name)) continue; // paranoia
-    // 2. Schema: reconstruct a CREATE TABLE from information_schema
+    if (!/^[a-zA-Z0-9_]+$/.test(table_name)) continue;
     const colsRes = await queryManagedSql<{
-      column_name: string; data_type: string; is_nullable: string; column_default: string | null;
+      column_name: string;
+      data_type: string;
+      is_nullable: string;
+      column_default: string | null;
     }>(
       ref,
       `SELECT column_name, data_type, is_nullable, column_default
@@ -85,14 +85,20 @@ export async function GET(req: NextRequest) {
     );
     if (!colsRes.ok || colsRes.rows.length === 0) continue;
 
-    const colDefs = colsRes.rows.map((c) =>
-      `  "${c.column_name}" ${c.data_type}` +
-      (c.column_default ? ` DEFAULT ${c.column_default}` : "") +
-      (c.is_nullable === "NO" ? " NOT NULL" : ""),
+    const colDefs = colsRes.rows.map(
+      (c) =>
+        `  "${c.column_name}" ${c.data_type}` +
+        (c.column_default ? ` DEFAULT ${c.column_default}` : "") +
+        (c.is_nullable === "NO" ? " NOT NULL" : ""),
     );
-    chunks.push(`-- ── ${table_name} ──`, `CREATE TABLE IF NOT EXISTS "${table_name}" (`, colDefs.join(",\n"), `);`, ``);
+    chunks.push(
+      `-- ── ${table_name} ──`,
+      `CREATE TABLE IF NOT EXISTS "${table_name}" (`,
+      colDefs.join(",\n"),
+      `);`,
+      ``,
+    );
 
-    // 3. Data as INSERTs
     const dataRes = await queryManagedSql<Record<string, unknown>>(
       ref,
       `SELECT * FROM "${table_name}" LIMIT ${MAX_ROWS_PER_TABLE}`,
@@ -114,12 +120,96 @@ export async function GET(req: NextRequest) {
     if (totalBytes > MAX_TOTAL_BYTES) break;
   }
 
-  const body = chunks.join("\n");
-  return new NextResponse(body, {
-    headers: {
-      "Content-Type": "application/sql; charset=utf-8",
-      "Content-Disposition": `attachment; filename="${(project.name as string).replace(/[^\w-]+/g, "-")}-export.sql"`,
-      "Cache-Control": "no-store",
-    },
-  });
+  return chunks.join("\n");
+}
+
+export async function GET(req: NextRequest) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const projectId = req.nextUrl.searchParams.get("projectId");
+  if (!projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 });
+
+  const loaded = await loadOwnedCloudProject(supabase, user.id, projectId);
+  if ("error" in loaded && loaded.error) return loaded.error;
+  const project = loaded.project!;
+
+  try {
+    const body = await buildDumpSql(projectId, project.name as string, project.cloud_project_ref as string);
+    return new NextResponse(body, {
+      headers: {
+        "Content-Type": "application/sql; charset=utf-8",
+        "Content-Disposition": `attachment; filename="${(project.name as string).replace(/[^\w-]+/g, "-")}-export.sql"`,
+        "Cache-Control": "no-store",
+      },
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Export failed" },
+      { status: 502 },
+    );
+  }
+}
+
+/** POST { projectId, email?: true } — email the SQL dump to the project owner. */
+export async function POST(req: NextRequest) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const body = (await req.json().catch(() => ({}))) as { projectId?: string; email?: boolean };
+  if (!body.projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 });
+  if (!body.email) return NextResponse.json({ error: "email: true required for POST" }, { status: 400 });
+
+  const loaded = await loadOwnedCloudProject(supabase, user.id, body.projectId);
+  if ("error" in loaded && loaded.error) return loaded.error;
+  const project = loaded.project!;
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("email, full_name")
+    .eq("id", user.id)
+    .single();
+  if (!profile?.email) {
+    return NextResponse.json({ error: "No email on your account to send the export to." }, { status: 400 });
+  }
+
+  try {
+    const sql = await buildDumpSql(
+      body.projectId,
+      project.name as string,
+      project.cloud_project_ref as string,
+    );
+    const filename = `${(project.name as string).replace(/[^\w-]+/g, "-")}-export.sql`;
+    const result = await sendEmail({
+      to: profile.email,
+      subject: `Database export ready — ${project.name}`,
+      html: `<p>Hi ${profile.full_name ?? "there"},</p>
+<p>Your Lifemark Cloud database export for <strong>${project.name}</strong> is attached (${Math.round(sql.length / 1024)} KB).</p>
+<p style="color:#888;font-size:12px">Caps: 200 tables · 5,000 rows/table · 20 MB. Re-export anytime from the Cloud panel.</p>`,
+      attachments: [
+        {
+          filename,
+          content: Buffer.from(sql, "utf8"),
+        },
+      ],
+    });
+    if ((result as { error?: unknown })?.error) {
+      return NextResponse.json(
+        { error: "Email failed — check RESEND_API_KEY or download the export instead." },
+        { status: 502 },
+      );
+    }
+    return NextResponse.json({ ok: true, emailedTo: profile.email, bytes: sql.length });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Export failed" },
+      { status: 502 },
+    );
+  }
 }

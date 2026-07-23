@@ -10,6 +10,7 @@ import {
   consumeProjectAiCredits,
   ProjectAiCreditLimitError,
 } from "@/lib/ai/project-credit-meter";
+import { buildAiRequestPreview } from "@/lib/ai/redact-ai-request";
 
 // POST /api/projects/[id]/ai-proxy
 // Managed, no-key AI connector for apps built with LifemarkAI.
@@ -150,6 +151,8 @@ interface LogMeta {
   model?: string | null;
   tokensUsed?: number;
   startedAt: number;
+  /** Truncated, secret-redacted request preview (migration 095). */
+  requestPreview?: string | null;
 }
 
 /** Best-effort per-request activity log (admin client → works for public apps). */
@@ -169,6 +172,7 @@ async function logAiRequest(
       cost: entry.cost,
       duration_ms: Math.max(0, Date.now() - entry.startedAt),
       error: entry.error ?? null,
+      request_preview: entry.requestPreview ?? null,
     });
   } catch {
     /* logging never affects the response */
@@ -177,6 +181,10 @@ async function logAiRequest(
 
 function logSuccessfulRequest(projectId: string, cost: number, meta: LogMeta): void {
   void logAiRequest(projectId, { ...meta, cost, status: "success" });
+}
+
+function withPreview(meta: LogMeta, requestPreview: string | null): LogMeta {
+  return requestPreview ? { ...meta, requestPreview } : meta;
 }
 
 export async function POST(
@@ -230,6 +238,14 @@ export async function POST(
   const cost = CAPABILITY_COST[capability];
   const currentUsed = Number(project.ai_credits_used ?? 0);
   const creditLimit = Number(project.ai_credit_limit ?? 0);
+  const requestPreview = buildAiRequestPreview({
+    capability,
+    prompt: body.prompt,
+    text: body.text,
+    input: body.input,
+    messages: body.messages,
+    systemPrompt: body.systemPrompt,
+  });
 
   if (currentUsed + cost > creditLimit) {
     return json(
@@ -266,11 +282,11 @@ export async function POST(
       const result = await generateImage({ prompt, size, style: body.style });
       if (!result) throw new Error("Image generation failed");
 
-      logSuccessfulRequest(projectId, cost, {
+      logSuccessfulRequest(projectId, cost, withPreview({
         capability,
         model: result.model,
         startedAt,
-      });
+      }, requestPreview));
       return json(origin, {
         capability,
         url: result.url,
@@ -299,12 +315,12 @@ export async function POST(
         input: Array.isArray(input) ? cleanItems : cleanItems[0],
       });
 
-      logSuccessfulRequest(projectId, cost, {
+      logSuccessfulRequest(projectId, cost, withPreview({
         capability,
         model: result.model ?? model,
         tokensUsed: result.usage?.total_tokens,
         startedAt,
-      });
+      }, requestPreview));
       return json(origin, {
         capability,
         model: result.model ?? model,
@@ -337,11 +353,11 @@ export async function POST(
       });
       const audio = Buffer.from(await speech.arrayBuffer()).toString("base64");
       const mimeType = format === "mp3" ? "audio/mpeg" : `audio/${format}`;
-      logSuccessfulRequest(projectId, cost, {
+      logSuccessfulRequest(projectId, cost, withPreview({
         capability,
         model,
         startedAt,
-      });
+      }, requestPreview));
 
       return json(origin, {
         capability,
@@ -379,11 +395,11 @@ export async function POST(
         language: body.language?.slice(0, 16),
         prompt: body.prompt?.slice(0, 500),
       });
-      logSuccessfulRequest(projectId, cost, {
+      logSuccessfulRequest(projectId, cost, withPreview({
         capability,
         model,
         startedAt,
-      });
+      }, requestPreview));
 
       return json(origin, {
         capability,
@@ -426,12 +442,12 @@ export async function POST(
       { projectId, userId: project.user_id, task: "app_ai_proxy" },
     );
 
-    logSuccessfulRequest(projectId, cost, {
+    logSuccessfulRequest(projectId, cost, withPreview({
       capability,
       model: result.model ?? selectedModel,
       tokensUsed: result.tokensUsed,
       startedAt,
-    });
+    }, requestPreview));
     return json(origin, {
       capability,
       content: result.content,
@@ -455,6 +471,7 @@ export async function POST(
       startedAt,
       status: "error",
       error: err instanceof Error ? err.message : "AI request failed",
+      requestPreview,
     });
     return json(origin, { error: err instanceof Error ? err.message : "AI request failed", capability }, 500);
   }

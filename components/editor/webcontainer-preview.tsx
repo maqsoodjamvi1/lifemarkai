@@ -1,6 +1,12 @@
 // @ts-nocheck
 "use client";
 
+/**
+ * DRAFT / LEGACY — in-browser WebContainer preview (StackBlitz).
+ * Lovable production preview is Modal sandboxes. This component only mounts
+ * when NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1.
+ */
+
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   RefreshCw, Terminal, Loader2, AlertCircle,
@@ -22,6 +28,8 @@ interface WebContainerPreviewProps {
   /** Owning project — the WC singleton is torn down when this changes so
    *  files from a previous project can't bleed into the new preview. */
   projectId?: string;
+  /** Inject guest comments widget when the project is public. */
+  isPublic?: boolean;
 }
 
 type DeviceMode = "desktop" | "tablet" | "mobile";
@@ -97,7 +105,7 @@ function resetWebContainerSingleton() {
   _bootGeneration++;
 }
 
-const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onError, onReady, embedded = false, className = "", projectId }) => {
+const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onError, onReady, embedded = false, className = "", projectId, isPublic = false }) => {
   const [status, setStatus] = useState<Status>("idle");
   const [logs, setLogs] = useState<string[]>([]);
   // Watchdog state
@@ -155,7 +163,11 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
   }, []);
 
   const mountFiles = useCallback(async (wc: any, filesToLoad: ProjectFile[]) => {
-    const patched = patchFilesForWebContainer(filesToLoad);
+    const patched = patchFilesForWebContainer(filesToLoad, {
+      isPublic,
+      projectId,
+      appOrigin: typeof window !== "undefined" ? window.location.origin : undefined,
+    });
     const fileTree = buildFileTree(patched);
     await wc.mount(fileTree);
     for (const file of patched) {
@@ -166,7 +178,11 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
   }, [addLog, buildFileTree]);
 
   const syncFiles = useCallback(async (wc: any, filesToLoad: ProjectFile[]) => {
-    const patched = patchFilesForWebContainer(filesToLoad);
+    const patched = patchFilesForWebContainer(filesToLoad, {
+      isPublic,
+      projectId,
+      appOrigin: typeof window !== "undefined" ? window.location.origin : undefined,
+    });
     let changed = 0;
     for (const file of patched) {
       const path = file.path.replace(/\\/g, "/").replace(/^\/+/, "");
@@ -702,7 +718,7 @@ const WebContainerPreview: React.FC<WebContainerPreviewProps> = ({ files, onErro
             >
               <AlertCircle className="w-6 h-6 text-red-400" />
               <div className="text-center max-w-sm">
-                <p className="text-xs text-slate-300 font-medium mb-1">WebContainer Error</p>
+                <p className="text-xs text-slate-700 dark:text-slate-300 font-medium mb-1">WebContainer Error</p>
                 <p className="text-xs text-slate-400">{errorMsg}</p>
               </div>
 

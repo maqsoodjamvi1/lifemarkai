@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -47,39 +47,6 @@ function parseTestNames(content: string): string[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(content)) !== null) names.push(m[1]);
   return names;
-}
-
-/** Deterministic "random" 0..1 from a string seed */
-function seedRand(seed: string): number {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) {
-    h = (Math.imul(31, h) + seed.charCodeAt(i)) | 0;
-  }
-  return ((h >>> 0) / 0xffffffff);
-}
-
-function simulateResults(file: ProjectFile): TestSuiteResult {
-  const names = parseTestNames(file.content || "");
-  const results: TestResult[] = names.map((name) => {
-    const r = seedRand(file.path + name);
-    const status: "pass" | "fail" | "skip" = r > 0.85 ? "fail" : r > 0.78 ? "skip" : "pass";
-    const duration = Math.floor(r * 1800 + 200);
-    return {
-      name,
-      status,
-      duration,
-      error: status === "fail"
-        ? `Expected element to be visible\n  Selector: [data-testid="${name.toLowerCase().replace(/\s+/g, "-")}"]\n  Timeout: 5000ms`
-        : undefined,
-    };
-  });
-
-  const passed = results.filter((r) => r.status === "pass").length;
-  const failed = results.filter((r) => r.status === "fail").length;
-  const skipped = results.filter((r) => r.status === "skip").length;
-  const duration = results.reduce((s, r) => s + r.duration, 0);
-
-  return { file: file.path, results, duration, passed, failed, skipped };
 }
 
 function buildFilesSample(files: ProjectFile[]): string {
@@ -213,7 +180,13 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
 
   // ── Live test state ─────────────────────────────────────────────────────────
   const deployedUrl = (project as any).deployed_url as string | null ?? null;
-  const [liveUrl, setLiveUrl] = useState<string>(deployedUrl ?? "");
+  const [liveUrl, setLiveUrl] = useState<string>(() => {
+    try {
+      const live = sessionStorage.getItem("lifemark-live-preview-url")?.trim();
+      if (live) return live;
+    } catch { /* private mode */ }
+    return deployedUrl ?? "";
+  });
   const [liveScenario, setLiveScenario] = useState("");
   const [isLiveRunning, setIsLiveRunning] = useState(false);
   const [liveSteps, setLiveSteps] = useState<LiveStep[]>([]);
@@ -232,9 +205,12 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
     [files]
   );
 
-  const handleGenerate = async () => {
+  const handleGenerate = useCallback(async (overrideDescription?: string) => {
+    const desc = (overrideDescription ?? description).trim();
+    if (overrideDescription !== undefined) setDescription(overrideDescription);
     setIsGenerating(true);
     setError(null);
+    setTab("generate");
     try {
       const filesSample = buildFilesSample(files);
       const res = await fetch("/api/ai/generate-browser-tests", {
@@ -244,7 +220,7 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
           projectId: project.id,
           projectName: project.name,
           previewUrl: (project as any).preview_url || (project as any).deploy_url || "",
-          description: description.trim() || undefined,
+          description: desc || undefined,
           filesSample,
         }),
       });
@@ -258,20 +234,161 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
     } finally {
       setIsGenerating(false);
     }
-  };
+  }, [description, files, onFilesUpdate, project]);
+
+  // Role-test chips in chat seed this panel and optionally auto-generate.
+  // sessionStorage covers the race where the event fires before this panel mounts.
+  useEffect(() => {
+    function applySeed(detail: { description?: string; autoGenerate?: boolean } | null | undefined) {
+      if (!detail?.description?.trim()) return;
+      setDescription(detail.description.trim());
+      setTab("generate");
+      if (detail.autoGenerate) {
+        void handleGenerate(detail.description.trim());
+      }
+    }
+    function onSeed(e: Event) {
+      applySeed((e as CustomEvent<{ description?: string; autoGenerate?: boolean }>).detail);
+    }
+    try {
+      const raw = sessionStorage.getItem("lifemark-seed-browser-tests");
+      if (raw) {
+        sessionStorage.removeItem("lifemark-seed-browser-tests");
+        applySeed(JSON.parse(raw) as { description?: string; autoGenerate?: boolean });
+      }
+    } catch { /* ignore */ }
+    window.addEventListener("lifemark-seed-browser-tests", onSeed);
+    return () => window.removeEventListener("lifemark-seed-browser-tests", onSeed);
+  }, [handleGenerate]);
+
+  /** Run one browser-test SSE against a URL; returns suite-shaped summary. */
+  const runLiveSuiteForFile = useCallback(
+    async (file: ProjectFile, url: string): Promise<TestSuiteResult> => {
+      const names = parseTestNames(file.content || "");
+      const scenario =
+        names.length > 0
+          ? `Execute Playwright coverage for ${file.path}:\n${names.map((n) => `- ${n}`).join("\n")}`
+          : `Smoke-test the app for scenarios defined in ${file.path}`;
+      const started = Date.now();
+      const res = await fetch(`/api/projects/${project.id}/browser-test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, scenario }),
+      });
+      if (!res.ok || !res.body) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? `Browser test failed (${res.status})`);
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buffer = "";
+      let pass = 0;
+      let fail = 0;
+      let note: string | undefined;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += dec.decode(value, { stream: true });
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+        for (const part of parts) {
+          let evtType = "";
+          let evtData = "";
+          for (const line of part.split("\n")) {
+            if (line.startsWith("event: ")) evtType = line.slice(7).trim();
+            if (line.startsWith("data: ")) evtData = line.slice(6);
+          }
+          if (evtType === "done" && evtData) {
+            try {
+              const payload = JSON.parse(evtData) as { pass?: number; fail?: number; note?: string };
+              pass = typeof payload.pass === "number" ? payload.pass : 0;
+              fail = typeof payload.fail === "number" ? payload.fail : 0;
+              note = payload.note;
+            } catch { /* skip */ }
+          }
+          if (evtType === "error" && evtData) {
+            let message = "Browser test error";
+            try {
+              const payload = JSON.parse(evtData) as { message?: string };
+              if (payload.message) message = payload.message;
+            } catch { /* use default */ }
+            throw new Error(message);
+          }
+        }
+      }
+      const duration = Date.now() - started;
+      const labelNames = names.length > 0 ? names : ["Live browser run"];
+      const failFrom = fail > 0 ? Math.max(0, labelNames.length - fail) : labelNames.length;
+      const results: TestResult[] = labelNames.map((name, i) => {
+        const status: "pass" | "fail" = i >= failFrom ? "fail" : "pass";
+        return {
+          name,
+          status,
+          duration: Math.round(duration / labelNames.length),
+          error: status === "fail" ? (note || "Step failed during live browser run") : undefined,
+        };
+      });
+      // API returned no counters — keep a single summary row from pass/fail defaults.
+      if (pass === 0 && fail === 0 && note) {
+        results[0] = { ...results[0], status: "fail", error: note };
+      }
+      return {
+        file: file.path,
+        results,
+        duration,
+        passed: results.filter((r) => r.status === "pass").length,
+        failed: results.filter((r) => r.status === "fail").length,
+        skipped: 0,
+      };
+    },
+    [project.id],
+  );
 
   const handleRunAll = async () => {
     if (testFiles.length === 0) return;
     setIsRunning(true);
     setSuiteResults([]);
     setTab("results");
+    setError(null);
 
-    // Simulate sequential test execution
-    for (const file of testFiles) {
-      await new Promise((r) => setTimeout(r, 600 + Math.random() * 400));
-      setSuiteResults((prev) => [...prev, simulateResults(file)]);
+    let url = liveUrl.trim();
+    if (!url) {
+      try {
+        url = sessionStorage.getItem("lifemark-live-preview-url")?.trim() || "";
+      } catch { /* private mode */ }
     }
-    setIsRunning(false);
+    if (!url) {
+      url = deployedUrl?.trim() || "";
+    }
+
+    try {
+      if (!url) {
+        setError("Start the sandbox/preview (or paste a Live URL) before running tests.");
+        setTab("live");
+        return;
+      }
+      for (const file of testFiles) {
+        try {
+          const suite = await runLiveSuiteForFile(file, url);
+          setSuiteResults((prev) => [...prev, suite]);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "Unknown error";
+          setSuiteResults((prev) => [
+            ...prev,
+            {
+              file: file.path,
+              results: [{ name: "Live browser run", status: "fail", duration: 0, error: msg }],
+              duration: 0,
+              passed: 0,
+              failed: 1,
+              skipped: 0,
+            },
+          ]);
+        }
+      }
+    } finally {
+      setIsRunning(false);
+    }
   };
 
   const handleCopyInstall = () => {
@@ -479,7 +596,7 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
           )}
 
           <Button
-            onClick={handleGenerate}
+            onClick={() => void handleGenerate()}
             disabled={isGenerating}
             className="w-full h-8 text-xs gap-2"
           >
@@ -496,7 +613,7 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
                 ✓ {testFiles.length} test file{testFiles.length !== 1 ? "s" : ""} already generated
               </p>
               <p className="text-[10px] text-muted-foreground">
-                Click "Run All" to simulate execution or view in the Tests tab.
+                Click "Run All" to run against the live preview, or open the Tests tab.
               </p>
             </div>
           )}
@@ -643,7 +760,7 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
               <Play className="w-8 h-8 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground">No results yet</p>
               <p className="text-xs text-muted-foreground/60">
-                Click "Run All" to simulate test execution.
+                Click "Run All" to run tests against the live preview.
               </p>
               {testFiles.length > 0 && (
                 <Button variant="outline" size="sm" className="text-xs gap-1.5" onClick={handleRunAll}>
@@ -787,7 +904,7 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
                     <span
                       className={`ml-auto text-[10px] px-1.5 py-0.5 rounded-full border ${
                         liveDone.engine === "playwright"
-                          ? "border-violet-500/30 bg-violet-500/10 text-violet-300"
+                          ? "border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300"
                           : "border-border text-muted-foreground"
                       }`}
                       title={liveDone.engine === "playwright"

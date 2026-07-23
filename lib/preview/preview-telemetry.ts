@@ -1,6 +1,7 @@
 /**
- * In-memory ring buffer of preview console + network events per project.
- * The preview panel POSTs here; the agent reads via tools.
+ * Preview console + network ring buffer.
+ * Hot path stays in-memory; durable copy lives in `preview_telemetry` (migration 094)
+ * so agent tools work across serverless instances / cold starts.
  */
 
 export type PreviewConsoleLine = {
@@ -83,6 +84,27 @@ export function appendPreviewNetwork(
   b.updatedAt = now;
 }
 
+export function hydratePreviewTelemetry(
+  projectId: string,
+  data: {
+    console?: PreviewConsoleLine[];
+    network?: PreviewNetworkLine[];
+    updatedAt?: string | number | null;
+  },
+): void {
+  const b = bucket(projectId);
+  if (Array.isArray(data.console) && data.console.length > 0 && b.console.length === 0) {
+    b.console = data.console.slice(-MAX_LINES);
+  }
+  if (Array.isArray(data.network) && data.network.length > 0 && b.network.length === 0) {
+    b.network = data.network.slice(-MAX_LINES);
+  }
+  if (data.updatedAt) {
+    const t = typeof data.updatedAt === "number" ? data.updatedAt : Date.parse(String(data.updatedAt));
+    if (Number.isFinite(t)) b.updatedAt = t;
+  }
+}
+
 export function getPreviewTelemetry(projectId: string): {
   console: PreviewConsoleLine[];
   network: PreviewNetworkLine[];
@@ -120,4 +142,45 @@ export function formatPreviewNetwork(projectId: string, limit = 40): string {
       return `${l.method} ${status} ${ms}${ct} ${l.url}${err}`;
     }),
   ].join("\n");
+}
+
+/** Persist current in-memory bucket to Supabase (best-effort). */
+export async function persistPreviewTelemetry(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  projectId: string,
+): Promise<void> {
+  const snap = getPreviewTelemetry(projectId);
+  await supabase.from("preview_telemetry").upsert(
+    {
+      project_id: projectId,
+      console_lines: snap.console,
+      network_lines: snap.network,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "project_id" },
+  );
+}
+
+/** Load durable telemetry into memory if the hot cache is empty. */
+export async function loadPreviewTelemetryFromDb(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  projectId: string,
+): Promise<void> {
+  const current = getPreviewTelemetry(projectId);
+  if (current.console.length > 0 || current.network.length > 0) return;
+
+  const { data } = await supabase
+    .from("preview_telemetry")
+    .select("console_lines, network_lines, updated_at")
+    .eq("project_id", projectId)
+    .maybeSingle();
+
+  if (!data) return;
+  hydratePreviewTelemetry(projectId, {
+    console: data.console_lines as PreviewConsoleLine[],
+    network: data.network_lines as PreviewNetworkLine[],
+    updatedAt: data.updated_at,
+  });
 }

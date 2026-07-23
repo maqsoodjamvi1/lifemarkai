@@ -16,7 +16,7 @@ export function LovableChatHeaderQueuePill({ count, paused, className }: Lovable
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
-        "border border-violet-500/30 bg-violet-500/10 text-violet-300 tabular-nums",
+        "border border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300 tabular-nums",
         className,
       )}
       title={paused ? "Queue paused" : "Prompts waiting in queue"}

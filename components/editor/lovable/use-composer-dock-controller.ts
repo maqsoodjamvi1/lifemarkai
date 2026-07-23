@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type { ChatInputHandle } from "@/components/editor/chat-tiptap-input";
 import type { RefObject } from "react";
 import type { EditorMode } from "@/components/editor/editor-layout";
 import type { PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import { REPEAT_STEPS, type LovableQueueItem } from "./prompt-queue";
-import type { ClarifySession } from "./clarify-session-card";
+import type { ClarifyQuestion, ClarifySession } from "./clarify-session-card";
 import type { LovableFileGenResult } from "./file-gen-result-cards";
 
 export interface UseComposerDockControllerArgs {
@@ -100,6 +100,25 @@ export function useComposerDockController(args: UseComposerDockControllerArgs) {
     [setInput, textareaRef],
   );
 
+  const onSelectRecoveryChip = useCallback(
+    (prompt: string) => {
+      const runtimeText = previewRuntimeErrors
+        .map((e) => e.message)
+        .filter(Boolean)
+        .join("\n")
+        .slice(0, 600);
+      const err = (previewError ?? runtimeText).trim().slice(0, 600);
+      setInput(err ? `${prompt}\n\nError:\n${err}` : prompt);
+      focusComposer(textareaRef, 0);
+      setAutoFixAttempts(0);
+    },
+    [previewError, previewRuntimeErrors, setAutoFixAttempts, setInput, textareaRef],
+  );
+
+  const [answeredClarifyQuestions, setAnsweredClarifyQuestions] = useState<ClarifyQuestion[] | null>(
+    null,
+  );
+
   return useMemo(
     () => ({
       autoFixing,
@@ -139,15 +158,22 @@ export function useComposerDockController(args: UseComposerDockControllerArgs) {
               }
             : null,
         ),
+      answeredClarifyQuestions,
+      onDismissAnsweredClarify: () => setAnsweredClarifyQuestions(null),
       onClarifyBuildNow: (enrichedPrompt: string) => {
+        const answered = activeClarifySession?.questions.filter((q) => q.answer.trim()) ?? [];
+        if (answered.length > 0) setAnsweredClarifyQuestions(answered);
         setActiveClarifySession(null);
         setClarifyFirst(false);
-        void sendMessage(enrichedPrompt, "build");
+        // forceBuild: the enriched prompt still matches clarify triggers (e.g.
+        // "authentication"/"database") — without it the questions loop forever.
+        void sendMessage(enrichedPrompt, "build", undefined, { forceBuild: true });
       },
       onClarifySkipAndBuild: (originalPrompt: string) => {
+        setAnsweredClarifyQuestions(null);
         setActiveClarifySession(null);
         setClarifyFirst(false);
-        void sendMessage(originalPrompt, "build");
+        void sendMessage(originalPrompt, "build", undefined, { forceBuild: true });
       },
       promptQueue,
       streaming,
@@ -197,14 +223,16 @@ export function useComposerDockController(args: UseComposerDockControllerArgs) {
           }),
         ),
       onRemoveQueueItem: (id: string) => setPromptQueue((prev) => prev.filter((q) => q.id !== id)),
-      showEmptySuggestions: messagesLength === 0 && !streaming,
+      // Empty-state prompts live in LovableChatEmptyState — avoid duplicating chips in the dock.
+      showEmptySuggestions: false,
       emptySuggestionChips: contextualEmptyPrompts,
       onSelectEmptySuggestion: onSelectComposerPrompt,
       showRecoveryChips: !streaming && !noCredits && (!!previewError || previewRuntimeErrors.length > 0),
-      onSelectRecoveryChip: onSelectComposerPrompt,
+      onSelectRecoveryChip,
     }),
     [
       activeClarifySession,
+      answeredClarifyQuestions,
       autoFixAttempts,
       autoFixing,
       freeFixesRemaining,
@@ -216,6 +244,7 @@ export function useComposerDockController(args: UseComposerDockControllerArgs) {
       maxAutoFixAttempts,
       messagesLength,
       noCredits,
+      onSelectRecoveryChip,
       onModeChange,
       onOpenPanel,
       onSelectComposerPrompt,

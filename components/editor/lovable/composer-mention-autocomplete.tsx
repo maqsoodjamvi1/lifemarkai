@@ -7,7 +7,7 @@ export type LovableMentionItem =
   | { kind: "user"; display: string; email: string }
   | { kind: "xproject"; projectName: string; projectId: string; filePath: string }
   | { kind: "xchat"; projectName: string; projectId: string }
-  | { kind: "connector"; id: string; name: string; emoji: string };
+  | { kind: "connector"; id: string; name: string; emoji: string; configured?: boolean };
 
 interface LovableComposerMentionAutocompleteProps {
   open: boolean;
@@ -78,7 +78,9 @@ export function LovableComposerMentionAutocomplete({
                 <>
                   <span className="text-muted-foreground/50">{item.emoji}</span>
                   <span className="font-medium truncate text-cyan-400">{item.name}</span>
-                  <span className="text-muted-foreground/50 text-[10px] ml-auto">connector</span>
+                  <span className={`text-[10px] ml-auto ${item.configured ? "text-emerald-400/90" : "text-muted-foreground/50"}`}>
+                    {item.configured ? "configured" : "connector"}
+                  </span>
                 </>
               ) : (
                 <>

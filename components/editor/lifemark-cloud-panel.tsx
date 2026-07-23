@@ -265,13 +265,13 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
         <div className="px-4 py-3 border-b border-border shrink-0 flex items-center gap-2">
           <Cloud className="w-4 h-4 text-violet-400" />
           <span className="text-sm font-semibold">Lifemark Cloud</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-300 ml-auto">Inactive</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/15 text-violet-700 dark:text-violet-300 ml-auto">Inactive</span>
         </div>
         <div className="flex-1 overflow-y-auto p-5">
           <div className="max-w-md mx-auto space-y-5">
             <div className="text-center">
               <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-500/20 to-purple-500/20 border border-violet-500/30 flex items-center justify-center mx-auto mb-3">
-                <Cloud className="w-7 h-7 text-violet-300" />
+                <Cloud className="w-7 h-7 text-violet-700 dark:text-violet-300" />
               </div>
               <h2 className="text-lg font-semibold">Enable Lifemark Cloud</h2>
               <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
@@ -288,7 +288,7 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
                     onClick={() => setProvisioningRegion(r.id)}
                     className={`text-xs px-2 py-2 rounded-lg border transition-all ${
                       provisioningRegion === r.id
-                        ? "border-violet-500/50 bg-violet-500/10 text-violet-200"
+                        ? "border-violet-500/50 bg-violet-500/10 text-violet-800 dark:text-violet-200"
                         : "border-border hover:border-violet-500/30 text-muted-foreground hover:text-foreground"
                     }`}
                   >
@@ -303,7 +303,7 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
             <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] p-3">
               <div className="flex items-start gap-2">
                 <AlertCircle className="w-3 h-3 text-amber-400 shrink-0 mt-0.5" />
-                <p className="text-[11px] text-amber-200/80 leading-relaxed">
+                <p className="text-[11px] text-amber-800/80 dark:text-amber-200/80 leading-relaxed">
                   Enabling Cloud creates a managed backend bundle. You can switch tiers later but the region is locked.
                 </p>
               </div>
@@ -334,7 +334,7 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
         <div className="flex items-center gap-2 mb-1.5">
           <Cloud className="w-4 h-4 text-violet-400" />
           <span className="text-sm font-semibold">Lifemark Cloud</span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 ml-auto flex items-center gap-1">
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 ml-auto flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             Active
           </span>
@@ -354,7 +354,7 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
             onClick={() => setActive(t.id as TabId)}
             className={`flex items-center gap-1.5 px-3 py-2 text-[11px] font-medium border-b-2 transition-colors whitespace-nowrap ${
               active === t.id
-                ? "border-violet-500 text-violet-300"
+                ? "border-violet-500 text-violet-700 dark:text-violet-300"
                 : "border-transparent text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -382,7 +382,7 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
               </div>
               {health ? (
                 <div className="space-y-2">
-                  <div className={`text-xs ${health.status === "healthy" ? "text-emerald-300" : "text-amber-300"}`}>
+                  <div className={`text-xs ${health.status === "healthy" ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}`}>
                     {health.status === "healthy" ? "✓ " : "⚠ "}{health.summary}
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-[11px]">
@@ -630,7 +630,7 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
                       <div className="flex-1">
                         <div className="text-sm font-medium flex items-center gap-2">
                           {t.display_name}
-                          {isCurrent && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300">Current</span>}
+                          {isCurrent && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-700 dark:text-violet-300">Current</span>}
                         </div>
                         <div className="text-[11px] text-muted-foreground">{t.description}</div>
                         <div className="text-[10px] text-muted-foreground/70 mt-0.5">
@@ -671,44 +671,79 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
                 Download your database as a SQL dump (schema + data) — use it before moving backend
                 infrastructure outside Lifemark Cloud, or as an extra backup.
               </p>
-              <Button
-                size="sm"
-                variant="outline"
-                className="text-xs"
-                disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  try {
-                    const res = await fetch(`/api/cloud/export?projectId=${project.id}`);
-                    if (!res.ok) {
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-xs"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      const res = await fetch(`/api/cloud/export?projectId=${project.id}`);
+                      if (!res.ok) {
+                        const data = await res.json().catch(() => ({}));
+                        toast({ title: "Export failed", description: (data as { error?: string }).error, variant: "destructive" });
+                        return;
+                      }
+                      const blob = await res.blob();
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `${project.name.replace(/[^\w-]+/g, "-")}-database-export.sql`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                      toast({ title: "Database exported", description: "SQL dump downloaded." });
+                    } finally { setBusy(false); }
+                  }}
+                >
+                  Export database
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-xs"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      const res = await fetch("/api/cloud/export", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ projectId: project.id, email: true }),
+                      });
                       const data = await res.json().catch(() => ({}));
-                      toast({ title: "Export failed", description: (data as { error?: string }).error, variant: "destructive" });
-                      return;
+                      if (!res.ok) {
+                        toast({
+                          title: "Email export failed",
+                          description: (data as { error?: string }).error,
+                          variant: "destructive",
+                        });
+                        return;
+                      }
+                      toast({
+                        title: "Export emailed",
+                        description: `Sent to ${(data as { emailedTo?: string }).emailedTo ?? "your account email"}.`,
+                      });
+                    } finally {
+                      setBusy(false);
                     }
-                    const blob = await res.blob();
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `${project.name.replace(/[^\w-]+/g, "-")}-database-export.sql`;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                    toast({ title: "Database exported", description: "SQL dump downloaded." });
-                  } finally { setBusy(false); }
-                }}
-              >
-                Export database
-              </Button>
+                  }}
+                >
+                  Email me the dump
+                </Button>
+              </div>
             </div>
 
             {/* Pause Cloud */}
             <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.04] p-4">
               <div className="flex items-center gap-2 mb-2">
                 <AlertCircle className="w-4 h-4 text-amber-400" />
-                <span className="text-sm font-medium text-amber-200">
+                <span className="text-sm font-medium text-amber-800 dark:text-amber-200">
                   {project.cloud_status === "paused" ? "Cloud is paused" : "Pause Cloud"}
                 </span>
               </div>
-              <p className="text-[11px] text-amber-200/70 leading-relaxed mb-3">
+              <p className="text-[11px] text-amber-800/70 dark:text-amber-200/70 leading-relaxed mb-3">
                 {project.cloud_status === "paused"
                   ? "The backend (database, auth, storage, functions) is offline and not using compute credits. Wake it up to bring your app back online — takes a few minutes."
                   : "Pausing stops compute usage while keeping your data. The live app stops working until you resume. Idle projects auto-pause after 14 days."}
@@ -716,7 +751,7 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
               <Button
                 size="sm"
                 variant="outline"
-                className="text-xs border-amber-500/40 text-amber-300 hover:bg-amber-500/10"
+                className="text-xs border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10"
                 disabled={busy}
                 onClick={async () => {
                   const action = project.cloud_status === "paused" ? "wake" : "pause";

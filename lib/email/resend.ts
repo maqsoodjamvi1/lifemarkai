@@ -220,12 +220,27 @@ export async function sendEmail({
   to,
   subject,
   html,
+  attachments,
 }: {
   to: string;
   subject: string;
   html: string;
+  attachments?: Array<{ filename: string; content: Buffer | string }>;
 }) {
-  return resend.emails.send({ from: FROM_EMAIL, to, subject, html });
+  return resend.emails.send({
+    from: FROM_EMAIL,
+    to,
+    subject,
+    html,
+    ...(attachments?.length
+      ? {
+          attachments: attachments.map((a) => ({
+            filename: a.filename,
+            content: typeof a.content === "string" ? Buffer.from(a.content) : a.content,
+          })),
+        }
+      : {}),
+  });
 }
 
 // ─── Team credit pool topped up ───────────────────────────────────────────────

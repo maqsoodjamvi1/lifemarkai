@@ -12,7 +12,7 @@ import { WEBSITE_HEADER_CONTRACT } from "@/lib/ai/website-header-contract";
 const PACKAGE_ALLOWLIST = `
 ## ⛔ STRICT PACKAGE ALLOWLIST — Only use these. Never import anything else.
 
-### Always available (bundled with Sandpack/WebContainers):
+### Always available (Modal live sandbox — Lovable parity):
 - react, react-dom, react-router-dom (v6)
 - typescript
 
@@ -40,17 +40,14 @@ const PACKAGE_ALLOWLIST = `
 - @capacitor/android (devDependency)
 - @capacitor/ios (devDependency)
 
-### ❌ NEVER USE — these will cause build errors in the srcdoc fallback engine:
-- axios (use fetch instead)
-- lodash (use native JS)
-- moment (use date-fns)
-- styled-components (use Tailwind)
-- material-ui / @mui/* (use Tailwind + Radix)
-- antd (use Tailwind + Radix)
-- jquery
+### Prefer these over heavier alternatives:
+- fetch instead of axios
+- native JS instead of lodash
+- date-fns instead of moment
+- Tailwind instead of styled-components / MUI / antd
 
-### WebContainer / Vite projects (Lovable-style live preview):
-When the app uses Vite + WebContainers, ANY npm package may be added to package.json — the preview runs real \`npm install\`. Always include packages you import (e.g. @supabase/supabase-js, @stripe/stripe-js, react-router-dom). Prefer the list above when possible.
+### Modal / Vite live preview (Lovable path):
+Preview runs a real cloud sandbox with \`npm install\`. ANY npm package may be added to package.json — always include packages you import (e.g. @supabase/supabase-js, @stripe/stripe-js, react-router-dom). Prefer the list above when possible.
 `.trim();
 
 // ─── SHARED DESIGN SYSTEM ────────────────────────────────────────────────────
@@ -287,6 +284,16 @@ const BUG_FREE_GENERATION_CONTRACT = `
 - File extensions must match content: JSX belongs in .tsx/.jsx, not .ts.
 - Remove scaffolding leftovers: no empty files, merge-conflict markers, TODO implementation notes, "Not implemented" throws, placeholder comments, or partial files.
 - For fixes, repair the root cause and then check for the next likely failure in the same file before returning.
+
+## Craft Discipline (distilled from at-scale build experience)
+- Reply in the user's language. If they write in Urdu, German, or Spanish, your prose answers in the same language (code and identifiers stay English).
+- Design-token discipline is absolute: components never carry ad-hoc color utilities (no text-white, bg-white, bg-black, hex-in-className). Define semantic tokens (HSL) in index.css + tailwind config and variants on the shared ui components; when a new look is needed, extend the design system, then use it. Verify contrast in BOTH light and dark renders — white-on-white from an unthemed component is a classic failure.
+- SEO ships by default on every page, SPA included: one keyworded <h1> per page, <title> under 60 chars, meta description under 160, semantic landmarks (header/nav/main/section/footer), descriptive alt text on every image, lazy-loaded media, and JSON-LD where the content type warrants it.
+- Debug from evidence, not guesses: when something is broken, consult the runtime signals you were given (console errors, network failures, verification findings) BEFORE proposing code. Name what the evidence shows, then fix that.
+- Architecture debt is in scope when the request exposes it: if fulfilling the change correctly requires untangling the structure it touches, do the small refactor as part of the change and say so in one line — but never restructure code the request doesn't touch.
+- No placeholder anything in shipped UI: no lorem ipsum, no gray "image here" boxes, no dead buttons. Generate real copy for the domain, generate or source real images, and wire every interactive element to working state.
+- First impressions decide everything on a fresh build: pick a distinctive direction (palette, type scale, spacing rhythm, one signature visual move) before writing components, and put that direction into the design system so every page inherits it.
+- After edits, summarize in at most two short sentences — what changed and where. The diff is the documentation; prose beyond that wastes the user's time.
 `.trim();
 
 const PRODUCT_MATURITY_CONTRACT = `

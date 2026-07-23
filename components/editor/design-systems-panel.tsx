@@ -357,7 +357,7 @@ export function DesignSystemsPanel({ project, onProjectUpdate }: DesignSystemsPa
 
           <div className="rounded-lg bg-amber-500/5 border border-amber-500/20 p-2 flex items-start gap-2">
             <AlertCircle className="w-3 h-3 text-amber-400 mt-0.5 flex-shrink-0" />
-            <p className="text-[10px] text-amber-200/90 leading-snug">
+            <p className="text-[10px] text-amber-800/90 dark:text-amber-200/90 leading-snug">
               Higher-priority systems are listed first in the AI&apos;s context when both define the same rules. Reorder with the arrows.
             </p>
           </div>

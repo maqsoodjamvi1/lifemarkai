@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import type { Message } from "@/types/database";
 import type { EditorMode } from "@/components/editor/editor-layout";
 import type { GeneratedFile } from "@/components/editor/file-attachment-card";
@@ -23,6 +24,8 @@ import { LovableVerificationCard } from "./verification-card";
 import { LovableMessageMetaBadges } from "./message-meta-badges";
 import { LovableMessageReactions } from "./message-reactions";
 import { LovableMessageEditInline } from "./message-edit-inline";
+import { formatLovableStampTime } from "./message-timestamp";
+import { LovableFixErrorMessage, parseLovableFixMessage } from "./fix-error-message";
 import { LovableRoleTestBanner } from "./role-test-banner";
 import { LovableCollapsibleText } from "./collapsible-text";
 import { LovableBranchChip } from "./branch-chip";
@@ -52,6 +55,57 @@ function buildAssistantSummary(
       .join(" ")
       .replace(/[*_`]/g, "")
       .slice(0, 240) || (diffCount > 0 ? `Updated ${diffCount} file${diffCount === 1 ? "" : "s"}.` : "Done.")
+  );
+}
+
+/** Build/agent summary with optional expand to full assistant prose. */
+function BuildSummaryWithExpand({
+  summary,
+  content,
+  mode,
+  searchQuery,
+}: {
+  summary: string;
+  content: string;
+  mode: string;
+  searchQuery?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const hasMore = content.trim().length > summary.trim().length + 40;
+  const q = searchQuery?.trim() ?? "";
+  return (
+    <div>
+      {expanded ? (
+        q ? (
+          <LovableHighlightedText text={content} query={q} />
+        ) : (
+          <LovableMessageContent content={content} mode={mode} />
+        )
+      ) : q ? (
+        <p className="text-sm text-foreground/90 leading-relaxed">
+          <LovableHighlightedText text={summary} query={q} />
+        </p>
+      ) : (
+        <p className="text-sm text-foreground/90 leading-relaxed">{summary}</p>
+      )}
+      {hasMore && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1.5 inline-flex items-center gap-0.5 text-[11px] text-violet-400/90 hover:text-violet-300 transition-colors"
+        >
+          {expanded ? (
+            <>
+              Show less <ChevronUp className="w-3 h-3" />
+            </>
+          ) : (
+            <>
+              Show more <ChevronDown className="w-3 h-3" />
+            </>
+          )}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -221,7 +275,10 @@ export function LovableMessageRow({
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       data-message-id={msg.id}
-      className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"} ${
+      data-message-role={msg.role}
+      id={msg.id}
+      // Lovable dump row: mx-auto w-full max-w-3xl flex flex-col rounded-3 py-2
+      className={`${msg.role === "user" ? "group/user-message" : "group/assistant-message"} mx-auto w-full max-w-3xl flex flex-col rounded-[var(--radius-3,12px)] py-2 ${
         searchActive
           ? "ring-2 ring-violet-500/50 rounded-xl"
           : keyboardFocused
@@ -230,8 +287,14 @@ export function LovableMessageRow({
       }`}
     >
       <div
-        className={`group relative ${msg.role === "user" ? "max-w-[80%] items-end" : "w-full items-start"} flex flex-col gap-1`}
+        className={`group relative ${msg.role === "user" ? "w-full items-end pr-4 gap-2" : "w-full items-start gap-1 px-4"} flex flex-col`}
       >
+        {/* Lovable dump: centered "Today at 1:38 PM" stamp above user messages */}
+        {msg.role === "user" && (
+          <div className="text-[var(--fg-tertiary)] mb-1 self-center text-sm font-normal md:text-xs select-none">
+            {formatLovableStampTime(msg.created_at)}
+          </div>
+        )}
         {hasStepPlan ? (() => {
           const steps = parseLovableStepPlan(msg.content);
           const approved = approvedSteps ?? new Set(steps.map((_, i) => i));
@@ -250,65 +313,82 @@ export function LovableMessageRow({
         {hasPlanReady ? (
           <LovablePlanReadyCard
             content={msg.content}
-            onRefine={() => onSendMessage("Continue refining this plan. Ask me any clarifying questions.")}
-            onApproveAndBuild={() => {
-              const planMarkdown = msg.content.replace("<!-- PLAN_READY -->", "").trim();
-              onApprovePlan?.(planMarkdown);
+            onRefine={(editedMarkdown) =>
+              void onSendMessage(
+                `Continue refining this plan. Ask clarifying questions if needed.\n\nCurrent plan:\n\n${editedMarkdown}`,
+              )
+            }
+            onApproveAndBuild={(editedMarkdown) => {
+              // Approve alone starts the build (editor-layout handleApprovePlan).
+              // Do not also sendMessage here — that double-fired implement.
+              onApprovePlan?.(editedMarkdown);
               onModeChange?.("build");
-              void onSendMessage(`Implement this approved plan:\n\n${planMarkdown}`, "build");
             }}
           />
         ) : (
-          {msg.role === "user" && (branchMeta?.branched_at || branchMeta?.branch_from_snapshot_id) && (
-            <LovableBranchChip
-              branchedAt={branchMeta.branched_at}
-              snapshotId={branchMeta.branch_from_snapshot_id}
-              onOpenSnapshot={onOpenBranchSnapshot}
-            />
-          )}
-          <LovableMessageBubble role={msg.role}>
-            {(() => {
-              const analyzeMeta = msg.role === "assistant" ? parseAnalyzeMetadata(msg.metadata) : null;
-              if (analyzeMeta) {
-                return (
-                  <AnalyzeMessageCard
-                    meta={analyzeMeta}
-                    createdAt={new Date(msg.created_at).toLocaleTimeString()}
-                    onSaveToProject={onSaveAnalyzeFile}
-                  />
-                );
-              }
-              if (msg.role === "assistant" && (msg.mode === "build" || msg.mode === "agent" || msg.mode === "patch")) {
-                const diffCount = diffs?.length ?? 0;
-                const changedCount = changedPaths?.length ?? 0;
-                const summary = buildAssistantSummary(msg.content ?? "", diffCount, changedCount);
-                return <p className="text-sm text-foreground/90 leading-relaxed">{summary}</p>;
-              }
-              if (searchQuery.trim()) {
-                const highlighted = <LovableHighlightedText text={msg.content} query={searchQuery} />;
-                return msg.role === "user" ? (
-                  <LovableCollapsibleText text={msg.content}>{highlighted}</LovableCollapsibleText>
-                ) : (
-                  highlighted
-                );
-              }
-              if (msg.role === "user") {
-                return (
-                  <LovableCollapsibleText text={msg.content ?? ""}>
-                    <LovableMessageContent content={msg.content} mode={msg.mode ?? "chat"} />
-                  </LovableCollapsibleText>
-                );
-              }
-              return <LovableMessageContent content={msg.content} mode={msg.mode ?? "chat"} />;
-            })()}
-          </LovableMessageBubble>
+          <>
+            {msg.role === "user" && (branchMeta?.branched_at || branchMeta?.branch_from_snapshot_id) && (
+              <LovableBranchChip
+                branchedAt={branchMeta.branched_at}
+                snapshotId={branchMeta.branch_from_snapshot_id}
+                onOpenSnapshot={onOpenBranchSnapshot}
+              />
+            )}
+            <LovableMessageBubble role={msg.role}>
+              {(() => {
+                // Lovable dump: fix requests render as a compact "Fix error"
+                // special message with the raw error collapsed behind a chevron.
+                const fixMeta = parseLovableFixMessage(msg.content);
+                if (fixMeta) {
+                  return <LovableFixErrorMessage title={fixMeta.title} detail={fixMeta.detail} />;
+                }
+                const analyzeMeta = msg.role === "assistant" ? parseAnalyzeMetadata(msg.metadata) : null;
+                if (analyzeMeta) {
+                  return (
+                    <AnalyzeMessageCard
+                      meta={analyzeMeta}
+                      createdAt={new Date(msg.created_at).toLocaleTimeString()}
+                      onSaveToProject={onSaveAnalyzeFile}
+                    />
+                  );
+                }
+                if (msg.role === "assistant" && (msg.mode === "build" || msg.mode === "agent" || msg.mode === "patch")) {
+                  const diffCount = diffs?.length ?? 0;
+                  const changedCount = changedPaths?.length ?? 0;
+                  const summary = buildAssistantSummary(msg.content ?? "", diffCount, changedCount);
+                  return (
+                    <BuildSummaryWithExpand
+                      summary={summary}
+                      content={msg.content ?? ""}
+                      mode={msg.mode ?? "chat"}
+                      searchQuery={searchQuery}
+                    />
+                  );
+                }
+                if (searchQuery.trim()) {
+                  const highlighted = <LovableHighlightedText text={msg.content} query={searchQuery} />;
+                  return (
+                    <LovableCollapsibleText text={msg.content ?? ""}>{highlighted}</LovableCollapsibleText>
+                  );
+                }
+                if (msg.role === "user" || msg.role === "assistant") {
+                  return (
+                    <LovableCollapsibleText text={msg.content ?? ""}>
+                      <LovableMessageContent content={msg.content} mode={msg.mode ?? "chat"} />
+                    </LovableCollapsibleText>
+                  );
+                }
+                return <LovableMessageContent content={msg.content} mode={msg.mode ?? "chat"} />;
+              })()}
+            </LovableMessageBubble>
+          </>
         )}
 
         {msg.role === "assistant" && Array.isArray(agentTrace) && (
           <LovableAgentTrace
             trace={agentTrace}
-            seconds={(msg.metadata as { work_seconds?: number }).work_seconds}
-            totalSteps={(msg.metadata as { steps?: number }).steps}
+            seconds={(msg.metadata as { work_seconds?: number } | null)?.work_seconds}
+            totalSteps={(msg.metadata as { steps?: number } | null)?.steps}
           />
         )}
 
@@ -317,7 +397,7 @@ export function LovableMessageRow({
             {buildActivity.every((s) => s.status === "done") ? (
               <LovableAgentTrace
                 trace={buildActivity.map((s) => ({ t: "action", c: s.label }))}
-                seconds={(msg.metadata as { work_seconds?: number }).work_seconds}
+                seconds={(msg.metadata as { work_seconds?: number } | null)?.work_seconds}
                 totalSteps={buildActivity.length}
               />
             ) : (
@@ -336,6 +416,19 @@ export function LovableMessageRow({
 
         {msg.role === "assistant" && diffs && diffs.length > 0 && (() => {
           const { title, statStr } = computeLovableChangeCardMeta(diffs);
+          const taskSource =
+            buildActivity && buildActivity.length > 0
+              ? buildActivity.map((s, i) => ({
+                  id: `ba-${i}`,
+                  label: s.label,
+                  done: s.status === "done",
+                }))
+              : Array.isArray(agentTrace) && agentTrace.length > 0
+                ? agentTrace
+                    .filter((t): t is { t: string; c: string } => typeof (t as { c?: string }).c === "string")
+                    .slice(0, 12)
+                    .map((t, i) => ({ id: `at-${i}`, label: t.c, done: true }))
+                : undefined;
           return (
             <LovableChangeCard
               title={title}
@@ -345,9 +438,12 @@ export function LovableMessageRow({
               onToggleDetails={onToggleDiffDetails}
               onPreview={() => {
                 onPreviewChanges?.();
-                onFocusPreview?.();
+                // Prefer after-snapshot version preview when available (Lovable Preview tab).
+                if (onPreviewVersion) onPreviewVersion();
+                else onFocusPreview?.();
               }}
               onToggleBookmark={onToggleBookmark}
+              tasks={taskSource}
               detailsContent={
                 <DiffViewer
                   diffs={diffs.map((d) => computeFileDiff(d.path, d.oldContent, d.newContent))}
@@ -363,7 +459,10 @@ export function LovableMessageRow({
         })()}
 
         {msg.role === "assistant" && (!diffs || diffs.length === 0) && changedPaths && changedPaths.length > 0 && (
-          <LovableChangedFilesCard paths={changedPaths} onFocusPreview={onFocusPreview} />
+          <LovableChangedFilesCard
+            paths={changedPaths}
+            onFocusPreview={onPreviewVersion ?? onFocusPreview}
+          />
         )}
 
         {msg.role === "assistant" && screenshot && (
@@ -375,6 +474,7 @@ export function LovableMessageRow({
             role={msg.role}
             createdAt={msg.created_at}
             statsText={msg.content}
+            copyText={msg.content}
             copied={copiedId === msg.id}
             linkCopied={copiedLinkId === msg.id}
             bookmarked={bookmarked}
@@ -394,6 +494,13 @@ export function LovableMessageRow({
             onThumbsUp={msg.role === "assistant" ? onThumbsUp : undefined}
             onThumbsDown={msg.role === "assistant" ? onThumbsDown : undefined}
             onAddToKnowledge={msg.role === "assistant" ? onAddToKnowledge : undefined}
+            onRevert={msg.role === "assistant" && onRevertVersion && !isCurrentVersion ? onRevertVersion : undefined}
+            revertDisabled={!!isCurrentVersion}
+            onUndoLatest={
+              msg.role === "assistant" && isCurrentVersion && onRevertVersion
+                ? onRevertVersion
+                : undefined
+            }
           >
             {msg.role === "assistant" && (
               <LovableMessageMetaBadges

@@ -76,7 +76,8 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
   {
     title: "Chat",
     shortcuts: [
-      { keys: ["⌘", "F"], description: "Search messages" },
+      { keys: ["⌘", "F"], description: "Search messages (when chat focused)" },
+      { keys: ["⌘", "⇧", "F"], description: "Search messages (anywhere)" },
       { keys: ["Alt", "B"], description: "Toggle bookmarks filter" },
       { keys: ["F3"], description: "Next search result" },
       { keys: ["⇧", "F3"], description: "Previous search result" },

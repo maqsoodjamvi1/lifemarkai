@@ -452,7 +452,7 @@ export function TestingPanel({ projectId, files, onFilesUpdate, onOpenFile }: Te
                 {liveLogs.length > 0 && (
                   <div className="rounded-lg bg-black/40 border border-border p-2 max-h-48 overflow-y-auto font-mono">
                     {liveLogs.map((l, i) => (
-                      <p key={i} className={`text-[10px] leading-relaxed whitespace-pre-wrap break-all ${l.isError ? "text-red-400" : "text-slate-300"}`}>
+                      <p key={i} className={`text-[10px] leading-relaxed whitespace-pre-wrap break-all ${l.isError ? "text-red-400" : "text-slate-700 dark:text-slate-300"}`}>
                         {l.line}
                       </p>
                     ))}

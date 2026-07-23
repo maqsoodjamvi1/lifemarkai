@@ -229,7 +229,7 @@ Please:
       {allStrings.length === 0 ? null : (
         <div className="flex items-center gap-1.5 px-3 py-2 bg-sky-500/5 border-b border-sky-500/10 shrink-0">
           <Languages className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-          <p className="text-[10px] text-sky-300 flex-1">
+          <p className="text-[10px] text-sky-700 dark:text-sky-300 flex-1">
             {allStrings.length} hardcoded strings detected across {byFile.size} file{byFile.size !== 1 ? "s" : ""}.
           </p>
         </div>
@@ -277,7 +277,7 @@ Please:
                 onClick={() => toggleLocale(locale.code)}
                 className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border text-[11px] transition-all ${
                   selectedLocales.includes(locale.code)
-                    ? "border-sky-500/40 bg-sky-500/10 text-sky-300"
+                    ? "border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300"
                     : "border-border text-muted-foreground hover:bg-muted/40"
                 }`}
               >

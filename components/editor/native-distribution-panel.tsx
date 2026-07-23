@@ -3,16 +3,20 @@
 import { useState } from "react";
 import {
   Smartphone, Monitor, Copy, Check, ExternalLink, Terminal,
-  Apple, Play, Sparkles,
+  Apple, Play, Sparkles, PackagePlus, Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
-import type { Project } from "@/types/database";
+import type { Project, ProjectFile } from "@/types/database";
+import { buildCapacitorScaffoldFiles } from "@/lib/native/capacitor-scaffold";
 
 interface NativeDistributionPanelProps {
   project: Project;
   deployedUrl?: string | null;
   onSendToChat?: (prompt: string) => void;
+  /** Persist scaffolded native packaging files into the project */
+  onFilesUpdate?: (files: ProjectFile[], opts?: { replace?: boolean }) => void;
+  files?: ProjectFile[];
 }
 
 type Platform = "ios" | "android" | "desktop";
@@ -35,17 +39,95 @@ const COMMANDS: Record<Platform, { label: string; cmd: string }[]> = {
   ],
 };
 
-export function NativeDistributionPanel({ project, deployedUrl, onSendToChat }: NativeDistributionPanelProps) {
+export function NativeDistributionPanel({
+  project,
+  deployedUrl,
+  onSendToChat,
+  onFilesUpdate,
+  files = [],
+}: NativeDistributionPanelProps) {
   const [platform, setPlatform] = useState<Platform>("ios");
   const [copied, setCopied] = useState<string | null>(null);
+  const [scaffolding, setScaffolding] = useState(false);
 
   const deployUrl = deployedUrl ?? project.deployed_url ?? "https://your-app.lifemarkai.app";
+  const alreadyScaffolded = files.some((f) => f.path === "capacitor.config.ts");
 
   function copy(text: string, id: string) {
     void navigator.clipboard.writeText(text);
     setCopied(id);
     setTimeout(() => setCopied(null), 2000);
     toast({ title: "Copied" });
+  }
+
+  async function scaffoldIntoProject() {
+    if (!onFilesUpdate) {
+      toast({
+        title: "Cannot scaffold here",
+        description: "Open Native Apps from the editor to write files into the project.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setScaffolding(true);
+    try {
+      const scaffold = buildCapacitorScaffoldFiles({
+        appName: project.name || "My App",
+        serverUrl: deployUrl,
+      });
+      const byPath = new Map(files.map((f) => [f.path, f]));
+      const next: ProjectFile[] = [...files];
+      for (const f of scaffold) {
+        const existing = byPath.get(f.path);
+        let saved: ProjectFile | null = null;
+        if (existing?.id && !String(existing.id).startsWith("local-")) {
+          const res = await fetch(`/api/projects/${project.id}/files`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fileId: existing.id, content: f.content }),
+          });
+          if (!res.ok) throw new Error(`Failed to update ${f.path}`);
+          saved = (await res.json().catch(() => null)) as ProjectFile | null;
+          const idx = next.findIndex((x) => x.path === f.path);
+          if (idx >= 0) {
+            next[idx] = { ...existing, content: f.content, language: f.language };
+          }
+        } else {
+          const res = await fetch(`/api/projects/${project.id}/files`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: f.path, content: f.content, language: f.language }),
+          });
+          if (!res.ok) throw new Error(`Failed to write ${f.path}`);
+          saved = (await res.json().catch(() => null)) as ProjectFile | null;
+          next.push(
+            saved ??
+              ({
+                id: `local-${f.path}`,
+                project_id: project.id,
+                path: f.path,
+                content: f.content,
+                language: f.language,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              } as ProjectFile),
+          );
+        }
+      }
+      onFilesUpdate(next, { replace: true });
+      toast({
+        title: "Native packaging scaffolded",
+        description: "Added capacitor.config.ts, electron/main.cjs, and NATIVE.md.",
+      });
+    } catch (err) {
+      toast({
+        title: "Scaffold failed",
+        description: err instanceof Error ? err.message : "Could not write files",
+        variant: "destructive",
+      });
+    } finally {
+      setScaffolding(false);
+    }
   }
 
   const mobilePrompt =
@@ -64,7 +146,7 @@ export function NativeDistributionPanel({ project, deployedUrl, onSendToChat }: 
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-200/90 leading-relaxed">
+        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/25 text-[11px] text-amber-800/90 dark:text-amber-200/90 leading-relaxed">
           Deploy your web app first. Capacitor loads your live URL in a native shell — set{" "}
           <code className="bg-black/20 px-1 rounded">server.url</code> in{" "}
           <code className="bg-black/20 px-1 rounded">capacitor.config.ts</code> to:
@@ -115,6 +197,20 @@ export function NativeDistributionPanel({ project, deployedUrl, onSendToChat }: 
             </div>
           ))}
         </div>
+
+        <Button
+          size="sm"
+          className="w-full text-xs gap-1.5"
+          onClick={() => void scaffoldIntoProject()}
+          disabled={scaffolding}
+        >
+          {scaffolding ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <PackagePlus className="w-3.5 h-3.5" />
+          )}
+          {alreadyScaffolded ? "Update Capacitor scaffold in project" : "Scaffold Capacitor into project"}
+        </Button>
 
         {onSendToChat && (platform === "ios" || platform === "android") && (
           <Button

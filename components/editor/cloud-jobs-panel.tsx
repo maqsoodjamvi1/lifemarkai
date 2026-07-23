@@ -217,7 +217,7 @@ export function CloudJobsPanel({ projectId }: { projectId: string }) {
                 <div className="flex items-center gap-2">
                   <span className={`w-1.5 h-1.5 rounded-full ${j.active ? "bg-emerald-400" : "bg-muted-foreground/40"}`} />
                   <span className="text-[11px] font-medium">{j.jobname ?? `job #${j.jobid}`}</span>
-                  <span className="text-[10px] font-mono text-cyan-300 ml-auto">{j.schedule}</span>
+                  <span className="text-[10px] font-mono text-cyan-700 dark:text-cyan-300 ml-auto">{j.schedule}</span>
                   {j.jobname && (
                     <button
                       onClick={() => void deleteJob(j.jobname!)}

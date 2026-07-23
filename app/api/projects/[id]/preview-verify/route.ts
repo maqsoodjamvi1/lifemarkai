@@ -8,9 +8,9 @@ import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
 
 export const runtime = "nodejs";
 
-/** POST — quick preview sanity check after AI builds (no deploy URL required). */
+/** POST — quick preview sanity check after AI builds (prefers live Modal URL). */
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
@@ -23,6 +23,30 @@ export async function POST(
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
+  let clientPreviewUrl: string | null = null;
+  try {
+    const body = (await req.json()) as { previewUrl?: unknown };
+    if (typeof body?.previewUrl === "string" && /^https?:\/\//i.test(body.previewUrl.trim())) {
+      clientPreviewUrl = body.previewUrl.trim();
+    }
+  } catch {
+    /* empty body is fine */
+  }
+
+  const { data: projectRow } = await (supabase as any)
+    .from("projects")
+    .select("preview_url, deployed_url")
+    .eq("id", id)
+    .maybeSingle();
+
+  const previewUrl =
+    clientPreviewUrl ??
+    (typeof projectRow?.preview_url === "string" && /^https?:\/\//i.test(projectRow.preview_url)
+      ? projectRow.preview_url
+      : typeof projectRow?.deployed_url === "string" && /^https?:\/\//i.test(projectRow.deployed_url)
+        ? projectRow.deployed_url
+        : null);
+
   const { data: files, error } = await (supabase as any)
     .from("project_files")
     .select("path, content, language, project_id, id, created_at, updated_at")
@@ -33,28 +57,41 @@ export async function POST(
     return NextResponse.json({ ok: false, checks: [{ name: "Files", pass: false, detail: "No files" }] });
   }
 
+  // Static srcdoc checks remain useful for cold-start / no-Modal projects.
   const html = buildFallbackHtml(files);
   const result = verifyPreviewHtml(html);
-  if (!result.ok) return NextResponse.json(result);
 
   const runtime = await runSelfVerification({
     supabase,
     projectId: id,
     userId: user.id,
     maxRounds: 0,
+    previewUrl,
   });
 
   if (!runtime) return NextResponse.json(result);
 
+  const liveLabel = previewUrl ? "Live preview" : `Runtime render (${runtime.engine})`;
   return NextResponse.json({
-    ok: result.ok && runtime.passed,
+    ok: (previewUrl ? true : result.ok) && runtime.passed,
+    previewUrl: previewUrl ?? null,
     checks: [
-      ...result.checks,
+      ...(previewUrl
+        ? [
+            {
+              name: "Live preview URL",
+              pass: true,
+              detail: previewUrl.replace(/^https?:\/\//, "").slice(0, 80),
+            },
+          ]
+        : result.checks),
       {
-        name: `Runtime render (${runtime.engine})`,
+        name: liveLabel,
         pass: runtime.passed,
         detail: runtime.passed
-          ? "Mounted without runtime errors"
+          ? previewUrl
+            ? "Mounted without runtime errors on live preview"
+            : "Mounted without runtime errors"
           : runtime.errors.slice(0, 2).join("; "),
       },
     ],

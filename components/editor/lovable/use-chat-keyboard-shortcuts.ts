@@ -102,10 +102,23 @@ export function useChatKeyboardShortcuts({
 
   useEffect(() => {
     function handler(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === "f") {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "f") return;
+      const target = e.target as HTMLElement | null;
+      const inMonaco =
+        !!target?.closest?.(".monaco-editor") ||
+        !!document.activeElement?.closest?.(".monaco-editor");
+      const inChatPanel = !!target?.closest?.("[data-chat-panel]");
+
+      // ⌘⇧F always opens chat search; bare ⌘F only when focus is in chat
+      // so Monaco find-in-file keeps working in the code panel.
+      if (e.shiftKey) {
         e.preventDefault();
         onSearchShortcut();
+        return;
       }
+      if (inMonaco || !inChatPanel) return;
+      e.preventDefault();
+      onSearchShortcut();
     }
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);

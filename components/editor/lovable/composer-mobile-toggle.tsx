@@ -26,7 +26,7 @@ export function LovableComposerMobileToggle({
       className={cn(
         "h-7 px-2.5 rounded-lg border text-xs font-medium transition-colors inline-flex items-center gap-1.5 shrink-0",
         active
-          ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300"
+          ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
           : "border-[color:var(--border-default)] text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-muted)]/40",
         disabled && "opacity-50 pointer-events-none",
         className,

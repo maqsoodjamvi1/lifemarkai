@@ -1,12 +1,22 @@
 import { NextResponse } from "next/server";
+import {
+  analyzeUnavailableReason,
+  isAnalyzeExecutionEnabled,
+} from "@/lib/ai/analyze-runner";
 
-/** Whether unsandboxed analyze / binary file-gen is enabled on this deploy. */
+/** Whether analyze / binary file-gen execution is available on this deploy. */
 export async function GET() {
-  const enabled = process.env.ALLOW_UNSANDBOXED_ANALYZE === "true";
+  const enabled = isAnalyzeExecutionEnabled();
+  const engine = process.env.E2B_API_KEY
+    ? "e2b"
+    : process.env.MODAL_TOKEN_ID && process.env.MODAL_TOKEN_SECRET
+      ? "modal"
+      : process.env.ALLOW_UNSANDBOXED_ANALYZE === "true"
+        ? "local"
+        : null;
   return NextResponse.json({
     analyzeEnabled: enabled,
-    reason: enabled
-      ? null
-      : "Data analysis and binary file generation need an isolated sandbox. Set ALLOW_UNSANDBOXED_ANALYZE=true only in trusted environments, or wait for the managed sandbox.",
+    engine,
+    reason: analyzeUnavailableReason(),
   });
 }

@@ -43,7 +43,7 @@ export function LovableConnectorApprovalCard({
             type="button"
             disabled={busy}
             onClick={() => onAllow(decision)}
-            className="text-[11px] px-2.5 py-1 rounded-full bg-cyan-500/15 text-cyan-300 hover:bg-cyan-500/25 border border-cyan-500/30 transition-colors disabled:opacity-50"
+            className="text-[11px] px-2.5 py-1 rounded-full bg-cyan-500/15 text-cyan-700 dark:text-cyan-300 hover:bg-cyan-500/25 border border-cyan-500/30 transition-colors disabled:opacity-50"
           >
             {decision === "once" ? "Allow once" : "Always allow"}
           </button>

@@ -218,7 +218,7 @@ export function SaveAsTemplatePanel({ projectId, projectName = "" }: SaveAsTempl
                     onClick={() => setCategory(cat.id)}
                     className={`px-2 py-1 rounded-md text-[10px] border transition-all ${
                       category === cat.id
-                        ? "border-violet-500/50 bg-violet-500/15 text-violet-300"
+                        ? "border-violet-500/50 bg-violet-500/15 text-violet-700 dark:text-violet-300"
                         : "border-border bg-muted/20 text-muted-foreground hover:text-foreground"
                     }`}
                   >

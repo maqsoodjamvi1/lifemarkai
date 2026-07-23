@@ -134,7 +134,13 @@ function SvgBlock({ code }: { code: string }) {
         <pre className="p-3 text-[10px] text-muted-foreground font-mono whitespace-pre-wrap max-h-64 overflow-auto">{code}</pre>
       ) : (
         <div
-          className="p-4 flex items-center justify-center bg-[url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22><rect width=%228%22 height=%228%22 fill=%22%23262637%22/><rect x=%228%22 y=%228%22 width=%228%22 height=%228%22 fill=%22%23262637%22/></svg>')] [&>svg]:max-w-full [&>svg]:max-h-72"
+          className="p-4 flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-72"
+          // Transparency checkerboard — inline style because Tailwind
+          // arbitrary values can't contain spaces (the class never generated).
+          style={{
+            backgroundImage: "repeating-conic-gradient(#262637 0% 25%, transparent 0% 50%)",
+            backgroundSize: "16px 16px",
+          }}
           dangerouslySetInnerHTML={{ __html: clean }}
         />
       )}
@@ -284,11 +290,15 @@ function LovableChatCodeBlock({ language, code }: { language: string; code: stri
 
 function linkifyLineRefs(content: string): string {
   const REF = /@([\w./\-]+\.\w{1,8}):(\d+)(?:-(\d+))?/g;
+  const SECURITY = /@security-memory\b|Security Memory/g;
   return content
     .split(/(```[\s\S]*?```)/)
-    .map((seg, i) =>
-      i % 2 === 1 ? seg : seg.replace(REF, (m, path, start) => `[${m}](#lm-ref/${encodeURIComponent(path)}/${start})`),
-    )
+    .map((seg, i) => {
+      if (i % 2 === 1) return seg;
+      return seg
+        .replace(SECURITY, () => `[Security Memory](#lm-security-memory)`)
+        .replace(REF, (m, path, start) => `[${m}](#lm-ref/${encodeURIComponent(path)}/${start})`);
+    })
     .join("");
 }
 
@@ -330,6 +340,17 @@ export const LovableMessageContent = React.memo(function LovableMessageContent({
           </blockquote>
         ),
         a: ({ href, children }) => {
+          if (href === "#lm-security-memory") {
+            return (
+              <span
+                data-mention="security-memory"
+                className="group/pill inline-flex items-center gap-1 rounded-full border border-[color:var(--border-default)] bg-[var(--bg-secondary-pulse)] px-2 py-0.5 text-[11px] font-medium text-[var(--fg-secondary)] align-baseline"
+              >
+                <span aria-hidden className="size-1.5 rounded-full bg-emerald-500" />
+                Security Memory
+              </span>
+            );
+          }
           if (href?.startsWith("#lm-ref/")) {
             const [, encodedPath, lineStr] = href.split("/");
             return (
@@ -353,6 +374,30 @@ export const LovableMessageContent = React.memo(function LovableMessageContent({
             <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline">
               {children}
             </a>
+          );
+        },
+        // Lovable parity (Jul 14 2026): media in chat renders as clickable
+        // thumbnails, not bare file paths / full-bleed images.
+        img({ src, alt }: React.ComponentPropsWithoutRef<"img">) {
+          if (!src) return null;
+          return (
+            <button
+              type="button"
+              onClick={() => window.open(src, "_blank", "noopener,noreferrer")}
+              className="group/thumb my-1.5 inline-block overflow-hidden rounded-[var(--radius-3,12px)] border border-[color:var(--border-translucent)] bg-[var(--bg-muted)]/40 align-top"
+              title={alt || "Open image"}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={src}
+                alt={alt ?? ""}
+                loading="lazy"
+                className="block max-h-56 max-w-full object-cover transition-transform duration-150 group-hover/thumb:scale-[1.02] cursor-zoom-in"
+              />
+              {alt && (
+                <span className="block truncate px-2 py-1 text-[10px] text-[var(--fg-tertiary)]">{alt}</span>
+              )}
+            </button>
           );
         },
       }}

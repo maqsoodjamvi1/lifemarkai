@@ -27,7 +27,7 @@ export function LovableAutofixBanner({ attempt, maxAttempts, freeRemaining }: Lo
       <Wand2 className="w-3.5 h-3.5 shrink-0 animate-pulse" />
       Auto-fixing preview error… (attempt {attempt}/{maxAttempts})
       {typeof freeRemaining === "number" && (
-        <span className="text-violet-300/70">· {freeRemaining} free left today</span>
+        <span className="text-violet-700/70 dark:text-violet-300/70">· {freeRemaining} free left today</span>
       )}
     </div>
   );

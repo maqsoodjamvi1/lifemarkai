@@ -271,9 +271,23 @@ ${contextFiles.length > 0
       );
     }
 
-    const fixFiles = finding.proposed_fix?.files;
-    if (finding.status !== "fix_proposed" || !Array.isArray(fixFiles) || fixFiles.length === 0) {
+    const allFixFiles = finding.proposed_fix?.files;
+    if (finding.status !== "fix_proposed" || !Array.isArray(allFixFiles) || allFixFiles.length === 0) {
       return NextResponse.json({ error: "No proposed fix to apply — run propose_fix first" }, { status: 400 });
+    }
+
+    // Optional path filter — client Accept/Reject in the self-heal DiffViewer.
+    const pathFilter = Array.isArray((body as { paths?: unknown }).paths)
+      ? new Set(
+          ((body as { paths: unknown[] }).paths)
+            .filter((p): p is string => typeof p === "string" && p.length > 0),
+        )
+      : null;
+    const fixFiles = pathFilter
+      ? allFixFiles.filter((f: { path?: string }) => f?.path && pathFilter.has(f.path))
+      : allFixFiles;
+    if (fixFiles.length === 0) {
+      return NextResponse.json({ error: "No accepted files to apply" }, { status: 400 });
     }
 
     const { error: upsertErr } = await (supabase as any).from("project_files").upsert(

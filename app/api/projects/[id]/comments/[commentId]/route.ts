@@ -39,14 +39,44 @@ export async function PATCH(
     .eq("id", commentId)
     .eq("project_id", id)
     .select(`
-      *,
-      author:profiles!project_comments_user_id_fkey(id, full_name, avatar_url, email)
+      id,
+      project_id,
+      user_id,
+      parent_id,
+      content,
+      resolved,
+      resolved_by,
+      resolved_at,
+      created_at,
+      updated_at,
+      element_xpath,
+      element_tag,
+      page_path,
+      element_preview,
+      is_guest,
+      guest_name
     `)
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  return NextResponse.json(data);
+  // FK is to auth.users — fetch profile separately for the author embed.
+  let author: {
+    id: string;
+    full_name: string | null;
+    avatar_url: string | null;
+    email: string | null;
+  } | null = null;
+  if (data?.user_id) {
+    const { data: profile } = await (supabase as any)
+      .from("profiles")
+      .select("id, full_name, avatar_url, email")
+      .eq("id", data.user_id)
+      .maybeSingle();
+    author = profile ?? null;
+  }
+
+  return NextResponse.json({ ...data, author });
 }
 
 // DELETE /api/projects/[id]/comments/[commentId]

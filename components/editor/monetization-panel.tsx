@@ -247,9 +247,9 @@ export function MonetizationPanel({ projectId, projectSlug }: MonetizationPanelP
             </div>
 
             {/* Stripe note */}
-            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-300 space-y-1">
+            <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300 space-y-1">
               <p className="font-medium flex items-center gap-1.5"><CreditCard className="w-3.5 h-3.5" />Stripe Connect required</p>
-              <p className="text-amber-300/70">Payments go directly to your Stripe account. Connect Stripe in Settings → Integrations to activate billing.</p>
+              <p className="text-amber-700/70 dark:text-amber-300/70">Payments go directly to your Stripe account. Connect Stripe in Settings → Integrations to activate billing.</p>
             </div>
 
             {/* Embed snippet */}

@@ -1,10 +1,10 @@
 /**
  * POST /api/projects/:id/sandbox-preview
  *
- * Runs the project's files in a real isolated sandbox (Modal — Lovable parity;
- * E2B fallback) and returns a LIVE preview URL. When no sandbox backend is
- * configured, responds with { enabled: false } so the client falls back to
- * WebContainer / srcdoc preview.
+ * Runs the project's files in a Modal sandbox (Lovable parity) and returns a
+ * LIVE preview tunnel URL. When Modal isn't configured, responds with
+ * `{ enabled: false }` so the editor shows "Modal preview required"
+ * (not WebContainer / srcdoc / esbuild).
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
@@ -35,7 +35,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   const { user } = await getServerUser(supabase);
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Not configured → tell the client to use the in-browser preview engine.
+  // Not configured → client shows "Modal preview required".
   if (!isSandboxEnabled()) {
     return NextResponse.json({ enabled: false, reason: "sandbox_not_configured" });
   }
@@ -84,20 +84,6 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const { port, startCommand } = detectSandboxStart(files);
 
-  const provider = getSandboxProvider();
-  const result = await provider.runProject({
-    files,
-    port,
-    startCommand,
-    projectId,
-    template: process.env.E2B_TEMPLATE,
-  });
-
-  if (!result.ok) {
-    return NextResponse.json({ enabled: true, ok: false, error: result.error, logs: result.logs });
-  }
-
-  // Persist the live preview URL + sandbox id for reconnects (Lovable warm-session parity).
   const { data: existing } = await (supabase as any)
     .from("projects")
     .select("metadata")
@@ -106,6 +92,40 @@ export async function POST(req: NextRequest, { params }: Params) {
   const prevMeta = (existing?.metadata && typeof existing.metadata === "object")
     ? (existing.metadata as Record<string, unknown>)
     : {};
+
+  const persistPhase = (phase: string, detail?: string) => {
+    void (supabase as any)
+      .from("projects")
+      .update({
+        metadata: {
+          ...prevMeta,
+          sandbox_phase: phase,
+          sandbox_phase_detail: detail ?? null,
+          sandbox_provider: getSandboxProviderId(),
+          sandbox_updated_at: new Date().toISOString(),
+        },
+      })
+      .eq("id", projectId)
+      .then(() => {})
+      .catch(() => {});
+  };
+
+  const provider = getSandboxProvider();
+  // Modal-first cloud preview (Lovable parity). Do not pass E2B templates here.
+  const result = await provider.runProject({
+    files,
+    port,
+    startCommand,
+    projectId,
+    onProgress: (phase, detail) => persistPhase(phase, detail),
+  });
+
+  if (!result.ok) {
+    persistPhase("error", result.error);
+    return NextResponse.json({ enabled: true, ok: false, error: result.error, logs: result.logs });
+  }
+
+  // Persist the live preview URL + sandbox id for reconnects (Lovable warm-session parity).
   const { error: previewUrlErr } = await (supabase as any)
     .from("projects")
     .update({
@@ -115,6 +135,8 @@ export async function POST(req: NextRequest, { params }: Params) {
         sandbox_id: result.sandboxId,
         sandbox_port: port,
         sandbox_provider: getSandboxProviderId(),
+        sandbox_phase: "ready",
+        sandbox_phase_detail: null,
         sandbox_updated_at: new Date().toISOString(),
       },
     })
@@ -130,6 +152,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     sandboxId: result.sandboxId,
     logs: result.logs,
     provider: getSandboxProviderId(),
+    phase: "ready",
     sandboxName: sandboxNameForProject(projectId),
   });
 }
@@ -152,6 +175,7 @@ export async function GET(req: NextRequest, { params }: Params) {
   }
 
   const queryId = req.nextUrl.searchParams.get("sandboxId");
+  const phaseOnly = req.nextUrl.searchParams.get("phaseOnly") === "1";
   const { data: project } = await (supabase as any)
     .from("projects")
     .select("preview_url, metadata")
@@ -165,11 +189,35 @@ export async function GET(req: NextRequest, { params }: Params) {
     queryId ||
     (typeof meta.sandbox_id === "string" ? meta.sandbox_id : null);
 
+  // Lightweight boot-progress poll — never mark ok on a stale preview_url alone
+  // (dead Modal tunnels were blanking the iframe while phase stuck at "writing").
+  if (phaseOnly) {
+    const phase = typeof meta.sandbox_phase === "string" ? meta.sandbox_phase : null;
+    const phaseDetail =
+      typeof meta.sandbox_phase_detail === "string" ? meta.sandbox_phase_detail : null;
+    const ready = phase === "ready" && Boolean(project?.preview_url);
+    return NextResponse.json({
+      enabled: true,
+      ok: ready,
+      previewUrl: ready ? project?.preview_url ?? null : null,
+      sandboxId,
+      phase,
+      phaseDetail,
+      provider: getSandboxProviderId(),
+    });
+  }
+
+  const phaseFromMeta =
+    typeof meta.sandbox_phase === "string" ? meta.sandbox_phase : null;
+  const phaseDetailFromMeta =
+    typeof meta.sandbox_phase_detail === "string" ? meta.sandbox_phase_detail : null;
+
   if (!sandboxId) {
     const provider = getSandboxProvider();
     if (provider.reconnectByProject) {
+      const storedPort = typeof meta.sandbox_port === "number" ? meta.sandbox_port : undefined;
       const { port } = detectSandboxStart([]);
-      const byProject = await provider.reconnectByProject(projectId, port);
+      const byProject = await provider.reconnectByProject(projectId, storedPort ?? port);
       if (byProject.ok && byProject.previewUrl) {
         await (supabase as any)
           .from("projects")
@@ -178,8 +226,9 @@ export async function GET(req: NextRequest, { params }: Params) {
             metadata: {
               ...meta,
               sandbox_id: byProject.sandboxId,
-              sandbox_port: port,
+              sandbox_port: storedPort ?? port,
               sandbox_provider: getSandboxProviderId(),
+              sandbox_phase: "ready",
               sandbox_updated_at: new Date().toISOString(),
             },
           })
@@ -191,36 +240,105 @@ export async function GET(req: NextRequest, { params }: Params) {
           sandboxId: byProject.sandboxId,
           reconnected: true,
           provider: getSandboxProviderId(),
+          phase: "ready",
         });
       }
     }
-    return NextResponse.json({ enabled: true, ok: false, reason: "no_sandbox_id" });
+    return NextResponse.json({
+      enabled: true,
+      ok: false,
+      reason: "no_sandbox_id",
+      phase: phaseFromMeta,
+      phaseDetail: phaseDetailFromMeta,
+      provider: getSandboxProviderId(),
+    });
   }
 
   const provider = getSandboxProvider();
   const storedPort = typeof meta.sandbox_port === "number" ? meta.sandbox_port : undefined;
   const port = storedPort ?? detectSandboxStart([]).port;
   const result = await provider.reconnect(sandboxId, port);
-  if (!result.ok || !result.previewUrl) {
+  if (result.ok && result.previewUrl) {
+    // Persist the EFFECTIVE sandbox id too — updating only preview_url leaves
+    // metadata.sandbox_id stale, and phaseOnly polls hand that stale id back to
+    // the client, whose later syncs then hit a dead sandbox forever.
+    await (supabase as any)
+      .from("projects")
+      .update({
+        preview_url: result.previewUrl,
+        metadata: {
+          ...meta,
+          sandbox_id: result.sandboxId ?? sandboxId,
+          sandbox_updated_at: new Date().toISOString(),
+        },
+      })
+      .eq("id", projectId);
+
     return NextResponse.json({
       enabled: true,
-      ok: false,
-      error: result.error ?? "Sandbox expired",
-      sandboxId,
+      ok: true,
+      previewUrl: result.previewUrl,
+      sandboxId: result.sandboxId ?? sandboxId,
+      reconnected: true,
+      provider: getSandboxProviderId(),
+      phase: typeof meta.sandbox_phase === "string" ? meta.sandbox_phase : "ready",
+      phaseDetail:
+        typeof meta.sandbox_phase_detail === "string" ? meta.sandbox_phase_detail : null,
     });
   }
 
+  // Stale client/session sandboxId is common after reclaim — fall back to the
+  // project-named Modal sandbox so the iframe is not left on a dead tunnel.
+  if (provider.reconnectByProject) {
+    const byProject = await provider.reconnectByProject(projectId, port);
+    if (byProject.ok && byProject.previewUrl) {
+      await (supabase as any)
+        .from("projects")
+        .update({
+          preview_url: byProject.previewUrl,
+          metadata: {
+            ...meta,
+            sandbox_id: byProject.sandboxId,
+            sandbox_port: port,
+            sandbox_provider: getSandboxProviderId(),
+            sandbox_phase: "ready",
+            sandbox_updated_at: new Date().toISOString(),
+          },
+        })
+        .eq("id", projectId);
+      return NextResponse.json({
+        enabled: true,
+        ok: true,
+        previewUrl: byProject.previewUrl,
+        sandboxId: byProject.sandboxId,
+        reconnected: true,
+        recoveredFromStaleId: true,
+        provider: getSandboxProviderId(),
+        phase: "ready",
+      });
+    }
+  }
+
+  // Clear stale URL so the client cold-boots instead of framing a dead tunnel.
   await (supabase as any)
     .from("projects")
-    .update({ preview_url: result.previewUrl })
+    .update({
+      preview_url: null,
+      metadata: {
+        ...meta,
+        sandbox_phase: "error",
+        sandbox_phase_detail: result.error ?? "Sandbox expired",
+        sandbox_updated_at: new Date().toISOString(),
+      },
+    })
     .eq("id", projectId);
 
   return NextResponse.json({
     enabled: true,
-    ok: true,
-    previewUrl: result.previewUrl,
-    sandboxId: result.sandboxId ?? sandboxId,
-    reconnected: true,
-    provider: getSandboxProviderId(),
+    ok: false,
+    error: result.error ?? "Sandbox expired",
+    sandboxId,
+    phase: "error",
+    phaseDetail: result.error ?? "Sandbox expired",
   });
 }

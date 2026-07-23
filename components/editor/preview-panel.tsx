@@ -23,14 +23,22 @@ import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
 import dynamic from "next/dynamic";
 import { buildFallbackHtml, EMPTY_PREVIEW_HTML, PREVIEW_ENGINE_REV } from "@/lib/preview/build-fallback-html";
+import { injectGuestCommentsIntoHtml } from "@/lib/preview/inject-guest-comments";
 import { buildEsbuildHtml } from "@/lib/preview/esbuild-engine";
 import { filesContentSignature } from "@/lib/preview/files-signature";
-import { resolvePreviewEngine, shouldUseWebContainer, WC_UNAVAILABLE_KEY, type PreviewEngine } from "@/lib/preview/resolve-preview-engine";
+import {
+  isWebContainerPreviewEnabled,
+  resolvePreviewEngine,
+  shouldUseWebContainer,
+  WC_UNAVAILABLE_KEY,
+  type PreviewEngine,
+} from "@/lib/preview/resolve-preview-engine";
 import { sandboxUrlWithPath } from "@/lib/preview/sandbox-url";
 import { getPreviewBarLabel } from "@/lib/preview/preview-url";
 import { useSandboxPreview } from "@/lib/preview/use-sandbox-preview";
 import { usePreviewErrorGuard } from "@/hooks/use-preview-error-guard";
 import { isNoisePreviewError, type PreviewErrorReport } from "@/lib/preview/preview-error-bridge";
+import { derivePreviewPages } from "@/lib/preview/derive-pages";
 import { appendPreviewDiagnosis, buildPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
 import { applyVisualEdit, buildVisualEditPrompt } from "@/lib/editor/apply-visual-edit";
 import { PreviewHealingOverlay } from "./preview-healing-overlay";
@@ -39,11 +47,13 @@ import { LovablePreviewInteractionToolbar } from "./lovable/preview-interaction-
 import { LovablePreviewStatusPill } from "./lovable/preview-status-pill";
 import { LovableVersionPreviewBanner } from "./lovable/version-preview-banner";
 import { ratePreviewMetric, type PreviewPerfSnapshot } from "@/lib/preview/preview-perf-bridge";
+import { PreviewCommentPins } from "./preview-comment-pins";
+import { createClient } from "@/lib/supabase/client";
 
 const WebContainerPreview = dynamic(() => import("./webcontainer-preview"), {
   ssr: false,
   loading: () => (
-    <div className="flex-1 flex items-center justify-center bg-[#0a0a0a]">
+    <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
       <Loader2 className="w-5 h-5 animate-spin text-muted-foreground/50" />
     </div>
   ),
@@ -162,11 +172,15 @@ interface PreviewPanelProps {
   versionPreviewLabel?: string | null;
   /** When true, hide the internal URL/device toolbar — top bar owns chrome. */
   hideTopChrome?: boolean;
+  /** Open an editor side panel (e.g. comments) from the preview toolbar. */
+  onOpenPanel?: (panel: string) => void;
+  /** When true, inject the guest comments embed into fallback / WebContainer previews. */
+  isPublic?: boolean;
 }
 
 function OutOfCreditsPreviewPaused() {
   return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center bg-[#0a0a0a]">
+    <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
       <div className="text-center max-w-sm px-8 py-10">
         <div className="w-12 h-12 rounded-xl bg-violet-500/15 border border-violet-500/25 flex items-center justify-center mx-auto mb-4">
           <AlertTriangle className="w-5 h-5 text-violet-400" />
@@ -254,16 +268,36 @@ const BG_COLORS = [
   "bg-blue-500","bg-green-500","bg-red-500","bg-yellow-500",
 ];
 
-function isEsbuildPreviewEnabled(): boolean {
+const ESBUILD_OVERRIDE_KEY = "lifemark-preview-esbuild";
+
+function envEsbuildPreviewDefault(): boolean {
   return (
     process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "1" ||
     process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "true"
   );
 }
 
+/** Env default, overridable per-session via localStorage (toolbar toggle). */
+function readEsbuildOverride(): boolean | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const override = localStorage.getItem(ESBUILD_OVERRIDE_KEY);
+    if (override === "1" || override === "true") return true;
+    if (override === "0" || override === "false") return false;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 function shouldAutoStartVitePreview(): boolean {
-  // Lovable parity: real Vite dev server by default. Set NEXT_PUBLIC_PREVIEW_AUTO_VITE=0 to disable.
-  return process.env.NEXT_PUBLIC_PREVIEW_AUTO_VITE !== "0";
+  // Draft/legacy WebContainer only — Lovable production preview is Modal.
+  // Requires NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1; AUTO_VITE defaults off.
+  if (!isWebContainerPreviewEnabled()) return false;
+  return (
+    process.env.NEXT_PUBLIC_PREVIEW_AUTO_VITE === "1" ||
+    process.env.NEXT_PUBLIC_PREVIEW_AUTO_VITE === "true"
+  );
 }
 
 function detectTemplate(files: ProjectFile[]): "react-ts" | "react" | "static" {
@@ -322,13 +356,40 @@ function addVebBridge(
 
 // ── Device frame components ───────────────────────────────────────────────────
 
+function useScaleToFit(naturalW: number, naturalH: number) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el) return;
+    const measure = () => {
+      const { clientWidth: w, clientHeight: h } = el;
+      if (w < 8 || h < 8) return;
+      setScale(Math.min(1, w / naturalW, h / naturalH));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [naturalW, naturalH]);
+  return { hostRef, scale };
+}
+
 function PhoneFrame({ children }: { children: React.ReactNode }) {
+  const { hostRef, scale } = useScaleToFit(390, 812);
   return (
-    <div className="relative flex flex-col items-center justify-center h-full py-4">
-      {/* Outer bezel */}
+    <div ref={hostRef} data-device-container className="relative flex h-full w-full items-center justify-center overflow-hidden py-4">
+      {/* Outer bezel — ScaledIframe: scale-to-fit viewport */}
       <div
-        className="relative flex flex-col rounded-[44px] overflow-hidden shadow-[0_0_0_2px_#3a3a3c,0_0_0_8px_#1c1c1e,0_20px_60px_rgba(0,0,0,0.7)]"
-        style={{ width: 390, height: 812, background: "#000", flexShrink: 0 }}
+        data-scaled-iframe
+        className="relative flex flex-col rounded-[44px] overflow-hidden shadow-[0_0_0_2px_#3a3a3c,0_0_0_8px_#1c1c1e,0_20px_60px_rgba(0,0,0,0.7)] origin-center"
+        style={{
+          width: 390,
+          height: 812,
+          background: "#000",
+          flexShrink: 0,
+          transform: `scale(${scale})`,
+        }}
       >
         {/* Dynamic Island */}
         <div className="absolute top-3 left-1/2 -translate-x-1/2 w-28 h-7 bg-black rounded-full z-20 flex items-center justify-center gap-2">
@@ -351,21 +412,24 @@ function PhoneFrame({ children }: { children: React.ReactNode }) {
           <div className="w-28 h-1 bg-white/30 rounded-full" />
         </div>
       </div>
-      {/* Side buttons */}
-      <div className="absolute left-[-3px] top-[120px] w-[3px] h-8 bg-[#3a3a3c] rounded-l-sm" />
-      <div className="absolute left-[-3px] top-[160px] w-[3px] h-12 bg-[#3a3a3c] rounded-l-sm" />
-      <div className="absolute left-[-3px] top-[184px] w-[3px] h-12 bg-[#3a3a3c] rounded-l-sm" />
-      <div className="absolute right-[-3px] top-[150px] w-[3px] h-16 bg-[#3a3a3c] rounded-r-sm" />
     </div>
   );
 }
 
 function TabletFrame({ children }: { children: React.ReactNode }) {
+  const { hostRef, scale } = useScaleToFit(768, 680);
   return (
-    <div className="relative flex flex-col items-center justify-center h-full py-4">
+    <div ref={hostRef} data-device-container className="relative flex h-full w-full items-center justify-center overflow-hidden py-4">
       <div
-        className="relative rounded-[24px] overflow-hidden shadow-[0_0_0_2px_#3a3a3c,0_0_0_10px_#1c1c1e,0_20px_60px_rgba(0,0,0,0.7)]"
-        style={{ width: 768, maxWidth: "calc(100vw - 120px)", height: 680, background: "#000", flexShrink: 0 }}
+        data-scaled-iframe
+        className="relative rounded-[24px] overflow-hidden shadow-[0_0_0_2px_#3a3a3c,0_0_0_10px_#1c1c1e,0_20px_60px_rgba(0,0,0,0.7)] origin-center"
+        style={{
+          width: 768,
+          height: 680,
+          background: "#000",
+          flexShrink: 0,
+          transform: `scale(${scale})`,
+        }}
       >
         {/* Camera */}
         <div className="absolute top-3 left-1/2 -translate-x-1/2 w-2 h-2 bg-[#2a2a2a] rounded-full z-20 border border-[#3a3a3c]" />
@@ -406,6 +470,8 @@ export function PreviewPanel({
   onSendPromptToChat,
   versionPreviewLabel = null,
   hideTopChrome = false,
+  onOpenPanel,
+  isPublic = false,
 }: PreviewPanelProps) {
   const outOfCredits = credits !== undefined && credits <= 0;
   const [device, setDevice] = useState<DeviceSize>("desktop");
@@ -431,6 +497,8 @@ export function PreviewPanel({
   // postMessage events from the iframe (see the URL-sync script injected
   // into fallbackHtml below). Defaults to "/" until the first nav fires.
   const [previewPath, setPreviewPath] = useState<string>("/");
+  const previewPathRef = useRef("/");
+  previewPathRef.current = previewPath;
   // Local-edit copy of the URL while user types; commits to navigation on
   // Enter, falls back to previewPath when the input loses focus without
   // committing.
@@ -442,11 +510,30 @@ export function PreviewPanel({
   const visualEditEnabled = visualEdit && !versionPreviewLabel;
   const [showConsole, setShowConsole] = useState(false);
   const [previewBottomTab, setPreviewBottomTab] = useState<"console" | "network" | "perf">("console");
+  /** WebContainer tunnel URL — published to the live-preview bus for agent/tests. */
+  const [wcPreviewUrl, setWcPreviewUrl] = useState<string | null>(null);
   const [annotateScreenshot, setAnnotateScreenshot] = useState<string | null>(null);
   const [commentPinMode, setCommentPinMode] = useState(false);
   const [pendingComment, setPendingComment] = useState<VebElement | null>(null);
   const [commentDraft, setCommentDraft] = useState("");
   const [commentSaving, setCommentSaving] = useState(false);
+  type ElementCommentPin = {
+    id: string;
+    content: string;
+    element_xpath: string;
+    element_tag?: string | null;
+    page_path?: string | null;
+    element_preview?: string | null;
+    is_guest?: boolean;
+    guest_name?: string | null;
+    resolved?: boolean;
+    parent_id?: string | null;
+  };
+  const [elementCommentPins, setElementCommentPins] = useState<ElementCommentPin[]>([]);
+  /** All unresolved top-level comments (guest + team) for the unread tray. */
+  const [openCommentCount, setOpenCommentCount] = useState(0);
+  const [activePinComment, setActivePinComment] = useState<ElementCommentPin | null>(null);
+  const [pinResolving, setPinResolving] = useState(false);
   const { toast } = useToast();
   const [previewEngine, setPreviewEngine] = useState<PreviewEngine>(() => {
     if (typeof window === "undefined") return "fallback";
@@ -474,6 +561,53 @@ export function PreviewPanel({
     setNetworkLines([]);
     setPerfSnapshot(null);
   }, []);
+
+  // Seed Console/Network tabs from durable telemetry (migration 094) on mount.
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    void fetch(`/api/projects/${projectId}/preview-telemetry`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: {
+        console?: Array<{ type?: string; text?: string }>;
+        network?: Array<{
+          method?: string;
+          url?: string;
+          status?: number;
+          ok?: boolean;
+          durationMs?: number;
+          contentType?: string;
+          error?: string;
+        }>;
+      } | null) => {
+        if (cancelled || !data) return;
+        const cons = (data.console ?? [])
+          .filter((l) => typeof l?.text === "string" && l.text.length > 0)
+          .slice(-100)
+          .map((l) => ({ type: l.type ?? "log", text: l.text! }));
+        const net = (data.network ?? [])
+          .filter((l) => typeof l?.url === "string" && l.url.length > 0)
+          .slice(-100)
+          .map((l) => ({
+            method: (l.method ?? "GET").toUpperCase(),
+            url: l.url!,
+            status: l.status,
+            ok: l.ok,
+            durationMs: l.durationMs,
+            contentType: l.contentType,
+            error: l.error,
+          }));
+        if (cons.length > 0) {
+          setConsoleLines((prev) => (prev.length > 0 ? prev : cons));
+        }
+        if (net.length > 0) {
+          setNetworkLines((prev) => (prev.length > 0 ? prev : net));
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectId]);
+
   const [previewMachineState, setPreviewMachineState] = useState<PreviewMachineState>("idle");
   const previewBuildShaRef = useRef<string>("");
   const previewEngineRef = useRef(previewEngine);
@@ -503,18 +637,32 @@ export function PreviewPanel({
       return next;
     });
   }, []);
-  // Real cloud sandbox preview (Modal — Lovable parity; E2B fallback).
+  // Real cloud sandbox preview (Modal — Lovable parity).
   const {
     previewUrl: sandboxUrl,
     enabled: sandboxEnabled,
     provider: sandboxProvider,
     stopPreview: stopSandboxPreview,
     syncFiles: syncSandboxFiles,
+    requestPreview: requestSandboxPreview,
+    reconnectPreview: reconnectSandboxPreview,
     sandboxId,
     loading: sandboxLoading,
+    error: sandboxError,
+    phase: sandboxPhase,
+    phaseDetail: sandboxPhaseDetail,
+    statusResolved: sandboxStatusResolved,
   } = useSandboxPreview(projectId ?? "");
   const sandboxIdLiveRef = useRef(sandboxId);
   sandboxIdLiveRef.current = sandboxId;
+  /** Hard iframe path — soft-nav updates previewPath only (VEB postMessage). */
+  const [sandboxIframePath, setSandboxIframePath] = useState("/");
+  const [sandboxSyncInstalling, setSandboxSyncInstalling] = useState(false);
+
+  // Reset hard path when a new Modal tunnel comes up.
+  useEffect(() => {
+    if (sandboxUrl) setSandboxIframePath("/");
+  }, [sandboxUrl, sandboxId]);
   const previewBarLabel = useMemo(
     () =>
       getPreviewBarLabel({
@@ -527,9 +675,11 @@ export function PreviewPanel({
   );
   const [vebSelected, setVebSelected] = useState<VebElement | null>(null);
   const [vebSelectedList, setVebSelectedList] = useState<VebElement[]>([]);
+  const [selectionClearSignal, setSelectionClearSignal] = useState(0);
   const clearVebSelection = useCallback(() => {
     setVebSelected(null);
     setVebSelectedList([]);
+    setSelectionClearSignal((n) => n + 1);
   }, []);
   const [activeError, setActiveError] = useState<string | null>(null);
   const [errorDismissed, setErrorDismissed] = useState(false);
@@ -541,6 +691,58 @@ export function PreviewPanel({
   const unifiedIframeRef = useRef<HTMLIFrameElement | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(false);
+  const [editTextMode, setEditTextMode] = useState(false);
+  const editTextModeRef = useRef(false);
+  editTextModeRef.current = editTextMode;
+  /** Staged inline text edits — preview in iframe until Clear / Send (Lovable pending tray). */
+  const [pendingVisualEdits, setPendingVisualEdits] = useState<
+    Array<{
+      id: string;
+      element: VebElement;
+      originalText: string;
+      nextText: string;
+    }>
+  >([]);
+  const pendingVisualEditsRef = useRef(pendingVisualEdits);
+  pendingVisualEditsRef.current = pendingVisualEdits;
+  const [commentsBannerDismissed, setCommentsBannerDismissed] = useState(false);
+  const [isRevertingPreview, setIsRevertingPreview] = useState(false);
+
+  useEffect(() => {
+    const onReverting = () => {
+      setIsRevertingPreview(true);
+      window.setTimeout(() => setIsRevertingPreview(false), 2800);
+    };
+    window.addEventListener("lifemark-preview-reverting", onReverting);
+    return () => window.removeEventListener("lifemark-preview-reverting", onReverting);
+  }, []);
+  const prevOpenCommentCountRef = useRef(0);
+  useEffect(() => {
+    // Re-show tray when new open comments arrive after a dismiss.
+    if (openCommentCount > prevOpenCommentCountRef.current) {
+      setCommentsBannerDismissed(false);
+    }
+    prevOpenCommentCountRef.current = openCommentCount;
+  }, [openCommentCount]);
+  const [annotationMeta, setAnnotationMeta] = useState({
+    count: 0,
+    canUndo: false,
+    canRedo: false,
+  });
+
+  useEffect(() => {
+    const onMeta = (e: Event) => {
+      const detail = (e as CustomEvent<{ count?: number; canUndo?: boolean; canRedo?: boolean }>).detail;
+      if (!detail) return;
+      setAnnotationMeta({
+        count: detail.count ?? 0,
+        canUndo: !!detail.canUndo,
+        canRedo: !!detail.canRedo,
+      });
+    };
+    window.addEventListener("lifemark-preview-annotations-meta", onMeta);
+    return () => window.removeEventListener("lifemark-preview-annotations-meta", onMeta);
+  }, []);
 
   const onFixWithAIRef = useRef(onFixWithAI);
   onFixWithAIRef.current = onFixWithAI;
@@ -637,10 +839,251 @@ export function PreviewPanel({
     );
   }, [commentPinMode, previewEngine, getPreviewContentWindow]);
 
-  // Pick WebContainers (Lovable-style Vite runtime) or srcdoc fallback.
+  // Edit-text mode: single-click leaf edit inside the VEB bridge.
+  useEffect(() => {
+    getPreviewContentWindow()?.postMessage(
+      { type: "lifemark-veb-edit-text-mode", enabled: editTextMode && visualEditEnabled },
+      "*",
+    );
+  }, [editTextMode, visualEditEnabled, previewEngine, getPreviewContentWindow]);
+
+  const refreshElementCommentPins = useCallback(async () => {
+    if (!projectId) {
+      setElementCommentPins([]);
+      setOpenCommentCount(0);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/projects/${projectId}/comments`);
+      if (!res.ok) return;
+      const rows = (await res.json()) as ElementCommentPin[];
+      const openTop = rows.filter((c) => !c.parent_id && !c.resolved);
+      setOpenCommentCount(openTop.length);
+      setElementCommentPins(
+        openTop.filter(
+          (c) => typeof c.element_xpath === "string" && !!c.element_xpath,
+        ),
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void refreshElementCommentPins();
+  }, [refreshElementCommentPins]);
+
+  useEffect(() => {
+    if (!projectId) return;
+    const supabase = createClient();
+    const channel = supabase
+      .channel(`preview-comment-pins:${projectId}:${crypto.randomUUID()}`)
+      .on(
+        "postgres_changes" as never,
+        {
+          event: "*",
+          schema: "public",
+          table: "project_comments",
+          filter: `project_id=eq.${projectId}`,
+        },
+        () => {
+          void refreshElementCommentPins();
+        },
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [projectId, refreshElementCommentPins]);
+
+  const pinsForCurrentPage = useMemo(() => {
+    return elementCommentPins.filter((c) => {
+      const page = c.page_path || "/";
+      return page === previewPath || page === "*" || !c.page_path;
+    });
+  }, [elementCommentPins, previewPath]);
+
+  const pushCommentPinsToPreview = useCallback(() => {
+    const pins = pinsForCurrentPage.map((c, i) => ({
+      id: c.id,
+      xpath: c.element_xpath,
+      label: c.content?.slice(0, 80) || `Comment ${i + 1}`,
+    }));
+    getPreviewContentWindow()?.postMessage({ type: "lifemark-comment-pins", pins }, "*");
+  }, [pinsForCurrentPage, getPreviewContentWindow]);
+  const pushCommentPinsToPreviewRef = useRef(pushCommentPinsToPreview);
+  pushCommentPinsToPreviewRef.current = pushCommentPinsToPreview;
+  const elementCommentPinsRef = useRef(elementCommentPins);
+  elementCommentPinsRef.current = elementCommentPins;
+
+  useEffect(() => {
+    pushCommentPinsToPreview();
+  }, [pushCommentPinsToPreview, previewEngine, refreshKey]);
+
+  // Jump from Comments panel → highlight element + open pin popover.
+  useEffect(() => {
+    function onJump(e: Event) {
+      const detail = (e as CustomEvent<{
+        commentId?: string;
+        xpath?: string;
+        pagePath?: string | null;
+      }>).detail;
+      if (!detail?.xpath) return;
+      if (detail.pagePath && detail.pagePath !== previewPath && detail.pagePath !== "*") {
+        window.dispatchEvent(
+          new CustomEvent("lifemark-preview-navigate", { detail: { pathname: detail.pagePath } }),
+        );
+      }
+      getPreviewContentWindow()?.postMessage(
+        {
+          type: "lifemark-comment-pin-focus",
+          xpath: detail.xpath,
+          commentId: detail.commentId,
+        },
+        "*",
+      );
+      const match =
+        elementCommentPins.find((c) => c.id === detail.commentId) ||
+        elementCommentPins.find((c) => c.element_xpath === detail.xpath);
+      if (match) setActivePinComment(match);
+    }
+    window.addEventListener("lifemark-jump-to-comment-element", onJump);
+    return () => window.removeEventListener("lifemark-jump-to-comment-element", onJump);
+  }, [elementCommentPins, getPreviewContentWindow, previewPath]);
+
+  const applyPreviewText = useCallback(
+    (xpath: string, text: string) => {
+      getPreviewContentWindow()?.postMessage(
+        { type: "lifemark-veb-apply", xpath, text },
+        "*",
+      );
+      // Same-origin srcdoc: also write the DOM directly (no VEB bridge listener).
+      const doc = iframeRef.current?.contentDocument;
+      if (!doc) return;
+      try {
+        const node = doc.evaluate(
+          xpath.startsWith("//") ? xpath : `//${xpath}`,
+          doc,
+          null,
+          XPathResult.FIRST_ORDERED_NODE_TYPE,
+          null,
+        ).singleNodeValue as HTMLElement | null;
+        if (node) node.textContent = text;
+      } catch {
+        /* ignore */
+      }
+    },
+    [getPreviewContentWindow],
+  );
+  const stagePendingTextEdit = useCallback((element: VebElement, nextText: string) => {
+    setPendingVisualEdits((prev) => {
+      const idx = prev.findIndex((p) => p.element.xpath === element.xpath);
+      const originalText = idx >= 0 ? prev[idx].originalText : element.textContent;
+      const entry = {
+        id: idx >= 0 ? prev[idx].id : `${element.xpath}:${Date.now()}`,
+        element: { ...element, textContent: originalText },
+        originalText,
+        nextText,
+      };
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = entry;
+        return next;
+      }
+      return [...prev, entry];
+    });
+    applyPreviewText(element.xpath, nextText);
+  }, [applyPreviewText]);
+  const stagePendingTextEditRef = useRef(stagePendingTextEdit);
+  stagePendingTextEditRef.current = stagePendingTextEdit;
+
+  const clearPendingVisualEdits = useCallback(() => {
+    for (const edit of pendingVisualEditsRef.current) {
+      applyPreviewText(edit.element.xpath, edit.originalText);
+    }
+    setPendingVisualEdits([]);
+  }, [applyPreviewText]);
+
+  const sendPendingVisualEdits = useCallback(() => {
+    const edits = pendingVisualEditsRef.current;
+    if (edits.length === 0) return;
+    void (async () => {
+      const { claimVisualEditCredit } = await import("./visual-edit-overlay");
+      let applied = 0;
+      let prompted = 0;
+      let remaining = [...edits];
+      let working = filesRef.current;
+      for (let i = 0; i < edits.length; i++) {
+        const edit = edits[i];
+        // One claim per staged edit (Lovable free-edit quota parity).
+        const claimed = await claimVisualEditCredit(projectId);
+        if (!claimed.ok) {
+          setPendingVisualEdits(remaining.slice(i));
+          toast({
+            title: claimed.insufficient ? "Out of credits" : "Couldn't apply edits",
+            description: claimed.insufficient
+              ? applied > 0
+                ? `Saved ${applied} edit${applied === 1 ? "" : "s"}; daily free edits used — add credits for the rest.`
+                : "Daily free edits used — add credits to save visual text changes."
+              : "Try again in a moment.",
+            variant: "destructive",
+          });
+          return;
+        }
+        const result = applyVisualEdit(working, edit.element, { text: edit.nextText });
+        if (result) {
+          const file = working.find((f) => f.path === result.path);
+          if (file && onFileUpdateRef.current) {
+            const nextFile = { ...file, content: result.content };
+            onFileUpdateRef.current(nextFile);
+            working = working.map((f) => (f.path === result.path ? nextFile : f));
+            filesRef.current = working;
+            applied += 1;
+          }
+        } else {
+          onSendPromptToChatRef.current?.(
+            buildVisualEditPrompt(edit.element, { text: edit.nextText }),
+          );
+          prompted += 1;
+        }
+      }
+      setPendingVisualEdits([]);
+      if (applied > 0 || prompted > 0) {
+        toast({
+          title: prompted > 0 && applied === 0 ? "Sent to chat" : "Changes applied",
+          description:
+            prompted > 0 && applied === 0
+              ? "Couldn't match source uniquely — AI will apply the edits."
+              : `${applied} edit${applied === 1 ? "" : "s"} saved${prompted > 0 ? `, ${prompted} sent to chat` : ""}.`,
+        });
+      }
+    })();
+  }, [toast, projectId]);
+
+  // Pick preview engine. Preferred = Modal sandbox (Lovable path). When the
+  // sandbox backend is unavailable, fall back AUTOMATICALLY to in-browser
+  // engines (WebContainer if allowed, else esbuild/srcdoc) so users always
+  // get a working preview instead of an "unavailable" pane.
+  // Dev/support override: localStorage "lifemark-preview-force-fallback"="1".
+  const webContainerAllowed = useWebContainers && isWebContainerPreviewEnabled();
+  const forceFallbackPreview =
+    typeof window !== "undefined" &&
+    (() => {
+      try {
+        return window.localStorage.getItem("lifemark-preview-force-fallback") === "1";
+      } catch {
+        return false;
+      }
+    })();
+  const sandboxAvailable = sandboxEnabled && !forceFallbackPreview;
   useEffect(() => {
     if (files.length === 0) {
       setPreviewEngine((prev) => (prev === "fallback" ? prev : "fallback"));
+      return;
+    }
+
+    if (sandboxAvailable) {
+      setPreviewEngine((prev) => (prev === "sandbox" ? prev : "sandbox"));
       return;
     }
 
@@ -648,19 +1091,21 @@ export function PreviewPanel({
     // resolvePreviewEngine() independently re-reads it below.
     const wcBlocked = isWcBlocked();
 
-    if (wcBlocked) {
+    if (wcBlocked || !webContainerAllowed) {
       setPreviewEngine((prev) => (prev === "fallback" ? prev : "fallback"));
       return;
     }
 
     const isolated = typeof window !== "undefined" ? window.crossOriginIsolated : false;
     const engine = resolvePreviewEngine(files, {
-      preferWebContainers: useWebContainers && vitePreviewRequested,
+      preferWebContainers: webContainerAllowed && vitePreviewRequested,
       crossOriginIsolated: isolated,
       sandboxUrl,
+      sandboxEnabled,
+      allowWebContainer: webContainerAllowed,
     });
     setPreviewEngine((prev) => (prev === engine ? prev : engine));
-  }, [files, useWebContainers, vitePreviewRequested, projectId, sandboxUrl]);
+  }, [files, webContainerAllowed, vitePreviewRequested, projectId, sandboxUrl, sandboxAvailable]);
 
   const getActivePreviewIframe = useCallback((): HTMLIFrameElement | null => {
     if (previewEngine === "webcontainer") {
@@ -694,25 +1139,27 @@ export function PreviewPanel({
   // Lovable parity: sandbox boot handled by useSandboxPreview (reconnect → POST).
   // Do not duplicate cold-start here.
 
-  // Auto-warm Vite preview on open — only when cloud sandbox is NOT configured.
-  // Lovable never runs browser npm install when Modal is available.
+  // Draft/legacy: auto-warm WebContainer only when explicitly enabled and Modal is off.
   useEffect(() => {
     if (sandboxEnabled) return;
-    if (!useWebContainers || files.length === 0 || isWcBlocked()) return;
+    if (!webContainerAllowed || files.length === 0 || isWcBlocked()) return;
+    if (!shouldAutoStartVitePreview()) return;
     if (!shouldUseWebContainer(files)) return;
     setVitePreviewRequested(true);
     setBackgroundViteActive(true);
-  }, [sandboxEnabled, useWebContainers, projectId, files.length]);
+  }, [sandboxEnabled, webContainerAllowed, projectId, files.length]);
 
-  // Top-bar URL bar → in-preview navigation (hideTopChrome mode).
+  // Top-bar URL bar → in-preview soft-nav (Modal VEB + SPA routers).
   useEffect(() => {
     function onExternalNavigate(e: Event) {
       const pathname = (e as CustomEvent<{ pathname?: string }>).detail?.pathname;
       if (!pathname || typeof pathname !== "string") return;
       const target = pathname.startsWith("/") ? pathname : `/${pathname}`;
-      if (previewEngine !== "sandbox") {
-        getPreviewContentWindow()?.postMessage({ type: "lifemark-preview-navigate", pathname: target }, "*");
-      }
+      // Always soft-nav via postMessage — Modal SPAs must not full-reload the tunnel.
+      getPreviewContentWindow()?.postMessage(
+        { type: "lifemark-preview-navigate", pathname: target },
+        "*",
+      );
       setPreviewPath(target);
       setUrlInput(target);
       setUrlEditing(false);
@@ -724,7 +1171,7 @@ export function PreviewPanel({
     }
     window.addEventListener("lifemark-preview-navigate", onExternalNavigate);
     return () => window.removeEventListener("lifemark-preview-navigate", onExternalNavigate);
-  }, [previewEngine, getPreviewContentWindow]);
+  }, [getPreviewContentWindow]);
   useEffect(() => {
     // Lovable parity: keep Modal sandboxes warm across editor navigation — do not
     // kill on panel unmount (they reconnect by name on next open).
@@ -799,19 +1246,7 @@ export function PreviewPanel({
         const data = asVebInlineElement(d);
         const text = typeof d.text === "string" ? d.text : null;
         if (!data || !text) return;
-        const result = applyVisualEdit(filesRef.current, data, { text });
-        if (result) {
-          const file = filesRef.current.find((f) => f.path === result.path);
-          if (file && onFileUpdateRef.current) {
-            onFileUpdateRef.current({ ...file, content: result.content });
-          }
-        } else {
-          onSendPromptToChatRef.current?.(buildVisualEditPrompt(data, { text }));
-        }
-        getPreviewContentWindow()?.postMessage(
-          { type: "lifemark-veb-apply", xpath: data.xpath, text },
-          "*",
-        );
+        stagePendingTextEditRef.current(data, text);
       }
       if (d.type === "lifemark-veb-ready") {
         getPreviewContentWindow()?.postMessage(
@@ -822,6 +1257,19 @@ export function PreviewPanel({
           { type: "lifemark-comment-pin-mode", enabled: commentPinMode },
           "*",
         );
+        getPreviewContentWindow()?.postMessage(
+          {
+            type: "lifemark-veb-edit-text-mode",
+            enabled: editTextModeRef.current && visualEditEnabled,
+          },
+          "*",
+        );
+        // Re-push canvas pins after iframe reload / HMR.
+        pushCommentPinsToPreviewRef.current();
+      }
+      if (d.source === "lifemark-comment-pin-click" && typeof d.commentId === "string") {
+        const match = elementCommentPinsRef.current.find((c) => c.id === d.commentId);
+        if (match) setActivePinComment(match);
       }
       if (d.source === "lifemark-comment-pin" && commentPinMode) {
         const data = asVebElement(d);
@@ -998,6 +1446,10 @@ export function PreviewPanel({
         previewFilesSigRef.current = propSig;
         setPreviewFiles(propRelevant);
       }
+      // Bare remount: keep Modal iframe on the route the user was viewing.
+      if (previewEngineRef.current === "sandbox") {
+        setSandboxIframePath(previewPathRef.current || "/");
+      }
       setRefreshKey((k) => k + 1);
       clearPreviewLogs();
       clearVebSelection();
@@ -1030,7 +1482,8 @@ export function PreviewPanel({
     previewFilesSigRef.current = sig;
     setPreviewFiles(relevantFiles);
 
-    // Lovable parity: warm runtimes sync in place — never cold-boot npm on every AI edit.
+    // Lovable parity: warm Modal sync in place — never cold-boot npm on every AI edit.
+    // The debounced sync effect clears loading → ready after PATCH returns.
     const engine = previewEngineRef.current;
     if (engine === "sandbox" && sandboxIdLiveRef.current) {
       clearPreviewLogs();
@@ -1076,6 +1529,13 @@ export function PreviewPanel({
     return () => window.removeEventListener("lifemark-preview-device", handleDevice);
   }, []);
 
+  // Broadcast the app's navigable pages (Lovable "switch pages" dropdown).
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("lifemark-preview-pages", { detail: derivePreviewPages(files) }),
+    );
+  }, [files]);
+
   // Broadcast route so top-bar UrlBarPill stays in sync with in-iframe navigation.
   useEffect(() => {
     window.dispatchEvent(
@@ -1101,9 +1561,10 @@ export function PreviewPanel({
         if (target === undefined) return prev;
         navSuppressRef.current = true;
         setTimeout(() => { navSuppressRef.current = false; }, 1000);
-        if (previewEngine !== "sandbox") {
-          getPreviewContentWindow()?.postMessage({ type: "lifemark-preview-navigate", pathname: target }, "*");
-        }
+        getPreviewContentWindow()?.postMessage(
+          { type: "lifemark-preview-navigate", pathname: target },
+          "*",
+        );
         setPreviewPath(target);
         setUrlInput(target);
         setUrlEditing(false);
@@ -1112,31 +1573,153 @@ export function PreviewPanel({
     }
     window.addEventListener("lifemark-preview-history", onHistoryNav);
     return () => window.removeEventListener("lifemark-preview-history", onHistoryNav);
-  }, [previewEngine, getPreviewContentWindow]);
+  }, [getPreviewContentWindow]);
 
-  // Sandbox live sync — push debounced file changes into the running E2B VM.
+  // Modal live sync — push debounced file changes, then clear Loading (HMR in-place).
   useEffect(() => {
     if (previewEngine !== "sandbox" || !sandboxId || previewFiles.length === 0) return;
     const payload = previewFiles.map((f) => ({ path: f.path, content: f.content ?? "" }));
     const timer = window.setTimeout(() => {
-      void syncSandboxFiles(payload);
+      void (async () => {
+        transitionPreviewMachine("loading", "sandbox file sync");
+        const result = await syncSandboxFiles(payload);
+        if (!result.ok) {
+          setConsoleLines((prev) => [
+            ...prev.slice(-99),
+            { type: "warn", text: `[preview] sync failed: ${result.error ?? "unknown"}` },
+          ]);
+          // Even after the hook's dead-sandbox recovery the sync failed — tell
+          // the user instead of silently rendering stale code (trust killer).
+          toast({
+            title: "Preview out of date",
+            description:
+              "Your latest changes were saved but the live preview could not be updated. Use the refresh button to restart it.",
+            variant: "destructive",
+          });
+          transitionPreviewMachine("ready", "sandbox sync failed — keep previous preview");
+          window.dispatchEvent(new CustomEvent("lifemark-preview-settled", { detail: { ok: false } }));
+          return;
+        }
+        if (result.recovered) {
+          setConsoleLines((prev) => [
+            ...prev.slice(-99),
+            { type: "log", text: "[preview] stale sandbox detected — reconnected and re-synced" },
+          ]);
+        }
+        setSandboxSyncInstalling(!!result.installing);
+        if (result.installing) {
+          // Dep install runs in background; show status briefly then ready for HMR.
+          window.setTimeout(() => setSandboxSyncInstalling(false), 12_000);
+        }
+        // Brief grace for Vite HMR, then mark ready so UrlBarPill stops spinning.
+        window.setTimeout(() => {
+          transitionPreviewMachine("ready", "sandbox sync applied");
+          window.dispatchEvent(
+            new CustomEvent("lifemark-preview-settled", {
+              detail: { ok: true, installing: !!result.installing },
+            }),
+          );
+        }, result.installing ? 2500 : 600);
+      })();
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [previewEngine, sandboxId, previewFiles, syncSandboxFiles]);
+  }, [previewEngine, sandboxId, previewFiles, syncSandboxFiles, transitionPreviewMachine]);
+
+  // Pull Modal Vite/Next logs into the Console tab + agent telemetry (Lovable parity).
+  const lastModalTelemetryKeyRef = useRef("");
+  useEffect(() => {
+    if (previewEngine !== "sandbox" || !sandboxId || !projectId || !sandboxUrl) return;
+    let cancelled = false;
+    const pull = () => {
+      void fetch(
+        `/api/projects/${projectId}/sandbox-preview/logs?sandboxId=${encodeURIComponent(sandboxId)}&lines=40`,
+      )
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: { ok?: boolean; logs?: string } | null) => {
+          if (cancelled || !data?.ok || !data.logs) return;
+          const lines = data.logs
+            .split("\n")
+            .map((t) => t.trim())
+            .filter(Boolean)
+            .slice(-30)
+            .map((text) => ({
+              type: /error|ERR!|failed/i.test(text) ? "error" : /warn/i.test(text) ? "warn" : "log",
+              text: `[preview] ${text}`,
+            }));
+          if (lines.length === 0) return;
+          setConsoleLines((prev) => {
+            const withoutModal = prev.filter((l) => !l.text.startsWith("[preview] "));
+            return [...withoutModal, ...lines].slice(-100);
+          });
+          // Buffer for agent read_preview_console (dedupe identical batches).
+          const key = lines.map((l) => l.text).join("\n");
+          if (key !== lastModalTelemetryKeyRef.current) {
+            lastModalTelemetryKeyRef.current = key;
+            void fetch(`/api/projects/${projectId}/preview-telemetry`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                console: lines.map((l) => ({ type: l.type, text: l.text })),
+              }),
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    };
+    pull();
+    const timer = window.setInterval(pull, 8000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [previewEngine, sandboxId, projectId, sandboxUrl]);
+
+  // Live preview URL for Agent browse_preview / browser-test / preview-verify.
+  useEffect(() => {
+    if (previewEngine !== "webcontainer") setWcPreviewUrl(null);
+  }, [previewEngine]);
+  useEffect(() => {
+    const url =
+      previewEngine === "sandbox" && sandboxUrl
+        ? sandboxUrl
+        : previewEngine === "webcontainer" && wcPreviewUrl
+          ? wcPreviewUrl
+          : deployedUrl || null;
+    try {
+      if (url) sessionStorage.setItem("lifemark-live-preview-url", url);
+      else sessionStorage.removeItem("lifemark-live-preview-url");
+    } catch { /* private mode */ }
+    window.dispatchEvent(
+      new CustomEvent("lifemark-live-preview-url", { detail: { url } }),
+    );
+  }, [previewEngine, sandboxUrl, wcPreviewUrl, deployedUrl]);
 
   const captureForAnnotation = useCallback(() => {
     const msgId = `ann-${Date.now()}`;
-    const handleReady = (e: Event) => {
+    let settled = false;
+    const finish = (dataUrl: string | null) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("lifemark-screenshot-ready", handleReady);
+      if (dataUrl) {
+        setAnnotateScreenshot(dataUrl);
+        return;
+      }
+      toast({
+        title: "Couldn't capture preview",
+        description: "Wait for the preview to finish loading, then try Capture & annotate again.",
+        variant: "destructive",
+      });
+    };
+    function handleReady(e: Event) {
       const detail = (e as CustomEvent).detail as { messageId: string; dataUrl: string | null };
       if (detail.messageId !== msgId) return;
-      window.removeEventListener("lifemark-screenshot-ready", handleReady);
-      if (detail.dataUrl) setAnnotateScreenshot(detail.dataUrl);
-    };
+      finish(detail.dataUrl);
+    }
     window.addEventListener("lifemark-screenshot-ready", handleReady);
     window.dispatchEvent(new CustomEvent("lifemark-request-screenshot", { detail: { messageId: msgId } }));
-    // Cleanup listener after 5s in case iframe never responds
-    setTimeout(() => window.removeEventListener("lifemark-screenshot-ready", handleReady), 5000);
-  }, []);
+    window.setTimeout(() => finish(null), 5000);
+  }, [toast]);
 
   // ── Debounced files for preview builds ──────────────────────────────────────
   // Every keystroke / AI stream chunk produces a new `files` array, and each one
@@ -1201,23 +1784,48 @@ export function PreviewPanel({
     const base = toSandpackFiles(files);
     return visualEditEnabled ? addVebBridge(base) : base;
   }, [files, visualEditEnabled]);
-  const fallbackHtml = useMemo(
-    // Always build srcdoc HTML. Gating on `previewEngine === "fallback"` left
-    // srcDoc="" (white blank) when the engine was briefly sandbox/webcontainer
-    // without a live URL — the catch-all iframe branch still mounts.
-    () => buildFallbackHtml(previewFiles.length > 0 ? previewFiles : previewRelevantFiles(files)),
-    [previewFiles, files],
-  );
+
+  // Draft esbuild prefs (must be declared before fallbackHtml gate).
+  const [esbuildPref, setEsbuildPref] = useState<boolean | null>(() => readEsbuildOverride());
+  const esbuildEnabled = esbuildPref ?? envEsbuildPreviewDefault();
+
+  // Build srcdoc HTML for draft engines AND as the automatic stand-in when
+  // the live sandbox backend is unavailable (users always get a preview).
+  const draftSrcdocNeeded =
+    webContainerAllowed ||
+    (esbuildEnabled && isWebContainerPreviewEnabled()) ||
+    (sandboxStatusResolved && !sandboxAvailable);
+  const fallbackHtml = useMemo(() => {
+    if (!draftSrcdocNeeded || previewEngine === "sandbox" || sandboxAvailable) {
+      return "";
+    }
+    const html = buildFallbackHtml(previewFiles.length > 0 ? previewFiles : previewRelevantFiles(files));
+    if (!isPublic || !projectId) return html;
+    const origin =
+      typeof window !== "undefined" ? window.location.origin : process.env.NEXT_PUBLIC_APP_URL;
+    return injectGuestCommentsIntoHtml(html, { projectId, origin: origin || undefined });
+  }, [
+    draftSrcdocNeeded,
+    previewEngine,
+    sandboxAvailable,
+    previewFiles,
+    files,
+    isPublic,
+    projectId,
+  ]);
   // ── esbuild preview engine (flagged) ────────────────────────────────────────
-  // When NEXT_PUBLIC_PREVIEW_ESBUILD is on, compile the fallback preview with the
-  // real esbuild-wasm bundler instead of the regex transpiler. It's async, so it
-  // lands in state; until it's ready (or if it errors) we keep showing the regex
-  // result — so this is never worse than today. See lib/preview/esbuild-engine.ts.
+  // Draft only — never the Modal product path. See lib/preview/esbuild-engine.ts.
   const [esbuildHtml, setEsbuildHtml] = useState("");
   const [esbuildBuilding, setEsbuildBuilding] = useState(false);
   useEffect(() => {
-    const on = isEsbuildPreviewEnabled();
-    if (!on || previewEngine !== "fallback" || previewFiles.length === 0) {
+    // Product preview = Modal only. Never compile esbuild/srcdoc stand-ins for the panel.
+    // Draft esbuild requires BOTH PREVIEW_ESBUILD and PREVIEW_WEBCONTAINER flags.
+    const draftOk =
+      esbuildEnabled &&
+      isWebContainerPreviewEnabled() &&
+      previewEngine !== "sandbox" &&
+      !sandboxAvailable;
+    if (!draftOk || previewFiles.length === 0) {
       setEsbuildHtml("");
       setEsbuildBuilding(false);
       return;
@@ -1265,7 +1873,7 @@ export function PreviewPanel({
     return () => {
       cancelled = true;
     };
-  }, [previewFiles, previewEngine, transitionPreviewMachine]);
+  }, [previewFiles, previewEngine, transitionPreviewMachine, esbuildEnabled, sandboxEnabled]);
   /** Rendered HTML: the esbuild bundle when ready, else the regex-engine result. */
   // Never feed the iframe an empty string — that paints a white blank pane.
   const effectivePreviewHtml = esbuildHtml || fallbackHtml || EMPTY_PREVIEW_HTML;
@@ -1362,23 +1970,52 @@ export function PreviewPanel({
     outOfCredits && !!deployedUrl && previewCompileFailed && !previewCompileOk;
   const iframeVisible = !outOfCredits || previewCompileOk;
   const showPausedOverlay = outOfCredits && !previewCompileOk && !showDeployedPreview;
-  const showEsbuildBadge =
-    !hideTopChrome &&
-    isEsbuildPreviewEnabled() &&
-    previewEngine === "fallback" &&
-    !showDeployedPreview &&
-    (esbuildBuilding || !!esbuildHtml);
+  // Never surface backend/vendor internals (provider names, gRPC paths, raw
+  // errors, sandbox ids) in preview UI — users must not see what tech runs
+  // the preview. Raw details stay in the Console tab only.
+  const displayPhaseDetail = (() => {
+    const d = sandboxPhaseDetail?.trim();
+    if (!d) return null;
+    if (/modal|FAILED_PRECONDITION|grpc|sb-[A-Za-z0-9]{8,}|traceback|error:|\.host|\.run\b/i.test(d)) {
+      return /already finished|already completed|timeout|expired/i.test(d)
+        ? "Preview session expired — restarting…"
+        : null; // fall through to the friendly phase map below
+    }
+    return d;
+  })();
+  const modalPhaseLabel =
+    sandboxSyncInstalling
+      ? "Installing dependencies…"
+      : displayPhaseDetail
+        || (sandboxPhase === "writing"
+          ? "Writing project files…"
+          : sandboxPhase === "installing"
+            ? "Installing dependencies…"
+            : sandboxPhase === "starting"
+              ? "Starting Vite…"
+              : sandboxPhase === "creating"
+                ? "Provisioning sandbox…"
+                : sandboxLoading
+                  ? "Connecting to warm sandbox…"
+                  : null);
+
   const previewStatusText =
     hideTopChrome
-      ? (previewMachineState === "building" || previewMachineState === "loading" || sandboxLoading
-          ? "Loading preview"
-          : null)
+      ? sandboxError
+        ? "Preview failed"
+        : previewEngine === "sandbox" && !sandboxUrl
+          ? (modalPhaseLabel || "Starting live preview…")
+          : sandboxSyncInstalling
+            ? "Installing dependencies…"
+            : previewMachineState === "building" || previewMachineState === "loading" || sandboxLoading
+              ? (modalPhaseLabel || (previewMachineState === "loading" ? "Updating preview…" : "Loading preview…"))
+              : null
       : previewMachineState === "building"
         ? "Preparing preview"
         : previewMachineState === "loading"
-          ? "Loading update"
+          ? (modalPhaseLabel || "Updating preview…")
           : previewMachineState === "fallback"
-            ? "Standard preview active"
+            ? "Preview unavailable"
             : previewMachineState === "error"
               ? "Preview needs repair"
               : null;
@@ -1417,6 +2054,7 @@ export function PreviewPanel({
       setPendingComment(null);
       setCommentDraft("");
       setCommentPinMode(false);
+      void refreshElementCommentPins();
     } catch {
       toast({ title: "Could not save comment", variant: "destructive" });
     } finally {
@@ -1435,6 +2073,20 @@ export function PreviewPanel({
     setPendingComment(null);
     setCommentDraft("");
     setCommentPinMode(false);
+    toast({ title: "Comment sent to chat" });
+  }
+
+  function sendActivePinCommentToChat() {
+    if (!activePinComment) return;
+    const path = activePinComment.page_path || previewPath;
+    const prompt =
+      `Fix this pinned preview comment on \`${path}\`:\n\n` +
+      `Element: <${activePinComment.element_tag ?? "element"}>` +
+      `${activePinComment.element_preview ? ` — "${activePinComment.element_preview.slice(0, 120)}"` : ""}\n` +
+      `XPath: ${activePinComment.element_xpath}\n\n` +
+      `Comment: ${activePinComment.content.trim()}`;
+    onSendPromptToChatRef.current?.(prompt);
+    setActivePinComment(null);
     toast({ title: "Comment sent to chat" });
   }
 
@@ -1476,7 +2128,8 @@ export function PreviewPanel({
 
   const hasFiles = files.length > 0;
   const useFallback = previewEngine === "fallback";
-  const viteCapable = useWebContainers && shouldUseWebContainer(files);
+  // Draft/legacy WebContainer path — hidden unless NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1.
+  const viteCapable = webContainerAllowed && shouldUseWebContainer(files);
 
   const retryVitePreview = useCallback(() => {
     clearWcBlock();
@@ -1527,18 +2180,27 @@ export function PreviewPanel({
   }
 
   function openInNewTab() {
-    if (deployedUrl) {
-      window.open(deployedUrl, "_blank", "noopener,noreferrer");
-    } else if (projectId) {
-      window.open(`/preview/${projectId}`, "_blank", "noopener,noreferrer");
-    } else if (useFallback && fallbackHtml) {
-      const blob = new Blob([fallbackHtml], { type: "text/html" });
-      const url = URL.createObjectURL(blob);
-      window.open(url, "_blank", "noopener,noreferrer");
-      // Blob URLs are never GC'd while this document lives — each click leaked
-      // the full preview HTML. Revoke once the new tab has had time to load.
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    // Lovable parity: open the live Modal tunnel (never srcdoc blob / /preview Babel).
+    const modalLive =
+      previewEngine === "sandbox" && sandboxUrl
+        ? sandboxUrlWithPath(sandboxUrl, sandboxIframePath || previewPath || "/")
+        : null;
+    const draftWc =
+      previewEngine === "webcontainer" && wcPreviewUrl ? wcPreviewUrl : null;
+    const target = modalLive || draftWc || deployedUrl || null;
+    if (!target) {
+      toast({
+        title: "Preview not ready",
+        description: sandboxEnabled
+          ? "The live preview is still starting — try again in a moment."
+          : process.env.NODE_ENV === "development"
+            ? "Set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in .env.local"
+            : "The live preview service is not available right now.",
+        variant: "destructive",
+      });
+      return;
     }
+    window.open(target, "_blank", "noopener,noreferrer");
   }
 
   // ⌘⇧O keyboard shortcut
@@ -1552,7 +2214,7 @@ export function PreviewPanel({
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deployedUrl, projectId, useFallback, fallbackHtml]);
+  }, [deployedUrl, projectId, previewEngine, sandboxUrl, sandboxIframePath, previewPath, wcPreviewUrl, sandboxEnabled]);
 
   function handleVebFileChange(path: string, content: string) {
     const file = files.find((f) => f.path === path);
@@ -1580,15 +2242,22 @@ export function PreviewPanel({
    * Wrap `children` in the appropriate device frame (or nothing for desktop).
    */
   function withDeviceFrame(children: React.ReactNode): React.ReactNode {
+    // PhoneFrame / TabletFrame already expose data-device-container + data-scaled-iframe.
     if (device === "mobile" && showFrame) return <PhoneFrame>{children}</PhoneFrame>;
     if (device === "tablet" && showFrame) return <TabletFrame>{children}</TabletFrame>;
-    // Desktop: flat, chrome-free preview (Lovable-minimal). Device + URL controls
-    // already live in the slim toolbar above — no macOS window skeuomorphism.
-    if (device === "desktop") return <div className="w-full h-full overflow-hidden bg-white">{children}</div>;
-    // no-frame mobile/tablet
+    // Desktop: flex-1 min-h-0 so the iframe always fills the panel (h-full alone can collapse).
+    if (device === "desktop") {
+      return (
+        <div data-device-container className="flex flex-1 min-h-0 w-full overflow-hidden bg-white">
+          <div data-scaled-iframe className="flex-1 min-h-0 w-full h-full">
+            {children}
+          </div>
+        </div>
+      );
+    }
     return (
-      <div className="flex items-start justify-center w-full h-full bg-muted/20 overflow-auto p-4">
-        <div className="mx-auto rounded-xl overflow-hidden shadow-2xl bg-white" style={deviceStyle}>
+      <div data-device-container className="flex flex-1 min-h-0 items-start justify-center w-full bg-muted/20 overflow-auto p-4">
+        <div data-scaled-iframe className="mx-auto rounded-xl overflow-hidden shadow-2xl bg-white" style={deviceStyle}>
           {children}
         </div>
       </div>
@@ -1597,7 +2266,7 @@ export function PreviewPanel({
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className={`relative flex flex-col bg-background ${previewFullscreen ? "fixed inset-0 z-[100] h-screen" : "h-full"} ${!previewFullscreen ? "rounded-[var(--radius-4)] shadow-surface-xl overflow-hidden m-1" : ""}`}>
+      <div className={`flex flex-col bg-background ${previewFullscreen ? "fixed inset-0 z-[100] h-screen" : "relative h-full rounded-[var(--radius-4)] shadow-surface-xl overflow-hidden m-1"}`}>
         {/* Version-preview banner (Lovable parity) — shown while an older
             snapshot's files are loaded via "Preview this version" */}
         {versionPreviewLabel && (
@@ -1777,8 +2446,8 @@ export function PreviewPanel({
               </span>
             )}
             {previewEngine === "fallback" && !showDeployedPreview && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/20 text-slate-400 border border-slate-500/30 mr-1">
-                Standard
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/25 mr-1">
+                Preview offline
               </span>
             )}
             {previewEngine === "sandbox" && (
@@ -1915,20 +2584,6 @@ export function PreviewPanel({
               <TooltipContent>Hide toolbar</TooltipContent>
             </Tooltip>
 
-            {previewEngine === "fallback" && viteCapable && !showDeployedPreview && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={retryVitePreview}
-                    className="p-1.5 rounded-md text-violet-400/80 hover:text-violet-300 hover:bg-violet-500/10 transition-all"
-                  >
-                    <Wand2 className="w-3.5 h-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>Switch to Vite preview (real dev server)</TooltipContent>
-              </Tooltip>
-            )}
-
             <Tooltip>
               <TooltipTrigger asChild>
                 <button onClick={openInNewTab} className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-all">
@@ -1951,7 +2606,7 @@ export function PreviewPanel({
 
         {/* Preview content */}
         {!hasFiles ? (
-          <div className="flex-1 flex items-center justify-center bg-[#0a0a0a] text-muted-foreground">
+          <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)] text-muted-foreground">
             <div className="text-center px-8 py-10 max-w-xs">
               {/* Animated placeholder frames */}
               <div className="relative w-48 h-32 mx-auto mb-6">
@@ -1969,31 +2624,75 @@ export function PreviewPanel({
             </div>
           </div>
         ) : previewEngine === "detecting" ? (
-          <div className="flex-1 flex items-center justify-center bg-[#0a0a0a]">
+          <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
             <div className="text-center">
               <Loader2 className="w-5 h-5 animate-spin text-muted-foreground/50 mx-auto mb-2" />
               <p className="text-xs text-muted-foreground/40">Loading preview…</p>
             </div>
           </div>
         ) : previewEngine === "sandbox" && !sandboxUrl ? (
-          <div className="flex-1 flex items-center justify-center bg-[#0a0a0a]">
-            <div className="text-center">
-              <Loader2 className="w-6 h-6 animate-spin text-muted-foreground/50 mx-auto mb-2" />
-              <p className="text-xs text-muted-foreground/40">Loading preview…</p>
+          /* Modal-only: wait / error / retry — never fake with srcdoc/WC/esbuild */
+          <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
+            <div className="text-center max-w-sm px-4">
+              {!sandboxError && (
+                <Loader2 className="w-6 h-6 animate-spin text-violet-400/70 mx-auto mb-3" />
+              )}
+              <p className="text-sm font-medium text-foreground/80 mb-1">
+                {sandboxError ? "Preview could not start" : "Starting live preview"}
+              </p>
+              <p className="text-xs text-muted-foreground/60 leading-relaxed">
+                {sandboxError
+                  ? "Something went wrong while starting your app. Retry below — this usually resolves itself."
+                  : (modalPhaseLabel || "Spinning up your app…")}
+              </p>
+              {sandboxError && (
+                <div className="mt-4 flex items-center justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void (async () => {
+                        const re = await reconnectSandboxPreview();
+                        if (!re.previewUrl) await requestSandboxPreview();
+                      })();
+                    }}
+                    className="h-8 px-3 rounded-md text-xs font-medium bg-violet-600 hover:bg-violet-500 text-white"
+                  >
+                    Retry
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopSandboxPreview();
+                      void requestSandboxPreview();
+                    }}
+                    className="h-8 px-3 rounded-md text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                  >
+                    Restart preview
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         ) : previewEngine === "sandbox" && sandboxUrl ? (
-          /* Real sandbox (Modal/E2B) — live dev server running server-side */
-          <div className={`flex flex-col flex-1 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}>
+          /* Real Modal sandbox — live Vite/Next on Modal tunnel */
+          <div className={`flex flex-col flex-1 min-h-0 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}>
             {withDeviceFrame(
               <iframe
-                key={`sandbox-${sandboxId ?? projectId ?? "warm"}`}
+                id="static-preview-panel"
+                // Prefer stable URL key — sandboxId churn from reclaim used to remount
+                // onto a dying tunnel and paint a white blank pane.
+                key={`sandbox-${sandboxUrl}-${refreshKey}`}
                 ref={sandboxIframeRef}
-                src={sandboxUrlWithPath(sandboxUrl, previewPath)}
-                className="w-full h-full border-0"
+                src={sandboxUrlWithPath(sandboxUrl, sandboxIframePath)}
+                data-preview-url={sandboxUrl}
+                className="w-full h-full min-h-0 border-0 bg-[var(--bg-base,#0a0a0a)]"
                 title="Live sandbox preview"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                onLoad={() => transitionPreviewMachine("ready", "sandbox iframe loaded")}
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-presentation"
+                allow="clipboard-read; clipboard-write; fullscreen"
+                onLoad={() => {
+                  transitionPreviewMachine("ready", "sandbox iframe loaded");
+                  window.dispatchEvent(new CustomEvent("lifemark-preview-settled", { detail: { ok: true } }));
+                }}
               />
             )}
             {visualEditEnabled && vebSelected && (
@@ -2020,6 +2719,7 @@ export function PreviewPanel({
                     prev.map((p) => (p.xpath === next.xpath ? next : p)),
                   );
                 }}
+                onStageTextEdit={stagePendingTextEdit}
               />
             )}
             {projectId && (
@@ -2030,7 +2730,7 @@ export function PreviewPanel({
               />
             )}
           </div>
-        ) : previewEngine === "webcontainer" ? (
+        ) : previewEngine === "webcontainer" && isWebContainerPreviewEnabled() ? (
           <div
             className={`flex flex-col flex-1 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}
             ref={sandpackContainerRef}
@@ -2040,11 +2740,14 @@ export function PreviewPanel({
                 key={`wc-${projectId ?? "preview"}`}
                 files={previewFiles}
                 projectId={projectId}
+                isPublic={isPublic}
                 embedded
-                onReady={() => {
+                onReady={(url) => {
+                  if (url) setWcPreviewUrl(url);
                   transitionPreviewMachine("ready", "webcontainer dev server ready");
                 }}
                 onError={(msg) => {
+                  setWcPreviewUrl(null);
                   transitionPreviewMachine("fallback", "webcontainer preview error");
                   if (typeof window !== "undefined") {
                     markWcUnavailable();
@@ -2086,6 +2789,7 @@ export function PreviewPanel({
                     prev.map((p) => (p.xpath === next.xpath ? next : p)),
                   );
                 }}
+                onStageTextEdit={stagePendingTextEdit}
               />
             )}
             {projectId && (
@@ -2095,228 +2799,162 @@ export function PreviewPanel({
                 onSendToChat={onSendPromptToChat}
               />
             )}
+          </div>
+        ) : showDeployedPreview && deployedUrl ? (
+          <div className={`flex flex-col flex-1 min-h-0 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}>
+            {withDeviceFrame(
+              <iframe
+                key={`deployed-${refreshKey}`}
+                src={deployedUrl}
+                className="w-full h-full border-0"
+                title="Live deployment"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-presentation"
+                allow="clipboard-read; clipboard-write; fullscreen"
+                onLoad={() => transitionPreviewMachine("ready", "deployment iframe loaded")}
+              />,
+            )}
+          </div>
+        ) : !sandboxStatusResolved ? (
+          /* Backend status still unknown — neutral loading only. This pane used
+             to flash setup instructions (env var names, provider) at every
+             editor open before the status check returned. */
+          <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
+            <div className="text-center">
+              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground/50 mx-auto mb-2" />
+              <p className="text-xs text-muted-foreground/40">Loading preview…</p>
+            </div>
+          </div>
+        ) : effectivePreviewHtml !== EMPTY_PREVIEW_HTML && (esbuildHtml || fallbackHtml) ? (
+          /* Automatic in-browser fallback (esbuild/srcdoc) — the live sandbox
+             backend is unavailable, but the user still gets a working preview
+             that re-renders on every AI edit. */
+          <div className={`flex flex-col flex-1 min-h-0 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}>
+            <iframe
+              key={`fallback-${refreshKey}`}
+              ref={iframeRef}
+              srcDoc={effectivePreviewHtml}
+              className="w-full h-full border-0 bg-white"
+              title="App preview"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
+              onLoad={() => transitionPreviewMachine("ready", "fallback srcdoc loaded")}
+            />
           </div>
         ) : (
-          /* Fallback: Babel + CDN iframe — still renders at 0 credits (errors suppressed below) */
-          <div
-            ref={previewContainerRef}
-            className={`flex flex-col flex-1 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}
-          >
-            <div className="flex-1 overflow-hidden flex flex-col bg-background">
-              {withDeviceFrame(
-                showDeployedPreview ? (
-                  <iframe
-                    key={`deployed-${refreshKey}`}
-                    src={deployedUrl}
-                    className="w-full h-full border-0"
-                    title="Live deployment"
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                    onLoad={() => transitionPreviewMachine("ready", "deployment iframe loaded")}
-                  />
-                ) : (
-                  <div className="relative w-full h-full">
-                    {showPausedOverlay && <OutOfCreditsPreviewPaused />}
-                    <iframe
-                      key={`${refreshKey}-${filesSignature}-${PREVIEW_ENGINE_REV}`}
-                      ref={iframeRef}
-                      srcDoc={effectivePreviewHtml}
-                      className={
-                        iframeVisible
-                          ? "w-full h-full border-0"
-                          : "absolute w-px h-px opacity-0 pointer-events-none border-0"
-                      }
-                      title="App Preview"
-                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-                      onLoad={() => transitionPreviewMachine("ready", "standard preview iframe loaded")}
-                    />
-                  </div>
-                )
+          /* Live preview backend not configured. Setup details (env vars,
+             provider name) are shown to DEVELOPERS only — end users get a
+             generic message that never reveals the underlying technology. */
+          <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
+            <div className="text-center max-w-md px-6">
+              <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl border border-violet-500/30 bg-violet-500/10">
+                <Globe className="size-5 text-violet-700 dark:text-violet-300" />
+              </div>
+              <p className="text-sm font-semibold text-foreground/90 mb-1.5">
+                Live preview unavailable
+              </p>
+              <p className="text-xs text-muted-foreground/70 leading-relaxed mb-3">
+                {process.env.NODE_ENV === "development"
+                  ? "The live-sandbox backend is not configured for this server."
+                  : "The live preview service is temporarily unavailable. Your project and files are safe — try again in a moment."}
+              </p>
+              {process.env.NODE_ENV === "development" && (
+                <>
+                  <pre className="text-left text-[11px] font-mono rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5 text-muted-foreground mb-4 overflow-x-auto">
+{`# .env.local
+MODAL_TOKEN_ID=ak-...
+MODAL_TOKEN_SECRET=...
+# optional:
+# MODAL_APP_NAME=lifemark-preview
+# SANDBOX_PROVIDER=modal`}
+                  </pre>
+                  <p className="text-[10px] text-muted-foreground/50 mb-4">
+                    Add tokens, restart <code className="text-muted-foreground/70">npm run dev</code>, then reload this editor.
+                  </p>
+                </>
               )}
-            </div>
-
-            {/* VisualEditOverlay — works because srcDoc iframe is same-origin */}
-            {backgroundViteActive && viteCapable && !showDeployedPreview && (
-              <div className="hidden" aria-hidden="true">
-                <WebContainerPreview
-                  key={`background-vite-${backgroundViteKey}`}
-                  files={previewFiles}
-                  projectId={projectId}
-                  embedded
-                  onReady={() => {
-                    setBackgroundViteActive(false);
-                    setVitePreviewRequested(true);
-                    setPreviewEngine("webcontainer");
-                    setRefreshKey((k) => k + 1);
-                    clearPreviewLogs();
-                  }}
-                  onError={(msg) => {
-                    if (typeof window !== "undefined") {
-                      markWcUnavailable();
+              <button
+                type="button"
+                onClick={() => {
+                  void (async () => {
+                    const re = await reconnectSandboxPreview();
+                    if (!re.enabled) {
+                      toast({
+                        title: "Preview unavailable",
+                        description:
+                          process.env.NODE_ENV === "development"
+                            ? "Set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in .env.local"
+                            : "The live preview service is not available right now. Try again shortly.",
+                        variant: "destructive",
+                      });
+                      return;
                     }
-                    setVitePreviewRequested(false);
-                    setBackgroundViteActive(false);
-                    setConsoleLines((prev) => [
-                      ...prev.slice(-99),
-                      { type: "warn", text: `Vite preview stayed in the background: ${msg}` },
-                    ]);
-                  }}
-                />
-              </div>
-            )}
-
-            <VisualEditOverlay
-              iframeRef={iframeRef}
-              files={files}
-              projectId={projectId}
-              onFileChange={handleVebFileChange}
-              enabled={visualEditEnabled}
-              onRequestAiEdit={onSendPromptToChat}
-            />
-
-            {/* Preview Annotations overlay */}
-            {projectId && (
-              <PreviewAnnotations
-                projectId={projectId}
-                enabled={annotationsEnabled}
-                onSendToChat={onSendPromptToChat}
-              />
-            )}
-
-            {showConsole && (
-              <div className="h-40 border-t border-border bg-muted/30 flex flex-col">
-                <div className="flex items-center gap-1 px-2 py-1 border-b border-border/60 shrink-0">
-                  {(["console", "network", "perf"] as const).map((tab) => (
-                    <button
-                      key={tab}
-                      type="button"
-                      onClick={() => setPreviewBottomTab(tab)}
-                      className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors capitalize ${
-                        previewBottomTab === tab
-                          ? "bg-muted text-foreground"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      {tab === "console" ? "Console" : tab === "network" ? "Network" : "Perf"}
-                      {tab === "network" && networkLines.length > 0 && (
-                        <span className="ml-1 text-muted-foreground/70">({networkLines.length})</span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-                <div className="flex-1 overflow-y-auto p-2 font-mono text-xs space-y-0.5">
-                  {previewBottomTab === "console" ? (
-                    consoleLines.length === 0 ? (
-                      <p className="text-muted-foreground">No console output yet…</p>
-                    ) : (
-                      consoleLines.map((line, i) => (
-                        <div
-                          key={i}
-                          className={
-                            line.type === "error" ? "text-red-400"
-                              : line.type === "warn" ? "text-yellow-400"
-                              : "text-emerald-400"
-                          }
-                        >
-                          {line.text}
-                        </div>
-                      ))
-                    )
-                  ) : previewBottomTab === "network" ? (
-                    networkLines.length === 0 ? (
-                      <p className="text-muted-foreground">No network requests yet…</p>
-                    ) : (
-                      networkLines.map((line, i) => (
-                        <div key={i} className="flex items-start gap-2 text-[11px] leading-snug">
-                          <span className="shrink-0 font-semibold text-violet-400 w-10">{line.method}</span>
-                          <span
-                            className={
-                              line.ok === false || (line.status != null && line.status >= 400)
-                                ? "text-red-400"
-                                : "text-emerald-400"
-                            }
-                          >
-                            {line.status ?? "—"}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate text-muted-foreground" title={line.url}>
-                            {line.url}
-                          </span>
-                          {line.contentType && (
-                            <span
-                              className="shrink-0 text-muted-foreground/60 truncate max-w-[90px]"
-                              title={line.contentType}
-                            >
-                              {line.contentType.split(";")[0]}
-                            </span>
-                          )}
-                          {line.durationMs != null && (
-                            <span className="shrink-0 text-muted-foreground/70">{line.durationMs}ms</span>
-                          )}
-                          {line.error && (
-                            <span className="shrink-0 text-red-400 truncate max-w-[120px]" title={line.error}>
-                              {line.error}
-                            </span>
-                          )}
-                        </div>
-                      ))
-                    )
-                  ) : !perfSnapshot ? (
-                    <p className="text-muted-foreground">Reload preview to capture timing metrics…</p>
-                  ) : (
-                    <>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-[10px] text-muted-foreground">Core Web Vitals + navigation</span>
-                        <button
-                          type="button"
-                          onClick={refreshPreviewPerf}
-                          className="text-[10px] text-violet-400 hover:text-violet-300"
-                        >
-                          Refresh
-                        </button>
-                      </div>
-                      {(["ttfb", "fcp", "lcp", "cls", "domContentLoaded", "load"] as const).map((key) => {
-                      const val = perfSnapshot[key];
-                      const rating = ratePreviewMetric(key, val);
-                      const color =
-                        rating === "good"
-                          ? "text-emerald-400"
-                          : rating === "needs"
-                            ? "text-amber-400"
-                            : rating === "poor"
-                              ? "text-red-400"
-                              : "text-muted-foreground";
-                      const label =
-                        key === "ttfb"
-                          ? "TTFB"
-                          : key === "fcp"
-                            ? "FCP"
-                            : key === "lcp"
-                              ? "LCP"
-                              : key === "cls"
-                                ? "CLS"
-                                : key === "domContentLoaded"
-                                  ? "DCL"
-                                  : "Load";
-                      return (
-                        <div key={key} className="flex items-center gap-3 text-[11px] py-0.5">
-                          <span className="w-10 shrink-0 text-muted-foreground">{label}</span>
-                          <span className={`w-16 shrink-0 font-semibold tabular-nums ${color}`}>
-                            {val == null
-                              ? "—"
-                              : key === "cls"
-                                ? String(val)
-                                : `${val}ms`}
-                          </span>
-                          <span className="text-muted-foreground/70 capitalize">{rating === "na" ? "pending" : rating}</span>
-                        </div>
-                      );
-                    })}
-                    </>
-                  )}
-                </div>
-              </div>
-            )}
+                    if (!re.previewUrl) await requestSandboxPreview();
+                  })();
+                }}
+                className="h-8 px-4 rounded-md text-xs font-medium bg-violet-600 hover:bg-violet-500 text-white"
+              >
+                Try again
+              </button>
+            </div>
           </div>
         )}
+
+        {/* Console / Network / Perf — Modal live preview only */}
+        {showConsole &&
+          hasFiles &&
+          previewEngine === "sandbox" &&
+          !!sandboxUrl && (
+            <div className="h-40 border-t border-border bg-muted/30 flex flex-col shrink-0">
+              <div className="flex items-center gap-1 px-2 py-1 border-b border-border/60 shrink-0">
+                {(["console", "network", "perf"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setPreviewBottomTab(tab)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors capitalize ${
+                      previewBottomTab === tab
+                        ? "bg-muted text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {tab === "console" ? "Console" : tab === "network" ? "Network" : "Perf"}
+                    {tab === "network" && networkLines.length > 0 && (
+                      <span className="ml-1 text-muted-foreground/70">({networkLines.length})</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+              <div className="flex-1 overflow-y-auto p-2 font-mono text-xs space-y-0.5">
+                {previewBottomTab === "console" ? (
+                  consoleLines.length === 0 ? (
+                    <p className="text-muted-foreground">No console output yet…</p>
+                  ) : (
+                    consoleLines.map((line, i) => (
+                      <div
+                        key={i}
+                        className={
+                          line.type === "error" ? "text-red-400"
+                            : line.type === "warn" ? "text-yellow-400"
+                            : "text-foreground/80"
+                        }
+                      >
+                        {line.text}
+                      </div>
+                    ))
+                  )
+                ) : previewBottomTab === "network" ? (
+                  networkLines.length === 0 ? (
+                    <p className="text-muted-foreground">No network activity yet…</p>
+                  ) : (
+                    networkLines.map((line, i) => (
+                      <div key={i} className="text-foreground/70 truncate">{line.text}</div>
+                    ))
+                  )
+                ) : (
+                  <p className="text-muted-foreground">Perf metrics appear when the live preview is running.</p>
+                )}
+              </div>
+            </div>
+          )}
 
         {/* LifemarkAI badge — overlaid on the preview (mirrors what appears on published apps) */}
         {!badgeHidden && (
@@ -2358,7 +2996,7 @@ export function PreviewPanel({
                       />
                     ))}
                   </div>
-                  <span className="text-[12px] text-violet-200 font-medium">
+                  <span className="text-[12px] text-violet-800 dark:text-violet-200 font-medium">
                     {generatingFileCount > 0
                       ? `Writing ${generatingFileCount} file${generatingFileCount !== 1 ? "s" : ""}…`
                       : "AI is generating…"}
@@ -2399,32 +3037,33 @@ export function PreviewPanel({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 12 }}
               transition={{ duration: 0.18 }}
-              className="absolute top-12 left-1/2 -translate-x-1/2 z-40 w-[min(420px,92%)] rounded-xl border border-red-500/30 bg-background/95 shadow-2xl backdrop-blur px-3 py-2.5"
+              // Lovable-style neutral error card: bg-secondary-pulse + shadow-surface-xl, red dot, round "Try to fix" pill
+              className="absolute top-12 left-1/2 -translate-x-1/2 z-40 w-[min(420px,92%)] rounded-[var(--radius-6)] bg-[var(--bg-secondary-pulse)] shadow-surface-xl px-4 py-3"
             >
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 mt-0.5 text-red-400 shrink-0" />
+              <div className="flex items-start gap-2.5">
+                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-red-500" aria-hidden />
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs font-semibold text-foreground">Preview paused after a runtime error</div>
-                  <div className="mt-0.5 text-[11px] text-muted-foreground truncate">
+                  <div className="text-sm font-medium text-[var(--fg-primary)]">Your preview has an error</div>
+                  <div className="mt-0.5 text-xs text-[var(--fg-tertiary)] truncate">
                     {activeError ?? errorGuard.report?.errors[0]?.message ?? "The last update could not render cleanly."}
                   </div>
                   {previewDiagnosis && (
-                    <div className="mt-1 text-[10px] text-muted-foreground/80 line-clamp-2">
+                    <div className="mt-1 text-[11px] text-[var(--fg-tertiary)]/80 line-clamp-2">
                       {previewDiagnosis.replace(/\n+/g, " ").slice(0, 180)}
                     </div>
                   )}
                 </div>
               </div>
-              <div className="mt-2 flex flex-wrap justify-end gap-1.5">
+              <div className="mt-2.5 flex flex-wrap items-center justify-end gap-1">
                 <button
                   onClick={() => setShowConsole((value) => !value)}
-                  className="px-2 py-1 rounded-md border border-border/70 bg-muted/40 hover:bg-muted text-[11px] text-muted-foreground"
+                  className="h-7 rounded-full px-3 text-xs text-[var(--fg-primary)] hover:bg-[var(--bg-muted)] transition-colors"
                 >
-                  Logs
+                  Show error
                 </button>
                 <button
                   onClick={() => refreshPreview(files)}
-                  className="px-2 py-1 rounded-md border border-border/70 bg-muted/40 hover:bg-muted text-[11px] text-muted-foreground"
+                  className="h-7 rounded-full px-3 text-xs text-[var(--fg-primary)] hover:bg-[var(--bg-muted)] transition-colors"
                 >
                   Refresh
                 </button>
@@ -2434,9 +3073,9 @@ export function PreviewPanel({
                       handleFixWithAI(activeError ?? errorGuard.report?.formatted ?? "Preview runtime error");
                       setErrorDismissed(true);
                     }}
-                    className="px-2 py-1 rounded-md border border-red-500/30 bg-red-500/15 hover:bg-red-500/25 text-[11px] text-red-200"
+                    className="h-7 rounded-full px-3 text-xs font-medium bg-[var(--fg-primary)] text-[var(--bg-base)] hover:opacity-90 transition-opacity"
                   >
-                    Fix with AI
+                    Try to fix
                   </button>
                 )}
               </div>
@@ -2452,8 +3091,19 @@ export function PreviewPanel({
             visualEditDisabled={!!versionPreviewLabel}
             onVisualEditToggle={() => {
               if (versionPreviewLabel) return;
+              setEditTextMode(false);
               setVisualEdit(!visualEdit);
               onVisualEditToggle?.();
+            }}
+            editTextMode={editTextMode}
+            onEditTextToggle={() => {
+              if (versionPreviewLabel) return;
+              const next = !editTextMode;
+              setEditTextMode(next);
+              if (next && !visualEdit) {
+                setVisualEdit(true);
+                onVisualEditToggle?.();
+              }
             }}
             commentPinMode={commentPinMode}
             onCommentPinToggle={() => {
@@ -2475,20 +3125,53 @@ export function PreviewPanel({
               setDevice(d);
               window.dispatchEvent(new CustomEvent("lifemark-preview-device", { detail: d }));
             }}
+            selectionCount={vebSelectedList.length}
+            onClearSelections={clearVebSelection}
+            onAskAboutSelections={() => {
+              if (vebSelectedList.length === 0) return;
+              const lines = vebSelectedList.map((el, i) => {
+                const text = el.textContent.trim().slice(0, 80);
+                return `${i + 1}. <${el.tagName}>${text ? ` "${text}"` : ""}${
+                  el.classList.length ? ` class="${el.classList.slice(0, 4).join(" ")}"` : ""
+                }`;
+              });
+              onSendPromptToChat?.(
+                `I selected ${vebSelectedList.length} element${vebSelectedList.length === 1 ? "" : "s"} in the preview:\n${lines.join("\n")}\n\nPlease improve or fix these elements.`,
+              );
+              clearVebSelection();
+            }}
+            annotationCount={annotationMeta.count}
+            canAnnotationUndo={annotationMeta.canUndo}
+            canAnnotationRedo={annotationMeta.canRedo}
+            onAnnotationUndo={() =>
+              window.dispatchEvent(new CustomEvent("lifemark-preview-annotations-undo"))
+            }
+            onAnnotationRedo={() =>
+              window.dispatchEvent(new CustomEvent("lifemark-preview-annotations-redo"))
+            }
+            onAnnotationClear={() => {
+              window.dispatchEvent(new CustomEvent("lifemark-preview-annotations-clear"));
+            }}
+            pendingChangeCount={pendingVisualEdits.length}
+            onClearPendingChanges={clearPendingVisualEdits}
+            onSendPendingChanges={sendPendingVisualEdits}
+            unreadCommentCount={
+              commentsBannerDismissed ? 0 : openCommentCount
+            }
+            onViewComments={() => {
+              setCommentsBannerDismissed(true);
+              onOpenPanel?.("comments");
+            }}
+            onDismissCommentsBanner={() => setCommentsBannerDismissed(true)}
+            reverting={isRevertingPreview}
+            onDismissReverting={() => setIsRevertingPreview(false)}
           />
         )}
 
         {showDeployedPreview && (
-          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/15 border border-violet-500/25 text-[10px] text-violet-300">
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/15 border border-violet-500/25 text-[10px] text-violet-700 dark:text-violet-300">
             <Globe className="w-3 h-3" />
             Live deployment
-          </div>
-        )}
-
-        {showEsbuildBadge && (
-          <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[10px] text-emerald-300">
-            {esbuildBuilding ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-            {esbuildBuilding ? "Bundling" : "esbuild preview"}
           </div>
         )}
 
@@ -2500,7 +3183,7 @@ export function PreviewPanel({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: 16 }}
               transition={{ duration: 0.2 }}
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 max-w-[90%] bg-red-950/95 backdrop-blur-sm border border-red-500/40 text-red-200 text-xs px-3 py-2 rounded-xl shadow-2xl"
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 max-w-[90%] bg-red-950/95 backdrop-blur-sm border border-red-500/40 text-red-800 dark:text-red-200 text-xs px-3 py-2 rounded-xl shadow-2xl"
             >
               <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
               <span className="flex-1 truncate min-w-0 font-mono opacity-80">
@@ -2509,7 +3192,7 @@ export function PreviewPanel({
               {onFixWithAI && (
                 <button
                   onClick={() => { handleFixWithAI(activeError); setErrorDismissed(true); }}
-                  className="flex items-center gap-1 shrink-0 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-200 px-2 py-1 rounded-lg transition-colors"
+                  className="flex items-center gap-1 shrink-0 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-800 dark:text-red-200 px-2 py-1 rounded-lg transition-colors"
                 >
                   <Wrench className="w-3 h-3" />
                   Fix with AI
@@ -2571,6 +3254,81 @@ export function PreviewPanel({
             </Button>
             <Button size="sm" disabled={commentSaving || !commentDraft.trim()} onClick={() => void submitElementComment()}>
               {commentSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Post comment"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {activePinComment && (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4">
+        <div className="w-full max-w-md rounded-xl border border-border bg-background shadow-xl p-4 space-y-3">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">Pinned comment</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5 font-mono truncate">
+                &lt;{activePinComment.element_tag ?? "element"}&gt; on{" "}
+                {activePinComment.page_path || previewPath}
+                {activePinComment.element_preview
+                  ? ` — "${activePinComment.element_preview.slice(0, 40)}"`
+                  : ""}
+              </p>
+              {activePinComment.is_guest && (
+                <p className="text-[10px] text-sky-400 mt-1">
+                  Guest{activePinComment.guest_name ? `: ${activePinComment.guest_name}` : ""}
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setActivePinComment(null)}
+              className="text-muted-foreground hover:text-foreground shrink-0"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <p className="text-sm text-foreground/90 leading-relaxed whitespace-pre-wrap break-words">
+            {activePinComment.content}
+          </p>
+          <div className="flex justify-end gap-2 flex-wrap">
+            <Button variant="ghost" size="sm" onClick={() => setActivePinComment(null)}>
+              Close
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                onOpenPanel?.("comments");
+                setActivePinComment(null);
+              }}
+            >
+              Open Comments
+            </Button>
+            <Button variant="outline" size="sm" onClick={sendActivePinCommentToChat}>
+              Send to AI
+            </Button>
+            <Button
+              size="sm"
+              disabled={pinResolving}
+              onClick={() => {
+                if (!projectId || !activePinComment) return;
+                setPinResolving(true);
+                void fetch(`/api/projects/${projectId}/comments/${activePinComment.id}`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ resolved: true }),
+                })
+                  .then((res) => {
+                    if (!res.ok) throw new Error("resolve failed");
+                    setActivePinComment(null);
+                    void refreshElementCommentPins();
+                    toast({ title: "Comment resolved" });
+                  })
+                  .catch(() => toast({ title: "Could not resolve", variant: "destructive" }))
+                  .finally(() => setPinResolving(false));
+              }}
+            >
+              {pinResolving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Resolve"}
             </Button>
           </div>
         </div>
@@ -2703,7 +3461,7 @@ function VebPopover({ selected, files, onFileChange, onClose }: VebPopoverProps)
                     <button key={cls} onClick={() => addClass(cls)}
                       className={`px-2 py-0.5 rounded text-xs border transition-colors ${
                         editClasses.includes(cls)
-                          ? "bg-violet-500/20 border-violet-500/40 text-violet-300"
+                          ? "bg-violet-500/20 border-violet-500/40 text-violet-700 dark:text-violet-300"
                           : "bg-muted border-border hover:bg-accent"
                       }`}
                     >
@@ -2719,7 +3477,7 @@ function VebPopover({ selected, files, onFileChange, onClose }: VebPopoverProps)
                     <button key={cls} onClick={() => addClass(cls)}
                       className={`px-2 py-0.5 rounded text-xs border transition-colors ${
                         editClasses.includes(cls)
-                          ? "bg-violet-500/20 border-violet-500/40 text-violet-300"
+                          ? "bg-violet-500/20 border-violet-500/40 text-violet-700 dark:text-violet-300"
                           : "bg-muted border-border hover:bg-accent"
                       }`}
                     >

@@ -393,6 +393,19 @@ export async function POST(req: NextRequest) {
   }
   const { userId, scopes } = identity;
 
+  // Enterprise hardening: per-identity rate limit (API keys are automatable —
+  // a runaway script must not be able to hammer the platform).
+  {
+    const { rateLimitAsync, RATE_LIMITS } = await import("@/lib/rate-limit");
+    const rl = await rateLimitAsync(`mcp:${userId}`, RATE_LIMITS.api);
+    if (!rl.success) {
+      return NextResponse.json(rpcErr(null, -32029, "Rate limit exceeded — retry shortly"), {
+        status: 429,
+        headers: { "X-RateLimit-Reset": String(rl.resetAt) },
+      });
+    }
+  }
+
   let body: unknown;
   try {
     body = await req.json();

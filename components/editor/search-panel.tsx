@@ -36,7 +36,7 @@ function highlight(text: string, start: number, end: number) {
   return (
     <>
       <span className="text-muted-foreground">{text.slice(0, start)}</span>
-      <mark className="bg-yellow-400/30 text-yellow-300 rounded-sm px-0.5">{text.slice(start, end)}</mark>
+      <mark className="bg-yellow-400/30 text-yellow-700 dark:text-yellow-300 rounded-sm px-0.5">{text.slice(start, end)}</mark>
       <span className="text-muted-foreground">{text.slice(end)}</span>
     </>
   );
@@ -141,9 +141,9 @@ export function SearchPanel({ files, projectId, onFileSelect, onFilesUpdate }: S
   function fileIcon(path: string) {
     const ext = path.split(".").pop() ?? "";
     const colors: Record<string, string> = {
-      tsx: "text-cyan-400", ts: "text-blue-400", jsx: "text-cyan-300",
+      tsx: "text-cyan-400", ts: "text-blue-400", jsx: "text-cyan-700 dark:text-cyan-300",
       js: "text-yellow-400", css: "text-pink-400", json: "text-orange-400",
-      html: "text-orange-300", md: "text-slate-400",
+      html: "text-orange-700 dark:text-orange-300", md: "text-slate-400",
     };
     return colors[ext] ?? "text-slate-500";
   }

@@ -1,9 +1,8 @@
 /**
  * GET /api/sandbox/status
  *
- * Lightweight check — is a cloud sandbox provider configured (Modal/E2B)?
- * Lets the preview panel skip browser WebContainer boot when Lovable-style
- * cloud preview is available.
+ * Lightweight check — is Modal (Lovable-style) cloud preview configured?
+ * When false, the editor shows "Modal preview required" (not WC/srcdoc).
  */
 import { NextResponse } from "next/server";
 import { getSandboxProviderId, isSandboxEnabled } from "@/lib/sandbox";

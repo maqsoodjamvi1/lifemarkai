@@ -14,6 +14,7 @@ import {
   type VisualEditChange,
 } from "@/lib/editor/apply-visual-edit";
 import type { ProjectFile } from "@/types/database";
+import { toast } from "@/hooks/use-toast";
 
 export interface SelectedElement {
   tagName: string;
@@ -67,6 +68,7 @@ function applyChangeToFiles(
 /** Fetch + cache today's free inline-edit quota (Lovable parity counter). */
 function useFreeEditQuota() {
   const [quota, setQuota] = useState<{ used: number; limit: number; remaining: number } | null>(null);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
     let cancelled = false;
     void fetch("/api/ai/inline-edit")
@@ -77,8 +79,39 @@ function useFreeEditQuota() {
       })
       .catch(() => {});
     return () => { cancelled = true; };
+  }, [tick]);
+  useEffect(() => {
+    const onRefresh = () => setTick((n) => n + 1);
+    window.addEventListener("lifemark-free-edit-quota", onRefresh);
+    return () => window.removeEventListener("lifemark-free-edit-quota", onRefresh);
   }, []);
   return quota;
+}
+
+/** Claim one free visual edit (or debit 1 credit when quota exhausted). */
+export async function claimVisualEditCredit(projectId?: string): Promise<{
+  ok: boolean;
+  remaining?: number;
+  insufficient?: boolean;
+}> {
+  try {
+    const res = await fetch("/api/ai/inline-edit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ claimOnly: true, ...(projectId ? { projectId } : {}) }),
+    });
+    if (res.status === 402) return { ok: false, insufficient: true };
+    if (!res.ok) return { ok: false };
+    const data = (await res.json()) as { remaining?: number };
+    window.dispatchEvent(new Event("lifemark-free-edit-quota"));
+    return { ok: true, remaining: typeof data.remaining === "number" ? data.remaining : undefined };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function changeNeedsCredit(change: VisualEditChange): boolean {
+  return change.text !== undefined || change.imageSrc !== undefined;
 }
 
 export function VebEditPopover({
@@ -209,7 +242,7 @@ export function VebEditPopover({
                       onClick={() => addClass(cls)}
                       className={`px-2 py-0.5 rounded text-xs border transition-colors ${
                         editClasses.includes(cls)
-                          ? "bg-violet-500/20 border-violet-500/40 text-violet-300"
+                          ? "bg-violet-500/20 border-violet-500/40 text-violet-700 dark:text-violet-300"
                           : "bg-muted border-border hover:bg-accent"
                       }`}
                     >
@@ -229,7 +262,7 @@ export function VebEditPopover({
                       onClick={() => addClass(cls)}
                       className={`px-2 py-0.5 rounded text-xs border transition-colors ${
                         editClasses.includes(cls)
-                          ? "bg-violet-500/20 border-violet-500/40 text-violet-300"
+                          ? "bg-violet-500/20 border-violet-500/40 text-violet-700 dark:text-violet-300"
                           : "bg-muted border-border hover:bg-accent"
                       }`}
                     >
@@ -500,6 +533,14 @@ interface VisualEditOverlayProps {
   projectId?: string;
   /** Optional: route unmatched edits to the AI chat as a precise prompt */
   onRequestAiEdit?: (prompt: string) => void;
+  /** When true, single-click leaf text starts inline edit (Lovable Edit text). */
+  editTextMode?: boolean;
+  /** Stage inline text for the pending-changes tray instead of writing files immediately. */
+  onStageInlineEdit?: (selection: SelectedElement, text: string) => void;
+  /** Sync multi-select to the floating toolbar selection tray. */
+  onSelectionChange?: (selections: SelectedElement[]) => void;
+  /** Increment to clear overlay selection from the parent toolbar. */
+  clearSelectionSignal?: number;
 }
 
 async function persistVisualEditImage(
@@ -536,15 +577,29 @@ export function VisualEditOverlay({
   enabled,
   projectId,
   onRequestAiEdit,
+  editTextMode = false,
+  onStageInlineEdit,
+  onSelectionChange,
+  clearSelectionSignal = 0,
 }: VisualEditOverlayProps) {
   const [selectedList, setSelectedList] = useState<SelectedElement[]>([]);
   const selected = selectedList[selectedList.length - 1] ?? null;
   const [popoverPos, setPopoverPos] = useState({ x: 0, y: 0 });
+  const editTextModeRef = useRef(editTextMode);
+  editTextModeRef.current = editTextMode;
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
+  const onStageInlineEditRef = useRef(onStageInlineEdit);
+  onStageInlineEditRef.current = onStageInlineEdit;
 
   // In-place edit commit — kept in a ref so the injected dblclick handler
   // (deps: [enabled, iframeRef]) never closes over stale files/props.
   const inlineCommitRef = useRef<((sel: SelectedElement, text: string) => void) | null>(null);
   inlineCommitRef.current = (sel, text) => {
+    if (onStageInlineEditRef.current) {
+      onStageInlineEditRef.current(sel, text);
+      return;
+    }
     applyChangeToFiles(files, sel, { text }, onFileChange, onRequestAiEdit);
   };
 
@@ -568,12 +623,69 @@ export function VisualEditOverlay({
     `;
     doc.head.appendChild(style);
 
+    const canInlineEdit = (el: HTMLElement) => {
+      if (el.id === "lifemark-overlay" || el.isContentEditable) return false;
+      const text = el.textContent ?? "";
+      return !!(text.trim() && el.children.length <= 2 && text.length <= 500);
+    };
+
+    const startInlineEdit = (el: HTMLElement) => {
+      const original = el.textContent ?? "";
+      const snapshot: SelectedElement = {
+        tagName: el.tagName.toLowerCase(),
+        textContent: original,
+        classList: Array.from(el.classList).filter((c) => !c.startsWith("lifemark-")),
+        xpath: getXPath(el, doc),
+        rect: { top: 0, left: 0, width: 0, height: 0 },
+      };
+      // "plaintext-only" is unsupported in Firefox (treated as invalid →
+      // element stays read-only). Feature-detect and fall back to "true".
+      el.setAttribute("contenteditable", "plaintext-only");
+      if (!el.isContentEditable) el.setAttribute("contenteditable", "true");
+      el.classList.add("lifemark-inline-editing");
+      el.focus();
+      const range = doc.createRange();
+      range.selectNodeContents(el);
+      const sel = iframe.contentWindow?.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+
+      const commit = () => {
+        cleanupEditing();
+        const next = (el.textContent ?? "").trim();
+        if (next && next !== original) {
+          inlineCommitRef.current?.(snapshot, next);
+        } else if (!next) {
+          el.textContent = original;
+        }
+      };
+      const cancel = () => {
+        cleanupEditing();
+        el.textContent = original;
+      };
+      const onKey = (ke: KeyboardEvent) => {
+        if (ke.key === "Enter" && !ke.shiftKey) { ke.preventDefault(); commit(); }
+        if (ke.key === "Escape") { ke.preventDefault(); cancel(); }
+      };
+      const cleanupEditing = () => {
+        el.removeAttribute("contenteditable");
+        el.classList.remove("lifemark-inline-editing");
+        el.removeEventListener("blur", commit);
+        el.removeEventListener("keydown", onKey);
+      };
+      el.addEventListener("blur", commit);
+      el.addEventListener("keydown", onKey);
+    };
+
     // Mouse events
     const handleMouseOver = (e: MouseEvent) => {
       if (!enabled) return;
       const el = e.target as HTMLElement;
       if (el.id === "lifemark-overlay") return;
-      document.querySelectorAll(".lifemark-hover").forEach((el) => el.classList.remove("lifemark-hover"));
+      if (el.isContentEditable) return; // don't outline the element being edited
+      // Clear stale outlines INSIDE THE IFRAME's document (`document` here is
+      // the parent page — the hover class lives in `doc`).
+      doc.querySelectorAll(".lifemark-hover").forEach((node) => node.classList.remove("lifemark-hover"));
       el.classList.add("lifemark-hover");
     };
 
@@ -583,9 +695,17 @@ export function VisualEditOverlay({
 
     const handleClick = (e: MouseEvent) => {
       if (!enabled) return;
+      const el = e.target as HTMLElement;
+      // While an element is being inline-edited, clicks inside it must reach
+      // the contenteditable normally (caret placement / text selection) — do
+      // NOT hijack them into element selection.
+      if (el.isContentEditable || el.closest("[contenteditable]")) return;
       e.preventDefault();
       e.stopPropagation();
-      const el = e.target as HTMLElement;
+      if (editTextModeRef.current && canInlineEdit(el)) {
+        startInlineEdit(el);
+        return;
+      }
       const rect = el.getBoundingClientRect();
       const iframeRect = iframe.getBoundingClientRect();
       const next: SelectedElement = {
@@ -602,11 +722,15 @@ export function VisualEditOverlay({
       };
       const additive = e.metaKey || e.ctrlKey;
       setSelectedList((prev) => {
-        if (!additive) return [next];
-        if (prev.some((p) => p.xpath === next.xpath)) {
-          return prev.filter((p) => p.xpath !== next.xpath);
+        let list: SelectedElement[];
+        if (!additive) list = [next];
+        else if (prev.some((p) => p.xpath === next.xpath)) {
+          list = prev.filter((p) => p.xpath !== next.xpath);
+        } else {
+          list = [...prev, next];
         }
-        return [...prev, next];
+        onSelectionChangeRef.current?.(list);
+        return list;
       });
       setPopoverPos({
         x: rect.left + iframeRect.left + rect.width / 2,
@@ -630,56 +754,10 @@ export function VisualEditOverlay({
     const handleDblClick = (e: MouseEvent) => {
       if (!enabled) return;
       const el = e.target as HTMLElement;
-      if (el.id === "lifemark-overlay" || el.isContentEditable) return;
-      // Only leaf-ish text elements: no element children beyond inline markup
-      const text = el.textContent ?? "";
-      if (!text.trim() || el.children.length > 2 || text.length > 500) return;
+      if (!canInlineEdit(el)) return;
       e.preventDefault();
       e.stopPropagation();
-
-      const original = text;
-      const snapshot: SelectedElement = {
-        tagName: el.tagName.toLowerCase(),
-        textContent: original,
-        classList: Array.from(el.classList).filter((c) => !c.startsWith("lifemark-")),
-        xpath: getXPath(el, doc),
-        rect: { top: 0, left: 0, width: 0, height: 0 },
-      };
-      el.setAttribute("contenteditable", "plaintext-only");
-      el.classList.add("lifemark-inline-editing");
-      el.focus();
-      // Select all so typing replaces (Lovable behavior)
-      const range = doc.createRange();
-      range.selectNodeContents(el);
-      const sel = iframe.contentWindow?.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-
-      const commit = () => {
-        cleanupEditing();
-        const next = (el.textContent ?? "").trim();
-        if (next && next !== original) {
-          inlineCommitRef.current?.(snapshot, next);
-        } else if (!next) {
-          el.textContent = original; // never commit an emptied element
-        }
-      };
-      const cancel = () => {
-        cleanupEditing();
-        el.textContent = original;
-      };
-      const onKey = (ke: KeyboardEvent) => {
-        if (ke.key === "Enter" && !ke.shiftKey) { ke.preventDefault(); commit(); }
-        if (ke.key === "Escape") { ke.preventDefault(); cancel(); }
-      };
-      const cleanupEditing = () => {
-        el.removeAttribute("contenteditable");
-        el.classList.remove("lifemark-inline-editing");
-        el.removeEventListener("blur", commit);
-        el.removeEventListener("keydown", onKey);
-      };
-      el.addEventListener("blur", commit);
-      el.addEventListener("keydown", onKey);
+      startInlineEdit(el);
     };
 
     doc.addEventListener("mouseover", handleMouseOver);
@@ -700,7 +778,18 @@ export function VisualEditOverlay({
   const [prevEnabled, setPrevEnabled] = useState(enabled);
   if (prevEnabled !== enabled) {
     setPrevEnabled(enabled);
-    if (!enabled) setSelectedList([]);
+    if (!enabled) {
+      setSelectedList([]);
+      onSelectionChangeRef.current?.([]);
+    }
+  }
+
+  const [prevClearSignal, setPrevClearSignal] = useState(clearSelectionSignal);
+  if (prevClearSignal !== clearSelectionSignal) {
+    setPrevClearSignal(clearSelectionSignal);
+    if (clearSelectionSignal > 0) {
+      setSelectedList([]);
+    }
   }
 
   useEffect(() => {
@@ -730,22 +819,66 @@ export function VisualEditOverlay({
         selection={selected}
         selectionCount={selectedList.length}
         position={popoverPos}
-        onClose={() => setSelectedList([])}
+        onClose={() => {
+          setSelectedList([]);
+          onSelectionChangeRef.current?.([]);
+        }}
         aiFallbackAvailable={!!onRequestAiEdit}
         onRequestAiImage={onRequestAiEdit}
         onUploadImageFile={(file) => persistVisualEditImage(file, onFileChange, projectId)}
         onApply={(change) => {
-          for (const sel of selectedList) {
-            applyChangeToFiles(files, sel, change, onFileChange, onRequestAiEdit);
-          }
-          setSelectedList((prev) =>
-            prev.map((p) => ({
-              ...p,
-              textContent: change.text !== undefined ? change.text : p.textContent,
-              classList:
-                change.classes !== undefined ? change.classes.split(" ").filter(Boolean) : p.classList,
-            })),
-          );
+          void (async () => {
+            const stagingText = change.text !== undefined && !!onStageInlineEditRef.current;
+            // Staged text is billed on Send; immediate text/image persists bill now.
+            if (!stagingText && changeNeedsCredit(change)) {
+              const claimed = await claimVisualEditCredit(projectId);
+              if (!claimed.ok) {
+                toast({
+                  title: claimed.insufficient ? "Out of credits" : "Couldn't apply edit",
+                  description: claimed.insufficient
+                    ? "Daily free edits used — add credits to save visual changes."
+                    : "Try again in a moment.",
+                  variant: "destructive",
+                });
+                return;
+              }
+            }
+            for (const sel of selectedList) {
+              if (change.text !== undefined && onStageInlineEditRef.current) {
+                onStageInlineEditRef.current(
+                  { ...sel, textContent: sel.textContent },
+                  change.text,
+                );
+                // Live-update DOM for staged text
+                try {
+                  const iframe = iframeRef.current;
+                  const doc = iframe?.contentDocument;
+                  if (doc) {
+                    const node = doc.evaluate(
+                      sel.xpath.startsWith("//") ? sel.xpath : `//${sel.xpath}`,
+                      doc,
+                      null,
+                      XPathResult.FIRST_ORDERED_NODE_TYPE,
+                      null,
+                    ).singleNodeValue as HTMLElement | null;
+                    if (node) node.textContent = change.text;
+                  }
+                } catch {
+                  /* ignore */
+                }
+                continue;
+              }
+              applyChangeToFiles(files, sel, change, onFileChange, onRequestAiEdit);
+            }
+            setSelectedList((prev) =>
+              prev.map((p) => ({
+                ...p,
+                textContent: change.text !== undefined ? change.text : p.textContent,
+                classList:
+                  change.classes !== undefined ? change.classes.split(" ").filter(Boolean) : p.classList,
+              })),
+            );
+          })();
         }}
       />
     </>
@@ -771,6 +904,8 @@ interface VebBridgePopoverProps {
   onRequestAiEdit?: (prompt: string) => void;
   onClose: () => void;
   onSelectionChange?: (next: SelectedElement) => void;
+  /** Stage text edits for the pending tray; classes/images still persist immediately. */
+  onStageTextEdit?: (selection: SelectedElement, text: string) => void;
 }
 
 export function VebBridgePopover({
@@ -783,6 +918,7 @@ export function VebBridgePopover({
   onRequestAiEdit,
   onClose,
   onSelectionChange,
+  onStageTextEdit,
 }: VebBridgePopoverProps) {
   const targets = selections && selections.length > 0 ? selections : [selection];
   return (
@@ -812,20 +948,50 @@ export function VebBridgePopover({
         onRequestAiImage={onRequestAiEdit}
         onUploadImageFile={(file) => persistVisualEditImage(file, onFileChange, projectId)}
         onApply={(change) => {
-          for (const sel of targets) {
-            onLiveApply({
-              xpath: sel.xpath,
-              text: change.text,
-              classes: change.classes,
-              imageSrc: change.imageSrc,
+          void (async () => {
+            const stagingText = change.text !== undefined && !!onStageTextEdit;
+            if (!stagingText && changeNeedsCredit(change)) {
+              const claimed = await claimVisualEditCredit(projectId);
+              if (!claimed.ok) {
+                toast({
+                  title: claimed.insufficient ? "Out of credits" : "Couldn't apply edit",
+                  description: claimed.insufficient
+                    ? "Daily free edits used — add credits to save visual changes."
+                    : "Try again in a moment.",
+                  variant: "destructive",
+                });
+                return;
+              }
+            }
+            for (const sel of targets) {
+              onLiveApply({
+                xpath: sel.xpath,
+                text: change.text,
+                classes: change.classes,
+                imageSrc: change.imageSrc,
+              });
+              if (change.text !== undefined && onStageTextEdit) {
+                onStageTextEdit({ ...sel, textContent: sel.textContent }, change.text);
+                // Persist non-text parts of the same change immediately when present.
+                if (change.classes !== undefined || change.imageSrc !== undefined) {
+                  applyChangeToFiles(
+                    files,
+                    sel,
+                    { classes: change.classes, imageSrc: change.imageSrc },
+                    onFileChange,
+                    onRequestAiEdit,
+                  );
+                }
+              } else {
+                applyChangeToFiles(files, sel, change, onFileChange, onRequestAiEdit);
+              }
+            }
+            onSelectionChange?.({
+              ...selection,
+              textContent: change.text !== undefined ? change.text : selection.textContent,
+              classList: change.classes !== undefined ? change.classes.split(" ").filter(Boolean) : selection.classList,
             });
-            applyChangeToFiles(files, sel, change, onFileChange, onRequestAiEdit);
-          }
-          onSelectionChange?.({
-            ...selection,
-            textContent: change.text !== undefined ? change.text : selection.textContent,
-            classList: change.classes !== undefined ? change.classes.split(" ").filter(Boolean) : selection.classList,
-          });
+          })();
         }}
       />
     </>

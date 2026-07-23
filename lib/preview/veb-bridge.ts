@@ -8,10 +8,76 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
   if (window.parent === window) return;
   var enabled = false;
   var commentPinEnabled = false;
+  var editTextMode = false;
   var hovered = null;
   var style = document.createElement('style');
   style.id = 'lm-veb-style';
-  style.textContent = '.lm-hover{outline:2px solid #7c3aed!important;outline-offset:2px;cursor:pointer!important}.lm-selected{outline:2px solid #0e90e8!important;outline-offset:2px}.lm-multi{outline:2px solid #38bdf8!important;outline-offset:2px}.lm-inline-editing{outline:2px dashed #22c55e!important;outline-offset:2px;cursor:text!important}';
+  style.textContent = [
+    '.lm-hover{outline:2px solid #7c3aed!important;outline-offset:2px;cursor:pointer!important}',
+    '.lm-selected{outline:2px solid #0e90e8!important;outline-offset:2px}',
+    '.lm-multi{outline:2px solid #38bdf8!important;outline-offset:2px}',
+    '.lm-inline-editing{outline:2px dashed #22c55e!important;outline-offset:2px;cursor:text!important}',
+    '.lm-pin-flash{outline:2px solid #f59e0b!important;outline-offset:3px;transition:outline 0.2s ease}',
+    '#lm-comment-pins{position:fixed;inset:0;pointer-events:none;z-index:2147483646}',
+    '.lm-comment-pin-marker{position:fixed;width:22px;height:22px;margin:0;padding:0;border:2px solid #fff;border-radius:9999px;background:#7c3aed;color:#fff;font:700 11px/18px system-ui,sans-serif;text-align:center;cursor:pointer;pointer-events:auto;box-shadow:0 2px 8px rgba(0,0,0,.35);z-index:2147483647}',
+    '.lm-comment-pin-marker:hover{transform:scale(1.08);background:#6d28d9}'
+  ].join('');
+  if (!style.parentNode) document.head.appendChild(style);
+
+  var pinLayer = null;
+  var activePins = [];
+
+  function ensurePinLayer() {
+    if (pinLayer && pinLayer.parentNode) return pinLayer;
+    pinLayer = document.createElement('div');
+    pinLayer.id = 'lm-comment-pins';
+    document.documentElement.appendChild(pinLayer);
+    return pinLayer;
+  }
+
+  function clearCommentPins() {
+    if (pinLayer) pinLayer.innerHTML = '';
+  }
+
+  function renderCommentPins(pins) {
+    activePins = Array.isArray(pins) ? pins : [];
+    var layer = ensurePinLayer();
+    layer.innerHTML = '';
+    for (var i = 0; i < activePins.length; i++) {
+      (function(pin, idx) {
+        if (!pin || !pin.xpath || !pin.id) return;
+        var el = findByXPath(pin.xpath);
+        if (!el) return;
+        var r = el.getBoundingClientRect();
+        var marker = document.createElement('button');
+        marker.type = 'button';
+        marker.className = 'lm-comment-pin-marker';
+        marker.textContent = String(idx + 1);
+        marker.title = pin.label || 'Comment';
+        marker.setAttribute('data-comment-id', pin.id);
+        marker.style.left = Math.max(4, r.left + r.width - 10) + 'px';
+        marker.style.top = Math.max(4, r.top - 10) + 'px';
+        marker.addEventListener('click', function(ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          window.parent.postMessage({
+            source: 'lifemark-comment-pin-click',
+            commentId: pin.id,
+            xpath: pin.xpath
+          }, '*');
+        }, true);
+        layer.appendChild(marker);
+      })(activePins[i], i);
+    }
+  }
+
+  function repositionCommentPins() {
+    if (!activePins.length) return;
+    renderCommentPins(activePins);
+  }
+
+  window.addEventListener('scroll', repositionCommentPins, true);
+  window.addEventListener('resize', repositionCommentPins);
 
   function getXPath(el) {
     var parts = [], cur = el;
@@ -54,59 +120,14 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
     if (hovered && hovered !== document.body) hovered.classList.add('lm-hover');
   }
   function onOut(e) { if (e.target && e.target.classList) e.target.classList.remove('lm-hover'); }
-  function onClick(e) {
-    if (commentPinEnabled) {
-      e.preventDefault(); e.stopPropagation();
-      var el = e.target;
-      if (!el || el === document.body) return;
-      var rect = el.getBoundingClientRect();
-      window.parent.postMessage({
-        source: 'lifemark-comment-pin',
-        tagName: el.tagName.toLowerCase(),
-        textContent: (el.textContent || '').trim().slice(0, 80),
-        classList: Array.prototype.filter.call(el.classList, function(c){ return c.indexOf('lm-') !== 0; }),
-        xpath: getXPath(el),
-        rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
-      }, '*');
-      return;
-    }
-    if (!enabled) return;
-    e.preventDefault(); e.stopPropagation();
-    var el = e.target;
-    if (!el || el === document.body) return;
-    var rect = el.getBoundingClientRect();
-    var additive = !!(e.metaKey || e.ctrlKey);
-    if (!additive) {
-      document.querySelectorAll('.lm-selected,.lm-multi').forEach(function(n){
-        n.classList.remove('lm-selected'); n.classList.remove('lm-multi');
-      });
-      el.classList.remove('lm-hover');
-      el.classList.add('lm-selected');
-    } else {
-      el.classList.add('lm-selected');
-      el.classList.add('lm-multi');
-    }
-    window.parent.postMessage({
-      source: 'lifemark-veb',
-      additive: additive,
-      tagName: el.tagName.toLowerCase(),
-      textContent: (el.textContent || '').trim(),
-      classList: Array.prototype.filter.call(el.classList, function(c){ return c.indexOf('lm-') !== 0; }),
-      xpath: getXPath(el),
-      rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
-    }, '*');
+  function canInlineEdit(el) {
+    if (!el || el === document.body || el.isContentEditable) return false;
+    var text = (el.textContent || '').trim();
+    return !!(text && el.children.length <= 2 && text.length <= 500);
   }
 
-  // True in-place text editing (Lovable parity): double-click leaf text → edit in preview.
-  function onDblClick(e) {
-    if (!enabled || commentPinEnabled) return;
-    var el = e.target;
-    if (!el || el === document.body || el.isContentEditable) return;
-    var text = (el.textContent || '').trim();
-    if (!text || el.children.length > 2 || text.length > 500) return;
-    e.preventDefault();
-    e.stopPropagation();
-    var original = text;
+  function startInlineEdit(el) {
+    var original = (el.textContent || '').trim();
     var snapshot = {
       tagName: el.tagName.toLowerCase(),
       textContent: original,
@@ -148,6 +169,64 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
     el.addEventListener('keydown', onKey);
   }
 
+  function onClick(e) {
+    if (commentPinEnabled) {
+      e.preventDefault(); e.stopPropagation();
+      var el = e.target;
+      if (!el || el === document.body) return;
+      var rect = el.getBoundingClientRect();
+      window.parent.postMessage({
+        source: 'lifemark-comment-pin',
+        tagName: el.tagName.toLowerCase(),
+        textContent: (el.textContent || '').trim().slice(0, 80),
+        classList: Array.prototype.filter.call(el.classList, function(c){ return c.indexOf('lm-') !== 0; }),
+        xpath: getXPath(el),
+        rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
+      }, '*');
+      return;
+    }
+    if (!enabled) return;
+    e.preventDefault(); e.stopPropagation();
+    var el = e.target;
+    if (!el || el === document.body) return;
+    // Edit-text mode: single-click leaf text starts inline edit (Lovable parity).
+    if (editTextMode && canInlineEdit(el)) {
+      startInlineEdit(el);
+      return;
+    }
+    var rect = el.getBoundingClientRect();
+    var additive = !!(e.metaKey || e.ctrlKey);
+    if (!additive) {
+      document.querySelectorAll('.lm-selected,.lm-multi').forEach(function(n){
+        n.classList.remove('lm-selected'); n.classList.remove('lm-multi');
+      });
+      el.classList.remove('lm-hover');
+      el.classList.add('lm-selected');
+    } else {
+      el.classList.add('lm-selected');
+      el.classList.add('lm-multi');
+    }
+    window.parent.postMessage({
+      source: 'lifemark-veb',
+      additive: additive,
+      tagName: el.tagName.toLowerCase(),
+      textContent: (el.textContent || '').trim(),
+      classList: Array.prototype.filter.call(el.classList, function(c){ return c.indexOf('lm-') !== 0; }),
+      xpath: getXPath(el),
+      rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
+    }, '*');
+  }
+
+  // True in-place text editing (Lovable parity): double-click leaf text → edit in preview.
+  function onDblClick(e) {
+    if (!enabled || commentPinEnabled) return;
+    var el = e.target;
+    if (!canInlineEdit(el)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    startInlineEdit(el);
+  }
+
   document.addEventListener('mouseover', onOver, true);
   document.addEventListener('mouseout', onOut, true);
   document.addEventListener('click', onClick, true);
@@ -163,6 +242,9 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
     if (d.type === 'lifemark-comment-pin-mode') {
       commentPinEnabled = !!d.enabled;
       if (!commentPinEnabled) clearMarks();
+    }
+    if (d.type === 'lifemark-veb-edit-text-mode') {
+      editTextMode = !!d.enabled;
     }
     if (d.type === 'lifemark-capture') {
       var msgId = d.messageId;
@@ -207,6 +289,24 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
       }
     }
     if (d.type === 'lifemark-veb-clear') clearMarks();
+    if (d.type === 'lifemark-comment-pins') {
+      renderCommentPins(d.pins);
+    }
+    if (d.type === 'lifemark-comment-pin-focus' && d.xpath) {
+      var focusEl = findByXPath(d.xpath);
+      if (focusEl) {
+        try { focusEl.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (err) {}
+        focusEl.classList.add('lm-pin-flash');
+        setTimeout(function() { focusEl.classList.remove('lm-pin-flash'); }, 1600);
+      }
+      if (d.commentId) {
+        window.parent.postMessage({
+          source: 'lifemark-comment-pin-click',
+          commentId: d.commentId,
+          xpath: d.xpath
+        }, '*');
+      }
+    }
   });
 
   // Announce readiness so the parent can push the current mode after HMR/reload
@@ -377,10 +477,35 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
   });
 })();`;
 
+/** Combined preview bridges (VEB + runtime + errors + perf). */
+export function getPreviewBridgeScripts(): string {
+  return `${VEB_BRIDGE_SCRIPT}\n${PREVIEW_RUNTIME_SCRIPT}\n${PREVIEW_ERROR_BRIDGE_SCRIPT}\n${PREVIEW_PERF_SCRIPT}`;
+}
+
 /** Inject both bridges into an index.html document (idempotent). */
 export function injectVebBridgeIntoHtml(html: string): string {
   if (html.includes("lifemark-veb-ready")) return html;
-  const tag = `<script>${VEB_BRIDGE_SCRIPT}</script>\n<script>${PREVIEW_RUNTIME_SCRIPT}</script>\n<script>${PREVIEW_ERROR_BRIDGE_SCRIPT}</script>\n<script>${PREVIEW_PERF_SCRIPT}</script>`;
+  const tag = `<script>${getPreviewBridgeScripts()}</script>`;
   if (html.includes("</body>")) return html.replace("</body>", `${tag}\n</body>`);
   return `${html}\n${tag}`;
+}
+
+/**
+ * Inject preview bridges into a Next.js App Router root layout (TSX/JSX).
+ * Vite apps use index.html; Next has no HTML entry, so layout is the hook.
+ */
+export function injectVebBridgeIntoNextLayout(source: string): string {
+  if (source.includes("lifemark-veb-ready")) return source;
+  const escaped = JSON.stringify(getPreviewBridgeScripts());
+  const tag = `<script dangerouslySetInnerHTML={{ __html: ${escaped} }} />`;
+  if (/<\/body>/i.test(source)) {
+    return source.replace(/<\/body>/i, `${tag}\n</body>`);
+  }
+  // Common pattern: <body>{children}</body> already handled; otherwise append
+  // before the final closing parenthesis of the default export return.
+  const htmlClose = source.lastIndexOf("</html>");
+  if (htmlClose >= 0) {
+    return `${source.slice(0, htmlClose)}${tag}\n${source.slice(htmlClose)}`;
+  }
+  return `${source}\n${tag}\n`;
 }

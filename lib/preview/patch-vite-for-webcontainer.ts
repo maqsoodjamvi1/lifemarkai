@@ -1,23 +1,41 @@
-/** Ensure Vite dev server binds for WebContainer preview (server-ready iframe). */
+/**
+ * Ensure Vite binds on 0.0.0.0 and HMR works through Modal TLS tunnels
+ * (Lovable-style cloud preview) as well as WebContainer.
+ */
 export function patchViteConfigForWebContainer(content: string): string {
-  const patched = patchReactPluginBabelConfig(content);
+  let patched = patchReactPluginBabelConfig(content);
   if (!patched.trim()) return patched;
-  if (/host\s*:\s*(true|['"]0\.0\.0\.0['"])/.test(patched)) return patched;
+
+  const hasHost = /host\s*:\s*(true|['"]0\.0\.0\.0['"])/.test(patched);
+  const hasHmr = /\bhmr\s*:\s*\{/.test(patched);
+  const hasAllowedHosts = /allowedHosts\s*:/.test(patched);
 
   const serverBlock = /server\s*:\s*\{/;
   if (serverBlock.test(patched)) {
-    return patched.replace(serverBlock, "server: {\n    host: true,");
+    const inject = [
+      !hasHost ? "host: true," : "",
+      !hasAllowedHosts ? "allowedHosts: true," : "",
+      // Modal TLS tunnels terminate on 443 — Vite HMR client must use wss.
+      !hasHmr ? 'hmr: { protocol: "wss", clientPort: 443 },' : "",
+    ]
+      .filter(Boolean)
+      .map((line) => `\n    ${line}`)
+      .join("");
+    if (inject) {
+      patched = patched.replace(serverBlock, `server: {${inject}`);
+    }
+    return patched;
   }
 
   const defineConfig = /defineConfig\s*\(\s*\{/;
   if (defineConfig.test(patched)) {
     return patched.replace(
       defineConfig,
-      "defineConfig({\n  server: { host: true },",
+      "defineConfig({\n  server: {\n    host: true,\n    allowedHosts: true,\n    hmr: { protocol: \"wss\", clientPort: 443 },\n  },",
     );
   }
 
-  return `${patched.trim()}\n// Added for WebContainer preview\nexport const __webcontainerHost = true;\n`;
+  return `${patched.trim()}\n// Added for cloud/WebContainer preview\nexport const __webcontainerHost = true;\n`;
 }
 
 /**
@@ -44,7 +62,9 @@ export function patchReactPluginBabelConfig(content: string): string {
 }
 
 import { injectGuestCommentsIntoHtml } from "./inject-guest-comments";
-import { injectVebBridgeIntoHtml } from "./veb-bridge";
+import { injectVebBridgeIntoHtml, injectVebBridgeIntoNextLayout } from "./veb-bridge";
+
+const NEXT_LAYOUT_RE = /^(src\/)?app\/layout\.(t|j)sx?$/;
 
 export interface WebContainerPatchOpts {
   projectId?: string;
@@ -97,6 +117,7 @@ export function patchFilesForWebContainer<T extends { path: string; content?: st
     !!opts?.isPublic && !!opts?.projectId;
   return files.map((file) => {
     const path = file.path.replace(/\\/g, "/");
+    const norm = path.replace(/^\//, "");
     if (file.content == null) return file;
     if (/vite\.config\.(t|j)sx?$/.test(path)) {
       return { ...file, content: patchViteConfigForWebContainer(file.content) };
@@ -104,7 +125,7 @@ export function patchFilesForWebContainer<T extends { path: string; content?: st
     // Visual-edit bridge: injected (dormant) into the app's HTML entry so the
     // parent editor can drive element picking via postMessage (Lovable-style).
     // Also repair a mis-pointed entry <script> so real Vite finds the app.
-    if (/^(public\/)?index\.html$/.test(path.replace(/^\//, ""))) {
+    if (/^(public\/)?index\.html$/.test(norm)) {
       let html = fixHtmlEntry(file.content, entry);
       html = injectVebBridgeIntoHtml(html);
       if (injectGuest) {
@@ -114,6 +135,10 @@ export function patchFilesForWebContainer<T extends { path: string; content?: st
         });
       }
       return { ...file, content: html };
+    }
+    // Next.js App Router: no index.html — inject bridges into root layout.
+    if (NEXT_LAYOUT_RE.test(norm)) {
+      return { ...file, content: injectVebBridgeIntoNextLayout(file.content) };
     }
     return file;
   });

@@ -5,6 +5,8 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  FileText,
+  Image as ImageIcon,
   Loader2,
   Pause,
   Pencil,
@@ -20,6 +22,10 @@ export interface LovableQueueItem {
   text: string;
   repeat: number;
   remaining: number;
+  /** Optional screenshot / mockup carried with a queued follow-up. */
+  imageBase64?: string | null;
+  imageName?: string | null;
+  attachedText?: string | null;
 }
 
 interface LovablePromptQueueProps {
@@ -171,9 +177,27 @@ export function LovablePromptQueue({
                     </div>
                   ) : (
                     <div className="flex items-start gap-1">
-                      <span className="text-[11px] text-[var(--fg-tertiary)] leading-relaxed line-clamp-2 flex-1">
-                        {item.text}
-                      </span>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-[11px] text-[var(--fg-tertiary)] leading-relaxed line-clamp-2">
+                          {item.text}
+                        </span>
+                        {(item.imageBase64 || item.attachedText) && (
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            {item.imageBase64 && (
+                              <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-sky-500/15 text-sky-400">
+                                <ImageIcon className="w-2.5 h-2.5" />
+                                {item.imageName?.trim() || "Image"}
+                              </span>
+                            )}
+                            {item.attachedText && (
+                              <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-400">
+                                <FileText className="w-2.5 h-2.5" />
+                                Text
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
                       {item.repeat > 1 && (
                         <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-400 font-mono">
                           &times;{item.remaining}

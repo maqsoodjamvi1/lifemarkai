@@ -9,13 +9,14 @@ import { downloadLovableGeneratedFile, formatLovableFileSize } from "./file-size
 import {
   LovableClarifySessionCard,
   type ClarifySession,
+  type ClarifyQuestion,
 } from "./clarify-session-card";
+import { LovableQuestionsAnsweredCard } from "./questions-answered-card";
 import { LovablePromptQueue, REPEAT_STEPS, type LovableQueueItem } from "./prompt-queue";
 import { LovableSuggestionChips } from "./suggestion-chips";
 import { LovableRecoveryChips, LOVABLE_RECOVERY_CHIPS } from "./recovery-chips";
 import { LovablePostBuildPublishBanner } from "./post-build-publish-banner";
 import { LovableComposerGuestCommentsBanner } from "./composer-guest-comments-banner";
-import { LovableComposerSharePreview } from "./composer-share-preview";
 import { LovableComposerRuntimeErrorsBanner } from "./composer-runtime-errors-banner";
 import type { PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 
@@ -41,6 +42,9 @@ interface LovableComposerDockProps {
   onUpdateClarifyQuestion: (questionId: string, answer: string) => void;
   onClarifyBuildNow: (enrichedPrompt: string) => void;
   onClarifySkipAndBuild: (originalPrompt: string) => void;
+  /** Lovable dump: collapsed “Questions answered” after clarify completes */
+  answeredClarifyQuestions?: ClarifyQuestion[] | null;
+  onDismissAnsweredClarify?: () => void;
   promptQueue: LovableQueueItem[];
   streaming: boolean;
   queuePaused: boolean;
@@ -99,6 +103,7 @@ export function LovableComposerDock({
   onUpdateClarifyQuestion,
   onClarifyBuildNow,
   onClarifySkipAndBuild,
+  answeredClarifyQuestions = null,
   promptQueue,
   streaming,
   queuePaused,
@@ -175,7 +180,9 @@ export function LovableComposerDock({
         />
       )}
 
-      {showSharePreview && projectId && <LovableComposerSharePreview projectId={projectId} />}
+      {/* Preview share link removed from the chat panel per product decision —
+          sharing lives in the top-bar Share menu. Component kept for reuse:
+          {showSharePreview && projectId && <LovableComposerSharePreview projectId={projectId} />} */}
 
       {showGuestCommentsBanner && guestCommentCount > 0 && onDismissGuestCommentsBanner && (
         <LovableComposerGuestCommentsBanner
@@ -210,6 +217,10 @@ export function LovableComposerDock({
             onBuildNow={onClarifyBuildNow}
             onSkipAndBuild={onClarifySkipAndBuild}
           />
+        )}
+
+        {!activeClarifySession && answeredClarifyQuestions && answeredClarifyQuestions.length > 0 && (
+          <LovableQuestionsAnsweredCard questions={answeredClarifyQuestions} />
         )}
 
         <LovablePromptQueue

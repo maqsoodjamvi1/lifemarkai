@@ -332,6 +332,19 @@ function TreeNodeComponent({
                 onClick={() => node.file && onFileSelect(node.file)}
                 onDoubleClick={(e) => { e.preventDefault(); setRenaming(true); }}
                 draggable
+                onDrop={(e) => {
+                  // Dropping onto a FILE moves the dragged file into this
+                  // file's folder — and must not bubble to the container,
+                  // which would silently move it to the project root.
+                  const src = e.dataTransfer.getData(DRAG_MIME);
+                  if (!src) return;
+                  e.preventDefault();
+                  const parent = node.path.includes("/") ? node.path.split("/").slice(0, -1).join("/") : "";
+                  if (src !== node.path) actions.onMove(src, parent);
+                }}
+                onDragOver={(e) => {
+                  if (e.dataTransfer.types.includes(DRAG_MIME)) e.preventDefault();
+                }}
                 onDragStart={(e) => {
                   e.dataTransfer.setData(DRAG_MIME, node.path);
                   e.dataTransfer.effectAllowed = "move";

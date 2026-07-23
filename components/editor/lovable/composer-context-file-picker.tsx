@@ -92,7 +92,7 @@ export function LovableComposerContextFilePicker({
                   disabled={disabled}
                   className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors ${
                     attached
-                      ? "bg-violet-500/10 text-violet-300"
+                      ? "bg-violet-500/10 text-violet-700 dark:text-violet-300"
                       : disabled
                         ? "opacity-40 cursor-not-allowed"
                         : "hover:bg-muted text-foreground"

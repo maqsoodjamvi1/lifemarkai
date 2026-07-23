@@ -243,10 +243,11 @@ const COLLAB_COLORS = [
   "#dc2626", "#db2777", "#0891b2", "#65a30d",
 ];
 
-export function colorForUserId(userId: string): string {
+export function colorForUserId(userId: string | null | undefined): string {
+  const id = typeof userId === "string" && userId.length > 0 ? userId : "anonymous";
   let hash = 0;
-  for (let i = 0; i < userId.length; i++) {
-    hash = (hash * 31 + userId.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
   }
   return COLLAB_COLORS[hash % COLLAB_COLORS.length];
 }

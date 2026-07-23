@@ -43,7 +43,7 @@ export function ViewSwitcherPill({
     <div
       role="tablist"
       className={cn(
-        "relative inline-flex h-7 items-center gap-0.5 rounded-full p-0.5",
+        "view-switcher-track relative inline-flex h-7 items-center gap-0.5 rounded-full p-0.5",
         "bg-[var(--bg-translucent)] shadow-[inset_0_0_0_0.5px_var(--border-default)]",
         className,
       )}
@@ -64,7 +64,7 @@ export function ViewSwitcherPill({
               "relative z-10 flex h-6 shrink-0 items-center overflow-hidden rounded-full outline-none transition-colors duration-150",
               "disabled:cursor-not-allowed disabled:opacity-50",
               isActive
-                ? "text-[var(--fg-accent)]"
+                ? "text-[#0066FF] dark:text-[#4d94ff]"
                 : "cursor-pointer text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] active:scale-[0.97]",
               isActive ? "px-2" : "px-1.5",
             )}
@@ -72,7 +72,7 @@ export function ViewSwitcherPill({
             {isActive && (
               <motion.span
                 layoutId="view-switcher-highlight"
-                className="absolute inset-0 -z-10 rounded-full bg-[var(--bg-primary-pulse)] shadow-[0_1px_2px_rgba(0,0,0,0.08),inset_0_0_0_0.5px_var(--border-default)]"
+                className="view-switcher-pill-soft absolute inset-0 -z-10 rounded-full bg-[rgba(0,102,255,0.08)] shadow-[0_1px_2px_rgba(0,0,0,0.06),inset_0_0_0_1px_rgba(0,102,255,0.25)]"
                 transition={{ type: "spring", stiffness: 520, damping: 40 }}
               />
             )}

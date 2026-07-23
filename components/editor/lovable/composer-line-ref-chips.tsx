@@ -18,7 +18,7 @@ export function LovableComposerLineRefChips({ refs, onRemove, onOpenAtLine }: Lo
       {refs.map((ref) => (
         <div
           key={ref.raw}
-          className="flex items-center gap-1 bg-sky-500/10 border border-sky-500/25 text-sky-300 text-[10px] rounded-md px-2 py-0.5"
+          className="flex items-center gap-1 bg-sky-500/10 border border-sky-500/25 text-sky-700 dark:text-sky-300 text-[10px] rounded-md px-2 py-0.5"
           title={`Line reference — ${ref.path}`}
         >
           <button

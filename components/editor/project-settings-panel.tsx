@@ -109,7 +109,7 @@ function BrandedUrlEditor({
             value={slug}
             onChange={(e) => handleChange(e.target.value)}
             placeholder="my-awesome-app"
-            className="flex-1 bg-transparent text-xs text-slate-300 font-mono py-1.5 pr-2 outline-none placeholder:text-slate-600"
+            className="flex-1 bg-transparent text-xs text-slate-700 dark:text-slate-300 font-mono py-1.5 pr-2 outline-none placeholder:text-slate-600"
           />
         </div>
         <button
@@ -254,7 +254,7 @@ function PublishTemplateDialog({
                     onClick={() => setCategory(c.id)}
                     className={`px-2.5 py-1 text-[11px] rounded-full border transition-colors ${
                       category === c.id
-                        ? "bg-violet-500/20 border-violet-500/40 text-violet-300"
+                        ? "bg-violet-500/20 border-violet-500/40 text-violet-700 dark:text-violet-300"
                         : "border-white/[0.08] text-slate-500 hover:text-slate-300 hover:border-white/20"
                     }`}
                   >
@@ -586,7 +586,7 @@ export function ProjectSettingsPanel({ project, profile, onProjectUpdate }: Proj
             <div className="pt-1 border-t border-white/[0.06]">
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-xs font-medium text-slate-300">Community Template</p>
+                  <p className="text-xs font-medium text-slate-700 dark:text-slate-300">Community Template</p>
                   <p className="text-[10px] text-slate-600 mt-0.5">Let others remix your project from the template gallery</p>
                 </div>
                 <Button
@@ -608,7 +608,7 @@ export function ProjectSettingsPanel({ project, profile, onProjectUpdate }: Proj
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
             <div className="p-3 rounded-lg bg-blue-500/[0.08] border border-blue-500/20">
               <p className="text-xs text-slate-400">
-                SEO settings are injected into your deployed app's <code className="text-blue-300">&lt;head&gt;</code>. They affect how your app appears in search results and social shares.
+                SEO settings are injected into your deployed app's <code className="text-blue-700 dark:text-blue-300">&lt;head&gt;</code>. They affect how your app appears in search results and social shares.
               </p>
             </div>
             <div className="space-y-1.5">

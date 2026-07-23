@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   Globe, Lock, Shield, ChevronDown, ChevronUp, CheckCircle2,
   AlertTriangle, X, Upload, Image, Type, FileText, ExternalLink,
@@ -28,11 +28,13 @@ interface PublishPanelProps {
   project: Project;
   onSwitchPanel?: (panel: string) => void;
   onDeploy?: () => void;
+  /** Optional override — when omitted, panel compares project.updated_at vs last deploy. */
+  hasUnpublishedChanges?: boolean;
 }
 
 /* ─── Component ─────────────────────────────────────────── */
 
-export function PublishPanel({ project, onSwitchPanel, onDeploy }: PublishPanelProps) {
+export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedChanges: hasUnpublishedProp }: PublishPanelProps) {
   const [activeSection, setActiveSection] = useState<"publish" | "settings" | "faq">("publish");
   const [websiteAccess, setWebsiteAccess] = useState<"public" | "workspace" | "private">("public");
   const [siteTitle, setSiteTitle]  = useState(project.name ?? "");
@@ -43,12 +45,33 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy }: PublishPanelP
   const [copiedUrl, setCopiedUrl]  = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
   const [savedMeta, setSavedMeta]  = useState(false);
+  const [hasUnpublishedFetched, setHasUnpublishedFetched] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ogInputRef   = useRef<HTMLInputElement>(null);
 
   const isPublished   = Boolean(project.deployed_url);
   const publishedUrl  = project.deployed_url ?? "";
+  const hasUnpublishedChanges = hasUnpublishedProp ?? hasUnpublishedFetched;
+
+  // Lovable-parity: banner when live site is behind the latest project save.
+  useEffect(() => {
+    if (hasUnpublishedProp != null || !project.deployed_url) {
+      setHasUnpublishedFetched(false);
+      return;
+    }
+    let cancelled = false;
+    void fetch(`/api/deploy/status?projectId=${project.id}`, { credentials: "include" })
+      .then(async (res) => {
+        const data = (await res.json().catch(() => ({}))) as { deployedAt?: string | null };
+        if (!res.ok || cancelled || !data.deployedAt) return;
+        const updatedAt = project.updated_at ? new Date(project.updated_at).getTime() : 0;
+        const deployedAt = new Date(data.deployedAt).getTime();
+        setHasUnpublishedFetched(updatedAt > deployedAt);
+      })
+      .catch(() => null);
+    return () => { cancelled = true; };
+  }, [project.id, project.deployed_url, project.updated_at, hasUnpublishedProp]);
 
   /* ── Actions ── */
 
@@ -160,6 +183,18 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy }: PublishPanelP
         {/* ═══ PUBLISH TAB ═══ */}
         {activeSection === "publish" && (
           <div className="space-y-3">
+            {isPublished && hasUnpublishedChanges && (
+              <div className="flex items-start gap-2 p-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10">
+                <AlertTriangle size={12} className="text-amber-400 mt-0.5 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[11px] font-medium text-amber-800 dark:text-amber-200">Unpublished changes</p>
+                  <p className="text-[10px] text-amber-800/70 dark:text-amber-200/70 mt-0.5">
+                    Your editor has edits that aren&apos;t on the live site yet. Click Update to publish them.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Published URL card */}
             {isPublished && publishedUrl && (
               <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-xl">

@@ -29,6 +29,7 @@ export interface LovableComposerInputAreaProps
   noCredits: boolean;
   isLocked: boolean;
   securityIssueCount: number;
+  freeFixesRemaining?: number | null;
   onOpenPanel?: (panel: LeftPanel) => void;
   onViewSecurityIssues: () => void;
   onFixAllSecurityIssues: () => void;
@@ -47,6 +48,7 @@ export function LovableComposerInputArea({
   noCredits,
   isLocked,
   securityIssueCount,
+  freeFixesRemaining = null,
   onOpenPanel,
   onViewSecurityIssues,
   onFixAllSecurityIssues,
@@ -81,6 +83,8 @@ export function LovableComposerInputArea({
     analyzeInstruction: rest.analyzeInstruction,
     analyzeFile: rest.analyzeFile,
     analyzeRunning: rest.analyzeRunning,
+    analyzeEnabled: rest.analyzeEnabled,
+    analyzeUnavailableReason: rest.analyzeUnavailableReason,
     onAnalyzeInstructionChange: rest.onAnalyzeInstructionChange,
     onAnalyzeFileSelect: rest.onAnalyzeFileSelect,
     onAnalyzeClose: rest.onAnalyzeClose,
@@ -110,6 +114,7 @@ export function LovableComposerInputArea({
         <LovableSecurityIssuesBar
           issueCount={securityIssueCount}
           noCredits={noCredits}
+          freeFixesRemaining={freeFixesRemaining}
           onViewIssues={onViewSecurityIssues}
           onFixAll={onFixAllSecurityIssues}
         />
@@ -117,16 +122,30 @@ export function LovableComposerInputArea({
 
       {isLocked && <LovableLiveLockBanner />}
 
-      <ChatTiptapInput
-        ref={textareaRef as unknown as React.Ref<ChatInputHandle>}
-        value={input}
-        onChange={onInputChange}
-        onKeyDown={onKeyDown}
-        onPasteText={onPasteText}
-        placeholder={placeholder}
-        className={`min-h-[60px] max-h-40 ${lovableComposerInputRingClass(input.length)}`}
-        disabled={noCredits || isLocked}
-      />
+      {/* Lovable dump: #chatinput CSS-grid host + always-mounted sibling placeholder */}
+      <div
+        id="chatinput"
+        className={`relative grid w-full flex-1 min-h-[40px] max-h-[max(35svh,5rem)] ${lovableComposerInputRingClass(input.length)}`}
+      >
+        <ChatTiptapInput
+          ref={textareaRef as unknown as React.Ref<ChatInputHandle>}
+          value={input}
+          onChange={onInputChange}
+          onKeyDown={onKeyDown}
+          onPasteText={onPasteText}
+          placeholder=""
+          className="col-start-1 row-start-1 w-full min-w-0 min-h-[40px] max-h-[max(35svh,5rem)] overflow-y-auto select-text"
+          disabled={noCredits || isLocked}
+        />
+        <span
+          aria-hidden
+          className={`pointer-events-none col-start-1 row-start-1 px-2 pt-2 pb-1 text-[16px] leading-snug md:text-base text-[var(--fg-tertiary)] select-none transition-opacity animate-in fade-in-0 duration-500 ${
+            input.trim() ? "opacity-0" : "opacity-100"
+          }`}
+        >
+          {placeholder || "Ask LifemarkAI..."}
+        </span>
+      </div>
 
       <LovableComposerCharacterCounter length={input.length} />
 
@@ -147,6 +166,8 @@ export function LovableComposerInputArea({
         onAnalyzeData={rest.onAnalyzeData}
         onDesignDirections={rest.onDesignDirections}
         onAttach={rest.onAttach}
+        fileInputRef={rest.fileInputRef}
+        onImageAttach={rest.onImageAttach}
         isVisualEditActive={rest.isVisualEditActive}
         onVisualEditToggle={rest.onVisualEditToggle}
         onFocusPreview={rest.onFocusPreview}

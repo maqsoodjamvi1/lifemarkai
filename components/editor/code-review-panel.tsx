@@ -27,9 +27,9 @@ const CATEGORY_META: Record<Category, { label: string; icon: React.ReactNode; co
 };
 
 const SEVERITY_META: Record<Severity, { icon: React.ReactNode; color: string; badge: string }> = {
-  error:   { icon: <AlertCircle className="w-3 h-3" />,   color: "text-red-400",    badge: "bg-red-400/15 text-red-300 border-red-400/30" },
-  warning: { icon: <AlertTriangle className="w-3 h-3" />, color: "text-yellow-400", badge: "bg-yellow-400/15 text-yellow-300 border-yellow-400/30" },
-  info:    { icon: <Info className="w-3 h-3" />,          color: "text-blue-400",   badge: "bg-blue-400/15 text-blue-300 border-blue-400/30" },
+  error:   { icon: <AlertCircle className="w-3 h-3" />,   color: "text-red-400",    badge: "bg-red-400/15 text-red-700 dark:text-red-300 border-red-400/30" },
+  warning: { icon: <AlertTriangle className="w-3 h-3" />, color: "text-yellow-400", badge: "bg-yellow-400/15 text-yellow-700 dark:text-yellow-300 border-yellow-400/30" },
+  info:    { icon: <Info className="w-3 h-3" />,          color: "text-blue-400",   badge: "bg-blue-400/15 text-blue-700 dark:text-blue-300 border-blue-400/30" },
 };
 
 const CATEGORY_ORDER: Category[] = ["security", "quality", "performance", "bestpractice"];
@@ -96,12 +96,12 @@ export function CodeReviewPanel({ activeFile, onJumpToLine, onFixWithAI }: CodeR
         {result && !stale && (
           <div className="ml-auto flex items-center gap-1.5">
             {errorCount > 0 && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded border bg-red-400/15 text-red-300 border-red-400/30">
+              <span className="text-[10px] px-1.5 py-0.5 rounded border bg-red-400/15 text-red-700 dark:text-red-300 border-red-400/30">
                 {errorCount} error{errorCount !== 1 ? "s" : ""}
               </span>
             )}
             {warningCount > 0 && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded border bg-yellow-400/15 text-yellow-300 border-yellow-400/30">
+              <span className="text-[10px] px-1.5 py-0.5 rounded border bg-yellow-400/15 text-yellow-700 dark:text-yellow-300 border-yellow-400/30">
                 {warningCount} warn{warningCount !== 1 ? "ings" : "ing"}
               </span>
             )}

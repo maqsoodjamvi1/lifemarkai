@@ -64,7 +64,7 @@ Current sprint goal: Ship v2.0 auth overhaul by end of week.`,
     name: "Notion",
     description: "Pull in docs, PRDs, and design decisions as building context",
     icon: FileText,
-    color: "bg-stone-500/15 text-stone-300",
+    color: "bg-stone-500/15 text-stone-700 dark:text-stone-300",
     docsUrl: "https://developers.notion.com/",
     contextType: "Docs & PRDs",
     configKey: "NOTION_API_KEY",
@@ -80,7 +80,7 @@ Current sprint goal: Ship v2.0 auth overhaul by end of week.`,
     name: "GitHub",
     description: "Open issues and PR descriptions inform code generation",
     icon: GitBranch,
-    color: "bg-stone-500/15 text-stone-300",
+    color: "bg-stone-500/15 text-stone-700 dark:text-stone-300",
     docsUrl: "https://docs.github.com/en/rest",
     contextType: "Issues & PRs",
     configKey: "GITHUB_ACCESS_TOKEN",
@@ -227,7 +227,7 @@ export function McpContextPanel({ projectId, enabledSources: externalEnabled, on
       {/* Info bar */}
       <div className="flex items-center gap-2 px-3 py-2 bg-sky-500/5 border-b border-sky-500/10 shrink-0">
         <Zap className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-        <p className="text-[10px] text-sky-300 flex-1">
+        <p className="text-[10px] text-sky-700 dark:text-sky-300 flex-1">
           Enabled sources are injected into every AI prompt during building.
           {totalTokens > 0 && <span className="ml-1 text-sky-400/70">~{totalTokens} tokens/request</span>}
         </p>

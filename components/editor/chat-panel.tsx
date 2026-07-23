@@ -63,6 +63,7 @@ import {
   useThreadMessageProps,
   extractStreamingReasoning,
   type ClarifySession,
+  type ClarifyQuestion,
   type LovableQueueItem,
   type LovableSecretBannerState,
 } from "./lovable";
@@ -72,12 +73,16 @@ import { formatErrorsForHealing } from "@/lib/preview/preview-error-bridge";
 import type { ChatSearchMode } from "@/lib/editor/search-chat-messages";
 import { printChatConversation } from "@/lib/editor/print-chat";
 import { buildLovableChatDayJumps, lovableChatDayKey } from "@/components/editor/lovable/chat-day-utils";
+import {
+  LIFEMARK_CHAT_SETTINGS_EVENT,
+  type LifemarkChatSettingsAction,
+} from "@/components/editor/lovable/chat-settings-events";
 import type { LovableFileGenFormat } from "./lovable/composer-file-gen-picker";
 import { useGuestCommentCount } from "@/hooks/use-guest-comment-count";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
 import { findMissingPackages, buildInstallCommand, syncPackageJsonDeps } from "@/lib/ai/npm-auto-install";
-import { classifyBuildIntent, type BuildIntent } from "@/lib/ai/build-intent";
+import { classifyBuildIntent, isInformationalQuery, isSmallSurgicalEdit, type BuildIntent } from "@/lib/ai/build-intent";
 import { buildDesignBrief, shouldOfferDesignPreviews, type DesignPreviewDirection } from "@/lib/ai/design-previews";
 import type { AgentStep } from "@/lib/ai/agent";
 import {
@@ -86,7 +91,6 @@ import {
   getEmptyProjectPrompts,
   getNoCreditsPrompts,
   getPreviewErrorPrompts,
-  getSmartPlaceholder,
   inferProjectStage,
   resolvePromptMode,
   resolveSmartModel,
@@ -278,10 +282,13 @@ export function ChatPanel({
   const [multiAgent, setMultiAgent] = useState(false);
   const [streaming, setStreaming] = useState(false);
 
-  const smartPlaceholder = useMemo(
-    () => getSmartPlaceholder({ ...intelCtx, streaming, isLocked }),
-    [intelCtx, streaming, isLocked],
-  );
+  // Lovable dump: fixed overlay placeholder on #chatinput (sibling span pattern).
+  // While generating, Lovable swaps the placeholder to "Queue follow-up...".
+  const smartPlaceholder = isLocked
+    ? "Switch to Test environment to edit…"
+    : streaming
+      ? "Queue follow-up..."
+      : "Ask LifemarkAI...";
   /** Tracks when the current build started so we know its duration for desktop notifications */
   const buildStartTimeRef = useRef<number | null>(null);
   /** Wrapper that also notifies the parent layout so PreviewPanel can show shimmer */
@@ -346,8 +353,31 @@ export function ChatPanel({
   const [filePickerSearch, setFilePickerSearch] = useState("");
   const MAX_CONTEXT_FILES = 5;
   const [isDragging, setIsDragging] = useState(false);
-  // React Native / Expo framework toggle
-  const [mobileMode, setMobileMode] = useState(false);
+  // React Native / Expo framework toggle — hydrated + persisted on project.framework
+  const isRnFramework = (f?: string | null) => f === "react-native" || f === "expo";
+  const [mobileMode, setMobileMode] = useState(() => isRnFramework(project.framework));
+  const webFrameworkRef = useRef(
+    isRnFramework(project.framework) ? "web" : (project.framework ?? "web"),
+  );
+  useEffect(() => {
+    setMobileMode(isRnFramework(project.framework));
+    if (project.framework && !isRnFramework(project.framework)) {
+      webFrameworkRef.current = project.framework;
+    }
+  }, [project.framework]);
+  const persistMobileMode = useCallback(
+    (next: boolean) => {
+      setMobileMode(next);
+      const framework = next ? "react-native" : webFrameworkRef.current;
+      onProjectUpdate?.({ framework });
+      void fetch(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ framework }),
+      }).catch(() => {/* best-effort */});
+    },
+    [onProjectUpdate, project.id],
+  );
   // URL scraping ("Chat with URL") state
   const [detectedUrl, setDetectedUrl] = useState<string | null>(null);
   const [isScraping, setIsScraping] = useState(false);
@@ -529,7 +559,14 @@ export function ChatPanel({
 
   // Prompt queue — messages queued while AI is streaming
   const [promptQueue, setPromptQueue] = useState<QueueItem[]>([]);
-  const [queuePaused, setQueuePaused] = useState(false);
+  const [queuePaused, setQueuePaused] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return localStorage.getItem(`lifemark-queue-paused-${project.id}`) === "1";
+    } catch {
+      return false;
+    }
+  });
   const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
   const [editingQueueText, setEditingQueueText] = useState("");
   // Agent task step visibility
@@ -540,7 +577,15 @@ export function ChatPanel({
   const [buildStatus, setBuildStatus] = useState<BuildIntent | null>(null);
   const runQuickPreviewVerify = useCallback((delayMs = 900) => {
     window.setTimeout(() => {
-      void fetch(`/api/projects/${project.id}/preview-verify`, { method: "POST" })
+      let previewUrl: string | undefined;
+      try {
+        previewUrl = sessionStorage.getItem("lifemark-live-preview-url") || undefined;
+      } catch { /* private mode */ }
+      void fetch(`/api/projects/${project.id}/preview-verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(previewUrl ? { previewUrl } : {}),
+      })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error("preview verify failed"))))
         .then((result) => setPreviewVerify(result))
         .catch(() => setPreviewVerify(null));
@@ -580,6 +625,8 @@ export function ChatPanel({
   const [savingSkill, setSavingSkill] = useState(false);
   // Analyze-data composer + result state (wires /api/ai/analyze into chat).
   const [analyzeOpen, setAnalyzeOpen] = useState(false);
+  const [analyzeEnabled, setAnalyzeEnabled] = useState(true);
+  const [analyzeUnavailableReason, setAnalyzeUnavailableReason] = useState<string | null>(null);
   const [analyzeInstruction, setAnalyzeInstruction] = useState("");
   const [analyzeFile, setAnalyzeFile] = useState<{ name: string; base64: string; mimeType: string } | null>(null);
   const [analyzeRunning, setAnalyzeRunning] = useState(false);
@@ -622,6 +669,8 @@ export function ChatPanel({
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchHitIds, setSearchHitIds] = useState<Set<string> | null>(null);
   const [searchMatchCount, setSearchMatchCount] = useState(0);
+  const [searchSource, setSearchSource] = useState<"cached" | "fallback" | null>(null);
+  const [configuredConnectorIds, setConfiguredConnectorIds] = useState<Set<string>>(() => new Set());
   const [activeSearchHitIndex, setActiveSearchHitIndex] = useState(0);
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
@@ -637,14 +686,27 @@ export function ChatPanel({
     }
   });
   const collapsedThreadsKey = `lifemark-collapsed-threads-${project.id}`;
+  // Default expanded — auto-collapsing every older turn made the chat look empty
+  // (only "Turn N" labels). Manual collapse via turn dividers still works.
   const [collapsedThreads, setCollapsedThreads] = useState<Set<number>>(() => {
     if (typeof window === "undefined") return new Set();
     try {
-      const raw = sessionStorage.getItem(`lifemark-collapsed-threads-${project.id}`);
-      if (raw) return new Set(JSON.parse(raw) as number[]);
+      // Drop legacy all-collapsed sessions that hid the conversation.
+      sessionStorage.removeItem(`lifemark-collapsed-threads-${project.id}`);
     } catch { /* private mode */ }
     return new Set();
   });
+
+  /** Keep collapse indices in range; never collapse the newest turn. */
+  const pruneCollapsedThreads = useCallback((prev: Set<number>, threadCount: number) => {
+    if (threadCount <= 0) return new Set<number>();
+    const maxCollapsible = Math.max(0, threadCount - 1);
+    const next = new Set<number>();
+    for (const i of prev) {
+      if (Number.isInteger(i) && i >= 0 && i < maxCollapsible) next.add(i);
+    }
+    return next;
+  }, []);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchStorageKey = `lifemark-chat-search-${project.id}`;
   const bookmarkKey = `lifemark-bookmarks-${project.id}`;
@@ -685,9 +747,22 @@ export function ChatPanel({
             data.prompt_queue.filter(
               (q): q is QueueItem =>
                 !!q && typeof q.id === "string" && typeof q.text === "string",
-            ),
+            ).map((q) => ({
+              id: q.id,
+              text: q.text,
+              repeat: typeof q.repeat === "number" ? q.repeat : 1,
+              remaining: typeof q.remaining === "number" ? q.remaining : 1,
+              imageBase64: typeof q.imageBase64 === "string" ? q.imageBase64 : null,
+              imageName: typeof q.imageName === "string" ? q.imageName : null,
+              attachedText: typeof q.attachedText === "string" ? q.attachedText : null,
+            })),
           );
         }
+        try {
+          if (localStorage.getItem(`lifemark-queue-paused-${project.id}`) === "1") {
+            setQueuePaused(true);
+          }
+        } catch { /* private mode */ }
       } catch {
         /* offline — keep local cache */
       } finally {
@@ -705,6 +780,10 @@ export function ChatPanel({
       if (pinnedMsgId) localStorage.setItem(`lifemark-pinned-${project.id}`, pinnedMsgId);
       else localStorage.removeItem(`lifemark-pinned-${project.id}`);
       localStorage.setItem(bookmarkKey, JSON.stringify([...bookmarkedIds]));
+      localStorage.setItem(
+        `lifemark-queue-paused-${project.id}`,
+        queuePaused ? "1" : "0",
+      );
     } catch { /* private mode */ }
 
     if (!chatStateReadyRef.current) return;
@@ -715,17 +794,25 @@ export function ChatPanel({
         body: JSON.stringify({
           pinned_message_id: pinnedMsgId,
           bookmarked_ids: [...bookmarkedIds],
-          prompt_queue: promptQueue.map((q) => ({
-            id: q.id,
-            text: q.text,
-            repeat: q.repeat,
-            remaining: q.remaining,
-          })),
+          prompt_queue: promptQueue.map((q) => {
+            const image =
+              typeof q.imageBase64 === "string" && q.imageBase64.length <= 180_000
+                ? q.imageBase64
+                : null;
+            return {
+              id: q.id,
+              text: q.text,
+              repeat: q.repeat,
+              remaining: q.remaining,
+              ...(image ? { imageBase64: image, imageName: q.imageName ?? null } : {}),
+              ...(q.attachedText ? { attachedText: q.attachedText.slice(0, 50_000) } : {}),
+            };
+          }),
         }),
       }).catch(() => {/* best-effort */});
     }, 400);
     return () => window.clearTimeout(timer);
-  }, [pinnedMsgId, bookmarkedIds, promptQueue, project.id, bookmarkKey]);
+  }, [pinnedMsgId, bookmarkedIds, promptQueue, queuePaused, project.id, bookmarkKey]);
 
   useEffect(() => {
     try {
@@ -755,6 +842,15 @@ export function ChatPanel({
     function handleScreenshotReady(e: Event) {
       const { messageId, dataUrl } = (e as CustomEvent<{ messageId: string; dataUrl: string }>).detail;
       if (!messageId || !dataUrl) return;
+
+      // Composer "+" → Screenshot: attach to the next message (optionally open annotate).
+      if (messageId === "manual") {
+        setAttachedImage(dataUrl);
+        setAttachedImageName("screenshot.png");
+        setChatAnnotateOpen(true);
+        return;
+      }
+
       setMessageScreenshots((prev) => ({ ...prev, [messageId]: dataUrl }));
 
       // Upload to storage; never write multi-MB base64 into message metadata (causes Failed to fetch).
@@ -771,11 +867,15 @@ export function ChatPanel({
             !messageId.startsWith("assistant-") &&
             !messageId.startsWith("temp-");
           if (!preview_url || !isPersistedId) return;
-          const supabase = createClient();
-          return (supabase as any)
-            .from("messages")
-            .update({ metadata: { screenshot_url: preview_url } })
-            .eq("id", messageId);
+          // Merge — never replace metadata wholesale (would drop snapshot_id / traces).
+          return fetch(`/api/projects/${project.id}/messages/${messageId}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              metadata: { screenshot_url: preview_url },
+              mergeMetadata: true,
+            }),
+          });
         })
         .catch(() => {});
     }
@@ -800,6 +900,22 @@ export function ChatPanel({
     });
   }, [messages]);
 
+  // Hydrate multi-role test chips persisted on assistant messages.
+  useEffect(() => {
+    setRoleTestChips((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      for (const m of messages) {
+        if (next[m.id] || m.role !== "assistant") continue;
+        const chips = (m.metadata as { role_test_chips?: unknown } | null)?.role_test_chips;
+        if (!Array.isArray(chips) || chips.length === 0) continue;
+        next[m.id] = chips.filter((c): c is string => typeof c === "string");
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [messages]);
+
   function toggleBookmark(messageId: string) {
     setBookmarkedIds((prev) => {
       const next = new Set(prev);
@@ -813,6 +929,8 @@ export function ChatPanel({
   const lastSeenCountRef = useRef(0);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  /** Latest browse_preview screenshot URL waiting to attach to the assistant message. */
+  const pendingBrowseShotRef = useRef<string | null>(null);
   /**
    * True while sendMessage is executing. `streaming` is React state, so two
    * sends triggered in the same frame (queue-drain effect + a click) can both
@@ -820,6 +938,17 @@ export function ChatPanel({
    * synchronously and closes that race.
    */
   const sendingRef = useRef(false);
+  /** Patch→build fallback retry timer — cleared on unmount so a navigation
+   *  away can't fire sendMessage against an unmounted panel. */
+  const patchFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+      if (patchFallbackTimerRef.current) clearTimeout(patchFallbackTimerRef.current);
+    };
+  }, []);
 
   // Realtime shared chat — merge remote inserts/updates/deletes without clobbering temps.
   useEffect(() => {
@@ -888,6 +1017,22 @@ export function ChatPanel({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<LovableChatTimelineHandle>(null);
+
+  // Wipe legacy all-collapsed + mid-list scroll so conversation bodies show.
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem(collapsedThreadsKey);
+      sessionStorage.removeItem(`lifemark-chat-scroll-${project.id}`);
+    } catch { /* private mode */ }
+    setCollapsedThreads(new Set());
+    setIsAtBottom(true);
+    const t = window.setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ block: "end" });
+    }, 80);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on project change / first mount
+  }, [project.id, collapsedThreadsKey]);
+
   const deepLinkedRef = useRef(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(hasMoreMessagesInitial);
   const loadingOlderRef = useRef(false);
@@ -1329,6 +1474,30 @@ export function ChatPanel({
     }
   }, [messages]);
 
+  // Hydrate "using skill" chips from persisted assistant metadata (survives reload).
+  useEffect(() => {
+    const fromMeta: Record<string, Array<{ id: string; name: string; reason?: string }>> = {};
+    messages.forEach((m) => {
+      if (m.role !== "assistant") return;
+      const raw = (m.metadata as { skills_attached?: unknown } | null)?.skills_attached;
+      if (!Array.isArray(raw) || raw.length === 0) return;
+      fromMeta[m.id] = raw
+        .filter((s): s is { id: string; name: string; reason?: string } =>
+          !!s && typeof s === "object" && typeof (s as { id?: unknown }).id === "string" &&
+          typeof (s as { name?: unknown }).name === "string",
+        )
+        .map((s) => ({
+          id: s.id,
+          name: s.name,
+          reason: typeof s.reason === "string" ? s.reason : undefined,
+        }));
+    });
+    if (Object.keys(fromMeta).length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- hydrate skill chips from message metadata
+      setMessageSkills((prev) => ({ ...fromMeta, ...prev }));
+    }
+  }, [messages]);
+
   // Auto-fire starter prompt from URL (new project with ?prompt=...)
   // Wait until credits are synced — sendMessage no-ops when credits <= 0
   useEffect(() => {
@@ -1363,6 +1532,62 @@ export function ChatPanel({
       window.removeEventListener("lifemark-preview-heal-done", onHealDone);
     };
   }, []);
+
+  // Team / Editor Intelligence → chat timeline summary + file refresh.
+  useEffect(() => {
+    function onIntelligenceDone(e: Event) {
+      const detail = (e as CustomEvent<{
+        projectId?: string;
+        summary?: string;
+        changedPaths?: string[];
+        ok?: boolean;
+      }>).detail;
+      if (!detail || detail.projectId !== project.id) return;
+      const content = (detail.summary || "Team run finished.").trim();
+      const tempId = `temp-team-result-${Date.now()}`;
+      const assistantMsg: Message = {
+        id: tempId,
+        project_id: project.id,
+        role: "assistant",
+        content,
+        tokens_used: null,
+        model: null,
+        mode: "agent",
+        metadata: {
+          multi_agent: true,
+          team_result: true,
+          ok: detail.ok !== false,
+          changed_paths: detail.changedPaths ?? [],
+        } as Json,
+        rating: null,
+        created_at: new Date().toISOString(),
+      };
+      onMessagesUpdate([...messagesRef.current, assistantMsg]);
+      void fetch(`/api/projects/${project.id}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: "assistant",
+              content,
+              mode: "agent",
+              metadata: {
+                multi_agent: true,
+                team_result: true,
+                ok: detail.ok !== false,
+                changed_paths: detail.changedPaths ?? [],
+              },
+            },
+          ],
+        }),
+      }).catch(() => {/* best-effort */});
+      void refreshProjectFiles().catch(() => {});
+      onOpenPanel?.("chat");
+    }
+    window.addEventListener("lifemark-intelligence-done", onIntelligenceDone);
+    return () => window.removeEventListener("lifemark-intelligence-done", onIntelligenceDone);
+  }, [project.id, onMessagesUpdate, refreshProjectFiles, onOpenPanel]);
 
   // Populate input when user clicks "Fix with AI" on the error banner in preview panel
   useEffect(() => {
@@ -1471,21 +1696,6 @@ export function ChatPanel({
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [previewError, previewRuntimeErrors]);
-
-  // Auto-collapse all threads except the latest 2 whenever messages grow
-  useEffect(() => {
-    const threads = groupIntoThreads(messages);
-    if (threads.length <= 2) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- derive collapsed thread defaults when new threads appear
-    setCollapsedThreads((prev) => {
-      const next = new Set(prev);
-      for (let i = 0; i < threads.length - 2; i++) {
-        if (!next.has(i)) next.add(i);
-      }
-      return next;
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages.length]);
 
   // Track whether the message list is scrolled to the bottom
   useEffect(() => {
@@ -1937,9 +2147,22 @@ export function ChatPanel({
     userMessage: string,
     overrideMode?: EditorMode,
     historyOverride?: Message[],
-    opts?: { branchMeta?: { snapshotId: string | null; branchedAt: string } },
+    opts?: {
+      branchMeta?: { snapshotId: string | null; branchedAt: string };
+      imageBase64?: string | null;
+      imageName?: string | null;
+      attachedText?: string | null;
+      /** Skip server-side mode downgrades (used by the patch→build fallback retry). */
+      forceBuild?: boolean;
+    },
   ) {
-    if ((!userMessage.trim() && !attachedImage) || streaming || sendingRef.current) return;
+    const queuedImage = opts?.imageBase64 ?? attachedImage;
+    const queuedImageName = opts?.imageName ?? attachedImageName;
+    const queuedText = opts?.attachedText ?? attachedText;
+    if ((!userMessage.trim() && !queuedImage) || streaming || sendingRef.current) return;
+    // Set when an AUTO-routed surgical patch missed — after this stream ends we
+    // silently retry the same request as a full build (agent resilience).
+    let patchFallbackMessage: string | null = null;
 
     // The user is giving a new instruction, so the code is about to change. Past
     // auto-fix failures were about the OLD code — forget them, and let the fixer
@@ -1947,20 +2170,88 @@ export function ChatPanel({
     clearAutoFixLedger(project.id);
     setAutoFixAttempts(0);
 
-    const effectiveMode = resolvePromptMode(userMessage, intelCtx, overrideMode);
+    let effectiveMode = resolvePromptMode(userMessage, intelCtx, overrideMode);
+    // ── Lovable machinery parity: BUILDS RUN THE FULL AGENT LOOP ────────────
+    // On existing projects, structural Build requests execute the ReAct agent
+    // (read/edit/write tools, preview+console introspection, db/web tools)
+    // instead of a monolithic JSON regeneration — surgical, verifiable edits.
+    // Questions still route to chat and micro-edits to patch (server-side),
+    // and fresh scaffolds keep the fast blueprint builder. Opt out with
+    // NEXT_PUBLIC_AGENT_BUILDS=false.
+    // Database/backend design requests get Lovable-style pre-build questions
+    // (schema, auth method, roles) — computed BEFORE the agent flip so the
+    // request stays in build mode where the clarify pipeline lives.
+    const dbClarifyIntent =
+      !opts?.forceBuild &&
+      files.length > 0 &&
+      /\b(database|schema|tables?|migrations?|auth(entication)?|sign[ -]?up|log[ -]?in|user accounts?|roles?|permissions|admin (panel|dashboard)|crud)\b/i.test(
+        userMessage,
+      );
+    // The smart router may map backend requests straight to AGENT — but the
+    // clarify pipeline lives in build mode. Ask first, build after (unless the
+    // user explicitly sits in Agent mode).
+    if (dbClarifyIntent && effectiveMode === "agent" && mode !== "agent") {
+      effectiveMode = "build";
+    }
+    if (
+      effectiveMode === "build" &&
+      files.length > 8 &&
+      !opts?.forceBuild &&
+      !dbClarifyIntent &&
+      process.env.NEXT_PUBLIC_AGENT_BUILDS !== "false" &&
+      !isInformationalQuery(userMessage) &&
+      !isSmallSurgicalEdit(userMessage)
+    ) {
+      effectiveMode = "agent";
+    }
+    // Our own router (not the user) chose surgical patch mode. The server needs
+    // to know so a patch miss triggers the silent patch→build fallback instead
+    // of surfacing "try rephrasing" (which is only fair when the USER picked patch).
+    const autoRoutedPatchClient =
+      effectiveMode === "patch" && mode !== "patch" && overrideMode !== "patch";
     const effectiveModel = modelManuallySelectedRef.current
       ? selectedModel
       : resolveSmartModel(effectiveMode, intelCtx, userMessage);
 
     // Multi-agent team mode: in Agent mode with the Team toggle on, run the full
     // Editor Intelligence orchestrator (lens debate + waves + durable run) in the
-    // Intelligence panel instead of the single-model agent route. Bail before any
-    // streaming setup so normal chat/plan/build/patch are untouched.
+    // Intelligence panel instead of the single-model agent route. Persist the user
+    // turn first so the chat timeline isn't empty, then hand off.
     if (effectiveMode === "agent" && multiAgent) {
+      const tempUserMsg: Message = {
+        id: `temp-team-${Date.now()}`,
+        project_id: project.id,
+        role: "user",
+        content: userMessage.trim() || "[Team run]",
+        tokens_used: null,
+        model: null,
+        mode: "agent",
+        metadata: { multi_agent: true } as Json,
+        rating: null,
+        created_at: new Date().toISOString(),
+      };
+      onMessagesUpdate([...messages, tempUserMsg]);
+      void fetch(`/api/projects/${project.id}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: "user",
+              content: tempUserMsg.content,
+              mode: "agent",
+              metadata: { multi_agent: true },
+            },
+          ],
+        }),
+      }).catch(() => {/* best-effort */});
       setInput("");
+      setAttachedImage(null);
+      setAttachedImageName(null);
+      setAttachedText(null);
       onOpenPanel?.("intelligence");
       window.dispatchEvent(new CustomEvent("lifemark-intelligence-run", {
-        detail: { goal: userMessage },
+        detail: { goal: userMessage, fromChat: true },
       }));
       return;
     }
@@ -2037,11 +2328,11 @@ export function ChatPanel({
     setPendingSkills([]);
     setSubagentSteps([]);
     setPreviewVerify(null);
-    const imageToSend = attachedImage;
-    const imageNameToSend = attachedImageName;
+    const imageToSend = queuedImage;
+    const imageNameToSend = queuedImageName;
     setAttachedImage(null);
     setAttachedImageName(null);
-    const textToSend = attachedText;
+    const textToSend = queuedText;
     setAttachedText(null);
     const contextFilesToSend = contextFiles;
     setContextFiles([]);
@@ -2253,6 +2544,14 @@ ${(f.content ?? "").slice(0, 8000)}
             rawTask: userMessage,
             ...(modelManuallySelectedRef.current ? { model: effectiveModel } : {}),
             modelManuallySelected: modelManuallySelectedRef.current,
+            // Prefer live Modal preview URL over published deploy for browse_preview.
+            previewUrl: (() => {
+              try {
+                return sessionStorage.getItem("lifemark-live-preview-url") || undefined;
+              } catch {
+                return undefined;
+              }
+            })(),
           }),
         });
 
@@ -2315,6 +2614,12 @@ ${(f.content ?? "").slice(0, 8000)}
                       });
                     }
                   } catch { /* malformed — ignore */ }
+                }
+                // browse_preview screenshot → chat thumbnail (applied to assistant id on done)
+                const shotMatch = obs.match(/screenshot_url=(https?:\/\/\S+)/);
+                if (shotMatch?.[1]) {
+                  pendingBrowseShotRef.current = shotMatch[1];
+                  setMessageScreenshots((prev) => ({ ...prev, __pending__: shotMatch[1]! }));
                 }
               }
 
@@ -2436,9 +2741,26 @@ ${(f.content ?? "").slice(0, 8000)}
                 runQuickPreviewVerify();
 
                 const captureId = syncedMessages?.at(-1)?.id ?? `assistant-${Date.now()}`;
-                setTimeout(() => {
-                  window.dispatchEvent(new CustomEvent("lifemark-request-screenshot", { detail: { messageId: captureId } }));
-                }, 2500);
+                const browseShot = pendingBrowseShotRef.current;
+                pendingBrowseShotRef.current = null;
+                if (browseShot) {
+                  setMessageScreenshots((prev) => {
+                    const { __pending__, ...rest } = prev;
+                    return { ...rest, [captureId]: browseShot };
+                  });
+                  void fetch(`/api/projects/${project.id}/messages/${captureId}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      metadata: { screenshot_url: browseShot },
+                      mergeMetadata: true,
+                    }),
+                  }).catch(() => {});
+                } else {
+                  setTimeout(() => {
+                    window.dispatchEvent(new CustomEvent("lifemark-request-screenshot", { detail: { messageId: captureId } }));
+                  }, 2500);
+                }
               }
 
               if (data.error) {
@@ -2481,10 +2803,18 @@ ${(f.content ?? "").slice(0, 8000)}
           message: messageWithContext + crossProjectContext,
           rawMessage: userMessage,
           mode: effectiveMode,
+          ...(autoRoutedPatchClient ? { autoRouted: true } : {}),
+          ...(opts?.forceBuild ? { forceBuild: true } : {}),
           ...(modelManuallySelectedRef.current ? { model: effectiveModel } : {}),
           modelManuallySelected: modelManuallySelectedRef.current,
           framework: mobileMode ? "react-native" : (project.framework ?? "web"),
-          clarifyFirst: effectiveMode === "build" && clarifyFirst && files.length === 0,
+          // Ask pre-build questions when: user enabled the toggle on a fresh
+          // project, OR the request is a DATABASE/BACKEND design task (Lovable
+          // asks schema/auth/roles questions before wiring a backend).
+          clarifyFirst:
+            effectiveMode === "build" &&
+            !opts?.forceBuild &&
+            ((clarifyFirst && files.length === 0) || dbClarifyIntent),
           ...(effectiveMode === "build" && designTemplateId ? { templateId: designTemplateId } : {}),
           // If @mentions present, only send those files for context (saves tokens + focuses AI)
           files: mentionedFilesForAI
@@ -2497,6 +2827,18 @@ ${(f.content ?? "").slice(0, 8000)}
                   name: textToSend.name,
                   content: textToSend.content.slice(0, 20000),
                 },
+              }
+            : {}),
+          // Lovable-agent parity: the AI always sees the CURRENT preview
+          // console state, not only during explicit fix flows.
+          ...(previewRuntimeErrors.length > 0
+            ? {
+                previewErrors: previewRuntimeErrors.slice(-5).map((e) => ({
+                  kind: e.kind,
+                  message: String(e.message ?? "").slice(0, 400),
+                  filename: e.filename,
+                  lineno: e.lineno,
+                })),
               }
             : {}),
         }),
@@ -2590,13 +2932,24 @@ ${(f.content ?? "").slice(0, 8000)}
           }
 
           if (data.status === "patches_failed") {
-            toast({
-              title: "Edit not applied",
-              description:
-                (data.message as string | undefined) ??
-                "The patch could not be applied. Try Quick Edit or rephrase.",
-              variant: "destructive",
-            });
+            if ((data.auto_routed || autoRoutedPatchClient) && !opts?.forceBuild) {
+              // The server auto-chose a surgical patch and it missed — fall
+              // back to a full build automatically instead of asking the user
+              // to rephrase (Lovable: the agent recovers on its own).
+              patchFallbackMessage = userMessage;
+              toast({
+                title: "Switching to full edit",
+                description: "The quick patch didn't match — rebuilding the change properly.",
+              });
+            } else {
+              toast({
+                title: "Edit not applied",
+                description:
+                  (data.message as string | undefined) ??
+                  "The patch could not be applied. Try Quick Edit or rephrase.",
+                variant: "destructive",
+              });
+            }
           }
 
           if (data.subagent) {
@@ -2638,15 +2991,31 @@ ${(f.content ?? "").slice(0, 8000)}
             setPostBuildStatus((data.wiring_status ?? data.verify_status) as string);
           }
 
+          if (Array.isArray(data.clarifying_questions) && (data.clarifying_questions as unknown[]).length === 0) {
+            // Question generation came back empty — don't show a blank wizard;
+            // rebuild directly (forceBuild skips the clarify gate).
+            clarifyExited = true;
+            controller.abort();
+            setStreamingWithCallback(false);
+            setStreamingContent("");
+            onMessagesUpdate(baseMessages);
+            patchFallbackTimerRef.current = setTimeout(() => {
+              patchFallbackTimerRef.current = null;
+              if (unmountedRef.current) return;
+              void sendMessage(userMessage, "build", undefined, { forceBuild: true });
+            }, 250);
+            return;
+          }
           if (data.clarifying_questions) {
             setActiveClarifySession({
               originalPrompt: (typeof data.originalPrompt === "string" ? data.originalPrompt : userMessage),
-              questions: (data.clarifying_questions as Array<{ id: string; question: string; type?: string; options?: string[] }>).map((q) => ({
+              questions: (data.clarifying_questions as Array<{ id: string; question: string; type?: string; kind?: string; options?: string[] }>).map((q) => ({
                 id: q.id ?? `q-${Math.random()}`,
                 question: q.question,
                 type: (q.type as "text" | "choice") ?? "text",
+                kind: q.kind as ClarifyQuestion["kind"],
                 options: q.options,
-                answer: q.options?.[0] ?? "",
+                answer: "",
               })),
             });
             setStreamingWithCallback(false);
@@ -2659,6 +3028,16 @@ ${(f.content ?? "").slice(0, 8000)}
           }
 
           if (data.done) {
+              // Auto-routed surgical patch parsed but every find string missed —
+              // recover by rebuilding (patches_failed status only covers the
+              // zero-patches case; this covers the all-missed case).
+              if (data.patch_failed && (data.auto_routed || autoRoutedPatchClient) && !opts?.forceBuild && !patchFallbackMessage) {
+                patchFallbackMessage = userMessage;
+                toast({
+                  title: "Switching to full edit",
+                  description: "The quick patch didn't match — rebuilding the change properly.",
+                });
+              }
               setPostBuildStatus(null);
               const assistantId =
                 (typeof data.assistantMessageId === "string" && data.assistantMessageId) ||
@@ -2845,6 +3224,7 @@ ${(f.content ?? "").slice(0, 8000)}
                   if (data.backend_wired) meta.backend_wired = data.backend_wired;
                   // Pre-build snapshot id — powers per-message Revert / Preview version
                   if (typeof data.snapshot_id === "string") meta.snapshot_id = data.snapshot_id;
+                  if (attachedSkills.length > 0) meta.skills_attached = attachedSkills;
                   return Object.keys(meta).length > 0 ? (meta as unknown as Json) : null;
                 })(),
                 rating: null,
@@ -2929,12 +3309,32 @@ ${(f.content ?? "").slice(0, 8000)}
               }
               setGenTimes((prev) => ({ ...prev, [assistantId]: Math.round((Date.now() - genStartRef.current) / 100) / 10 }));
 
-              // Request preview screenshot for build/agent messages (2.5 s delay for React to re-render)
+              // Capture after Modal sync/HMR settles (not a blind timer).
               if (effectiveMode === "build" || effectiveMode === "patch") {
                 const captureId = assistantId;
-                setTimeout(() => {
-                  window.dispatchEvent(new CustomEvent("lifemark-request-screenshot", { detail: { messageId: captureId } }));
-                }, 2500);
+                const requestShot = () => {
+                  window.dispatchEvent(
+                    new CustomEvent("lifemark-request-screenshot", {
+                      detail: { messageId: captureId },
+                    }),
+                  );
+                };
+                let settled = false;
+                const onSettled = () => {
+                  if (settled) return;
+                  settled = true;
+                  window.removeEventListener("lifemark-preview-settled", onSettled);
+                  window.setTimeout(requestShot, 400);
+                };
+                window.addEventListener("lifemark-preview-settled", onSettled);
+                // Fallback if sync never acks (srcdoc / stalled Modal).
+                window.setTimeout(() => {
+                  if (!settled) {
+                    settled = true;
+                    window.removeEventListener("lifemark-preview-settled", onSettled);
+                    requestShot();
+                  }
+                }, 8000);
               }
 
               // Generate follow-up suggestion chips
@@ -2973,6 +3373,20 @@ ${(f.content ?? "").slice(0, 8000)}
               const roleChips = buildRoleTestChips(filePaths);
               if (roleChips.length > 0) {
                 setRoleTestChips((prev) => ({ ...prev, [assistantId]: roleChips }));
+                const isPersistedId =
+                  !!assistantId &&
+                  !assistantId.startsWith("assistant-") &&
+                  !assistantId.startsWith("temp-");
+                if (isPersistedId) {
+                  void fetch(`/api/projects/${project.id}/messages/${assistantId}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      metadata: { role_test_chips: roleChips },
+                      mergeMetadata: true,
+                    }),
+                  }).catch(() => {/* best-effort */});
+                }
               }
             }
 
@@ -3078,6 +3492,14 @@ ${(f.content ?? "").slice(0, 8000)}
       setSubagentSteps([]);
       setPreviewVerify(null);
       // buildActivitySteps cleared in data.done; completed steps live on the assistant message
+      if (patchFallbackMessage) {
+        const retry = patchFallbackMessage;
+        patchFallbackTimerRef.current = setTimeout(() => {
+          patchFallbackTimerRef.current = null;
+          if (unmountedRef.current) return; // panel gone — drop the retry
+          void sendMessage(retry, "build", undefined, { forceBuild: true });
+        }, 250);
+      }
     }
   }
 
@@ -3144,17 +3566,23 @@ ${(f.content ?? "").slice(0, 8000)}
     }
 
     if (streaming) {
-      // AI is busy — add to queue instead of blocking
-      if (attachedImage || attachedText) {
-        toast({
-          title: "Attachments cannot be queued",
-          description: "Wait for the current run to finish, or remove the attachment and queue a text follow-up.",
-          variant: "destructive",
-        });
-        return;
-      }
-      setPromptQueue((prev) => [...prev, { id: `q-${Date.now()}`, text, repeat: 1, remaining: 1 }]);
+      // AI is busy — queue the follow-up (attachments ride along when present).
+      setPromptQueue((prev) => [
+        ...prev,
+        {
+          id: `q-${Date.now()}`,
+          text,
+          repeat: 1,
+          remaining: 1,
+          imageBase64: attachedImage,
+          imageName: attachedImageName,
+          attachedText: attachedText,
+        },
+      ]);
       setInput("");
+      setAttachedImage(null);
+      setAttachedImageName(null);
+      setAttachedText(null);
       return;
     }
     if (
@@ -3178,9 +3606,17 @@ ${(f.content ?? "").slice(0, 8000)}
   async function handleGenerateFile(format: LovableFileGenFormat) {
     const prompt = input.trim();
     if (!prompt || fileGenBusy) return;
+    const isBinary = format === "pdf" || format === "xlsx" || format === "pptx";
+    if (isBinary && !analyzeEnabled) {
+      toast({
+        title: "Binary file generation unavailable",
+        description: analyzeUnavailableReason ?? "Analyze sandbox is not configured.",
+        variant: "destructive",
+      });
+      return;
+    }
     setShowFileGenPicker(false);
     setFileGenBusy(format);
-    const isBinary = format === "pdf" || format === "xlsx" || format === "pptx";
     try {
       if (isBinary) {
         const res = await fetch("/api/ai/analyze", {
@@ -3385,7 +3821,12 @@ ${(f.content ?? "").slice(0, 8000)}
       setPromptQueue(rest);
     }
     // Same as handleSend: let resolvePromptMode promote surgical edits.
-    void sendMessage(next.text);
+    // Pass attachments via opts — setState would race before sendMessage reads them.
+    void sendMessage(next.text, undefined, undefined, {
+      imageBase64: next.imageBase64,
+      imageName: next.imageName,
+      attachedText: next.attachedText,
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streaming]);
 
@@ -3555,7 +3996,14 @@ ${(f.content ?? "").slice(0, 8000)}
 
   function handleInputChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const val = e.target.value;
+    // Programmatic echo (tiptap syncing a hydrated draft / pill insert fires
+    // a synthetic change with the SAME value but a stale caret) — never open
+    // pickers for it. Only real edits should drive mention/template detection;
+    // this was popping the @mention dropdown on page load when a draft
+    // containing "@" was restored.
+    const isEcho = val === input;
     setInput(val);
+    if (isEcho) return;
     // "/" at start of input opens the template/skill picker
     if (val.startsWith("/")) {
       setShowTemplates(true);
@@ -3717,7 +4165,13 @@ ${(f.content ?? "").slice(0, 8000)}
                c.id.toLowerCase().includes(mentionQuery.toLowerCase())),
             )
             .slice(0, 4)
-            .map((c): MentionItem => ({ kind: "connector", id: c.id, name: c.name, emoji: c.emoji })),
+            .map((c): MentionItem => ({
+              kind: "connector",
+              id: c.id,
+              name: c.name,
+              emoji: c.emoji,
+              configured: configuredConnectorIds.has(c.id),
+            })),
           // Hint to trigger cross-project mode
           ...(!mentionQuery || "project".startsWith(mentionQuery.toLowerCase()) ? [{ kind: "xproject" as const, projectName: "Other project…", projectId: "", filePath: "" }] : []),
         ]
@@ -3881,6 +4335,7 @@ ${(f.content ?? "").slice(0, 8000)}
     if (!q) {
       setSearchHitIds(null);
       setSearchMatchCount(0);
+      setSearchSource(null);
       setSearchLoading(false);
       return;
     }
@@ -3890,20 +4345,60 @@ ${(f.content ?? "").slice(0, 8000)}
         const res = await fetch(
           `/api/projects/${project.id}/messages/search?q=${encodeURIComponent(q)}&mode=${searchMode}`,
         );
-        const data = (await res.json()) as { hits?: Array<{ id: string }> };
+        const data = (await res.json()) as {
+          hits?: Array<{ id: string }>;
+          cached?: boolean;
+          fallback?: boolean;
+        };
         const ids = new Set((data.hits ?? []).map((h) => h.id));
         setSearchHitIds(ids);
         setSearchMatchCount(ids.size);
+        setSearchSource(
+          data.fallback ? "fallback" : data.cached ? "cached" : null,
+        );
         if (ids.size > 0) rememberSearchQuery(q);
       } catch {
         setSearchHitIds(null);
         setSearchMatchCount(0);
+        setSearchSource(null);
       } finally {
         setSearchLoading(false);
       }
     }, 320);
     return () => window.clearTimeout(timer);
   }, [searchQuery, searchMode, project.id, rememberSearchQuery]);
+
+  // Prefetch analyze sandbox availability (gates binary file-gen formats).
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/ai/analyze/capabilities")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d || cancelled) return;
+        setAnalyzeEnabled(d.analyzeEnabled !== false);
+        setAnalyzeUnavailableReason(typeof d.reason === "string" ? d.reason : null);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  // Which @connectors already have env credentials configured.
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`/api/projects/${project.id}/env`)
+      .then((r) => (r.ok ? r.json() : { envVars: [] }))
+      .then((data: { envVars?: Array<{ key: string }> }) => {
+        if (cancelled) return;
+        const keys = new Set((data.envVars ?? []).map((e) => e.key));
+        const connected = new Set<string>();
+        for (const c of CONNECTORS) {
+          if (c.fields.every((f) => keys.has(f.key))) connected.add(c.id);
+        }
+        setConfiguredConnectorIds(connected);
+      })
+      .catch(() => null);
+    return () => { cancelled = true; };
+  }, [project.id]);
 
   // Lovable-parity per-message versions: the newest assistant message carrying
   // a pre-build snapshot represents the CURRENT version — its Revert action is
@@ -3940,6 +4435,10 @@ ${(f.content ?? "").slice(0, 8000)}
   // Follow-up suggestion chips (Lovable parity): static, zero-cost pool keyed
   // to the last build prompt + current files. Only shown once a build exists.
   const followUpChips = useMemo(() => {
+    // Lovable dump: horizontal chip “Re-run full security scan” above composer.
+    if (securityIssueCount > 0) {
+      return ["Re-run full security scan"];
+    }
     if (!latestSnapshotMessageId) return [];
     let lastPrompt = "";
     const buildIdx = messages.findIndex((m) => m.id === latestSnapshotMessageId);
@@ -3947,7 +4446,7 @@ ${(f.content ?? "").slice(0, 8000)}
       if (messages[i]?.role === "user") { lastPrompt = messages[i].content; break; }
     }
     return suggestFollowUps(lastPrompt, files.map((f) => f.path), 4);
-  }, [latestSnapshotMessageId, messages, files]);
+  }, [latestSnapshotMessageId, messages, files, securityIssueCount]);
 
   const composerLineRefs = useMemo(() => parseLineRefs(input), [input]);
 
@@ -3967,6 +4466,15 @@ ${(f.content ?? "").slice(0, 8000)}
     [guestCommentsBannerDismissed, streaming, guestCommentCount, project.is_public],
   );
 
+  // After a build: first-publish CTA when unpublished; "Update" only when the
+  // latest snapshot actually changed files (skip no-op / chat-only snapshots).
+  const latestBuildHadFileChanges = useMemo(() => {
+    if (!latestSnapshotMessageId) return false;
+    const m = messages.find((msg) => msg.id === latestSnapshotMessageId);
+    const changed = (m?.metadata as { files_changed?: unknown } | null)?.files_changed;
+    return Array.isArray(changed) && changed.length > 0;
+  }, [latestSnapshotMessageId, messages]);
+
   const showPublishBanner = useMemo(
     () =>
       !publishBannerDismissed &&
@@ -3974,8 +4482,18 @@ ${(f.content ?? "").slice(0, 8000)}
       !previewError &&
       !isLocked &&
       files.length > 0 &&
-      !!latestSnapshotMessageId,
-    [publishBannerDismissed, streaming, previewError, isLocked, files.length, latestSnapshotMessageId],
+      !!latestSnapshotMessageId &&
+      (!project.deployed_url || latestBuildHadFileChanges),
+    [
+      publishBannerDismissed,
+      streaming,
+      previewError,
+      isLocked,
+      files.length,
+      latestSnapshotMessageId,
+      project.deployed_url,
+      latestBuildHadFileChanges,
+    ],
   );
 
   const showSharePreview = files.length > 0 && !streaming;
@@ -4377,9 +4895,19 @@ ${(f.content ?? "").slice(0, 8000)}
     searchMsgModeFilter,
   ]);
 
+  // Prune stale collapse indices when the thread list shrinks — do not
+  // auto-collapse older turns (that hid message bodies behind Turn labels).
+  useEffect(() => {
+    const threadCount = chatThreads.length;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- align collapse set with rendered turns
+    setCollapsedThreads((prev) => pruneCollapsedThreads(prev, threadCount));
+  }, [chatThreads.length, pruneCollapsedThreads]);
+
   const scrollToMessage = useCallback((messageId: string) => {
     const threadIdx = chatThreads.findIndex((t) => t.some((m) => m.id === messageId));
     if (threadIdx < 0) return;
+
+    setFocusedMessageId(messageId);
 
     if (!searchQuery) {
       setCollapsedThreads((prev) => {
@@ -4392,13 +4920,19 @@ ${(f.content ?? "").slice(0, 8000)}
 
     timelineRef.current?.scrollToThreadIndex(threadIdx, "center");
 
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        scrollContainerRef.current
-          ?.querySelector(`[data-message-id="${messageId}"]`)
-          ?.scrollIntoView({ block: "center", behavior: "smooth" });
-      });
-    });
+    // Virtualized rows mount asynchronously — retry until the message node exists.
+    const tryScroll = (attemptsLeft: number) => {
+      const el = scrollContainerRef.current?.querySelector(
+        `[data-message-id="${messageId}"]`,
+      ) as HTMLElement | null;
+      if (el) {
+        el.scrollIntoView({ block: "center", behavior: "smooth" });
+        return;
+      }
+      if (attemptsLeft <= 0) return;
+      window.setTimeout(() => tryScroll(attemptsLeft - 1), 40);
+    };
+    window.requestAnimationFrame(() => tryScroll(15));
   }, [chatThreads, searchQuery]);
 
   const scrollToBottom = useCallback(() => {
@@ -4528,6 +5062,125 @@ ${(f.content ?? "").slice(0, 8000)}
     onStopGeneration: stopGeneration,
   });
 
+  // Dump places chat utilities in `#main-menu` (editor top bar), not an in-panel header.
+  useEffect(() => {
+    const onSettings = (e: Event) => {
+      const action = (e as CustomEvent<{ action: LifemarkChatSettingsAction }>).detail?.action;
+      if (!action) return;
+      switch (action) {
+        case "search": {
+          setShowSearch((v) => {
+            const next = !v;
+            if (next) {
+              try {
+                const raw = sessionStorage.getItem(searchStorageKey);
+                if (raw) {
+                  const saved = JSON.parse(raw) as {
+                    query?: string;
+                    mode?: ChatSearchMode;
+                    role?: ChatSearchRoleFilter;
+                    msgMode?: ChatSearchMsgModeFilter;
+                  };
+                  if (saved.query) setSearchQuery(saved.query);
+                  if (saved.mode === "keyword" || saved.mode === "semantic") setSearchMode(saved.mode);
+                  if (saved.role === "all" || saved.role === "user" || saved.role === "assistant") {
+                    setSearchRoleFilter(saved.role);
+                  }
+                  if (
+                    saved.msgMode === "all" ||
+                    saved.msgMode === "chat" ||
+                    saved.msgMode === "plan" ||
+                    saved.msgMode === "build" ||
+                    saved.msgMode === "agent" ||
+                    saved.msgMode === "patch"
+                  ) {
+                    setSearchMsgModeFilter(saved.msgMode);
+                  }
+                }
+              } catch { /* private mode */ }
+              setTimeout(() => searchInputRef.current?.focus(), 50);
+            }
+            return next;
+          });
+          break;
+        }
+        case "bookmarks":
+          setShowBookmarks((v) => {
+            const next = !v;
+            if (next && bookmarkedIds.size > 0) {
+              const first = visibleMessages.find((m) => bookmarkedIds.has(m.id));
+              if (first) setTimeout(() => scrollToMessage(first.id), 80);
+            }
+            return next;
+          });
+          break;
+        case "export-markdown":
+          exportChatAsMarkdown();
+          break;
+        case "export-json":
+          exportChatAsJson();
+          break;
+        case "print":
+          printChat();
+          break;
+        case "copy-all":
+          void (async () => {
+            const text = visibleMessages.map((m) => `${m.role === "user" ? "You" : "AI"}: ${m.content}`).join("\n\n");
+            await navigator.clipboard.writeText(text);
+            setCopiedAll(true);
+            setTimeout(() => setCopiedAll(false), 2000);
+            toast({ description: "All messages copied" });
+          })();
+          break;
+        case "clear":
+          void handleClearChat();
+          break;
+        case "toggle-code-blocks": {
+          const next = !allCodeBlocksCollapsed;
+          setAllCodeBlocksCollapsed(next);
+          window.dispatchEvent(new CustomEvent("chat-codeblock-set-all", { detail: { collapsed: next } }));
+          break;
+        }
+        case "collapse-threads":
+          // Collapse all but the newest turn (manual action from #main-menu).
+          setCollapsedThreads(pruneCollapsedThreads(
+            new Set(Array.from({ length: Math.max(0, chatThreads.length - 1) }, (_, i) => i)),
+            chatThreads.length,
+          ));
+          break;
+        case "expand-threads":
+          setCollapsedThreads(new Set());
+          break;
+        case "toggle-density":
+          setCompactDensity((v) => {
+            const next = !v;
+            try {
+              localStorage.setItem(
+                `lifemark-chat-density-${project.id}`,
+                next ? "compact" : "comfortable",
+              );
+            } catch { /* private mode */ }
+            return next;
+          });
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener(LIFEMARK_CHAT_SETTINGS_EVENT, onSettings);
+    return () => window.removeEventListener(LIFEMARK_CHAT_SETTINGS_EVENT, onSettings);
+  }, [
+    searchStorageKey,
+    bookmarkedIds,
+    visibleMessages,
+    allCodeBlocksCollapsed,
+    chatThreads.length,
+    project.id,
+    scrollToMessage,
+    toast,
+    pruneCollapsedThreads,
+  ]);
+
   const getMessageProps = useThreadMessageProps({
     searchQuery,
     activeSearchHitId,
@@ -4566,7 +5219,17 @@ ${(f.content ?? "").slice(0, 8000)}
     onReadAloud: toggleReadAloud,
     speakingMessageId,
     onStartEdit: startEditMessage,
-    onTogglePin: (msgId) => setPinnedMsgId((prev) => (prev === msgId ? null : msgId)),
+    onTogglePin: (msgId) =>
+      setPinnedMsgId((prev) => {
+        const next = prev === msgId ? null : msgId;
+        toast({
+          title: next ? "Message pinned" : "Message unpinned",
+          description: next
+            ? "Jump to it anytime from the pin banner above the chat."
+            : undefined,
+        });
+        return next;
+      }),
     onRate: rateMessage,
     onEditInputChange: setEditInput,
     onSubmitEdit: submitEditedMessage,
@@ -4590,11 +5253,17 @@ ${(f.content ?? "").slice(0, 8000)}
     onToggleReaction: toggleReaction,
     onRevertFile: handleRevertFile,
     onReApplyFile: handleReApplyFile,
-    onAcceptFile: (msgId, path) =>
+    onAcceptFile: (msgId, path) => {
+      const diff = messageDiffs[msgId]?.find((d) => d.path === path);
+      if (diff) {
+        void handleReApplyFile(msgId, diff);
+        return;
+      }
       setFileStates((prev) => ({
         ...prev,
         [msgId]: { ...(prev[msgId] ?? {}), [path]: "accepted" },
-      })),
+      }));
+    },
     onRevertToVersion: handleRevertToVersion,
     onSaveAsSkill: (msg) => {
       const idx = visibleMessages.findIndex((m) => m.id === msg.id);
@@ -4633,10 +5302,27 @@ ${(f.content ?? "").slice(0, 8000)}
         return n;
       });
       const role = chip.replace(/^Test the new changes as the\s+/i, "").replace(/\s+role$/i, "");
-      const framed = `Generate browser tests (Playwright-style) that validate the recent changes for the ${role} role specifically. Cover: 1) login/auth scenarios for ${role}, 2) which routes ${role} can/cannot reach, 3) UI elements that should be visible/hidden for ${role}, 4) any role-specific actions. After writing the tests, summarize what to run them against.`;
-      void sendMessage(framed);
+      const description =
+        `Validate recent changes for the ${role} role. Cover: ` +
+        `1) login/auth for ${role}, 2) routes ${role} can/cannot reach, ` +
+        `3) UI visible/hidden for ${role}, 4) role-specific actions.`;
+      // Open Browser Tests (e2e), not unit Testing — seed listener lives there.
+      try {
+        sessionStorage.setItem(
+          "lifemark-seed-browser-tests",
+          JSON.stringify({ description, autoGenerate: true }),
+        );
+      } catch { /* private mode */ }
+      onOpenPanel?.("e2e");
+      window.setTimeout(() => {
+        window.dispatchEvent(
+          new CustomEvent("lifemark-seed-browser-tests", {
+            detail: { description, autoGenerate: true },
+          }),
+        );
+      }, 50);
     },
-    onOpenTestingPanel: () => onOpenPanel?.("testing"),
+    onOpenTestingPanel: () => onOpenPanel?.("e2e"),
     onSaveAnalyzeFile: saveGeneratedFileToProject,
     onOpenBranchSnapshot: (snapshotId) => {
       onOpenPanel?.("history");
@@ -4730,64 +5416,33 @@ ${(f.content ?? "").slice(0, 8000)}
         }}
         onClearChat={() => void handleClearChat()}
         onToggleSearch={() => {
-          setShowSearch((v) => {
-            const next = !v;
-            if (next) {
-              try {
-                const raw = sessionStorage.getItem(searchStorageKey);
-                if (raw) {
-                  const saved = JSON.parse(raw) as {
-                    query?: string;
-                    mode?: ChatSearchMode;
-                    role?: ChatSearchRoleFilter;
-                    msgMode?: ChatSearchMsgModeFilter;
-                  };
-                  if (saved.query) setSearchQuery(saved.query);
-                  if (saved.mode === "keyword" || saved.mode === "semantic") setSearchMode(saved.mode);
-                  if (saved.role === "all" || saved.role === "user" || saved.role === "assistant") {
-                    setSearchRoleFilter(saved.role);
-                  }
-                  if (
-                    saved.msgMode === "all" ||
-                    saved.msgMode === "chat" ||
-                    saved.msgMode === "plan" ||
-                    saved.msgMode === "build" ||
-                    saved.msgMode === "agent" ||
-                    saved.msgMode === "patch"
-                  ) {
-                    setSearchMsgModeFilter(saved.msgMode);
-                  }
-                }
-              } catch { /* private mode */ }
-              setTimeout(() => searchInputRef.current?.focus(), 50);
-            }
-            return next;
-          });
+          window.dispatchEvent(
+            new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "search" } }),
+          );
         }}
         onToggleBookmarks={() => {
-          setShowBookmarks((v) => {
-            const next = !v;
-            if (next && bookmarkedIds.size > 0) {
-              const first = visibleMessages.find((m) => bookmarkedIds.has(m.id));
-              if (first) setTimeout(() => scrollToMessage(first.id), 80);
-            }
-            return next;
-          });
+          window.dispatchEvent(
+            new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "bookmarks" } }),
+          );
         }}
         onToggleCodeBlocks={() => {
-          const next = !allCodeBlocksCollapsed;
-          setAllCodeBlocksCollapsed(next);
-          window.dispatchEvent(new CustomEvent("chat-codeblock-set-all", { detail: { collapsed: next } }));
+          window.dispatchEvent(
+            new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "toggle-code-blocks" } }),
+          );
         }}
         onCollapseAllThreads={() => {
-          if (chatThreads.length <= 1) return;
-          setCollapsedThreads(new Set(Array.from({ length: chatThreads.length - 1 }, (_, i) => i)));
+          window.dispatchEvent(
+            new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "collapse-threads" } }),
+          );
         }}
-        onExpandAllThreads={() => setCollapsedThreads(new Set())}
+        onExpandAllThreads={() => {
+          window.dispatchEvent(
+            new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "expand-threads" } }),
+          );
+        }}
         chatDays={chatDays}
         onJumpToDay={(messageId) => scrollToMessage(messageId)}
       />
-
       <LovableChatHeaderStatus />
 
       <AnimatePresence>
@@ -4799,6 +5454,7 @@ ${(f.content ?? "").slice(0, 8000)}
             roleFilter={searchRoleFilter}
             msgModeFilter={searchMsgModeFilter}
             loading={searchLoading}
+            searchSource={searchSource}
             matchCount={searchHitMessageIds.length || searchMatchCount}
             activeIndex={searchHitMessageIds.length > 0 ? activeSearchHitIndex : undefined}
             recentQueries={recentSearchQueries}
@@ -4856,6 +5512,21 @@ ${(f.content ?? "").slice(0, 8000)}
         projectId={project.id}
         scrollRef={scrollContainerRef}
         items={chatThreads}
+        getItemKey={(thread, i) => thread[0]?.id ?? `thread-${i}`}
+        estimateSize={(index) => {
+          const thread = chatThreads[index];
+          if (!thread?.length) return 220;
+          let h = 160;
+          for (const m of thread) {
+            const len = (m.content ?? "").length;
+            h += Math.min(420, 80 + Math.floor(len / 4));
+            const diffs = messageDiffs[m.id];
+            if (diffs?.length) h += Math.min(360, 120 + diffs.length * 48);
+            if (messageScreenshots[m.id]) h += 220;
+            if (messageBuildActivity[m.id]?.length) h += 80;
+          }
+          return Math.min(900, Math.max(180, h));
+        }}
         header={
           <LovableChatTimelineHeader
             loadingOlderMessages={loadingOlderMessages}
@@ -4891,7 +5562,8 @@ ${(f.content ?? "").slice(0, 8000)}
             thread={thread}
             threadIdx={threadIdx}
             searchQuery={searchQuery}
-            collapsed={!searchQuery && collapsedThreads.has(threadIdx)}
+            // Always show message bodies — turn collapse was hiding the chat.
+            collapsed={false}
             onToggleCollapse={() =>
               setCollapsedThreads((prev) => {
                 const n = new Set(prev);
@@ -5011,6 +5683,13 @@ ${(f.content ?? "").slice(0, 8000)}
           streaming={streaming}
           followUpChips={followUpChips}
           onSelectFollowUp={(chip) => {
+            if (chip === "Re-run full security scan") {
+              onOpenPanel?.("security");
+              void triggerAutoFix(
+                `Re-run a full security scan and fix all ${securityIssueCount} security issue${securityIssueCount === 1 ? "" : "s"} in this project.`,
+              );
+              return;
+            }
             setInput(chip);
             setTimeout(() => textareaRef.current?.focus(), 0);
           }}
@@ -5036,8 +5715,6 @@ ${(f.content ?? "").slice(0, 8000)}
             setInput(prompt);
             setTimeout(() => textareaRef.current?.focus(), 50);
           }}
-          fileInputRef={fileInputRef}
-          onImageAttach={handleImageAttach}
           contextFiles={contextFiles}
           onRemoveContextFile={(id) => setContextFiles((prev) => prev.filter((cf) => cf.id !== id))}
           lineRefs={composerLineRefs}
@@ -5048,7 +5725,7 @@ ${(f.content ?? "").slice(0, 8000)}
           onOpenSecrets={() => onOpenPanel?.("secrets")}
         />
 
-        <LovableChatInputCard>
+        <LovableChatInputCard isDragging={isDragging}>
           <LovableComposerInputArea
             textareaRef={textareaRef}
             input={input}
@@ -5059,15 +5736,15 @@ ${(f.content ?? "").slice(0, 8000)}
             noCredits={noCredits}
             isLocked={isLocked}
             securityIssueCount={securityIssueCount}
+            freeFixesRemaining={freeFixesRemaining}
             onOpenPanel={onOpenPanel}
             onViewSecurityIssues={() => onOpenPanel?.("security")}
             onFixAllSecurityIssues={() => {
-              onOpenPanel?.("intelligence");
-              window.dispatchEvent(new CustomEvent("lifemark-intelligence-run", {
-                detail: {
-                  goal: "Fix all security issues in this project. Review every finding, apply the safest fix for each, and verify the app still builds.",
-                },
-              }));
+              // Use the free Try-to-fix path (/api/ai/fix), not Editor Intelligence.
+              void triggerAutoFix(
+                `Fix all ${securityIssueCount} security issue${securityIssueCount === 1 ? "" : "s"} in this project. ` +
+                  "Review findings (secrets, XSS, auth/RLS gaps, unsafe deps), apply the safest fix for each, and keep the app building.",
+              );
             }}
             hasAttachments={!!attachedImage || !!attachedText}
             contextFileCount={contextFiles.length}
@@ -5101,6 +5778,8 @@ ${(f.content ?? "").slice(0, 8000)}
             analyzeInstruction={analyzeInstruction}
             analyzeFile={analyzeFile}
             analyzeRunning={analyzeRunning}
+            analyzeEnabled={analyzeEnabled}
+            analyzeUnavailableReason={analyzeUnavailableReason}
             onAnalyzeInstructionChange={setAnalyzeInstruction}
             onAnalyzeFileSelect={setAnalyzeFile}
             onAnalyzeClose={() => setAnalyzeOpen(false)}
@@ -5130,15 +5809,29 @@ ${(f.content ?? "").slice(0, 8000)}
             onScreenshot={() => window.dispatchEvent(new CustomEvent("lifemark-request-screenshot", { detail: { messageId: "manual" } }))}
             onAddReference={() => setShowFilePicker((v) => !v)}
             onAddSkill={() => setShowSkillPicker((v) => !v)}
-            onAnalyzeData={() => setAnalyzeOpen(true)}
+            onAnalyzeData={() => {
+              setAnalyzeOpen(true);
+              void fetch("/api/ai/analyze/capabilities")
+                .then((r) => (r.ok ? r.json() : null))
+                .then((d) => {
+                  if (!d) return;
+                  setAnalyzeEnabled(d.analyzeEnabled !== false);
+                  setAnalyzeUnavailableReason(
+                    typeof d.reason === "string" ? d.reason : null,
+                  );
+                })
+                .catch(() => {});
+            }}
             onDesignDirections={() => openDesignDirections()}
             onAttach={() => fileInputRef.current?.click()}
+            fileInputRef={fileInputRef}
+            onImageAttach={handleImageAttach}
             isVisualEditActive={isVisualEditActive}
             onVisualEditToggle={onVisualEditToggle}
             onFocusPreview={onFocusPreview}
             onToggleTemplates={() => setShowTemplates((v) => !v)}
             mobileMode={mobileMode}
-            onToggleMobileMode={() => setMobileMode((v) => !v)}
+            onToggleMobileMode={() => persistMobileMode(!mobileMode)}
             mobileDisabled={noCredits || isLocked || streaming}
             mode={mode}
             clarifyFirst={clarifyFirst}
@@ -5159,12 +5852,14 @@ ${(f.content ?? "").slice(0, 8000)}
             showFileGenPicker={showFileGenPicker}
             fileGenBusy={fileGenBusy}
             fileGenDisabled={!input.trim() || !!fileGenBusy || noCredits || isLocked || streaming}
+            fileGenBinaryEnabled={analyzeEnabled}
+            fileGenBinaryReason={analyzeUnavailableReason}
             onToggleFileGenPicker={() => setShowFileGenPicker((v) => !v)}
             onGenerateFile={(fmt) => void handleGenerateFile(fmt)}
             streaming={streaming}
             canSend={(!input.trim() && !attachedImage) ? false : !noCredits && !isLocked}
-            canQueue={!!input.trim() && !noCredits && !isLocked && !attachedImage && !attachedText}
-            queueDisabledReason={attachedImage || attachedText ? "Remove attachments before queueing a follow-up" : undefined}
+            canQueue={(!!input.trim() || !!attachedImage || !!attachedText) && !noCredits && !isLocked}
+            queueDisabledReason={undefined}
             onSend={() => void handleSend()}
             onStop={stopGeneration}
           />

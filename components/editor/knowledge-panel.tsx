@@ -176,7 +176,7 @@ export function KnowledgePanel({ project, profile, onProjectUpdate }: KnowledgeP
               onClick={generateFromProject}
               disabled={generating}
               variant="outline"
-              className="w-full border-violet-500/30 bg-violet-500/[0.06] text-violet-300 hover:bg-violet-500/10 hover:text-violet-200 text-xs h-8 gap-1.5"
+              className="w-full border-violet-500/30 bg-violet-500/[0.06] text-violet-700 dark:text-violet-300 hover:bg-violet-500/10 hover:text-violet-200 text-xs h-8 gap-1.5"
               title="Read the current project files and draft a Knowledge document"
             >
               {generating ? (
@@ -190,7 +190,7 @@ export function KnowledgePanel({ project, profile, onProjectUpdate }: KnowledgeP
               value={projectKnowledge}
               onChange={(e) => setProjectKnowledge(e.target.value.slice(0, MAX_CHARS))}
               placeholder={`Describe your project context...\n\nExamples:\n• Tech stack decisions\n• Design system rules\n• What not to modify\n• Business logic constraints`}
-              className="min-h-[280px] text-xs font-mono bg-white/[0.03] border-white/[0.08] text-slate-200 placeholder:text-slate-600 resize-none leading-relaxed"
+              className="min-h-[280px] text-xs font-mono bg-white/[0.03] border-white/[0.08] text-slate-800 dark:text-slate-200 placeholder:text-slate-600 resize-none leading-relaxed"
             />
 
             <div className="flex items-center justify-between">
@@ -259,7 +259,7 @@ export function KnowledgePanel({ project, profile, onProjectUpdate }: KnowledgeP
               value={workspaceKnowledge}
               onChange={(e) => setWorkspaceKnowledge(e.target.value.slice(0, MAX_CHARS))}
               placeholder={`Global rules for all projects...\n\nExamples:\n• Always use TypeScript strict mode\n• Prefer shadcn/ui over custom components\n• Company name: Acme Inc\n• Never use inline styles`}
-              className="min-h-[280px] text-xs font-mono bg-white/[0.03] border-white/[0.08] text-slate-200 placeholder:text-slate-600 resize-none leading-relaxed"
+              className="min-h-[280px] text-xs font-mono bg-white/[0.03] border-white/[0.08] text-slate-800 dark:text-slate-200 placeholder:text-slate-600 resize-none leading-relaxed"
             />
 
             <div className="flex justify-end">

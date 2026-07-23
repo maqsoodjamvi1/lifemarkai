@@ -294,7 +294,9 @@ export function SecondaryPanelContent(ctx: LazyPanelContext) {
     return (
       <NativeDistributionPanel
         project={project}
+        files={files}
         deployedUrl={project.deployed_url}
+        onFilesUpdate={handleFilesUpdate}
         onSendToChat={(p) => { setPendingCrossRefPrompt(p); setRightPanel(null); }}
       />
     );
@@ -378,6 +380,7 @@ export function SecondaryPanelContent(ctx: LazyPanelContext) {
     return (
       <SelfHealingPanel
         projectId={pid}
+        files={files}
         isLocked={isLiveLocked}
         onFilesRefresh={async () => {
           const res = await fetch(`/api/projects/${pid}/files`);

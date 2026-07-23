@@ -53,6 +53,9 @@ function LoginContent() {
     try {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
+      // Sign-in alerts: record this device; emails the owner if it's new.
+      // Fire-and-forget — must never delay or block the login flow.
+      void fetch("/api/auth/device-check", { method: "POST" }).catch(() => {});
       // Check if the user has a verified TOTP factor — redirect to MFA challenge if so
       const { data: mfaData } = await supabase.auth.mfa.listFactors();
       const hasVerifiedTotp = mfaData?.totp?.some((f) => f.status === "verified");

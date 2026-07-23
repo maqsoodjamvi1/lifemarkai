@@ -43,7 +43,7 @@ function renderValue(v: unknown) {
   if (typeof v === "object") {
     const s = JSON.stringify(v);
     return (
-      <span className="font-mono text-[10px] text-violet-300/90" title={s.slice(0, 500)}>
+      <span className="font-mono text-[10px] text-violet-700/90 dark:text-violet-300/90" title={s.slice(0, 500)}>
         {s.length > 80 ? `${s.slice(0, 80)}…` : s}
       </span>
     );
@@ -403,8 +403,8 @@ export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPan
             <span
               className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
                 backend === "cloud"
-                  ? "border-sky-500/40 text-sky-300 bg-sky-500/10"
-                  : "border-emerald-500/40 text-emerald-300 bg-emerald-500/10"
+                  ? "border-sky-500/40 text-sky-700 dark:text-sky-300 bg-sky-500/10"
+                  : "border-emerald-500/40 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10"
               }`}
             >
               {backend === "cloud" ? "☁️ Managed Cloud" : "🔌 Own Supabase"}
@@ -423,7 +423,7 @@ export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPan
         </div>
 
         {isLocked && (
-          <div className="flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-300">
+          <div className="flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-700 dark:text-amber-300">
             <Lock className="w-3 h-3 shrink-0" />
             Live environment — data is read-only. Switch to Test to edit.
           </div>
@@ -462,7 +462,7 @@ export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPan
               {sqlRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
               Run
             </Button>
-            {isLocked && <span className="text-[10px] text-amber-300">Live environment — SQL disabled.</span>}
+            {isLocked && <span className="text-[10px] text-amber-700 dark:text-amber-300">Live environment — SQL disabled.</span>}
             {sqlRows && !sqlError && (
               <span className="text-[10px] text-muted-foreground">
                 {sqlRows.length} row{sqlRows.length !== 1 ? "s" : ""}
@@ -470,7 +470,7 @@ export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPan
             )}
           </div>
           {sqlError && (
-            <div className="rounded-md border border-red-500/30 bg-red-500/10 p-2.5 text-[11px] text-red-300 font-mono whitespace-pre-wrap break-all shrink-0">
+            <div className="rounded-md border border-red-500/30 bg-red-500/10 p-2.5 text-[11px] text-red-700 dark:text-red-300 font-mono whitespace-pre-wrap break-all shrink-0">
               {sqlError}
             </div>
           )}
@@ -533,7 +533,7 @@ export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPan
                         <span className="font-mono">{c.name}</span>
                         <span className="text-muted-foreground text-[10px]">{c.type}</span>
                         {c.isPk && (
-                          <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-amber-500/40 text-amber-300 px-1.5 py-px text-[9px]">
+                          <span className="ml-auto inline-flex items-center gap-1 rounded-full border border-amber-500/40 text-amber-700 dark:text-amber-300 px-1.5 py-px text-[9px]">
                             <KeyRound className="w-2.5 h-2.5" /> PK
                           </span>
                         )}

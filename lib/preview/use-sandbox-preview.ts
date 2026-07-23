@@ -1,11 +1,12 @@
 "use client";
 
 /**
- * Client hook that requests a real cloud sandbox preview (Modal — Lovable parity;
- * E2B fallback) for a project and returns the live tunnel URL. When the sandbox
- * backend isn't configured the API returns { enabled: false } and `enabled` is false,
- * so the caller should keep using the WebContainer / srcdoc engine
- * (see lib/preview/resolve-preview-engine.ts — pass `sandboxUrl` to prefer it).
+ * Client hook that requests a Modal sandbox preview (Lovable parity) and returns
+ * the live tunnel URL. When Modal isn't configured the API returns
+ * `{ enabled: false }` and the editor shows "Modal preview required"
+ * (not WebContainer / srcdoc / esbuild).
+ *
+ * Draft E2B is only used when ENABLE_E2B_SANDBOX=1 / SANDBOX_PROVIDER=e2b.
  *
  * Lovable parity: GET reconnect before cold POST; persist sandboxId in
  * sessionStorage so reloads can reconnect quickly.
@@ -20,6 +21,9 @@ export interface SandboxPreviewState {
   loading: boolean;
   error: string | null;
   logs: string | null;
+  /** Modal boot phase: creating | writing | installing | starting | ready */
+  phase: string | null;
+  phaseDetail: string | null;
 }
 
 function storageKey(projectId: string) {
@@ -35,21 +39,45 @@ export function useSandboxPreview(projectId: string) {
     loading: false,
     error: null,
     logs: null,
+    phase: null,
+    phaseDetail: null,
   });
   const sandboxIdRef = useRef<string | null>(null);
+  /** One-shot guard for mid-session dead-sandbox auto-recovery (cold re-boot). */
+  const coldRetryRef = useRef(false);
   const bootedRef = useRef(false);
   const statusCheckedRef = useRef(false);
 
   const applyState = useCallback((next: SandboxPreviewState) => {
     sandboxIdRef.current = next.sandboxId;
-    if (next.sandboxId && projectId) {
+    if (projectId) {
       try {
-        sessionStorage.setItem(storageKey(projectId), next.sandboxId);
+        if (next.sandboxId) {
+          sessionStorage.setItem(storageKey(projectId), next.sandboxId);
+        } else {
+          sessionStorage.removeItem(storageKey(projectId));
+        }
       } catch { /* private mode */ }
     }
     setState(next);
     return next;
   }, [projectId]);
+
+  const emptyState = useCallback(
+    (partial: Partial<SandboxPreviewState> = {}): SandboxPreviewState => ({
+      enabled: false,
+      previewUrl: null,
+      sandboxId: null,
+      provider: null,
+      loading: false,
+      error: null,
+      logs: null,
+      phase: null,
+      phaseDetail: null,
+      ...partial,
+    }),
+    [],
+  );
 
   const reconnectPreview = useCallback(async (): Promise<SandboxPreviewState> => {
     setState((s) => ({ ...s, loading: true, error: null }));
@@ -58,20 +86,39 @@ export function useSandboxPreview(projectId: string) {
       try {
         storedId = sessionStorage.getItem(storageKey(projectId));
       } catch { /* private mode */ }
-      const qs = storedId ? `?sandboxId=${encodeURIComponent(storedId)}` : "";
-      const res = await fetch(`/api/projects/${projectId}/sandbox-preview${qs}`, { method: "GET" });
-      const data = await res.json();
+
+      const tryGet = async (qs: string) => {
+        const res = await fetch(`/api/projects/${projectId}/sandbox-preview${qs}`, {
+          method: "GET",
+        });
+        return res.json() as Promise<{
+          enabled?: boolean;
+          ok?: boolean;
+          previewUrl?: string | null;
+          sandboxId?: string | null;
+          provider?: string;
+          reconnected?: boolean;
+          phase?: string | null;
+          phaseDetail?: string | null;
+          error?: string;
+        }>;
+      };
+
+      // 1) Prefer stored sandboxId (fast path).
+      let data = await tryGet(
+        storedId ? `?sandboxId=${encodeURIComponent(storedId)}` : "",
+      );
+
+      // 2) Stale ID → clear + project-named reconnect (no sandboxId query).
+      if (storedId && data.enabled !== false && !(data.ok && data.previewUrl)) {
+        try {
+          sessionStorage.removeItem(storageKey(projectId));
+        } catch { /* private mode */ }
+        data = await tryGet("");
+      }
 
       if (!data.enabled) {
-        return applyState({
-          enabled: false,
-          previewUrl: null,
-          sandboxId: null,
-          provider: null,
-          loading: false,
-          error: null,
-          logs: null,
-        });
+        return applyState(emptyState());
       }
 
       if (data.ok && data.previewUrl) {
@@ -83,6 +130,8 @@ export function useSandboxPreview(projectId: string) {
           loading: false,
           error: null,
           logs: data.reconnected ? "Reconnected to warm sandbox" : null,
+          phase: typeof data.phase === "string" ? data.phase : "ready",
+          phaseDetail: typeof data.phaseDetail === "string" ? data.phaseDetail : null,
         });
       }
 
@@ -91,22 +140,20 @@ export function useSandboxPreview(projectId: string) {
         previewUrl: null,
         sandboxId: null,
         provider: typeof data.provider === "string" ? data.provider : null,
-        loading: false,
+        loading: true, // keep spinner until cold POST finishes — avoid empty white pane
         error: null,
         logs: null,
+        phase: typeof data.phase === "string" ? data.phase : "creating",
+        phaseDetail: typeof data.phaseDetail === "string" ? data.phaseDetail : "Cold start…",
       });
     } catch (err) {
-      return applyState({
-        enabled: false,
-        previewUrl: null,
-        sandboxId: null,
-        provider: null,
-        loading: false,
-        error: err instanceof Error ? err.message : "Reconnect failed",
-        logs: null,
-      });
+      return applyState(
+        emptyState({
+          error: err instanceof Error ? err.message : "Reconnect failed",
+        }),
+      );
     }
-  }, [applyState, projectId]);
+  }, [applyState, emptyState, projectId]);
 
   const requestPreview = useCallback(async (): Promise<SandboxPreviewState> => {
     setState((s) => ({ ...s, loading: true, error: null }));
@@ -115,15 +162,7 @@ export function useSandboxPreview(projectId: string) {
       const data = await res.json();
 
       if (!data.enabled) {
-        return applyState({
-          enabled: false,
-          previewUrl: null,
-          sandboxId: null,
-          provider: null,
-          loading: false,
-          error: null,
-          logs: null,
-        });
+        return applyState(emptyState());
       }
 
       return applyState({
@@ -134,21 +173,20 @@ export function useSandboxPreview(projectId: string) {
         loading: false,
         error: data.ok ? null : (data.error ?? "Sandbox failed"),
         logs: data.logs ?? null,
+        phase: typeof data.phase === "string" ? data.phase : data.ok ? "ready" : "error",
+        phaseDetail: typeof data.phaseDetail === "string" ? data.phaseDetail : null,
       });
     } catch (err) {
-      return applyState({
-        enabled: false,
-        previewUrl: null,
-        sandboxId: null,
-        provider: null,
-        loading: false,
-        error: err instanceof Error ? err.message : "Request failed",
-        logs: null,
-      });
+      return applyState(
+        emptyState({
+          error: err instanceof Error ? err.message : "Request failed",
+        }),
+      );
     }
-  }, [applyState, projectId]);
+  }, [applyState, emptyState, projectId]);
 
-  /** Preflight: know cloud sandbox is configured before boot (skip WebContainer). */
+  /** Preflight: know Modal is configured before boot (skip WebContainer). */
+  const [statusResolved, setStatusResolved] = useState(false);
   useEffect(() => {
     if (statusCheckedRef.current) return;
     statusCheckedRef.current = true;
@@ -161,9 +199,14 @@ export function useSandboxPreview(projectId: string) {
           enabled: true,
           provider: typeof data.provider === "string" ? data.provider : s.provider,
           loading: true,
+          phase: s.phase ?? "creating",
         }));
       })
-      .catch(() => {});
+      .catch(() => {})
+      // Resolved either way — until this flips, the panel must show a neutral
+      // loading state, never the "backend not configured" setup pane (it used
+      // to flash setup instructions at every editor open).
+      .finally(() => setStatusResolved(true));
   }, []);
 
   /** Lovable parity: reconnect warm sandbox first, cold-provision only if needed. */
@@ -171,11 +214,78 @@ export function useSandboxPreview(projectId: string) {
     if (!projectId || bootedRef.current) return;
     bootedRef.current = true;
     void (async () => {
+      setState((s) => ({ ...s, loading: true, phase: "creating", phaseDetail: "Connecting…" }));
       const reconnected = await reconnectPreview();
       if (reconnected.previewUrl) return;
+      setState((s) => ({ ...s, phase: "creating", phaseDetail: "Cold start…" }));
       await requestPreview();
     })();
   }, [projectId, reconnectPreview, requestPreview]);
+
+  /** Poll Modal boot phase while cold-starting (metadata updates from POST).
+   *  ALSO keeps polling in the error state: a failed boot used to freeze the
+   *  "could not start" pane forever even after a later boot succeeded — the
+   *  poll now adopts the ready sandbox and the pane self-recovers. */
+  useEffect(() => {
+    const bootPending = state.loading || !!state.error || state.phase === "error";
+    if (!projectId || !state.enabled || state.previewUrl || !bootPending) return;
+    const timer = window.setInterval(() => {
+      void fetch(`/api/projects/${projectId}/sandbox-preview?phaseOnly=1`)
+        .then((r) => r.json())
+        .then((data: {
+          ok?: boolean;
+          previewUrl?: string | null;
+          sandboxId?: string | null;
+          phase?: string | null;
+          phaseDetail?: string | null;
+          provider?: string;
+        }) => {
+          // Only adopt URL once boot reports ready — never a stale preview_url
+          // left over from a timed-out Modal sandbox.
+          if (data.ok && data.previewUrl && data.phase === "ready") {
+            applyState({
+              enabled: true,
+              previewUrl: data.previewUrl,
+              sandboxId: data.sandboxId ?? null,
+              provider: typeof data.provider === "string" ? data.provider : state.provider,
+              loading: false,
+              error: null,
+              logs: null,
+              phase: "ready",
+              phaseDetail: null,
+            });
+            return;
+          }
+          if (typeof data.phase === "string") {
+            setState((s) => ({
+              ...s,
+              phase: data.phase ?? s.phase,
+              phaseDetail:
+                typeof data.phaseDetail === "string" ? data.phaseDetail : s.phaseDetail,
+            }));
+          }
+          // Dead-sandbox auto-recovery: when Modal reclaims the sandbox
+          // MID-SESSION, phase sticks at "error" ("Sandbox has already finished
+          // with status timeout") and nothing ever issues a cold POST — the
+          // spinner pane polls forever (observed live). Boot a fresh sandbox
+          // once per death instead of waiting for the user to intervene.
+          const deadPhase =
+            data.phase === "error" ||
+            /already finished|already completed|FAILED_PRECONDITION/i.test(
+              data.phaseDetail ?? "",
+            );
+          if (deadPhase && !coldRetryRef.current) {
+            coldRetryRef.current = true;
+            void requestPreview().then((next) => {
+              // Allow another recovery on the NEXT death only after success.
+              if (next.previewUrl) coldRetryRef.current = false;
+            });
+          }
+        })
+        .catch(() => {});
+    }, 1200);
+    return () => window.clearInterval(timer);
+  }, [projectId, state.enabled, state.previewUrl, state.loading, state.error, state.phase, state.provider, applyState, requestPreview]);
 
   const stopPreview = useCallback(() => {
     const sandboxId = sandboxIdRef.current;
@@ -203,21 +313,64 @@ export function useSandboxPreview(projectId: string) {
   }, [projectId]);
 
   const syncFiles = useCallback(
-    async (files: Array<{ path: string; content: string }>): Promise<void> => {
-      const sandboxId = sandboxIdRef.current;
-      if (!projectId || !sandboxId || files.length === 0) return;
-      try {
-        await fetch(`/api/projects/${projectId}/sandbox-preview/sync`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sandboxId, files }),
-        });
-      } catch {
-        /* best-effort */
+    async (
+      files: Array<{ path: string; content: string }>,
+    ): Promise<{ ok: boolean; installing?: boolean; error?: string; recovered?: boolean }> => {
+      if (!projectId || files.length === 0) {
+        return { ok: false, error: "No sandbox" };
       }
+      const doSync = async (
+        sandboxId: string,
+      ): Promise<{ ok: boolean; installing?: boolean; error?: string }> => {
+        try {
+          const res = await fetch(`/api/projects/${projectId}/sandbox-preview/sync`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sandboxId, files }),
+          });
+          const data = (await res.json().catch(() => ({}))) as {
+            ok?: boolean;
+            installing?: boolean;
+            error?: string;
+          };
+          if (!res.ok || data.ok === false) {
+            return { ok: false, error: data.error ?? `Sync failed (${res.status})` };
+          }
+          return { ok: true, installing: !!data.installing };
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : "Sync failed" };
+        }
+      };
+
+      const sandboxId = sandboxIdRef.current;
+      if (!sandboxId) return { ok: false, error: "No sandbox" };
+      let result = await doSync(sandboxId);
+
+      // Self-heal: Modal reclaims idle sandboxes, and a cold-start recovery can
+      // leave the client holding the DEAD sandbox's id while the iframe shows a
+      // fresh one. Observed live: sync returned "Sandbox … has already completed"
+      // silently forever, so AI edits never reached the preview. Drop the stale
+      // id, reconnect (project-name lookup finds the live sandbox), retry once.
+      const dead =
+        !result.ok &&
+        /already completed|invalid sandbox|not found|not responding|no such sandbox/i.test(
+          result.error ?? "",
+        );
+      if (dead) {
+        sandboxIdRef.current = null;
+        try {
+          sessionStorage.removeItem(storageKey(projectId));
+        } catch { /* private mode */ }
+        const fresh = await reconnectPreview();
+        if (fresh.sandboxId && fresh.sandboxId !== sandboxId) {
+          result = await doSync(fresh.sandboxId);
+          return { ...result, recovered: result.ok };
+        }
+      }
+      return result;
     },
-    [projectId],
+    [projectId, reconnectPreview],
   );
 
-  return { ...state, requestPreview, reconnectPreview, stopPreview, syncFiles };
+  return { ...state, statusResolved, requestPreview, reconnectPreview, stopPreview, syncFiles };
 }

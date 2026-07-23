@@ -38,6 +38,30 @@ export function rewriteStaticPaths(html: string, projectId: string): string {
 export async function servePreviewHtml(projectId: string): Promise<NextResponse> {
   const supabase = await createAdminClient();
 
+  // Lovable parity: if a warm Modal tunnel is stored, redirect there instead of Babel srcdoc.
+  type ProjectRow = {
+    preview_url: string | null;
+    metadata: Record<string, unknown> | null;
+  };
+  const { data: projectRow } = await supabase
+    .from("projects")
+    .select("preview_url, metadata")
+    .eq("id", projectId)
+    .maybeSingle();
+  const project = projectRow as ProjectRow | null;
+  const tunnel = project?.preview_url?.trim() || "";
+  const meta = project?.metadata && typeof project.metadata === "object" ? project.metadata : {};
+  const sandboxReady =
+    meta.sandbox_phase === "ready" ||
+    (typeof meta.sandbox_id === "string" && meta.sandbox_id.length > 0);
+  if (
+    sandboxReady &&
+    /^https?:\/\//i.test(tunnel) &&
+    !tunnel.startsWith("data:")
+  ) {
+    return NextResponse.redirect(tunnel, 302);
+  }
+
   type FileRow = { path: string; content: string | null; language: string | null };
 
   const { data: rawFiles } = await supabase
@@ -64,6 +88,32 @@ export async function servePreviewHtml(projectId: string): Promise<NextResponse>
     return new NextResponse(html, {
       headers: { ...previewHeaders(), "Content-Type": "text/html; charset=utf-8" },
     });
+  }
+
+  // Vite/Next apps need Modal — do not serve Babel srcdoc as a fake live preview.
+  const looksLikeApp = files.some(
+    (f) =>
+      f.path === "package.json" ||
+      /vite\.config\.(t|j)sx?$/.test(f.path) ||
+      /^src\/(main|index|App)\.(t|j)sx?$/.test(f.path.replace(/\\/g, "/")),
+  );
+  if (looksLikeApp) {
+    return new NextResponse(
+      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Modal preview required</title></head>
+<body style="margin:0;font-family:system-ui,sans-serif;background:#0a0a0a;color:#e5e5e5;display:flex;min-height:100vh;align-items:center;justify-content:center">
+  <div style="max-width:28rem;padding:2rem;text-align:center">
+    <p style="font-weight:600;margin:0 0 0.5rem">Modal preview required</p>
+    <p style="font-size:0.875rem;opacity:0.7;margin:0;line-height:1.5">
+      This app needs a live Modal sandbox (same path as Lovable). Open it in the Lifemark editor with
+      <code style="opacity:0.9">MODAL_TOKEN_ID</code> / <code style="opacity:0.9">MODAL_TOKEN_SECRET</code> configured.
+    </p>
+  </div>
+</body></html>`,
+      {
+        status: 503,
+        headers: { ...previewHeaders(), "Content-Type": "text/html; charset=utf-8" },
+      },
+    );
   }
 
   const projectFiles: ProjectFile[] = files.map((f) => ({

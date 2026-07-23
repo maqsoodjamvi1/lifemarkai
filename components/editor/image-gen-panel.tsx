@@ -191,7 +191,7 @@ export function ImageGenPanel({ projectId, onInsertImage }: ImageGenPanelProps =
                   key={s}
                   onClick={() => setSize(s)}
                   className={`flex-1 py-1.5 rounded-lg text-xs border transition-all ${
-                    size === s ? "bg-violet-500/20 border-violet-500/40 text-violet-300" : "bg-muted border-border hover:bg-accent"
+                    size === s ? "bg-violet-500/20 border-violet-500/40 text-violet-700 dark:text-violet-300" : "bg-muted border-border hover:bg-accent"
                   }`}
                 >
                   {s === "1024x1024" ? "Square" : s === "1792x1024" ? "Wide" : "Tall"}
@@ -209,7 +209,7 @@ export function ImageGenPanel({ projectId, onInsertImage }: ImageGenPanelProps =
                   key={s}
                   onClick={() => setStyle(s)}
                   className={`flex-1 py-1.5 rounded-lg text-xs border transition-all capitalize ${
-                    style === s ? "bg-violet-500/20 border-violet-500/40 text-violet-300" : "bg-muted border-border hover:bg-accent"
+                    style === s ? "bg-violet-500/20 border-violet-500/40 text-violet-700 dark:text-violet-300" : "bg-muted border-border hover:bg-accent"
                   }`}
                 >
                   {s}

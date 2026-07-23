@@ -28,9 +28,9 @@ export function LovableComposerSendControls({
             type="button"
             onClick={onSend}
             disabled={!canQueue}
-            className={`flex items-center justify-center w-7 h-7 rounded-lg border transition-all flex-shrink-0 ${
+            className={`flex items-center justify-center w-7 h-7 rounded-full border transition-all flex-shrink-0 ${
               canQueue
-                ? "border-violet-500/50 bg-violet-500/15 text-violet-300 hover:bg-violet-500/25"
+                ? "border-violet-500/50 bg-violet-500/15 text-violet-700 dark:text-violet-300 hover:bg-violet-500/25"
                 : "border-[color:var(--border-default)] bg-[var(--bg-muted)]/40 text-[var(--fg-tertiary)]/40 cursor-not-allowed"
             }`}
             title={queueDisabledReason ?? "Add follow-up to queue"}
@@ -41,8 +41,9 @@ export function LovableComposerSendControls({
         <button
           type="button"
           onClick={onStop}
-          className="flex items-center justify-center w-7 h-7 rounded-lg bg-[var(--fg-primary)] text-[var(--bg-base)] hover:opacity-90 transition-all flex-shrink-0"
-          title="Stop generation"
+          aria-label="Stop generating"
+          className="flex items-center justify-center w-7 h-7 rounded-full bg-[var(--fg-primary)] text-[var(--bg-base)] hover:opacity-90 transition-all flex-shrink-0"
+          title="Stop generating"
         >
           <Square className="w-3 h-3 fill-current" />
         </button>
@@ -52,18 +53,23 @@ export function LovableComposerSendControls({
 
   return (
     <button
-      type="button"
+      id="chatinput-send-message-button"
+      type="submit"
       onClick={onSend}
       disabled={!canSend}
-      className={`flex items-center justify-center w-7 h-7 rounded-lg transition-all flex-shrink-0 ${
+      aria-label="Send message"
+      aria-disabled={!canSend}
+      className={`flex items-center justify-center w-7 h-7 rounded-full transition-all flex-shrink-0 ${
         canSend
           ? "bg-[var(--fg-primary)] text-[var(--bg-base)] hover:opacity-90"
           : "bg-[var(--bg-muted)]/50 text-[var(--fg-tertiary)]/40 cursor-not-allowed"
       }`}
       title="Send (Enter)"
     >
-      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+      {/* Lovable dump: round send button with up arrow */}
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 19V5" />
+        <path d="m5 12 7-7 7 7" />
       </svg>
     </button>
   );

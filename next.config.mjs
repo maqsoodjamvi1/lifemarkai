@@ -21,8 +21,22 @@ const webContainerFrameSrc =
 const webContainerScriptSrc =
   " https://*.staticblitz.com https://*.webcontainer.io https://*.webcontainer-api.io https://*.stackblitz.io https://*.stackblitz.com https://stackblitz.io https://stackblitz.com";
 
+// Lovable product preview = Modal tunnel iframes (*.modal.host / *.modal.run).
+const modalFrameSrc = " https://*.modal.host https://*.modal.run";
+const modalConnectSrc =
+  " https://*.modal.host https://*.modal.run wss://*.modal.host wss://*.modal.run";
+
+const allowWebContainerIsolation =
+  process.env.NEXT_PUBLIC_PREVIEW_WEBCONTAINER === "1" ||
+  process.env.NEXT_PUBLIC_PREVIEW_WEBCONTAINER === "true";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Dev-only: the Next.js build indicator defaults to bottom-left, where it
+  // completely covers the composer's "+" (Chat actions) button. Move it.
+  devIndicators: {
+    position: "bottom-right",
+  },
   // Monaco editor must not be bundled server-side (Next.js 16 syntax)
   serverExternalPackages: ["monaco-editor"],
 
@@ -116,46 +130,49 @@ const nextConfig = {
   },
 
   async headers() {
-    return [
-      {
-        // WebContainers need SharedArrayBuffer via cross-origin isolation.
-        // Use COEP "credentialless" (not require-corp): require-corp blocks many
-        // same-tab fetches (Supabase realtime, HMR, third-party assets without
-        // CORP) and floods the console with TypeError: Failed to fetch.
-        // Isolation still works in Chromium with credentialless + COOP.
-        // Only on /editor — applying this on /dashboard broke client navigations
-        // and unrelated API polling.
+    /** @type {{ source: string; headers: { key: string; value: string }[] }[]} */
+    const rules = [];
+
+    // Draft WebContainer only — COEP/COOP break Modal tunnel iframes in the editor.
+    if (allowWebContainerIsolation) {
+      rules.push({
         source: "/editor/:path*",
         headers: [
           { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
           { key: "Cross-Origin-Embedder-Policy", value: "credentialless" },
         ],
-      },
-      {
-        // Exclude /_next/static so we don't interfere with Next.js's own
-        // cache-control headers for static assets.
-        source: "/((?!_next/static).*)",
-        headers: [
-          { key: "X-Frame-Options",        value: "SAMEORIGIN"                      },
-          { key: "X-Content-Type-Options", value: "nosniff"                         },
-          { key: "Referrer-Policy",        value: "strict-origin-when-cross-origin" },
-          {
-            key: "Content-Security-Policy",
-            value: [
-              "default-src 'self'",
-              "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdnjs.cloudflare.com https://unpkg.com https://cdn.tailwindcss.com https://cdn.jsdelivr.net" + webContainerScriptSrc,
-              "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com https://cdn.jsdelivr.net",
-              "img-src 'self' data: blob: https:",
-              "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
-              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.openai.com https://api.anthropic.com https://api.stripe.com https://openrouter.ai https://*.openrouter.ai blob: https://cdn.jsdelivr.net ws: wss:" + webContainerConnectSrc,
-              "frame-src 'self' blob: data:" + webContainerFrameSrc,
-              "worker-src 'self' blob:" + webContainerFrameSrc,
-              "child-src 'self' blob: data:",
-            ].join("; "),
-          },
-        ],
-      },
-    ];
+      });
+    }
+
+    rules.push({
+      // Exclude /_next/static so we don't interfere with Next.js's own
+      // cache-control headers for static assets.
+      source: "/((?!_next/static).*)",
+      headers: [
+        { key: "X-Frame-Options", value: "SAMEORIGIN" },
+        { key: "X-Content-Type-Options", value: "nosniff" },
+        { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+        {
+          key: "Content-Security-Policy",
+          value: [
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdnjs.cloudflare.com https://unpkg.com https://cdn.tailwindcss.com https://cdn.jsdelivr.net" +
+              webContainerScriptSrc,
+            "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com https://cdn.jsdelivr.net",
+            "img-src 'self' data: blob: https:",
+            "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net",
+            "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.openai.com https://api.anthropic.com https://api.stripe.com https://openrouter.ai https://*.openrouter.ai blob: https://cdn.jsdelivr.net ws: wss:" +
+              webContainerConnectSrc +
+              modalConnectSrc,
+            "frame-src 'self' blob: data:" + webContainerFrameSrc + modalFrameSrc,
+            "worker-src 'self' blob:" + webContainerFrameSrc,
+            "child-src 'self' blob: data:" + modalFrameSrc,
+          ].join("; "),
+        },
+      ],
+    });
+
+    return rules;
   },
 
   images: {

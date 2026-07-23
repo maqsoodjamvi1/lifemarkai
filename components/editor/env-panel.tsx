@@ -269,7 +269,7 @@ export function EnvPanel({ projectId: _projectId, files, onUpdateFile }: EnvPane
   const secretVars = vars.filter((v) => !isPublicKey(v.key));
 
   return (
-    <div className="flex flex-col h-full bg-[#0a0a0f] text-slate-200">
+    <div className="flex flex-col h-full bg-[#0a0a0f] text-slate-800 dark:text-slate-200">
       <div className="px-3 py-2.5 border-b border-white/[0.06] flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Shield className="w-3.5 h-3.5 text-slate-400" />
@@ -290,7 +290,7 @@ export function EnvPanel({ projectId: _projectId, files, onUpdateFile }: EnvPane
               {showSync && (
                 <motion.div initial={{ opacity: 0, y: -4, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
                   className="absolute right-0 top-full mt-1 z-50 bg-[#12141c] border border-white/[0.08] rounded-xl shadow-2xl p-3 w-56">
-                  <p className="text-xs font-medium text-slate-300 mb-2">Copy {env.label} \u2192 all envs?</p>
+                  <p className="text-xs font-medium text-slate-700 dark:text-slate-300 mb-2">Copy {env.label} \u2192 all envs?</p>
                   <p className="text-[10px] text-slate-500 mb-3">Overwrites other environments with current {env.label.toLowerCase()} vars.</p>
                   <div className="flex gap-2">
                     <Button variant="ghost" size="sm" className="h-6 text-[10px] flex-1" onClick={() => setShowSync(false)}>Cancel</Button>

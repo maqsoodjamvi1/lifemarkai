@@ -29,7 +29,7 @@ export function LovableAttachedMockupCard({
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-violet-500/20 bg-violet-500/10">
         <div className="flex items-center gap-1.5">
           <Wand2 className="w-3 h-3 text-violet-400" />
-          <span className="text-[11px] font-semibold text-violet-300">Mockup detected</span>
+          <span className="text-[11px] font-semibold text-violet-700 dark:text-violet-300">Mockup detected</span>
           {fileName && (
             <span className="text-[10px] text-violet-400/60 font-mono truncate max-w-[120px]">{fileName}</span>
           )}
@@ -54,7 +54,7 @@ export function LovableAttachedMockupCard({
             <button
               type="button"
               onClick={onAnnotate}
-              className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 hover:bg-rose-500/30 transition-colors"
+              className="text-[10px] px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-700 dark:text-rose-300 border border-rose-500/30 hover:bg-rose-500/30 transition-colors"
             >
               Draw on image
             </button>
@@ -67,7 +67,7 @@ export function LovableAttachedMockupCard({
                 key={label}
                 type="button"
                 onClick={() => onPreset(prompt)}
-                className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 hover:bg-violet-500/30 transition-colors"
+                className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-700 dark:text-violet-300 border border-violet-500/30 hover:bg-violet-500/30 transition-colors"
               >
                 {label}
               </button>

@@ -1308,7 +1308,7 @@ export function CodePanel({
                         <button
                           key={n}
                           onClick={() => { const s = { ...editorSettings, tabSize: n }; setEditorSettings(s); saveEditorSettings(s); }}
-                          className={`px-2 py-0.5 rounded text-xs transition-colors ${editorSettings.tabSize === n ? "bg-violet-500/30 text-violet-300" : "text-[#585b70] hover:bg-[#313244]"}`}
+                          className={`px-2 py-0.5 rounded text-xs transition-colors ${editorSettings.tabSize === n ? "bg-violet-500/30 text-violet-700 dark:text-violet-300" : "text-[#585b70] hover:bg-[#313244]"}`}
                         >
                           {n}
                         </button>

@@ -46,6 +46,8 @@ export interface LovableComposerOverlaysProps {
   analyzeInstruction: string;
   analyzeFile: LovableAnalyzeFileAttachment | null;
   analyzeRunning: boolean;
+  analyzeEnabled?: boolean;
+  analyzeUnavailableReason?: string | null;
   onAnalyzeInstructionChange: (value: string) => void;
   onAnalyzeFileSelect: (file: LovableAnalyzeFileAttachment | null) => void;
   onAnalyzeClose: () => void;
@@ -95,6 +97,8 @@ export function LovableComposerOverlays({
   analyzeInstruction,
   analyzeFile,
   analyzeRunning,
+  analyzeEnabled = true,
+  analyzeUnavailableReason = null,
   onAnalyzeInstructionChange,
   onAnalyzeFileSelect,
   onAnalyzeClose,
@@ -174,6 +178,8 @@ export function LovableComposerOverlays({
         instruction={analyzeInstruction}
         file={analyzeFile}
         running={analyzeRunning}
+        analyzeEnabled={analyzeEnabled}
+        analyzeUnavailableReason={analyzeUnavailableReason}
         onInstructionChange={onAnalyzeInstructionChange}
         onFileSelect={onAnalyzeFileSelect}
         onFileClear={() => onAnalyzeFileSelect(null)}

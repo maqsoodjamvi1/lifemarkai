@@ -23,7 +23,7 @@ export function LovableDraftRestoreBanner({
       <button
         type="button"
         onClick={onKeep}
-        className="shrink-0 rounded-md px-2 py-1 text-[11px] font-medium text-sky-200 hover:bg-sky-500/20 transition-colors"
+        className="shrink-0 rounded-md px-2 py-1 text-[11px] font-medium text-sky-800 dark:text-sky-200 hover:bg-sky-500/20 transition-colors"
       >
         Keep
       </button>

@@ -411,7 +411,7 @@ export function ComponentMarketplacePanel({ projectId, onInstall }: ComponentMar
             key={cat}
             onClick={() => setCategory(cat)}
             className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-medium transition-all ${
-              category === cat ? "bg-violet-500/20 text-violet-300 border border-violet-500/30" : "text-muted-foreground hover:text-foreground"
+              category === cat ? "bg-violet-500/20 text-violet-700 dark:text-violet-300 border border-violet-500/30" : "text-muted-foreground hover:text-foreground"
             }`}
           >
             {cat}

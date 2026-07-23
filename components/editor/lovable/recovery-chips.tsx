@@ -63,7 +63,7 @@ export function LovableRecoveryChips({ chips, onSelect, className }: LovableReco
           type="button"
           title={tooltip}
           onClick={() => onSelect(prompt)}
-          className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-amber-500/25 bg-amber-500/[0.04] hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-200/80 hover:text-amber-100 transition-all shadow-surface-xs"
+          className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-amber-500/25 bg-amber-500/[0.04] hover:bg-amber-500/10 hover:border-amber-500/40 text-amber-800/80 dark:text-amber-200/80 hover:text-amber-100 transition-all shadow-surface-xs"
         >
           {icon && <span>{icon}</span>}
           <span>{label}</span>

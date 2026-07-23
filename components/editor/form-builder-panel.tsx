@@ -285,7 +285,7 @@ export function FormBuilderPanel({ projectId, onInsertForm }: FormBuilderPanelPr
           <div className="space-y-3">
             <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 flex items-center gap-2">
               <FileCode2 className="w-4 h-4 text-emerald-400 shrink-0" />
-              <p className="text-xs text-emerald-300 flex-1">{result.description}</p>
+              <p className="text-xs text-emerald-700 dark:text-emerald-300 flex-1">{result.description}</p>
             </div>
 
             {result.installDeps.length > 0 && (

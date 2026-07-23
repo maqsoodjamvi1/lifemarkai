@@ -50,7 +50,7 @@ export function SubagentActivityCard({ steps, collapsed: defaultCollapsed = fals
                   {step.title}
                 </span>
                 {step.type === "explore" && (
-                  <span className="text-[9px] px-1 py-0.5 rounded bg-violet-500/15 text-violet-300 border border-violet-500/25">
+                  <span className="text-[9px] px-1 py-0.5 rounded bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-500/25">
                     Explore
                   </span>
                 )}

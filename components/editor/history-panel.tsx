@@ -576,7 +576,7 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
       </div>
 
       {pairSelectMode && (
-        <div className="flex items-center gap-2 border-b border-blue-500/20 bg-blue-500/[0.06] px-3 py-2 text-[11px] text-blue-200">
+        <div className="flex items-center gap-2 border-b border-blue-500/20 bg-blue-500/[0.06] px-3 py-2 text-[11px] text-blue-800 dark:text-blue-200">
           <GitCompareArrows className="h-3 w-3" />
           <span className="flex-1">
             {selectedForCompare.length === 0

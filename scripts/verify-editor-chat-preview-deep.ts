@@ -210,11 +210,20 @@ check(
 check(
   "lovable: header status + credit estimate + add to knowledge",
   chatSrc.includes("LovableChatHeaderStatus") &&
+    chatSrc.includes("LIFEMARK_CHAT_SETTINGS_EVENT") &&
     chatSrc.includes("handleAddToKnowledge") &&
     chatSrc.includes("handleOpenLineRefAtLine") &&
     readFileSync("components/editor/lovable/composer-input-area.tsx", "utf8").includes("LovableComposerEstimatedCredits") &&
     readFileSync("components/editor/lovable/message-actions.tsx", "utf8").includes("onAddToKnowledge") &&
     readFileSync("lib/ai/estimate-message-credits.ts", "utf8").includes("estimateMessageCredits"),
+);
+check(
+  "lovable: dump chat-nav + main-menu settings",
+  readFileSync("components/editor/editor-top-bar.tsx", "utf8").includes('data-editor-chat-nav-container="true"') &&
+    readFileSync("components/editor/editor-top-bar.tsx", "utf8").includes('id="main-menu"') &&
+    readFileSync("components/editor/editor-top-bar.tsx", "utf8").includes('aria-label="Switch project"') &&
+    readFileSync("components/editor/editor-top-bar.tsx", "utf8").includes("dispatchChatSettings") &&
+    readFileSync("components/editor/lovable/chat-settings-events.ts", "utf8").includes("LIFEMARK_CHAT_SETTINGS_EVENT"),
 );
 check(
   "preview: guest comments injected for public sandbox",
@@ -441,8 +450,9 @@ check(
     chatSrc.includes("lifemark-collapsed-threads-") &&
     chatSrc.includes("copyMessageLink") &&
     chatSrc.includes("exportMessage") &&
-    chatSrc.includes("onCollapseAllThreads") &&
-    chatSrc.includes("onExpandAllThreads") &&
+    chatSrc.includes("collapse-threads") &&
+    chatSrc.includes("expand-threads") &&
+    chatSrc.includes("LIFEMARK_CHAT_SETTINGS_EVENT") &&
     chatSrc.includes('params.get("message")') &&
     readFileSync("components/editor/lovable/chat-timeline.tsx", "utf8").includes("LovableChatTimelineHandle") &&
     readFileSync("components/editor/lovable/chat-header.tsx", "utf8").includes("chatSearchShortcutLabel") &&
@@ -573,6 +583,86 @@ check(
     readFileSync("components/editor/lovable/composer-mention-autocomplete.tsx", "utf8").includes(
       "file, connector, or collaborator",
     ),
+);
+check(
+  "lovable: agent browse_preview + durable telemetry + capacitor scaffold",
+  readFileSync("lib/ai/agent.ts", "utf8").includes("browse_preview") &&
+    readFileSync("lib/ai/agent.ts", "utf8").includes("deployedUrl") &&
+    readFileSync("lib/ai/agent-browser.ts", "utf8").includes("browsePreview") &&
+    readFileSync("lib/ai/agent-browser.ts", "utf8").includes("deployedUrl") &&
+    readFileSync("app/api/ai/agent/route.ts", "utf8").includes("deployed_url") &&
+    readFileSync("supabase/migrations/094_preview_telemetry.sql", "utf8").includes("preview_telemetry") &&
+    readFileSync("lib/preview/preview-telemetry.ts", "utf8").includes("persistPreviewTelemetry") &&
+    readFileSync("app/api/projects/[id]/preview-telemetry/route.ts", "utf8").includes("loadPreviewTelemetryFromDb") &&
+    readFileSync("lib/native/capacitor-scaffold.ts", "utf8").includes("buildCapacitorScaffoldFiles") &&
+    readFileSync("components/editor/native-distribution-panel.tsx", "utf8").includes("Scaffold Capacitor into project") &&
+    readFileSync("components/editor/lazy-editor-panels.tsx", "utf8").includes("onFilesUpdate={handleFilesUpdate}"),
+);
+check(
+  "lovable: binary file-gen gate + publish dirty + connector badge + search chip + IPTC hosted",
+  readFileSync("components/editor/lovable/composer-file-gen-picker.tsx", "utf8").includes("binaryEnabled") &&
+    chatSrc.includes("fileGenBinaryEnabled") &&
+    chatSrc.includes("configuredConnectorIds") &&
+    chatSrc.includes("searchSource") &&
+    readFileSync("components/editor/lovable/composer-mention-autocomplete.tsx", "utf8").includes("configured") &&
+    readFileSync("components/editor/lovable/chat-search-bar.tsx", "utf8").includes("searchSource") &&
+    readFileSync("components/editor/publish-panel.tsx", "utf8").includes("Unpublished changes") &&
+    readFileSync("lib/ai/image-provenance.ts", "utf8").includes("addHostedUrlAiProvenance") &&
+    readFileSync("lib/ai/image-generate.ts", "utf8").includes("addHostedUrlAiProvenance") &&
+    readFileSync("app/api/projects/[id]/messages/search/route.ts", "utf8").includes("cached: true"),
+);
+check(
+  "lovable: self-heal DiffViewer + skills metadata + telemetry hydrate + Modal analyze",
+  readFileSync("components/editor/self-healing-panel.tsx", "utf8").includes("DiffViewer") &&
+    readFileSync("components/editor/self-healing-panel.tsx", "utf8").includes("Apply accepted") &&
+    readFileSync("app/api/projects/[id]/health/route.ts", "utf8").includes("paths") &&
+    readFileSync("app/api/ai/chat/route.ts", "utf8").includes("skills_attached") &&
+    chatSrc.includes("skills_attached") &&
+    chatSrc.includes("setMessageSkills") &&
+    previewSrc.includes("preview-telemetry") &&
+    previewSrc.includes("setConsoleLines") &&
+    readFileSync("lib/ai/analyze-runner.ts", "utf8").includes('engine: "modal"') &&
+    readFileSync("lib/ai/analyze-runner.ts", "utf8").includes("runModal") &&
+    readFileSync("app/api/ai/analyze/capabilities/route.ts", "utf8").includes('"modal"'),
+);
+check(
+  "lovable: AI request preview + read_ai_activity + esbuild toggle + browse screenshot",
+  readFileSync("supabase/migrations/095_ai_request_preview.sql", "utf8").includes("request_preview") &&
+    readFileSync("lib/ai/redact-ai-request.ts", "utf8").includes("buildAiRequestPreview") &&
+    readFileSync("app/api/projects/[id]/ai-proxy/route.ts", "utf8").includes("request_preview") &&
+    readFileSync("components/editor/ai-integration-panel.tsx", "utf8").includes("request_preview") &&
+    readFileSync("lib/ai/agent.ts", "utf8").includes("read_ai_activity") &&
+    readFileSync("lib/ai/agent-browser.ts", "utf8").includes("screenshot_url=") &&
+    previewSrc.includes("ESBUILD_OVERRIDE_KEY") &&
+    previewSrc.includes("esbuild on") &&
+    chatSrc.includes("pendingBrowseShotRef"),
+);
+check(
+  "lovable: Modal preview FS + boot phases + tunnel HMR + logs",
+  readFileSync("lib/sandbox/modal.ts", "utf8").includes("filesystem") &&
+    readFileSync("lib/sandbox/modal.ts", "utf8").includes("onProgress") &&
+    readFileSync("lib/sandbox/modal.ts", "utf8").includes("getDevLogs") &&
+    readFileSync("app/api/projects/[id]/sandbox-preview/route.ts", "utf8").includes("sandbox_phase") &&
+    readFileSync("app/api/projects/[id]/sandbox-preview/route.ts", "utf8").includes("phaseOnly") &&
+    readFileSync("app/api/projects/[id]/sandbox-preview/logs/route.ts", "utf8").includes("getDevLogs") &&
+    readFileSync("lib/preview/use-sandbox-preview.ts", "utf8").includes("phaseOnly=1") &&
+    readFileSync("lib/preview/patch-vite-for-webcontainer.ts", "utf8").includes('clientPort: 443') &&
+    previewSrc.includes("Starting Modal preview") &&
+    previewSrc.includes("sandboxEnabled"),
+);
+check(
+  "lovable: analyze E2B runner + monitoring history + email DB export",
+  readFileSync("lib/ai/analyze-runner.ts", "utf8").includes("runAnalyzeScript") &&
+    readFileSync("lib/ai/analyze-runner.ts", "utf8").includes("isAnalyzeExecutionEnabled") &&
+    readFileSync("app/api/ai/analyze/route.ts", "utf8").includes("runAnalyzeScript") &&
+    readFileSync("app/api/ai/analyze/capabilities/route.ts", "utf8").includes("isAnalyzeExecutionEnabled") &&
+    readFileSync("components/editor/chat-panel.tsx", "utf8").includes("analyzeUnavailableReason") &&
+    readFileSync("components/editor/lovable/composer-overlays.tsx", "utf8").includes("analyzeEnabled") &&
+    readFileSync("app/api/health-scan/route.ts", "utf8").includes("last_email_at") &&
+    readFileSync("components/editor/self-healing-panel.tsx", "utf8").includes("Last check:") &&
+    readFileSync("app/api/cloud/export/route.ts", "utf8").includes("email: true") &&
+    readFileSync("components/editor/lifemark-cloud-panel.tsx", "utf8").includes("Email me the dump") &&
+    readFileSync("lib/email/resend.ts", "utf8").includes("attachments"),
 );
 check(
   "platform: domain buy modal + interface language picker",

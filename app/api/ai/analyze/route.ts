@@ -8,10 +8,11 @@ import {
   reserveCredits,
   settleCreditReservation,
 } from "@/lib/credits";
-import { spawn } from "child_process";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
+import {
+  analyzeUnavailableReason,
+  isAnalyzeExecutionEnabled,
+  runAnalyzeScript,
+} from "@/lib/ai/analyze-runner";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -41,36 +42,12 @@ export const maxDuration = 60;
  * }
  *
  * Notes:
- *   - A temporary directory and timeout are not an OS security boundary.
- *     Keep this route disabled unless execution is moved into a real sandbox.
- *   - The script can read INPUT_FILE env var (path to the uploaded file) and
- *     write to OUTPUT_DIR.
+ *   - Prefers E2B isolated execution when E2B_API_KEY is set.
+ *   - Host python only when ALLOW_UNSANDBOXED_ANALYZE=true (trusted/local).
+ *   - The script can read INPUT_FILE env var and write to OUTPUT_DIR.
  */
 
-const SCRIPT_TIMEOUT_MS = 25_000;
-const MAX_OUTPUT_BYTES = 20 * 1024 * 1024; // 20 MB total
 const MAX_INPUT_BYTES = 20 * 1024 * 1024;
-
-/** Give generated code only the OS variables required to launch Python. */
-function buildSandboxEnv(inputPath: string, outputDir: string, sandboxDir: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
-    INPUT_FILE: inputPath,
-    OUTPUT_DIR: outputDir,
-    MPLBACKEND: "Agg",
-    MPLCONFIGDIR: path.join(sandboxDir, ".matplotlib"),
-    HOME: sandboxDir,
-    USERPROFILE: sandboxDir,
-    TEMP: sandboxDir,
-    TMP: sandboxDir,
-  };
-
-  // PATH resolves Python; the Windows variables are required by the
-  // interpreter. Application secrets and proxy credentials are not forwarded.
-  for (const key of ["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL"] as const) {
-    if (process.env[key]) env[key] = process.env[key];
-  }
-  return env;
-}
 
 interface AnalyzeBody {
   instruction: string;
@@ -97,9 +74,9 @@ export async function POST(req: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (process.env.ALLOW_UNSANDBOXED_ANALYZE !== "true") {
+  if (!isAnalyzeExecutionEnabled()) {
     return NextResponse.json(
-      { error: "Data analysis execution is unavailable until an isolated sandbox is configured." },
+      { error: analyzeUnavailableReason() ?? "Analyze unavailable" },
       { status: 503 },
     );
   }
@@ -194,72 +171,24 @@ export async function POST(req: NextRequest) {
     }, { status: 422 });
   }
 
-  // ── 2) Prepare tmp sandbox ─────────────────────────────────────────────────
-  const sandboxDir = fs.mkdtempSync(path.join(os.tmpdir(), "lifemark-analyze-"));
-  const outputDir = path.join(sandboxDir, "out");
-  fs.mkdirSync(outputDir, { recursive: true });
-
-  let inputPath = "";
-  if (inputFile?.base64 && inputBuffer) {
-    inputPath = path.join(sandboxDir, inputFile.name.replace(/[^a-zA-Z0-9._-]/g, "_"));
-    fs.writeFileSync(inputPath, inputBuffer);
+  // ── 2) Run in E2B (preferred) or trusted local sandbox ─────────────────────
+  let result: Awaited<ReturnType<typeof runAnalyzeScript>>;
+  try {
+    result = await runAnalyzeScript({
+      script,
+      inputFile:
+        inputFile?.base64 && inputBuffer
+          ? { name: inputFile.name, buffer: inputBuffer }
+          : undefined,
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: `Analyze execution failed: ${(err as Error).message}` },
+      { status: 503 },
+    );
   }
 
-  const scriptPath = path.join(sandboxDir, "script.py");
-  fs.writeFileSync(scriptPath, script);
-
-  // ── 3) Run the script ──────────────────────────────────────────────────────
-  const result = await new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
-    const child = spawn("python3", [scriptPath], {
-      env: buildSandboxEnv(inputPath, outputDir, sandboxDir),
-      cwd: sandboxDir,
-    });
-    let stdout = "";
-    let stderr = "";
-    const stdoutMax = 200_000;
-    const stderrMax = 200_000;
-
-    child.stdout.on("data", (d) => {
-      if (stdout.length < stdoutMax) stdout += d.toString();
-    });
-    child.stderr.on("data", (d) => {
-      if (stderr.length < stderrMax) stderr += d.toString();
-    });
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      stderr += "\n[timeout — script killed after 25s]";
-    }, SCRIPT_TIMEOUT_MS);
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ code, stdout, stderr });
-    });
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve({ code: -1, stdout, stderr: stderr + `\nspawn error: ${err.message}` });
-    });
-  });
-
-  // ── 4) Collect output files ────────────────────────────────────────────────
-  const files: Array<{ name: string; base64: string; sizeBytes: number; mimeType: string }> = [];
-  let totalBytes = 0;
-  try {
-    for (const name of fs.readdirSync(outputDir)) {
-      const full = path.join(outputDir, name);
-      const stat = fs.statSync(full);
-      if (!stat.isFile()) continue;
-      if (totalBytes + stat.size > MAX_OUTPUT_BYTES) {
-        files.push({ name, base64: "", sizeBytes: stat.size, mimeType: guessMime(name) });
-        continue;
-      }
-      const buf = fs.readFileSync(full);
-      files.push({ name, base64: buf.toString("base64"), sizeBytes: stat.size, mimeType: guessMime(name) });
-      totalBytes += stat.size;
-    }
-  } catch { /* directory read failed — return empty list */ }
-
-  // ── 5) Cleanup ─────────────────────────────────────────────────────────────
-  try { fs.rmSync(sandboxDir, { recursive: true, force: true }); } catch { /* ignore */ }
-
+  const files = result.files;
   const fileManifest = files.map((f) => ({
     name: f.name,
     base64: f.base64,
@@ -304,35 +233,11 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     ok: result.code === 0,
     exitCode: result.code,
+    engine: result.engine,
     script,
     stdout: result.stdout,
     stderr: result.stderr,
     files,
     messages: persistedMessages,
   });
-}
-
-function guessMime(filename: string): string {
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  const map: Record<string, string> = {
-    pdf: "application/pdf",
-    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-    csv: "text/csv",
-    json: "application/json",
-    txt: "text/plain",
-    md: "text/markdown",
-    html: "text/html",
-    png: "image/png",
-    jpg: "image/jpeg",
-    jpeg: "image/jpeg",
-    webp: "image/webp",
-    svg: "image/svg+xml",
-    gif: "image/gif",
-    mp4: "video/mp4",
-    mp3: "audio/mpeg",
-    zip: "application/zip",
-  };
-  return map[ext] ?? "application/octet-stream";
 }

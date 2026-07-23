@@ -3,6 +3,11 @@ export { LovableChangeCard } from "./change-card";
 export { LovableChatEmptyState } from "./empty-state";
 export { LovableChatLoadingSkeleton } from "./chat-loading-skeleton";
 export { LovableChatHeader } from "./chat-header";
+export {
+  LIFEMARK_CHAT_SETTINGS_EVENT,
+  dispatchChatSettings,
+  type LifemarkChatSettingsAction,
+} from "./chat-settings-events";
 export { LovableChatPanelShell } from "./chat-panel-shell";
 export { LovableChatComposerShell, LovableChatInputCard } from "./chat-composer-shell";
 export { LovableComposerMobileSheet } from "./composer-mobile-sheet";
@@ -24,7 +29,8 @@ export { LovableMessageActions } from "./message-actions";
 export { LovableMessageStats } from "./message-stats";
 export { LovableBranchChip } from "./branch-chip";
 export { LovableMessageBubble } from "./message-bubble";
-export { LovableMessageTimestamp, formatLovableMessageTime } from "./message-timestamp";
+export { LovableMessageTimestamp, formatLovableMessageTime, formatLovableStampTime } from "./message-timestamp";
+export { LovableFixErrorMessage, parseLovableFixMessage } from "./fix-error-message";
 export { LovablePinnedMessageBanner } from "./pinned-message-banner";
 export { LovablePreviewStatusPill } from "./preview-status-pill";
 export { LovablePreviewInteractionToolbar } from "./preview-interaction-toolbar";
@@ -36,6 +42,7 @@ export { LovableUpgradeDialog } from "./upgrade-dialog";
 export { LovablePromptQueue, REPEAT_STEPS, type LovableQueueItem } from "./prompt-queue";
 export { LovableComposerModeRow } from "./composer-mode-row";
 export { LovableClarifySessionCard, type ClarifySession, type ClarifyQuestion } from "./clarify-session-card";
+export { LovableQuestionsAnsweredCard } from "./questions-answered-card";
 export { LovableStreamingFilesCard } from "./streaming-files-card";
 export { LovableStreamingMessageShell } from "./streaming-message-shell";
 export { LovableConnectorApprovalCard, type ConnectorApprovalRequest } from "./connector-approval-card";
@@ -118,6 +125,7 @@ export { LovableAgentStepGlyph, type AgentStepKind } from "./agent-step-glyph";
 export { LovableLiveTasksDock } from "./live-tasks-dock";
 export {
   agentStepFile,
+  agentStepPath,
   agentStepToTaskStep,
   mergeAgentStep,
   type AgentTaskStep,

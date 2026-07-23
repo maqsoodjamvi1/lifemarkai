@@ -879,7 +879,7 @@ function ConnectorDetail({ connector, onApply, onBack }: {
             </div>
           </div>
         ) : (
-          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-[11px] text-emerald-300">
+          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3 text-[11px] text-emerald-700 dark:text-emerald-300">
             No app-level API keys required. LifemarkAI keeps provider credentials server-side.
           </div>
         )}

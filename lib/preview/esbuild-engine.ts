@@ -1,21 +1,12 @@
 /**
- * esbuild-wasm preview engine (v1 — flagged, additive).
+ * DRAFT / LEGACY — esbuild-wasm on srcdoc fallback.
  *
- * Replaces the regex transpiler (`build-fallback-html.ts`) with a real bundler:
- * esbuild-wasm runs IN THE BROWSER, resolves the module graph properly, and
- * transforms TS/TSX/JSX — eliminating the "preview won't compile" class of bugs
- * (JSX parse, duplicate declarations, missed import shapes, etc.).
+ * Not the Lovable preview path (Modal sandboxes). Opt in only with
+ * NEXT_PUBLIC_PREVIEW_ESBUILD=1. Production preview = Modal; without Modal,
+ * thin regex srcdoc (`build-fallback-html.ts`) is the default.
  *
- * Architecture (see docs/preview-compiler-esbuild-plan.md):
- *   - A virtual-FS plugin serves the project's files (relative imports + entry).
- *   - An http plugin pulls bare deps (react, etc.) from esm.sh and bundles them,
- *     so there is no globals/interop guesswork.
- *   - Output is one IIFE bundle injected into a minimal iframe srcdoc.
- *
- * SAFE TO MERGE: nothing imports this yet. Wire it in `resolve-preview-engine.ts`
- * behind `PREVIEW_ENGINE=esbuild` (or a per-project flag) and shadow-compare
- * against the fallback before flipping the default. NOTE: needs a real browser to
- * run — verify in the editor once enabled; it has not been runtime-tested yet.
+ * When enabled: esbuild-wasm runs in the browser, resolves the module graph,
+ * and injects one IIFE into srcdoc. See docs/preview-compiler-esbuild-plan.md.
  */
 import type { ProjectFile } from "@/types/database";
 import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";

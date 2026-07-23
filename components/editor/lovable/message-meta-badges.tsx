@@ -54,7 +54,7 @@ export function LovableMessageMetaBadges({
       {skills?.map((s) => (
         <span
           key={s.id}
-          className="text-[10px] px-1.5 py-0.5 rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-300 select-none"
+          className="text-[10px] px-1.5 py-0.5 rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300 select-none"
           title={s.reason ? `Auto-attached skill — ${s.reason}` : "Auto-attached skill"}
         >
           ⚡ {s.name}

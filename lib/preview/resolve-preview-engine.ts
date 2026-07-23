@@ -5,7 +5,17 @@ export type PreviewEngine = "detecting" | "sandbox" | "webcontainer" | "fallback
 /** Set in sessionStorage when WebContainer.boot() fails — skip retrying this session. */
 export const WC_UNAVAILABLE_KEY = "lifemark-wc-unavailable";
 
-/** True when the project looks like a Vite/Node app that benefits from WebContainers. */
+/**
+ * DRAFT ONLY — in-browser WebContainer.
+ * Lovable / Lifemark product preview is Modal sandboxes only.
+ * Never enable for product UX unless explicitly opted in.
+ */
+export function isWebContainerPreviewEnabled(): boolean {
+  const flag = process.env.NEXT_PUBLIC_PREVIEW_WEBCONTAINER;
+  return flag === "1" || flag === "true";
+}
+
+/** True when the project looks like a Vite/Node app (legacy WC eligibility). */
 export function shouldUseWebContainer(files: Pick<ProjectFile, "path">[]): boolean {
   if (files.length === 0) return false;
   const paths = files.map((f) => f.path.replace(/\\/g, "/"));
@@ -18,21 +28,35 @@ export function shouldUseWebContainer(files: Pick<ProjectFile, "path">[]): boole
   return hasPackageJson && (hasVite || hasNodeEntry);
 }
 
+/**
+ * Product preview engine = Modal sandbox only (Lovable).
+ *
+ * - Modal configured / booting / live → `"sandbox"`
+ * - Modal missing → `"fallback"` which the panel treats as **Modal required**
+ *   (not WebContainer, not esbuild, not E2B, not a fake srcdoc product).
+ * - WebContainer only when `NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1` (draft).
+ */
 export function resolvePreviewEngine(
   files: Pick<ProjectFile, "path">[],
   opts?: {
     preferWebContainers?: boolean;
     crossOriginIsolated?: boolean;
-    /** Live URL from a real sandbox (E2B). When present, it wins — it's the
-     *  highest-fidelity preview (real dev server running server-side). */
+    /** Live Modal tunnel URL — highest fidelity. */
     sandboxUrl?: string | null;
+    /** Modal configured / booting — stay on sandbox even before URL arrives. */
+    sandboxEnabled?: boolean;
+    /** Explicit opt-in for draft WebContainer path. */
+    allowWebContainer?: boolean;
   },
 ): Exclude<PreviewEngine, "detecting"> {
-  // 1) A real sandbox URL is the best preview — use it whenever available.
-  if (opts?.sandboxUrl) {
+  // Lovable product path — Modal always wins when available or booting.
+  if (opts?.sandboxUrl || opts?.sandboxEnabled) {
     return "sandbox";
   }
 
+  // Draft WebContainer — never the default product path.
+  const allowWc =
+    opts?.allowWebContainer === true && isWebContainerPreviewEnabled();
   const prefer = opts?.preferWebContainers === true;
   const isolated = opts?.crossOriginIsolated ?? false;
 
@@ -43,8 +67,10 @@ export function resolvePreviewEngine(
     return "fallback";
   }
 
-  if (prefer && isolated && shouldUseWebContainer(files)) {
+  if (allowWc && prefer && isolated && shouldUseWebContainer(files)) {
     return "webcontainer";
   }
+
+  // Modal not configured → panel shows "Configure Modal" (not WC/esbuild/E2B).
   return "fallback";
 }

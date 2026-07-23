@@ -71,7 +71,7 @@ export function LovableStreamingMessageShell({
             {pendingSkills.map((s) => (
               <span
                 key={s.id}
-                className="text-[10px] px-2 py-0.5 rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-300"
+                className="text-[10px] px-2 py-0.5 rounded-full border border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300"
                 title={s.reason ? `Auto-attached skill — ${s.reason}` : "Auto-attached skill"}
               >
                 ⚡ Using skill: {s.name}
@@ -104,7 +104,7 @@ export function LovableStreamingMessageShell({
         </div>
 
         {postBuildStatus && (
-          <div className="flex items-center gap-1.5 py-1 text-[11px] text-violet-300">
+          <div className="flex items-center gap-1.5 py-1 text-[11px] text-violet-700 dark:text-violet-300">
             <Loader2 className="w-3 h-3 animate-spin shrink-0" />
             <span>{postBuildStatus}</span>
           </div>
@@ -124,7 +124,7 @@ export function LovableStreamingMessageShell({
                   Generating files…
                 </div>
                 {generatingPaths.map((path) => (
-                  <div key={path} className="flex items-center gap-1 text-violet-300/70">
+                  <div key={path} className="flex items-center gap-1 text-violet-700/70 dark:text-violet-300/70">
                     <span className="text-violet-500">+</span>
                     <span className="truncate">{path}</span>
                   </div>

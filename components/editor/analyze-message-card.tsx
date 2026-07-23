@@ -22,7 +22,7 @@ export function AnalyzeMessageCard({ meta, createdAt, onSaveToProject }: Analyze
     <div className="w-full space-y-2 rounded-2xl border border-violet-500/20 bg-violet-500/5 p-3">
       <div className="flex items-center gap-2 text-[11px]">
         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-violet-400"><path d="M3 3v18h18"/><path d="M7 14l3-3 3 3 5-5"/></svg>
-        <span className="font-medium text-violet-300">Data analysis</span>
+        <span className="font-medium text-violet-700 dark:text-violet-300">Data analysis</span>
         {createdAt && <span className="text-muted-foreground">· {createdAt}</span>}
       </div>
       <p className="text-xs text-foreground/90 italic">&ldquo;{meta.instruction}&rdquo;</p>

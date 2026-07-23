@@ -119,6 +119,7 @@ export function VoiceMode({ onTranscript, disabled }: VoiceModeProps) {
         type="button"
         variant="ghost"
         size="icon"
+        aria-label={state === "recording" ? "Stop voice recording" : "Start voice recording"}
         className={`w-8 h-8 transition-colors ${
           state === "recording" ? "text-red-400 bg-red-500/10 hover:bg-red-500/20" :
           state === "processing" ? "text-yellow-400" : "text-muted-foreground hover:text-foreground"

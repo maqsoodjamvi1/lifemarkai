@@ -66,7 +66,14 @@ export async function GET(req: NextRequest) {
       // ── Monitoring digest: when due, email the owner about important
       // (high/critical) open findings. Editors already see findings above
       // chat via the security bar; the email covers time-sensitive issues.
-      const monitoring = (project.metadata as { monitoring?: { enabled?: boolean; cadence?: string; last_run_at?: string } } | null)?.monitoring;
+      type MonitoringMeta = {
+        enabled?: boolean;
+        cadence?: string;
+        last_run_at?: string;
+        last_email_at?: string;
+        history?: Array<{ at: string; findings: number; emailed: boolean }>;
+      };
+      const monitoring = (project.metadata as { monitoring?: MonitoringMeta } | null)?.monitoring;
       if (monitoring?.enabled) {
         const cadenceMs = monitoring.cadence === "weekly" ? 7 * 86_400_000 : 86_400_000;
         const lastRun = monitoring.last_run_at ? new Date(monitoring.last_run_at).getTime() : 0;
@@ -78,6 +85,7 @@ export async function GET(req: NextRequest) {
             .in("status", ["open", "fix_proposed"])
             .in("severity", ["critical", "error"])
             .limit(10);
+          let emailed = false;
           if ((important?.length ?? 0) > 0) {
             try {
               const { data: owner } = await supabase
@@ -96,17 +104,29 @@ export async function GET(req: NextRequest) {
 <p>Open the project's Self-Heal panel to review proposed fixes, or ask the AI in chat to fix them.</p>
 <p style="color:#888;font-size:12px">You get this email because project monitoring is enabled (${monitoring.cadence ?? "daily"}). Turn it off in the Self-Heal panel.</p>`,
                 });
+                emailed = true;
               }
             } catch (mailErr) {
               console.warn("[health-scan] monitoring email failed:", mailErr instanceof Error ? mailErr.message : mailErr);
             }
           }
+          const nowIso = new Date().toISOString();
+          const prevHistory = Array.isArray(monitoring.history) ? monitoring.history : [];
+          const history = [
+            { at: nowIso, findings: findings ?? 0, emailed },
+            ...prevHistory,
+          ].slice(0, 10);
           await supabase
             .from("projects")
             .update({
               metadata: {
                 ...((project.metadata ?? {}) as Record<string, unknown>),
-                monitoring: { ...monitoring, last_run_at: new Date().toISOString() },
+                monitoring: {
+                  ...monitoring,
+                  last_run_at: nowIso,
+                  ...(emailed ? { last_email_at: nowIso } : {}),
+                  history,
+                },
               },
             })
             .eq("id", project.id);

@@ -85,7 +85,12 @@ export function LovableChatHeader({
     <div
       data-chat-header
       className={cn(
-        "flex items-center gap-2 px-3 py-2 border-b border-[color:var(--border-translucent)] shrink-0",
+        // Lovable dump: the chat panel has NO header row — the timeline starts
+        // directly under the top bar. Utilities live in the composer "+" menu
+        // (see composer-toolbar) and via chat-settings events; keep this
+        // mounted-but-hidden so nothing regresses if a flag re-enables it.
+        "hidden",
+        "items-center gap-2 px-3 py-2 border-b border-[color:var(--border-translucent)] shrink-0",
         "bg-[var(--bg-base)]/90 backdrop-blur-sm",
         className,
       )}

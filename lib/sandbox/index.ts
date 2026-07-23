@@ -1,19 +1,17 @@
 /**
  * Sandbox execution provider — run a generated app in a real isolated
  * environment and get a LIVE preview URL (Lovable-parity real execution).
- * Part of the Lovable-parity sandbox preview flow.
  *
- * Pattern: Lovable uses **Modal Sandboxes** at scale; LifemarkAI implements Modal
- * as the primary provider (see lib/sandbox/modal.ts), with E2B as fallback.
+ * Production (Lovable): **Modal Sandboxes** only (`lib/sandbox/modal.ts`).
+ *
+ * Draft / legacy:
+ * - **E2B** — opt-in via `SANDBOX_PROVIDER=e2b` or `ENABLE_E2B_SANDBOX=1`.
+ *   Not auto-selected when Modal is missing.
+ * - In-browser WebContainer / esbuild — gated in preview-panel / resolve-preview-engine.
  *
  * Design notes:
  * - Provider-agnostic interface so Docker / Firecracker can be added later.
- * - **Dependency-optional**: the E2B SDK (`@e2b/code-interpreter`) is imported
- *   via a guarded dynamic import so the module compiles and the app builds even
- *   when the SDK isn't installed. Install it + set E2B_API_KEY to enable;
- *   otherwise `isEnabled()` is false and callers fall back to the existing
- *   in-browser preview (same graceful-degradation pattern as the Netlify domain
- *   path and the domain registrar drivers).
+ * - E2B SDK is dependency-optional (dynamic import).
  */
 
 export interface SandboxFile {
@@ -78,7 +76,11 @@ export interface SandboxProvider {
     timeoutMs?: number;
     /** Project id — enables Lovable-style named warm sandboxes. */
     projectId?: string;
+    /** Modal boot progress (creating → writing → installing → starting → ready). */
+    onProgress?: (phase: string, detail?: string) => void;
   }): Promise<SandboxRunResult>;
+  /** Tail the sandbox Vite/Next log (Modal `/tmp/lifemark-dev.log`). */
+  getDevLogs?(sandboxId: string, lines?: number): Promise<string>;
   /**
    * Run Claude Code agentically inside the sandbox (E2B `claude` template).
    * Writes the project, runs `claude -p <task>` with streaming JSON, and returns
@@ -139,6 +141,7 @@ function truncLocal(s: string, n = 4000): string {
   return trunc(s, n);
 }
 
+/** DRAFT / LEGACY — E2B sandbox. Opt-in via SANDBOX_PROVIDER=e2b or ENABLE_E2B_SANDBOX=1. */
 class E2BSandboxProvider implements SandboxProvider {
   readonly id = "e2b" as const;
   private template = process.env.E2B_TEMPLATE || "base";
@@ -377,16 +380,34 @@ class E2BSandboxProvider implements SandboxProvider {
 
 let cached: SandboxProvider | null = null;
 
-/** Lovable uses Modal; auto-picks Modal when creds exist, else E2B. */
+/** Draft/legacy: E2B only when explicitly opted in. */
+function isE2bSandboxAllowed(): boolean {
+  const pref = (process.env.SANDBOX_PROVIDER ?? "").toLowerCase();
+  if (pref === "e2b") return true;
+  const flag = process.env.ENABLE_E2B_SANDBOX;
+  return flag === "1" || flag === "true";
+}
+
+/**
+ * Lovable production path = Modal.
+ * E2B is draft/legacy and never auto-selected.
+ */
 export function getSandboxProvider(): SandboxProvider {
   if (!cached) {
     const pref = (process.env.SANDBOX_PROVIDER ?? "auto").toLowerCase();
     const modal = new ModalSandboxProvider();
     const e2b = new E2BSandboxProvider();
-    if (pref === "e2b") cached = e2b;
-    else if (pref === "modal") cached = modal;
-    else if (modal.isEnabled()) cached = modal;
-    else cached = e2b;
+    if (pref === "e2b" && isE2bSandboxAllowed()) {
+      cached = e2b;
+    } else if (pref === "modal" || modal.isEnabled()) {
+      cached = modal;
+    } else if (isE2bSandboxAllowed() && e2b.isEnabled()) {
+      // Explicit draft opt-in only — never silent fallback.
+      cached = e2b;
+    } else {
+      // Modal class still returned so isEnabled() is false → thin srcdoc fallback.
+      cached = modal;
+    }
   }
   return cached;
 }
@@ -396,7 +417,12 @@ export function getSandboxProviderId(): SandboxProvider["id"] {
   return getSandboxProvider().id;
 }
 
-/** True when a real sandbox backend is available (else use in-browser preview). */
+/**
+ * True when the production Modal sandbox (or explicitly enabled draft E2B) is available.
+ * When false, the editor shows "Modal preview required" — not WebContainer/srcdoc/esbuild.
+ */
 export function isSandboxEnabled(): boolean {
-  return getSandboxProvider().isEnabled();
+  const provider = getSandboxProvider();
+  if (provider.id === "e2b" && !isE2bSandboxAllowed()) return false;
+  return provider.isEnabled();
 }

@@ -82,16 +82,16 @@ interface EditorIntelligencePanelProps {
 }
 
 const ROLE_COLORS: Record<string, string> = {
-  product_manager: "border-sky-500/25 bg-sky-500/10 text-sky-300",
-  technical_architect: "border-violet-500/25 bg-violet-500/10 text-violet-300",
-  ui_designer: "border-pink-500/25 bg-pink-500/10 text-pink-300",
-  frontend_engineer: "border-cyan-500/25 bg-cyan-500/10 text-cyan-300",
-  backend_engineer: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300",
-  database_engineer: "border-amber-500/25 bg-amber-500/10 text-amber-300",
-  devops_engineer: "border-orange-500/25 bg-orange-500/10 text-orange-300",
-  qa_engineer: "border-lime-500/25 bg-lime-500/10 text-lime-300",
-  security_engineer: "border-red-500/25 bg-red-500/10 text-red-300",
-  business_analyst: "border-blue-500/25 bg-blue-500/10 text-blue-300",
+  product_manager: "border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300",
+  technical_architect: "border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300",
+  ui_designer: "border-pink-500/25 bg-pink-500/10 text-pink-700 dark:text-pink-300",
+  frontend_engineer: "border-cyan-500/25 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300",
+  backend_engineer: "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  database_engineer: "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  devops_engineer: "border-orange-500/25 bg-orange-500/10 text-orange-700 dark:text-orange-300",
+  qa_engineer: "border-lime-500/25 bg-lime-500/10 text-lime-700 dark:text-lime-300",
+  security_engineer: "border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300",
+  business_analyst: "border-blue-500/25 bg-blue-500/10 text-blue-700 dark:text-blue-300",
 };
 
 const CONSOLE_TABS = [
@@ -251,6 +251,25 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
     }
   }
 
+  const runChangedPathsRef = useRef<string[]>([]);
+  const runGoalRef = useRef("");
+  const runResultPostedRef = useRef(false);
+
+  function postTeamResult(detail: {
+    summary: string;
+    changedPaths: string[];
+    creditsUsed: number;
+    ok: boolean;
+  }) {
+    if (runResultPostedRef.current) return;
+    runResultPostedRef.current = true;
+    window.dispatchEvent(
+      new CustomEvent("lifemark-intelligence-done", {
+        detail: { projectId, goal: runGoalRef.current, ...detail },
+      }),
+    );
+  }
+
   /** Ingest one event into the console state + raw log. */
   function ingestEvent(ev: Record<string, unknown>) {
     setConsoleState((prev) => applyConsoleEvent(prev, ev));
@@ -260,9 +279,45 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
       setActiveRunId(ev.initiativeId);
       localStorage.setItem(runKey, ev.initiativeId);
     }
+    if (ev.type === "file_change" && typeof ev.path === "string") {
+      if (!runChangedPathsRef.current.includes(ev.path)) {
+        runChangedPathsRef.current = [...runChangedPathsRef.current, ev.path];
+      }
+      window.dispatchEvent(
+        new CustomEvent("lifemark-files-changed", {
+          detail: { projectId, path: ev.path },
+        }),
+      );
+    }
     if (ev.type === "done") {
       localStorage.removeItem(runKey);
       setActiveRunId(null);
+      const doneFiles = Array.isArray(ev.filesChanged)
+        ? (ev.filesChanged as string[]).filter((p) => typeof p === "string")
+        : [];
+      const paths = [...runChangedPathsRef.current];
+      for (const p of doneFiles) if (!paths.includes(p)) paths.push(p);
+      const creditsUsed = typeof ev.creditsUsed === "number" ? ev.creditsUsed : 0;
+      const summary =
+        paths.length > 0
+          ? `Team run finished — updated ${paths.length} file${paths.length === 1 ? "" : "s"}${
+              creditsUsed > 0 ? ` · ${creditsUsed} credits` : ""
+            }.\n\nChanged:\n${paths
+              .slice(0, 24)
+              .map((p) => `- ${p}`)
+              .join("\n")}${paths.length > 24 ? `\n…and ${paths.length - 24} more` : ""}`
+          : `Team run finished${creditsUsed > 0 ? ` · ${creditsUsed} credits` : ""}. No file changes recorded.`;
+      postTeamResult({ summary, changedPaths: paths, creditsUsed, ok: true });
+      runChangedPathsRef.current = [];
+    }
+    if (ev.type === "error") {
+      const message = typeof ev.message === "string" ? ev.message : "Team run failed";
+      postTeamResult({
+        summary: `Team run failed: ${message}`,
+        changedPaths: [...runChangedPathsRef.current],
+        creditsUsed: 0,
+        ok: false,
+      });
     }
   }
 
@@ -285,7 +340,10 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
     const goal = (goalOverride ?? buildGoal).trim() || (resumeRunId ? "Resume editor intelligence run" : "");
     if (!goal || building) return;
     setBuilding(true);
+    runGoalRef.current = goal;
+    runResultPostedRef.current = false;
     if (!resumeRunId) {
+      runChangedPathsRef.current = [];
       setBuildLog([]);
       setConsoleState(initialConsoleState());
     } else {
@@ -449,7 +507,7 @@ Then identify the smallest safe implementation slice and build it using existing
     <div className="flex h-full flex-col bg-background">
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-violet-500/25 bg-violet-500/10">
-          <BriefcaseBusiness className="h-4 w-4 text-violet-300" />
+          <BriefcaseBusiness className="h-4 w-4 text-violet-700 dark:text-violet-300" />
         </div>
         <div className="min-w-0">
           <div className="text-sm font-semibold">Editor Intelligence</div>
@@ -469,7 +527,7 @@ Then identify the smallest safe implementation slice and build it using existing
               onClick={() => setTab(t.id)}
               className={`flex items-center gap-1.5 px-3 py-2 text-[11px] font-medium border-b-2 transition-colors whitespace-nowrap ${
                 tab === t.id
-                  ? "border-violet-500 text-violet-300"
+                  ? "border-violet-500 text-violet-700 dark:text-violet-300"
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -489,7 +547,7 @@ Then identify the smallest safe implementation slice and build it using existing
         )}
 
         {error && (
-          <div className="mb-3 space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200">
+          <div className="mb-3 space-y-2 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
             <p>{error}</p>
             <Button
               type="button"
@@ -506,7 +564,7 @@ Then identify the smallest safe implementation slice and build it using existing
         {!loading && !error && state && !initialized && (
           <div className="rounded-lg border border-dashed border-border p-5 text-center">
             <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-lg border border-violet-500/25 bg-violet-500/10">
-              <BriefcaseBusiness className="h-5 w-5 text-violet-300" />
+              <BriefcaseBusiness className="h-5 w-5 text-violet-700 dark:text-violet-300" />
             </div>
             <p className="text-sm font-medium">Editor intelligence is not initialized yet</p>
             <p className="mx-auto mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">
@@ -561,7 +619,7 @@ Then identify the smallest safe implementation slice and build it using existing
             >
               {logOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
               Log ({buildLog.length})
-              {building && <Loader2 className="ml-auto h-3 w-3 animate-spin text-violet-300" />}
+              {building && <Loader2 className="ml-auto h-3 w-3 animate-spin text-violet-700 dark:text-violet-300" />}
             </button>
             {logOpen && (
               <div className="max-h-40 overflow-y-auto border-t border-border p-2 text-[11px] font-mono leading-relaxed">
@@ -579,7 +637,7 @@ Then identify the smallest safe implementation slice and build it using existing
                     {l}
                   </div>
                 ))}
-                {building && <div className="text-violet-300"><Loader2 className="inline h-3 w-3 animate-spin mr-1" />working…</div>}
+                {building && <div className="text-violet-700 dark:text-violet-300"><Loader2 className="inline h-3 w-3 animate-spin mr-1" />working…</div>}
               </div>
             )}
           </div>
@@ -679,7 +737,7 @@ function MemoryView({ state }: { state: IntelligenceState }) {
         <div className="space-y-2">
           {state.messages.slice(0, 8).map((message) => (
             <div key={message.id} className="rounded-lg border border-border bg-muted/20 p-3">
-              <div className="mb-1 text-[11px] font-medium text-violet-300">
+              <div className="mb-1 text-[11px] font-medium text-violet-700 dark:text-violet-300">
                 {message.agent?.name ?? "LifemarkAI"} - {message.phase}
               </div>
               <p className="text-xs leading-relaxed text-muted-foreground">{message.content}</p>
@@ -700,7 +758,7 @@ function MemoryView({ state }: { state: IntelligenceState }) {
             <div key={decision.id} className="rounded-lg border border-border bg-muted/20 p-3">
               <div className="mb-1 flex items-center justify-between gap-2">
                 <p className="text-xs font-medium">{decision.title}</p>
-                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300">
+                <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
                   {decision.status}
                 </span>
               </div>

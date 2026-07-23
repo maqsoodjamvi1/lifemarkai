@@ -392,7 +392,7 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
             {/* Run header — status pill, files changed, elapsed, raw-log toggle */}
             <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-muted/30 text-xs">
               {activeRun.status === "running" ? (
-                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-300 font-medium">
+                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-700 dark:text-violet-300 font-medium">
                   <Loader2 className="w-3 h-3 animate-spin" /> Running
                 </span>
               ) : activeRun.status === "done" ? (
@@ -618,7 +618,7 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
       {/* Input */}
       <div className="p-3 border-t border-border shrink-0">
         {isLocked && (
-          <div className="mb-2 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300 flex items-center gap-2">
+          <div className="mb-2 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
             <AlertCircle className="w-3.5 h-3.5 text-emerald-400" />
             <span><span className="font-semibold">Live environment</span> — agent runs are locked. Switch to Test in the top bar.</span>
           </div>

@@ -116,8 +116,19 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
   const [copied, setCopied] = useState(false);
   const [showCode, setShowCode] = useState(false);
   const [logs, setLogs] = useState<
-    Array<{ capability: string; model: string | null; status: string; cost: number; duration_ms: number; created_at: string }>
+    Array<{
+      id?: string;
+      capability: string;
+      model: string | null;
+      status: string;
+      cost: number;
+      duration_ms: number;
+      created_at: string;
+      request_preview?: string | null;
+      error?: string | null;
+    }>
   >([]);
+  const [expandedLogId, setExpandedLogId] = useState<string | null>(null);
 
   useEffect(() => {
     // Refresh usage count from Supabase
@@ -141,7 +152,7 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
     void (async () => {
       const { data } = await (supabase as any)
         .from("ai_request_logs")
-        .select("capability, model, status, cost, duration_ms, created_at")
+        .select("id, capability, model, status, cost, duration_ms, created_at, request_preview, error")
         .eq("project_id", project.id)
         .order("created_at", { ascending: false })
         .limit(20);
@@ -207,7 +218,7 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
         {/* How it works */}
         <div className="flex gap-2.5 p-3 rounded-lg border border-blue-500/20 bg-blue-500/5">
           <Info className="w-3.5 h-3.5 text-blue-400 mt-0.5 shrink-0" />
-          <p className="text-[11px] text-blue-300 leading-relaxed">
+          <p className="text-[11px] text-blue-700 dark:text-blue-300 leading-relaxed">
             Enable this to expose a managed AI endpoint at <code className="font-mono">/api/projects/{project.id.slice(0,8)}…/ai-proxy</code>.
             Your deployed app calls it and LifemarkAI routes the selected OpenRouter model server-side — users never see credentials.
           </p>
@@ -345,18 +356,53 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
                 <p className="text-[10px] text-muted-foreground">requests</p>
               </div>
             </div>
-            <div className="space-y-1 max-h-44 overflow-y-auto">
-              {logs.map((l, i) => (
-                <div key={i} className="flex items-center gap-2 px-2 py-1.5 rounded-lg border border-border bg-muted/5 text-[10px]">
-                  {l.status === "success"
-                    ? <CheckCircle2 className="w-3 h-3 text-green-400 shrink-0" />
-                    : <XCircle className="w-3 h-3 text-red-400 shrink-0" />}
-                  <span className="font-medium capitalize">{l.capability}</span>
-                  <span className="text-muted-foreground/70 truncate flex-1">{l.model ?? "—"}</span>
-                  <span className="text-muted-foreground/60 shrink-0">{l.duration_ms}ms</span>
-                  <span className="text-muted-foreground shrink-0">{l.cost} cr</span>
-                </div>
-              ))}
+            <div className="space-y-1 max-h-56 overflow-y-auto">
+              {logs.map((l, i) => {
+                const rowKey = l.id ?? `${l.created_at}-${i}`;
+                const expanded = expandedLogId === rowKey;
+                const hasDetail = !!(l.request_preview || l.error);
+                return (
+                  <div key={rowKey} className="rounded-lg border border-border bg-muted/5 text-[10px] overflow-hidden">
+                    <button
+                      type="button"
+                      disabled={!hasDetail}
+                      onClick={() => setExpandedLogId(expanded ? null : rowKey)}
+                      className={`w-full flex items-center gap-2 px-2 py-1.5 text-left ${hasDetail ? "hover:bg-muted/20 cursor-pointer" : "cursor-default"}`}
+                      title={hasDetail ? (expanded ? "Hide request" : "Show redacted request") : undefined}
+                    >
+                      {l.status === "success"
+                        ? <CheckCircle2 className="w-3 h-3 text-green-400 shrink-0" />
+                        : <XCircle className="w-3 h-3 text-red-400 shrink-0" />}
+                      <span className="font-medium capitalize">{l.capability}</span>
+                      <span className="text-muted-foreground/70 truncate flex-1">{l.model ?? "—"}</span>
+                      <span className="text-muted-foreground/60 shrink-0">{l.duration_ms}ms</span>
+                      <span className="text-muted-foreground shrink-0">{l.cost} cr</span>
+                      {hasDetail && (
+                        expanded
+                          ? <ChevronUp className="w-3 h-3 text-muted-foreground/50 shrink-0" />
+                          : <ChevronDown className="w-3 h-3 text-muted-foreground/50 shrink-0" />
+                      )}
+                    </button>
+                    {expanded && hasDetail && (
+                      <div className="px-2 pb-2 space-y-1 border-t border-border/50 bg-background/40">
+                        {l.request_preview && (
+                          <p className="pt-1.5 font-mono text-[10px] text-muted-foreground leading-relaxed break-words whitespace-pre-wrap">
+                            {l.request_preview}
+                          </p>
+                        )}
+                        {l.error && (
+                          <p className="font-mono text-[10px] text-red-400/90 leading-relaxed break-words">
+                            {l.error}
+                          </p>
+                        )}
+                        <p className="text-[9px] text-muted-foreground/50">
+                          Secrets redacted · {new Date(l.created_at).toLocaleString()}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

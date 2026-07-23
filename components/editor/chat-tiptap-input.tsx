@@ -10,21 +10,24 @@
  * existing @-mention / cross-project / slash-command logic in chat-panel keeps
  * working against ProseMirror without changes.
  *
- * Plain-text only (formatting marks/nodes disabled) — this is a prompt box, not
- * a rich editor. Enter submits (unless a mention/template popover consumes it);
- * Shift+Enter inserts a newline.
+ * Mentions are atomic inline chips (`@path`, `@connector:…`) so backspace
+ * deletes the whole token. Enter submits (unless a mention/template popover
+ * consumes it); Shift+Enter inserts a newline.
  */
 
 import * as React from "react";
 import { useEditor, EditorContent, type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
+import { Node, mergeAttributes } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import type { EditorView } from "@tiptap/pm/view";
 
 /** The subset of HTMLTextAreaElement that chat-panel actually calls. */
 export interface ChatInputHandle {
   focus: () => void;
+  /** Textarea-compat: current plain-text content. */
+  value: string;
   selectionStart: number;
   setSelectionRange: (start: number, end: number) => void;
 }
@@ -44,6 +47,70 @@ interface ChatTiptapInputProps {
   placeholder?: string;
   disabled?: boolean;
   className?: string;
+}
+
+/** Match @file / @connector:id / @chat:slug / @project:… style tokens. */
+const MENTION_TOKEN_RE = /@[\w./:@+-]+/g;
+
+const MentionChip = Node.create({
+  name: "mentionChip",
+  group: "inline",
+  inline: true,
+  atom: true,
+  selectable: true,
+  addAttributes() {
+    return {
+      label: { default: null },
+    };
+  },
+  parseHTML() {
+    return [{ tag: "span[data-mention-chip]" }];
+  },
+  renderHTML({ node, HTMLAttributes }) {
+    const label = String(node.attrs.label ?? "");
+    return [
+      "span",
+      mergeAttributes(HTMLAttributes, {
+        "data-mention-chip": "",
+        class:
+          // Lovable-parity: drifting gradient mention pill (see globals.css)
+          "mention-pill-lifemark inline-flex items-center rounded-full px-1.5 py-0.5 mx-0.5 text-[12px] font-medium text-[var(--fg-primary)] align-baseline",
+        contenteditable: "false",
+      }),
+      `@${label}`,
+    ];
+  },
+  renderText({ node }) {
+    return `@${String(node.attrs.label ?? "")}`;
+  },
+});
+
+type InlineNode =
+  | { type: "text"; text: string }
+  | { type: "mentionChip"; attrs: { label: string } };
+
+function textToDocJson(text: string): { type: "doc"; content: Array<{ type: "paragraph"; content?: InlineNode[] }> } {
+  const lines = text.split("\n");
+  return {
+    type: "doc",
+    content: lines.map((line) => {
+      const content: InlineNode[] = [];
+      let last = 0;
+      MENTION_TOKEN_RE.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = MENTION_TOKEN_RE.exec(line)) !== null) {
+        if (m.index > last) {
+          content.push({ type: "text", text: line.slice(last, m.index) });
+        }
+        content.push({ type: "mentionChip", attrs: { label: m[0].slice(1) } });
+        last = m.index + m[0].length;
+      }
+      if (last < line.length) content.push({ type: "text", text: line.slice(last) });
+      return content.length > 0
+        ? { type: "paragraph", content }
+        : { type: "paragraph" };
+    }),
+  };
 }
 
 /** ProseMirror doc position → plain-text offset (blocks joined by "\n"). */
@@ -97,14 +164,17 @@ export const ChatTiptapInput = React.forwardRef<ChatInputHandle, ChatTiptapInput
           strike: false,
           code: false,
         }),
-        Placeholder.configure({ placeholder: () => placeholderRef.current ?? "Ask LifemarkAI…" }),
+        MentionChip,
+        // Empty string disables TipTip placeholder — Lovable dump uses a sibling overlay span.
+        Placeholder.configure({ placeholder: () => placeholderRef.current ?? "" }),
       ],
-      content: value,
+      content: textToDocJson(value),
       editorProps: {
         attributes: {
           class:
-            "outline-none whitespace-pre-wrap break-words min-h-[52px] max-h-40 overflow-y-auto px-4 pt-4 pb-2 text-sm text-[var(--fg-primary)]",
+            "tiptap ProseMirror outline-none whitespace-pre-wrap break-words min-h-[40px] max-h-[max(35svh,5rem)] overflow-y-auto px-2 pt-2 pb-1 text-[16px] leading-snug md:text-base text-[var(--fg-primary)]",
           role: "textbox",
+          "aria-label": "Chat input",
           "aria-multiline": "true",
         },
         handleKeyDown: (_view: EditorView, event: KeyboardEvent) => {
@@ -145,12 +215,13 @@ export const ChatTiptapInput = React.forwardRef<ChatInputHandle, ChatTiptapInput
     });
 
     // Sync external value → editor when they diverge (programmatic setInput:
-    // starter prompts, mention inserts, clear-after-send).
+    // starter prompts, mention inserts, clear-after-send). Re-parse mentions
+    // into atomic chips so @tokens stay whole on backspace.
     React.useEffect(() => {
       if (!editor) return;
       const current = editor.getText({ blockSeparator: "\n" });
       if (value !== current) {
-        editor.commands.setContent(value, false);
+        editor.commands.setContent(textToDocJson(value), false);
       }
     }, [value, editor]);
 
@@ -172,6 +243,11 @@ export const ChatTiptapInput = React.forwardRef<ChatInputHandle, ChatTiptapInput
       ref,
       () => ({
         focus: () => editor?.commands.focus(),
+        /** Textarea-compat: callers do `el.value.length` to move the caret
+         *  to the end — without this getter that access throws. */
+        get value() {
+          return editor?.getText() ?? "";
+        },
         get selectionStart() {
           if (!editor) return 0;
           return posToTextOffset(editor.state.doc, editor.state.selection.head);

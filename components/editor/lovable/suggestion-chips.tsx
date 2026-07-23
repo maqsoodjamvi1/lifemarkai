@@ -28,19 +28,30 @@ export function LovableSuggestionChips({
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.1 }}
-      className={cn("flex flex-wrap gap-1.5", className)}
+      className={cn("relative", className)}
     >
-      {chips.map((chip) => (
-        <button
-          key={chip}
-          type="button"
-          onClick={() => onSelect(chip)}
-          className="flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-full border border-[color:var(--border-default)] bg-[var(--bg-secondary-pulse)] hover:bg-[var(--bg-muted)] hover:border-[color:var(--border-accent)] text-[var(--fg-secondary)] hover:text-[var(--fg-primary)] transition-colors shadow-surface-xs"
-        >
-          {icon ?? <Sparkles className="w-2.5 h-2.5 text-[var(--fg-accent)] shrink-0" />}
-          <span className="truncate max-w-[220px]">{chip}</span>
-        </button>
-      ))}
+      <div
+        data-horizontal-scroll
+        className="flex gap-1.5 overflow-x-auto pr-6"
+        style={{ scrollbarWidth: "none" }}
+      >
+        {chips.map((chip) => (
+          <button
+            key={chip}
+            type="button"
+            onClick={() => onSelect(chip)}
+            // Lovable dump pill: gap-0.5 px-[9px] py-1 text-sm rounded-full, bg-translucent, fg-primary
+            className="flex shrink-0 items-center gap-0.5 text-sm px-[9px] py-1 rounded-full bg-[var(--bg-translucent,var(--bg-muted))] text-[var(--fg-primary)] hover:opacity-80 [@media(hover:none)]:active:opacity-80 transition-opacity whitespace-nowrap select-none"
+          >
+            {icon ?? <Sparkles className="w-3 h-3 text-[var(--fg-accent)] shrink-0 mr-0.5" />}
+            <span className="truncate max-w-[220px]">{chip}</span>
+          </button>
+        ))}
+      </div>
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-[var(--bg-base)] to-transparent"
+      />
     </motion.div>
   );
 }

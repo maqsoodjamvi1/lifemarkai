@@ -141,15 +141,18 @@ export async function generateImage(opts: {
   if (!result) return null;
 
   // AI-provenance labeling (Lovable parity): embed IPTC/XMP
-  // "trainedAlgorithmicMedia" metadata into PNG/JPEG data-URLs so platforms
-  // that read provenance can label the image as AI-generated. Hosted URLs
-  // (DALL-E) are left as-is — we can't rewrite OpenAI's file.
-  if (/^data:image\/(png|jpe?g);base64,/.test(result.url)) {
-    try {
-      const { addDataUrlAiProvenance } = await import("./image-provenance");
+  // "trainedAlgorithmicMedia" into PNG/JPEG. Data-URLs are tagged in place;
+  // hosted URLs (DALL-E) are fetched → tagged → returned as data-URLs so the
+  // provenance travels with any later save/upload.
+  try {
+    const { addDataUrlAiProvenance, addHostedUrlAiProvenance } = await import("./image-provenance");
+    if (/^data:image\/(png|jpe?g);base64,/.test(result.url)) {
       result.url = addDataUrlAiProvenance(result.url);
-    } catch { /* provenance is best-effort — never fail generation */ }
-  }
+    } else if (/^https?:\/\//i.test(result.url)) {
+      const tagged = await addHostedUrlAiProvenance(result.url);
+      if (tagged) result.url = tagged;
+    }
+  } catch { /* provenance is best-effort — never fail generation */ }
   return result;
 }
 

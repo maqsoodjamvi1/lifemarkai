@@ -158,3 +158,35 @@ export function addDataUrlAiProvenance(dataUrl: string, tool = "LifemarkAI"): st
     return dataUrl;
   }
 }
+
+/**
+ * Fetch a hosted image URL, embed AI provenance, and return a data-URL.
+ * Returns null when the fetch fails or the content type isn't PNG/JPEG.
+ */
+export async function addHostedUrlAiProvenance(
+  url: string,
+  tool = "LifemarkAI",
+): Promise<string | null> {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
+    if (!res.ok) return null;
+    const ctype = (res.headers.get("content-type") ?? "").toLowerCase();
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (buf.length < 24 || buf.length > 12 * 1024 * 1024) return null;
+
+    const isPng =
+      ctype.includes("png") ||
+      (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47);
+    const isJpeg =
+      ctype.includes("jpeg") ||
+      ctype.includes("jpg") ||
+      (buf[0] === 0xff && buf[1] === 0xd8);
+
+    if (!isPng && !isJpeg) return null;
+    const tagged = isPng ? addPngAiProvenance(buf, tool) : addJpegAiProvenance(buf, tool);
+    const format = isPng ? "png" : "jpeg";
+    return `data:image/${format};base64,${Buffer.from(tagged).toString("base64")}`;
+  } catch {
+    return null;
+  }
+}

@@ -16,6 +16,12 @@ interface LovableChatSearchBarProps {
   roleFilter?: ChatSearchRoleFilter;
   msgModeFilter?: ChatSearchMsgModeFilter;
   loading?: boolean;
+  /**
+   * Semantic search provenance chip:
+   * - cached — embeddings served from message_embeddings
+   * - fallback — keyword results because embeddings unavailable
+   */
+  searchSource?: "cached" | "fallback" | null;
   /** Zero-based index of the highlighted match (for ↑/↓ navigation). */
   activeIndex?: number;
   recentQueries?: string[];
@@ -41,6 +47,7 @@ export const LovableChatSearchBar = forwardRef<HTMLInputElement, LovableChatSear
     roleFilter = "all",
     msgModeFilter = "all",
     loading,
+    searchSource = null,
     activeIndex,
     recentQueries = [],
     onNavigate,
@@ -159,6 +166,22 @@ export const LovableChatSearchBar = forwardRef<HTMLInputElement, LovableChatSear
                 : `${matchCount} match${matchCount === 1 ? "" : "es"}`}
             </span>
           ) : null}
+          {query && !loading && searchSource === "cached" && (
+            <span
+              className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-700 dark:text-violet-300 shrink-0"
+              title="Semantic results from cached embeddings"
+            >
+              cached
+            </span>
+          )}
+          {query && !loading && searchSource === "fallback" && (
+            <span
+              className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-700 dark:text-amber-300 shrink-0"
+              title="Fell back to keyword search — embeddings unavailable"
+            >
+              fallback
+            </span>
+          )}
           {query && matchCount > 0 && (onJumpFirst || onJumpLast) && (
             <div className="flex items-center gap-0.5 shrink-0">
               {onJumpFirst && (
@@ -210,7 +233,7 @@ export const LovableChatSearchBar = forwardRef<HTMLInputElement, LovableChatSear
                 className={cn(
                   "shrink-0 rounded-full border px-2 py-0.5 text-[10px] transition-colors",
                   msgModeFilter === m.id
-                    ? "border-violet-500/40 bg-violet-500/15 text-violet-200"
+                    ? "border-violet-500/40 bg-violet-500/15 text-violet-800 dark:text-violet-200"
                     : "border-border/50 bg-muted/20 text-muted-foreground hover:text-foreground",
                 )}
               >

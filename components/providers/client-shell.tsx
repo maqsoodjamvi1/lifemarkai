@@ -20,7 +20,9 @@ export function ClientShell({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider
       attribute="class"
-      defaultTheme="dark"
+      // Lovable dump: <html class="light"> — the editor defaults to LIGHT.
+      // Users who already picked a theme keep it (localStorage wins).
+      defaultTheme="light"
       enableSystem
       disableTransitionOnChange
     >

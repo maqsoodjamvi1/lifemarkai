@@ -61,7 +61,7 @@ export function LovableCloudOpsCard({
               onClick={() => onTierPick(t)}
               className={`flex-1 text-[10px] px-1.5 py-1 rounded-md border transition-colors capitalize ${
                 tierPick === t
-                  ? "bg-violet-500/20 border-violet-500/50 text-violet-300"
+                  ? "bg-violet-500/20 border-violet-500/50 text-violet-700 dark:text-violet-300"
                   : "border-[color:var(--border-default)] text-[var(--fg-tertiary)] hover:bg-[var(--bg-muted)]/50"
               }`}
             >
@@ -75,7 +75,7 @@ export function LovableCloudOpsCard({
           type="button"
           disabled={busy || (action.kind === "resize" && tierPick === action.currentTier)}
           onClick={onConfirm}
-          className="text-[11px] px-2.5 py-1 rounded-full bg-violet-500/15 text-violet-300 hover:bg-violet-500/25 border border-violet-500/30 transition-colors disabled:opacity-50"
+          className="text-[11px] px-2.5 py-1 rounded-full bg-violet-500/15 text-violet-700 dark:text-violet-300 hover:bg-violet-500/25 border border-violet-500/30 transition-colors disabled:opacity-50"
         >
           {confirmLabel}
         </button>
