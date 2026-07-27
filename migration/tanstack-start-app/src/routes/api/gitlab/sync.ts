@@ -1,0 +1,134 @@
+// @ts-nocheck
+import { createFileRoute } from "@tanstack/react-router";
+import { createClient } from "@/lib/supabase/server";
+import {
+  createRepo,
+  ensureBranch,
+  pushFiles,
+  pushChangedFiles,
+  pullFiles,
+  getBranchStatus,
+  createOrGetMR,
+} from "@/lib/gitlab/client";
+import { logger } from "@/lib/logger";
+
+/** Native /api/gitlab/sync — actions: create | push | pull | mr | status. */
+const LANG_MAP: Record<string, string> = {
+  ts: "typescript", tsx: "typescriptreact",
+  js: "javascript", jsx: "javascriptreact",
+  css: "css", html: "html", json: "json", md: "markdown",
+  sql: "sql", sh: "shell", yaml: "yaml", yml: "yaml",
+};
+
+function projectBranchName(projectName: string, projectId: string): string {
+  const slug = projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 30);
+  return `lifemark/${slug}-${projectId.slice(0, 8)}`;
+}
+
+export const Route = createFileRoute("/api/gitlab/sync")({
+  server: {
+    handlers: {
+      POST: async ({ request }) => {
+        const supabase = await createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+        const { projectId, action } = await request.json();
+
+        const { data: profile } = await (supabase as any)
+          .from("profiles").select("gitlab_access_token, gitlab_username").eq("id", user.id).single();
+        if (!profile?.gitlab_access_token) {
+          return Response.json({ error: "GitLab not connected" }, { status: 400 });
+        }
+        const token: string = profile.gitlab_access_token;
+
+        const { data: project } = await (supabase as any)
+          .from("projects").select("*, project_files(*)").eq("id", projectId).single();
+        if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
+
+        // ── Create ──
+        if (action === "create") {
+          const repoSlug = project.name.toLowerCase().replace(/\s+/g, "-");
+          const repo = await createRepo(token, repoSlug, project.description ?? undefined);
+          const files = (project.project_files ?? []).map((f: any) => ({ path: f.path, content: f.content }));
+
+          await pushFiles(token, repo.id, files, "Initial commit from LifemarkAI 🚀", repo.default_branch);
+          const branch = projectBranchName(project.name, projectId);
+          await ensureBranch(token, repo.id, branch, repo.default_branch);
+
+          const repoRef = `gitlab:${repo.id}`;
+          await (supabase as any)
+            .from("projects")
+            .update({ github_repo: repoRef, github_branch: branch, git_provider: "gitlab" })
+            .eq("id", projectId);
+
+          logger.info("gitlab.sync.create", { projectId, repoId: repo.id, namespace: repo.path_with_namespace, branch });
+          return Response.json({ repo: repo.path_with_namespace, url: repo.web_url, branch });
+        }
+
+        const rawRepo: string = project.github_repo ?? "";
+        if (!rawRepo.startsWith("gitlab:")) {
+          return Response.json({ error: "No GitLab repo connected to this project" }, { status: 400 });
+        }
+        const glProjectId = rawRepo.replace("gitlab:", "");
+
+        const branch = (project.github_branch && project.github_branch !== "main")
+          ? project.github_branch as string
+          : projectBranchName(project.name, projectId);
+
+        // ── Push ──
+        if (action === "push") {
+          await ensureBranch(token, glProjectId, branch);
+          const files = (project.project_files ?? []).map((f: any) => ({ path: f.path, content: f.content }));
+          const { changed } = await pushChangedFiles(
+            token, glProjectId, branch, files, `Update from LifemarkAI · ${new Date().toISOString()}`,
+          );
+          await (supabase as any).from("projects").update({ github_branch: branch }).eq("id", projectId);
+          logger.info("gitlab.sync.push", { projectId, branch, changed });
+          return Response.json({ success: true, branch, changed });
+        }
+
+        // ── Pull ──
+        if (action === "pull") {
+          const files = await pullFiles(token, glProjectId, branch);
+          for (const file of files) {
+            const ext = file.path.split(".").pop()?.toLowerCase() ?? "";
+            await (supabase as any).from("project_files").upsert({
+              project_id: projectId,
+              path: file.path,
+              content: file.content,
+              language: LANG_MAP[ext] ?? "plaintext",
+            }, { onConflict: "project_id,path" });
+          }
+          logger.info("gitlab.sync.pull", { projectId, branch, fileCount: files.length });
+          return Response.json({ files: files.length, branch });
+        }
+
+        // ── MR ──
+        if (action === "mr") {
+          await ensureBranch(token, glProjectId, branch);
+          const mr = await createOrGetMR(
+            token, glProjectId, branch, "main",
+            `Changes from LifemarkAI · ${project.name}`,
+            `This merge request was generated by [LifemarkAI](https://lifemarkai.app).\n\n**Project:** ${project.name}`,
+          );
+          logger.info("gitlab.sync.mr", { projectId, branch, mrIid: mr.iid });
+          return Response.json({ mr });
+        }
+
+        // ── Status ──
+        if (action === "status") {
+          try {
+            await ensureBranch(token, glProjectId, branch);
+            const status = await getBranchStatus(token, glProjectId, branch, "main");
+            return Response.json({ branch, ...status });
+          } catch {
+            return Response.json({ branch, ahead: 0, behind: 0, diverged: false });
+          }
+        }
+
+        return Response.json({ error: "Unknown action" }, { status: 400 });
+      },
+    },
+  },
+});

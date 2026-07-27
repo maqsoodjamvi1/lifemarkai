@@ -1,0 +1,295 @@
+/**
+ * Publish-from-chat helper (Lovable "ship it" parity).
+ *
+ * The deploy pipeline in `app/api/deploy/route.ts` is inline-only (its Netlify
+ * helpers aren't exported), so this module replicates its direct/fallback path
+ * 1:1 — reusing everything that IS exported (`buildNetlifyFileMap`,
+ * `buildLifemarkDeployUrl`, `tryViteBuild`, `sendDeploymentEmail`) — but runs
+ * SYNCHRONOUSLY so the chat route can stream progress and hand the user a live
+ * URL in the same SSE response. It intentionally skips the Bull queue: the
+ * queue path is fire-and-forget (URL arrives later via notification), which
+ * doesn't fit a chat turn that must end with "your app is live at <url>".
+ *
+ * Keep this in lockstep with app/api/deploy/route.ts if the deploy flow changes.
+ */
+
+import { buildNetlifyFileMap } from "@/lib/deploy/build-deploy-files";
+import { buildLifemarkDeployUrl } from "@/lib/deploy/branded-deploy-url";
+import { sendDeploymentEmail } from "@/lib/email/resend";
+import { logger } from "@/lib/logger";
+
+// ── Netlify helpers (mirrored from app/api/deploy/route.ts — not exported there) ──
+
+const NETLIFY_TOKEN = process.env.NETLIFY_AUTH_TOKEN;
+const NETLIFY_API = "https://api.netlify.com/api/v1";
+
+interface NetlifySite {
+  id: string;
+  name: string;
+  ssl_url: string;
+  url: string;
+}
+
+interface NetlifyDeploy {
+  id: string;
+  state: "uploading" | "uploaded" | "processing" | "ready" | "error";
+  ssl_url: string;
+  url: string;
+  error_message?: string;
+}
+
+async function netlifyFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
+  if (!NETLIFY_TOKEN) throw new Error("NETLIFY_AUTH_TOKEN not set");
+  const res = await fetch(`${NETLIFY_API}${path}`, {
+    ...opts,
+    headers: {
+      Authorization: `Bearer ${NETLIFY_TOKEN}`,
+      "Content-Type": "application/json",
+      ...opts.headers,
+    },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Netlify API ${res.status}: ${body}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+/** Get or create a Netlify site for this project (stable name from project id). */
+async function getOrCreateSite(projectId: string): Promise<NetlifySite> {
+  const siteName = `lifemark-${projectId.slice(0, 12)}`;
+  try {
+    const sites = await netlifyFetch<NetlifySite[]>(
+      `/sites?name=${encodeURIComponent(siteName)}`
+    );
+    const existing = sites.find((s) => s.name === siteName);
+    if (existing) return existing;
+  } catch {}
+  return netlifyFetch<NetlifySite>("/sites", {
+    method: "POST",
+    body: JSON.stringify({ name: siteName, custom_domain: null }),
+  });
+}
+
+/** Deploy files to a Netlify site and wait for it to go live (max 60s poll). */
+async function deployToNetlify(
+  siteId: string,
+  fileMap: Record<string, string>
+): Promise<string> {
+  const deploy = await netlifyFetch<NetlifyDeploy>(`/sites/${siteId}/deploys`, {
+    method: "POST",
+    body: JSON.stringify({ files: fileMap, async: true }),
+  });
+
+  const deadline = Date.now() + 60_000;
+  let liveUrl = deploy.ssl_url || deploy.url || "";
+
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const status = await netlifyFetch<NetlifyDeploy>(`/deploys/${deploy.id}`);
+    if (status.state === "ready") {
+      liveUrl = status.ssl_url || status.url || liveUrl;
+      break;
+    }
+    if (status.state === "error") {
+      throw new Error(status.error_message ?? "Netlify build failed");
+    }
+  }
+
+  return liveUrl;
+}
+
+// ── Public API ─────────────────────────────────────────────────────────────
+
+export interface PublishFromChatResult {
+  ok: boolean;
+  url?: string;
+  deploymentId?: string;
+  provider: "netlify" | "lifemarkai";
+  fileCount: number;
+  error?: string;
+}
+
+export interface PublishFromChatOptions {
+  /** Supabase client already scoped to the caller (user client or admin for API-key auth). */
+  supabase: unknown;
+  projectId: string;
+  userId: string;
+  /** Progress callback — each string is streamed to the chat client. */
+  emit?: (status: string) => void;
+}
+
+/**
+ * Publish a project's current files, synchronously. Never throws — failures
+ * come back as `{ ok: false, error }` so the chat route can render a friendly
+ * "Publish failed: …" assistant message instead of a naked exception.
+ */
+export async function publishProjectFromChat(
+  opts: PublishFromChatOptions
+): Promise<PublishFromChatResult> {
+  const { projectId, userId } = opts;
+  const supabase = opts.supabase as any;
+  const emit = opts.emit ?? (() => {});
+  const provider: "netlify" | "lifemarkai" = NETLIFY_TOKEN ? "netlify" : "lifemarkai";
+
+  let deploymentId: string | undefined;
+  let fileCount = 0;
+
+  try {
+    // Fetch project + files (ownership-scoped, same as the deploy route)
+    const { data: project } = await supabase
+      .from("projects")
+      .select("*, project_files(*)")
+      .eq("id", projectId)
+      .eq("user_id", userId)
+      .single();
+
+    if (!project) {
+      return { ok: false, provider, fileCount: 0, error: "Project not found" };
+    }
+
+    const projectFiles =
+      (project.project_files as Array<{ path: string; content: string; language?: string }>) ?? [];
+    fileCount = projectFiles.length;
+    if (projectFiles.length === 0) {
+      return { ok: false, provider, fileCount: 0, error: "This project has no files to publish yet — build something first." };
+    }
+
+    const { data: ownerProfile } = await supabase
+      .from("profiles")
+      .select("branded_subdomain, branded_status, referral_code, email")
+      .eq("id", userId)
+      .single();
+
+    // Ensure a unique app_slug so the URL is a CLEAN slug host; generate lazily
+    // if missing (builder falls back to the id-embedded host on failure).
+    let appSlug: string | null = (project as { app_slug?: string | null }).app_slug ?? null;
+    if (!appSlug) {
+      try {
+        const { data: gen } = await (supabase as any).rpc("generate_app_slug", {
+          p_name: (project as { name?: string }).name ?? "app",
+        });
+        if (typeof gen === "string" && gen) {
+          appSlug = gen;
+          await (supabase as any)
+            .from("projects")
+            .update({ app_slug: gen })
+            .eq("id", projectId)
+            .is("app_slug", null);
+        }
+      } catch { /* fall back to id-based URL */ }
+    }
+
+    const lifemarkUrl = () =>
+      buildLifemarkDeployUrl({
+        projectName: project.name as string,
+        projectId,
+        appSlug,
+        brandedSubdomain: ownerProfile?.branded_subdomain,
+        brandedStatus: ownerProfile?.branded_status,
+      });
+
+    // Auto-snapshot current files for rollback capability
+    emit("Snapshotting current version…");
+    const snapshotFiles = projectFiles.map((f) => ({
+      path: f.path,
+      content: f.content,
+      language: f.language ?? "plaintext",
+    }));
+    let snapshotId: string | null = null;
+    const { data: snap } = await supabase
+      .from("project_snapshots")
+      .insert({
+        project_id: projectId,
+        user_id: userId,
+        label: `Publish snapshot · ${new Date().toLocaleString()}`,
+        is_baseline: true,
+        files: snapshotFiles,
+        patches: null,
+        parent_id: null,
+      })
+      .select("id")
+      .single();
+    snapshotId = snap?.id ?? null;
+
+    // Create deployment record (building state)
+    const { data: deployment } = await supabase
+      .from("deployments")
+      .insert({
+        project_id: projectId,
+        user_id: userId,
+        status: "building",
+        provider,
+        snapshot_id: snapshotId,
+        file_count: snapshotFiles.length,
+      })
+      .select()
+      .single();
+    if (!deployment) {
+      return { ok: false, provider, fileCount, error: "Failed to create deployment record" };
+    }
+    deploymentId = deployment.id as string;
+
+    // Preview == deploy: try a real `vite build` when opted in (same as deploy route)
+    let deployProjectFiles = projectFiles;
+    try {
+      const { tryViteBuild } = await import("@/lib/deploy/build-project");
+      const built = await tryViteBuild(projectFiles);
+      if (built && built.length > 0) deployProjectFiles = built as typeof projectFiles;
+    } catch {
+      /* fall back to static files */
+    }
+
+    let deployedUrl: string;
+    if (provider === "netlify") {
+      emit("Uploading to Netlify…");
+      const site = await getOrCreateSite(projectId);
+      const fileMap = buildNetlifyFileMap(deployProjectFiles, {
+        projectId,
+        projectName: project.name as string,
+        badgeHidden: (project as { badge_hidden?: boolean }).badge_hidden ?? false,
+        referralCode: ownerProfile?.referral_code ?? null,
+      });
+      emit("Waiting for the site to go live…");
+      deployedUrl = await deployToNetlify(site.id, fileMap);
+    } else {
+      // Lifemark-hosted URL (fallback / lifemarkai provider — same as deploy route)
+      emit("Publishing to your Lifemark URL…");
+      await new Promise((r) => setTimeout(r, 2500));
+      deployedUrl = lifemarkUrl();
+    }
+
+    // Update deployment + project records
+    await supabase
+      .from("deployments")
+      .update({ status: "live", url: deployedUrl, deployed_at: new Date().toISOString() })
+      .eq("id", deploymentId);
+    await supabase
+      .from("projects")
+      .update({ deployed_url: deployedUrl, status: "active" })
+      .eq("id", projectId);
+
+    // Email notification (fire-and-forget, same as deploy route)
+    if (ownerProfile?.email) {
+      sendDeploymentEmail(ownerProfile.email, project.name as string, deployedUrl).catch(() => {});
+    }
+
+    logger.info("deploy.from_chat.live", { deploymentId, projectId, userId, provider, url: deployedUrl });
+    return { ok: true, url: deployedUrl, deploymentId, provider, fileCount };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error(
+      "deploy.from_chat.failed",
+      err instanceof Error ? err : new Error(message),
+      { deploymentId, projectId, userId, provider }
+    );
+    if (deploymentId) {
+      await supabase
+        .from("deployments")
+        .update({ status: "failed", error_message: message })
+        .eq("id", deploymentId)
+        .then(() => {}, () => {});
+    }
+    return { ok: false, deploymentId, provider, fileCount, error: message };
+  }
+}
