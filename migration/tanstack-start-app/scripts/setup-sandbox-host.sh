@@ -71,6 +71,39 @@ else
   ok "created '$NET' (inter-container comms disabled)"
 fi
 
+# ── 3b. Preview routing network (HTTPS previews via Traefik) ─────────────────
+# Without this, previews are served as http://IP:PORT. A browser will NOT embed
+# those in an https:// editor (mixed content) — it fails silently with a blank
+# pane and no console error. Putting sandboxes behind the existing Traefik gives
+# each one a real https://<id>.<domain> URL and removes the published-port range
+# entirely (nothing of the sandbox is internet-reachable except via the proxy).
+#
+# NOTE: this network has ICC *enabled*, unlike the isolated one above — Traefik
+# has to reach the sandboxes to proxy them. Sandboxes can therefore reach each
+# other on this network. Acceptable for a single-tenant product; for untrusted
+# multi-tenant use, give each sandbox its own network and attach Traefik to each.
+PREVIEW_NET="${SANDBOX_PROXY_NETWORK:-lifemark-previews}"
+PROXY_CONTAINER="${TRAEFIK_CONTAINER:-coolify-proxy}"
+say "Preview routing network"
+if docker network inspect "$PREVIEW_NET" >/dev/null 2>&1; then
+  ok "network '$PREVIEW_NET' exists"
+else
+  docker network create --driver bridge "$PREVIEW_NET" >/dev/null
+  ok "created '$PREVIEW_NET'"
+fi
+if docker ps --format '{{.Names}}' | grep -qx "$PROXY_CONTAINER"; then
+  if docker inspect -f '{{json .NetworkSettings.Networks}}' "$PROXY_CONTAINER" \
+      | grep -q "$PREVIEW_NET"; then
+    ok "$PROXY_CONTAINER already attached to '$PREVIEW_NET'"
+  else
+    docker network connect "$PREVIEW_NET" "$PROXY_CONTAINER" 2>/dev/null \
+      && ok "attached $PROXY_CONTAINER to '$PREVIEW_NET'" \
+      || warn "could not attach $PROXY_CONTAINER — do it manually or previews won't route"
+  fi
+else
+  warn "proxy container '$PROXY_CONTAINER' not running — set TRAEFIK_CONTAINER"
+fi
+
 # ── 4. Firewall ──────────────────────────────────────────────────────────────
 say "Firewall"
 if command -v ufw >/dev/null 2>&1; then
@@ -136,7 +169,32 @@ fi
 say "Done"
 cat <<EOF
 
-  Put these in the app's .env.local:
+  RECOMMENDED — HTTPS previews via the existing Traefik (no published ports,
+  no mixed-content problem). Requires a wildcard DNS record:
+
+      *.preview.lifemarkai.com   A   <this server's IP>
+
+  CERTIFICATE RATE LIMIT — read this before going wide. Coolify's Traefik uses
+  the ACME HTTP-01 challenge (certificatesresolvers.letsencrypt.acme
+  .httpchallenge=true), which CANNOT issue wildcard certs: every distinct
+  preview hostname gets its own certificate. Let's Encrypt permits 50 certs per
+  registered domain per week. The provider therefore uses one STABLE hostname
+  per project, not per sandbox, so restarts reuse a cert. If you expect more
+  than ~50 new projects a week, switch Traefik to a DNS-01 resolver and issue a
+  single wildcard cert for *.preview.lifemarkai.com — after that, hostnames are
+  free and you can go back to per-sandbox naming.
+
+  Then in the app's environment:
+
+    SANDBOX_PROVIDER=docker
+    SANDBOX_PREVIEW_DOMAIN=preview.lifemarkai.com
+    SANDBOX_PROXY_NETWORK=${PREVIEW_NET}
+    SANDBOX_CERT_RESOLVER=letsencrypt      # must match your Traefik resolver name
+    SANDBOX_TRAEFIK_ENTRYPOINT=https       # Coolify's Traefik calls it "https"
+    SANDBOX_IMAGE=${IMAGE}
+    DOCKER_SOCKET=/var/run/docker.sock
+
+  FALLBACK — published host ports (http only, fine for local dev):
 
     SANDBOX_PROVIDER=docker
     SANDBOX_PUBLIC_HOST=<this server's IP or hostname>

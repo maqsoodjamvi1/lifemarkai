@@ -23,15 +23,21 @@ const SERVER_PORT = Number(process.env.PORT || 3000);
 // emits `dist/`. Hard-coding either one breaks silently on the other — the
 // Docker build fails at COPY with ".output: not found" even though `vite build`
 // succeeded seconds earlier. Resolve instead of assuming.
-// Verified against the installed @tanstack/start-plugin-core 1.171.24:
-//   vite/output-directory.js  ->  build.outDir ?? "dist", subdirs "client"/"server"
-//   server entry filename     ->  "index.js"   (NOT index.mjs)
-// So a stock build lands at dist/server/index.js, and .output/server/index.js
-// once the Dockerfile normalises the directory name. The .mjs spellings are kept
-// for older vinxi-era builds.
+// CONFIRMED from a real build artifact (docker run … ls .output/server):
+//   .output/server/server.js   ← @tanstack/start-plugin-core 1.171.24 emits THIS
+//   .output/server/assets/
+//
+// Do not "simplify" this list to one entry. Grepping the plugin source for
+// filename literals is misleading — it contains "index.js" in an unrelated
+// context, and trusting that over the actual artifact is precisely how this
+// broke once already. The directory name also varies (dist/ vs .output/, see
+// the Dockerfile), so probe rather than assume; the failure branch below prints
+// every path tried, which is what made this diagnosable in seconds.
 const SERVER_ENTRY_CANDIDATES = [
+  ".output/server/server.js",
   ".output/server/index.js",
   ".output/server/index.mjs",
+  "dist/server/server.js",
   "dist/server/index.js",
   "dist/server/index.mjs",
 ];

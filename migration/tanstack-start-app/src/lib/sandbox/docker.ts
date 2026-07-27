@@ -80,6 +80,14 @@ const APP_DIR = "/home/node/app";
  * a URL that fails with a confusing browser error rather than a config error.
  * Strip the scheme, any path, and trailing slashes.
  */
+/**
+ * Traefik router/service names may only contain [a-zA-Z0-9-_.]; a hostname's
+ * dots are legal but make the label read like a nested key, so flatten them.
+ */
+function routerId(previewHost: string): string {
+  return "lmsbx-" + previewHost.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
 function normalizeHost(raw: string): string {
   return raw
     .trim()
@@ -93,6 +101,9 @@ function cfg() {
   const [lo, hi] = (process.env.SANDBOX_PORT_RANGE ?? "42000-42099")
     .split("-")
     .map((n) => Number(n.trim()));
+  // Wildcard domain enables hostname routing. Without it we fall back to
+  // publishing host ports, which only works when the editor is also on http.
+  const previewDomain = normalizeHost(process.env.SANDBOX_PREVIEW_DOMAIN || "");
   return {
     socketPath: process.env.DOCKER_SOCKET || "/var/run/docker.sock",
     tcpHost: process.env.DOCKER_HOST || "",
@@ -105,6 +116,17 @@ function cfg() {
     image: process.env.SANDBOX_IMAGE || "node:22-alpine",
     memoryMb: Number(process.env.SANDBOX_MEMORY_MB) || 1024,
     cpus: Number(process.env.SANDBOX_CPUS) || 1,
+    // ── routing ──────────────────────────────────────────────────────────────
+    previewDomain,
+    // Hostname routing is what makes previews usable in production: Traefik
+    // terminates TLS and proxies https://<id>.<domain> to the container's port
+    // on an internal network. No published ports, so no port-range exhaustion
+    // and nothing of the sandbox is reachable from the internet except through
+    // the proxy.
+    routeViaProxy: Boolean(previewDomain),
+    proxyNetwork: process.env.SANDBOX_PROXY_NETWORK || "lifemark-previews",
+    certResolver: process.env.SANDBOX_CERT_RESOLVER || "letsencrypt",
+    entrypoint: process.env.SANDBOX_TRAEFIK_ENTRYPOINT || "https",
   };
 }
 
@@ -118,6 +140,8 @@ function cfg() {
  */
 export function mixedContentWarning(): string | null {
   const c = cfg();
+  // Proxy mode already returns https:// URLs — nothing to warn about.
+  if (c.routeViaProxy) return null;
   if (c.scheme === "https") return null;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.VITE_APP_URL || "";
   if (!appUrl.startsWith("https://")) return null;
@@ -273,10 +297,31 @@ export class DockerSandboxProvider implements SandboxProvider {
     }
 
     const innerPort = opts.port ?? 5173;
-    const hostPort = claimPort();
-    if (hostPort == null) {
+    // In proxy mode Traefik reaches the container over the shared network, so
+    // there is no host port to claim and no range to exhaust.
+    const hostPort = c.routeViaProxy ? null : claimPort();
+    if (!c.routeViaProxy && hostPort == null) {
       return { ok: false, error: `No free port in ${c.portLo}-${c.portHi}. Raise SANDBOX_PORT_RANGE.` };
     }
+    // Hostname is STABLE PER PROJECT, deliberately not per sandbox.
+    //
+    // Coolify's Traefik issues certs via the ACME **HTTP-01** challenge
+    // (verified: certificatesresolvers.letsencrypt.acme.httpchallenge=true),
+    // which cannot issue wildcards — every distinct hostname needs its own
+    // certificate. Let's Encrypt allows 50 certs per registered domain per week,
+    // so a per-sandbox hostname would exhaust the quota within days and then
+    // previews would fail with opaque TLS errors that look nothing like a rate
+    // limit. Reusing one hostname per project keeps issuance proportional to
+    // projects, not to preview restarts.
+    //
+    // Trade-off: two live sandboxes for the SAME project would both claim this
+    // hostname and Traefik would route to whichever registered last. The preview
+    // panel only runs one sandbox per project at a time, so that doesn't arise —
+    // but if that ever changes, either add a wildcard cert via a DNS-01 resolver
+    // (then per-sandbox hostnames become free) or suffix the sandbox id here.
+    const previewHost = c.routeViaProxy
+      ? `${(opts.projectId || "sbx").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 32) || "sbx"}.${c.previewDomain}`
+      : "";
 
     try {
       progress("creating", "Creating container");
@@ -296,8 +341,15 @@ export class DockerSandboxProvider implements SandboxProvider {
           "CI=1",
         ],
         ExposedPorts: { [`${innerPort}/tcp`]: {} },
+        // Proxy mode: join the network Traefik watches. Port mode: publish to host.
+        ...(c.routeViaProxy
+          ? { NetworkingConfig: { EndpointsConfig: { [c.proxyNetwork]: {} } } }
+          : {}),
         HostConfig: {
-          PortBindings: { [`${innerPort}/tcp`]: [{ HostPort: String(hostPort) }] },
+          PortBindings: c.routeViaProxy
+            ? {}
+            : { [`${innerPort}/tcp`]: [{ HostPort: String(hostPort) }] },
+          ...(c.routeViaProxy ? { NetworkMode: c.proxyNetwork } : {}),
           Memory: c.memoryMb * 1024 * 1024,
           NanoCpus: Math.round(c.cpus * 1e9),
           PidsLimit: 512,
@@ -312,6 +364,21 @@ export class DockerSandboxProvider implements SandboxProvider {
           "lifemark.sandbox": "1",
           "lifemark.project": opts.projectId ?? "",
           "lifemark.created": new Date().toISOString(),
+          // Traefik discovers routes from container labels. The router name must
+          // be unique per container or the last one created silently wins the
+          // hostname — hence the timestamped previewHost, reused as the id.
+          ...(c.routeViaProxy
+            ? {
+                "traefik.enable": "true",
+                "traefik.docker.network": c.proxyNetwork,
+                [`traefik.http.routers.${routerId(previewHost)}.rule`]: `Host(\`${previewHost}\`)`,
+                [`traefik.http.routers.${routerId(previewHost)}.entrypoints`]: c.entrypoint,
+                [`traefik.http.routers.${routerId(previewHost)}.tls`]: "true",
+                [`traefik.http.routers.${routerId(previewHost)}.tls.certresolver`]: c.certResolver,
+                [`traefik.http.services.${routerId(previewHost)}.loadbalancer.server.port`]:
+                  String(innerPort),
+              }
+            : {}),
         },
       });
       if (create.status >= 400) {
@@ -374,7 +441,9 @@ export class DockerSandboxProvider implements SandboxProvider {
       progress("starting", cmd);
       await this.exec(id, `nohup sh -c '${cmd}' > ${DEV_LOG} 2>&1 &`);
 
-      const previewUrl = `${c.scheme}://${c.publicHost}:${hostPort}`;
+      const previewUrl = c.routeViaProxy
+        ? `https://${previewHost}`
+        : `${c.scheme}://${c.publicHost}:${hostPort}`;
       // Wait for a real response — returning before the server listens hands the
       // iframe a dead URL and paints a blank pane.
       const ready = await waitForServer(previewUrl, Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000));
