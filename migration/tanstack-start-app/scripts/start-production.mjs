@@ -18,11 +18,35 @@ const SANDBOX_PORT = Number(process.env.LIFEMARK_SANDBOX_WORKER_PORT || 3012);
 const AI_PORT = Number(process.env.LIFEMARK_AI_WORKER_PORT || 3010);
 const SERVER_PORT = Number(process.env.PORT || 3000);
 
-const serverEntry = path.join(startAppRoot, ".output/server/index.mjs");
-if (!fs.existsSync(serverEntry)) {
-  console.error(`[start-production] missing ${serverEntry} — run vite build first`);
+// Vite's output directory moved between TanStack Start versions: the older
+// vinxi-based builds emitted `.output/`, the current `tanstackStart()` plugin
+// emits `dist/`. Hard-coding either one breaks silently on the other — the
+// Docker build fails at COPY with ".output: not found" even though `vite build`
+// succeeded seconds earlier. Resolve instead of assuming.
+// Verified against the installed @tanstack/start-plugin-core 1.171.24:
+//   vite/output-directory.js  ->  build.outDir ?? "dist", subdirs "client"/"server"
+//   server entry filename     ->  "index.js"   (NOT index.mjs)
+// So a stock build lands at dist/server/index.js, and .output/server/index.js
+// once the Dockerfile normalises the directory name. The .mjs spellings are kept
+// for older vinxi-era builds.
+const SERVER_ENTRY_CANDIDATES = [
+  ".output/server/index.js",
+  ".output/server/index.mjs",
+  "dist/server/index.js",
+  "dist/server/index.mjs",
+];
+const serverEntry = SERVER_ENTRY_CANDIDATES.map((p) => path.join(startAppRoot, p)).find((p) =>
+  fs.existsSync(p),
+);
+if (!serverEntry) {
+  console.error(
+    `[start-production] no server entry found under ${startAppRoot}.\n` +
+      `Looked for:\n  ${SERVER_ENTRY_CANDIDATES.join("\n  ")}\n` +
+      `Run \`vite build\` first, or check which directory it wrote to.`,
+  );
   process.exit(1);
 }
+console.log(`[start-production] server entry: ${path.relative(startAppRoot, serverEntry)}`);
 
 let shuttingDown = false;
 const children = new Map();

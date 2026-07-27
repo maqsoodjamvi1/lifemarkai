@@ -48,11 +48,19 @@ ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
     NEXT_PUBLIC_APP_DOMAIN=$NEXT_PUBLIC_APP_DOMAIN
 
 COPY . .
+# The output directory changed between TanStack Start versions: vinxi-era builds
+# wrote `.output/`, the current `tanstackStart()` plugin writes `dist/`. The COPY
+# lines below (and scripts/start-production.mjs) expect `.output`, so normalise
+# here rather than in four other places. Without this the build SUCCEEDS and then
+# the image fails at `COPY ... .output` with "not found", which reads like a
+# build failure but is really a path mismatch.
 RUN cd migration/tanstack-start-app \
   && node scripts/build-api-manifest.mjs \
   && node scripts/build-ai-http.mjs \
   && node scripts/verify-api-coverage.mjs \
-  && npx vite build
+  && npx vite build \
+  && if [ ! -d .output ] && [ -d dist ]; then mv dist .output; fi \
+  && test -d .output/server || (echo "BUILD ERROR: no server output in .output/ or dist/" && ls -la && exit 1)
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS runner
