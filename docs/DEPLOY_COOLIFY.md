@@ -1,63 +1,73 @@
 # Deploy LifemarkAI on Coolify (Hostinger VPS)
 
-Step-by-step to run the Next.js app on a Hostinger VPS via Coolify, using the
-`Dockerfile` in the repo root.
+Step-by-step to run the **TanStack Start** app on a Hostinger VPS via Coolify,
+using the `Dockerfile` in the repo root.
 
-> The app is a Next.js front/back; **Supabase, OpenRouter, Stripe, etc. are
-> external services** reached by env vars — Coolify only runs the Next.js
-> container. Apply DB migrations to your Supabase project separately (see §6).
+> The app is a TanStack Start front/back plus three isolated Node workers
+> (API routes, sandbox/Modal, AI SSE) in one container; **Supabase, OpenRouter,
+> Stripe, etc. are external services** reached by env vars. Apply DB migrations
+> to your Supabase project separately (see §6).
+
+## Runtime layout (one container)
+
+| Port | Process |
+|------|---------|
+| 3000 | TanStack Start server (`.output/server/index.mjs`) — the only exposed port |
+| 3010 | AI SSE worker (chat/agent/fix) |
+| 3011 | API worker (all legacy `app/api` handlers, prebuilt esbuild bundles) |
+| 3012 | Sandbox worker (Modal cold boot / sync) |
+
+All four are supervised by `migration/tanstack-start-app/scripts/start-production.mjs`
+(the container CMD). Workers listen on localhost only.
 
 ## 1. Hostinger VPS prep
 
 1. Buy a Hostinger **VPS** (KVM 2 or higher recommended — **≥ 4 GB RAM**; the
-   `next build` is memory-heavy). Choose **Ubuntu 22.04/24.04** (a plain OS image,
-   not a panel image). Note the server's public **IP**.
+   Vite build + 203 route bundles are memory-heavy). Choose **Ubuntu 22.04/24.04**.
+   Note the server's public **IP**.
 2. SSH in as root: `ssh root@YOUR_VPS_IP`.
 3. Update: `apt update && apt -y upgrade`.
-4. Point your domain at the VPS: in your DNS, create an **A record**
-   `app.yourdomain.com → YOUR_VPS_IP` (and optionally `@`/`www`). DNS first so SSL
-   can issue later.
+4. Point your domain at the VPS: create an **A record**
+   `app.yourdomain.com → YOUR_VPS_IP`. DNS first so SSL can issue later.
 
 ## 2. Install Coolify
-
-On the VPS, run the official installer:
 
 ```bash
 curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
 ```
 
-When it finishes, open `http://YOUR_VPS_IP:8000`, create the admin account, and
-complete onboarding (it registers the VPS itself as the deployment server).
+Open `http://YOUR_VPS_IP:8000`, create the admin account, complete onboarding.
 Then in Coolify → **Settings → set your instance domain** and let it grab SSL.
 
 ## 3. Create the application
 
 1. **Projects → + New → Application**.
-2. **Source:** connect your Git provider (GitHub recommended → install the Coolify
-   GitHub App and pick the LifemarkAI repo) — or "Public/Private Repository" with
-   a deploy key. Choose the branch (e.g. `main`).
-3. **Build Pack:** select **Dockerfile** (Coolify auto-detects the root `Dockerfile`).
+2. **Source:** connect your Git provider and pick the LifemarkAI repo + branch.
+3. **Build Pack:** select **Dockerfile** (root `Dockerfile`).
 4. **Port:** set the exposed port to **3000**.
-5. **Domain:** set `https://app.yourdomain.com` (Coolify provisions Let's Encrypt
-   SSL automatically once DNS resolves).
+5. **Domain:** set `https://app.yourdomain.com`.
+6. **Health check (optional):** HTTP GET `/api/health` on port 3000.
 
 ## 4. Environment variables (the important part)
 
-Add these in the app's **Environment Variables** tab. Two kinds:
+### Build-time (must be marked "Build Variable" — inlined by `vite build`)
 
-### Build-time (must be marked "Build Variable" — they're inlined at build)
-Any `NEXT_PUBLIC_*` var is baked into the bundle during `npm run build`, so it
-**must** be present as a build variable, not just runtime:
+`VITE_*` **and** `NEXT_PUBLIC_*` client vars are baked into the bundle during
+the Docker build (the Vite config maps both):
 
 ```
+VITE_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+VITE_APP_URL=https://app.yourdomain.com
+# The NEXT_PUBLIC_* equivalents may also be set; either prefix works.
 NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 NEXT_PUBLIC_APP_URL=https://app.yourdomain.com
-# Optional feature flag (client-read): live sandbox preview
-NEXT_PUBLIC_ENABLE_SANDBOX_PREVIEW=0
+NEXT_PUBLIC_ENABLE_SANDBOX_PREVIEW=0     # optional live sandbox preview flag
 ```
 
 ### Runtime (server-only secrets — normal env, NOT build vars)
+
 ```
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 OPENROUTER_API_KEY=sk-or-...
@@ -71,11 +81,15 @@ STRIPE_WEBHOOK_SECRET=...
 NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=...   # build var
 # Email (if using Resend)
 RESEND_API_KEY=...
-# Optional model pins; leave unset to use approved Qwen/DeepSeek defaults
+# Cron auth (see §7)
+CRON_SECRET=some-long-random-string
+# Modal sandbox preview (optional)
+MODAL_TOKEN_ID=...
+MODAL_TOKEN_SECRET=...
+# Optional model pins; leave unset to use approved defaults
 OPENROUTER_CODING_MODEL=qwen/qwen3-coder
 OPENROUTER_BALANCED_MODEL=deepseek/deepseek-v4-pro
 OPENROUTER_FAST_MODEL=deepseek/deepseek-v4-flash
-BUILD_MAX_TOKENS=64000                   # optional, single-pass app builds
 ```
 
 See `.env.local.example` for the full list. Anything unset degrades gracefully.
@@ -85,50 +99,52 @@ See `.env.local.example` for the full list. Anything unset degrades gracefully.
 
 ## 5. Deploy
 
-Click **Deploy**. Coolify clones the repo, builds the Dockerfile (deps → build →
-runner), and starts the container on port 3000 behind its Traefik proxy with SSL.
-Watch the **build logs**; first build takes several minutes.
+Click **Deploy**. Coolify builds the Dockerfile (root deps → Start deps →
+route/AI bundles → vite build → runner) and starts the container on port 3000
+behind Traefik with SSL. First build takes several minutes.
 
-To auto-deploy on push: enable the **webhook / "Automatic Deployment"** toggle so
-each push to the branch redeploys.
+Enable **Automatic Deployment** to redeploy on push.
 
 ## 6. Database migrations (run once, separately)
 
-Coolify doesn't run your Supabase migrations. Apply them to your Supabase project
-in order — `001 … 072` (or at minimum the new ones if the base is already live):
+Apply all `supabase/migrations/0XX_*.sql` in order via the Supabase Dashboard
+SQL editor or `supabase db push`. All migrations are idempotent.
 
-- Supabase Dashboard → SQL Editor → paste each `supabase/migrations/0XX_*.sql` in
-  order, **including 068 → 072**; or
-- `supabase db push` from your machine if you use the Supabase CLI linked to the
-  project.
+## 7. Cron jobs (Coolify Scheduled Tasks)
 
-All migrations are idempotent (`IF NOT EXISTS`), so re-running is safe.
+Vercel crons don't run here. In Coolify → your app → **Scheduled Tasks**, add
+five tasks (all authenticated with `CRON_SECRET`):
 
-## 7. Post-deploy checks
+| Schedule | Command |
+|----------|---------|
+| `0 3 * * *` | `curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cloud/daily-backups` |
+| `30 3 * * *` | `curl -fsS -X POST -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cloud/bill-usage` |
+| `0 4 * * *` | `curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/health-scan` |
+| `15 4 * * *` | `curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/security/scheduled-scan` |
+| `0 5 * * *` | `curl -fsS -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/sandbox-cleanup` |
 
-- Visit `https://app.yourdomain.com` — landing page loads over HTTPS.
-- Sign up / log in (Supabase auth) — confirm the Supabase URL/keys are correct.
-- Create a project and run a build — confirms `OPENROUTER_API_KEY` + credits work
-  (your OpenRouter balance must be funded).
-- Editor route loads (it sets COOP/COEP headers for WebContainers — already in
-  `next.config.mjs`).
+(Daily-backups and bill-usage are POST; the rest are GET.)
 
-## 8. Gotchas specific to this app
+## 8. Post-deploy checks
 
-- **Build memory:** the build is large; use ≥4 GB RAM or set the heap env above.
-- **`NEXT_PUBLIC_*` are build-time:** if Supabase auth/URL looks wrong in the
-  browser, you set them as runtime-only — re-add as **Build Variables** and redeploy.
-- **AI Gateway (optional):** if you run the Cloudflare Worker gateway, set
-  `LIFEMARK_GATEWAY_URL` + `LIFEMARK_GATEWAY_SECRET`; otherwise leave unset and the
-  app calls providers directly via `OPENROUTER_API_KEY`.
-- **Sandbox/E2B + domain-purchase** features stay off until their env is set
-  (see `INTEGRATION_CHANGES.md`).
-- **Persistent storage:** the app is stateless (state lives in Supabase), so no
-  volumes are required for the Next.js container.
+- `https://app.yourdomain.com` — landing page loads over HTTPS.
+- `/api/health` returns 200.
+- Sign up / log in (Supabase auth) — confirms the Supabase URL/keys.
+- Create a project and run a build — confirms `OPENROUTER_API_KEY` + credits
+  (AI worker on :3010 handles the SSE stream).
+- Open the editor — full `EditorLayout` should mount (not the minimal shell).
+- If Modal env is set: preview cold boot (sandbox worker on :3012).
 
-## 9. Optional — smaller image via standalone output
+## 9. Gotchas specific to this app
 
-For a leaner image later, add `output: "standalone"` to `next.config.mjs` and
-switch the runner to copy `.next/standalone` + `.next/static` + `public` and run
-`node server.js`. Validate locally first — verify Monaco and dynamic imports still
-resolve. The shipped Dockerfile uses the robust full-deps path by default.
+- **Build memory:** ≥4 GB RAM or set the heap env above.
+- **`VITE_*`/`NEXT_PUBLIC_*` are build-time:** if Supabase auth looks wrong in
+  the browser, re-add them as **Build Variables** and redeploy.
+- **Workers are in-container:** no extra services needed; if a worker dies the
+  supervisor restarts it (check container logs for `[start-production]`).
+- **AI Gateway (optional):** set `LIFEMARK_GATEWAY_URL` + `LIFEMARK_GATEWAY_SECRET`
+  to route AI through the Cloudflare Worker; otherwise providers are called
+  directly.
+- **Persistent storage:** state lives in Supabase; no volumes required.
+- **Emergency Next runtime:** `npm run dev:next` still exists at the repo root
+  for local comparison only — production never runs Next.

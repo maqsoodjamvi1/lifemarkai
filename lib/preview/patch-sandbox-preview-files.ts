@@ -2,6 +2,7 @@ import {
   patchFilesForWebContainer,
   type WebContainerPatchOpts,
 } from "./patch-vite-for-webcontainer";
+import { isTanStackStartProject } from "@/lib/templates/tanstack-start-scaffold";
 
 /**
  * Synthesize missing Vite entry files. Incremental builds return only CHANGED
@@ -22,7 +23,9 @@ function ensureViteEntryFiles<T extends { path: string; content?: string | null 
     (p) => /^app\/.*(page|layout)\.(tsx|jsx)$/.test(p) || /^next\.config\./.test(p),
   );
   const isVue = [...paths].some((p) => /\.vue$/.test(p));
-  if (!appPath || isNext || isVue) return files;
+  // TanStack Start owns its entry (src/routes/__root.tsx + the Vite plugin) —
+  // never inject index.html / src/main.tsx into it.
+  if (!appPath || isNext || isVue || isTanStackStartProject(files)) return files;
 
   const hasHtml = [...paths].some((p) => /^(public\/)?index\.html$/.test(p));
   const existingMain = [...paths].find((p) =>
@@ -113,10 +116,59 @@ function ensureViteEntryFiles<T extends { path: string; content?: string | null 
   return [...patched, ...(extras as unknown as T[])];
 }
 
+/**
+ * Guarantee a `.env` with VITE_SUPABASE_* whenever the app imports
+ * @supabase/supabase-js. Without it, generated `createClient(url, key)` runs
+ * with UNDEFINED env → supabase-js throws "supabaseUrl is required." at import
+ * time → the whole module graph fails → React never mounts → "Preview root is
+ * empty" (THE crash the user kept hitting after adding auth/database).
+ *
+ * If the project already ships real creds (its own .env/.env.local, or Cloud
+ * auto-wire injected them), we leave them alone. Otherwise we inject a VALID-
+ * LOOKING placeholder so `new URL(url)` inside supabase-js succeeds and the app
+ * mounts — backend calls then fail gracefully at network time (caught by the
+ * app's own error handling) instead of crashing the entire preview.
+ */
+function ensureSupabaseEnv<T extends { path: string; content?: string | null }>(files: T[]): T[] {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\/+/, "");
+  const usesSupabase = files.some(
+    (f) => f.content != null && /["']@supabase\/supabase-js["']/.test(f.content),
+  );
+  if (!usesSupabase) return files;
+
+  const envFiles = files.filter((f) => /(^|\/)\.env(\.\w+)?$/.test(norm(f.path)));
+  const hasRealUrl = envFiles.some(
+    (f) =>
+      f.content != null &&
+      /^\s*VITE_SUPABASE_URL\s*=\s*\S+/m.test(f.content) &&
+      !/placeholder\.supabase\.co/.test(f.content),
+  );
+  if (hasRealUrl) return files;
+
+  // Deterministic, valid-format placeholders. A syntactically valid JWT-shaped
+  // anon key keeps libraries that decode it happy; the URL just has to parse.
+  const placeholder =
+    "# Injected for preview so @supabase/supabase-js can initialize without\n" +
+    "# real credentials. Backend calls will fail gracefully until Cloud is set up.\n" +
+    "VITE_SUPABASE_URL=https://placeholder.supabase.co\n" +
+    "VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiJ9.preview\n";
+
+  // Overwrite an existing (creds-less) .env in place; else add a fresh one.
+  const existingEnv = files.find((f) => norm(f.path) === ".env");
+  if (existingEnv) {
+    return files.map((f) =>
+      f === existingEnv
+        ? ({ ...f, content: `${f.content ?? ""}\n${placeholder}` } as T)
+        : f,
+    );
+  }
+  return [...files, { path: ".env", content: placeholder } as unknown as T];
+}
+
 /** Vite host + VEB bridge + optional guest comments for cloud sandbox previews. */
 export function patchSandboxPreviewFiles<T extends { path: string; content?: string | null }>(
   files: T[],
   opts?: WebContainerPatchOpts,
 ): T[] {
-  return patchFilesForWebContainer(ensureViteEntryFiles(files), opts);
+  return patchFilesForWebContainer(ensureSupabaseEnv(ensureViteEntryFiles(files)), opts);
 }

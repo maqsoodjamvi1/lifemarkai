@@ -3,19 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { generateAI } from "@/lib/ai/generate";
 import { getFastAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import type { ReviewIssue, ReviewResult } from "@/lib/ai/review-types";
 
-export interface ReviewIssue {
-  category: "quality" | "security" | "performance" | "bestpractice";
-  severity: "error" | "warning" | "info";
-  line?: number;
-  title: string;
-  description: string;
-}
-
-export interface ReviewResult {
-  issues: ReviewIssue[];
-  summary: string;
-}
+export type { ReviewIssue, ReviewResult } from "@/lib/ai/review-types";
 
 const SYSTEM = `You are a senior software engineer performing a code review.
 Analyse the provided file and return a JSON object with this exact shape:

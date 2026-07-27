@@ -331,6 +331,8 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
     var m = String(text || "").trim();
     if (!m || m === "{}" || m === "[]" || m === "[object Object]") return true;
     if (m.length < 4 && !/error|fail/i.test(m)) return true;
+    if (/chrome-extension:\\/\\/|moz-extension:\\/\\/|safari-web-extension:\\/\\/|safari-extension:\\/\\/|webkit-masked-url:/i.test(m)) return true;
+    if (/\\binpage\\.js\\b/i.test(m) && /emit|ethereum|wallet|metamask|solana|web3/i.test(m)) return true;
     return false;
   }
   function post(type, text){

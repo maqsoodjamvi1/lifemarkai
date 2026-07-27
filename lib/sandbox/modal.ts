@@ -13,12 +13,14 @@ import type {
   SandboxRunResult,
 } from "./index";
 import {
+  DEFAULT_IDLE_TIMEOUT_MS,
   DEFAULT_TIMEOUT_MS,
   detectSandboxStart,
   sandboxNameForProject,
   trunc,
   waitForServer,
 } from "./shared";
+import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "@/lib/preview/base-app-deps";
 
 const WORKDIR = "/workspace";
 const WRITE_CONCURRENCY = 8;
@@ -52,12 +54,17 @@ type ModalSandbox = {
   terminate: () => Promise<void>;
 };
 
+type ModalImage = {
+  dockerfileCommands: (commands: string[], params?: Record<string, unknown>) => ModalImage;
+  build: (app: unknown) => Promise<ModalImage>;
+};
+
 type ModalClient = {
   apps: {
     fromName: (name: string, opts?: { createIfMissing?: boolean }) => Promise<unknown>;
   };
   images: {
-    fromRegistry: (image: string) => unknown;
+    fromRegistry: (image: string) => ModalImage;
   };
   sandboxes: {
     create: (
@@ -122,6 +129,58 @@ export class ModalSandboxProvider implements SandboxProvider {
 
   isEnabled(): boolean {
     return Boolean(process.env.MODAL_TOKEN_ID && process.env.MODAL_TOKEN_SECRET);
+  }
+
+  /**
+   * Pre-bake the default app dependency set into the preview image so a cold
+   * sandbox's `npm install` only resolves the app's deltas (near-instant),
+   * matching Lovable's warm-image speed. Off by setting MODAL_SANDBOX_PREBAKE=0.
+   */
+  private prebakeEnabled(): boolean {
+    const v = process.env.MODAL_SANDBOX_PREBAKE;
+    return v === undefined || v === "" ? true : v === "1" || v.toLowerCase() === "true";
+  }
+
+  /** Base package.json (shared with the scaffold) as base64 for a Dockerfile RUN. */
+  private basePackageJsonB64(): string {
+    const pkg = JSON.stringify({
+      name: "lifemark-preview-base",
+      private: true,
+      type: "module",
+      dependencies: BASE_APP_DEPENDENCIES,
+      devDependencies: BASE_APP_DEV_DEPENDENCIES,
+    });
+    return Buffer.from(pkg, "utf8").toString("base64");
+  }
+
+  /**
+   * The preview image. With prebake on, adds a cached layer that installs the
+   * base deps into /workspace/node_modules at build time (package.json kept so
+   * a superset app install doesn't prune the baked modules).
+   */
+  private previewImage(modal: ModalClient): ModalImage {
+    const base = modal.images.fromRegistry(this.imageRef);
+    if (!this.prebakeEnabled()) return base;
+    const b64 = this.basePackageJsonB64();
+    return base.dockerfileCommands([
+      "RUN mkdir -p /workspace",
+      "WORKDIR /workspace",
+      `RUN echo '${b64}' | base64 -d > package.json && npm install --no-audit --no-fund --loglevel=error && npm cache clean --force`,
+    ]);
+  }
+
+  /**
+   * Resolve the image to boot from — the pre-baked image when enabled, but if
+   * its build fails for any reason, fall back to the plain base image so a bake
+   * problem can NEVER break previews.
+   */
+  private async resolveImage(modal: ModalClient, app: unknown): Promise<ModalImage> {
+    if (!this.prebakeEnabled()) return modal.images.fromRegistry(this.imageRef);
+    try {
+      return await this.previewImage(modal).build(app);
+    } catch {
+      return modal.images.fromRegistry(this.imageRef);
+    }
   }
 
   private async client(): Promise<ModalClient> {
@@ -284,13 +343,18 @@ export class ModalSandboxProvider implements SandboxProvider {
       }
 
       progress?.("creating", "Provisioning Modal sandbox");
-      const image = modal.images.fromRegistry(this.imageRef);
+      const image = await this.resolveImage(modal, app);
+      // Keep the sandbox's entrypoint alive for the WHOLE lifetime — a fixed
+      // `sleep 7200` (2h) used to terminate the container before the wall-clock
+      // deadline, killing long previews. Sleep for the full timeout window (+a
+      // small margin) so only the Modal timeout/idle policy governs teardown.
+      const keepAliveSecs = Math.ceil(timeoutMs / 1000) + 60;
       const createOpts: Record<string, unknown> = {
         encryptedPorts: [port],
         timeoutMs,
-        idleTimeoutMs: Math.min(timeoutMs, 20 * 60 * 1000),
+        idleTimeoutMs: Math.min(DEFAULT_IDLE_TIMEOUT_MS, timeoutMs),
         workdir: WORKDIR,
-        command: ["sleep", "7200"],
+        command: ["sleep", String(keepAliveSecs)],
       };
       if (opts.projectId) {
         createOpts.name = sandboxNameForProject(opts.projectId);
@@ -317,6 +381,19 @@ export class ModalSandboxProvider implements SandboxProvider {
           }
           await existing.terminate().catch(() => {});
           sb = await modal.sandboxes.create(app, image, createOpts);
+        } else if (/timeout|duration|limit|exceed|too (large|long)|invalid/i.test(msg)) {
+          // Defensive: if the plan/API rejects the long (24h) lifetime, don't
+          // break previews — retry once with a conservative 2h cap so the
+          // sandbox still comes up (just shorter-lived).
+          const cappedMs = 2 * 60 * 60 * 1000;
+          const cappedOpts = {
+            ...createOpts,
+            timeoutMs: cappedMs,
+            idleTimeoutMs: cappedMs,
+            command: ["sleep", String(Math.ceil(cappedMs / 1000) + 60)],
+          };
+          sb = await modal.sandboxes.create(app, image, cappedOpts);
+          progress?.("creating", "Provisioned with a 2h cap (plan limit on lifetime)");
         } else {
           throw createErr;
         }
@@ -421,6 +498,69 @@ export class ModalSandboxProvider implements SandboxProvider {
       await sb.terminate();
     } catch {
       /* already gone */
+    }
+  }
+
+  /**
+   * Reset the sandbox's idle/wall-clock timer so it doesn't expire while the
+   * user is actively editing. Any RPC to the sandbox resets Modal's idle timer;
+   * we also push the wall-clock deadline via setTimeout when the SDK exposes it.
+   * Cheap (a no-op exec) and fail-soft — a dead sandbox just reports alive:false
+   * so the caller can trigger a reconnect.
+   */
+  async keepAlive(
+    sandboxId: string,
+    opts?: { previewUrl?: string; port?: number },
+  ): Promise<{ alive: boolean; tunnelHealthy?: boolean; restarted?: boolean }> {
+    try {
+      const sb = await this.connect(sandboxId);
+      // Push the wall-clock deadline forward when supported (SDK-version safe).
+      const withTimeout = sb as unknown as { setTimeout?: (ms: number) => Promise<void> | void };
+      if (typeof withTimeout.setTimeout === "function") {
+        try {
+          await withTimeout.setTimeout(DEFAULT_TIMEOUT_MS);
+        } catch {
+          /* older SDK — the exec below still resets the idle timer */
+        }
+      }
+      // A lightweight command resets Modal's idle timer AND proves the container
+      // (compute) is alive.
+      await this.execProcess(sb, ["true"]);
+
+      // ── Zombie-tunnel detection + self-heal ────────────────────────────────
+      // Modal can keep the CONTAINER alive while the Vite dev server inside it
+      // dies (OOM, crash, reclaim of the tunnel). The tunnel then resets
+      // connections (ERR_CONNECTION_RESET) even though phase stays "ready" and a
+      // no-op exec still succeeds — so `alive:true` alone is NOT enough, and the
+      // client never reboots, leaving the user stuck on a dead preview that the
+      // UI mislabels "Preview root is empty — app crashed during mount". Probe
+      // the actual tunnel HTTP; if it's dead while compute is alive, restart
+      // Vite in place and re-probe.
+      const port = opts?.port ?? Number(process.env.MODAL_PREVIEW_PORT ?? 5173);
+      let previewUrl = opts?.previewUrl;
+      if (!previewUrl) {
+        try {
+          previewUrl = await this.previewUrlFromSandbox(sb, port);
+        } catch {
+          /* can't resolve — skip the tunnel probe, compute is still alive */
+        }
+      }
+      if (!previewUrl) return { alive: true };
+
+      if (await waitForServer(previewUrl, 6000)) {
+        return { alive: true, tunnelHealthy: true };
+      }
+
+      // Dead tunnel + live compute → restart the dev server in place.
+      await this.execProcess(sb, [
+        "bash",
+        "-c",
+        `(pkill -f vite || true); sleep 1; cd ${WORKDIR} && nohup npm run dev -- --host 0.0.0.0 --port ${port} >> /tmp/lifemark-dev.log 2>&1 &`,
+      ]);
+      const recovered = await waitForServer(previewUrl, 15_000);
+      return { alive: true, tunnelHealthy: recovered, restarted: true };
+    } catch {
+      return { alive: false };
     }
   }
 }

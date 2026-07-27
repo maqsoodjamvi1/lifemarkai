@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { ENV_FILE_PATH, parseEnvFile } from "@/lib/project/env-file";
 import {
   CONNECTOR_REGISTRY,
   resolveConnectorBaseUrl,
 } from "@/lib/integrations/connector-registry";
+import { getAppUserConnection, ensureFreshToken } from "@/lib/integrations/app-user-connections";
 import { rateLimit } from "@/lib/rate-limit";
 
 // ─── POST /api/projects/[id]/connector-proxy ─────────────────────────────────
@@ -64,7 +65,7 @@ function cors(origin: string | null, origins: Set<string>): Record<string, strin
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-App-User-Id",
     Vary: "Origin",
   };
 }
@@ -147,6 +148,22 @@ export async function POST(
     return NextResponse.json({ error: "Unsupported method" }, { status: 400, headers });
   }
 
+  // ── App-user connector (per-end-user OAuth, migration 154) ──────────────────
+  // When the built app sends X-App-User-Id and that end-user has connected this
+  // provider, call the provider AS them with their own token instead of the
+  // project-owner credentials. Guarded: absent header → unchanged behavior.
+  const appUserId = req.headers.get("x-app-user-id") ?? "";
+  let appUserToken: string | null = null;
+  if (appUserId) {
+    try {
+      const admin = await createAdminClient();
+      const conn = await getAppUserConnection(admin, projectId, appUserId, body.connector.toLowerCase());
+      if (conn) appUserToken = await ensureFreshToken(admin, conn);
+    } catch {
+      /* fall back to project credentials */
+    }
+  }
+
   // Read connector credentials from the project's .env file
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: envRow } = await (supabase as any)
@@ -157,7 +174,8 @@ export async function POST(
     .maybeSingle();
   const env = parseEnvFile((envRow as { content?: string } | null)?.content ?? "");
 
-  const missing = spec.requiredEnv.filter((k) => !env[k]);
+  // Skip the project-credential requirement when calling as a connected end-user.
+  const missing = appUserToken ? [] : spec.requiredEnv.filter((k) => !env[k]);
   if (missing.length > 0) {
     return NextResponse.json(
       { error: `Connector "${body.connector}" is not configured: missing ${missing.join(", ")}. Add credentials in the App Connectors panel.` },
@@ -173,6 +191,8 @@ export async function POST(
   const upstreamHeaders: Record<string, string> = {
     ...spec.headers(env),
   };
+  // Per-end-user token overrides the project-owner Authorization header.
+  if (appUserToken) upstreamHeaders["Authorization"] = `Bearer ${appUserToken}`;
   let upstreamBody: string | undefined;
   if (method !== "GET" && body.body !== undefined) {
     const ct = body.contentType ?? upstreamHeaders["Content-Type"] ?? "application/json";

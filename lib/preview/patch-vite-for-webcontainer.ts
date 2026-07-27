@@ -6,6 +6,8 @@ export function patchViteConfigForWebContainer(content: string): string {
   let patched = patchReactPluginBabelConfig(content);
   if (!patched.trim()) return patched;
 
+  patched = ensureAtAlias(patched);
+
   const hasHost = /host\s*:\s*(true|['"]0\.0\.0\.0['"])/.test(patched);
   const hasHmr = /\bhmr\s*:\s*\{/.test(patched);
   const hasAllowedHosts = /allowedHosts\s*:/.test(patched);
@@ -36,6 +38,51 @@ export function patchViteConfigForWebContainer(content: string): string {
   }
 
   return `${patched.trim()}\n// Added for cloud/WebContainer preview\nexport const __webcontainerHost = true;\n`;
+}
+
+/**
+ * shadcn/ui convention: components import from "@/lib/utils", "@/components/…".
+ * That "@" is a Vite path alias for /src that the AI frequently forgets to
+ * configure. Without it Vite throws "Failed to resolve import @/lib/utils" and
+ * the app crashes on mount ("Preview root is empty"). Inject a resolve.alias
+ * mapping "@" → the project's src dir so these imports always resolve.
+ *
+ * Uses import.meta.dirname (Node 20.11+ / Vite 5, present in the sandbox) so we
+ * don't need to add a `path`/`url` import to an arbitrary config shape.
+ */
+export function ensureAtAlias(content: string): string {
+  if (!content.trim()) return content;
+  // Already has an "@" alias — leave it alone.
+  if (/alias\s*:\s*\{[^}]*['"]@['"]\s*:/.test(content)) return content;
+
+  const aliasValue = 'new URL("./src", import.meta.url).pathname';
+
+  // Case 1: a resolve: { ... } block exists — add/extend its alias.
+  const resolveBlock = /resolve\s*:\s*\{/;
+  if (resolveBlock.test(content)) {
+    if (/resolve\s*:\s*\{[\s\S]*?alias\s*:\s*\{/.test(content)) {
+      // resolve.alias exists but has no "@" — add it as the first entry.
+      return content.replace(
+        /(resolve\s*:\s*\{[\s\S]*?alias\s*:\s*\{)/,
+        `$1\n      "@": ${aliasValue},`,
+      );
+    }
+    return content.replace(
+      resolveBlock,
+      `resolve: {\n    alias: { "@": ${aliasValue} },`,
+    );
+  }
+
+  // Case 2: no resolve block — insert one right after defineConfig({.
+  const defineConfig = /defineConfig\s*\(\s*\{/;
+  if (defineConfig.test(content)) {
+    return content.replace(
+      defineConfig,
+      `defineConfig({\n  resolve: { alias: { "@": ${aliasValue} } },`,
+    );
+  }
+
+  return content;
 }
 
 /**

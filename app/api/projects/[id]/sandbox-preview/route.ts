@@ -72,15 +72,34 @@ export async function POST(req: NextRequest, { params }: Params) {
     appOrigin: process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, ""),
   };
 
-  const files: SandboxFile[] = patchSandboxPreviewFiles(
-    rows
-      .filter((r: { path?: string; content?: string }) => typeof r.path === "string")
-      .map((r: { path: string; content: string | null }) => ({
-        path: r.path,
-        content: r.content ?? "",
-      })),
-    patchOpts,
-  );
+  const rawFiles: SandboxFile[] = rows
+    .filter((r: { path?: string; content?: string }) => typeof r.path === "string")
+    .map((r: { path: string; content: string | null }) => ({
+      path: r.path,
+      content: r.content ?? "",
+    }));
+
+  // Cold-boot dependency reconciliation: a project whose persisted package.json
+  // already omits an imported package (class-variance-authority, @radix-ui/*,
+  // tailwind-merge, …) would crash on first mount before any sync could fix it.
+  // Repair package.json BEFORE the sandbox boots + npm-installs.
+  try {
+    const pkgRow = rawFiles.find((f) => f.path.replace(/\\/g, "/") === "package.json");
+    if (pkgRow?.content) {
+      const { syncPackageJsonDeps } = await import("@/lib/ai/npm-auto-install");
+      const sync = syncPackageJsonDeps(rawFiles, pkgRow.content);
+      if (sync && sync.addedPackages.length > 0) {
+        pkgRow.content = sync.updated;
+        await (supabase as any)
+          .from("project_files")
+          .update({ content: sync.updated, updated_at: new Date().toISOString() })
+          .eq("project_id", projectId)
+          .eq("path", "package.json");
+      }
+    }
+  } catch { /* non-fatal */ }
+
+  const files: SandboxFile[] = patchSandboxPreviewFiles(rawFiles, patchOpts);
 
   const { port, startCommand } = detectSandboxStart(files);
 
@@ -319,13 +338,15 @@ export async function GET(req: NextRequest, { params }: Params) {
     }
   }
 
-  // Clear stale URL so the client cold-boots instead of framing a dead tunnel.
+  // Clear stale URL + sandbox id so the client cold-boots instead of framing a
+  // dead tunnel / retrying reconnect against a terminated Modal sandbox.
   await (supabase as any)
     .from("projects")
     .update({
       preview_url: null,
       metadata: {
         ...meta,
+        sandbox_id: null,
         sandbox_phase: "error",
         sandbox_phase_detail: result.error ?? "Sandbox expired",
         sandbox_updated_at: new Date().toISOString(),
@@ -333,11 +354,27 @@ export async function GET(req: NextRequest, { params }: Params) {
     })
     .eq("id", projectId);
 
+  // #region agent log
+  fetch("http://127.0.0.1:7580/ingest/4eab943a-2827-4583-b27a-87e40bad58c8", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "32a6e2" },
+    body: JSON.stringify({
+      sessionId: "32a6e2",
+      runId: "preview-fix",
+      hypothesisId: "C",
+      location: "sandbox-preview/route.ts:GET",
+      message: "cleared terminated sandbox",
+      data: { projectId, sandboxId, error: result.error ?? "Sandbox expired" },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
+
   return NextResponse.json({
     enabled: true,
     ok: false,
     error: result.error ?? "Sandbox expired",
-    sandboxId,
+    sandboxId: null,
     phase: "error",
     phaseDetail: result.error ?? "Sandbox expired",
   });

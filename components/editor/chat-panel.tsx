@@ -282,6 +282,12 @@ export function ChatPanel({
   const [multiAgent, setMultiAgent] = useState(false);
   const [streaming, setStreaming] = useState(false);
 
+  // Message queueing (Lovable parity): if you send while the agent is still
+  // working, the message is queued and auto-sent when the current run finishes.
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
+  const autoSendRef = useRef<string | null>(null);
+  const prevStreamingRef = useRef(false);
+
   // Lovable dump: fixed overlay placeholder on #chatinput (sibling span pattern).
   // While generating, Lovable swaps the placeholder to "Queue follow-up...".
   const smartPlaceholder = isLocked
@@ -318,6 +324,29 @@ export function ChatPanel({
       // Don't ask immediately — wait until first build starts
     }
   }, []);
+
+  // Queue flush — when a run finishes (streaming true→false), pop the next
+  // queued message into the composer and mark it for auto-send.
+  useEffect(() => {
+    const was = prevStreamingRef.current;
+    prevStreamingRef.current = streaming;
+    if (was && !streaming && queuedMessages.length > 0 && !isLocked) {
+      const next = queuedMessages[0];
+      setQueuedMessages((q) => q.slice(1));
+      setInput(next);
+      autoSendRef.current = next;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streaming, queuedMessages, isLocked]);
+
+  // Auto-send the popped message once the composer holds it and we're idle.
+  useEffect(() => {
+    if (autoSendRef.current !== null && input === autoSendRef.current && !streaming && !isLocked) {
+      autoSendRef.current = null;
+      void handleSend();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [input, streaming, isLocked]);
   const [starterFired, setStarterFired] = useState(false);
   // Push the chat panel above the on-screen keyboard on mobile. 0 on desktop.
   const keyboardInset = useKeyboardInset();
@@ -3508,6 +3537,15 @@ ${(f.content ?? "").slice(0, 8000)}
     let text = input.trim();
     if (!text && !attachedImage) return;
 
+    // While the agent is working, queue the message instead of sending — it
+    // auto-sends when the current run finishes (see the flush effects above).
+    // autoSendRef guards the programmatic flush so it isn't re-queued.
+    if (streaming && text && autoSendRef.current !== text) {
+      setQueuedMessages((q) => [...q, text]);
+      setInput("");
+      return;
+    }
+
     const redaction = text ? redactPromptSecrets(text) : null;
     if (redaction && redaction.assignments.length > 0) {
       if (redaction.hasUnsecuredSecret) {
@@ -5621,6 +5659,31 @@ ${(f.content ?? "").slice(0, 8000)}
         onClick={scrollToBottom}
       />
       </div>{/* end messages wrapper */}
+
+      {queuedMessages.length > 0 && (
+        <div className="px-3 pb-1.5 flex flex-col gap-1">
+          {queuedMessages.map((m, i) => (
+            <div
+              key={`${i}-${m.slice(0, 12)}`}
+              className="flex items-center gap-2 rounded-[var(--radius-3)] bg-[var(--bg-muted)]/60 px-2.5 py-1.5 text-xs text-[var(--fg-tertiary)]"
+            >
+              <span className="shrink-0 tabular-nums text-[10px] opacity-70">{i + 1}</span>
+              <span className="flex-1 truncate">{m}</span>
+              <button
+                type="button"
+                aria-label="Remove queued message"
+                onClick={() => setQueuedMessages((q) => q.filter((_, idx) => idx !== i))}
+                className="shrink-0 rounded-full p-0.5 hover:bg-[var(--bg-muted)]"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+          <span className="px-0.5 text-[10px] text-[var(--fg-tertiary)]">
+            Queued — sends automatically when the current run finishes
+          </span>
+        </div>
+      )}
 
       {stoppedDraft && !streaming && (
         <LovableContinueBanner

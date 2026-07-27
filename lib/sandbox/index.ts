@@ -111,6 +111,16 @@ export interface SandboxProvider {
   reconnect(sandboxId: string, port?: number): Promise<SandboxRunResult>;
   /** Reconnect by stable project name (Modal named sandboxes). */
   reconnectByProject?(projectId: string, port?: number): Promise<SandboxRunResult>;
+  /**
+   * Reset the idle/wall-clock timer so an actively-edited sandbox never expires,
+   * AND verify the tunnel is actually serving (a zombie container can outlive its
+   * dev server). When the tunnel is dead but compute is alive, the provider may
+   * restart the dev server in place and report `tunnelHealthy`/`restarted`.
+   */
+  keepAlive?(
+    sandboxId: string,
+    opts?: { previewUrl?: string; port?: number },
+  ): Promise<{ alive: boolean; tunnelHealthy?: boolean; restarted?: boolean }>;
   /** Tear down a sandbox. */
   kill(sandboxId: string): Promise<void>;
 }

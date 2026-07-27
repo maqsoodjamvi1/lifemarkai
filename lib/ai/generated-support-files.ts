@@ -260,6 +260,28 @@ function appendDefaultExport(content: string, name: string): string {
   );
 }
 
+/**
+ * Drop bare `export { Name };` when `export function/const/class Name` already
+ * exists. That combo is a Vite/esbuild "Multiple exports with the same name"
+ * fatal — it often appears after converting `export default function Name` into
+ * a named+default pair while a generated `export { Name }` re-export remains.
+ */
+function stripRedundantNamedReExports(content: string): string {
+  let next = content;
+  const declared = new Set<string>();
+  for (const match of content.matchAll(
+    /\bexport\s+(?:async\s+)?(?:function|const|class|let|var)\s+([A-Za-z_$][\w$]*)\b/g,
+  )) {
+    declared.add(match[1]);
+  }
+  for (const name of declared) {
+    next = next.replace(new RegExp(`\\nexport\\s*\\{\\s*${name}\\s*\\}\\s*;\\s*(?=\\n|$)`, "g"), "\n");
+  }
+  // Orphan comment left behind when every generated re-export was stripped.
+  next = next.replace(/\n\/\/ LifemarkAI generated missing named exports\n(?!\s*export)/g, "\n");
+  return next;
+}
+
 function appendNamedReExports(content: string, names: string[]): string {
   const missing = names.filter(
     (name) => /^[A-Za-z_$][\w$]*$/.test(name) && !exportedNames(content).has(name),
@@ -268,6 +290,10 @@ function appendNamedReExports(content: string, names: string[]): string {
 
   const blockLines: string[] = [];
   for (const name of missing) {
+    // Already a named declaration export — never add a second `export { Name }`.
+    if (new RegExp(`\\bexport\\s+(?:async\\s+)?(?:function|const|class)\\s+${name}\\b`).test(content)) {
+      continue;
+    }
     // Default export function/const with the same name → also expose as named.
     if (
       new RegExp(`export\\s+default\\s+(?:async\\s+)?function\\s+${name}\\b`).test(content) ||
@@ -276,9 +302,22 @@ function appendNamedReExports(content: string, names: string[]): string {
       blockLines.push(`export { ${name} };`);
       continue;
     }
-    // File has some default export — alias it to the requested named import.
-    if (hasDefaultExport(content)) {
-      blockLines.push(`export { default as ${name} };`);
+    // File has some default export — alias it to the requested named import,
+    // but ONLY via the default's LOCAL binding name. `export { default as X }`
+    // without a `from` clause is a SYNTAX ERROR ("Unexpected keyword 'default'")
+    // and crashed the whole app on mount. If we can't find a local name, fall
+    // through to a passthrough stub (always valid).
+    const localDefault =
+      content.match(/export\s+default\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/)?.[1] ??
+      content.match(/export\s+default\s+(?:async\s+)?class\s+([A-Za-z_$][\w$]*)/)?.[1] ??
+      content.match(/export\s+default\s+([A-Za-z_$][\w$]*)\s*;/)?.[1] ??
+      null;
+    if (localDefault && localDefault !== name) {
+      blockLines.push(`export { ${localDefault} as ${name} };`);
+      continue;
+    }
+    if (localDefault === name) {
+      // Default's local name already equals the requested export → nothing to add.
       continue;
     }
     if (/^[A-Z]/.test(name)) {
@@ -590,6 +629,17 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
       if (hasDefaultExport(known.content ?? "")) continue;
       const next = appendDefaultExport(known.content ?? "", defaultName);
       upsertSupportFile(out, paths, known.path, known.language ?? "typescriptreact", next);
+    }
+  }
+
+  // Final pass: remove `export { Name }` that collides with `export function Name`
+  // (Vite: "Multiple exports with the same name").
+  for (let i = 0; i < out.length; i++) {
+    const file = out[i]!;
+    const content = file.content ?? "";
+    const cleaned = stripRedundantNamedReExports(content);
+    if (cleaned !== content) {
+      out[i] = { ...file, content: cleaned };
     }
   }
 

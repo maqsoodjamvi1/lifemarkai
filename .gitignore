@@ -49,3 +49,23 @@ Thumbs.db
 /lifemarkai/.git.bak/
 
 kdp-workbooks/
+
+# Session scratch: probe scripts, diagnostic dumps, and downloaded installers.
+# The Docker Desktop installer here is 117MB and .tmp-docker/ is 93MB — GitHub
+# hard-rejects any single file over 100MB, so committing these does not just
+# bloat the repo, it makes `git push` fail outright.
+.tmp-docker/
+.tmp-*.exe
+.tmp-*.txt
+.tmp-*.html
+.tmp-*.ps1
+tmp-preview-diag*.txt
+tmp-preview-diag*.json
+tmp-parse-lovable-out*.txt
+scripts/tmp-*.mjs
+
+# Probe scripts written into the migration app during the port (any depth).
+npm-install-result.txt
+_gen_probe.mjs
+_regen.mjs
+_verify_routes.mjs

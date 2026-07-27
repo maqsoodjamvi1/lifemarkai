@@ -97,6 +97,13 @@ const TOKEN_COST_MAP: Record<string, [number, number]> = {
   "mistralai/devstral-2512":            [0.10, 0.30],
   "z-ai/glm-5-turbo":                   [0.20, 0.80],
   "moonshotai/kimi-k2.7-code":          [0.60, 2.50],
+  // Embeddings (input-only; output rate 0) — for semantic search / RAG in
+  // generated apps via POST /v1/embeddings.
+  "text-embedding-3-small":  [0.02, 0.00],
+  "text-embedding-3-large":  [0.13, 0.00],
+  "text-embedding-ada-002":  [0.10, 0.00],
+  "gemini-embedding-001":    [0.15, 0.00],
+  "google/gemini-embedding-001": [0.15, 0.00],
 };
 
 // Fallback cost when model is unknown
@@ -860,6 +867,98 @@ async function handleTranscription(request: Request, env: Env, ctx: ExecutionCon
   });
 }
 
+// ── /v1/embeddings — semantic search / RAG for built apps ────────────────────
+//
+// OpenAI-compatible embeddings proxy. Generated apps call this (via their
+// injected LIFEMARK_API_KEY) to embed text for vector search / RAG without a
+// separate provider key. Billed on prompt_tokens like chat, into the unified
+// credit balance. Routes text-embedding-* → OpenAI, gemini-embedding-* →
+// Google's OpenAI-compatible endpoint.
+
+function resolveEmbeddingUpstream(model: string, env: Env): { url: string; apiKey: string } {
+  const m = model.toLowerCase();
+  if (m.startsWith("google/") || m.startsWith("gemini")) {
+    return {
+      url: "https://generativelanguage.googleapis.com/v1beta/openai/embeddings",
+      apiKey: env.GOOGLE_GENERATIVE_AI_API_KEY,
+    };
+  }
+  return { url: "https://api.openai.com/v1/embeddings", apiKey: env.OPENAI_API_KEY };
+}
+
+async function handleEmbeddings(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  const origin = request.headers.get("Origin");
+  const projectId = request.headers.get("X-Lifemark-Project-Id") ?? "";
+  const userId = request.headers.get("X-Lifemark-User-Id") ?? "";
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
+      status: 400, headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
+  }
+
+  const model = (body.model as string | undefined) ?? "text-embedding-3-small";
+  if (body.input === undefined || body.input === null || (typeof body.input === "string" && body.input === "")) {
+    return new Response(JSON.stringify({ error: "input (string or string[]) is required" }), {
+      status: 400, headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
+  }
+
+  if (userId) {
+    const balance = await checkAiBalance(userId, env);
+    if (balance !== null && balance <= AI_BALANCE_FLOOR_CENTS) {
+      return new Response(JSON.stringify({ error: "Credit balance exhausted. Top up your LifemarkAI credits to continue." }), {
+        status: 402, headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+      });
+    }
+  }
+
+  const { url, apiKey } = resolveEmbeddingUpstream(model, env);
+  const upstreamModel = model.startsWith("google/") ? model.slice("google/".length) : model;
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ ...body, model: upstreamModel }),
+      signal: AbortSignal.timeout(60_000),
+    });
+  } catch (err) {
+    return new Response(JSON.stringify({ error: "Upstream unreachable", detail: String(err) }), {
+      status: 502, headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
+  }
+
+  const text = await upstream.text();
+  if (!upstream.ok) {
+    return new Response(text, {
+      status: upstream.status,
+      headers: { "Content-Type": upstream.headers.get("content-type") ?? "application/json", ...corsHeaders(origin) },
+    });
+  }
+
+  if (projectId && userId) {
+    try {
+      const parsed = JSON.parse(text) as { usage?: { prompt_tokens?: number; total_tokens?: number } };
+      const promptTokens = parsed.usage?.prompt_tokens ?? parsed.usage?.total_tokens ?? 0;
+      if (promptTokens > 0) {
+        ctx.waitUntil(logUsage({ projectId, userId, promptTokens, completionTokens: 0, model }, env));
+      }
+    } catch {
+      /* non-JSON — skip billing */
+    }
+  }
+
+  return new Response(text, {
+    status: 200,
+    headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+  });
+}
+
 // ── Main fetch handler ────────────────────────────────────────────────────────
 
 export default {
@@ -897,6 +996,11 @@ export default {
     }
     if (url.pathname === "/v1/audio/transcriptions" && request.method === "POST") {
       return handleTranscription(request, env, ctx);
+    }
+
+    // Embeddings for semantic search / RAG in built apps.
+    if (url.pathname === "/v1/embeddings" && request.method === "POST") {
+      return handleEmbeddings(request, env, ctx);
     }
 
     if (url.pathname === "/inject-secret" && request.method === "POST") {

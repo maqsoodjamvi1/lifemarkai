@@ -1,5 +1,4 @@
-import type { AutoWireResult } from "@/lib/cloud/auto-wire";
-import type { SelfVerifyResult } from "@/lib/ai/self-verify";
+import type { AutoWireResult, SelfVerifyResult } from "@/lib/ai/http/result-types";
 import {
   EDITOR_LENS_DEFINITIONS,
   type EditorLensRole,

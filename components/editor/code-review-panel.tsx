@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ProjectFile } from "@/types/database";
-import type { ReviewIssue, ReviewResult } from "@/app/api/ai/review/route";
+import type { ReviewIssue, ReviewResult } from "@/lib/ai/review-types";
 
 interface CodeReviewPanelProps {
   activeFile: ProjectFile | null;

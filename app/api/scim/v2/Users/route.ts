@@ -100,8 +100,8 @@ export async function POST(req: NextRequest) {
   const scimCfg = (settings?.scim_config ?? { groupMappings: [] }) as WorkspaceScimConfig;
   const role = resolveScimRole(groups, scimCfg.groupMappings ?? []);
   const displayName =
-    body.name?.formatted ??
-    [body.name?.givenName, body.name?.familyName].filter(Boolean).join(" ") ||
+    (body.name?.formatted ??
+      [body.name?.givenName, body.name?.familyName].filter(Boolean).join(" ")) ||
     email;
 
   const externalId = body.externalId ?? email;

@@ -13,8 +13,8 @@ const PACKAGE_ALLOWLIST = `
 ## ⛔ STRICT PACKAGE ALLOWLIST — Only use these. Never import anything else.
 
 ### Always available (Modal live sandbox — Lovable parity):
-- react, react-dom, react-router-dom (v6)
-- typescript
+- react, react-dom, typescript
+- @tanstack/react-start + @tanstack/react-router — routing + SSR for TanStack Start apps (the target framework; see the TanStack Start blueprint below). Prefer these over react-router-dom for new apps.
 
 ### UI & Styling:
 - tailwindcss (via classes only — no import needed)
@@ -48,6 +48,70 @@ const PACKAGE_ALLOWLIST = `
 
 ### Modal / Vite live preview (Lovable path):
 Preview runs a real cloud sandbox with \`npm install\`. ANY npm package may be added to package.json — always include packages you import (e.g. @supabase/supabase-js, @stripe/stripe-js, react-router-dom). Prefer the list above when possible.
+`.trim();
+
+// ─── TANSTACK START BLUEPRINT ─────────────────────────────────────────────────
+// The STRICT app structure for TanStack Start apps (Lovable's default framework).
+// Corrected to the CURRENT API: package is @tanstack/react-start (NOT @tanstack/start),
+// no Vinxi (Vite plugin), routes live in src/routes/ (NOT app/routes/).
+const TANSTACK_START_BLUEPRINT = `
+## 🎯 TARGET FRAMEWORK — TanStack Start (strict structure, TypeScript, SSR)
+
+Generate/refactor apps as **TanStack Start** (TanStack Router + Vite + server functions).
+Use the CURRENT API — the following are the ONLY correct forms:
+
+- Package: **\`@tanstack/react-start\`** (NOT \`@tanstack/start\`) + **\`@tanstack/react-router\`**.
+- Build tool: **Vite** with \`tanstackStart()\` from \`@tanstack/react-start/plugin/vite\` — **no Vinxi**.
+- Routing: **file-based** in **\`src/routes/\`** (NOT \`app/routes/\`). \`src/routeTree.gen.ts\` is AUTO-GENERATED — never write it by hand.
+- Env vars: **\`import.meta.env.VITE_*\`** (NOT \`process.env.NEXT_PUBLIC_*\`).
+
+### Canonical structure (do not deviate)
+\`\`\`
+src/routes/__root.tsx     root document: <html><head><HeadContent/></head><body>{children}<Scripts/></body></html>
+src/routes/index.tsx      home route
+src/routes/<name>.tsx      flat routes — dots for nesting (blog.$slug.tsx), $ for params
+src/router.tsx            export function getRouter() { return createRouter({ routeTree }) }
+src/lib/utils.ts          cn() for shadcn
+vite.config.ts            plugins: [tanstackStart(), viteReact()]  // react AFTER start
+tsconfig.json             jsx react-jsx, Bundler resolution, @/* → src/*
+\`\`\`
+
+### Next.js → TanStack Start mapping (when migrating)
+- Pages: \`app/x/page.tsx\` → \`src/routes/x.tsx\`; \`app/blog/[slug]/page.tsx\` → \`src/routes/blog.$slug.tsx\`.
+- Layouts: \`layout.tsx\` → a parent route file rendering \`<Outlet />\` (pathless: \`_layout.tsx\`).
+- Data: async Server Component fetch → a route **\`loader\`**; read it with \`Route.useLoaderData()\` in a SYNC component.
+- Mutations / Server Actions (\`'use server'\`) → **\`createServerFn({ method: 'POST' | 'GET' })\`** with \`.validator()\` + \`.handler()\`.
+- Navigation: \`next/link\` \`<Link href>\` → \`import { Link } from '@tanstack/react-router'\` \`<Link to params search>\` (strictly typed).
+- Head/SEO: \`export const metadata\` / \`generateMetadata\` → the route's \`head: () => ({ meta: [...], links: [...] })\`.
+- Hooks: \`useRouter/usePathname/useSearchParams\` (next/navigation) → \`useNavigate/useLocation/useSearch\` (@tanstack/react-router).
+
+### Reference template (copy this shape verbatim)
+\`\`\`tsx
+import { createFileRoute } from '@tanstack/react-router'
+import { createServerFn } from '@tanstack/react-start'
+
+const getProjectDetails = createServerFn({ method: 'GET' })
+  .validator((slug: string) => slug)
+  .handler(async ({ data: slug }) => {
+    return { title: \`Project \${slug}\`, status: 'active' }
+  })
+
+export const Route = createFileRoute('/projects/$slug')({
+  head: ({ loaderData }) => ({ meta: [{ title: loaderData?.title ?? 'Project' }] }),
+  loader: async ({ params }) => getProjectDetails({ data: params.slug }),
+  component: ProjectPage,
+})
+
+function ProjectPage() {
+  const data = Route.useLoaderData()
+  return <div><h1>{data.title}</h1><p>Status: {data.status}</p></div>
+}
+\`\`\`
+
+RULES: components are synchronous (data comes from the loader, not async component bodies);
+every route file exports \`Route = createFileRoute('<path>')({...})\`; server-only work lives in
+\`createServerFn\` handlers; all \`<Link>\`s are type-safe. Never emit index.html or src/main.tsx —
+the TanStack Start Vite plugin owns the entry.
 `.trim();
 
 // ─── SHARED DESIGN SYSTEM ────────────────────────────────────────────────────
@@ -699,9 +763,13 @@ serve(async (req) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // BUILD mode — full app generation
 // ─────────────────────────────────────────────────────────────────────────────
-export const APP_GENERATION_SYSTEM_PROMPT = `You are LifemarkAI Build Engine — an expert React/TypeScript developer who builds complete, production-quality Vite + React applications.
+export const APP_GENERATION_SYSTEM_PROMPT = `You are LifemarkAI Build Engine — an expert React/TypeScript developer who builds complete, production-quality TanStack Start (React + TypeScript, SSR) applications.
 
 ${PACKAGE_ALLOWLIST}
+
+---
+
+${TANSTACK_START_BLUEPRINT}
 
 ---
 
@@ -1078,62 +1146,9 @@ When the user asks to add, change, or remove menu items, nav links, or header li
 9. NEVER patch \`index.css\` / \`globals.css\` / Footer / hero / main sections as part of a header/menu request unless the user explicitly asked. Preserve their classNames and markup.
 10. Do NOT full-rewrite \`App.tsx\` just to change the header — emit a surgical find/replace around the existing \`<header>\` / \`<nav>\` block only.`;
 
-// AUTO-FIX mode — error repair loop
-// ─────────────────────────────────────────────────────────────────────────────
-export const AUTO_FIX_SYSTEM_PROMPT = `You are LifemarkAI AutoFix — an expert at repairing React/TypeScript build errors.
-
-Given an error and the affected files, diagnose and fix the issue.
-
-${PACKAGE_ALLOWLIST}
-
-${BUG_FREE_GENERATION_CONTRACT}
-
-## Common Error Patterns and Fixes
-
-| Error | Likely Cause | Fix |
-|-------|-------------|-----|
-| "X" is imported by A but is not exported from B | The module exists, but the symbol was never added to it | ADD the missing \`export\` to B, shaped to match how A uses it. Do NOT delete A's import, and do NOT stub it as an empty array just to silence the error. |
-| A imports "X", but no such file exists in the project | The file was referenced but never created | CREATE that file, fully implemented, exporting exactly the symbols listed. Prefer creating it over deleting the import — the import reflects intended behaviour. |
-| Cannot read properties of undefined (reading 'map'/'length'/…) | A named import resolved to \`undefined\` because the target module doesn't export it (or doesn't exist) | Fix the CONTRACT — add the missing export or create the missing file. Do NOT paper over it with \`?.\` or \`|| []\`. |
-| Cannot find module 'X' | Wrong import path or uninstalled package | Fix path, create the missing project file, or replace with an allowed package |
-| Type 'X' is not assignable to type 'Y' | Wrong type, missing type cast | Fix the type — don't use \`as any\` |
-| 'X' is not defined | Missing import or undefined variable | Add import or define variable |
-| Expected N arguments, but got M | Wrong function call signature | Fix call to match signature |
-| Property 'X' does not exist on type 'Y' | Accessing property that doesn't exist | Fix property name or add to type |
-| Objects are not valid as a React child | Rendering object directly | Render a property: {obj.name} not {obj} |
-
-### Broken module contracts — the #1 cause of a frozen preview
-Most "undefined" crashes are NOT logic bugs. They are broken contracts: a file
-imports a symbol or a module that was never created. The preview binds the
-missing name to \`undefined\`, and React then dies somewhere far away with a
-message that names neither the symbol nor the file.
-
-When you are told a file or export is missing, **supply the missing thing**:
-- Missing FILE → emit it as a NEW entry in \`files\` (a path not in "Files to Repair" is allowed and expected). Implement it properly, consistent with the app's existing style and data shapes.
-- Missing EXPORT → emit the OWNING module with the export added, inferring the shape from how the importer consumes it (e.g. \`partner.name\`, \`partner.logo\` ⇒ an array of \`{ id, name, logo }\`).
-- Fix ALL reported contract errors in ONE pass — they are independent and each one left unfixed will crash the app the moment the previous one is resolved.
-
-## Output Format — ONLY this JSON:
-\`\`\`json
-{
-  "diagnosis": "Root cause in one clear sentence",
-  "fix_description": "What you changed and why — 2-3 sentences",
-  "files": [
-    {
-      "path": "src/App.tsx",
-      "content": "// COMPLETE fixed file — never truncated"
-    }
-  ]
-}
-\`\`\`
-
-Rules:
-- Fix ONLY the broken code. Preserve all design/styling.
-- NEVER use \`as any\` as a fix. Solve the actual type problem.
-- Return complete file contents for every file you touch.
-- \`files\` MAY include files that do not exist yet — that is how you create a missing module. Use the exact path named in the error.
-- Fix EVERY error you were given, not just the first one.
-- If the fix requires a package not in the allowlist, use the allowed alternative instead.`;
+// AUTO-FIX mode — error repair loop (canonical copy lives in prompts/auto-fix.ts
+// so the HTTP fix handler can import it without this whole blueprint module).
+export { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/prompts/auto-fix";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers

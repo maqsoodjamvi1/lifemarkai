@@ -6,7 +6,9 @@ import {
   formatErrorsForHealing,
   isBundlerError,
   isNoisePreviewError,
+  parsePreviewErrorClear,
   parsePreviewErrorMessage,
+  type PreviewErrorKind,
   type PreviewErrorReport,
   type PreviewRuntimeError,
 } from "@/lib/preview/preview-error-bridge";
@@ -106,7 +108,7 @@ export function usePreviewErrorGuard(
 
   const pushError = useCallback(
     (err: PreviewRuntimeError) => {
-      if (isNoisePreviewError(err.message)) return;
+      if (isNoisePreviewError(err.message, { filename: err.filename, stack: err.stack })) return;
       if (healingRef.current) return;
       const key = `${err.kind}:${err.message}`;
       if (seenErrorsRef.current.has(key)) return;
@@ -122,6 +124,32 @@ export function usePreviewErrorGuard(
     },
     [debounceMs, flushReport, maxErrors],
   );
+
+  // Retract errors of a given kind (used by the bridge's late-mount CLEAR:
+  // the empty-root probe fired a phantom "crashed" on a slow cold sandbox,
+  // then React actually painted). Removing the empty-root error un-freezes
+  // the preview so the banner disappears the moment the app truly mounts.
+  const clearErrorKind = useCallback((kind: PreviewErrorKind) => {
+    const before = errorsRef.current.length;
+    errorsRef.current = errorsRef.current.filter((e) => e.kind !== kind);
+    if (errorsRef.current.length === before) return; // nothing of this kind pending
+    // Drop the dedupe keys for this kind so a genuine future crash can re-report.
+    for (const key of Array.from(seenErrorsRef.current)) {
+      if (key.startsWith(`${kind}:`)) seenErrorsRef.current.delete(key);
+    }
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    if (errorsRef.current.length === 0) {
+      healingRef.current = false;
+      setReport((prev) => (prev === null ? prev : null));
+      setPhase((prev) => (prev === "healthy" ? prev : "healthy"));
+    } else {
+      // Real errors remain — refresh the report without the retracted kind.
+      setReport(buildReport());
+    }
+  }, [buildReport]);
 
   const parseLegacyPreviewMessage = useCallback((data: unknown): PreviewRuntimeError | null => {
     if (!data || typeof data !== "object") return null;
@@ -142,6 +170,12 @@ export function usePreviewErrorGuard(
         return;
       }
 
+      const cleared = parsePreviewErrorClear(e.data);
+      if (cleared) {
+        clearErrorKind(cleared);
+        return;
+      }
+
       const structured = parsePreviewErrorMessage(e.data);
       if (structured) {
         pushError(structured);
@@ -154,7 +188,7 @@ export function usePreviewErrorGuard(
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [iframeRef, parseLegacyPreviewMessage, pushError, strictIframeSource]);
+  }, [iframeRef, clearErrorKind, parseLegacyPreviewMessage, pushError, strictIframeSource]);
 
   const clearErrors = useCallback(() => {
     errorsRef.current = [];

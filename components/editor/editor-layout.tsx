@@ -148,6 +148,12 @@ interface EditorLayoutProps {
   starterPrompt?: string;
   starterMode?: EditorMode;
   autoDeploy?: boolean;
+  /** Deep-link: open this file path (from TanStack Zod search `?file=`). */
+  initialFilePath?: string;
+  /** Deep-link: canvas view (`?view=preview|code|both|files`). */
+  initialView?: ViewMode;
+  /** Deep-link: left tool panel id (`?panel=chat`). */
+  initialPanel?: LeftPanel | string;
 }
 
 export function EditorLayout({
@@ -159,6 +165,9 @@ export function EditorLayout({
   starterPrompt,
   starterMode,
   autoDeploy,
+  initialFilePath,
+  initialView,
+  initialPanel,
 }: EditorLayoutProps) {
   const router = useRouter();
   // Record this project visit for the dashboard "Recently visited" rail
@@ -290,7 +299,10 @@ export function EditorLayout({
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [messagesHydrating, setMessagesHydrating] = useState(false);
   const [activeFile, setActiveFile] = useState<ProjectFile | null>(
-    initialFiles.find((f) => f.path === "app/page.tsx" || f.path === "src/App.tsx" || f.path === "index.html") ||
+    (initialFilePath
+      ? initialFiles.find((f) => f.path === initialFilePath)
+      : undefined) ||
+      initialFiles.find((f) => f.path === "app/page.tsx" || f.path === "src/App.tsx" || f.path === "index.html") ||
       initialFiles[0] ||
       null
   );
@@ -309,11 +321,13 @@ export function EditorLayout({
     // Agent stays available as an explicit choice for autonomous multi-step runs.
     return "build";
   });
-  const [viewMode, setViewMode] = useState<ViewMode>("preview");
+  const [viewMode, setViewMode] = useState<ViewMode>(initialView ?? "preview");
   // Lovable-parity "Preview this version": when set, the preview panel renders
   // this snapshot's files (read-only banner) instead of the live project files.
   const [previewVersion, setPreviewVersion] = useState<{ files: ProjectFile[]; label: string } | null>(null);
-  const [leftPanel, setLeftPanel] = useState<LeftPanel>("chat");
+  const [leftPanel, setLeftPanel] = useState<LeftPanel>(
+    (initialPanel as LeftPanel | undefined) || "chat",
+  );
   // Right-side secondary panel (null = show preview/code)
   const [rightPanel, setRightPanel] = useState<LeftPanel | null>(null);
   const [leftChatOverlay, setLeftChatOverlay] = useState<"history" | null>(null);

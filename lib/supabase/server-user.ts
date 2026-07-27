@@ -13,8 +13,18 @@ export type ServerUserResult = {
 
 /** Resolve the current user; prefers fast cookie session when Supabase is slow/unreachable. */
 export async function getServerUser(supabase: SupabaseServer): Promise<ServerUserResult> {
-  const { data: { session } } = await supabase.auth.getSession();
-  const sessionUser = session?.user ?? null;
+  let sessionUser: User | null = null;
+  try {
+    const sessionResult = await Promise.race([
+      supabase.auth.getSession(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("getSession timeout")), GET_USER_TIMEOUT_MS),
+      ),
+    ]);
+    sessionUser = sessionResult.data.session?.user ?? null;
+  } catch {
+    sessionUser = null;
+  }
 
   let verifiedUser: User | null = null;
   let authError: Error | null = null;

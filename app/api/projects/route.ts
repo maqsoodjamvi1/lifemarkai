@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import { getTemplateById } from "@/lib/templates/built-in";
+import { tanstackStartScaffold } from "@/lib/templates/tanstack-start-scaffold";
 import { projectSchema } from "@/lib/validations";
 
 // Explicitly exclude managed service credentials on databases where the
@@ -53,8 +54,11 @@ export async function POST(req: NextRequest) {
   const { name, description, templateId, forkFiles } = body;
   // SSR-first default: Next.js App Router unless the client picked a framework
   // or the deployment overrides it (DEFAULT_NEW_PROJECT_FRAMEWORK=react to revert).
+  // Default new-project framework = TanStack Start (Lovable parity). Override
+  // instantly with DEFAULT_NEW_PROJECT_FRAMEWORK=next (e.g. to revert) — no code
+  // change needed.
   const framework: string =
-    body.framework ?? process.env.DEFAULT_NEW_PROJECT_FRAMEWORK ?? "next";
+    body.framework ?? process.env.DEFAULT_NEW_PROJECT_FRAMEWORK ?? "tanstack-start";
 
   if (!name) return NextResponse.json({ error: "Name is required" }, { status: 400 });
 
@@ -149,6 +153,13 @@ export async function POST(req: NextRequest) {
 
 function getStarterFiles(name: string, framework: string) {
   const safeName = name.replace(/[^a-zA-Z0-9]/g, "");
+
+  // TanStack Start starter (Lovable's default framework) — canonical strict
+  // structure from lib/templates/tanstack-start-scaffold.ts. The AI's first
+  // build fills in src/routes/*; this boots immediately in the preview sandbox.
+  if (framework === "tanstack-start" || framework === "tanstack") {
+    return tanstackStartScaffold();
+  }
 
   // Next.js App Router starter — minimal SSR-first scaffold. The AI's first
   // build replaces app/page.tsx (the placeholder text is what the validator's

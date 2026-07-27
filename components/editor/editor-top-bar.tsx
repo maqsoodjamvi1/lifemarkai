@@ -119,6 +119,13 @@ function openSecondaryPanel(
 /** Returns a human-readable relative time string that auto-updates every 5 s */
 function useRelativeTime(date: Date | null | undefined): string {
   const [, tick] = useState(0);
+  // Server and client render at different instants, so the label has to stay
+  // empty through hydration to keep the markup identical.
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     if (!date) return;
@@ -126,7 +133,7 @@ function useRelativeTime(date: Date | null | undefined): string {
     return () => clearInterval(id);
   }, [date]);
 
-  if (!date) return "";
+  if (!mounted || !date) return "";
   const seconds = Math.round((Date.now() - date.getTime()) / 1000);
   if (seconds < 5)  return "Saved just now";
   if (seconds < 60) return `Saved ${seconds}s ago`;

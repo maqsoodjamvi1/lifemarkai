@@ -5,6 +5,8 @@
  * by the WebContainer preview — only app-specific files live here.
  */
 
+import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "@/lib/preview/base-app-deps";
+
 export interface TemplateFile {
   path: string;
   content: string;
@@ -35,24 +37,13 @@ const PACKAGE_JSON = (extra: Record<string, string> = {}): TemplateFile => ({
     private: true,
     type: "module",
     scripts: { dev: "vite --host", build: "vite build" },
-    dependencies: {
-      react: "^18.3.1",
-      "react-dom": "^18.3.1",
-      "lucide-react": "^0.414.0",
-      "framer-motion": "^11.0.0",
-      "clsx": "^2.1.0",
-      ...extra,
-    },
-    devDependencies: {
-      "@types/react": "^18.3.1",
-      "@types/react-dom": "^18.3.1",
-      "@vitejs/plugin-react": "^4.3.0",
-      typescript: "^5.5.0",
-      vite: "^5.4.0",
-      tailwindcss: "^3.4.0",
-      autoprefixer: "^10.4.0",
-      postcss: "^8.4.0",
-    },
+    // Lovable-parity default stack (single source of truth: base-app-deps.ts).
+    // Every new app ships the full shadcn/ui + forms + routing + data ecosystem
+    // pre-declared → zero missing-dependency crashes, no reconcile round trip.
+    // The SAME set is baked into the Modal preview image so cold installs are
+    // near-instant.
+    dependencies: { ...BASE_APP_DEPENDENCIES, ...extra },
+    devDependencies: { ...BASE_APP_DEV_DEPENDENCIES },
   }, null, 2),
 });
 
@@ -106,7 +97,7 @@ const TSCONFIG: TemplateFile = {
 const TAILWIND_CONFIG: TemplateFile = {
   path: "tailwind.config.js",
   language: "javascript",
-  content: `/** @type {import('tailwindcss').Config} */\nexport default {\n  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],\n  theme: { extend: {} },\n  plugins: [],\n}`,
+  content: `import tailwindcssAnimate from 'tailwindcss-animate'\n\n/** @type {import('tailwindcss').Config} */\nexport default {\n  darkMode: ['class'],\n  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],\n  theme: { extend: {} },\n  plugins: [tailwindcssAnimate],\n}`,
 };
 
 const POSTCSS_CONFIG: TemplateFile = {

@@ -43,6 +43,9 @@ export function useSandboxPreview(projectId: string) {
     phaseDetail: null,
   });
   const sandboxIdRef = useRef<string | null>(null);
+  /** Bumped when a zombie tunnel is healed in place, to force the iframe (which
+   *  is stuck on a stale connection-reset page) to reload the recovered URL. */
+  const [reloadNonce, setReloadNonce] = useState(0);
   /** One-shot guard for mid-session dead-sandbox auto-recovery (cold re-boot). */
   const coldRetryRef = useRef(false);
   const bootedRef = useRef(false);
@@ -222,13 +225,89 @@ export function useSandboxPreview(projectId: string) {
     })();
   }, [projectId, reconnectPreview, requestPreview]);
 
+  /** Keep-alive heartbeat: while a live preview is up AND the tab is visible,
+   *  ping the sandbox so Modal's idle timer never fires (sandboxes were expiring
+   *  every ~10 min mid-edit). If the heartbeat reports the sandbox died, boot a
+   *  fresh one immediately instead of waiting for the user to hit an error. */
+  useEffect(() => {
+    if (!projectId || !state.enabled || !state.previewUrl) return;
+    let stopped = false;
+    const beat = () => {
+      if (stopped || typeof document !== "undefined" && document.hidden) return;
+      const sid = sandboxIdRef.current;
+      if (!sid) return;
+      void fetch(`/api/projects/${projectId}/sandbox-preview/keep-alive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Send the tunnel URL so the server can probe it (zombie detection):
+        // a Modal container can outlive its Vite dev server, leaving the tunnel
+        // resetting connections while `alive` is still true.
+        body: JSON.stringify({ sandboxId: sid, previewUrl: state.previewUrl }),
+        keepalive: true,
+      })
+        .then((r) => r.json())
+        .then((d: { alive?: boolean; enabled?: boolean; tunnelHealthy?: boolean; restarted?: boolean }) => {
+          if (stopped || d.enabled === false) return;
+          // #region agent log
+          fetch('http://127.0.0.1:7580/ingest/4eab943a-2827-4583-b27a-87e40bad58c8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32a6e2'},body:JSON.stringify({sessionId:'32a6e2',runId:'preview-fix',hypothesisId:'A',location:'use-sandbox-preview.ts:keepalive',message:'keepalive beat',data:{alive:d.alive,tunnelHealthy:d.tunnelHealthy,restarted:d.restarted,sandboxId:sid},timestamp:Date.now()})}).catch(()=>{});
+          // #endregion
+          // (1) Compute gone — reboot a fresh sandbox before the user sees a dead
+          // tunnel. (2) Tunnel dead and the in-place Vite restart didn't recover
+          // it — also reboot. Either way, get a working preview automatically.
+          if (d.alive === false || d.tunnelHealthy === false) {
+            sandboxIdRef.current = null;
+            try { sessionStorage.removeItem(storageKey(projectId)); } catch { /* private */ }
+            // Drop the dead tunnel URL immediately so the iframe stops showing a
+            // blank/connection-reset page while the cold boot runs.
+            setState((s) => ({
+              ...s,
+              previewUrl: null,
+              sandboxId: null,
+              loading: true,
+              error: null,
+              phase: "creating",
+              phaseDetail: "Sandbox expired — restarting…",
+            }));
+            // #region agent log
+            fetch('http://127.0.0.1:7580/ingest/4eab943a-2827-4583-b27a-87e40bad58c8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32a6e2'},body:JSON.stringify({sessionId:'32a6e2',runId:'preview-fix',hypothesisId:'A',location:'use-sandbox-preview.ts:keepalive-reboot',message:'dead tunnel → cold reboot',data:{sandboxId:sid},timestamp:Date.now()})}).catch(()=>{});
+            // #endregion
+            void requestPreview();
+          } else if (d.restarted && d.tunnelHealthy) {
+            // Zombie healed in place: Vite was restarted and the tunnel serves
+            // again, but the iframe is still showing the stale connection-reset
+            // page (browsers don't auto-retry those). Bump the nonce to reload it.
+            setReloadNonce((n) => n + 1);
+          }
+        })
+        .catch(() => {});
+    };
+    // Probe immediately on mount/URL change — observed live: terminated Modal
+    // sandboxes left a blank iframe for minutes because the first beat waited 90s.
+    beat();
+    // Heartbeat every 15s (well under Modal's idle window) + when tab is visible.
+    const timer = window.setInterval(beat, 15_000);
+    const onVisible = () => { if (!document.hidden) beat(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [projectId, state.enabled, state.previewUrl, requestPreview]);
+
   /** Poll Modal boot phase while cold-starting (metadata updates from POST).
    *  ALSO keeps polling in the error state: a failed boot used to freeze the
    *  "could not start" pane forever even after a later boot succeeded — the
-   *  poll now adopts the ready sandbox and the pane self-recovers. */
+   *  poll now adopts the ready sandbox and the pane self-recovers.
+   *
+   *  ALSO polls when a previewUrl is already set: Modal can terminate the
+   *  sandbox mid-session while the client still frames the dead tunnel URL.
+   *  Previously `state.previewUrl` short-circuited this effect, so cold-retry
+   *  never ran and the editor stayed blank until a manual refresh. */
   useEffect(() => {
     const bootPending = state.loading || !!state.error || state.phase === "error";
-    if (!projectId || !state.enabled || state.previewUrl || !bootPending) return;
+    const hasStaleUrlRisk = !!state.previewUrl;
+    if (!projectId || !state.enabled || (!bootPending && !hasStaleUrlRisk)) return;
     const timer = window.setInterval(() => {
       void fetch(`/api/projects/${projectId}/sandbox-preview?phaseOnly=1`)
         .then((r) => r.json())
@@ -271,11 +350,25 @@ export function useSandboxPreview(projectId: string) {
           // once per death instead of waiting for the user to intervene.
           const deadPhase =
             data.phase === "error" ||
-            /already finished|already completed|FAILED_PRECONDITION/i.test(
+            /already finished|already completed|FAILED_PRECONDITION|terminated/i.test(
               data.phaseDetail ?? "",
             );
           if (deadPhase && !coldRetryRef.current) {
             coldRetryRef.current = true;
+            sandboxIdRef.current = null;
+            try { sessionStorage.removeItem(storageKey(projectId)); } catch { /* private */ }
+            setState((s) => ({
+              ...s,
+              previewUrl: null,
+              sandboxId: null,
+              loading: true,
+              error: null,
+              phase: "creating",
+              phaseDetail: "Sandbox expired — restarting…",
+            }));
+            // #region agent log
+            fetch('http://127.0.0.1:7580/ingest/4eab943a-2827-4583-b27a-87e40bad58c8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32a6e2'},body:JSON.stringify({sessionId:'32a6e2',runId:'preview-fix',hypothesisId:'B',location:'use-sandbox-preview.ts:phase-poll-reboot',message:'dead phase → cold reboot',data:{phase:data.phase,phaseDetail:data.phaseDetail,hadUrl:!!state.previewUrl},timestamp:Date.now()})}).catch(()=>{});
+            // #endregion
             void requestPreview().then((next) => {
               // Allow another recovery on the NEXT death only after success.
               if (next.previewUrl) coldRetryRef.current = false;
@@ -372,5 +465,5 @@ export function useSandboxPreview(projectId: string) {
     [projectId, reconnectPreview],
   );
 
-  return { ...state, statusResolved, requestPreview, reconnectPreview, stopPreview, syncFiles };
+  return { ...state, reloadNonce, statusResolved, requestPreview, reconnectPreview, stopPreview, syncFiles };
 }

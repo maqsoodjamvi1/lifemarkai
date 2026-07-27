@@ -62,15 +62,24 @@ const SUPABASE_CLIENT_SCAFFOLD = `import { createClient } from "@supabase/supaba
 
 // Auto-configured by Lifemark Cloud — credentials live in .env.local
 // (VITE_* vars are build-time, browser-safe values).
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-if (!supabaseUrl || !supabaseAnonKey) {
+export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+
+if (!isSupabaseConfigured) {
   // eslint-disable-next-line no-console
   console.warn("Supabase credentials missing — backend features are disabled until the project finishes provisioning.");
 }
 
-export const supabase = createClient(supabaseUrl ?? "", supabaseAnonKey ?? "");
+// IMPORTANT: never call createClient with an empty string — @supabase/supabase-js
+// throws "supabaseUrl is required." at import time, which crashes the whole app
+// on mount ("Preview root is empty"). Fall back to a valid placeholder so the UI
+// always renders; backend calls then fail gracefully instead of crashing.
+export const supabase = createClient(
+  supabaseUrl || "https://placeholder.supabase.co",
+  supabaseAnonKey || "public-anon-key",
+);
 `;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

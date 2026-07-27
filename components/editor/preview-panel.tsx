@@ -22,13 +22,10 @@ import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
 import dynamic from "next/dynamic";
-import { buildFallbackHtml, EMPTY_PREVIEW_HTML, PREVIEW_ENGINE_REV } from "@/lib/preview/build-fallback-html";
-import { injectGuestCommentsIntoHtml } from "@/lib/preview/inject-guest-comments";
-import { buildEsbuildHtml } from "@/lib/preview/esbuild-engine";
+import { EMPTY_PREVIEW_HTML, PREVIEW_ENGINE_REV } from "@/lib/preview/build-fallback-html";
 import { filesContentSignature } from "@/lib/preview/files-signature";
 import {
   isWebContainerPreviewEnabled,
-  resolvePreviewEngine,
   shouldUseWebContainer,
   WC_UNAVAILABLE_KEY,
   type PreviewEngine,
@@ -49,15 +46,6 @@ import { LovableVersionPreviewBanner } from "./lovable/version-preview-banner";
 import { ratePreviewMetric, type PreviewPerfSnapshot } from "@/lib/preview/preview-perf-bridge";
 import { PreviewCommentPins } from "./preview-comment-pins";
 import { createClient } from "@/lib/supabase/client";
-
-const WebContainerPreview = dynamic(() => import("./webcontainer-preview"), {
-  ssr: false,
-  loading: () => (
-    <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
-      <Loader2 className="w-5 h-5 animate-spin text-muted-foreground/50" />
-    </div>
-  ),
-});
 
 // Sandpack stubs — these branches are never reached (sandpackReady is always false)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -267,28 +255,6 @@ const BG_COLORS = [
   "bg-transparent","bg-white","bg-black","bg-gray-100",
   "bg-blue-500","bg-green-500","bg-red-500","bg-yellow-500",
 ];
-
-const ESBUILD_OVERRIDE_KEY = "lifemark-preview-esbuild";
-
-function envEsbuildPreviewDefault(): boolean {
-  return (
-    process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "1" ||
-    process.env.NEXT_PUBLIC_PREVIEW_ESBUILD === "true"
-  );
-}
-
-/** Env default, overridable per-session via localStorage (toolbar toggle). */
-function readEsbuildOverride(): boolean | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const override = localStorage.getItem(ESBUILD_OVERRIDE_KEY);
-    if (override === "1" || override === "true") return true;
-    if (override === "0" || override === "false") return false;
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
 
 function shouldAutoStartVitePreview(): boolean {
   // Draft/legacy WebContainer only — Lovable production preview is Modal.
@@ -652,6 +618,7 @@ export function PreviewPanel({
     phase: sandboxPhase,
     phaseDetail: sandboxPhaseDetail,
     statusResolved: sandboxStatusResolved,
+    reloadNonce: sandboxReloadNonce,
   } = useSandboxPreview(projectId ?? "");
   const sandboxIdLiveRef = useRef(sandboxId);
   sandboxIdLiveRef.current = sandboxId;
@@ -1060,52 +1027,24 @@ export function PreviewPanel({
     })();
   }, [toast, projectId]);
 
-  // Pick preview engine. Preferred = Modal sandbox (Lovable path). When the
-  // sandbox backend is unavailable, fall back AUTOMATICALLY to in-browser
-  // engines (WebContainer if allowed, else esbuild/srcdoc) so users always
-  // get a working preview instead of an "unavailable" pane.
-  // Dev/support override: localStorage "lifemark-preview-force-fallback"="1".
-  const webContainerAllowed = useWebContainers && isWebContainerPreviewEnabled();
-  const forceFallbackPreview =
-    typeof window !== "undefined" &&
-    (() => {
-      try {
-        return window.localStorage.getItem("lifemark-preview-force-fallback") === "1";
-      } catch {
-        return false;
-      }
-    })();
-  const sandboxAvailable = sandboxEnabled && !forceFallbackPreview;
+  // MODAL-ONLY PREVIEW. The Modal cloud sandbox is the single, sole preview
+  // engine — the WebContainer / esbuild / srcdoc in-browser engines are fully
+  // retired (their code below is unreachable and kept only until physically
+  // deleted). When Modal is unavailable we show a neutral "preview unavailable"
+  // pane rather than switching engines. Rationale: one real engine = exact
+  // parity with the deployed app + no engine-switch state races.
+  const webContainerAllowed = false;
+  const forceFallbackPreview = false;
+  const sandboxAvailable = sandboxEnabled;
   useEffect(() => {
-    if (files.length === 0) {
-      setPreviewEngine((prev) => (prev === "fallback" ? prev : "fallback"));
-      return;
-    }
-
-    if (sandboxAvailable) {
-      setPreviewEngine((prev) => (prev === "sandbox" ? prev : "sandbox"));
-      return;
-    }
-
-    // isWcBlocked() also CLEARS an expired flag from sessionStorage before
-    // resolvePreviewEngine() independently re-reads it below.
-    const wcBlocked = isWcBlocked();
-
-    if (wcBlocked || !webContainerAllowed) {
-      setPreviewEngine((prev) => (prev === "fallback" ? prev : "fallback"));
-      return;
-    }
-
-    const isolated = typeof window !== "undefined" ? window.crossOriginIsolated : false;
-    const engine = resolvePreviewEngine(files, {
-      preferWebContainers: webContainerAllowed && vitePreviewRequested,
-      crossOriginIsolated: isolated,
-      sandboxUrl,
-      sandboxEnabled,
-      allowWebContainer: webContainerAllowed,
+    // "sandbox" whenever there are files (Modal renders them); "fallback" only
+    // as the no-files empty state, which renders a neutral message — never an
+    // in-browser engine.
+    setPreviewEngine((prev) => {
+      const next = files.length === 0 ? "fallback" : "sandbox";
+      return prev === next ? prev : next;
     });
-    setPreviewEngine((prev) => (prev === engine ? prev : engine));
-  }, [files, webContainerAllowed, vitePreviewRequested, projectId, sandboxUrl, sandboxAvailable]);
+  }, [files.length]);
 
   const getActivePreviewIframe = useCallback((): HTMLIFrameElement | null => {
     if (previewEngine === "webcontainer") {
@@ -1785,98 +1724,11 @@ export function PreviewPanel({
     return visualEditEnabled ? addVebBridge(base) : base;
   }, [files, visualEditEnabled]);
 
-  // Draft esbuild prefs (must be declared before fallbackHtml gate).
-  const [esbuildPref, setEsbuildPref] = useState<boolean | null>(() => readEsbuildOverride());
-  const esbuildEnabled = esbuildPref ?? envEsbuildPreviewDefault();
-
-  // Build srcdoc HTML for draft engines AND as the automatic stand-in when
-  // the live sandbox backend is unavailable (users always get a preview).
-  const draftSrcdocNeeded =
-    webContainerAllowed ||
-    (esbuildEnabled && isWebContainerPreviewEnabled()) ||
-    (sandboxStatusResolved && !sandboxAvailable);
-  const fallbackHtml = useMemo(() => {
-    if (!draftSrcdocNeeded || previewEngine === "sandbox" || sandboxAvailable) {
-      return "";
-    }
-    const html = buildFallbackHtml(previewFiles.length > 0 ? previewFiles : previewRelevantFiles(files));
-    if (!isPublic || !projectId) return html;
-    const origin =
-      typeof window !== "undefined" ? window.location.origin : process.env.NEXT_PUBLIC_APP_URL;
-    return injectGuestCommentsIntoHtml(html, { projectId, origin: origin || undefined });
-  }, [
-    draftSrcdocNeeded,
-    previewEngine,
-    sandboxAvailable,
-    previewFiles,
-    files,
-    isPublic,
-    projectId,
-  ]);
-  // ── esbuild preview engine (flagged) ────────────────────────────────────────
-  // Draft only — never the Modal product path. See lib/preview/esbuild-engine.ts.
-  const [esbuildHtml, setEsbuildHtml] = useState("");
-  const [esbuildBuilding, setEsbuildBuilding] = useState(false);
-  useEffect(() => {
-    // Product preview = Modal only. Never compile esbuild/srcdoc stand-ins for the panel.
-    // Draft esbuild requires BOTH PREVIEW_ESBUILD and PREVIEW_WEBCONTAINER flags.
-    const draftOk =
-      esbuildEnabled &&
-      isWebContainerPreviewEnabled() &&
-      previewEngine !== "sandbox" &&
-      !sandboxAvailable;
-    if (!draftOk || previewFiles.length === 0) {
-      setEsbuildHtml("");
-      setEsbuildBuilding(false);
-      return;
-    }
-    let cancelled = false;
-    setEsbuildHtml("");
-    setEsbuildBuilding(true);
-    transitionPreviewMachine("building", "esbuild preview compiling");
-    void buildEsbuildHtml(previewFiles)
-      .then((res) => {
-        if (cancelled) return;
-        if (res.html) {
-          setEsbuildHtml(res.html);
-          setEsbuildBuilding(false);
-          transitionPreviewMachine("loading", "esbuild preview compiled");
-        } else {
-          console.warn("[preview/esbuild] build failed; using fallback engine:", res.errors);
-          setConsoleLines((prev) => [
-            ...prev.slice(-99),
-            {
-              type: "warn",
-              text: `esbuild preview fell back: ${res.errors.slice(0, 2).join("; ")}`,
-            },
-          ]);
-          setEsbuildHtml("");
-          setEsbuildBuilding(false);
-          transitionPreviewMachine("fallback", "esbuild preview fell back");
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          console.warn("[preview/esbuild] error; using fallback engine:", e);
-          setConsoleLines((prev) => [
-            ...prev.slice(-99),
-            {
-              type: "warn",
-              text: `esbuild preview fell back: ${e instanceof Error ? e.message : String(e)}`,
-            },
-          ]);
-          setEsbuildHtml("");
-          setEsbuildBuilding(false);
-          transitionPreviewMachine("fallback", "esbuild preview error");
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [previewFiles, previewEngine, transitionPreviewMachine, esbuildEnabled, sandboxEnabled]);
-  /** Rendered HTML: the esbuild bundle when ready, else the regex-engine result. */
-  // Never feed the iframe an empty string — that paints a white blank pane.
-  const effectivePreviewHtml = esbuildHtml || fallbackHtml || EMPTY_PREVIEW_HTML;
+  // Modal-only: the in-browser esbuild/srcdoc engines are retired. These stay as
+  // stable empty references for the comment-pin / URL-sync / refresh effects that
+  // still read them (each no-ops on an empty string / the placeholder html).
+  const fallbackHtml = "";
+  const effectivePreviewHtml = EMPTY_PREVIEW_HTML;
   const filesSignature = useMemo(() => filesContentSignature(previewFiles), [previewFiles]);
 
   // Foreground reliability guard: WebContainer can occasionally stall while its
@@ -2680,8 +2532,10 @@ export function PreviewPanel({
               <iframe
                 id="static-preview-panel"
                 // Prefer stable URL key — sandboxId churn from reclaim used to remount
-                // onto a dying tunnel and paint a white blank pane.
-                key={`sandbox-${sandboxUrl}-${refreshKey}`}
+                // onto a dying tunnel and paint a white blank pane. reloadNonce bumps
+                // only when a zombie tunnel is healed in place, forcing a reconnect off
+                // the stale connection-reset page.
+                key={`sandbox-${sandboxUrl}-${refreshKey}-${sandboxReloadNonce}`}
                 ref={sandboxIframeRef}
                 src={sandboxUrlWithPath(sandboxUrl, sandboxIframePath)}
                 data-preview-url={sandboxUrl}
@@ -2692,6 +2546,13 @@ export function PreviewPanel({
                 onLoad={() => {
                   transitionPreviewMachine("ready", "sandbox iframe loaded");
                   window.dispatchEvent(new CustomEvent("lifemark-preview-settled", { detail: { ok: true } }));
+                }}
+                onError={() => {
+                  // Dead tunnel (sandbox expired between renders) — reconnect to
+                  // the current sandbox instead of leaving a broken frame.
+                  void reconnectSandboxPreview().then((re) => {
+                    if (!re.previewUrl) void requestSandboxPreview();
+                  });
                 }}
               />
             )}
@@ -2712,76 +2573,6 @@ export function PreviewPanel({
                 onClose={() => {
                   clearVebSelection();
                   sandboxIframeRef.current?.contentWindow?.postMessage({ type: "lifemark-veb-clear" }, "*");
-                }}
-                onSelectionChange={(next) => {
-                  setVebSelected(next);
-                  setVebSelectedList((prev) =>
-                    prev.map((p) => (p.xpath === next.xpath ? next : p)),
-                  );
-                }}
-                onStageTextEdit={stagePendingTextEdit}
-              />
-            )}
-            {projectId && (
-              <PreviewAnnotations
-                projectId={projectId}
-                enabled={annotationsEnabled}
-                onSendToChat={onSendPromptToChat}
-              />
-            )}
-          </div>
-        ) : previewEngine === "webcontainer" && isWebContainerPreviewEnabled() ? (
-          <div
-            className={`flex flex-col flex-1 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}
-            ref={sandpackContainerRef}
-          >
-            {withDeviceFrame(
-              <WebContainerPreview
-                key={`wc-${projectId ?? "preview"}`}
-                files={previewFiles}
-                projectId={projectId}
-                isPublic={isPublic}
-                embedded
-                onReady={(url) => {
-                  if (url) setWcPreviewUrl(url);
-                  transitionPreviewMachine("ready", "webcontainer dev server ready");
-                }}
-                onError={(msg) => {
-                  setWcPreviewUrl(null);
-                  transitionPreviewMachine("fallback", "webcontainer preview error");
-                  if (typeof window !== "undefined") {
-                    markWcUnavailable();
-                  }
-                  setVitePreviewRequested(false);
-                  queueMicrotask(() => {
-                    toast({
-                      title: "WebContainer preview unavailable",
-                      description: msg,
-                      variant: "destructive",
-                    });
-                    setPreviewEngine("fallback");
-                  });
-                }}
-              />
-            )}
-
-            {/* Visual edits — cross-origin engine, driven via postMessage bridge */}
-            {visualEditEnabled && vebSelected && (
-              <VebBridgePopover
-                selection={vebSelected}
-                selections={vebSelectedList}
-                files={files}
-                projectId={projectId}
-                onFileChange={handleVebFileChange}
-                onLiveApply={(payload) => {
-                  const iframe = sandpackContainerRef.current?.querySelector("iframe");
-                  iframe?.contentWindow?.postMessage({ type: "lifemark-veb-apply", ...payload }, "*");
-                }}
-                onRequestAiEdit={onSendPromptToChat}
-                onClose={() => {
-                  clearVebSelection();
-                  const iframe = sandpackContainerRef.current?.querySelector("iframe");
-                  iframe?.contentWindow?.postMessage({ type: "lifemark-veb-clear" }, "*");
                 }}
                 onSelectionChange={(next) => {
                   setVebSelected(next);
@@ -2823,21 +2614,6 @@ export function PreviewPanel({
               <Loader2 className="w-5 h-5 animate-spin text-muted-foreground/50 mx-auto mb-2" />
               <p className="text-xs text-muted-foreground/40">Loading preview…</p>
             </div>
-          </div>
-        ) : effectivePreviewHtml !== EMPTY_PREVIEW_HTML && (esbuildHtml || fallbackHtml) ? (
-          /* Automatic in-browser fallback (esbuild/srcdoc) — the live sandbox
-             backend is unavailable, but the user still gets a working preview
-             that re-renders on every AI edit. */
-          <div className={`flex flex-col flex-1 min-h-0 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}>
-            <iframe
-              key={`fallback-${refreshKey}`}
-              ref={iframeRef}
-              srcDoc={effectivePreviewHtml}
-              className="w-full h-full border-0 bg-white"
-              title="App preview"
-              sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"
-              onLoad={() => transitionPreviewMachine("ready", "fallback srcdoc loaded")}
-            />
           </div>
         ) : (
           /* Live preview backend not configured. Setup details (env vars,
