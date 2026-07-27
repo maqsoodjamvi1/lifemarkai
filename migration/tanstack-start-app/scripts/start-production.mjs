@@ -92,7 +92,10 @@ launch("ai-worker", [aiWorkerScript], {
     .join(" "),
 });
 
-launch("server", [serverEntry], {
+// The build output is a fetch handler, not a listening server — running it
+// directly exits 0 immediately (see scripts/serve-tanstack.mjs). Host it.
+const serveScript = path.join(__dirname, "serve-tanstack.mjs");
+launch("server", [serveScript, serverEntry], {
   PORT: String(SERVER_PORT),
   HOST: "0.0.0.0",
   // Server must never self-spawn workers — point clients at the sidecars.
