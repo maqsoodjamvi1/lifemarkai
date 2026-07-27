@@ -194,12 +194,42 @@ export default defineConfig(({ mode }) => {
       ],
     },
     define: {
-      "process.env.NEXT_PUBLIC_SUPABASE_URL": JSON.stringify(supabaseUrl),
-      "process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY": JSON.stringify(supabaseAnon),
-      "process.env.NEXT_PUBLIC_APP_URL": JSON.stringify(appUrl),
-      "process.env.VITE_SUPABASE_URL": JSON.stringify(supabaseUrl),
-      "process.env.VITE_SUPABASE_ANON_KEY": JSON.stringify(supabaseAnon),
-      "process.env.VITE_APP_URL": JSON.stringify(appUrl),
+      // RUNTIME-FIRST, BAKED-FALLBACK — do not revert to plain JSON.stringify.
+      //
+      // `define:` applies to the SERVER bundle too. When these were plain baked
+      // strings, a Docker build without build-args froze `""` into
+      // .output/server/server.js; the correct values sat in the container's
+      // runtime env, but the code no longer contained any env lookup to read
+      // them — SSR crash-looped with "@supabase/ssr: URL and API key required"
+      // while Coolify showed the container Running. (Jul 27 outage.)
+      //
+      // Each key therefore expands to an expression, not a literal:
+      //   server  → globalThis.process exists → real runtime env wins
+      //   browser → globalThis.process undefined → baked build-time value
+      // `globalThis.process?.env?.X` uses optional chaining on purpose: it is
+      // NOT the `process.env.X` token sequence, so the define pass cannot
+      // recursively rewrite its own replacement.
+      ...Object.fromEntries(
+        (
+          [
+            ["NEXT_PUBLIC_SUPABASE_URL", supabaseUrl],
+            ["NEXT_PUBLIC_SUPABASE_ANON_KEY", supabaseAnon],
+            ["NEXT_PUBLIC_APP_URL", appUrl],
+            ["VITE_SUPABASE_URL", supabaseUrl],
+            ["VITE_SUPABASE_ANON_KEY", supabaseAnon],
+            ["VITE_APP_URL", appUrl],
+          ] as const
+        ).flatMap(([key, baked]) => {
+          const expr = `(globalThis.process?.env?.${key} || ${JSON.stringify(baked)})`;
+          return [
+            [`process.env.${key}`, expr],
+            // src/lib/supabase/{client,server}.ts read import.meta.env.VITE_* —
+            // Vite's automatic import.meta.env replacement is build-time-only,
+            // so route it through the same runtime-first expression.
+            [`import.meta.env.${key}`, expr],
+          ];
+        }),
+      ),
       // Client code reads process.env.NEXT_PUBLIC_PREVIEW_WEBCONTAINER to decide
       // whether the in-browser Vite/WebContainer preview engine is available.
       // Vite does NOT expose process.env to the browser — anything not listed in
