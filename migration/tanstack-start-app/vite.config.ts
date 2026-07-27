@@ -220,7 +220,12 @@ export default defineConfig(({ mode }) => {
             ["VITE_APP_URL", appUrl],
           ] as const
         ).flatMap(([key, baked]) => {
-          const expr = `(globalThis.process?.env?.${key} || ${JSON.stringify(baked)})`;
+          // __LM_ENV__ first: serve-tanstack.mjs injects it into every HTML
+          // response from the container's runtime env, so the BROWSER also gets
+          // correct values even when the Docker build received no build-args
+          // (which is exactly what happened on Coolify despite "Build Variable"
+          // being checked). Baked value remains the last-resort fallback.
+          const expr = `(globalThis.__LM_ENV__?.${key} || globalThis.process?.env?.${key} || ${JSON.stringify(baked)})`;
           return [
             [`process.env.${key}`, expr],
             // src/lib/supabase/{client,server}.ts read import.meta.env.VITE_* —
