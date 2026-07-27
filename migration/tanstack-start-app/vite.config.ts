@@ -194,21 +194,14 @@ export default defineConfig(({ mode }) => {
       ],
     },
     define: {
-      // RUNTIME-FIRST, BAKED-FALLBACK — do not revert to plain JSON.stringify.
-      //
-      // `define:` applies to the SERVER bundle too. When these were plain baked
-      // strings, a Docker build without build-args froze `""` into
-      // .output/server/server.js; the correct values sat in the container's
-      // runtime env, but the code no longer contained any env lookup to read
-      // them — SSR crash-looped with "@supabase/ssr: URL and API key required"
-      // while Coolify showed the container Running. (Jul 27 outage.)
-      //
-      // Each key therefore expands to an expression, not a literal:
-      //   server  → globalThis.process exists → real runtime env wins
-      //   browser → globalThis.process undefined → baked build-time value
-      // `globalThis.process?.env?.X` uses optional chaining on purpose: it is
-      // NOT the `process.env.X` token sequence, so the define pass cannot
-      // recursively rewrite its own replacement.
+      // CLIENT bundle: baked literals. esbuild's define accepts ONLY an entity
+      // name or a JS literal — the `(a || b || "lit")` expression variant fails
+      // the whole build with "Invalid define value" (verified on Coolify).
+      // The SERVER bundle must NOT use these baked values: when the Docker
+      // build received no build-args, `""` was frozen into server.js and SSR
+      // crash-looped with "@supabase/ssr: URL and API key required" while the
+      // container showed Running (Jul 27 outage). The server override lives in
+      // `environments.server.define` below — keep both blocks in sync.
       ...Object.fromEntries(
         (
           [
@@ -219,21 +212,11 @@ export default defineConfig(({ mode }) => {
             ["VITE_SUPABASE_ANON_KEY", supabaseAnon],
             ["VITE_APP_URL", appUrl],
           ] as const
-        ).flatMap(([key, baked]) => {
-          // __LM_ENV__ first: serve-tanstack.mjs injects it into every HTML
-          // response from the container's runtime env, so the BROWSER also gets
-          // correct values even when the Docker build received no build-args
-          // (which is exactly what happened on Coolify despite "Build Variable"
-          // being checked). Baked value remains the last-resort fallback.
-          const expr = `(globalThis.__LM_ENV__?.${key} || globalThis.process?.env?.${key} || ${JSON.stringify(baked)})`;
-          return [
-            [`process.env.${key}`, expr],
-            // src/lib/supabase/{client,server}.ts read import.meta.env.VITE_* —
-            // Vite's automatic import.meta.env replacement is build-time-only,
-            // so route it through the same runtime-first expression.
-            [`import.meta.env.${key}`, expr],
-          ];
-        }),
+        ).flatMap(([key, baked]) => [
+          [`process.env.${key}`, JSON.stringify(baked)],
+          // src/lib/supabase/{client,server}.ts read import.meta.env.VITE_*.
+          [`import.meta.env.${key}`, JSON.stringify(baked)],
+        ]),
       ),
       // Client code reads process.env.NEXT_PUBLIC_PREVIEW_WEBCONTAINER to decide
       // whether the in-browser Vite/WebContainer preview engine is available.
@@ -259,6 +242,42 @@ export default defineConfig(({ mode }) => {
         "@tiptap/pm/view",
       ],
       exclude: ["@tiptap/pm"],
+    },
+    // SERVER environment: replace the baked literals with runtime env lookups.
+    // `globalThis.process.env.X` is an entity name, which esbuild's define DOES
+    // accept (unlike expressions), and the substituted entity is not re-scanned
+    // so it cannot recursively match the `process.env.X` key. Result: the
+    // server bundle reads the container's real environment at runtime and works
+    // even when Docker build-args are missing. serve-tanstack.mjs mirrors the
+    // NEXT_PUBLIC_* ↔ VITE_* aliases into process.env at startup, so pointing
+    // VITE_* reads at the NEXT_PUBLIC_* names (Coolify only sets those) is safe.
+    // If TanStack ever renames its server environment this block silently stops
+    // applying and the server falls back to the baked literals above — worse,
+    // but not broken while build-args arrive.
+    environments: {
+      server: {
+        define: Object.fromEntries(
+          (
+            [
+              "NEXT_PUBLIC_SUPABASE_URL",
+              "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+              "NEXT_PUBLIC_APP_URL",
+              "VITE_SUPABASE_URL",
+              "VITE_SUPABASE_ANON_KEY",
+              "VITE_APP_URL",
+            ] as const
+          ).flatMap((key) => {
+            const canonical = key.startsWith("VITE_")
+              ? `NEXT_PUBLIC_${key.slice(5)}`
+              : key;
+            const entity = `globalThis.process.env.${canonical}`;
+            return [
+              [`process.env.${key}`, entity],
+              [`import.meta.env.${key}`, entity],
+            ];
+          }),
+        ),
+      },
     },
     // Externalize node_modules in SSR so importing the AI route graph does not
     // bundle the entire Modal/sandbox graph into the Vite SSR heap.

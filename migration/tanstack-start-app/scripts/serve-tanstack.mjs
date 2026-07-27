@@ -31,6 +31,18 @@ if (!entryPath) {
   process.exit(1);
 }
 
+// NEXT_PUBLIC_* ↔ VITE_* are aliases of the same three values, but Coolify
+// only sets the NEXT_PUBLIC_* spellings. The server bundle's define map points
+// every read at globalThis.process.env.<NEXT_PUBLIC_name> (vite.config.ts), and
+// this mirroring makes either spelling work regardless. MUST run before the
+// entry import below: src/lib/supabase/server.ts reads env at module top level.
+for (const base of ["SUPABASE_URL", "SUPABASE_ANON_KEY", "APP_URL"]) {
+  const next = `NEXT_PUBLIC_${base}`;
+  const vite = `VITE_${base}`;
+  if (process.env[next] && !process.env[vite]) process.env[vite] = process.env[next];
+  if (process.env[vite] && !process.env[next]) process.env[next] = process.env[vite];
+}
+
 const mod = await import(pathToFileURL(entryPath).href);
 const handler = mod.default ?? mod.server;
 if (!handler || typeof handler.fetch !== "function") {
