@@ -359,6 +359,13 @@ export class DockerSandboxProvider implements SandboxProvider {
             ? {}
             : { [`${innerPort}/tcp`]: [{ HostPort: String(hostPort) }] },
           ...(c.routeViaProxy ? { NetworkMode: c.proxyNetwork } : {}),
+          // Init (tini) as pid 1 is LOAD-BEARING. Without it pid 1 is our
+          // `sleep infinity`, which never reaps children: when vite's file
+          // watcher triggers a self-restart (late .env/config writes), the
+          // restarted process is orphaned onto sleep and dies — observed live
+          // as `[npm run dev]`/`[esbuild]` zombies, "server restarted." as the
+          // final log line, connection refused on 5173, and 502 from Traefik.
+          Init: true,
           Memory: c.memoryMb * 1024 * 1024,
           NanoCpus: Math.round(c.cpus * 1e9),
           PidsLimit: 512,
