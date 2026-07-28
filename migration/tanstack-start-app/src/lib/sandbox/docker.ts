@@ -489,17 +489,21 @@ export class DockerSandboxProvider implements SandboxProvider {
       // Bind 0.0.0.0 or the port mapping can't reach it from outside the container.
       const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
       progress("starting", cmd);
-      // `setsid` is LOAD-BEARING, as is passing tty:false below.
+      // START DETACHED (Detach:true), not backgrounded over an attached exec.
       //
-      // The old form (`nohup sh -c '…' &` over a Tty:true exec) reported success
-      // and left NOTHING running: the dev server is in the exec's pty session,
-      // and when the exec returns the pty is torn down and the whole session
-      // goes with it. `nohup` only blocks SIGHUP — it does not survive that.
-      // Symptom was maximally misleading: npm install logs, phase "ready", a
-      // real previewUrl, then 502 with an empty process table.
-      // setsid puts the server in its own session, owned by pid 1 (docker-init,
-      // see Init above), so it outlives the exec that started it.
-      await this.exec(id, `setsid sh -c '${cmd}' > ${DEV_LOG} 2>&1 &`, APP_DIR, false);
+      // History of this bug (three wrong fixes before this one):
+      //   1. `nohup … &` over Tty:true exec
+      //   2. `setsid … &` over Tty:false exec
+      // Both reported success then left an EMPTY process table + 502. Proven
+      // locally that at the plain-shell level BOTH forms survive their
+      // launcher's exit — so the shell form was never the cause. The cause is
+      // Docker's ATTACHED exec (`Detach:false`): when the exec's main process
+      // returns, the daemon tears down the exec and kills its descendants. No
+      // amount of nohup/setsid/& escapes that, because it happens above the
+      // shell. The documented remedy is a DETACHED exec — the daemon runs it in
+      // the background and never attaches, so nothing is torn down. Cmd is the
+      // server itself (no `&`); the HTTP call returns immediately.
+      await this.exec(id, `${cmd} > ${DEV_LOG} 2>&1`, APP_DIR, false, true);
 
       const previewUrl = c.routeViaProxy
         ? `https://${previewHost}`
@@ -508,11 +512,31 @@ export class DockerSandboxProvider implements SandboxProvider {
       // iframe a dead URL and paints a blank pane.
       const ready = await waitForServer(previewUrl, Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000));
 
+      if (!ready) {
+        // ONE-SHOT DIAGNOSTICS. Six deploys were spent guessing at this failure
+        // because the result carried no evidence. Never again: on a non-ready
+        // server, attach the dev log, the live process table, and — critically —
+        // whether the kernel OOM-killed anything (a 1 GB cap silently killing
+        // vite looks identical to every other cause). This runs only on failure.
+        const devLog = await this.exec(id, `tail -n 40 ${DEV_LOG} 2>/dev/null`);
+        const procs = await this.exec(id, `ps -o pid,rss,comm 2>/dev/null | head -n 15`);
+        const inspect = await docker("GET", `/v1.43/containers/${id}/json`);
+        let oom = "unknown";
+        try {
+          oom = String((JSON.parse(inspect.text) as { State?: { OOMKilled?: boolean } }).State?.OOMKilled);
+        } catch { /* keep unknown */ }
+        logs +=
+          `\n[preview] dev server did not answer in time.` +
+          `\n[preview] container OOMKilled=${oom}` +
+          `\n[preview] --- ${DEV_LOG} (tail) ---\n${devLog.stdout.trim() || "(empty)"}` +
+          `\n[preview] --- processes ---\n${procs.stdout.trim() || "(none)"}`;
+      }
+
       return {
         ok: true,
         sandboxId: id,
         previewUrl,
-        logs: trunc(logs + (ready ? "" : "\n[preview] dev server slow to start — give it a moment.")),
+        logs: trunc(logs, 4000),
       };
     } catch (err) {
       claimedPorts.delete(hostPort);
@@ -525,28 +549,39 @@ export class DockerSandboxProvider implements SandboxProvider {
    * BEFORE the project dir exists — exec fails outright if WorkingDir is
    * missing, so the bootstrap mkdir can't use the default.
    *
-   * `tty` must be FALSE for anything that leaves a process running after the
-   * exec returns. With a tty, Docker tears the pty down on exec exit and every
-   * process in that session dies — see the dev-server launch above.
+   * `detach`: run the command in the background and return immediately WITHOUT
+   * attaching. This is the ONLY reliable way to leave a long-running process
+   * (the dev server) alive: an attached exec (`Detach:false`) is torn down when
+   * its main process returns, taking every descendant with it regardless of
+   * nohup/setsid/&. Detached execs get no stdout and no exit code back.
    */
   async exec(
     sandboxId: string,
     command: string,
     workdir = APP_DIR,
     tty = true,
+    detach = false,
   ): Promise<CommandResult> {
     const create = await docker("POST", `/v1.43/containers/${sandboxId}/exec`, {
-      AttachStdout: true,
-      AttachStderr: true,
+      // A detached exec cannot attach streams; asking to would error.
+      AttachStdout: !detach,
+      AttachStderr: !detach,
       WorkingDir: workdir,
-      Tty: tty,
+      Tty: detach ? false : tty,
       Cmd: ["sh", "-c", command],
     });
     if (create.status >= 400) {
       return { stdout: "", stderr: `exec create failed: ${create.text}`, exitCode: 1 };
     }
     const execId = (JSON.parse(create.text) as { Id: string }).Id;
-    const run = await docker("POST", `/v1.43/exec/${execId}/start`, { Detach: false, Tty: tty });
+    const run = await docker("POST", `/v1.43/exec/${execId}/start`, {
+      Detach: detach,
+      Tty: detach ? false : tty,
+    });
+    if (detach) {
+      // Fire-and-forget: the daemon owns the process now. No output, no wait.
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
     const inspect = await docker("GET", `/v1.43/exec/${execId}/json`);
     let exitCode = 0;
     try {
