@@ -60,6 +60,12 @@ export function extractImportedPackages(sourceCode: string): string[] {
       if (!spec) continue;
       // Skip relative / absolute / internal imports
       if (INTERNAL_PREFIXES.some((p) => spec.startsWith(p))) continue;
+      // Node builtins with the modern prefix ("node:url", "node:path", ...) are
+      // never npm packages. Without this, the TanStack Start scaffold's
+      // `import { fileURLToPath } from "node:url"` in vite.config.ts got
+      // injected into package.json as "node:url": "latest" and npm install
+      // died with EINVALIDPACKAGENAME before installing anything.
+      if (spec.startsWith("node:")) continue;
       // Extract package name (strip subpath: 'lodash/merge' → 'lodash', '@scope/pkg/sub' → '@scope/pkg')
       const name = spec.startsWith("@")
         ? spec.split("/").slice(0, 2).join("/")   // scoped: @scope/pkg
