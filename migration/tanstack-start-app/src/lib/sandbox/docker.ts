@@ -211,6 +211,40 @@ async function docker(
 export function buildTar(files: SandboxFile[]): Buffer {
   const blocks: Buffer[] = [];
 
+  // Emit explicit DIRECTORY entries (parents first) owned by uid/gid 1000.
+  // Without them the daemon auto-creates missing parent dirs as root:root
+  // 0755 while extracting, and the non-root `node` user can then never CREATE
+  // a new file inside them. That killed TanStack Start previews: the router
+  // generator's rename into src/ (routeTree.gen.ts) failed with EACCES, the
+  // dev server died, and Traefik answered 502 behind a "ready" phase.
+  const dirs = new Set<string>();
+  for (const f of files) {
+    const parts = f.path.replace(/\\/g, "/").replace(/^\/+/, "").split("/");
+    parts.pop();
+    let acc = "";
+    for (const part of parts) {
+      if (!part) continue;
+      acc = acc ? `${acc}/${part}` : part;
+      dirs.add(acc);
+    }
+  }
+  for (const dir of [...dirs].sort()) {
+    const header = Buffer.alloc(512);
+    header.write((dir + "/").slice(0, 100), 0, "utf8");
+    header.write("000755 \0", 100, "utf8");            // mode
+    header.write("001750 \0", 108, "utf8");            // uid 1000 (node)
+    header.write("001750 \0", 116, "utf8");            // gid 1000
+    header.write("00000000000 ", 124, "utf8");          // size 0
+    header.write(Math.floor(Date.now() / 1000).toString(8).padStart(11, "0") + " ", 136, "utf8");
+    header.write("        ", 148, "utf8");              // checksum placeholder
+    header.write("5", 156, "utf8");                     // type: directory
+    header.write("ustar\0" + "00", 257, "utf8");
+    let sum = 0;
+    for (const byte of header) sum += byte;
+    header.write(sum.toString(8).padStart(6, "0") + "\0 ", 148, "utf8");
+    blocks.push(header);
+  }
+
   for (const f of files) {
     const name = f.path.replace(/\\/g, "/").replace(/^\/+/, "");
     if (!name) continue;
