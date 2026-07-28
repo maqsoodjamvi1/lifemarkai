@@ -455,7 +455,17 @@ export class DockerSandboxProvider implements SandboxProvider {
       // Bind 0.0.0.0 or the port mapping can't reach it from outside the container.
       const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
       progress("starting", cmd);
-      await this.exec(id, `nohup sh -c '${cmd}' > ${DEV_LOG} 2>&1 &`);
+      // `setsid` is LOAD-BEARING, as is passing tty:false below.
+      //
+      // The old form (`nohup sh -c '…' &` over a Tty:true exec) reported success
+      // and left NOTHING running: the dev server is in the exec's pty session,
+      // and when the exec returns the pty is torn down and the whole session
+      // goes with it. `nohup` only blocks SIGHUP — it does not survive that.
+      // Symptom was maximally misleading: npm install logs, phase "ready", a
+      // real previewUrl, then 502 with an empty process table.
+      // setsid puts the server in its own session, owned by pid 1 (docker-init,
+      // see Init above), so it outlives the exec that started it.
+      await this.exec(id, `setsid sh -c '${cmd}' > ${DEV_LOG} 2>&1 &`, APP_DIR, false);
 
       const previewUrl = c.routeViaProxy
         ? `https://${previewHost}`
@@ -480,19 +490,29 @@ export class DockerSandboxProvider implements SandboxProvider {
    * `workdir` defaults to the project dir. Pass "/" for anything that runs
    * BEFORE the project dir exists — exec fails outright if WorkingDir is
    * missing, so the bootstrap mkdir can't use the default.
+   *
+   * `tty` must be FALSE for anything that leaves a process running after the
+   * exec returns. With a tty, Docker tears the pty down on exec exit and every
+   * process in that session dies — see the dev-server launch above.
    */
-  async exec(sandboxId: string, command: string, workdir = APP_DIR): Promise<CommandResult> {
+  async exec(
+    sandboxId: string,
+    command: string,
+    workdir = APP_DIR,
+    tty = true,
+  ): Promise<CommandResult> {
     const create = await docker("POST", `/v1.43/containers/${sandboxId}/exec`, {
       AttachStdout: true,
       AttachStderr: true,
       WorkingDir: workdir,
+      Tty: tty,
       Cmd: ["sh", "-c", command],
     });
     if (create.status >= 400) {
       return { stdout: "", stderr: `exec create failed: ${create.text}`, exitCode: 1 };
     }
     const execId = (JSON.parse(create.text) as { Id: string }).Id;
-    const run = await docker("POST", `/v1.43/exec/${execId}/start`, { Detach: false, Tty: true });
+    const run = await docker("POST", `/v1.43/exec/${execId}/start`, { Detach: false, Tty: tty });
     const inspect = await docker("GET", `/v1.43/exec/${execId}/json`);
     let exitCode = 0;
     try {
