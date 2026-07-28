@@ -38,6 +38,10 @@ export const TANSTACK_START_DEPENDENCIES: Record<string, string> = (() => {
 export const TANSTACK_START_DEV_DEPENDENCIES: Record<string, string> = {
   ...BASE_APP_DEV_DEPENDENCIES,
   "@types/node": "^20.14.0",
+  // @tanstack/react-start requires vite >= 7 (peer dep). The base set pins
+  // vite ^5 for the plain Vite scaffold; override here or npm install exits 1
+  // with ERESOLVE inside the preview sandbox.
+  vite: "^7.0.0",
 };
 
 const PACKAGE_JSON = (extra: Record<string, string> = {}): string =>

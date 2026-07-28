@@ -41,8 +41,15 @@ await esbuild.build({
     "next/server": path.join(shimDir, "server.ts"),
     "next/headers": path.join(shimDir, "headers.ts"),
   },
+  // The worker runs in plain Node — `import.meta.env` is undefined there, and
+  // supabase/server.ts reads import.meta.env.VITE_SUPABASE_URL at module top
+  // level, which crashed the whole worker on load ("Cannot read properties of
+  // undefined"). Rewrite every `import.meta.env` to a process.env-backed global.
+  define: {
+    "import.meta.env": "globalThis.__LM_IME__",
+  },
   banner: {
-    js: 'globalThis.__lifemark_request_als_store__ ??= undefined;',
+    js: 'globalThis.__LM_IME__ ??= process.env;globalThis.__lifemark_request_als_store__ ??= undefined;',
   },
 });
 
