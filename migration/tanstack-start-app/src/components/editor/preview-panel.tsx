@@ -2611,7 +2611,15 @@ export function PreviewPanel({
                   data-preview-url={wcUrl}
                   className="w-full h-full min-h-0 border-0 bg-[var(--bg-base,#0a0a0a)]"
                   title="In-browser preview"
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-presentation"
+                  // `allow-popups-to-escape-sandbox` lets a preview open OAuth
+                // (Supabase/Google/GitHub) in a NEW TAB that is NOT itself
+                // sandboxed, so the sign-in can actually complete. Without it,
+                // a same-frame OAuth redirect tries to embed the provider in
+                // this iframe and the provider's X-Frame-Options shows
+                // "<host> refused to connect" in the preview. OAuth providers
+                // never permit framing; a new tab is the only way it works
+                // inside a framed preview.
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation"
                   allow="clipboard-read; clipboard-write; fullscreen"
                   onLoad={() => {
                     transitionPreviewMachine("ready", "webcontainer iframe loaded");
@@ -2659,7 +2667,15 @@ export function PreviewPanel({
                 data-preview-url={sandboxUrl}
                 className="w-full h-full min-h-0 border-0 bg-[var(--bg-base,#0a0a0a)]"
                 title="Live sandbox preview"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-presentation"
+                // `allow-popups-to-escape-sandbox` lets a preview open OAuth
+                // (Supabase/Google/GitHub) in a NEW TAB that is NOT itself
+                // sandboxed, so the sign-in can actually complete. Without it,
+                // a same-frame OAuth redirect tries to embed the provider in
+                // this iframe and the provider's X-Frame-Options shows
+                // "<host> refused to connect" in the preview. OAuth providers
+                // never permit framing; a new tab is the only way it works
+                // inside a framed preview.
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation"
                 allow="clipboard-read; clipboard-write; fullscreen"
                 onLoad={() => {
                   transitionPreviewMachine("ready", "sandbox iframe loaded");
@@ -2717,7 +2733,15 @@ export function PreviewPanel({
                 src={deployedUrl}
                 className="w-full h-full border-0"
                 title="Live deployment"
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads allow-presentation"
+                // `allow-popups-to-escape-sandbox` lets a preview open OAuth
+                // (Supabase/Google/GitHub) in a NEW TAB that is NOT itself
+                // sandboxed, so the sign-in can actually complete. Without it,
+                // a same-frame OAuth redirect tries to embed the provider in
+                // this iframe and the provider's X-Frame-Options shows
+                // "<host> refused to connect" in the preview. OAuth providers
+                // never permit framing; a new tab is the only way it works
+                // inside a framed preview.
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation"
                 allow="clipboard-read; clipboard-write; fullscreen"
                 onLoad={() => transitionPreviewMachine("ready", "deployment iframe loaded")}
               />,
