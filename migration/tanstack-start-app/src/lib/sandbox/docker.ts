@@ -547,8 +547,20 @@ export class DockerSandboxProvider implements SandboxProvider {
     const res = await docker("GET", `/v1.43/containers/${sandboxId}/json`);
     try {
       const info = JSON.parse(res.text) as {
+        Config?: { Labels?: Record<string, string> };
         NetworkSettings?: { Ports?: Record<string, Array<{ HostPort: string }>> };
       };
+      // Proxy mode publishes NO host ports — the hostname lives in the Traefik
+      // router rule label set at create time. Without this branch, reconnect()
+      // in production always returned "Could not resolve the container's port."
+      // right after a successful boot, erroring the preview.
+      if (c.routeViaProxy) {
+        for (const [k, v] of Object.entries(info.Config?.Labels ?? {})) {
+          if (!/^traefik\.http\.routers\..+\.rule$/.test(k)) continue;
+          const m = v.match(/Host\(`([^`]+)`\)/);
+          if (m) return `https://${m[1]}`;
+        }
+      }
       const first = Object.values(info.NetworkSettings?.Ports ?? {})[0]?.[0]?.HostPort;
       if (first) return `${c.scheme}://${c.publicHost}:${first}`;
     } catch { /* fall through */ }
