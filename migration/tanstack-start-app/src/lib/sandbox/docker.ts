@@ -654,7 +654,10 @@ export class DockerSandboxProvider implements SandboxProvider {
     return trunc(res.stdout);
   }
 
-  async writeFiles(sandboxId: string, files: SandboxFile[]): Promise<void> {
+  async writeFiles(
+    sandboxId: string,
+    files: SandboxFile[],
+  ): Promise<{ written: string[] }> {
     // INCREMENTAL SYNC — upload only files whose CONTENT actually changed.
     //
     // Why this is load-bearing for a clean first paint: every editor open does
@@ -704,7 +707,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       toWrite = files.filter((f) => prev![norm(f.path)] !== hashes[norm(f.path)]);
       // Nothing changed → write NOTHING. Even rewriting just the manifest is
       // pointless churn; skipping the upload entirely is what keeps vite quiet.
-      if (toWrite.length === 0) return;
+      if (toWrite.length === 0) return { written: [] };
     }
 
     const payload: SandboxFile[] = [
@@ -724,6 +727,10 @@ export class DockerSandboxProvider implements SandboxProvider {
     if (res.status >= 400) {
       throw new Error(`sandbox writeFiles failed (${res.status}): ${trunc(res.text, 300)}`);
     }
+    // Report what ACTUALLY landed so callers can gate side effects (npm
+    // install, vite restart) on real changes instead of on what the client
+    // happened to send — the editor's baseline sync sends the FULL file set.
+    return { written: toWrite.map((f) => norm(f.path)) };
   }
 
   async getPreviewUrl(sandboxId: string): Promise<string> {

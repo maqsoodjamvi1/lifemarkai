@@ -140,29 +140,34 @@ async function handlePATCH(req: Request, params: any) {
   const syncFiles: SandboxFile[] = patchSandboxPreviewFiles(files, patchOpts);
   const provider = getSandboxProvider();
   try {
-    await provider.writeFiles(sandboxId, syncFiles);
+    const writeResult = await provider.writeFiles(sandboxId, syncFiles);
 
     const norm = (p: string) => p.replace(/\\/g, "/");
-    // Gate restarts on what the client ACTUALLY changed — NOT on the full synced
-    // set. `syncFiles` always contains package.json AND vite.config.ts (the
-    // patcher includes/patches them on every sync), so keying restarts off
-    // `syncFiles` made EVERY editor open (a full baseline re-sync) run
-    // `pkill -f vite` + `npm install`. That killed the dev server on each open;
-    // the iframe then loaded during the restart window and showed a blank page /
-    // "Bad Gateway" until a manual reload. A baseline re-sync of an
-    // already-running sandbox must be a no-op for config — vite already applied
-    // it at boot, and vite's own watcher restarts on a genuine vite.config edit.
-    const changed = clientFiles ?? [];
-    const clientChangedPkg = changed.some((f) => norm(f.path) === "package.json");
-    const clientChangedConfig = changed.some((f) =>
-      /(^|\/)(vite|tailwind|postcss)\.config\.(ts|js|cjs|mjs)$/.test(norm(f.path)),
+    // Gate restarts on what ACTUALLY CHANGED ON DISK — nothing weaker works:
+    //   • Keying off `syncFiles` (v1) restarted on every sync — the patcher
+    //     always includes vite.config.ts + package.json.
+    //   • Keying off client-sent files (v2) STILL restarted on every editor
+    //     open, because the editor's baseline sync sends the FULL file set as
+    //     `files` (verified live: open #2 after the incremental-upload fix
+    //     still hit `pkill vite` and painted Bad Gateway).
+    // The Docker provider's writeFiles now diffs against its in-container
+    // content-hash manifest and reports exactly which paths landed. An open
+    // with no edits writes [] → no install, no restart, clean first paint.
+    // Providers that return void (Modal) fall back to the client-sent set.
+    const written: string[] | null = Array.isArray(writeResult?.written)
+      ? writeResult.written.map(norm)
+      : null;
+    const changed = written ?? (clientFiles ?? []).map((f) => norm(f.path));
+    const diskChangedPkg = changed.includes("package.json");
+    const diskChangedConfig = changed.some((p) =>
+      /(^|\/)(vite|tailwind|postcss)\.config\.(ts|js|cjs|mjs)$/.test(p),
     );
-    const pkgChanged = reconciledPackageJson != null || clientChangedPkg;
+    const pkgChanged = reconciledPackageJson != null || diskChangedPkg;
     // NOTE: do NOT restart for `.env`. The preview patcher injects an idempotent
     // placeholder .env on EVERY sync, so keying a restart on ".env present"
     // caused a restart loop that raced the tunnel down. The .env is consumed at
     // cold-boot startup; real creds are rare and Vite's watcher handles those.
-    const buildConfigChanged = clientChangedConfig;
+    const buildConfigChanged = diskChangedConfig;
     if (pkgChanged || buildConfigChanged) {
       const steps: string[] = [];
       if (pkgChanged) steps.push("npm install");

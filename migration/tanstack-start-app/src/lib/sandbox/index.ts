@@ -103,8 +103,15 @@ export interface SandboxProvider {
   }): Promise<ClaudeCodeResult>;
   /** Run a shell command in an existing sandbox. */
   exec(sandboxId: string, command: string): Promise<CommandResult>;
-  /** Write/update files in an existing sandbox (incremental edits). */
-  writeFiles(sandboxId: string, files: SandboxFile[]): Promise<void>;
+  /** Write/update files in an existing sandbox (incremental edits).
+   *  MAY return the normalized paths that actually changed on disk (Docker
+   *  provider does — it diffs against a content-hash manifest). Callers use
+   *  this to gate side effects like npm install / vite restart on REAL changes;
+   *  providers returning void get the caller's conservative fallback. */
+  writeFiles(
+    sandboxId: string,
+    files: SandboxFile[],
+  ): Promise<void | { written: string[] }>;
   /** Re-derive the live preview URL for a running sandbox. */
   getPreviewUrl(sandboxId: string, port?: number): Promise<string>;
   /** Reconnect to an existing sandbox if still alive (Lovable warm-session parity). */
