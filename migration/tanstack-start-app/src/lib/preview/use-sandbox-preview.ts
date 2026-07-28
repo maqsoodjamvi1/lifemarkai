@@ -288,6 +288,61 @@ export function useSandboxPreview(projectId: string) {
     };
   }, [projectId, state.enabled, state.previewUrl, requestPreview]);
 
+  /** PAINT WATCHDOG — the last blank-preview class standing after server-side
+   *  hardening. Observed live: sandbox healthy, tunnel probe "verified", phase
+   *  "ready" — yet the iframe showed a blank page, because it had loaded during
+   *  a transient (vite restart / rolling deploy) and browsers never re-fetch a
+   *  failed/blank document on their own. Every health signal was green, so no
+   *  recovery path fired and the user had to click reload manually.
+   *
+   *  The sandbox patcher injects the VEB bridge into every app's index.html,
+   *  and the bridge posts `lifemark-veb-ready` to the parent as soon as the
+   *  app's HTML actually executes. That makes "did the iframe REALLY paint the
+   *  app?" observable: if no bridge ping arrives within 6s of ready, force the
+   *  iframe to reload via reloadNonce (3 attempts, doubling backoff), which
+   *  re-fetches from the now-healthy vite. */
+  const paintAttemptsRef = useRef(0);
+  const lastPaintPingRef = useRef(0);
+  useEffect(() => {
+    if (!state.enabled || !state.previewUrl) return;
+    const onMsg = (e: MessageEvent) => {
+      const d = e.data as { type?: string; source?: string } | null;
+      if (!d || typeof d !== "object") return;
+      if (
+        d.type === "lifemark-veb-ready" ||
+        d.type === "lifemark-preview-location" ||
+        d.source === "lifemark-preview"
+      ) {
+        lastPaintPingRef.current = Date.now();
+        paintAttemptsRef.current = 0;
+      }
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, [state.enabled, state.previewUrl]);
+
+  useEffect(() => {
+    if (!state.enabled || !state.previewUrl || state.phase !== "ready") return;
+    lastPaintPingRef.current = 0;
+    paintAttemptsRef.current = 0;
+    let cancelled = false;
+    let timer = 0;
+    const schedule = (delay: number) => {
+      timer = window.setTimeout(() => {
+        if (cancelled || lastPaintPingRef.current > 0) return;
+        if (paintAttemptsRef.current >= 3) return;
+        paintAttemptsRef.current += 1;
+        setReloadNonce((n) => n + 1);
+        schedule(delay * 2);
+      }, delay);
+    };
+    schedule(6000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [state.enabled, state.previewUrl, state.phase]);
+
   /** Poll Modal boot phase while cold-starting (metadata updates from POST).
    *  ALSO keeps polling in the error state: a failed boot used to freeze the
    *  "could not start" pane forever even after a later boot succeeded — the
