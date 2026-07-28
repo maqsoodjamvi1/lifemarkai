@@ -489,21 +489,33 @@ export class DockerSandboxProvider implements SandboxProvider {
       // Bind 0.0.0.0 or the port mapping can't reach it from outside the container.
       const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
       progress("starting", cmd);
-      // START DETACHED (Detach:true), not backgrounded over an attached exec.
+      // TWO independent fixes here — both were needed, in order:
       //
-      // History of this bug (three wrong fixes before this one):
-      //   1. `nohup … &` over Tty:true exec
-      //   2. `setsid … &` over Tty:false exec
-      // Both reported success then left an EMPTY process table + 502. Proven
-      // locally that at the plain-shell level BOTH forms survive their
-      // launcher's exit — so the shell form was never the cause. The cause is
-      // Docker's ATTACHED exec (`Detach:false`): when the exec's main process
-      // returns, the daemon tears down the exec and kills its descendants. No
-      // amount of nohup/setsid/& escapes that, because it happens above the
-      // shell. The documented remedy is a DETACHED exec — the daemon runs it in
-      // the background and never attaches, so nothing is torn down. Cmd is the
-      // server itself (no `&`); the HTTP call returns immediately.
-      await this.exec(id, `${cmd} > ${DEV_LOG} 2>&1`, APP_DIR, false, true);
+      // (1) START DETACHED (Detach:true), not backgrounded over an attached
+      //     exec. An attached exec (`Detach:false`) is torn down when its main
+      //     process returns, killing all descendants regardless of nohup/setsid
+      //     — proven locally. A detached exec is owned by the daemon and never
+      //     attaches, so nothing is torn down.
+      //
+      // (2) SUPERVISE in a restart loop. With (1) alone the server started and
+      //     served 200 — then DIED a minute later. The dev log showed why:
+      //       vite.config.ts changed, restarting server...
+      //       .env changed, restarting server...
+      //       server restarted.        ← then the process was gone
+      //     vite does a FULL restart (not HMR) whenever a config file changes,
+      //     and every subsequent sandbox-preview call re-uploads the project,
+      //     rewriting vite.config/tsconfig/.env and tripping that restart —
+      //     which, run as a bare process, exits and never comes back. Users
+      //     editing config files would hit the same thing. So don't run vite
+      //     bare: wrap it in `while true; do …; sleep 1; done` so any exit
+      //     (config restart, crash, OOM-of-the-process) is back within a second.
+      //     Init:true (tini as pid 1) reaps the exited children so they don't
+      //     pile up as zombies across restarts.
+      const supervised =
+        `while true; do ${cmd} >> ${DEV_LOG} 2>&1; ` +
+        `echo "[supervisor] dev server exited ($(date -u +%H:%M:%S)); restarting" >> ${DEV_LOG}; ` +
+        `sleep 1; done`;
+      await this.exec(id, supervised, APP_DIR, false, true);
 
       const previewUrl = c.routeViaProxy
         ? `https://${previewHost}`
