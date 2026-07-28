@@ -33,13 +33,30 @@ export function trunc(s: string, n = 4000): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
-/** Poll until the dev server inside the sandbox responds (any HTTP status counts). */
+/**
+ * Does this HTTP status prove the APP is serving — not just the proxy?
+ *
+ * THE DOCKER-MODE TRAP (verified live): previews route through Traefik, and
+ * Traefik ALWAYS answers. When the sandbox's vite is down, Traefik returns
+ * **502 Bad Gateway** — an HTTP response. The old check (`status > 0`) counted
+ * that as "server up", so EVERY health layer lied at once: boot reported ready
+ * while vite never started ("ready-then-502"), keepAlive said tunnelHealthy
+ * while the pane showed Bad Gateway, and the phase probe said "verified" so no
+ * self-heal ever fired. On Modal the old check was fine (a dead tunnel is a
+ * connection error, not a 502) — behind ANY reverse proxy it never was.
+ * Gateway statuses mean "proxy up, backend down" and must read as DOWN.
+ * A dev-server 404 still counts as up — the app itself answered.
+ */
+function backendResponding(status: number): boolean {
+  return status > 0 && status !== 502 && status !== 503 && status !== 504;
+}
+
 export async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(5000) });
-      if (res.status > 0) return true;
+      if (backendResponding(res.status)) return true;
     } catch {
       /* not listening yet */
     }
@@ -114,9 +131,10 @@ export async function isPreviewReachable(url: string, timeoutMs = 8000): Promise
         method: "GET",
         signal: AbortSignal.timeout(timeoutMs),
       });
-      // Any HTTP status proves the tunnel is up; even a 404 from the dev server
-      // means something is listening, which is all we assert here.
-      reached = res.status > 0;
+      // The app must actually answer — see backendResponding: behind Traefik a
+      // dead vite still yields an HTTP response (502), which must read as DOWN
+      // or the "unreachable" self-heal can never fire. A dev-server 404 is up.
+      reached = backendResponding(res.status);
     } catch {
       reached = false;
     }
