@@ -247,9 +247,6 @@ export function useSandboxPreview(projectId: string) {
         .then((r) => r.json())
         .then((d: { alive?: boolean; enabled?: boolean; tunnelHealthy?: boolean; restarted?: boolean }) => {
           if (stopped || d.enabled === false) return;
-          // #region agent log
-          fetch('http://127.0.0.1:7580/ingest/4eab943a-2827-4583-b27a-87e40bad58c8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32a6e2'},body:JSON.stringify({sessionId:'32a6e2',runId:'preview-fix',hypothesisId:'A',location:'use-sandbox-preview.ts:keepalive',message:'keepalive beat',data:{alive:d.alive,tunnelHealthy:d.tunnelHealthy,restarted:d.restarted,sandboxId:sid},timestamp:Date.now()})}).catch(()=>{});
-          // #endregion
           // (1) Compute gone — reboot a fresh sandbox before the user sees a dead
           // tunnel. (2) Tunnel dead and the in-place Vite restart didn't recover
           // it — also reboot. Either way, get a working preview automatically.
@@ -267,9 +264,6 @@ export function useSandboxPreview(projectId: string) {
               phase: "creating",
               phaseDetail: "Sandbox expired — restarting…",
             }));
-            // #region agent log
-            fetch('http://127.0.0.1:7580/ingest/4eab943a-2827-4583-b27a-87e40bad58c8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32a6e2'},body:JSON.stringify({sessionId:'32a6e2',runId:'preview-fix',hypothesisId:'A',location:'use-sandbox-preview.ts:keepalive-reboot',message:'dead tunnel → cold reboot',data:{sandboxId:sid},timestamp:Date.now()})}).catch(()=>{});
-            // #endregion
             void requestPreview();
           } else if (d.restarted && d.tunnelHealthy) {
             // Zombie healed in place: Vite was restarted and the tunnel serves
@@ -347,8 +341,15 @@ export function useSandboxPreview(projectId: string) {
           // with status timeout") and nothing ever issues a cold POST — the
           // spinner pane polls forever (observed live). Boot a fresh sandbox
           // once per death instead of waiting for the user to intervene.
+          // "unreachable" is reported by phaseOnly when the stored sandbox
+          // claims ready but its tunnel never answers the server-side probe
+          // (container reaped/crashed while the client still frames the URL).
+          // It was NOT in this list, so a client without a live sandboxId (the
+          // heartbeat needs one) had NO recovery path — the pane stayed blank
+          // polling forever. Treat it as dead so the cold-reboot fires.
           const deadPhase =
             data.phase === "error" ||
+            data.phase === "unreachable" ||
             /already finished|already completed|FAILED_PRECONDITION|terminated/i.test(
               data.phaseDetail ?? "",
             );
@@ -365,9 +366,6 @@ export function useSandboxPreview(projectId: string) {
               phase: "creating",
               phaseDetail: "Sandbox expired — restarting…",
             }));
-            // #region agent log
-            fetch('http://127.0.0.1:7580/ingest/4eab943a-2827-4583-b27a-87e40bad58c8',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'32a6e2'},body:JSON.stringify({sessionId:'32a6e2',runId:'preview-fix',hypothesisId:'B',location:'use-sandbox-preview.ts:phase-poll-reboot',message:'dead phase → cold reboot',data:{phase:data.phase,phaseDetail:data.phaseDetail,hadUrl:!!state.previewUrl},timestamp:Date.now()})}).catch(()=>{});
-            // #endregion
             void requestPreview().then((next) => {
               // Allow another recovery on the NEXT death only after success.
               if (next.previewUrl) coldRetryRef.current = false;

@@ -458,22 +458,6 @@ async function handleGET(req: Request, params: any) {
     })
     .eq("id", projectId);
 
-  // #region agent log
-  fetch("http://127.0.0.1:7580/ingest/4eab943a-2827-4583-b27a-87e40bad58c8", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "32a6e2" },
-    body: JSON.stringify({
-      sessionId: "32a6e2",
-      runId: "preview-fix",
-      hypothesisId: "C",
-      location: "sandbox-preview/route.ts:GET",
-      message: "cleared terminated sandbox",
-      data: { projectId, sandboxId, error: result.error ?? "Sandbox expired" },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
-
   return Response.json({
     enabled: true,
     ok: false,

@@ -143,25 +143,37 @@ async function handlePATCH(req: Request, params: any) {
     await provider.writeFiles(sandboxId, syncFiles);
 
     const norm = (p: string) => p.replace(/\\/g, "/");
-    const pkgChanged =
-      reconciledPackageJson != null || syncFiles.some((f) => norm(f.path) === "package.json");
-    // Vite reads vite/tailwind/postcss config ONLY at startup — syncing a new
-    // config into a running sandbox silently does nothing (observed: Tailwind
-    // classes stayed inert until a manual restart). Restart the dev server.
-    // NOTE: do NOT restart for `.env` here. The preview patcher injects an
-    // idempotent placeholder .env on EVERY sync, so keying a restart on ".env
-    // present" caused a restart loop that raced the tunnel down. The .env is
-    // consumed at cold-boot startup (where Vite reads it once); real creds are
-    // rare and Vite's own watcher handles those.
-    const buildConfigChanged = syncFiles.some((f) =>
+    // Gate restarts on what the client ACTUALLY changed — NOT on the full synced
+    // set. `syncFiles` always contains package.json AND vite.config.ts (the
+    // patcher includes/patches them on every sync), so keying restarts off
+    // `syncFiles` made EVERY editor open (a full baseline re-sync) run
+    // `pkill -f vite` + `npm install`. That killed the dev server on each open;
+    // the iframe then loaded during the restart window and showed a blank page /
+    // "Bad Gateway" until a manual reload. A baseline re-sync of an
+    // already-running sandbox must be a no-op for config — vite already applied
+    // it at boot, and vite's own watcher restarts on a genuine vite.config edit.
+    const changed = clientFiles ?? [];
+    const clientChangedPkg = changed.some((f) => norm(f.path) === "package.json");
+    const clientChangedConfig = changed.some((f) =>
       /(^|\/)(vite|tailwind|postcss)\.config\.(ts|js|cjs|mjs)$/.test(norm(f.path)),
     );
+    const pkgChanged = reconciledPackageJson != null || clientChangedPkg;
+    // NOTE: do NOT restart for `.env`. The preview patcher injects an idempotent
+    // placeholder .env on EVERY sync, so keying a restart on ".env present"
+    // caused a restart loop that raced the tunnel down. The .env is consumed at
+    // cold-boot startup; real creds are rare and Vite's watcher handles those.
+    const buildConfigChanged = clientChangedConfig;
     if (pkgChanged || buildConfigChanged) {
       const steps: string[] = [];
       if (pkgChanged) steps.push("npm install");
       if (buildConfigChanged) {
+        // App dir differs by provider: Docker = /home/node/app, Modal =
+        // /workspace. Hardcoding /workspace made this `cd` fail on Docker, so the
+        // dev server was killed but never restarted here — it came back only via
+        // the supervisor loop, leaving a longer blank window. Pick the dir that
+        // actually holds package.json so the restart works on both.
         steps.push(
-          "(pkill -f vite || true); sleep 1; cd /workspace && nohup npm run dev -- --host 0.0.0.0 --port 5173 >> /tmp/lifemark-dev.log 2>&1 &",
+          '(pkill -f vite || true); sleep 1; d=/home/node/app; [ -f "$d/package.json" ] || d=/workspace; cd "$d" && nohup npm run dev -- --host 0.0.0.0 --port 5173 >> /tmp/lifemark-dev.log 2>&1 &',
         );
       }
       void provider.exec(sandboxId, steps.join(" && ")).catch(() => {});

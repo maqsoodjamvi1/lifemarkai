@@ -143,25 +143,56 @@ else
 fi
 
 # ── 7. Cleanup helper ────────────────────────────────────────────────────────
+# IDLE-based, not age-based. Reaping by creation age cut off ACTIVE users at
+# the age cutoff mid-edit ("preview goes blank after some time"). The app's
+# keep-alive heartbeat touches /tmp/.lm-keepalive inside the container every
+# ~15s while the editor tab is open, so idle time is measurable directly.
+# Also dedupes: two live containers for one project share a stable preview
+# hostname, Traefik round-robins them, and the browser ends up with two React
+# copies -> blank preview. Keep the newest, remove the rest.
 say "Stale sandbox cleanup"
 cat >/usr/local/bin/lifemark-sandbox-gc <<'GC'
 #!/usr/bin/env bash
-# Remove lifemark sandbox containers older than N hours (default 6).
-HOURS="${1:-6}"
-CUTOFF=$(date -u -d "-${HOURS} hours" +%s 2>/dev/null || date -u -v-"${HOURS}"H +%s)
+# lifemark-sandbox-gc [IDLE_HOURS] [MAX_HOURS]
+#   Reap sandboxes idle (no keep-alive touch) > IDLE_HOURS (default 3), or
+#   older than the MAX_HOURS hard cap (default 48). Always dedupe per project.
+IDLE_HOURS="${1:-3}"
+MAX_HOURS="${2:-48}"
+now=$(date -u +%s)
+
+# 1) One container per project — newest wins.
+docker ps --filter "label=lifemark.sandbox=1" --format '{{.ID}} {{.Label "lifemark.project"}}' \
+| awk '$2 != "" { print $2 " " $1 }' \
+| while read -r proj id; do
+    echo "$proj $(docker inspect -f '{{.Created}}' "$id" 2>/dev/null) $id"
+  done \
+| sort -k1,1 -k2,2r \
+| awk 'seen[$1]++ { print $3 }' \
+| while read -r dup; do
+    docker rm -f "$dup" >/dev/null 2>&1 && echo "removed duplicate $dup"
+  done
+
+# 2) Idle reap (stopped containers can't answer exec -> fall back to age).
 docker ps -aq --filter "label=lifemark.sandbox=1" | while read -r id; do
   created=$(docker inspect -f '{{.Created}}' "$id" 2>/dev/null) || continue
-  ts=$(date -u -d "$created" +%s 2>/dev/null) || continue
-  [ "$ts" -lt "$CUTOFF" ] && docker rm -f "$id" >/dev/null && echo "removed $id"
+  cts=$(date -u -d "$created" +%s 2>/dev/null) || continue
+  age=$(( now - cts ))
+  last=$(docker exec "$id" stat -c %Y /tmp/.lm-keepalive 2>/dev/null || echo "$cts")
+  case "$last" in (*[!0-9]*) last="$cts";; esac
+  [ "$last" -lt "$cts" ] && last="$cts"
+  idle=$(( now - last ))
+  if [ "$idle" -gt $(( IDLE_HOURS * 3600 )) ] || [ "$age" -gt $(( MAX_HOURS * 3600 )) ]; then
+    docker rm -f "$id" >/dev/null 2>&1 && echo "removed $id (idle ${idle}s, age ${age}s)"
+  fi
 done
 GC
 chmod +x /usr/local/bin/lifemark-sandbox-gc
-ok "installed /usr/local/bin/lifemark-sandbox-gc"
+ok "installed /usr/local/bin/lifemark-sandbox-gc (idle-aware + per-project dedupe)"
 
 if command -v crontab >/dev/null 2>&1; then
   ( crontab -l 2>/dev/null | grep -v lifemark-sandbox-gc; \
-    echo "0 * * * * /usr/local/bin/lifemark-sandbox-gc 6 >/dev/null 2>&1" ) | crontab -
-  ok "hourly cron installed (removes sandboxes older than 6h)"
+    echo "*/10 * * * * /usr/local/bin/lifemark-sandbox-gc 3 48 >/dev/null 2>&1" ) | crontab -
+  ok "cron installed: every 10 min, reap idle>3h or age>48h, dedupe per project"
 else
   warn "no crontab — run lifemark-sandbox-gc periodically or containers accumulate"
 fi

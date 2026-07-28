@@ -295,6 +295,19 @@ export function buildTar(files: SandboxFile[]): Buffer {
 /** Ports handed out this process; avoids racing two boots onto one port. */
 const claimedPorts = new Set<number>();
 
+/**
+ * Per-project provision lock. The client has TWO independent auto-recovery
+ * paths (the 15s keep-alive heartbeat and the 1.2s phase poll) that can each
+ * decide the sandbox is dead and POST a cold boot — OBSERVED LIVE as two
+ * containers created 1 second apart for the same project. Both then carry
+ * Traefik labels for the same stable hostname, Traefik round-robins them, the
+ * browser assembles the app from two React copies, and the preview goes blank
+ * ("Invalid hook call"). Concurrent runProject calls for one project must
+ * therefore collapse into a single provision: first caller does the work,
+ * everyone else awaits the same promise and shares the result.
+ */
+const inflightRuns = new Map<string, Promise<SandboxRunResult>>();
+
 function claimPort(): number | null {
   const c = cfg();
   for (let p = c.portLo; p <= c.portHi; p++) {
@@ -323,6 +336,27 @@ export class DockerSandboxProvider implements SandboxProvider {
   }
 
   async runProject(opts: {
+    files: SandboxFile[];
+    port?: number;
+    startCommand?: string;
+    timeoutMs?: number;
+    projectId?: string;
+    onProgress?: (phase: string, detail?: string) => void;
+  }): Promise<SandboxRunResult> {
+    // Serialize provisions per project (see inflightRuns). Projects without an
+    // id can't be deduplicated — run those directly.
+    const key = opts.projectId ?? "";
+    if (!key) return this.runProjectInner(opts);
+    const existing = inflightRuns.get(key);
+    if (existing) return existing;
+    const run = this.runProjectInner(opts).finally(() => {
+      inflightRuns.delete(key);
+    });
+    inflightRuns.set(key, run);
+    return run;
+  }
+
+  private async runProjectInner(opts: {
     files: SandboxFile[];
     port?: number;
     startCommand?: string;
@@ -367,6 +401,16 @@ export class DockerSandboxProvider implements SandboxProvider {
       : "";
 
     try {
+      // One sandbox per project: the preview hostname is stable per project, so
+      // any leftover container for this project would make Traefik round-robin
+      // across two vite servers → the browser assembles the app from two React
+      // copies → "more than one copy of React" → blank preview. Tear those down
+      // before creating the replacement.
+      if (opts.projectId) {
+        progress("cleanup", "Removing previous sandbox for project");
+        await this.removeProjectContainers(opts.projectId);
+      }
+
       progress("creating", "Creating container");
       const create = await docker("POST", "/v1.43/containers/create", {
         Image: c.image,
@@ -665,12 +709,73 @@ export class DockerSandboxProvider implements SandboxProvider {
   async keepAlive(
     sandboxId: string,
     opts?: { previewUrl?: string },
-  ): Promise<{ alive: boolean; tunnelHealthy?: boolean }> {
+  ): Promise<{ alive: boolean; tunnelHealthy?: boolean; restarted?: boolean }> {
     const re = await this.reconnect(sandboxId);
     if (!re.ok) return { alive: false };
+
+    // Activity marker for the host GC: the gc script reaps sandboxes whose
+    // marker is stale (idle), NOT by creation age — reaping by age was cutting
+    // off users mid-edit at the 6h mark ("preview goes blank after some time").
+    // Detached fire-and-forget: never delays the heartbeat response.
+    void this.exec(sandboxId, "touch /tmp/.lm-keepalive", "/", false, true).catch(
+      () => undefined,
+    );
+
     if (!opts?.previewUrl) return { alive: true };
     const healthy = await waitForServer(opts.previewUrl, 3000);
-    return { alive: true, tunnelHealthy: healthy };
+    if (healthy) return { alive: true, tunnelHealthy: true };
+
+    // GRACE WINDOW — the tunnel being down while the container is alive almost
+    // always means vite is mid-restart (config re-sync triggers a FULL vite
+    // restart; the in-container supervisor loop revives it within ~1-2s).
+    // Reporting tunnelHealthy:false immediately made the client declare the
+    // sandbox dead and COLD-REBOOT a brand-new container — which, before the
+    // one-per-project teardown, stacked duplicates behind one hostname and
+    // caused the dual-React blank. Wait out the restart window and re-probe;
+    // only report dead if the tunnel stays down.
+    const recovered = await waitForServer(opts.previewUrl, 9000);
+    if (recovered) {
+      // The iframe may be stuck on a connection-reset page from the brief
+      // outage — `restarted` tells the client to bump its reload nonce.
+      return { alive: true, tunnelHealthy: true, restarted: true };
+    }
+    return { alive: true, tunnelHealthy: false };
+  }
+
+  /**
+   * Enforce ONE live sandbox per project. The preview hostname is STABLE PER
+   * PROJECT (see previewHost), so a leftover sandbox from a prior run still
+   * carries Traefik labels for the same Host() rule. Traefik then sees TWO (or
+   * more) backends for that hostname and ROUND-ROBINS across them — the browser
+   * loads `react.js` from one vite server and `react-dom.js` from another, so
+   * the module graph ends up with two physical copies of React. That surfaces
+   * as "Invalid hook call … more than one copy of React" → `useRef` of null in
+   * <BrowserRouter> → a permanently BLANK preview, no matter what resolve.dedupe
+   * the config sets (dedupe only collapses copies WITHIN one vite instance).
+   *
+   * Removing every existing container for the project before creating the new
+   * one guarantees Traefik always points the hostname at a single vite server.
+   */
+  private async removeProjectContainers(projectId: string): Promise<void> {
+    if (!projectId) return;
+    const filters = encodeURIComponent(
+      JSON.stringify({ label: [`lifemark.project=${projectId}`] }),
+    );
+    const res = await docker("GET", `/v1.43/containers/json?all=1&filters=${filters}`);
+    if (res.status >= 400) return;
+    let list: Array<{ Id: string }> = [];
+    try {
+      list = JSON.parse(res.text) as Array<{ Id: string }>;
+    } catch {
+      return;
+    }
+    await Promise.all(
+      list.map((ctr) =>
+        docker("DELETE", `/v1.43/containers/${ctr.Id}?force=true&v=true`).catch(
+          () => undefined,
+        ),
+      ),
+    );
   }
 
   async kill(sandboxId: string): Promise<void> {

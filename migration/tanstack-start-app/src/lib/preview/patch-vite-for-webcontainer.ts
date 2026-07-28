@@ -7,6 +7,8 @@ export function patchViteConfigForWebContainer(content: string): string {
   if (!patched.trim()) return patched;
 
   patched = ensureAtAlias(patched);
+  patched = ensureReactDedupe(patched);
+  patched = ensureReactOptimizeDeps(patched);
 
   const hasHost = /host\s*:\s*(true|['"]0\.0\.0\.0['"])/.test(patched);
   const hasHmr = /\bhmr\s*:\s*\{/.test(patched);
@@ -82,6 +84,67 @@ export function ensureAtAlias(content: string): string {
     );
   }
 
+  return content;
+}
+
+/**
+ * THE fix for blank previews caused by "Invalid hook call … more than one copy
+ * of React" → `Cannot read properties of null (reading 'useRef')` inside
+ * react-router-dom's <BrowserRouter>. Generated apps never write a dedupe, so
+ * Vite's dep-optimizer can pre-bundle react-router-dom against a SECOND physical
+ * copy of React — two Reacts in the module graph, hooks throw null, #root stays
+ * empty. `resolve.dedupe` forces every bare `react`/`react-dom` import to the one
+ * copy at the project root. Applied to EVERY app config in the pipeline so no
+ * generated project can hit the dual-React crash again.
+ */
+export function ensureReactDedupe(content: string): string {
+  if (!content.trim()) return content;
+  // Already dedupes react — leave alone.
+  if (/dedupe\s*:\s*\[[^\]]*['"]react['"]/.test(content)) return content;
+
+  const dedupeEntry = 'dedupe: ["react", "react-dom", "react-router-dom"],';
+
+  // Case 1: a resolve: { ... } block exists (ensureAtAlias guarantees one for
+  // any defineConfig shape) — add dedupe as the first entry.
+  const resolveBlock = /resolve\s*:\s*\{/;
+  if (resolveBlock.test(content)) {
+    return content.replace(resolveBlock, `resolve: {\n    ${dedupeEntry}`);
+  }
+
+  // Case 2: no resolve block — insert one right after defineConfig({.
+  const defineConfig = /defineConfig\s*\(\s*\{/;
+  if (defineConfig.test(content)) {
+    return content.replace(
+      defineConfig,
+      `defineConfig({\n  resolve: { ${dedupeEntry} },`,
+    );
+  }
+
+  return content;
+}
+
+/**
+ * Pair with {@link ensureReactDedupe}: force React, ReactDOM and react-router-dom
+ * to be pre-bundled together in a SINGLE optimize pass. Without this, Vite can
+ * discover react-router-dom late and optimize it separately against its own
+ * React copy (the "multiple react-dom optimize hashes" symptom), reintroducing
+ * the dual-React crash even when dedupe is set. Only injected when the config has
+ * no optimizeDeps of its own, so we never fight an author's explicit setup.
+ *
+ * Only react + react-dom are force-included — they exist in every React app.
+ * react-router-dom is intentionally left out of `include` (listing an
+ * uninstalled dep in optimizeDeps.include makes Vite throw "could not be
+ * resolved"); dedupe already pins its React to the single root copy.
+ */
+export function ensureReactOptimizeDeps(content: string): string {
+  if (!content.trim()) return content;
+  if (/optimizeDeps\s*:/.test(content)) return content;
+
+  const includeBlock = 'optimizeDeps: { include: ["react", "react-dom"] },';
+  const defineConfig = /defineConfig\s*\(\s*\{/;
+  if (defineConfig.test(content)) {
+    return content.replace(defineConfig, `defineConfig({\n  ${includeBlock}`);
+  }
   return content;
 }
 
