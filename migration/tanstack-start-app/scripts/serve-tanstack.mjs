@@ -24,6 +24,8 @@
 import { createServer } from "node:http";
 import { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
+import fs from "node:fs";
+import path from "node:path";
 
 const entryPath = process.argv[2];
 if (!entryPath) {
@@ -55,6 +57,77 @@ if (!handler || typeof handler.fetch !== "function") {
 
 const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
+
+/**
+ * STATIC CLIENT ASSETS. The build's fetch handler does SSR only — it does NOT
+ * serve `.output/client/**`. Without this block every `/assets/*.js|css`
+ * request falls through to the router's HTML catch-all and 404s, so the whole
+ * site renders server-side but never hydrates: pages LOOK alive (SSR HTML,
+ * inline __LM_ENV__ script) while every button is dead and the editor hangs on
+ * its unstyled pending state forever. That combination shipped once — the
+ * landing page masked it for hours.
+ */
+const CLIENT_DIR = path.resolve(path.dirname(entryPath), "../client");
+const MIME = {
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".avif": "image/avif",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".txt": "text/plain; charset=utf-8",
+  ".webmanifest": "application/manifest+json",
+  ".wasm": "application/wasm",
+};
+
+/** Serve a file from .output/client if the URL maps to one; false otherwise. */
+function tryServeStatic(req, res) {
+  if (req.method !== "GET" && req.method !== "HEAD") return false;
+  let pathname;
+  try {
+    pathname = decodeURIComponent(new URL(req.url, "http://x").pathname);
+  } catch {
+    return false;
+  }
+  if (pathname === "/" || pathname.includes("\0")) return false;
+  // Safe join — resolve and require the result to stay inside CLIENT_DIR.
+  const abs = path.resolve(CLIENT_DIR, "." + pathname);
+  if (abs !== CLIENT_DIR && !abs.startsWith(CLIENT_DIR + path.sep)) return false;
+  let st;
+  try {
+    st = fs.statSync(abs);
+  } catch {
+    return false;
+  }
+  if (!st.isFile()) return false;
+  const type = MIME[path.extname(abs).toLowerCase()] || "application/octet-stream";
+  res.writeHead(200, {
+    "content-type": type,
+    "content-length": String(st.size),
+    // Vite content-hashes everything under /assets/, so those are immutable;
+    // other public files (favicons etc.) get a short cache.
+    "cache-control": pathname.startsWith("/assets/")
+      ? "public, max-age=31536000, immutable"
+      : "public, max-age=3600",
+  });
+  if (req.method === "HEAD") {
+    res.end();
+    return true;
+  }
+  fs.createReadStream(abs).pipe(res);
+  return true;
+}
 
 /**
  * RUNTIME ENV → BROWSER. The Vite `define:` map bakes public env values into
@@ -120,6 +193,7 @@ function toWebHeaders(nodeHeaders) {
 
 const server = createServer(async (req, res) => {
   try {
+    if (tryServeStatic(req, res)) return;
     const host = req.headers.host || `${HOST}:${PORT}`;
     // Trust the proxy's scheme so absolute URLs / redirects stay https behind Traefik.
     const proto = req.headers["x-forwarded-proto"] || "http";

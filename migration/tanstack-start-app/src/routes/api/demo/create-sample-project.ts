@@ -306,5 +306,13 @@ function getLanguage(path: string): string {
 
 
 export const Route = createFileRoute("/api/demo/create-sample-project")({
-  server: { handlers: { GET: async () => demoHandler() } },
+  // The demo page (src/routes/demo.tsx) calls this with POST; GET kept for
+  // manual/curl use. With only GET registered, a POST fell through to the
+  // router's HTML catch-all and the "Launch demo" button silently did nothing.
+  server: {
+    handlers: {
+      GET: async () => demoHandler(),
+      POST: async () => demoHandler(),
+    },
+  },
 });
