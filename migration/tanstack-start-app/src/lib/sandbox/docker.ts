@@ -276,10 +276,16 @@ export class DockerSandboxProvider implements SandboxProvider {
   readonly id = "docker" as const;
 
   isEnabled(): boolean {
-    // A public host is mandatory: without it we can hand back a URL that only
-    // resolves on the server, which fails silently in the user's browser —
-    // exactly the failure mode that wasted hours on the Modal tunnel.
-    return Boolean(cfg().publicHost);
+    // A browser-reachable address is mandatory: without one we can hand back a
+    // URL that only resolves on the server, which fails silently in the user's
+    // browser — exactly the failure mode that wasted hours on the Modal tunnel.
+    // Either mode satisfies that:
+    //   - proxy mode: SANDBOX_PREVIEW_DOMAIN (Traefik serves https://<id>.<domain>)
+    //   - port mode:  SANDBOX_PUBLIC_HOST (http://host:port)
+    // This MUST accept proxy mode — checking only publicHost silently fell back
+    // to Modal in production while every SANDBOX_* var was correctly set.
+    const c = cfg();
+    return Boolean(c.publicHost || c.routeViaProxy);
   }
 
   async runProject(opts: {
@@ -293,7 +299,10 @@ export class DockerSandboxProvider implements SandboxProvider {
     const progress = opts.onProgress ?? (() => {});
     const c = cfg();
     if (!this.isEnabled()) {
-      return { ok: false, error: "Docker sandbox needs SANDBOX_PUBLIC_HOST set." };
+      return {
+        ok: false,
+        error: "Docker sandbox needs SANDBOX_PREVIEW_DOMAIN (proxy mode) or SANDBOX_PUBLIC_HOST (port mode) set.",
+      };
     }
 
     const innerPort = opts.port ?? 5173;

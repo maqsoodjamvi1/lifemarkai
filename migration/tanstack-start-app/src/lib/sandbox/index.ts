@@ -477,7 +477,7 @@ export function getSandboxProvider(): SandboxProvider {
         return cached;
       }
       console.warn(
-        "[sandbox] SANDBOX_PROVIDER=docker but SANDBOX_PUBLIC_HOST is unset — falling back.",
+        "[sandbox] SANDBOX_PROVIDER=docker but neither SANDBOX_PREVIEW_DOMAIN nor SANDBOX_PUBLIC_HOST is set — falling back.",
       );
     }
     if (pref === "e2b" && isE2bSandboxAllowed()) {
