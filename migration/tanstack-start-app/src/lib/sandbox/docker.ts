@@ -39,6 +39,7 @@
  */
 
 import http from "node:http";
+import { createHash } from "node:crypto";
 import type {
   ClaudeCodeResult,
   CommandResult,
@@ -49,6 +50,8 @@ import type {
 import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared";
 
 const DEV_LOG = "/tmp/lifemark-dev.log";
+/** Content-hash manifest for incremental writeFiles — lives in APP_DIR. */
+const SYNC_MANIFEST = ".lm-sync-manifest.json";
 
 /**
  * Project directory INSIDE the node user's own home — not /app.
@@ -652,11 +655,67 @@ export class DockerSandboxProvider implements SandboxProvider {
   }
 
   async writeFiles(sandboxId: string, files: SandboxFile[]): Promise<void> {
+    // INCREMENTAL SYNC — upload only files whose CONTENT actually changed.
+    //
+    // Why this is load-bearing for a clean first paint: every editor open does
+    // a full baseline sync. Uploading the whole project refreshes every file's
+    // mtime — including vite.config.ts / tsconfig.json / .env — and vite's OWN
+    // config watcher does a FULL SERVER RESTART on any config-file change event
+    // (mtime alone is enough; identical content does not matter). So every
+    // editor open knocked the dev server down for ~2-3s, and the preview
+    // iframe's first paint landed exactly in that window → Bad Gateway / blank
+    // until a manual refresh. Diffing against a content-hash manifest stored in
+    // the container means an open with no edits writes NOTHING, vite never
+    // restarts, and the first paint is clean. Real edits still upload and HMR.
+    //
+    // The manifest lives in the container (not the DB) so it always describes
+    // THIS container's actual disk state: fresh containers have none (full
+    // upload, correct), and out-of-band container changes at worst cause a
+    // redundant re-upload (safe), never a skipped write of real changes.
+    const norm = (p: string) => p.replace(/\\/g, "/");
+    const hashes: Record<string, string> = {};
+    for (const f of files) {
+      hashes[norm(f.path)] = createHash("sha1").update(f.content ?? "").digest("hex");
+    }
+
+    let prev: Record<string, string> | null = null;
+    try {
+      // tty=true (default) keeps the output a single raw stream (no Docker
+      // stream-multiplexing frame headers). The manifest is compact JSON on one
+      // line, so tty CRLF translation cannot corrupt it. Any parse failure
+      // falls back to a full upload — worst case is today's behavior.
+      const read = await this.exec(
+        sandboxId,
+        `cat ${APP_DIR}/${SYNC_MANIFEST} 2>/dev/null || true`,
+        "/",
+      );
+      const raw = read.stdout ?? "";
+      const start = raw.indexOf("{");
+      const end = raw.lastIndexOf("}");
+      if (start >= 0 && end > start) {
+        prev = JSON.parse(raw.slice(start, end + 1)) as Record<string, string>;
+      }
+    } catch {
+      prev = null;
+    }
+
+    let toWrite = files;
+    if (prev) {
+      toWrite = files.filter((f) => prev![norm(f.path)] !== hashes[norm(f.path)]);
+      // Nothing changed → write NOTHING. Even rewriting just the manifest is
+      // pointless churn; skipping the upload entirely is what keeps vite quiet.
+      if (toWrite.length === 0) return;
+    }
+
+    const payload: SandboxFile[] = [
+      ...toWrite,
+      { path: SYNC_MANIFEST, content: JSON.stringify(hashes) },
+    ];
     const res = await docker(
       "PUT",
       `/v1.43/containers/${sandboxId}/archive?path=${encodeURIComponent(APP_DIR)}`,
       undefined,
-      buildTar(files),
+      buildTar(payload),
     );
     // Throw rather than swallow: this is how an AI edit reaches the running
     // preview. Ignoring the status makes a failed write look like a successful
