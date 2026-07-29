@@ -742,6 +742,12 @@ export function PreviewPanel({
   const errorGuard = usePreviewErrorGuard({
     iframeRef: unifiedIframeRef,
     onHealRequest: onHealRequestStable,
+    // `autoHeal` defaults to false, so omitting it left the documented
+    // self-healing loop manual-only: buildHealingPrompt / onHealRequest fired
+    // solely when the user clicked "Try to fix". The loop is already bounded by
+    // MAX_AUTO_FIX_ATTEMPTS (3) in chat-panel, after which the recovery banner
+    // takes over, so enabling it cannot spin.
+    autoHeal: true,
   });
 
   const previewDiagnosis = useMemo(

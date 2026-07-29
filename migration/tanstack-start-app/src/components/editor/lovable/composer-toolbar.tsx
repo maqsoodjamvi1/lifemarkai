@@ -27,6 +27,18 @@ export interface ComposerContextMenuActions {
   mobileDisabled?: boolean;
   onToggleFileGenPicker?: () => void;
   showFileGenPicker?: boolean;
+  /**
+   * Opens the model / multi-agent menu.
+   *
+   * This entry point was missing, which made both features unreachable: the
+   * menu in composer-bottom-row renders only when `multiAgent ||
+   * modelManuallySelectedRef.current`, and the ONLY controls that set either
+   * flag live inside that same menu — a closed loop. Nothing else in the app
+   * called onMultiAgentChange, so a user could never pick a model or turn on
+   * multi-agent at all.
+   */
+  onToggleModelMenu?: () => void;
+  showModelMenu?: boolean;
 }
 
 /** Lovable-parity + context menu in the composer footer. */
@@ -127,6 +139,11 @@ export function LovableComposerContextMenu({ actions }: { actions: ComposerConte
         {actions.onToggleFileGenPicker && (
           <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onToggleFileGenPicker}>
             {actions.showFileGenPicker ? "Hide file generator" : "Generate file"}
+          </DropdownMenuItem>
+        )}
+        {actions.onToggleModelMenu && (
+          <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onToggleModelMenu}>
+            {actions.showModelMenu ? "Hide model options" : "Model & multi-agent"}
           </DropdownMenuItem>
         )}
         <div className="h-px bg-[color:var(--border-default)] my-1" />

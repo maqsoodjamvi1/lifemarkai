@@ -190,7 +190,14 @@ export function LovableComposerInputArea({
         showFileGenPicker={rest.showFileGenPicker}
         fileGenBusy={rest.fileGenBusy}
         fileGenDisabled={rest.fileGenDisabled}
+        // fileGenBinary* were passed in by chat-panel but never forwarded from
+        // here, so the binary file-gen capability gate always fell back to its
+        // defaults (enabled / no reason) and was inert.
+        fileGenBinaryEnabled={rest.fileGenBinaryEnabled}
+        fileGenBinaryReason={rest.fileGenBinaryReason}
         input={input}
+        showModelMenu={rest.showModelMenu}
+        onToggleModelMenu={rest.onToggleModelMenu}
         onToggleFileGenPicker={rest.onToggleFileGenPicker}
         onGenerateFile={rest.onGenerateFile}
         streaming={rest.streaming}

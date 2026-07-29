@@ -51,6 +51,9 @@ export interface LovableComposerBottomRowProps {
   fileGenBinaryEnabled?: boolean;
   fileGenBinaryReason?: string | null;
   input: string;
+  /** Opens the model / multi-agent menu — see composer-toolbar for why this exists. */
+  showModelMenu?: boolean;
+  onToggleModelMenu?: () => void;
   onToggleFileGenPicker: () => void;
   onGenerateFile: (fmt: LovableFileGenFormat) => void;
   streaming: boolean;
@@ -101,6 +104,8 @@ export function LovableComposerBottomRow({
   fileGenBinaryEnabled = true,
   fileGenBinaryReason = null,
   input,
+  showModelMenu = false,
+  onToggleModelMenu,
   onToggleFileGenPicker,
   onGenerateFile,
   streaming,
@@ -134,6 +139,8 @@ export function LovableComposerBottomRow({
     mobileDisabled,
     onToggleFileGenPicker,
     showFileGenPicker,
+    onToggleModelMenu,
+    showModelMenu,
   };
 
   return (
@@ -180,9 +187,13 @@ export function LovableComposerBottomRow({
         />
       )}
 
-      {/* Model menu + file-gen appear only while engaged (opened from the + menu). */}
+      {/* Model menu + file-gen appear only while engaged (opened from the + menu).
+          `showModelMenu` is the entry point that makes this reachable at all —
+          without it the render condition and the only controls that satisfy it
+          lived inside each other, so neither the model picker nor multi-agent
+          could ever be opened. */}
       <div className="hidden sm:contents">
-        {(multiAgent || modelManuallySelectedRef.current) && (
+        {(showModelMenu || multiAgent || modelManuallySelectedRef.current) && (
           <LovableComposerModelMenu
             mode={mode}
             onModeChange={onModeChange}

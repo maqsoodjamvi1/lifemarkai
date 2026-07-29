@@ -661,6 +661,10 @@ export function ChatPanel({
   // "Generate as file" — standalone downloadable documents via /api/ai/generate-file.
   // Results render as download cards above the composer; they never touch project files.
   const [showFileGenPicker, setShowFileGenPicker] = useState(false);
+  // Entry point for the model / multi-agent menu. Without this the menu's render
+  // condition and its only controls were mutually dependent, so neither the
+  // model picker nor multi-agent could be opened at all.
+  const [showModelMenu, setShowModelMenu] = useState(false);
   const [fileGenBusy, setFileGenBusy] = useState<string | null>(null);
   const [fileGenResults, setFileGenResults] = useState<LovableFileGenResult[]>([]);
   const saveGeneratedFileToProject = useCallback(async (file: GeneratedFile) => {
@@ -3620,14 +3624,15 @@ ${(f.content ?? "").slice(0, 8000)}
     let text = input.trim();
     if (!text && !attachedImage) return;
 
-    // While the agent is working, queue the message instead of sending — it
-    // auto-sends when the current run finishes (see the flush effects above).
-    // autoSendRef guards the programmatic flush so it isn't re-queued.
-    if (streaming && text && autoSendRef.current !== text) {
-      setQueuedMessages((q) => [...q, text]);
-      setInput("");
-      return;
-    }
+    // NOTE: there used to be an early return here that pushed typed follow-ups
+    // into the SIMPLE `queuedMessages` string array and returned. Because it ran
+    // before the rich-queue branch below, `promptQueue` only ever received
+    // image-only sends — so the entire LovablePromptQueue UI (reorder, inline
+    // edit, repeat-N, pause, clear) never saw a typed message, the header queue
+    // pill read 0 while items were pending, and the pause control acted on the
+    // wrong queue. Removed so every queued send flows through the rich queue,
+    // which is drained by the effect below (guarded on sendingRef, credits,
+    // paused state, and per-item repeats).
 
     const redaction = text ? redactPromptSecrets(text) : null;
     if (redaction && redaction.assignments.length > 0) {
@@ -5683,8 +5688,12 @@ ${(f.content ?? "").slice(0, 8000)}
             thread={thread}
             threadIdx={threadIdx}
             searchQuery={searchQuery}
-            // Always show message bodies — turn collapse was hiding the chat.
-            collapsed={false}
+            // Collapse is opt-in per thread and NEVER applies to the newest one,
+            // so the current turn is always readable. It was previously pinned to
+            // `false`, which left the "Collapse all threads" menu item, the
+            // onToggleCollapse handler and the sessionStorage persistence all
+            // writing state that nothing ever read.
+            collapsed={collapsedThreads.has(threadIdx) && threadIdx !== chatThreads.length - 1}
             onToggleCollapse={() =>
               setCollapsedThreads((prev) => {
                 const n = new Set(prev);
@@ -6000,12 +6009,24 @@ ${(f.content ?? "").slice(0, 8000)}
             fileGenDisabled={!input.trim() || !!fileGenBusy || noCredits || isLocked || streaming}
             fileGenBinaryEnabled={analyzeEnabled}
             fileGenBinaryReason={analyzeUnavailableReason}
+            showModelMenu={showModelMenu}
+            onToggleModelMenu={() => setShowModelMenu((v) => !v)}
             onToggleFileGenPicker={() => setShowFileGenPicker((v) => !v)}
             onGenerateFile={(fmt) => void handleGenerateFile(fmt)}
             streaming={streaming}
             canSend={(!input.trim() && !attachedImage) ? false : !noCredits && !isLocked}
             canQueue={(!!input.trim() || !!attachedImage || !!attachedText) && !noCredits && !isLocked}
-            queueDisabledReason={undefined}
+            // Was hardcoded undefined, so the send-control tooltip could never
+            // explain why queueing was unavailable.
+            queueDisabledReason={
+              noCredits
+                ? "You're out of credits — top up to queue more messages."
+                : isLocked
+                  ? "This project is in Live mode; switch to Test to make changes."
+                  : !input.trim() && !attachedImage && !attachedText
+                    ? "Type a message first."
+                    : undefined
+            }
             onSend={() => void handleSend()}
             onStop={stopGeneration}
           />
