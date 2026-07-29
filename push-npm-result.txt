@@ -1,0 +1,9 @@
+warning: in the working copy of 'lib/ai/npm-auto-install.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'migration/tanstack-start-app/src/lib/ai/npm-auto-install.ts', LF will be replaced by CRLF the next time Git touches it
+[codex/security-hardening 0d96d2a] fix: dependency auto-injection treats node:* imports as builtins
+ 2 files changed, 12 insertions(+)
+To github.com:maqsoodjamvi1/lifemarkai.git
+   319e553..0d96d2a  codex/security-hardening -> codex/security-hardening
+===== done, HEAD is =====
+0d96d2a fix: dependency auto-injection treats node:* imports as builtins
+319e553 fix: prod editor save + AI worker boot + TSS scaffold deps

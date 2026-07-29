@@ -3,10 +3,12 @@
 # Built for Coolify. Node 22 (modal SDK requires >=22.12).
 #
 # Processes at runtime (supervised by scripts/start-production.mjs):
-#   :3000 TanStack Start server (.output/server/index.mjs)
-#   :3010 AI SSE worker        (chat/agent/fix — .tmp/ai-http bundles)
-#   :3011 API worker           (all legacy app/api handlers — .tmp/api-routes)
-#   :3012 Sandbox worker       (Modal cold boot / sync — same bundles, own heap)
+#   :3000 TanStack Start server (.output/server/index.mjs) — ALL routes, native
+#   :3010 AI SSE worker        (chat/agent/fix — .tmp/ai-http bundles, own heap)
+#
+# The :3011 API worker and :3012 sandbox worker were retired in Phase 2: every
+# route is now a native TanStack Start handler and sandbox-preview runs in-process.
+# There is no Next.js in this image — the app was removed in commit c363c8f.
 
 # ── deps + build ─────────────────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS build
@@ -14,7 +16,10 @@ WORKDIR /app
 
 ENV NODE_OPTIONS=--max-old-space-size=4096
 
-# Root deps first (legacy app/api handler externals live here).
+# Root deps first: the AI worker's esbuild bundles use `packages: "external"`,
+# so their runtime imports (openai, stripe, @supabase/*, resend…) resolve from
+# the ROOT node_modules at runtime. Root package.json is a dependency manifest
+# only — there is no root application code left.
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
@@ -23,10 +28,12 @@ COPY migration/tanstack-start-app/package.json migration/tanstack-start-app/pack
 RUN cd migration/tanstack-start-app && npm ci --no-audit --no-fund --legacy-peer-deps
 
 # Copy the repo and build:
-#  1. API route bundles + manifest (.tmp/api-routes)
-#  2. AI HTTP bundles (.tmp/ai-http)
-#  3. Vite production build (.output) — VITE_*/NEXT_PUBLIC_* are inlined here;
+#  1. AI HTTP bundles (.tmp/ai-http) for the SSE worker
+#  2. Vite production build (.output) — VITE_*/NEXT_PUBLIC_* are inlined here;
 #     pass as --build-arg or Coolify Build Variables.
+#
+# build-api-manifest.mjs / verify-api-coverage.mjs were dropped from this chain:
+# both became no-op tombstones when the API worker was retired (all routes native).
 ARG VITE_SUPABASE_URL
 ARG VITE_SUPABASE_ANON_KEY
 ARG VITE_APP_URL
@@ -55,9 +62,7 @@ COPY . .
 # the image fails at `COPY ... .output` with "not found", which reads like a
 # build failure but is really a path mismatch.
 RUN cd migration/tanstack-start-app \
-  && node scripts/build-api-manifest.mjs \
   && node scripts/build-ai-http.mjs \
-  && node scripts/verify-api-coverage.mjs \
   && npx vite build \
   && if [ ! -d .output ] && [ -d dist ]; then mv dist .output; fi \
   && test -d .output/server || (echo "BUILD ERROR: no server output in .output/ or dist/" && ls -la && exit 1)

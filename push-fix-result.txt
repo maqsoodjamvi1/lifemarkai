@@ -1,0 +1,12 @@
+warning: in the working copy of 'lib/templates/tanstack-start-scaffold.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'migration/tanstack-start-app/scripts/build-ai-http.mjs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'migration/tanstack-start-app/src/lib/server-fns/project-files.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'migration/tanstack-start-app/src/lib/templates/tanstack-start-scaffold.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'migration/tanstack-start-app/src/routes/api/projects/$id/files.ts', LF will be replaced by CRLF the next time Git touches it
+[codex/security-hardening 319e553] fix: prod editor save + AI worker boot + TSS scaffold deps
+ 5 files changed, 161 insertions(+), 150 deletions(-)
+To github.com:maqsoodjamvi1/lifemarkai.git
+   79b9410..319e553  codex/security-hardening -> codex/security-hardening
+===== done, HEAD is =====
+319e553 fix: prod editor save + AI worker boot + TSS scaffold deps
+79b9410 fix: start dev server with setsid over a tty-less exec - pty teardown was killing it, leaving ready+502

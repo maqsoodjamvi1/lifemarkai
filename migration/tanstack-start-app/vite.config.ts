@@ -10,10 +10,11 @@ const srcDir = path.join(rootDir, "src");
 // PHASE 2: `repoRoot` is gone — this app no longer reads the main LifemarkAI repo
 // for env, module resolution, or file serving. It is fully standalone.
 //
-// NOTE: src/lib/next-shims is intentionally NOT aliased here (Blocker 2). It is
-// still consumed by scripts/build-ai-http.mjs for the AI worker's esbuild pass
-// (server-only/client-only/next/server/next/headers), which now bundles the LOCAL
-// src/lib/ai/http/{fix,chat,agent}.ts for /api/ai/{chat,agent}.
+// PHASE 3: src/lib/next-shims is DELETED. It survived only to satisfy esbuild
+// aliases in scripts/build-ai-http.mjs; a walk of that worker's real import
+// graph (282 files from src/lib/ai/http/{fix,chat,agent}.ts) found zero imports
+// of server-only/client-only/next/server/next/headers, so shims and aliases were
+// removed together. No Next.js compatibility layer remains anywhere in the app.
 // (The API worker + build-api-manifest.mjs were retired in Phase 1.)
 
 /**
@@ -183,10 +184,12 @@ export default defineConfig(({ mode }) => {
         // next/* imports, so next/{navigation,dynamic,link,image,server,headers},
         // server-only/client-only and @lifemark/editor are no longer resolved here.
         //
-        // src/lib/next-shims/* still exists ON PURPOSE: scripts/build-ai-http.mjs
-        // uses it for the AI worker's esbuild pass (lib/ai/http/{fix,chat,agent}).
-        // src/lib/preview/next-app-preview.ts also emits next/* shims — but those are
-        // for USER-GENERATED Next apps rendered in the preview iframe, not for us.
+        // PHASE 3: src/lib/next-shims/* is DELETED along with the esbuild aliases
+        // that were its only consumer (scripts/build-ai-http.mjs).
+        //
+        // src/lib/preview/next-app-preview.ts still emits next/* shims and that is
+        // CORRECT — those are for USER-GENERATED Next.js apps rendered in the
+        // preview iframe. LifemarkAI builds Next apps for customers; it is not one.
 
         // Force a single graph for shared editor packages (Windows dual-drive risk).
         { find: /^framer-motion$/, replacement: path.join(rootDir, "node_modules/framer-motion") },

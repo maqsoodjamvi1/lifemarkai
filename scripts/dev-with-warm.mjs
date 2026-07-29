@@ -52,7 +52,10 @@ async function waitForServer() {
   console.warn("[dev-warm] server did not become ready in time");
 }
 
-const child = spawn("npm", ["run", "dev:next"], {
+// TanStack Start dev server (root `dev` delegates to migration/tanstack-start-app).
+// Was `dev:next` — that script ran `next dev`, which has been dead since the
+// Next.js app was removed (commit c363c8f); this helper silently failed with it.
+const child = spawn("npm", ["run", "dev"], {
   stdio: "inherit",
   env: process.env,
   cwd: process.cwd(),

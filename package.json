@@ -4,24 +4,13 @@
   "private": true,
   "scripts": {
     "dev": "npm run dev --prefix migration/tanstack-start-app",
-    "dev:start": "npm run dev --prefix migration/tanstack-start-app",
     "dev:warm": "node scripts/dev-with-warm.mjs",
-    "dev:next": "next dev --webpack",
     "build": "npm run build --prefix migration/tanstack-start-app",
-    "build:start": "npm run build --prefix migration/tanstack-start-app",
-    "build:next": "next build",
     "start": "npm run start --prefix migration/tanstack-start-app",
-    "start:start": "npm run start --prefix migration/tanstack-start-app",
-    "start:next": "next start",
     "lint": "eslint .",
     "type-check": "tsc --noEmit",
-    "test": "tsx --test lib/ai/code-parser.test.ts lib/ai/chat-capabilities.test.ts lib/ai/skill-matcher.test.ts lib/ai/stream-file-paths.test.ts lib/security/static-scan.test.ts lib/security/credit-hardening.test.ts lib/preview/diagnose-preview.test.ts lib/auth/safe-redirect.test.ts lib/api/array-response.test.ts lib/build-with-url.test.ts",
-    "verify:openrouter": "npx tsx scripts/verify-openrouter-routing.ts && npx tsx scripts/verify-openrouter-catalog.ts",
-    "verify:parity": "npx tsx scripts/verify-lovable-gaps.ts && npx tsx scripts/verify-tier2-gaps.ts && npx tsx scripts/verify-tier3-gaps.ts && npx tsx scripts/verify-tier5-gaps.ts && npx tsx scripts/verify-tier6-gaps.ts && npx tsx scripts/verify-tier7-gaps.ts && npx tsx scripts/verify-tier8-gaps.ts",
-    "verify:production": "npx tsx scripts/verify-production-ready.ts",
+    "test": "tsx --test migration/tanstack-start-app/src/lib/ai/code-parser.test.ts migration/tanstack-start-app/src/lib/ai/chat-capabilities.test.ts migration/tanstack-start-app/src/lib/ai/skill-matcher.test.ts migration/tanstack-start-app/src/lib/ai/stream-file-paths.test.ts migration/tanstack-start-app/src/lib/security/static-scan.test.ts migration/tanstack-start-app/src/lib/preview/diagnose-preview.test.ts migration/tanstack-start-app/src/lib/auth/safe-redirect.test.ts migration/tanstack-start-app/src/lib/api/array-response.test.ts migration/tanstack-start-app/src/lib/build-with-url.test.ts",
     "verify:smoke": "node scripts/verify-production-smoke.mjs",
-    "verify:previews": "tsx scripts/verify-preview-transpiler.ts && tsx scripts/verify-export-contract.ts && tsx --test lib/preview/diagnose-preview.test.ts",
-    "verify:intelligence": "tsx scripts/verify-intent-routing.ts",
     "electron:dev": "NODE_ENV=development concurrently \"npm run dev\" \"wait-on http://localhost:3000 && electron electron/main.js\"",
     "electron:build": "npm run build && electron-builder --config electron/electron-builder.yml",
     "electron:build:mac": "npm run build && electron-builder --mac --config electron/electron-builder.yml",
@@ -142,9 +131,6 @@
     "playwright": "^1.49.0"
   },
   "overrides": {
-    "form-data": "4.0.6",
-    "next": {
-      "postcss": "8.5.12"
-    }
+    "form-data": "4.0.6"
   }
 }

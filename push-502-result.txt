@@ -1,0 +1,11 @@
+BRANCH=codex/security-hardening
+warning: in the working copy of 'migration/tanstack-start-app/src/lib/sandbox/shared.ts', LF will be replaced by CRLF the next time Git touches it
+===== commit =====
+[codex/security-hardening 4b351f6] fix(preview): health probes must not count Traefik's 502 as 'server up' - behind a reverse proxy every request gets an HTTP response, so status>0 made boot readiness, keepAlive and the phase probe all report healthy while the pane showed Bad Gateway and no self-heal could ever fire. Gateway statuses (502/503/504) now read as backend-down
+ 1 file changed, 23 insertions(+), 5 deletions(-)
+===== push =====
+To github.com:maqsoodjamvi1/lifemarkai.git
+   6138bf7..4b351f6  codex/security-hardening -> codex/security-hardening
+===== HEAD =====
+4b351f6 fix(preview): health probes must not count Traefik's 502 as 'server up' - behind a reverse proxy every request gets an HTTP response, so status>0 made boot readiness, keepAlive and the phase probe all report healthy while the pane showed Bad Gateway and no self-heal could ever fire. Gateway statuses (502/503/504) now read as backend-down
+6138bf7 fix(preview): paint watchdog - verified live that a healthy sandbox can still show a blank iframe (loaded during a transient; browsers never refetch). Use the VEB bridge's lifemark-veb-ready ping as a paint signal; no ping within 6s of ready = force iframe reload via reloadNonce, 3 attempts with backoff

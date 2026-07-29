@@ -1,0 +1,8 @@
+warning: in the working copy of 'migration/tanstack-start-app/src/lib/sandbox/docker.ts', LF will be replaced by CRLF the next time Git touches it
+[codex/security-hardening 2f4980c] fix: sandbox tar upload emits node-owned directory entries
+ 1 file changed, 34 insertions(+)
+To github.com:maqsoodjamvi1/lifemarkai.git
+   41ff9b2..2f4980c  codex/security-hardening -> codex/security-hardening
+===== done, HEAD is =====
+2f4980c fix: sandbox tar upload emits node-owned directory entries
+41ff9b2 fix: docker sandbox reconnect resolves preview URL in Traefik proxy mode

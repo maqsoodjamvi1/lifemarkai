@@ -1,0 +1,11 @@
+BRANCH=codex/security-hardening
+warning: in the working copy of 'migration/tanstack-start-app/src/lib/preview/use-sandbox-preview.ts', LF will be replaced by CRLF the next time Git touches it
+===== commit =====
+[codex/security-hardening 6138bf7] fix(preview): paint watchdog - verified live that a healthy sandbox can still show a blank iframe (loaded during a transient; browsers never refetch). Use the VEB bridge's lifemark-veb-ready ping as a paint signal; no ping within 6s of ready = force iframe reload via reloadNonce, 3 attempts with backoff
+ 1 file changed, 55 insertions(+)
+===== push =====
+To github.com:maqsoodjamvi1/lifemarkai.git
+   6498b3a..6138bf7  codex/security-hardening -> codex/security-hardening
+===== HEAD =====
+6138bf7 fix(preview): paint watchdog - verified live that a healthy sandbox can still show a blank iframe (loaded during a transient; browsers never refetch). Use the VEB bridge's lifemark-veb-ready ping as a paint signal; no ping within 6s of ready = force iframe reload via reloadNonce, 3 attempts with backoff
+6498b3a fix(preview): production-grade sandbox stability - one container per project (teardown before create + per-project provision lock; concurrent heartbeat/phase-poll reboots collapsed), keepAlive grace window for supervisor vite restarts (+restarted signal, keepalive touch for GC), sync no longer pkills vite on every baseline re-sync (+provider-correct restart path), React dedupe in vite patcher, unreachable phase now auto-recovers, idle-aware GC with per-project dedupe, remove debug ingest calls

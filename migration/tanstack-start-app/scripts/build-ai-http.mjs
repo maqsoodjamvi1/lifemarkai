@@ -14,7 +14,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const startAppRoot = path.resolve(__dirname, "..");
 // PHASE 2: sources are now LOCAL (src/lib/ai/http/*) — the main repo is no longer read.
 const srcDir = path.join(startAppRoot, "src");
-const shimDir = path.join(startAppRoot, "src/lib/next-shims");
 const outdir = path.join(startAppRoot, ".tmp/ai-http");
 
 fs.mkdirSync(outdir, { recursive: true });
@@ -34,12 +33,12 @@ await esbuild.build({
   target: "node20",
   logLevel: "info",
   splitting: false,
+  // PHASE 3: the next-shims aliases (server-only / client-only / next/server /
+  // next/headers) are gone with the shims themselves — verified zero import
+  // statements for any of them across src/. If a future dependency reintroduces
+  // one, esbuild fails loudly here rather than silently bundling a stub.
   alias: {
     "@": srcDir,
-    "server-only": path.join(shimDir, "server-only.ts"),
-    "client-only": path.join(shimDir, "server-only.ts"),
-    "next/server": path.join(shimDir, "server.ts"),
-    "next/headers": path.join(shimDir, "headers.ts"),
   },
   // The worker runs in plain Node — `import.meta.env` is undefined there, and
   // supabase/server.ts reads import.meta.env.VITE_SUPABASE_URL at module top
