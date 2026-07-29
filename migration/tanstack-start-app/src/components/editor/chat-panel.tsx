@@ -1038,6 +1038,90 @@ export function ChatPanel({
     };
   }, [project.id, onMessagesUpdate, streaming]);
 
+  // ── Post-run reconciliation ────────────────────────────────────────────────
+  // The realtime handler above deliberately DROPS events while `streaming` is
+  // true (see the `if (streaming || sendingRef.current) return;` guard) so the
+  // SSE stream stays the single writer during a run and messages aren't
+  // duplicated. That is correct — but it has no fallback.
+  //
+  // If a run ends WITHOUT delivering its terminal payload (stream stalled,
+  // connection dropped, proxy cut it), the assistant message and the updated
+  // files have ALREADY been persisted server-side, yet the client discarded the
+  // realtime notifications for them and never appended them itself. Nothing
+  // re-fetches, so the editor sits on stale state until a manual page reload.
+  //
+  // Observed live: a first build on a cold-booting sandbox rendered 7 of the
+  // run's 23 steps, showed no assistant message, and left the preview on the
+  // scaffold — while the DB had the finished message and files and credits had
+  // been charged. A plain reload fixed it, which is the tell that only the
+  // client was behind.
+  //
+  // So: whenever a run finishes, reconcile against the server. On the happy
+  // path the stream already delivered everything, ids match, and this is a
+  // no-op. Best-effort throughout — reconciliation must never break the editor.
+  const reconcilePrevStreamingRef = useRef(streaming);
+  useEffect(() => {
+    const was = reconcilePrevStreamingRef.current;
+    reconcilePrevStreamingRef.current = streaming;
+    if (!was || streaming) return; // only fire on true -> false
+
+    let cancelled = false;
+    // Small delay so the stream's own terminal write lands first and this stays
+    // a no-op in the normal case.
+    const timer = window.setTimeout(async () => {
+      try {
+        const supabase = createClient();
+        const { data: rows } = await supabase
+          .from("messages")
+          .select("*")
+          .eq("project_id", project.id)
+          .order("created_at", { ascending: true });
+        if (cancelled || !rows) return;
+
+        const have = new Set(messagesRef.current.map((m) => m.id));
+        const missing = (rows as Message[]).filter((r) => r.id && !have.has(r.id));
+        if (missing.length === 0) return; // stream delivered everything
+
+        // Merge, then drop any optimistic temp that the server row supersedes.
+        const merged = [...messagesRef.current, ...missing]
+          .filter(
+            (m, _i, arr) =>
+              !(
+                m.id.startsWith("temp-") &&
+                arr.some(
+                  (o) =>
+                    !o.id.startsWith("temp-") &&
+                    o.role === m.role &&
+                    o.content === m.content,
+                )
+              ),
+          )
+          .sort(
+            (a, b) =>
+              new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+          );
+        onMessagesUpdate(merged);
+
+        // The same run wrote files; pull them so the preview isn't left stale.
+        const { data: fileRows } = await supabase
+          .from("project_files")
+          .select("*")
+          .eq("project_id", project.id);
+        if (!cancelled && fileRows && fileRows.length > 0) {
+          onFilesUpdate(fileRows as unknown as ProjectFile[], { replace: true });
+        }
+      } catch {
+        /* best-effort — never surface a reconciliation failure to the user */
+      }
+    }, 1200);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streaming, project.id]);
+
   // Abort any in-flight stream when the panel unmounts so the response
   // reader is cancelled/released and no further work runs against an
   // unmounted component.
