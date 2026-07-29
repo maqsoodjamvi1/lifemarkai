@@ -52,6 +52,25 @@ const projectCreateSchema = z.object({
     .optional(),
 });
 
+/**
+ * Framework values the projects_framework_check constraint accepts
+ * (supabase/migrations/155_framework_tanstack_start.sql). Keep in sync with it.
+ *
+ * The onboarding wizard also offers "astro" and "remix", which are NOT in this
+ * list — so a stored preference must be validated before it is used as a project
+ * framework, or createProject would fail the check constraint for those users.
+ */
+const ALLOWED_FRAMEWORKS = new Set([
+  "react",
+  "next",
+  "nextjs",
+  "vue",
+  "svelte",
+  "react-native",
+  "tanstack-start",
+  "tanstack",
+]);
+
 function getStarterFiles(name: string, framework: string) {
   const safeName = name.replace(/[^a-zA-Z0-9]/g, "") || "app";
   if (framework === "tanstack-start" || framework === "tanstack") {
@@ -141,12 +160,37 @@ export const createProject = createServerFn({ method: "POST" })
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
 
-    const framework =
+    // Per-user default from onboarding. Only consulted when the client did not
+    // send an explicit framework — the three create surfaces all send one, so
+    // this mainly covers API/MCP creates and future callers that omit it.
+    let preferred: string | undefined;
+    if (!data.framework) {
+      try {
+        const { data: profile } = await (supabase as any)
+          .from("profiles")
+          .select("preferred_framework")
+          .eq("id", user.id)
+          .maybeSingle();
+        const p = profile?.preferred_framework;
+        if (typeof p === "string" && ALLOWED_FRAMEWORKS.has(p)) preferred = p;
+      } catch {
+        // Preference is an optimisation, never a reason to fail a create.
+      }
+    }
+
+    // Precedence: explicit request > user's onboarding preference > operator env
+    // override > built-in default.
+    const requested =
       data.framework ??
+      preferred ??
       (typeof process !== "undefined"
         ? process.env.DEFAULT_NEW_PROJECT_FRAMEWORK
         : undefined) ??
       "tanstack-start";
+
+    // Coerce rather than insert something projects_framework_check will reject:
+    // a constraint violation surfaces as an opaque 500 on the create path.
+    const framework = ALLOWED_FRAMEWORKS.has(requested) ? requested : "tanstack-start";
 
     const { data: project, error } = await (supabase as any)
       .from("projects")

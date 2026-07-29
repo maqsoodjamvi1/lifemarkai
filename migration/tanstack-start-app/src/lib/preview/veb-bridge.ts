@@ -496,6 +496,21 @@ export function injectVebBridgeIntoHtml(html: string): string {
  * Inject preview bridges into a Next.js App Router root layout (TSX/JSX).
  * Vite apps use index.html; Next has no HTML entry, so layout is the hook.
  */
+/**
+ * Inject the bridge into a JSX module that renders the document itself.
+ *
+ * Applies to any framework whose root is a React component containing
+ * <html>/<body> rather than a static index.html:
+ *   - Next.js App Router  -> app/layout.tsx
+ *   - TanStack Start      -> src/routes/__root.tsx
+ *
+ * Kept generic because the TanStack Start scaffold renders
+ * `<body>{children}<Scripts /></body>`, so the same `</body>` anchor works.
+ */
+export function injectVebBridgeIntoJsxDocument(source: string): string {
+  return injectVebBridgeIntoNextLayout(source);
+}
+
 export function injectVebBridgeIntoNextLayout(source: string): string {
   if (source.includes("lifemark-veb-ready")) return source;
   const escaped = JSON.stringify(getPreviewBridgeScripts());

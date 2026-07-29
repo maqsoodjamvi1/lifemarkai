@@ -172,9 +172,18 @@ export function patchReactPluginBabelConfig(content: string): string {
 }
 
 import { injectGuestCommentsIntoHtml } from "./inject-guest-comments";
-import { injectVebBridgeIntoHtml, injectVebBridgeIntoNextLayout } from "./veb-bridge";
+import {
+  injectVebBridgeIntoHtml,
+  injectVebBridgeIntoJsxDocument,
+} from "./veb-bridge";
 
 const NEXT_LAYOUT_RE = /^(src\/)?app\/layout\.(t|j)sx?$/;
+// TanStack Start renders the document from src/routes/__root.tsx — there is no
+// index.html and no app/layout.tsx, so before this existed the visual-edit
+// bridge was never injected into a TanStack Start app at all. Since
+// tanstack-start is the DEFAULT framework, click-to-edit was silently dead for
+// every new project.
+const TSS_ROOT_RE = /^src\/routes\/__root\.(t|j)sx?$/;
 
 export interface WebContainerPatchOpts {
   projectId?: string;
@@ -246,9 +255,10 @@ export function patchFilesForWebContainer<T extends { path: string; content?: st
       }
       return { ...file, content: html };
     }
-    // Next.js App Router: no index.html — inject bridges into root layout.
-    if (NEXT_LAYOUT_RE.test(norm)) {
-      return { ...file, content: injectVebBridgeIntoNextLayout(file.content) };
+    // Frameworks whose document root is a JSX module rather than an index.html:
+    // Next.js App Router (app/layout.tsx) and TanStack Start (__root.tsx).
+    if (NEXT_LAYOUT_RE.test(norm) || TSS_ROOT_RE.test(norm)) {
+      return { ...file, content: injectVebBridgeIntoJsxDocument(file.content) };
     }
     return file;
   });
