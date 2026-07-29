@@ -48,6 +48,10 @@ import { validateApiKey } from "@/lib/api/api-key";
 import { logger } from "@/lib/logger";
 import { getProjectSchemaContext } from "@/lib/supabase/schema-reader";
 import { attachSkillsToPrompt } from "@/lib/ai/attach-skills";
+import {
+  recommendInitiative,
+  initiativeRoutingEnabled,
+} from "@/lib/ai/initiative-routing";
 import type { SkillMatch } from "@/lib/ai/skill-matcher";
 import { shouldUseSubagents, runSubagentInvestigation, type SubagentStep } from "@/lib/ai/subagents";
 import { computeCreditCost, maxCreditCostForMode } from "@/lib/ai/credit-cost";
@@ -1301,6 +1305,44 @@ The user has expressed frustration. Do the following:
           safeEnqueue(
             encoder.encode(`data: ${JSON.stringify({ build_intent: buildIntent })}\n\n`),
           );
+        }
+
+        // The 11-role initiative orchestrator (editor-lenses/orchestrator.ts) is
+        // the strongest generation path we have, but it is reachable only from
+        // the Editor Intelligence side panel, so no normal build ever uses it.
+        //
+        // We RECOMMEND rather than auto-route. An initiative spans multiple waves
+        // of role calls; a build is one generation plus at most a repair pass.
+        // Silently promoting one to the other could multiply a user's credit
+        // spend on a single message, and "expensive, invisible, heuristic-
+        // triggered" is precisely the failure mode this codebase has already been
+        // bitten by. So the build proceeds normally and the client is told it
+        // COULD have used the team, with the signals and a bounded credit quote.
+        //
+        // Gated by ENABLE_INITIATIVE_SUGGESTIONS, default off — with no env
+        // configuration this emits nothing and behaviour is unchanged.
+        if (mode === "build" && initiativeRoutingEnabled()) {
+          try {
+            const rec = recommendInitiative(message, {
+              fileCount: Array.isArray(files) ? files.length : 0,
+              mode,
+            });
+            if (rec.recommend) {
+              safeEnqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    initiative_suggestion: {
+                      reason: rec.reason,
+                      signals: rec.signals,
+                      budgetCredits: rec.suggestedBudgetCredits,
+                    },
+                  })}\n\n`,
+                ),
+              );
+            }
+          } catch {
+            /* a suggestion must never disturb the build */
+          }
         }
 
         if (attachedSkills.length > 0) {
