@@ -10,6 +10,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/server";
 import { getProviderConfig, providerCredentials } from "@/lib/integrations/app-user-connections";
+import { redirectResponse } from "@/lib/api/redirect";
 
 
 async function handleGET(req: Request, params: any) {
@@ -60,7 +61,7 @@ async function handleGET(req: Request, params: any) {
   authUrl.searchParams.set("state", state);
   for (const [k, v] of Object.entries(cfg.authorizeParams ?? {})) authUrl.searchParams.set(k, v);
 
-  return Response.redirect(authUrl.toString());
+  return redirectResponse(authUrl.toString());
 }
 
 

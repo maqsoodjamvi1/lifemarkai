@@ -5,6 +5,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { resolveSafeRedirect } from "@/lib/auth/safe-redirect";
+// MUST NOT be Response.redirect() — exchangeCodeForSession() writes the Supabase
+// session cookies, and the framework then appends them to this response. A
+// Response.redirect() has immutable headers, so that append threw and the whole
+// callback 500'd with {"unhandled":true,"message":"HTTPError"}. See the helper.
+import { redirectResponse } from "@/lib/api/redirect";
 
 export const Route = createFileRoute("/auth/callback")({
   server: {
@@ -42,14 +47,14 @@ export const Route = createFileRoute("/auth/callback")({
                 /* non-fatal */
               }
             }
-            return Response.redirect(new URL(next, origin), 302);
+            return redirectResponse(next, origin);
           }
         }
 
         const loginUrl = new URL("/login", origin);
         loginUrl.searchParams.set("error", "auth_callback_failed");
         loginUrl.searchParams.set("next", next);
-        return Response.redirect(loginUrl, 302);
+        return redirectResponse(loginUrl);
       },
     },
   },

@@ -1,6 +1,9 @@
 // @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+// Not Response.redirect(): auth.getUser() can refresh the session and write
+// cookies, which the framework appends to this response — immutable headers throw.
+import { redirectResponse } from "@/lib/api/redirect";
 
 /**
  * Native /api/oauth/callback/:connector — gateway-connector OAuth callback.
@@ -30,7 +33,7 @@ export const Route = createFileRoute("/api/oauth/callback/$connector")({
       GET: async ({ request, params }) => {
         const { connector } = params;
         const { origin, searchParams } = new URL(request.url);
-        const redirect302 = (to: string) => Response.redirect(new URL(to, origin), 302);
+        const redirect302 = (to: string) => redirectResponse(to, origin);
 
         const config = OAUTH_CONFIG[connector];
         if (!config) return Response.json({ error: "Unknown connector" }, { status: 400 });

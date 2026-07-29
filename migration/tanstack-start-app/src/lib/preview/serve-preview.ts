@@ -1,5 +1,6 @@
 // Ported to TanStack Start: uses the standard Web Response (was next/server NextResponse).
 import { createAdminClient } from "@/lib/supabase/server";
+import { redirectResponse } from "@/lib/api/redirect";
 import { buildFallbackHtml } from "@/lib/preview/build-fallback-html";
 import type { ProjectFile } from "@/types/database";
 
@@ -59,7 +60,7 @@ export async function servePreviewHtml(projectId: string): Promise<Response> {
     /^https?:\/\//i.test(tunnel) &&
     !tunnel.startsWith("data:")
   ) {
-    return Response.redirect(tunnel, 302);
+    return redirectResponse(tunnel);
   }
 
   type FileRow = { path: string; content: string | null; language: string | null };

@@ -2,6 +2,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getAuthenticatedUser } from "@/lib/gitlab/client";
+// Not Response.redirect(): a Supabase session refresh during this request writes
+// cookies, which the framework appends here — immutable headers would throw.
+import { redirectResponse } from "@/lib/api/redirect";
 
 /**
  * Native /api/gitlab/connect — GitLab OAuth callback.
@@ -18,7 +21,7 @@ export const Route = createFileRoute("/api/gitlab/connect")({
         const state = searchParams.get("state"); // projectId or null
         const error = searchParams.get("error");
 
-        const redirect302 = (to: string) => Response.redirect(new URL(to, origin), 302);
+        const redirect302 = (to: string) => redirectResponse(to, origin);
 
         if (error || !code) return redirect302("/dashboard?error=gitlab_denied");
 

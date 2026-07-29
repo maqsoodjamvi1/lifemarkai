@@ -8,6 +8,7 @@
  */
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/server";
+import { redirectResponse } from "@/lib/api/redirect";
 import {
   getProviderConfig,
   providerCredentials,
@@ -85,7 +86,7 @@ async function handleGET(req: Request, params: any) {
   const back = stateRow.redirect_to || (await getDeployedUrl(admin, id)) || appOrigin;
   const dest = new URL(back);
   dest.searchParams.set("connected", provider);
-  return Response.redirect(dest.toString());
+  return redirectResponse(dest.toString());
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
+import { redirectResponseWithStatus } from "@/lib/api/redirect";
 
 /**
  * Compatibility route for `/api/integrations/openai/openapi/json`.
@@ -26,9 +27,10 @@ export const Route = createFileRoute("/api/integrations/openai/openapi/json")({
   server: {
     handlers: {
       GET: async ({ request }) =>
-        Response.redirect(
-          new URL("/api/integrations/openai/openapi.json", new URL(request.url).origin),
+        redirectResponseWithStatus(
+          "/api/integrations/openai/openapi.json",
           308,
+          new URL(request.url).origin,
         ),
       OPTIONS: async () => new Response(null, { status: 204 }),
     },
