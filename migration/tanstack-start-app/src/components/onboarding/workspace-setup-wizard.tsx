@@ -15,11 +15,16 @@ interface WorkspaceSetupWizardProps {
   onSkip?: () => void;
 }
 
-type Framework = "nextjs" | "react" | "vue" | "svelte" | "astro" | "remix";
+type Framework = "tanstack-start" | "nextjs" | "react" | "vue" | "svelte" | "astro" | "remix";
 type AIStyle = "concise" | "detailed" | "creative";
 
+// "tanstack-start" first and marked default, matching the server default in
+// lib/server-fns/projects.ts and the other two create surfaces. This wizard used
+// to open on "nextjs" and not offer TanStack Start at all, so every new user was
+// onboarded onto the framework the platform had already moved off.
 const FRAMEWORKS: { id: Framework; label: string; desc: string; icon: string }[] = [
-  { id: "nextjs",  label: "Next.js",  desc: "Full-stack React (default)",   icon: "▲" },
+  { id: "tanstack-start", label: "TanStack Start", desc: "Full-stack React, SSR (default)", icon: "🏁" },
+  { id: "nextjs",  label: "Next.js",  desc: "Full-stack React, App Router", icon: "▲" },
   { id: "react",   label: "React",    desc: "Client-side SPA",              icon: "⚛" },
   { id: "vue",     label: "Vue 3",    desc: "Progressive framework",        icon: "🟢" },
   { id: "svelte",  label: "Svelte",   desc: "Compile-time UI",              icon: "🔥" },
@@ -55,7 +60,7 @@ export function WorkspaceSetupWizard({ onComplete, onSkip }: WorkspaceSetupWizar
   const [checkingGithub, setCheckingGithub] = useState(false);
   const [state, setState] = useState<WizardState>({
     workspaceName: "",
-    framework: "nextjs",
+    framework: "tanstack-start",
     aiStyle: "concise",
     githubConnected: false,
     skipGithub: false,
