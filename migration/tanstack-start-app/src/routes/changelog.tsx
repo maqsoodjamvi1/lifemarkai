@@ -1,8 +1,3 @@
-// Converted from app/(marketing)/changelog/page.tsx.
-// Demonstrates the mechanical swaps the codemod does automatically:
-//   import Link from "next/link"  →  import { Link } from "@tanstack/react-router"
-//   <Link href="/x">              →  <Link to="/x">
-//   export const metadata         →  route head()
 import { createFileRoute, Link } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/changelog")({
