@@ -2672,6 +2672,20 @@ ${(f.content ?? "").slice(0, 8000)}
         });
 
         if (!res.ok || !res.body) {
+          // The agent route now rejects informational questions (409) rather than
+          // burning a 30-iteration run on something needing no edits. Silently
+          // re-send in chat mode — the user asked a question, they should just
+          // get an answer, not an error telling them to try again differently.
+          if (res.status === 409) {
+            let payload: { error?: string } | null = null;
+            try { payload = await res.json(); } catch { /* ignore */ }
+            if (payload?.error === "informational_query") {
+              setStreaming(false);
+              onModeChange?.("chat");
+              void sendMessage(userMessage, "chat");
+              return;
+            }
+          }
           if (res.status === 402) {
             toast({
               title: "Insufficient credits",

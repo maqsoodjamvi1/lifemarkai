@@ -22,6 +22,9 @@ import {
 } from "@/lib/cloud/permissions";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { attachSkillsToPrompt } from "@/lib/ai/attach-skills";
+// Same ranked-context builder the build path uses — see the contextSeed comment
+// at the runAgent call site.
+import { buildProjectContext } from "@/lib/ai/system-prompts";
 import {
   buildEditorIntelligencePromptBlock,
   recordEditorIntelligenceBuild,
@@ -56,6 +59,27 @@ export async function handleAiAgent(req: Request) {
   }
   if (!task || typeof task !== "string" || task.length > 8000) {
     return Response.json({ error: "Task must be a string under 8000 characters" }, { status: 400 });
+  }
+
+  // INTENT GATE. The chat route downgrades informational questions to chat mode
+  // (see isInformationalQuery in http/chat.ts) but this route had no gate at
+  // all: "why is the cart empty?" would spin up the full 30-iteration ReAct
+  // loop, read files, and charge agent-tier credits to answer a question that
+  // needed no edits. Tell the client to re-send as chat instead of burning the
+  // run. 409 rather than 400 — the request is well-formed, just mis-routed.
+  {
+    const { isInformationalQuery } = await import("@/lib/ai/build-intent");
+    if (isInformationalQuery(costTask)) {
+      return Response.json(
+        {
+          error: "informational_query",
+          message:
+            "This looks like a question rather than a change request. Re-send it in Chat mode — it is faster and costs less.",
+          suggestedMode: "chat",
+        },
+        { status: 409 },
+      );
+    }
   }
 
   const access = await getProjectAccess(supabase, projectId, user.id);
@@ -380,6 +404,21 @@ export async function handleAiAgent(req: Request) {
             (projectRow as { deployed_url?: string | null } | null)?.deployed_url ??
             null,
           files: files ?? [],
+          // Seed the agent with ranked file CONTENT, not just a path list.
+          // buildProjectContext is the same BM25-ranked, per-file-budgeted
+          // selector the build path uses, so this costs nothing extra and stops
+          // the loop spending iterations re-reading what we already have.
+          // Budget is deliberately below build's 80k: the agent still has tools
+          // for anything not included, and its output cap is only 8k.
+          contextSeed: (() => {
+            try {
+              const list = (files ?? []) as Array<{ path: string; content: string }>;
+              if (list.length === 0) return undefined;
+              return buildProjectContext(list, 30000, costTask);
+            } catch {
+              return undefined; // never block a run on context selection
+            }
+          })(),
           model: effectiveModel,
           maxOutputTokens: maxOutputTokensForRequest({
             mode: "agent",
@@ -530,6 +569,24 @@ export async function handleAiAgent(req: Request) {
               emit: (status) => send({ verify_status: status }),
               maxRounds: simpleAgentRequest ? 0 : undefined,
             });
+            // Errors that survive the auto-fix rounds become 'runtime' health
+            // findings, which is what feeds the learned-rules flywheel
+            // (lib/ai/learned-rules.ts needs >=2 hits per class before it
+            // injects a rule). Chat did this; the agent route did NOT — and the
+            // agent is the DEFAULT path for edits on mature projects
+            // (editor-intelligence.ts shouldAutoBuildMode), so the flywheel was
+            // starved of its main data source. Best-effort, never fails a run.
+            if (verification && !verification.passed) {
+              try {
+                const { recordVerificationFindings } = await import("@/lib/ai/self-healing");
+                await recordVerificationFindings({
+                  supabase,
+                  projectId,
+                  userId: user.id,
+                  verification,
+                }).catch(() => {});
+              } catch { /* ignore */ }
+            }
           } catch { verification = null; }
 
           await recordEditorIntelligenceBuild({
