@@ -600,6 +600,53 @@ Every npm package import (e.g. \`import { motion } from 'framer-motion'\`) MUST 
 - [ ] tailwind.config.js and postcss.config.js exist
 `.trim();
 
+/**
+ * TanStack Start counterpart to IMPORT_RULES.
+ *
+ * IMPORT_RULES above is Vite/CRA-shaped: it forbids `@/` aliases, and its
+ * checklist demands src/main.tsx + index.html + vite.config with
+ * @vitejs/plugin-react. Every one of those is WRONG for TanStack Start, whose
+ * blueprint mandates `@/* -> src/*` and forbids emitting index.html or
+ * src/main.tsx at all (the plugin owns the document).
+ *
+ * Both blocks used to be concatenated into the same build prompt, so the model
+ * was told to use aliases and not to use them, and to always generate an
+ * index.html it was also told never to generate. Now exactly one ships per
+ * framework — see buildFrameworkContract().
+ */
+const TANSTACK_IMPORT_RULES = `
+## Import Resolution — CRITICAL (TanStack Start)
+
+### Rule 1: Every local import MUST match a file you generate
+If you write \`import { Button } from '@/components/ui/Button'\`, you MUST also
+generate \`src/components/ui/Button.tsx\`. NEVER import a local file that is not
+in your output files list.
+
+### Rule 2: Path aliases — USE THEM
+\`@/\` maps to \`src/\` (tsconfig paths + the vite resolve alias in the scaffold).
+Prefer \`@/components/ui/Button\` over deep relative chains like \`../../components\`.
+Both resolve; the alias is the house style.
+
+### Rule 3: Package imports
+Every npm package import MUST appear in package.json dependencies.
+
+### Rule 4: CSS
+\`import appCss from "../styles.css?url"\` belongs in \`src/routes/__root.tsx\` and
+is attached via the route's \`links\`. Do NOT \`import "./styles.css"\` in
+components.
+
+### Pre-output checklist (do this mentally before writing JSON):
+- [ ] Every \`import X from '@/Y'\` → \`src/Y.tsx\` exists in my files list
+- [ ] Every \`import { X } from 'package'\` → package is in package.json
+- [ ] \`src/routes/__root.tsx\` exists and renders \`<html>/<head>/<body>\` with
+      \`<HeadContent />\`, \`<Outlet />\` and \`<Scripts />\`
+- [ ] Every page is a file in \`src/routes/\` exporting \`createFileRoute(...)\`
+- [ ] NO index.html, NO src/main.tsx, NO react-router-dom — the TanStack Start
+      Vite plugin owns the document and routing is file-based
+- [ ] vite.config.ts uses \`tanstackStart()\` BEFORE \`viteReact()\`
+- [ ] tsconfig.json, tailwind.config.js, postcss.config.js exist
+`.trim();
+
 // ─── LOVABLE-QUALITY PATTERNS ─────────────────────────────────────────────────
 const LOVABLE_PATTERNS = `
 ## Lovable-Quality Patterns — MANDATORY
@@ -764,25 +811,41 @@ serve(async (req) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // BUILD mode — full app generation
 // ─────────────────────────────────────────────────────────────────────────────
-export const APP_GENERATION_SYSTEM_PROMPT = `You are LifemarkAI Build Engine — an expert React/TypeScript developer who builds complete, production-quality TanStack Start (React + TypeScript, SSR) applications.
 
-${PACKAGE_ALLOWLIST}
+/** Frameworks that use the TanStack Start contract rather than the Vite one. */
+const TANSTACK_FRAMEWORKS = new Set(["tanstack-start", "tanstack"]);
 
----
+/**
+ * The framework-specific half of the build prompt.
+ *
+ * buildGenerationPrompt() serves FOUR frameworks — tanstack-start (the default),
+ * react, vue and svelte — from one prompt. It used to concatenate the TanStack
+ * blueprint AND the Vite rules AND the Vite-shaped import rules, file structure
+ * and react-router patterns, so a TanStack build was told:
+ *
+ *   "Never emit index.html or src/main.tsx"   (TANSTACK_START_BLUEPRINT)
+ *   "index.html — always generate this"       (VITE_RULES)
+ *   "src/main.tsx — always generate this"     (VITE_RULES)
+ *   "Do NOT use path aliases like @/components" (IMPORT_RULES)
+ *
+ * ...while the blueprint mandates `@/* -> src/*`. Contradictory contracts in one
+ * prompt make the model pick arbitrarily, which is exactly how a TanStack
+ * project ends up with a stray index.html and relative-path spaghetti.
+ *
+ * Now exactly one contract ships per framework.
+ */
+function buildFrameworkContract(framework: string): string {
+  if (TANSTACK_FRAMEWORKS.has(framework)) {
+    return [TANSTACK_START_BLUEPRINT, TANSTACK_IMPORT_RULES].join("\n\n---\n\n");
+  }
+  // Vite/SPA frameworks (react, vue, svelte) keep the original contract.
+  return [VITE_RULES, IMPORT_RULES, LOVABLE_PATTERNS, FILE_STRUCTURE].join(
+    "\n\n---\n\n",
+  );
+}
 
-${TANSTACK_START_BLUEPRINT}
-
----
-
-${VITE_RULES}
-
----
-
-${IMPORT_RULES}
-
----
-
-${DESIGN_SYSTEM}
+/** Blocks that are true regardless of framework. */
+const FRAMEWORK_NEUTRAL_BLOCKS = `${DESIGN_SYSTEM}
 
 ---
 
@@ -799,14 +862,6 @@ ${PRODUCT_MATURITY_CONTRACT}
 ---
 
 ${EDITOR_INTELLIGENCE_CONTRACT}
-
----
-
-${LOVABLE_PATTERNS}
-
----
-
-${FILE_STRUCTURE}
 
 ---
 
@@ -875,6 +930,41 @@ When the user asks to create a website, app, ERP, POS, CRM, or management system
 8. **Visual fullness — the #1 quality bar.** Every landing/home/storefront page MUST have at least 5 distinct, content-rich sections (e.g. header, hero, category/feature grid, product/service cards (8+), social proof/value props, CTA, footer). A page that renders only a heading and a sentence — or just a header and footer with an empty middle — is a FAILED build. Fill the page like a real professional website.
 9. Match the request's app type exactly: an "e-commerce store" is a shopping storefront (products, cart, checkout) — NOT a services/marketing site and NOT a POS terminal.
 10. Run your import checklist mentally before writing the JSON output.`;
+
+/**
+ * Assemble the BUILD prompt for a specific framework.
+ *
+ * One engine header + the allowlist + exactly ONE framework contract + the
+ * framework-neutral quality/design/output blocks. Previously every framework
+ * received the TanStack blueprint *and* the Vite rules simultaneously; see
+ * buildFrameworkContract() for what that produced.
+ */
+export function buildAppGenerationSystemPrompt(
+  framework: string = "tanstack-start",
+): string {
+  const engine = TANSTACK_FRAMEWORKS.has(framework)
+    ? "TanStack Start (React + TypeScript, SSR)"
+    : "React + TypeScript (Vite)";
+  return `You are LifemarkAI Build Engine — an expert developer who builds complete, production-quality ${engine} applications.
+
+${PACKAGE_ALLOWLIST}
+
+---
+
+${buildFrameworkContract(framework)}
+
+---
+
+${FRAMEWORK_NEUTRAL_BLOCKS}`;
+}
+
+/**
+ * Default build prompt (TanStack Start — the platform default framework).
+ * Kept as a const because buildRepairPrompt()'s enrichment path uses it
+ * directly when the project is not a Next.js app.
+ */
+export const APP_GENERATION_SYSTEM_PROMPT =
+  buildAppGenerationSystemPrompt("tanstack-start");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CHAT mode — conversational assistant
@@ -1016,6 +1106,22 @@ Think step by step. Use this JSON format for each step:
 - **delete_file(path)** — remove a file.
 - **generate_image(prompt, size?)** — generate a REAL image and get a permanent URL to embed. Use for ONE bespoke hero/banner (size "1792x1024") on storefronts/landing pages so it looks designed; use stock CDN URLs (loremflickr) for product grids. Put the returned URL straight into <img src> or your mock data.
 
+### Inspect the RUNNING app (use these before guessing at a bug)
+- **read_preview_console()** — console output from the live preview, including runtime errors the user is actually seeing. Check this FIRST when told something is broken.
+- **read_preview_network()** — network requests from the live preview: failed calls, status codes, timings.
+- **browse_preview(path?)** — load a route in a real headless browser and get back the rendered text plus any errors. Use to confirm a page actually renders after you change it.
+- **read_ai_activity()** — what previous runs on this project did, so you don't redo or undo recent work.
+
+### Reach outside the project (available when configured — call and handle a refusal)
+- **web_search(query)** — search the web for current docs, API shapes, versions, error messages. Use it instead of guessing at an unfamiliar library's API.
+- **fetch_url(url)** — fetch a specific page (docs, spec, reference design) as text.
+- **db_query(sql)** — READ-ONLY SQL against the project's managed Postgres. Use to check real table/column names before writing data code, instead of inventing a schema.
+- **connector_call(connector, action, params)** — call a configured third-party connector (Slack, Stripe, Notion…). Write actions may require user approval; if refused, say so rather than faking success.
+- **mcp_&lt;server&gt;_&lt;tool&gt;** — tools exposed by the user's own connected MCP servers, when present.
+
+These last five are only injected when the project has them configured. If a tool
+isn't in your tool list this run, it isn't available — don't pretend to call it.
+
 **When you have an observation:**
 \`\`\`json
 {
@@ -1041,7 +1147,7 @@ Think step by step. Use this JSON format for each step:
 5. Make reasonable assumptions — don't ask for clarification, ship something.
 6. After editing, verify by re-reading (or analyze_code) the key file.
 7. Never refer to tool names when explaining to the user — say "I'll edit the header", not "I'll call edit_file".
-8. Max 12 steps per task — if not done, produce partial work and summarize what remains.`;
+8. You have up to 30 steps. Spend them: investigate with analyze_code / find_definition / read_preview_console before editing, and verify with browse_preview after. If you genuinely cannot finish, produce partial work and summarize precisely what remains.`;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SCREENSHOT-TO-CODE mode — convert design image to React app
@@ -1289,6 +1395,10 @@ export function buildGenerationPrompt(
   userPrompt: string,
   projectFiles: Array<{ path: string; content: string }>,
   contextMaxChars = 80000,
+  // Serves tanstack-start (default), react, vue and svelte. The framework picks
+  // which contract ships — passing it wrong is how a TanStack project gets told
+  // to emit index.html. Defaults to the platform default framework.
+  framework: string = "tanstack-start",
 ): string {
   const intent = classifyBuildIntent(userPrompt);
   const accent = inferAccentColor(userPrompt);
@@ -1301,7 +1411,7 @@ export function buildGenerationPrompt(
   // files it isn't going to generate or that aren't already present
   const existingPaths = projectFiles.map((f) => `  • ${f.path}`).join("\n");
 
-  return `${APP_GENERATION_SYSTEM_PROMPT}
+  return `${buildAppGenerationSystemPrompt(framework)}
 
 ${intent.blueprint}
 

@@ -69,7 +69,6 @@ import {
 import { ensureDevCredits, getDevProfile } from "@/lib/dev-credits";
 import { detectDeployIntent } from "@/lib/ai/deploy-intent";
 import { detectCloudIntent } from "@/lib/ai/cloud-intent";
-import { buildMcpContextBlock } from "@/lib/ai/mcp-context";
 import { ENV_FILE_PATH, parseEnvFile } from "@/lib/project/env-file";
 import {
   buildEditorIntelligencePromptBlock,
@@ -660,7 +659,10 @@ export async function handleAiChat(req: Request) {
         // returns "nextjs" — accept both.
         systemPrompt = buildNextJSPrompt(message, contextFiles, buildContextBudget) + suffix;
       } else {
-        systemPrompt = buildGenerationPrompt(message, contextFiles, buildContextBudget) + suffix;
+        // Pass the framework so the prompt ships ONE contract — the TanStack
+        // blueprint for tanstack-start, the Vite rules for react/vue/svelte.
+        systemPrompt =
+          buildGenerationPrompt(message, contextFiles, buildContextBudget, framework) + suffix;
       }
       if (simpleEconomyRequest) {
         systemPrompt += `\n\n---\n# Economy Small Edit Mode\nThis is a small edit/debug turn on an existing project. Keep the response minimal:\n- Return ONLY files that must change.\n- Prefer surgical changes over rewriting whole files.\n- Do not regenerate the whole app, create new pages, restyle unrelated UI, or expand product scope.\n- Keep existing imports, data, assets, and routes unless the user explicitly asked to change them.\n---`;
@@ -805,7 +807,16 @@ export async function handleAiChat(req: Request) {
       systemPrompt += `\n\n---\n# Connected Backend (Lifemark Cloud)\nThis project has a managed Supabase backend${credsReady ? ` at ${backendCreds.cloud_supabase_url}` : " (still provisioning — credentials connect automatically)"}.\nRules:\n- Use the shared client: \`import { supabase } from "./lib/supabase"\` (src/lib/supabase.ts — auto-scaffolded; never create another client or hardcode keys).\n- Credentials live in .env.local as VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY — already configured, do not ask the user for them.\n- Auth: use supabase.auth (signUp, signInWithPassword, signOut, onAuthStateChange).\n- Database schema changes: write SQL files at supabase/migrations/NNN_description.sql — they are applied to the backend automatically after the build.\n- Always enable RLS on new tables and add owner-scoped policies.\n- Storage (file/image/avatar uploads): use supabase.storage — create the bucket in a migration, upload via supabase.storage.from(bucket).upload(...), and store the returned public URL.\n- Serverless logic + secrets (webhooks, third-party API calls, payments): write Supabase Edge Functions at supabase/functions/<name>/index.ts and call them with supabase.functions.invoke('<name>') — NEVER put secret keys in client code.\n- Realtime (live updates, presence, chat): subscribe via supabase.channel(...).on('postgres_changes', { event:'*', schema:'public', table:'<t>' }, cb).subscribe().\n---`;
     }
 
-    // MCP context — inject catalogue blocks when matching keys exist in .env.local
+    // NOTE: there used to be an "MCP context" injection here that appended a
+    // block headed `# Live MCP Context` whenever the project's .env.local
+    // contained keys like LINEAR_API_KEY / NEXT_PUBLIC_SENTRY_DSN /
+    // NEXT_PUBLIC_SUPABASE_URL. Every one of those blocks was HARDCODED DEMO
+    // DATA — fake Linear tickets ("[ENG-142] Redesign onboarding flow"), a fake
+    // Sentry stack trace, and, worst, LifemarkAI's OWN database table list
+    // presented to the model as the user's schema. Since NEXT_PUBLIC_SUPABASE_URL
+    // is present in essentially every backend-enabled project, most builds were
+    // being handed fiction labelled as live fact. Removed — do not reintroduce
+    // this unless it fetches REAL data from the connected MCP server.
     let envFileContent =
       (files as Array<{ path: string; content: string }>).find(
         (f) => f.path === ENV_FILE_PATH || f.path.endsWith(`/${ENV_FILE_PATH}`),
@@ -821,8 +832,6 @@ export async function handleAiChat(req: Request) {
     }
     if (envFileContent) {
       const envKeys = Object.keys(parseEnvFile(envFileContent));
-      const mcpBlock = buildMcpContextBlock(envKeys);
-      if (mcpBlock) systemPrompt += mcpBlock;
 
       // Connector gateway — when connector credentials are configured, teach
       // the AI to route third-party API calls through the gateway so secrets
