@@ -13,6 +13,7 @@ import {
   getProjectAccess,
 } from "@/lib/project/access";
 import { tanstackStartScaffold } from "@/lib/templates/tanstack-start-scaffold";
+import { lovableViteScaffold } from "@/lib/templates/lovable-vite-scaffold";
 import { getTemplateById } from "@/lib/templates/built-in";
 
 const PROJECT_SAFE_SELECT = [
@@ -75,6 +76,11 @@ function getStarterFiles(name: string, framework: string) {
   const safeName = name.replace(/[^a-zA-Z0-9]/g, "") || "app";
   if (framework === "tanstack-start" || framework === "tanstack") {
     return tanstackStartScaffold();
+  }
+  // "react" is the Lovable shape: Vite + React 18 + shadcn + react-router-dom,
+  // mirroring a real Lovable export file-for-file. See lovable-vite-scaffold.ts.
+  if (framework === "react") {
+    return lovableViteScaffold(name);
   }
   if (framework === "next" || framework === "nextjs") {
     return [
@@ -180,13 +186,18 @@ export const createProject = createServerFn({ method: "POST" })
 
     // Precedence: explicit request > user's onboarding preference > operator env
     // override > built-in default.
+    //
+    // Default is "react" — the Lovable shape (Vite + React 18 + shadcn +
+    // react-router-dom), matching a real Lovable export file-for-file. The
+    // PLATFORM itself runs on TanStack Start; that is a separate concern from
+    // what it generates. tanstack-start remains fully supported and selectable.
     const requested =
       data.framework ??
       preferred ??
       (typeof process !== "undefined"
         ? process.env.DEFAULT_NEW_PROJECT_FRAMEWORK
         : undefined) ??
-      "tanstack-start";
+      "react";
 
     // Coerce rather than insert something projects_framework_check will reject:
     // a constraint violation surfaces as an opaque 500 on the create path.

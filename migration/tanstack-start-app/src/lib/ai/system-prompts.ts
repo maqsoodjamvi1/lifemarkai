@@ -341,10 +341,9 @@ const BUG_FREE_GENERATION_CONTRACT = `
 - A dangling import is the single most damaging bug you can ship: the preview binds the missing name to \`undefined\`, and the app dies with an error that points at neither the symbol nor the file. NEVER reference a component, page, type, helper, or data constant you did not create. If you list a section in a page, you must emit that section's file and every export it needs.
 - Match import style to exports: use \`import X\` only for default exports, and \`import { X }\` only for named exports that the target file actually exports.
 - Do not emit duplicate files or duplicate top-level declarations. Keep one final definition for each component, helper, type, and constant.
-- React hooks must be imported from react or called as React.useX. Next.js App Router files that use hooks, browser globals, or event handlers must start with "use client" or delegate that logic to a client component.
-- If using react-router-dom, wrap the app once with BrowserRouter or RouterProvider at the entry point before using Routes, Link, Navigate, or router hooks.
-- New Vite apps must include valid package.json scripts, especially "dev", and dependency/devDependency objects.
-- index.html must include <div id="root"></div> and a module script for /src/main.tsx; src/main.tsx must render the React app into #root.
+- React hooks must be imported from react or called as React.useX.
+- Every app must include valid package.json scripts — especially "dev" — and dependency/devDependency objects.
+- Wire the app's entry exactly as the framework rules above specify, and do not invent an alternative entry point.
 - tsconfig.json must be valid JSON with object-shaped compilerOptions when present.
 - File extensions must match content: JSX belongs in .tsx/.jsx, not .ts.
 - Remove scaffolding leftovers: no empty files, merge-conflict markers, TODO implementation notes, "Not implemented" throws, placeholder comments, or partial files.
@@ -581,8 +580,12 @@ const IMPORT_RULES = `
 If you write \`import { Button } from './components/ui/Button'\`, you MUST also generate \`src/components/ui/Button.tsx\`.
 NEVER import a local file that isn't in your output files list.
 
-### Rule 2: Path aliases
-Do NOT use path aliases like \`@/components\` — use relative paths: \`../components/ui/Button\`.
+### Rule 2: Path aliases — USE THEM
+\`@/\` maps to \`src/\` (tsconfig \`paths\` + the vite \`resolve.alias\`, and
+\`components.json\` declares @/components, @/lib/utils, @/components/ui, @/hooks).
+Import through the alias — \`@/components/ui/button\`, \`@/lib/utils\`,
+\`@/hooks/use-toast\` — not through deep relative chains. Relative paths are only
+for siblings inside the same folder (e.g. \`./pages/Index\` from App.tsx).
 
 ### Rule 3: Package imports
 Every npm package import (e.g. \`import { motion } from 'framer-motion'\`) MUST appear in package.json dependencies.
@@ -590,14 +593,30 @@ Every npm package import (e.g. \`import { motion } from 'framer-motion'\`) MUST 
 ### Rule 4: CSS imports
 \`import './index.css'\` — only in main.tsx, not in component files.
 
+### Rule 5: Project shape (this is the exact shape a Lovable app has)
+- \`src/pages/<PascalCase>.tsx\` — one file per route. Home is \`src/pages/Index.tsx\`,
+  the catch-all is \`src/pages/NotFound.tsx\`. Do NOT invent \`src/routes/\`.
+- \`src/components/ui/*\` — shadcn primitives (lowercase filenames: \`button.tsx\`,
+  \`card.tsx\`). \`src/components/<domain>/*\` — feature components (PascalCase).
+- \`src/hooks/\`, \`src/contexts/\`, \`src/lib/utils.ts\` (exports \`cn\`).
+- Supabase, when used, lives at \`src/integrations/supabase/client.ts\` and reads
+  \`import.meta.env.VITE_SUPABASE_URL\` + \`VITE_SUPABASE_PUBLISHABLE_KEY\`.
+  Import it as \`import { supabase } from "@/integrations/supabase/client"\`.
+- Routing is declared in \`src/App.tsx\` with react-router-dom v6:
+  \`<QueryClientProvider>\` → \`<TooltipProvider>\` → your context providers →
+  \`<Toaster />\` → \`<BrowserRouter>\` → \`<Routes>\`. Every custom \`<Route>\` goes
+  ABOVE the \`path="*"\` catch-all.
+- \`tailwind.config.ts\` is TypeScript (\`satisfies Config\`), not .js.
+
 ### Pre-output checklist (do this mentally before writing JSON):
-- [ ] Every \`import X from './Y'\` → src/Y.tsx exists in my files list
+- [ ] Every \`@/...\` import → that file exists in my output or the existing files
 - [ ] Every \`import { X } from 'package'\` → package is in package.json
-- [ ] src/main.tsx exists and imports App correctly
-- [ ] index.html exists with <script src="/src/main.tsx">
-- [ ] vite.config.ts exists with @vitejs/plugin-react
-- [ ] tsconfig.json exists
-- [ ] tailwind.config.js and postcss.config.js exist
+- [ ] src/main.tsx exists and calls createRoot(...).render(<App />)
+- [ ] index.html exists with <div id="root"> and <script src="/src/main.tsx">
+- [ ] vite.config.ts exists with @vitejs/plugin-react-swc and the "@" alias
+- [ ] tsconfig.json exists with "@/*": ["./src/*"] in paths
+- [ ] tailwind.config.ts and postcss.config.js exist
+- [ ] every new route is registered in src/App.tsx above the "*" route
 `.trim();
 
 /**
@@ -844,8 +863,55 @@ function buildFrameworkContract(framework: string): string {
   );
 }
 
-/** Blocks that are true regardless of framework. */
-const FRAMEWORK_NEUTRAL_BLOCKS = `${DESIGN_SYSTEM}
+/**
+ * The "minimum scaffold" file list is NOT framework-neutral — it was the second
+ * half of the same contradiction. The Vite list names index.html, src/main.tsx
+ * and src/App.tsx, every one of which the TanStack blueprint forbids, and it
+ * shipped to TanStack builds because it lives in the Output Format section
+ * rather than in the framework rules.
+ */
+const VITE_SCAFFOLD_LIST = `Minimum scaffold (always include):
+    index.html, vite.config.ts, tsconfig.json, package.json, tailwind.config.js,
+    postcss.config.js, src/main.tsx, src/index.css, src/App.tsx,
+    src/lib/utils.ts, src/lib/types.ts, src/data/<domain-data>.ts
+
+PLUS the feature files, e.g. for a typical site/store:
+    src/components/ui/Button.tsx, src/components/ui/Card.tsx, src/components/ui/Badge.tsx,
+    src/components/layout/Header.tsx, src/components/layout/Footer.tsx,
+    src/components/<Feature>Card.tsx, ...
+    src/pages/Home.tsx, src/pages/<Other>.tsx, ...
+    src/hooks/use<Domain>.ts
+
+App.tsx wires the router + layout; it must NOT contain the whole app. The Home/
+landing page is a real page file with MULTIPLE substantial sections — never just
+a heading and one sentence.`;
+
+const TANSTACK_SCAFFOLD_LIST = `Minimum scaffold (always include):
+    package.json, vite.config.ts, tsconfig.json, tailwind.config.js,
+    postcss.config.js, src/styles.css, src/router.tsx,
+    src/routes/__root.tsx, src/routes/index.tsx,
+    src/lib/utils.ts, src/lib/types.ts, src/data/<domain-data>.ts
+
+NEVER include index.html, src/main.tsx or src/App.tsx — the tanstackStart()
+Vite plugin owns the entry and src/routes/__root.tsx owns the document.
+
+PLUS the feature files, e.g. for a typical site/store:
+    src/components/ui/Button.tsx, src/components/ui/Card.tsx, src/components/ui/Badge.tsx,
+    src/components/layout/Header.tsx, src/components/layout/Footer.tsx,
+    src/components/<Feature>Card.tsx, ...
+    src/routes/<other-route>.tsx for EVERY additional page, ...
+    src/hooks/use<Domain>.ts
+
+src/routes/__root.tsx wires the document + shared shell; it must NOT contain the
+whole app. src/routes/index.tsx is the home page — a real page with MULTIPLE
+substantial sections, never just a heading and one sentence.`;
+
+/** Blocks that are shared, with the one framework-dependent slot filled in. */
+function frameworkNeutralBlocks(framework: string): string {
+  const SCAFFOLD_FILE_LIST_PLACEHOLDER = TANSTACK_FRAMEWORKS.has(framework)
+    ? TANSTACK_SCAFFOLD_LIST
+    : VITE_SCAFFOLD_LIST;
+  return `${DESIGN_SYSTEM}
 
 ---
 
@@ -888,21 +954,7 @@ data files that the blueprint above requires — a complete app is typically
 14–20+ files. A response that contains only the scaffold + a near-empty App.tsx
 is a FAILED build.
 
-Minimum scaffold (always include):
-    index.html, vite.config.ts, tsconfig.json, package.json, tailwind.config.js,
-    postcss.config.js, src/main.tsx, src/index.css, src/App.tsx,
-    src/lib/utils.ts, src/lib/types.ts, src/data/<domain-data>.ts
-
-PLUS the feature files, e.g. for a typical site/store:
-    src/components/ui/Button.tsx, src/components/ui/Card.tsx, src/components/ui/Badge.tsx,
-    src/components/layout/Header.tsx, src/components/layout/Footer.tsx,
-    src/components/<Feature>Card.tsx, ...
-    src/pages/Home.tsx, src/pages/<Other>.tsx, ...
-    src/hooks/use<Domain>.ts
-
-App.tsx wires the router + layout; it must NOT contain the whole app. The Home/
-landing page is a real page file with MULTIPLE substantial sections — never just
-a heading and one sentence.
+${SCAFFOLD_FILE_LIST_PLACEHOLDER}
 
 ## Autonomous Intelligence — behave like Lovable
 When the user asks to create a website, app, ERP, POS, CRM, or management system:
@@ -930,6 +982,7 @@ When the user asks to create a website, app, ERP, POS, CRM, or management system
 8. **Visual fullness — the #1 quality bar.** Every landing/home/storefront page MUST have at least 5 distinct, content-rich sections (e.g. header, hero, category/feature grid, product/service cards (8+), social proof/value props, CTA, footer). A page that renders only a heading and a sentence — or just a header and footer with an empty middle — is a FAILED build. Fill the page like a real professional website.
 9. Match the request's app type exactly: an "e-commerce store" is a shopping storefront (products, cart, checkout) — NOT a services/marketing site and NOT a POS terminal.
 10. Run your import checklist mentally before writing the JSON output.`;
+}
 
 /**
  * Assemble the BUILD prompt for a specific framework.
@@ -955,7 +1008,7 @@ ${buildFrameworkContract(framework)}
 
 ---
 
-${FRAMEWORK_NEUTRAL_BLOCKS}`;
+${frameworkNeutralBlocks(framework)}`;
 }
 
 /**
@@ -1450,13 +1503,20 @@ Before outputting, verify:
 - Every named/default import matches the target file's actual exports.
 - package.json lists every npm package you import.
 - package.json has valid scripts/dependencies objects and a dev script for new apps.
-- React Router components/hooks are wrapped by a BrowserRouter or RouterProvider.
+${
+    TANSTACK_FRAMEWORKS.has(framework)
+      ? `- src/routes/__root.tsx exists and renders <html>/<head>/<body> with <HeadContent />, <Outlet /> and <Scripts />.
+- Every page is a file under src/routes/ exporting createFileRoute("<path>")({ component }).
+- NO index.html, NO src/main.tsx, NO src/App.tsx, NO react-router-dom anywhere in the output.
+- vite.config.ts calls tanstackStart() BEFORE viteReact().
+- Website requests have 5-10 linked ROUTES under src/routes/; e-commerce and ERP requests include the user-facing/admin or operations modules required by the blueprint.`
+      : `- React Router components/hooks are wrapped by a BrowserRouter or RouterProvider.
 - index.html has the root mount node and /src/main.tsx script, and the entry file calls createRoot(...).render(...).
-- Product builds that imply persistence include Supabase migration SQL, src/lib/supabase.ts, and a data-access layer with local fallback seed data.
-- Website requests have 5-10 linked pages; e-commerce and ERP requests include both user-facing/admin or operations modules required by the blueprint.
-- React hooks are imported from \`react\`, duplicate top-level declarations are removed, and JSX files use \`.tsx\`/\`.jsx\`.
-- Next.js App Router files using hooks, browser globals, or event handlers include \`"use client"\` or move that logic into a client component.
 - src/main.tsx, index.html, vite.config.ts, tsconfig.json are included (new project) or already exist (existing project).
+- Website requests have 5-10 linked pages; e-commerce and ERP requests include both user-facing/admin or operations modules required by the blueprint.`
+  }
+- Product builds that imply persistence include Supabase migration SQL, src/lib/supabase.ts, and a data-access layer with local fallback seed data.
+- React hooks are imported from \`react\`, duplicate top-level declarations are removed, and JSX files use \`.tsx\`/\`.jsx\`.
 - No file content is truncated or contains placeholder comments like \`// TODO\`, \`Not implemented\`, or \`// ... rest\`.`;
 }
 
