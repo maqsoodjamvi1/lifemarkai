@@ -225,7 +225,12 @@ export function sandboxNameForProject(projectId: string): string {
 
 export function detectSandboxStart(files: SandboxFile[]): { port: number; startCommand: string } {
   const paths = files.map((f) => f.path.replace(/\\/g, "/"));
-  const isNext = paths.some((p) => /next\.config\.(t|j|m)s$/.test(p));
+  // NOTE the extension list. The previous pattern was /next\.config\.(t|j|m)s$/,
+  // which reads as ".mjs" but actually matches only .ts/.js/.ms — one char from
+  // (t|j|m) plus a literal "s". Since NEXTJS_RULES mandates "next.config.mjs
+  // (always generate this — .mjs, not .ts)", EVERY generated Next app failed
+  // this test, fell through to `npm run dev` on the vite port, and 502'd.
+  const isNext = paths.some((p) => /(^|\/)next\.config\.(mjs|cjs|mts|cts|js|ts)$/.test(p));
   if (isNext) {
     const port = 3000;
     return { port, startCommand: `npx next dev -p ${port}` };

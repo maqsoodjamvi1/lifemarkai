@@ -69,3 +69,17 @@ npm-install-result.txt
 _gen_probe.mjs
 _regen.mjs
 _verify_routes.mjs
+
+# Session scratch: one-shot push/cleanup scripts and their transcripts. These
+# are generated per-task and hardcode a single commit message, so they are not
+# reusable; they stay on disk for reference but must not enter the repo.
+push-*.bat
+push-*.ps1
+push-*result.txt
+phase3-*.ps1
+phase3-*result.txt
+remove-nextjs*.ps1
+remove-result.txt
+__sim.js
+__sync_marker__.txt
+__tsc-scope.json

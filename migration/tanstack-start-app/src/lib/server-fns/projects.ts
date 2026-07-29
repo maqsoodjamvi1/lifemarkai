@@ -69,14 +69,35 @@ function getStarterFiles(name: string, framework: string) {
         language: "typescriptreact",
         content: `export default function RootLayout({ children }: { children: React.ReactNode }) {\n  return <html lang="en"><body>{children}</body></html>;\n}`,
       },
+      // next.config.mjs is REQUIRED here, not cosmetic: detectSandboxStart()
+      // (src/lib/sandbox/shared.ts) tests for next.config.* to decide between
+      // `npx next dev -p 3000` and the vite default. Without it a brand-new Next
+      // project boots `npm run dev` on port 5173 and the preview 502s until the
+      // first AI turn writes the real config. Same for the scripts block —
+      // ensureViteEntryFiles() deliberately bails out on Next projects, so the
+      // dev-script repair that saves the React scaffold never runs for this one.
+      {
+        path: "next.config.mjs",
+        language: "javascript",
+        content: `/** @type {import('next').NextConfig} */\nconst nextConfig = { reactStrictMode: true };\nexport default nextConfig;\n`,
+      },
       {
         path: "package.json",
         language: "json",
-        content: JSON.stringify({
-          name: safeName.toLowerCase(),
-          private: true,
-          dependencies: { next: "^14.2.15", react: "^18.3.1", "react-dom": "^18.3.1" },
-        }),
+        content: JSON.stringify(
+          {
+            name: safeName.toLowerCase(),
+            private: true,
+            scripts: {
+              dev: "next dev",
+              build: "next build",
+              start: "next start",
+            },
+            dependencies: { next: "^14.2.15", react: "^18.3.1", "react-dom": "^18.3.1" },
+          },
+          null,
+          2,
+        ),
       },
     ];
   }
