@@ -77,6 +77,43 @@ push-*.bat
 push-*.ps1
 push-*result.txt
 phase3-*.ps1
+# Generalised 2026-07-30. The list above was per-batch, so each new session added
+# more untracked files: 40 of them were sitting in the root at once, and `git stash`
+# during a merge then got entangled with them (the stash could not remove them, so
+# `stash pop` refused with "already exists" and left a phantom stash entry).
+#
+# These patterns are PREFIX-based on purpose, so the next batch of one-shot scripts
+# is covered without editing this file again. Anything matching is a script that
+# hardcodes one commit message or one migration id - re-running it later would do
+# the wrong thing, which is exactly why it must not look like repo tooling.
+phase*.ps1
+phase*result.txt
+ship-*.ps1
+ship-*.txt
+finish.ps1
+finish-result.txt
+apply-1*.ps1
+rollback-*.ps1
+tidy.ps1
+chk.ps1
+r.bat
+ping.txt
+*-result.txt
+*-console.txt
+
+# Reusable dev helpers - these stay TRACKED and must not be caught above.
+# (Negations are belt-and-braces: none of the patterns match them today, but they
+# document the intent if someone broadens a pattern later.)
+!setup-mobile.ps1
+!start-dev.ps1
+!run-dev.bat
+!migrate.bat
+
+# One-off capture dumps that were committed by mistake in merge e4fb9f9. The DOM
+# dump alone is 388K of a third party's markup - reference material for cloning the
+# editor layout, not source, and nothing in the app reads it.
+tmp-lovable-*
+__rmtest__.txt
 phase3-*result.txt
 remove-nextjs*.ps1
 remove-result.txt
