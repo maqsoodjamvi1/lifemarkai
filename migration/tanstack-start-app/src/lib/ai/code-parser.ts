@@ -1,5 +1,6 @@
 import { salvageFilesFromStreamJson } from "./streaming-file-extractor";
 import { ensureCommonGeneratedSupportFiles } from "./generated-support-files";
+import { parseFileUpdateBlocks } from "./xml-stream-parser";
 
 export interface ValidationError {
   type: string;
@@ -29,6 +30,25 @@ export interface ParsedAIResponse {
    * to get the remaining files.
    */
   truncated?: boolean;
+  /**
+   * `<file_update>` blocks that carried `<search>`/`<replace>` rather than
+   * `<full>`. They are NOT in `files`, because turning a search/replace pair into
+   * file content needs the current content of that file — and parseAIResponse
+   * only receives the raw response text. The caller holds the project files and
+   * must run these through `applyPatches()`; see the chat route.
+   */
+  xmlPatches?: Array<{ path: string; find: string; replace: string }>;
+  /**
+   * Count of code fences that stated no destination path, so no file could be
+   * salvaged from them. Lets a caller re-ask the model for the one thing that was
+   * actually missing rather than reporting a vague "returned prose". Set only by
+   * the prose-fence strategy; see extractFencesAsFiles.
+   */
+  unlabelledFences?: number;
+  /** Root cause, when the model was asked for one (auto-fix). */
+  diagnosis?: string;
+  /** What the model says it changed and why (auto-fix). */
+  fixDescription?: string;
 }
 
 /**
@@ -36,6 +56,21 @@ export interface ParsedAIResponse {
  */
 function normalizeResponse(parsed: Record<string, unknown>, truncated = false): ParsedAIResponse {
   const rawFiles = Array.isArray(parsed.files) ? parsed.files : [];
+
+  // AUTO_FIX_SYSTEM_PROMPT asks for `diagnosis` and `fix_description`, and models
+  // return them — but this function used to read neither, so both were dropped on
+  // the floor and every repair surfaced as the "Changes applied." default below.
+  // The model had already worked out the root cause; we were throwing it away and
+  // showing the user nothing. Carried through now, and used as the message when
+  // the model gave no separate `message`, which is the usual case for auto-fix.
+  const diagnosis = typeof parsed.diagnosis === "string" ? parsed.diagnosis.trim() : undefined;
+  const fixDescription =
+    typeof parsed.fix_description === "string"
+      ? parsed.fix_description.trim()
+      : typeof parsed.fixDescription === "string"
+        ? parsed.fixDescription.trim()
+        : undefined;
+
   return {
     thoughts: typeof parsed.thoughts === "string" ? parsed.thoughts : undefined,
     plan: Array.isArray(parsed.plan) ? (parsed.plan as string[]) : undefined,
@@ -47,9 +82,34 @@ function normalizeResponse(parsed: Record<string, unknown>, truncated = false): 
         language: file.language ?? detectLanguage(file.path ?? file.name ?? ""),
       };
     }).filter((f) => f.path),
-    message: typeof parsed.message === "string" ? parsed.message : "Changes applied.",
+    message:
+      typeof parsed.message === "string" && parsed.message.trim()
+        ? parsed.message
+        : (fixDescription || diagnosis || "Changes applied."),
+    diagnosis: diagnosis || undefined,
+    fixDescription: fixDescription || undefined,
     truncated,
   };
+}
+
+/**
+ * Compose the user-facing explanation for a repair.
+ *
+ * Reads what the model actually said instead of the generic fallback: the root
+ * cause first, then what changed. Lovable shows its reasoning on a fix; showing
+ * "Changes applied." when the model handed us a diagnosis is a self-inflicted
+ * downgrade. Falls back to `message` when the model gave neither field.
+ */
+export function buildFixExplanation(
+  parsed: Pick<ParsedAIResponse, "diagnosis" | "fixDescription" | "message">,
+  fallback = "Fixed the error — check the preview.",
+): string {
+  const parts: string[] = [];
+  if (parsed.diagnosis) parts.push(`**Cause:** ${parsed.diagnosis}`);
+  if (parsed.fixDescription) parts.push(parsed.fixDescription);
+  if (parts.length > 0) return parts.join("\n\n");
+  const msg = parsed.message?.trim();
+  return msg && msg !== "Changes applied." ? msg : fallback;
 }
 
 /** Return normalized response only when at least one file was extracted. */
@@ -155,20 +215,35 @@ function recoverPartialJSON(raw: string): string | null {
  *
  * When the AI ignores the json_object instruction and replies with
  * "Here's App.jsx:" + a ```jsx fence + "And here's Login.jsx:" + another
- * fence, we extract each fence as a file. Path inference order:
- *   1. A path comment on the line BEFORE the fence ("// src/App.jsx")
- *   2. A path comment on the FIRST line of the fence ("// App.jsx")
- *   3. A derived name from the language tag ("file1.jsx", "file2.jsx")
+ * fence, we extract each fence as a file. A path must be STATED — either:
+ *   1. A path comment on the line before the fence ("// src/App.jsx"), or
+ *   2. A path comment on the first line of the fence ("// App.jsx")
  *
- * Returns an empty array if no fenced blocks exist OR if every block has
- * fewer than 2 non-empty lines (too small to be a real file).
+ * A fence with no stated path is counted and skipped.
+ *
+ * WHY IT IS NOT GUESSED. This used to fall back to a counter — an unlabelled
+ * ```tsx fence became `src/file1.tsx`, the next `src/file2.tsx`. Nothing imports
+ * those, so the user's actual request went unfulfilled while the build reported
+ * success WITH files: junk in the file tree, an unchanged app, and no error to
+ * retry from. Returning nothing is strictly better, because zero files is a state
+ * the callers already handle — chat.ts re-asks for the required format, which is
+ * the outcome the user wanted in the first place. Guessing a real path instead
+ * (App.tsx from `export default function App`) would be worse still: that
+ * overwrites working code on a hunch.
+ *
+ * Also returns an empty file list if every block has fewer than 2 non-empty lines
+ * (too small to be a real file).
  */
-function extractFencesAsFiles(raw: string): ParsedFile[] {
+function extractFencesAsFiles(raw: string): {
+  files: ParsedFile[];
+  /** Fences that looked like real files but stated no path — see above. */
+  unlabelled: number;
+} {
   const files: ParsedFile[] = [];
+  let unlabelled = 0;
   // Match each ```lang\n...\n``` block, capturing language + body.
   const fenceRe = /```([a-zA-Z0-9+_-]*)\n([\s\S]*?)\n```/g;
   let match: RegExpExecArray | null;
-  let derivedCounter = 1;
 
   while ((match = fenceRe.exec(raw)) !== null) {
     const lang = (match[1] || "").trim();
@@ -202,19 +277,15 @@ function extractFencesAsFiles(raw: string): ParsedFile[] {
       path = firstLineMatch[1];
     } else if (prevLineMatch) {
       path = prevLineMatch[1];
-    } else if (lang) {
-      // Derive from language tag — best effort
-      const ext = (
-        { tsx: "tsx", jsx: "jsx", ts: "ts", js: "js", css: "css", html: "html", json: "json", md: "md" } as Record<string, string>
-      )[lang.toLowerCase()];
-      if (ext) {
-        // Common Vite/React layout — put generated files under src/.
-        path = `src/file${derivedCounter}.${ext}`;
-        derivedCounter++;
-      }
     }
 
-    if (!path) continue;
+    if (!path) {
+      // A code fence in a language we generate, with no path anywhere near it.
+      // Count it so the caller can tell the model exactly what was missing,
+      // instead of inventing a destination for it.
+      if (CODE_FENCE_LANGS.has(lang.toLowerCase())) unlabelled++;
+      continue;
+    }
     // Strip a leading "// path" comment from the body so it doesn't duplicate.
     const cleanedBody = firstLineMatch ? body.split("\n").slice(1).join("\n") : body;
     files.push({
@@ -224,8 +295,18 @@ function extractFencesAsFiles(raw: string): ParsedFile[] {
     });
   }
 
-  return files;
+  return { files, unlabelled };
 }
+
+/**
+ * Fence languages that would have been turned into a `src/fileN.<ext>` guess by
+ * the old counter fallback. Used only to decide whether an unlabelled fence is
+ * worth reporting — a ```bash or ```text fence is not a missing file.
+ */
+const CODE_FENCE_LANGS = new Set([
+  "tsx", "jsx", "ts", "js", "css", "html", "json", "md",
+  "typescript", "javascript", "typescriptreact", "javascriptreact",
+]);
 
 /**
  * True when a build-mode JSON response was cut off before the closing brace.
@@ -242,6 +323,57 @@ export function needsBuildContinuation(raw: string): boolean {
   } catch {
     return true;
   }
+}
+
+export interface FileUpdateXml {
+  /** Blocks carrying <full> — complete file content, usable as-is. */
+  full: ParsedFile[];
+  /** Blocks carrying <search>/<replace> — need the original file to apply. */
+  patches: Array<{ path: string; find: string; replace: string }>;
+}
+
+/**
+ * Extract `<file_update>` blocks from a model response.
+ *
+ * WHY THE SERVER NEEDS THIS. The preview self-heal prompt
+ * (lib/preview/preview-error-bridge.ts) used to instruct the model to "Use
+ * <file_update> with <search> and <replace>", and that message is sent in BUILD
+ * mode. The client already parses that XML — chat-panel feeds the same stream to
+ * XmlStreamParser, which applies <full>/<search>+<replace> to local file state —
+ * but the server's parseAIResponse had no XML strategy at all, so a compliant
+ * response yielded ZERO files, burned a "model returned prose" retry, and left
+ * the client's in-memory files diverged from the database.
+ *
+ * It was reachable, not theoretical: jsonMode sets response_format json_object
+ * only on OpenAI-compatible providers. provider.ts notes Anthropic has no such
+ * parameter and relies on the system prompt — and the repair path calls
+ * ESCALATION_MODEL (an Anthropic model) directly, so nothing forced JSON there.
+ *
+ * The instruction has since been removed, but the parser stays: two consumers of
+ * one stream must never disagree about its format, whatever the prompt says.
+ *
+ * Block scanning, entity decoding and path normalisation are delegated to
+ * `parseFileUpdateBlocks` — the same code the client's streaming parser runs — so
+ * both sides derive identical content from identical text. This function only
+ * splits the result into the two shapes the server can act on.
+ */
+export function extractFileUpdateXml(raw: string): FileUpdateXml {
+  const full: ParsedFile[] = [];
+  const patches: Array<{ path: string; find: string; replace: string }> = [];
+
+  for (const block of parseFileUpdateBlocks(raw)) {
+    if (block.kind === "full") {
+      full.push({
+        path: block.path,
+        content: block.content ?? "",
+        language: block.language || detectLanguage(block.path),
+      });
+    } else if (typeof block.search === "string" && typeof block.replace === "string") {
+      patches.push({ path: block.path, find: block.search, replace: block.replace });
+    }
+  }
+
+  return { full, patches };
 }
 
 export function parseAIResponse(raw: string): ParsedAIResponse {
@@ -307,22 +439,51 @@ export function parseAIResponse(raw: string): ParsedAIResponse {
     } catch { /* fall through */ }
   }
 
-  // ── Strategy 6: extract per-fenced-block files from prose ───────────────────
+  // ── Strategy 6: <file_update> XML blocks ────────────────────────────────────
+  // Ordered AHEAD of prose-fence salvage on purpose: `<file_update path="…">`
+  // states which file to write, whereas fence salvage GUESSES the path from a
+  // nearby comment or the language tag. Where both could match, the explicit
+  // statement has to win. See extractFileUpdateXml for why the server parses this
+  // format at all.
+  const xmlStart = raw.search(/<file_update\b/i);
+  if (xmlStart !== -1) {
+    const xml = extractFileUpdateXml(raw);
+    if (xml.full.length > 0 || xml.patches.length > 0) {
+      const prose = raw.slice(0, xmlStart).trim();
+      return {
+        files: xml.full,
+        xmlPatches: xml.patches.length > 0 ? xml.patches : undefined,
+        message: prose || "Changes applied.",
+      };
+    }
+  }
+
+  // ── Strategy 7: extract per-fenced-block files from prose ───────────────────
   // When the AI returns conversational prose with multiple ```lang … ``` blocks
-  // instead of the JSON shape, salvage each block as a file. We infer the path
-  // from a comment immediately before or inside the fence
-  // (// App.jsx, /* src/Login.jsx */, # main.py), or fall back to a derived
-  // name from the language tag. This rescue keeps the preview working when the
-  // model ignores the json_object constraint.
-  const proseFiles = extractFencesAsFiles(raw);
-  if (proseFiles.length > 0) {
+  // instead of the JSON shape, salvage each block as a file. The path must be
+  // STATED in a comment immediately before or inside the fence
+  // (// App.jsx, /* src/Login.jsx */, # main.py). Fences with no stated path are
+  // reported via `unlabelledFences` rather than given an invented destination —
+  // see extractFencesAsFiles. This rescue keeps the preview working when the
+  // model ignores the json_object constraint but still says where code goes.
+  const prose = extractFencesAsFiles(raw);
+  if (prose.files.length > 0) {
     // Use everything BEFORE the first fence as the conversational message.
     const firstFenceIdx = raw.search(/```/);
     const message = firstFenceIdx > 0 ? raw.slice(0, firstFenceIdx).trim() : "Generated files from your prompt.";
-    return { files: proseFiles, message };
+    return {
+      files: prose.files,
+      message,
+      unlabelledFences: prose.unlabelled || undefined,
+    };
+  }
+  // Fences that are clearly code but state no path: no files, but the caller can
+  // now say WHY when it re-asks the model, instead of a generic "returned prose".
+  if (prose.unlabelled > 0) {
+    return { files: [], message: raw, unlabelledFences: prose.unlabelled };
   }
 
-  // ── Strategy 7: salvage complete file objects from truncated build JSON ─────
+  // ── Strategy 8: salvage complete file objects from truncated build JSON ─────
   // When the model hits max_tokens mid-JSON, earlier files in the "files" array
   // may be fully closed even though JSON.parse fails on the whole blob.
   if (trimmed.startsWith("{") && trimmed.includes('"files"')) {

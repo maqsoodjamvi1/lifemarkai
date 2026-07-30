@@ -259,6 +259,28 @@ function compactStack(stack: string | undefined): string {
     .slice(0, 500);
 }
 
+/**
+ * Build the self-heal prompt sent when the preview reports runtime errors.
+ *
+ * TWO CONSTRAINTS ON THE WORDING.
+ *
+ * 1. The first line is load-bearing. chat-panel one-click-sends this prompt only
+ *    when it `startsWith("Fix the preview/runtime errors")`; change that opening
+ *    and self-heal silently degrades to dropping text in the composer.
+ *
+ * 2. It must not name an output format. This prompt used to say "Use
+ *    <file_update> with <search> and <replace> when possible", which was wrong in
+ *    every mode it can actually reach: chat-panel sends it as "build" (whose
+ *    system prompt demands a JSON object of complete files, with
+ *    response_format: json_object on OpenAI-compatible providers), and the chat
+ *    route may auto-route it to "patch" (which expects a JSON patch array —
+ *    encouraged by "surgical" wording in this very prompt). The XML was a third
+ *    format nobody asked for: the client parsed it, so the editor showed the fix,
+ *    while the server extracted no files and persisted nothing.
+ *
+ * The format belongs to the mode's system prompt, which is the only thing that
+ * knows which mode this is. This prompt states the TASK only.
+ */
 export function buildHealingPrompt(errors: PreviewRuntimeError[]): string {
   const actionable = errors.filter((e) => !isNoisePreviewError(e.message));
   const log = formatErrorsForHealing(actionable);
@@ -280,7 +302,7 @@ export function buildHealingPrompt(errors: PreviewRuntimeError[]): string {
   }
   return [
     "Fix the preview/runtime errors below. Apply minimal surgical patches only.",
-    "Use <file_update> with <search> and <replace> when possible.",
+    "Touch only the lines needed to clear these errors — leave everything else exactly as it is. Do not restructure working code, rename anything, or drop existing features.",
     ...hints,
     "",
     "```",

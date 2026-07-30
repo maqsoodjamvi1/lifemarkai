@@ -128,12 +128,14 @@ export const Route = createFileRoute("/api/ai/fix")({
             { appendPreviewDiagnosis },
             { generateAI },
             { ensureCommonGeneratedSupportFiles },
-            { parseAIResponse },
+            { parseAIResponse, detectLanguage, buildFixExplanation },
+            { applyPatches, collapsePatchResults },
           ] = await Promise.all([
             import("@/lib/preview/diagnose-preview"),
             import("@/lib/ai/generate"),
             import("@/lib/ai/generated-support-files"),
             import("@/lib/ai/code-parser"),
+            import("@/lib/ai/patch-applier"),
           ]);
 
           const enrichedError = appendPreviewDiagnosis(
@@ -188,6 +190,46 @@ Return the fixed files as JSON.`;
             if (!rawContent.trim()) throw new Error("AI returned empty response");
 
             const parsed = parseAIResponse(rawContent);
+
+            // ── <file_update> with <search>/<replace> ──────────────────────────
+            // The preview self-heal prompt used to ask models for exactly this
+            // format. parseAIResponse cannot resolve a search/replace pair on its
+            // own — that needs the file's current content, which only this scope
+            // has — so it returns them as `xmlPatches`. Dropped, they made a
+            // perfectly good fix look like the "missing files array" failure
+            // below, on an action the user paid a credit for.
+            if (parsed.xmlPatches?.length) {
+              // Patch against the current files overlaid with any <full> blocks
+              // from the same response, so both kinds compose on one path.
+              const base = new Map(
+                (fileList as Array<{ path: string; content: string }>).map((f) => [f.path, f.content]),
+              );
+              for (const f of parsed.files) base.set(f.path, f.content);
+
+              const xmlResults = applyPatches(
+                parsed.xmlPatches.map((p) => ({ path: p.path, find: p.find, replace: p.replace })),
+                [...base].map(([path, content]) => ({ path, content })),
+              );
+
+              const byPath = new Map(parsed.files.map((f) => [f.path, f]));
+              for (const pr of collapsePatchResults(xmlResults)) {
+                byPath.set(pr.path, {
+                  path: pr.path,
+                  content: pr.content,
+                  language: byPath.get(pr.path)?.language ?? detectLanguage(pr.path),
+                });
+              }
+              parsed.files = [...byPath.values()];
+
+              const xmlFailed = xmlResults.filter((r) => !r.applied);
+              if (xmlFailed.length > 0) {
+                console.warn(
+                  "auto-fix: unapplied <file_update> patches:",
+                  xmlFailed.map((f) => `${f.path}: ${f.error}`).join("; "),
+                );
+              }
+            }
+
             if (!parsed.files?.length) {
               // Distinguish "the model was cut off" from "the model returned junk".
               // These need opposite responses (raise the budget vs. fix the prompt),
@@ -234,8 +276,13 @@ Return the fixed files as JSON.`;
             }
 
             return Response.json({
+              // The model was asked for `diagnosis` and `fix_description` and
+              // returns them; until now nothing read either field, so every
+              // repair came back as the generic default. Show the reasoning.
+              explanation: buildFixExplanation(parsed),
+              diagnosis: parsed.diagnosis ?? null,
+              fixDescription: parsed.fixDescription ?? null,
               files: outFiles,
-              explanation: parsed.message ?? "Fixed the error — check the preview.",
               tokensUsed: result.tokensUsed ?? 0,
               free: isFreeFix,
               freeFixesRemainingToday: Math.max(

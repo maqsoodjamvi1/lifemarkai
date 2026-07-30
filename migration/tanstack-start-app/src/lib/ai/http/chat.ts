@@ -40,7 +40,7 @@ import {
   parseTextReplacementIntent,
   parseHeadingDescriptor,
 } from "@/lib/ai/text-edit";
-import { parseAIResponse, validateGeneratedFiles, assessGenerationQuality, shouldAutoFix, needsBuildContinuation, type ParsedFile } from "@/lib/ai/code-parser";
+import { parseAIResponse, validateGeneratedFiles, assessGenerationQuality, shouldAutoFix, needsBuildContinuation, detectLanguage, type ParsedFile } from "@/lib/ai/code-parser";
 import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
 import { StreamingFileExtractor } from "@/lib/ai/streaming-file-extractor";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
@@ -48,12 +48,19 @@ import { validateApiKey } from "@/lib/api/api-key";
 import { logger } from "@/lib/logger";
 import { getProjectSchemaContext } from "@/lib/supabase/schema-reader";
 import { attachSkillsToPrompt } from "@/lib/ai/attach-skills";
-import {
-  recommendInitiative,
-  initiativeRoutingEnabled,
-} from "@/lib/ai/initiative-routing";
+import { decideInitiativeRouting } from "@/lib/ai/initiative-routing";
 import type { SkillMatch } from "@/lib/ai/skill-matcher";
-import { shouldUseSubagents, runSubagentInvestigation, type SubagentStep } from "@/lib/ai/subagents";
+import {
+  shouldUseSubagents,
+  runSubagentInvestigation,
+  rankFilesByKeywords,
+  type SubagentStep,
+} from "@/lib/ai/subagents";
+import {
+  parallelSubagentsEnabled,
+  planSubagents,
+  runParallelSubagents,
+} from "@/lib/ai/subagents-parallel";
 import { computeCreditCost, maxCreditCostForMode } from "@/lib/ai/credit-cost";
 import {
   cancelCreditReservation,
@@ -1067,9 +1074,54 @@ The user has expressed frustration. Do the following:
     // ── Subagents: read-only parallel investigation (Lovable-style) ─────────
     let subagentSteps: SubagentStep[] = [];
     if (shouldUseSubagents(message, mode, files.length)) {
-      const investigation = runSubagentInvestigation(message, files);
-      subagentSteps = investigation.steps;
-      if (investigation.contextBlock) systemPrompt += investigation.contextBlock;
+      // Real parallel read-only investigators when enabled (default on): three
+      // concurrent fast-tier calls, hard-capped, each given one question and its
+      // own file slice. Costs a fraction of a cent per build, which is why it can
+      // be on without moving the economy posture.
+      //
+      // Falls back to the deterministic keyword scan whenever the fan-out is
+      // disabled or every agent fails. The scan is what shipped before this and is
+      // still a reasonable answer — a build must not degrade because an optional
+      // investigation did.
+      let usedParallel = false;
+      if (parallelSubagentsEnabled()) {
+        try {
+          const assignments = planSubagents(message, files, rankFilesByKeywords);
+          if (assignments.length > 0) {
+            const fanout = await runParallelSubagents(
+              assignments,
+              { projectId, userId },
+              (step) => {
+                safeEnqueue(
+                  encoder.encode(`data: ${JSON.stringify({ subagent: step })}\n\n`),
+                );
+              },
+            );
+            logger.info("ai.chat.subagents_parallel", {
+              projectId,
+              agents: fanout.outcomes.length,
+              succeeded: fanout.outcomes.filter((o) => o.ok).length,
+              ms: Math.max(0, ...fanout.outcomes.map((o) => o.ms)),
+            });
+            if (fanout.anySucceeded) {
+              subagentSteps = fanout.steps;
+              systemPrompt += `\n\n${fanout.contextBlock}`;
+              usedParallel = true;
+            }
+          }
+        } catch (fanoutErr) {
+          logger.warn("ai.chat.subagents_parallel_failed", {
+            projectId,
+            error: String(fanoutErr),
+          });
+        }
+      }
+
+      if (!usedParallel) {
+        const investigation = runSubagentInvestigation(message, files);
+        subagentSteps = investigation.steps;
+        if (investigation.contextBlock) systemPrompt += investigation.contextBlock;
+      }
     }
 
     // Build messages array — support image attachments (vision)
@@ -1307,41 +1359,87 @@ The user has expressed frustration. Do the following:
           );
         }
 
-        // The 11-role initiative orchestrator (editor-lenses/orchestrator.ts) is
-        // the strongest generation path we have, but it is reachable only from
-        // the Editor Intelligence side panel, so no normal build ever uses it.
+        // ── Risk-gated route to the 11-role orchestrator ────────────────────
+        // editor-lenses/orchestrator.ts (discovery → planning → debate → waves →
+        // verification, 11 roles, real agent execution) is the strongest
+        // generation path in the codebase. It used to be reachable only from the
+        // Editor Intelligence side panel, so no normal build ever used it — the
+        // best thing the product could do was not something it did.
         //
-        // We RECOMMEND rather than auto-route. An initiative spans multiple waves
-        // of role calls; a build is one generation plus at most a repair pass.
-        // Silently promoting one to the other could multiply a user's credit
-        // spend on a single message, and "expensive, invisible, heuristic-
-        // triggered" is precisely the failure mode this codebase has already been
-        // bitten by. So the build proceeds normally and the client is told it
-        // COULD have used the team, with the signals and a bounded credit quote.
+        // A request that scores high enough on `decideInitiativeRouting` is now
+        // HANDED OFF to that path; a borderline one is merely offered. The handoff
+        // is deliberate rather than inline: the initiative route owns the
+        // orchestrator, its credit reservation and its own SSE contract, and
+        // re-implementing that here would create a second copy of it — the same
+        // mistake as the two auto-fix implementations.
         //
-        // Gated by ENABLE_INITIATIVE_SUGGESTIONS, default off — with no env
-        // configuration this emits nothing and behaviour is unchanged.
-        if (mode === "build" && initiativeRoutingEnabled()) {
+        // The build stops when we hand off, so we only hand off to a caller that
+        // said it can pick the work up (`canRouteInitiative`). Without that flag —
+        // API clients, older UI builds — the normal build runs, because a promoted
+        // request that nobody executes is worse than a cheaper one that completes.
+        if (mode === "build") {
           try {
-            const rec = recommendInitiative(message, {
+            const routing = decideInitiativeRouting(message, {
               fileCount: Array.isArray(files) ? files.length : 0,
               mode,
+              credits: typeof profile?.credits === "number" ? Number(profile.credits) : undefined,
+              clientCanRoute: body.canRouteInitiative === true,
+              forceBuild: body.forceBuild === true,
             });
-            if (rec.recommend) {
+
+            if (routing.autoRoute) {
+              logger.info("ai.chat.initiative_autoroute", {
+                projectId,
+                signals: routing.signals,
+                budgetCredits: routing.budgetCredits,
+              });
+              safeEnqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    initiative_routed: {
+                      goal: message,
+                      reason: routing.reason,
+                      signals: routing.signals,
+                      budgetCredits: routing.budgetCredits,
+                    },
+                  })}\n\n`,
+                ),
+              );
+              // Nothing was generated and nothing was charged on this request —
+              // say so explicitly rather than sending a `done` that implies a
+              // finished build.
+              safeEnqueue(
+                encoder.encode(
+                  `data: ${JSON.stringify({
+                    status: "handed_off",
+                    message: "Routed to the engineering team — this build was not charged.",
+                  })}\n\n`,
+                ),
+              );
+              safeClose();
+              return;
+            }
+
+            if (routing.suggest) {
               safeEnqueue(
                 encoder.encode(
                   `data: ${JSON.stringify({
                     initiative_suggestion: {
-                      reason: rec.reason,
-                      signals: rec.signals,
-                      budgetCredits: rec.suggestedBudgetCredits,
+                      reason: routing.reason,
+                      signals: routing.signals,
+                      budgetCredits: routing.budgetCredits,
+                      declinedBecause: routing.declinedBecause,
                     },
                   })}\n\n`,
                 ),
               );
             }
-          } catch {
-            /* a suggestion must never disturb the build */
+          } catch (routeErr) {
+            // Routing is an optimisation. It must never cost the user their build.
+            logger.warn("ai.chat.initiative_routing_failed", {
+              projectId,
+              error: String(routeErr),
+            });
           }
         }
 
@@ -1799,6 +1897,61 @@ The user has expressed frustration. Do the following:
           } else if (mode === "build") {
             const parsed = parseAIResponse(fullContent);
             const existingFiles = (files as ParsedFile[]) ?? [];
+
+            // ── <file_update> with <search>/<replace> ─────────────────────────
+            // parseAIResponse can turn <full> blocks straight into files, but a
+            // search/replace pair needs the file's CURRENT content to resolve, and
+            // the parser only receives the raw response text. So it hands them back
+            // as `xmlPatches` and they are applied here, where the project's files
+            // are in scope.
+            //
+            // This closes a real divergence: the client feeds the same stream to
+            // XmlStreamParser and applies these blocks to its local file state, so
+            // before this the editor showed the edit and the database kept the old
+            // content. Failures are left to the existing zero-files retry below,
+            // which asks the model for the proper format.
+            if (parsed.xmlPatches?.length) {
+              // Patch against existing files overlaid with any <full> blocks from
+              // the same response, so a <full> and a <search> for one path compose
+              // instead of racing.
+              const baseMap = new Map(existingFiles.map((f) => [f.path, f.content]));
+              for (const f of parsed.files) baseMap.set(f.path, f.content);
+              const patchBase = [...baseMap].map(([path, content]) => ({ path, content }));
+
+              const xmlResults = applyPatches(
+                parsed.xmlPatches.map((p) => ({
+                  path: p.path,
+                  find: p.find,
+                  replace: p.replace,
+                })),
+                patchBase,
+              );
+
+              const byPath = new Map(parsed.files.map((f) => [f.path, f]));
+              for (const pr of collapsePatchResults(xmlResults)) {
+                byPath.set(pr.path, {
+                  path: pr.path,
+                  content: pr.content,
+                  language: detectLanguage(pr.path),
+                });
+              }
+              parsed.files = [...byPath.values()];
+
+              const xmlFailed = xmlResults.filter((r) => !r.applied);
+              if (xmlFailed.length > 0) {
+                logger.warn("ai.chat.xml_patch_failed", {
+                  projectId,
+                  failed: xmlFailed.map((f) => ({ path: f.path, error: f.error })),
+                });
+              }
+              logger.info("ai.chat.xml_file_update", {
+                projectId,
+                model: effectiveModel,
+                patches: parsed.xmlPatches.length,
+                applied: parsed.xmlPatches.length - xmlFailed.length,
+              });
+            }
+
             let finalFiles = ensureCommonGeneratedSupportFiles(parsed.files, existingFiles);
 
             // ── Validation pass ───────────────────────────────────────────
@@ -1887,10 +2040,20 @@ The user has expressed frustration. Do the following:
               // (common with weaker models that answer in prose + code fences).
               // Retry once with an explicit format demand; if that also fails,
               // tell the user instead of silently doing nothing.
+              // Be specific about WHY nothing was extracted. An unlabelled code
+              // fence used to be silently turned into `src/fileN.tsx` — junk that
+              // nothing imports, reported as a successful build. Now it fails, so
+              // say exactly what was missing and the retry has a real chance.
+              const unlabelled = parsed.unlabelledFences ?? 0;
               safeEnqueue(
-                encoder.encode(`data: ${JSON.stringify({ status: "fixing", message: "Model returned prose instead of files — requesting proper file output…" })}\n\n`)
+                encoder.encode(`data: ${JSON.stringify({
+                  status: "fixing",
+                  message: unlabelled > 0
+                    ? `Model returned ${unlabelled} code block${unlabelled === 1 ? "" : "s"} without a file path — requesting proper file output…`
+                    : "Model returned prose instead of files — requesting proper file output…",
+                })}\n\n`)
               );
-                  logger.warn("ai.chat.no_files_parsed", { projectId, model: effectiveModel });
+                  logger.warn("ai.chat.no_files_parsed", { projectId, model: effectiveModel, unlabelledFences: unlabelled });
               try {
                 let retryContent = "";
                 await generateAI({
@@ -1901,9 +2064,11 @@ The user has expressed frustration. Do the following:
                     {
                       role: "user" as const,
                       content:
-                        "Your previous response did not contain any files in the required output format. " +
+                        (unlabelled > 0
+                          ? `Your previous response contained ${unlabelled} code block${unlabelled === 1 ? "" : "s"} but never said which file each one belongs to, so none of it could be saved. `
+                          : "Your previous response did not contain any files in the required output format. ") +
                         "Respond ONLY with the required JSON object containing the COMPLETE file contents for this request — " +
-                        "no explanations, no installation steps, no markdown fences.",
+                        "every file must carry its full path — no explanations, no installation steps, no markdown fences.",
                     },
                   ],
                   maxTokens: outputMaxTokens,

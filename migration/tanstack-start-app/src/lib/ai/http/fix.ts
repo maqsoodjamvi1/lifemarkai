@@ -63,18 +63,57 @@ function normalizeRuntimeErrors(value: unknown, fallbackMessage: string): Previe
     : [{ kind: "runtime", message: fallbackMessage, timestamp: Date.now() }];
 }
 
-async function parseFixResponse(raw: string): Promise<{
+async function parseFixResponse(
+  raw: string,
+  currentFiles: Array<{ path: string; content: string }> = [],
+): Promise<{
   files: Array<{ path: string; content: string }>;
   explanation: string;
 }> {
-  const { parseAIResponse } = await import("@/lib/ai/code-parser");
+  const { parseAIResponse, buildFixExplanation } = await import("@/lib/ai/code-parser");
   const parsed = parseAIResponse(raw);
-  if (!parsed.files?.length) {
+  const files: Array<{ path: string; content: string }> = [...(parsed.files ?? [])];
+
+  // ── <file_update> with <search>/<replace> ───────────────────────────────────
+  // This route is the main consumer of the preview healing prompt, which used to
+  // ask for exactly that format. parseAIResponse cannot resolve a search/replace
+  // pair on its own — it needs the file's current content, which only the caller
+  // has — so it returns them as `xmlPatches`. Before this they were dropped, the
+  // route saw zero files and threw "missing files array": a fix the user paid a
+  // credit for, that the client had already applied to its local state, and that
+  // was never written to the database.
+  if (parsed.xmlPatches?.length) {
+    const { applyPatches, collapsePatchResults } = await import("@/lib/ai/patch-applier");
+    const base = new Map(currentFiles.map((f) => [f.path, f.content]));
+    for (const f of files) base.set(f.path, f.content);
+
+    const results = applyPatches(
+      parsed.xmlPatches.map((p) => ({ path: p.path, find: p.find, replace: p.replace })),
+      [...base].map(([path, content]) => ({ path, content })),
+    );
+
+    const byPath = new Map(files.map((f) => [f.path, f]));
+    for (const pr of collapsePatchResults(results)) {
+      byPath.set(pr.path, { path: pr.path, content: pr.content });
+    }
+    files.length = 0;
+    files.push(...byPath.values());
+
+    const failed = results.filter((r) => !r.applied);
+    if (failed.length > 0) {
+      console.warn(
+        "auto-fix: unapplied <file_update> patches:",
+        failed.map((f) => `${f.path}: ${f.error}`).join("; "),
+      );
+    }
+  }
+
+  if (!files.length) {
     throw new Error("AI response missing files array");
   }
   return {
-    files: parsed.files,
-    explanation: parsed.message ?? "Fixed the error — check the preview.",
+    files,
+    explanation: buildFixExplanation(parsed),
   };
 }
 
@@ -214,7 +253,7 @@ Return the fixed files as JSON.`;
       throw new Error("AI returned empty response");
     }
 
-    const parsed = await parseFixResponse(rawContent);
+    const parsed = await parseFixResponse(rawContent, fileList);
     parsed.files = ensureCommonGeneratedSupportFiles(parsed.files, fileList);
 
     for (const fixedFile of parsed.files) {

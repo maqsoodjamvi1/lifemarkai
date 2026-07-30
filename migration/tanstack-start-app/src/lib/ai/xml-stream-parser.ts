@@ -93,6 +93,65 @@ function parseFileUpdateBlock(attrs: string, inner: string): ParsedFileUpdate | 
   return null;
 }
 
+/**
+ * Locate the first COMPLETE `<file_update>…</file_update>` block in `buffer`.
+ * Returns null when no complete block is present yet.
+ *
+ * This is the single definition of where a block begins and ends. Both the
+ * streaming parser below and `parseFileUpdateBlocks` go through it, so the
+ * client and the server can never disagree about block boundaries.
+ */
+function nextFileUpdateBlock(
+  buffer: string,
+): { attrs: string; inner: string; consumed: number } | null {
+  const open = buffer.match(FILE_UPDATE_OPEN);
+  if (!open || open.index === undefined) return null;
+
+  const afterOpen = open.index + open[0].length;
+  const tail = buffer.slice(afterOpen);
+  const close = tail.match(FILE_UPDATE_CLOSE);
+  if (!close || close.index === undefined) return null;
+
+  return {
+    attrs: open[1] ?? "",
+    inner: tail.slice(0, close.index),
+    consumed: afterOpen + close.index + close[0].length,
+  };
+}
+
+/**
+ * Parse every complete `<file_update>` block out of a whole response string.
+ *
+ * The non-streaming counterpart of `XmlStreamParser`, for consumers that already
+ * hold the full text — chiefly the SERVER. The client streams the model's
+ * response through `XmlStreamParser` and applies each block to its local file
+ * state; the server must extract the same blocks from the same text in order to
+ * PERSIST them. While only the client understood this format, a response that
+ * complied with it updated the editor and saved nothing.
+ *
+ * Deliberately shares `nextFileUpdateBlock` and `parseFileUpdateBlock` with the
+ * streaming path rather than re-implementing them: entity decoding, `.trim()` of
+ * tag bodies and path normalisation must produce byte-identical results on both
+ * sides, and the only way to guarantee that is to have one implementation.
+ *
+ * Malformed blocks are skipped, as in the streaming parser (which reports them
+ * through `onParseError` and continues).
+ */
+export function parseFileUpdateBlocks(raw: string): ParsedFileUpdate[] {
+  if (!raw || !FILE_UPDATE_OPEN.test(raw)) return [];
+  const out: ParsedFileUpdate[] = [];
+  let rest = raw;
+  let safety = 0;
+  while (safety++ < 200) {
+    const block = nextFileUpdateBlock(rest);
+    if (!block) break;
+    rest = rest.slice(block.consumed);
+    const parsed = parseFileUpdateBlock(block.attrs, block.inner);
+    if (parsed) out.push(parsed);
+  }
+  return out;
+}
+
 export class XmlStreamParser {
   private buffer = "";
   private readonly maxBytes: number;
@@ -126,26 +185,18 @@ export class XmlStreamParser {
   }
 
   private drainCompleteBlocks(final = false): void {
+    // `final` is accepted for symmetry with flush() but changes nothing: an
+    // incomplete trailing block is left in the buffer either way, since there is
+    // no safe way to apply half a file.
+    void final;
     let safety = 0;
     while (safety++ < 200) {
-      const open = this.buffer.match(FILE_UPDATE_OPEN);
-      if (!open || open.index === undefined) break;
+      const block = nextFileUpdateBlock(this.buffer);
+      if (!block) break;
 
-      const afterOpen = open.index + open[0].length;
-      const tail = this.buffer.slice(afterOpen);
-      const close = tail.match(FILE_UPDATE_CLOSE);
-      if (!close || close.index === undefined) {
-        if (!final) break;
-        // Incomplete block at end — report if we have attrs but no close
-        break;
-      }
-
-      const inner = tail.slice(0, close.index);
-      const attrs = open[1] ?? "";
-      const parsed = parseFileUpdateBlock(attrs, inner);
-
-      const consumed = afterOpen + close.index + close[0].length;
-      this.buffer = this.buffer.slice(consumed);
+      this.buffer = this.buffer.slice(block.consumed);
+      const parsed = parseFileUpdateBlock(block.attrs, block.inner);
+      const inner = block.inner;
 
       if (!parsed) {
         this.opts.onParseError?.(

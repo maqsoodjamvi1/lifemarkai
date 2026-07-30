@@ -1,10 +1,13 @@
 /**
- * Tests for the Strategy 6 fence extraction in parseAIResponse.
+ * Tests for the prose-fence extraction strategy in parseAIResponse
+ * (extractFencesAsFiles — Strategy 7 since the <file_update> strategy was
+ * inserted ahead of it; referred to here by name, not number, so renumbering
+ * cannot make this comment lie again).
  *
  *   node --test lib/ai/code-parser.test.ts
  *
  * These pin the actual response shapes we've seen models emit so the
- * "preview is blank because Strategy 6 missed the path label" bug stays
+ * "preview is blank because fence salvage missed the path label" bug stays
  * fixed.
  */
 
@@ -100,7 +103,7 @@ test("extracts files from bare-filename label on its own line", () => {
   assert.equal(parsed.files[0].path, "src/Profile.tsx");
 });
 
-test("derives file name from language tag when no label present", () => {
+test("reports, rather than invents, a path when a fence has no label", () => {
   const raw = [
     "```tsx",
     "import React from 'react';",
@@ -109,8 +112,18 @@ test("derives file name from language tag when no label present", () => {
   ].join("\n");
 
   const parsed = parseAIResponse(raw);
-  assert.equal(parsed.files.length, 1);
-  assert.equal(parsed.files[0].path, "src/file1.tsx");
+
+  // This test previously asserted `src/file1.tsx` — it pinned the counter
+  // fallback as intended behaviour. It was not: nothing imports src/file1.tsx, so
+  // the user's request went unfulfilled while the build reported success WITH
+  // files. Zero files is the honest answer, and it is a state the callers already
+  // handle by re-asking the model for the required format.
+  assert.equal(parsed.files.length, 0);
+  assert.equal(parsed.unlabelledFences, 1);
+  assert.ok(
+    !JSON.stringify(parsed.files).includes("src/file"),
+    "must never invent a src/fileN path",
+  );
 });
 
 test("falls back to plain message when only short snippets exist", () => {
