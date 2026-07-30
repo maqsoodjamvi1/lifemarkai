@@ -1,3 +1,25 @@
+/**
+ * Keyword-scored codebase scan run before a large build.
+ *
+ * WHAT THIS IS NOT. It was described as "Lovable-style parallel read-only
+ * investigations" and surfaced in chat as an investigation with a 3/3 progress
+ * counter, which read as three agents working concurrently. It is none of those
+ * things: this module contains no `await`, makes no model call, and spawns nothing.
+ * It tokenises the prompt, scores files already loaded in memory by keyword
+ * overlap, and returns the top matches plus a few canned step titles so the UI has
+ * something to show while the real build starts.
+ *
+ * That is genuinely useful — it is how relevant files reach the prompt — but it is
+ * a ranking function, and calling it an agent invented capability the product does
+ * not have. The names below are kept (they are the established internal vocabulary
+ * and the SSE field name is a client/server contract) while every claim of
+ * parallelism or agency has been removed from the comments and the UI copy.
+ *
+ * If real parallel read-only agents are wanted later, that is a new feature with a
+ * real cost: N extra model calls per build. It should be a deliberate, priced
+ * decision, not something implied by a label.
+ */
+
 import type { EditorMode } from "@/components/editor/editor-layout";
 
 export type SubagentStatus = "running" | "done" | "error";
@@ -9,12 +31,20 @@ export interface SubagentStep {
   status: SubagentStatus;
   filesInspected?: string[];
   finding?: string;
+  /**
+   * True when this step came from a REAL model-backed subagent
+   * (`subagents-parallel.ts`), false/absent for the deterministic keyword scan in
+   * this file. The UI reads it to choose between "Investigating" and "Scanning" —
+   * without it the card would have to guess, and guessing is how the original
+   * "3 subagents ran" fiction happened.
+   */
+  agent?: boolean;
 }
 
 const EXPLORE_TRIGGERS =
   /\b(subagent|explore|investigate|how does|how do|where is|where are|why does|why is|research|inspect|walk me through|structure of)\b/i;
 
-/** Lovable-style parallel read-only investigations before large builds. */
+/** Should the prompt get a keyword-scored file scan before building? */
 export function shouldUseSubagents(
   message: string,
   mode: EditorMode | string,
@@ -57,7 +87,7 @@ function buildTasks(message: string): SubagentStep[] {
   if (/\bauth|login|signup|session|oauth\b/i.test(message)) {
     tasks.push({
       id: "sa-auth",
-      title: "Explore: authentication flow",
+      title: "Scanned: authentication flow",
       type: "explore",
       status: "running",
     });
@@ -66,7 +96,7 @@ function buildTasks(message: string): SubagentStep[] {
   if (/\bdashboard|admin|layout|nav\b/i.test(message)) {
     tasks.push({
       id: "sa-layout",
-      title: "Explore: layout and navigation",
+      title: "Scanned: layout and navigation",
       type: "generic",
       status: "running",
     });
@@ -74,7 +104,7 @@ function buildTasks(message: string): SubagentStep[] {
 
   tasks.push({
     id: "sa-codebase",
-    title: "Explore: relevant project files",
+    title: "Scanned: relevant project files",
     type: "explore",
     status: "running",
   });
@@ -143,4 +173,23 @@ export function runSubagentInvestigation(
       : "";
 
   return { steps: tasks, contextBlock: contextBlock ? `\n\n${contextBlock}` : "" };
+}
+
+/**
+ * Rank files by keyword relevance, highest first.
+ *
+ * Exported so `subagents-parallel.ts` can reuse this scoring to decide which files
+ * each real subagent gets. The scoring is the part of this module that genuinely
+ * works; paying a model to re-derive a file ranking would be spending money to
+ * replace something deterministic and free.
+ */
+export function rankFilesByKeywords(
+  files: Array<{ path: string; content?: string | null }>,
+  keywords: string[],
+): string[] {
+  return [...files]
+    .map((f) => ({ path: f.path, score: scoreFile(f.path, f.content ?? "", keywords) }))
+    .filter((f) => f.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((f) => f.path);
 }

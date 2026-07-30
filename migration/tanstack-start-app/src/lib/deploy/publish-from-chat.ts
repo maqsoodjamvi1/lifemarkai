@@ -10,9 +10,16 @@
  * queue path is fire-and-forget (URL arrives later via notification), which
  * doesn't fit a chat turn that must end with "your app is live at <url>".
  *
- * Keep this in lockstep with app/api/deploy/route.ts if the deploy flow changes.
+ * Keep this in lockstep with routes/api/deploy.ts if the deploy flow changes.
+ *
+ * SECURITY GATE. Because this module deploys directly instead of calling the
+ * deploy route, it originally ran no security scan at all — "publish it" in chat
+ * shipped code the Publish button would have refused with a 412. Both paths now
+ * call `evaluatePublishGate` from lib/security/publish-gate, which is the single
+ * definition of what blocks a publish. If you add a check, add it there, not here.
  */
 
+import { evaluatePublishGate } from "@/lib/security/publish-gate";
 import { buildNetlifyFileMap } from "@/lib/deploy/build-deploy-files";
 import { buildLifemarkDeployUrl } from "@/lib/deploy/branded-deploy-url";
 import { sendDeploymentEmail } from "@/lib/email/resend";
@@ -153,6 +160,33 @@ export async function publishProjectFromChat(
     fileCount = projectFiles.length;
     if (projectFiles.length === 0) {
       return { ok: false, provider, fileCount: 0, error: "This project has no files to publish yet — build something first." };
+    }
+
+    // ── Security gate ─────────────────────────────────────────────────────────
+    // This path talks to Netlify directly rather than going through
+    // routes/api/deploy.ts, so it inherited none of that route's checks: asking
+    // the agent to publish shipped code the Publish button would have refused.
+    // Same shared gate now, so the two cannot diverge again.
+    //
+    // No override is accepted here on purpose. Overriding a security block is a
+    // decision a user makes by looking at findings and choosing to accept them;
+    // it is not something to infer from a chat message like "publish it". If the
+    // gate trips, the user is told what and where, and can accept the risk from
+    // the Publish panel where the findings are visible.
+    const gate = evaluatePublishGate(projectFiles);
+    if (gate.blocked) {
+      const where = gate.blocking
+        .slice(0, 3)
+        .map((f) => `${f.title} (${f.file}:${f.line})`)
+        .join("; ");
+      const more = gate.blocking.length > 3 ? ` +${gate.blocking.length - 3} more` : "";
+      emit(`Publish blocked by the security gate (${gate.reasons.join(", ")}).`);
+      return {
+        ok: false,
+        provider,
+        fileCount,
+        error: `${gate.message} Found: ${where}${more}`,
+      };
     }
 
     const { data: ownerProfile } = await supabase

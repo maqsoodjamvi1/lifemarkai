@@ -8,8 +8,7 @@ import { sendDeploymentEmail } from "@/lib/email/resend";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { enqueueDeployJob, getDeployQueue } from "@/lib/queue/client";
 import { logger } from "@/lib/logger";
-import { scanProject } from "@/lib/security/scan";
-import { auditDependencies } from "@/lib/security/deps";
+import { evaluatePublishGate, publishGateResponseBody } from "@/lib/security/publish-gate";
 
 // ── Netlify helpers ────────────────────────────────────────────────────────
 
@@ -228,6 +227,9 @@ async function handlePOST(req: Request) {
     projectId,
     provider = "netlify",
     allowCriticalSecurityFindings = false,
+    // Separate from the critical override on purpose: accepting "this API key is
+    // fake" is a different decision from "yes, publish these card numbers".
+    allowPersonalDataFindings = false,
   } = await req.json();
 
   // Fetch project + files
@@ -278,23 +280,21 @@ async function handlePOST(req: Request) {
 
   const projectFiles = (project.project_files as Array<{ path: string; content: string; language?: string }>) ?? [];
 
-  // Publish-time security gate. The project security panel remains the place
-  // to investigate and fix issues, but deployments must make an explicit
-  // decision when a scan finds critical risks.
-  const securityFindings = [
-    ...scanProject(projectFiles).findings,
-    ...auditDependencies(projectFiles),
-  ];
-  const criticalSecurityFindings = securityFindings.filter((finding) => finding.severity === "critical");
-  if (criticalSecurityFindings.length > 0 && !allowCriticalSecurityFindings) {
-    return Response.json(
-      {
-        error: "Critical security findings must be reviewed before publishing.",
-        requiresSecurityReview: true,
-        findings: criticalSecurityFindings,
-      },
-      { status: 412 },
-    );
+  // Publish-time security gate. The project security panel remains the place to
+  // investigate and fix issues, but deployments must make an explicit decision
+  // when a scan finds critical risks or personal data.
+  //
+  // Delegated to lib/security/publish-gate so this route and the chat publish path
+  // enforce the SAME rule. They did not before: chat published with no scan at all,
+  // and this gate tested only `severity === "critical"`, which no PII rule can
+  // reach — so card numbers and SSNs were detected and then shipped anyway.
+  const gate = evaluatePublishGate(projectFiles, {
+    allowCritical: allowCriticalSecurityFindings,
+    allowPii: allowPersonalDataFindings,
+  });
+  const securityFindings = gate.findings;
+  if (gate.blocked) {
+    return Response.json(publishGateResponseBody(gate), { status: 412 });
   }
 
   // Auto-snapshot current files for rollback capability

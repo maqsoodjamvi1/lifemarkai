@@ -62,21 +62,33 @@ interface CloudStatus {
   backups: Array<{ id: string; snapshot_id: string | null; run_date: string; status: string; notes: string | null }>;
 }
 
+/**
+ * Shape of GET /api/cloud/health.
+ *
+ * `measured` is the important field. The route used to synthesize RAM, CPU and
+ * disk from unrelated counts (file count, deploy count) and this panel rendered
+ * them as live readings. Those fields no longer exist; everything below is read
+ * from the managed Postgres instance, and `unavailable` names what genuinely
+ * cannot be measured so the panel shows "n/a" rather than a number.
+ */
 interface HealthResp {
-  status: "healthy" | "warning";
+  status: "healthy" | "warning" | "unknown";
+  measured: boolean;
   flags: string[];
   metrics: {
-    uptime_hours: number;
-    ram_used_mb: number;
-    ram_total_mb: number;
-    ram_used_pct: number;
-    cpu_load_pct: number;
-    disk_used_mb: number;
-    disk_total_mb: number;
-    disk_used_pct: number;
-    active_connections: number;
-    max_connections: number;
+    uptime_hours?: number;
+    db_size_mb?: number;
+    active_connections?: number;
+    max_connections?: number;
+    connections_used_pct?: number;
+    cache_hit_pct?: number | null;
+    rollback_pct?: number | null;
+    deadlocks?: number;
+    table_count?: number;
   };
+  capacity?: { ram_mb: number | null; cpu_units: number | null };
+  unavailable?: string[];
+  error?: string;
   summary: string;
 }
 
@@ -384,14 +396,34 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
                   <div className={`text-xs ${health.status === "healthy" ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}`}>
                     {health.status === "healthy" ? "✓ " : "⚠ "}{health.summary}
                   </div>
-                  <div className="grid grid-cols-3 gap-2 text-[11px]">
-                    <Metric label="RAM"    value={`${health.metrics.ram_used_pct}%`} sub={`${health.metrics.ram_used_mb}/${health.metrics.ram_total_mb} MB`} />
-                    <Metric label="CPU"    value={`${health.metrics.cpu_load_pct}%`} sub="load" />
-                    <Metric label="Disk"   value={`${health.metrics.disk_used_pct}%`} sub={`${health.metrics.disk_used_mb}/${health.metrics.disk_total_mb} MB`} />
-                    <Metric label="Uptime" value={`${health.metrics.uptime_hours}h`} sub="since provision" />
-                    <Metric label="Conns"  value={`${health.metrics.active_connections}/${health.metrics.max_connections}`} sub="active" />
-                    <Metric label="Status" value={health.status === "healthy" ? "OK" : "Warning"} sub={health.flags.join(", ") || "no issues"} />
-                  </div>
+                  {/* Only measured values. RAM and CPU tiles are gone: the route
+                      used to derive them from file and deploy counts, so they were
+                      confident-looking numbers about nothing. What replaces them
+                      comes from pg_stat_database on the real instance. */}
+                  {health.measured === false ? (
+                    <div className="text-[11px] text-muted-foreground">
+                      No live metrics available for this project.
+                      {health.error ? ` (${health.error})` : ""}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-2 text-[11px]">
+                      <Metric label="Uptime" value={`${health.metrics.uptime_hours ?? "–"}h`} sub="since restart" />
+                      <Metric label="DB size" value={`${health.metrics.db_size_mb ?? "–"} MB`} sub="on disk" />
+                      <Metric label="Conns"  value={`${health.metrics.active_connections ?? "–"}/${health.metrics.max_connections ?? "–"}`} sub={`${health.metrics.connections_used_pct ?? 0}% used`} />
+                      <Metric label="Cache hit" value={health.metrics.cache_hit_pct == null ? "n/a" : `${health.metrics.cache_hit_pct}%`} sub="buffer cache" />
+                      <Metric label="Rollbacks" value={health.metrics.rollback_pct == null ? "n/a" : `${health.metrics.rollback_pct}%`} sub={`${health.metrics.deadlocks ?? 0} deadlocks`} />
+                      <Metric label="Tables" value={`${health.metrics.table_count ?? "–"}`} sub="public schema" />
+                    </div>
+                  )}
+                  {health.capacity?.ram_mb ? (
+                    <div className="text-[10px] text-muted-foreground">
+                      Instance capacity: {health.capacity.ram_mb} MB RAM
+                      {health.capacity.cpu_units ? `, ${health.capacity.cpu_units} CPU units` : ""}.
+                      {health.unavailable?.length
+                        ? ` Live ${health.unavailable.join(" and ").replace(/_/g, " ")} are not measurable from here.`
+                        : ""}
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <p className="text-[11px] text-muted-foreground">Click <em>Run check</em> for a real-time snapshot of connections, memory, disk, and uptime.</p>
