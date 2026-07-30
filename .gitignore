@@ -77,6 +77,46 @@ push-*.bat
 push-*.ps1
 push-*result.txt
 phase3-*.ps1
+# Generalised 2026-07-30. The list above was per-batch, so each new session added
+# more untracked files: 40 of them were sitting in the root at once, and `git stash`
+# during a merge then got entangled with them (the stash could not remove them, so
+# `stash pop` refused with "already exists" and left a phantom stash entry).
+#
+# These patterns are PREFIX-based on purpose, so the next batch of one-shot scripts
+# is covered without editing this file again. Anything matching is a script that
+# hardcodes one commit message or one migration id - re-running it later would do
+# the wrong thing, which is exactly why it must not look like repo tooling.
+# The rule is POSITIONAL, not name-based, and that is the point. Listing prefixes
+# (push-*, phase*, ship-*) failed repeatedly because every session invents a new
+# name - clean-tree.ps1, the script that was cleaning this very mess up, escaped the
+# prefix list I had just written. So: ROOT-LEVEL scripts are scratch by default, and
+# the handful of reusable ones are named exceptions. Real repo tooling lives in
+# scripts/ and is unaffected by these (the patterns are anchored with a leading /).
+/*.ps1
+/*.bat
+/ping.txt
+
+# Transcripts are never source, WHEREVER they land - so these two are deliberately
+# unanchored. The first version anchored them to the root, which promptly bit: a
+# one-shot script was moved into scripts/ "to keep it out of the ignore rule", and it
+# plus its transcript became untracked noise there instead. The mistake was thinking
+# an ignored file cannot be run. Being ignored is exactly what a one-shot script
+# wants: it stays on disk, it runs, and it never enters the repo.
+*-result.txt
+*-console.txt
+
+# The four reusable root helpers, explicitly kept. A negation only works if no
+# PARENT directory is excluded, which holds here since these are at the root.
+!/setup-mobile.ps1
+!/start-dev.ps1
+!/run-dev.bat
+!/migrate.bat
+
+# One-off capture dumps that were committed by mistake in merge e4fb9f9. The DOM
+# dump alone is 388K of a third party's markup - reference material for cloning the
+# editor layout, not source, and nothing in the app reads it.
+tmp-lovable-*
+__rmtest__.txt
 phase3-*result.txt
 remove-nextjs*.ps1
 remove-result.txt
