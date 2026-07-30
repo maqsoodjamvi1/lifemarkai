@@ -17,11 +17,34 @@ const ROUTER_FRONTIER = "deepseek/deepseek-v4-pro";
 const ROUTER_CODING = "qwen/qwen3-coder";
 const ROUTER_FAST = "deepseek/deepseek-v4-flash";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PREMIUM TIER — refreshed to the GPT-5.6 generation, 2026-07-30.
+//
+// gpt-5.2-codex / gpt-5.2 both cost $1.75/M in and $14/M out. gpt-5.6-terra is
+// $1.25/$7.50 — newer AND roughly 46% cheaper on output, on a 1.05M context.
+// So this is a version bump that LOWERS cost; the economy tier below is
+// deliberately untouched.
+//
+// There is no gpt-5.6-codex: verified against
+// openrouter.ai/api/v1/models/openai/gpt-5.6-codex/endpoints, which returns no
+// data. Terra is OpenAI's mid-tier for coding and agentic work in this
+// generation, so premium coding points there rather than staying a generation
+// behind on a codex-branded slug. gpt-5.2-codex still resolves and remains
+// selectable in the model picker for anyone who prefers it.
+//
+// Every slug in this file was verified live against the OpenRouter endpoints API
+// on 2026-07-30. Do not add one from memory — a dead slug fails every request
+// that routes to that tier.
+// ─────────────────────────────────────────────────────────────────────────────
 export const PREMIUM_CODING_MODEL: AIModel =
-  (process.env.OPENROUTER_PREMIUM_CODING_MODEL || "openai/gpt-5.2-codex") as AIModel;
+  (process.env.OPENROUTER_PREMIUM_CODING_MODEL || "openai/gpt-5.6-terra") as AIModel;
 
 export const PREMIUM_REASONING_MODEL: AIModel =
-  (process.env.OPENROUTER_PREMIUM_REASONING_MODEL || "openai/gpt-5.2") as AIModel;
+  (process.env.OPENROUTER_PREMIUM_REASONING_MODEL || "openai/gpt-5.6-terra") as AIModel;
+
+/** Cheapest model in the 5.6 generation ($0.50/$3.00) — for premium-ish work on a budget. */
+export const PREMIUM_ECONOMY_MODEL: AIModel =
+  (process.env.OPENROUTER_PREMIUM_ECONOMY_MODEL || "openai/gpt-5.6-luna") as AIModel;
 
 /** Primary model for coding. */
 export const DEFAULT_CODING_MODEL: AIModel =
@@ -58,8 +81,15 @@ export const REASONING_MODEL: AIModel =
  * model when the free pool is rate-limited/congested, so routing here is
  * best-effort-free rather than free-or-fail.
  */
+// Switched off qwen/qwen3-coder:free on 2026-07-30. The slug still resolves, but
+// it has exactly ONE provider (Venice) and that provider's uptime_last_1d was 0
+// at the time of checking — the free pool was simply down, so every request paid
+// the fallback path instead. cohere/north-mini-code:free is also single-provider
+// but was actually serving (~97%), is code-specialised, and carries a 256k
+// context. Still best-effort-free by design: provider.ts falls back to the paid
+// economy model when a free pool is congested.
 export const FREE_CODING_MODEL: AIModel =
-  (process.env.OPENROUTER_FREE_CODING_MODEL || "qwen/qwen3-coder:free") as AIModel;
+  (process.env.OPENROUTER_FREE_CODING_MODEL || "cohere/north-mini-code:free") as AIModel;
 
 /** Cheap paid fallback when a free pool is busy or a small Auto request needs reliability. */
 export const ECONOMY_CODING_MODEL: AIModel =

@@ -98,12 +98,15 @@ const RAW_MODEL_CATALOG: CatalogModel[] = [
     envKey: "CLAUDE_OPUS",
   },
   {
-    id: envSlug("CLAUDE_SONNET", "anthropic/claude-sonnet-4.6"),
-    label: "Claude Sonnet 4.6",
+    // Sonnet 5 replaces Sonnet 4.6 (2026-07-30): newer generation at $2/$10 vs
+    // $3/$15, same 1M context, 99.95% uptime. Another version bump that costs
+    // less, so `cost` drops from 3 to 2.
+    id: envSlug("CLAUDE_SONNET", "anthropic/claude-sonnet-5"),
+    label: "Claude Sonnet 5",
     family: "anthropic",
     strengths: ["code", "design", "reasoning", "content", "fixes"],
     tier: "balanced",
-    cost: 3,
+    cost: 2,
     envKey: "CLAUDE_SONNET",
   },
   {
@@ -116,13 +119,28 @@ const RAW_MODEL_CATALOG: CatalogModel[] = [
     envKey: "CLAUDE_HAIKU",
   },
   {
-    id: envSlug("GPT", "openai/gpt-5.5"),
-    label: "GPT-5.5",
+    // GPT-5.6 Terra replaces GPT-5.5 as the OpenAI frontier entry (2026-07-30).
+    // 5.5 was $5/$30 with no endpoint above 99% uptime; Terra is $1.25/$7.50 at
+    // 99.7% on a 1.05M context — a generation newer and ~4x cheaper, so `cost`
+    // drops from 5 to 2.
+    id: envSlug("GPT", "openai/gpt-5.6-terra"),
+    label: "GPT-5.6 Terra",
     family: "openai",
     strengths: ["reasoning", "code", "content", "vision", "longContext"],
     tier: "frontier",
-    cost: 5,
+    cost: 2,
     envKey: "GPT",
+  },
+  {
+    // Cheapest of the 5.6 family at $0.50/$3.00 — frontier-generation quality on
+    // an economy budget, which is exactly the tier this product defaults to.
+    id: envSlug("GPT_5_6_LUNA", "openai/gpt-5.6-luna"),
+    label: "GPT-5.6 Luna",
+    family: "openai-luna",
+    strengths: ["reasoning", "code", "content", "vision", "longContext"],
+    tier: "balanced",
+    cost: 1,
+    envKey: "GPT_5_6_LUNA",
   },
   {
     id: envSlug("GPT_5_2", "openai/gpt-5.2"),
@@ -150,6 +168,18 @@ const RAW_MODEL_CATALOG: CatalogModel[] = [
     tier: "balanced",
     cost: 2,
     envKey: "GEMINI_PRO",
+  },
+  {
+    // Newest Gemini flash tier ($0.75/$3.75, 1M context, 99.92% uptime). This is
+    // what Lovable defaults its app AI to; we offer it but do NOT default to it,
+    // because gemini-3.1-flash-lite below is 3x cheaper for the same job.
+    id: envSlug("GEMINI_FLASH_LATEST", "google/gemini-3.6-flash"),
+    label: "Gemini 3.6 Flash",
+    family: "google-36",
+    strengths: ["fast", "reasoning", "vision", "longContext", "content"],
+    tier: "balanced",
+    cost: 2,
+    envKey: "GEMINI_FLASH_LATEST",
   },
   {
     id: envSlug("GEMINI_FLASH", "google/gemini-3.1-flash-lite"),
@@ -216,22 +246,41 @@ const RAW_MODEL_CATALOG: CatalogModel[] = [
   },
 ];
 
+/**
+ * Allowlist gate for MODEL_CATALOG. A catalog entry whose id is missing from this
+ * set is filtered out SILENTLY — so any slug added above must be added here too,
+ * or the model simply never appears and nothing says why.
+ *
+ * Every id was verified live against openrouter.ai/api/v1/models/<slug>/endpoints
+ * on 2026-07-30. Two notes from that check:
+ *   - `z-ai/glm-5.2` was NOT adopted: it is listed in OpenRouter's catalog but
+ *     returns an empty `endpoints` array, so no provider serves it. glm-5-turbo
+ *     stays.
+ *   - `openai/gpt-5.6-codex` does not exist; gpt-5.2-codex stays as the
+ *     codex-branded option.
+ */
 const APPROVED_SMART_MODEL_IDS = new Set<string>([
+  // Economy tier — the default path. Cheapest credible models, deliberately kept.
+  "cohere/north-mini-code:free",
   "qwen/qwen3-coder:free",
   "qwen/qwen3-coder",
   "moonshotai/kimi-k2.7-code",
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
+  "google/gemini-3.1-flash-lite",
+  "z-ai/glm-5-turbo",
+  "mistralai/devstral-2512",
+  // Current generation.
   "anthropic/claude-haiku-4.5",
-  "anthropic/claude-sonnet-4.6",
+  "anthropic/claude-sonnet-5",
   "anthropic/claude-opus-4.8",
+  "openai/gpt-5.6-terra",
+  "openai/gpt-5.6-luna",
+  "google/gemini-3.5-flash",
+  "google/gemini-3.6-flash",
+  // Previous generation, still resolving — kept selectable, no longer defaults.
   "openai/gpt-5.2",
   "openai/gpt-5.2-codex",
-  "openai/gpt-5.5",
-  "google/gemini-3.1-flash-lite",
-  "google/gemini-3.5-flash",
-  "mistralai/devstral-2512",
-  "z-ai/glm-5-turbo",
 ]);
 
 export const MODEL_CATALOG: CatalogModel[] = RAW_MODEL_CATALOG.filter((model) =>
@@ -295,7 +344,7 @@ function selectClaudeAutoModel(prompt: string, desired: Iterable<ModelStrength>)
   if (!shouldAutoSelectClaude(prompt, { desired })) return null;
   const preferred = CLAUDE_OPUS_RE.test(prompt)
     ? "anthropic/claude-opus-4.8"
-    : "anthropic/claude-sonnet-4.6";
+    : "anthropic/claude-sonnet-5";
   return MODEL_CATALOG.some((model) => model.id === preferred) ? (preferred as AIModel) : null;
 }
 

@@ -22,7 +22,9 @@ const FIX_RE = /\b(fix|debug|resolve|repair|error|bug|broken|not working|crash|r
 const PREMIUM_MODEL_RE = /opus|sonnet|gpt-5/i;
 
 const APPROVED_MODEL_IDS = new Set<string>(OPENROUTER_MODEL_IDS);
-const SAFE_FREE_CODING_MODEL = "qwen/qwen3-coder:free" as AIModel;
+// Matches FREE_CODING_MODEL in model-defaults.ts. qwen3-coder:free was swapped
+// out on 2026-07-30: single provider, and that provider's 1-day uptime was 0.
+const SAFE_FREE_CODING_MODEL = "cohere/north-mini-code:free" as AIModel;
 const SAFE_ECONOMY_CODING_MODEL = "qwen/qwen3-coder" as AIModel;
 const SAFE_ECONOMY_CHAT_MODEL = "deepseek/deepseek-v4-flash" as AIModel;
 
