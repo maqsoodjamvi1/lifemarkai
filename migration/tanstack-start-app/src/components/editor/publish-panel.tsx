@@ -15,7 +15,7 @@ import { LovableGuestCommentsSetup } from "@/components/editor/lovable/guest-com
 
 const FAQ_ITEMS = [
   { q: "Does publishing expose my project and code?", a: "No. Publishing only makes the app available at the published URL. It does not grant anyone access to your project in the editor or your project code." },
-  { q: "Can I restrict who can access my published app?", a: "Yes. Choose 'Workspace' access so only authenticated workspace members can visit the published app." },
+  { q: "Can I restrict who can access my published app?", a: "Yes. 'Workspace' limits it to signed-in members of your workspace, 'Private' to you alone, and 'Custom' lets you grant access to specific groups, people or external email addresses. The setting is enforced when the app loads." },
   { q: "Why do I not see my latest changes on the live site?", a: "Publishing deploys a snapshot. Changes are not automatically pushed. Click Publish then Update to deploy new changes." },
   { q: "How do I change my published URL?", a: "On paid plans, you can add a custom domain. The default subdomain is fixed after first publish." },
   { q: "Why can I not publish my project?", a: "Publishing errors are usually caused by build issues. Check the console errors in the Preview panel and ask the AI to fix them." },
@@ -35,7 +35,9 @@ interface PublishPanelProps {
 
 export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedChanges: hasUnpublishedProp }: PublishPanelProps) {
   const [activeSection, setActiveSection] = useState<"publish" | "settings" | "faq">("publish");
-  const [websiteAccess, setWebsiteAccess] = useState<"public" | "workspace" | "private">("public");
+  // Mirrors projects.publish_audience (migration 157). "custom" defers to
+  // project_publish_grants and is managed from the audience endpoint.
+  const [websiteAccess, setWebsiteAccess] = useState<"public" | "workspace" | "private" | "custom">("public");
   const [siteTitle, setSiteTitle]  = useState(project.name ?? "");
   const [siteDesc,  setSiteDesc]   = useState("");
   const [faviconUrl, setFaviconUrl] = useState("");
@@ -87,12 +89,41 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
         throw new Error((data as { error?: string }).error ?? "Deploy failed");
       }
       onDeploy?.();
-      // Persist visibility setting
-      await fetch(`/api/projects/${project.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ visibility: websiteAccess }),
-      }).catch(() => null);
+
+      // Persist who may view the published app.
+      //
+      // This used to PATCH `{ visibility: websiteAccess }` to /api/projects/:id — a
+      // field that route does not handle, against a column that does not exist. The
+      // value was silently dropped, so the access tier the user picked here was
+      // never stored and never enforced, while the FAQ below promised it was. It now
+      // goes to the dedicated audience endpoint, which /api/embed/access reads.
+      //
+      // A failure here is surfaced rather than swallowed: silently failing to apply
+      // an access restriction is how an internal app ends up public.
+      try {
+        const accessRes = await fetch(`/api/projects/${project.id}/publish-audience`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ audience: websiteAccess }),
+        });
+        if (!accessRes.ok) {
+          const body = await accessRes.json().catch(() => ({}));
+          toast({
+            title: "Access setting not saved",
+            description:
+              (body as { error?: string }).error ??
+              "The app is deploying, but who can view it was not changed. Re-apply it in the Publish panel.",
+            variant: "destructive",
+          });
+        }
+      } catch {
+        toast({
+          title: "Access setting not saved",
+          description: "The app is deploying, but who can view it was not changed.",
+          variant: "destructive",
+        });
+      }
+
       toast({ title: isPublished ? "Update queued" : "Deployment started", description: "Your project is being deployed." });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Deploy failed";

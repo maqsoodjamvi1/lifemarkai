@@ -77,17 +77,26 @@ export const Route = createFileRoute("/api/security/scan")({
         if (vendor === "wiz") {
           const clientId = process.env.WIZ_CLIENT_ID;
           const clientSecret = process.env.WIZ_CLIENT_SECRET;
-          if (!clientId || !clientSecret) {
+          // Tenant-scoped: Wiz has no global API host. This route used to POST to
+          // "https://api.wiz.io/graphql", which does not exist (live DNS check
+          // 2026-07-30: NXDOMAIN; the real form is api.<region>.app.wiz.io). Every
+          // configured Wiz scan since this route shipped ended in a fetch error —
+          // the 501 setup guide below also never mentioned the endpoint, so the
+          // vendor was unconfigurable even by a diligent user.
+          const apiEndpoint = process.env.WIZ_API_ENDPOINT;
+          if (!clientId || !clientSecret || !apiEndpoint) {
             return Response.json({
               error: "Wiz not configured",
               guide: {
                 step1: "Contact Wiz to enable API access (enterprise-only)",
                 step2: "Generate a service account with Vulnerabilities.read + Scans.create",
                 step3: "Set WIZ_CLIENT_ID and WIZ_CLIENT_SECRET",
-                docs: "https://docs.lovable.dev/integrations/wiz",
+                step4: "Set WIZ_API_ENDPOINT to your tenant's API host (Wiz console → Settings → API endpoint, e.g. api.us1.app.wiz.io)",
+                docs: "https://win.wiz.io/reference/quickstart",
               },
             }, { status: 501 });
           }
+          const wizGraphql = `https://${apiEndpoint.replace(/^https?:\/\//, "").replace(/\/graphql\/?$/, "").replace(/\/$/, "")}/graphql`;
 
           const scanTarget = target?.repo ?? project.github_repo;
           if (!scanTarget) return Response.json({ error: "No github_repo or target.repo to scan" }, { status: 400 });
@@ -106,7 +115,7 @@ export const Route = createFileRoute("/api/security/scan")({
             const tokenData = await tokenRes.json();
             if (!tokenRes.ok) return Response.json({ error: `Wiz auth failed: ${JSON.stringify(tokenData)}` }, { status: 502 });
 
-            const scanRes = await fetch("https://api.wiz.io/graphql", {
+            const scanRes = await fetch(wizGraphql, {
               method: "POST",
               headers: { Authorization: `Bearer ${tokenData.access_token}`, "Content-Type": "application/json" },
               body: JSON.stringify({

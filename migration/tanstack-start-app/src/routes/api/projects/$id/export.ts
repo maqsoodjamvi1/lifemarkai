@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { canDownloadProjectCode } from "@/lib/project/download-policy";
 
 async function exportHandler({ request, params }: { request: Request; params: { id: string } }) {
   try {
@@ -26,6 +27,21 @@ async function exportHandler({ request, params }: { request: Request; params: { 
 
     if (!project) {
       return Response.json({ error: "Project not found" }, { status: 404 });
+    }
+
+    // Code-download restriction (gap #10). Read access is not download access:
+    // a collaborator who can open a file in the editor is not necessarily allowed
+    // to walk away with the whole source tree, and until now there was no way for
+    // an owner to express that.
+    const downloadPolicy = await canDownloadProjectCode(supabase as any, {
+      ownerId: project.user_id as string,
+      requesterId: user.id,
+    });
+    if (!downloadPolicy.allowed) {
+      return Response.json(
+        { error: downloadPolicy.reason, downloadRestricted: true },
+        { status: 403 },
+      );
     }
 
     const { data: files } = await (supabase as any)
