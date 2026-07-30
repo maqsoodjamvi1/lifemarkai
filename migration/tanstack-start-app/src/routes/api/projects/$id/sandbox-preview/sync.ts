@@ -106,6 +106,7 @@ async function handlePATCH(req: Request, params: any) {
   let files: SandboxFile[] = syncSourceFiles as SandboxFile[];
   let reconciledPackageJson: string | null = null;
   let reconciledPackages: string[] = [];
+  let rejectedPackages: string[] = [];
   try {
     const { data: allRows } = await (supabase as any)
       .from("project_files")
@@ -118,6 +119,12 @@ async function handlePATCH(req: Request, params: any) {
     if (pkgRow?.content) {
       const { syncPackageJsonDeps } = await import("@/lib/ai/npm-auto-install");
       const sync = syncPackageJsonDeps(allFiles, pkgRow.content);
+      if (sync && sync.rejectedPackages.length > 0) {
+        // Refused imports are not written to package.json, so npm install cannot
+        // 404 on them — but the sandbox will fail to resolve them at build time.
+        // Report so the caller can show why, instead of a bare module error.
+        rejectedPackages = sync.rejectedPackages;
+      }
       if (sync && sync.addedPackages.length > 0) {
         reconciledPackageJson = sync.updated;
         reconciledPackages = sync.addedPackages;
@@ -190,6 +197,7 @@ async function handlePATCH(req: Request, params: any) {
       fileCount: syncFiles.length,
       installing: pkgChanged || buildConfigChanged,
       ...(reconciledPackages.length > 0 ? { addedDependencies: reconciledPackages } : {}),
+      ...(rejectedPackages.length > 0 ? { rejectedDependencies: rejectedPackages } : {}),
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Sync failed";

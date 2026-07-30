@@ -464,9 +464,13 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
   // Keep the ref pointing at the current runBuild closure (fresh buildGoal/building).
   runBuildRef.current = runBuild;
 
-  // External trigger: other surfaces (e.g. the chat panel's "Try to fix all"
-  // security bar) dispatch `lifemark-intelligence-run` with a goal to kick off a
-  // full multi-agent initiative here instead of a single-model chat send.
+  // External trigger: other surfaces dispatch `lifemark-intelligence-run` with a
+  // goal to kick off a full multi-agent initiative here instead of a single-model
+  // chat send. Two senders today: the chat panel's "Try to fix all" security bar,
+  // and the chat route's risk-gated promotion of a multi-part build
+  // (`initiative_routed` → chat-panel re-dispatches it here). Both go through this
+  // one listener and `runBuildRef` so there is a single caller of runBuild and no
+  // stale-closure goal.
   useEffect(() => {
     function onExternalRun(e: Event) {
       const detail = (e as CustomEvent).detail as { goal?: string } | undefined;

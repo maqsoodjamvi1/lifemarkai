@@ -80,7 +80,7 @@ import type { LovableFileGenFormat } from "./lovable/composer-file-gen-picker";
 import { useGuestCommentCount } from "@/hooks/use-guest-comment-count";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
-import { findMissingPackages, buildInstallCommand, syncPackageJsonDeps } from "@/lib/ai/npm-auto-install";
+import { findMissingPackages, buildInstallCommand, syncPackageJsonDeps, describeRejectedPackages } from "@/lib/ai/npm-auto-install";
 import { classifyBuildIntent, isInformationalQuery, isSmallSurgicalEdit, type BuildIntent } from "@/lib/ai/build-intent";
 import { buildDesignBrief, shouldOfferDesignPreviews, type DesignPreviewDirection } from "@/lib/ai/design-previews";
 import type { AgentStep } from "@/lib/ai/agent";
@@ -2831,7 +2831,14 @@ ${(f.content ?? "").slice(0, 8000)}
                     const pkgContent = updatedFiles.find((f: { path: string; content: string }) => f.path === "package.json")?.content;
                     if (pkgContent) {
                       const sync = syncPackageJsonDeps(updatedFiles as Array<{ path: string; content: string }>, pkgContent);
-                      if (sync) {
+                      if (sync && sync.rejectedPackages.length > 0) {
+                        toast({
+                          title: "Some packages were not installed",
+                          description: describeRejectedPackages(sync.rejectedPackages),
+                          variant: "destructive",
+                        });
+                      }
+                      if (sync && sync.addedPackages.length > 0) {
                         try {
                           const supabase = createClient();
                           await (supabase as any).from("project_files").upsert({
@@ -2935,6 +2942,11 @@ ${(f.content ?? "").slice(0, 8000)}
           mode: effectiveMode,
           ...(autoRoutedPatchClient ? { autoRouted: true } : {}),
           ...(opts?.forceBuild ? { forceBuild: true } : {}),
+          // Declares that this client can pick up an `initiative_routed` handoff
+          // (see the handler below). The server only promotes a build to the
+          // 11-role team when it knows someone will run it — without this flag a
+          // promoted request would silently do nothing.
+          canRouteInitiative: true,
           ...(modelManuallySelectedRef.current ? { model: effectiveModel } : {}),
           modelManuallySelected: modelManuallySelectedRef.current,
           framework: mobileMode ? "react-native" : (project.framework ?? "web"),
@@ -3059,6 +3071,49 @@ ${(f.content ?? "").slice(0, 8000)}
                 });
               });
             }
+          }
+
+          // ── Handed off to the 11-role engineering team ────────────────────
+          // The server scored this request as a multi-part build and stopped
+          // without generating or charging. Run the initiative the server chose,
+          // and tell the user in-thread — a handoff the user cannot see is
+          // indistinguishable from a request that was dropped.
+          if (data.initiative_routed) {
+            const routed = data.initiative_routed as {
+              goal?: string;
+              reason?: string;
+              signals?: string[];
+              budgetCredits?: number;
+            };
+            const signals = (routed.signals ?? []).map((s) => `• ${s}`).join("\n");
+            onMessagesUpdate([
+              ...baseMessages,
+              {
+                id: `initiative-routed-${Date.now()}`,
+                project_id: project.id,
+                role: "assistant",
+                content:
+                  `**Engineering team mode** — this looked like a multi-part build, so the ` +
+                  `11-role team is planning it instead of a single pass.\n\n${signals}\n\n` +
+                  `Budget ceiling: ${routed.budgetCredits ?? 0} credits. Progress appears in ` +
+                  `the Intelligence panel. Ask again with "just build it" for a single-pass build.`,
+                tokens_used: null,
+                model: null,
+                mode: "build",
+                metadata: null,
+                rating: null,
+                created_at: new Date().toISOString(),
+              } as Message,
+            ]);
+            onOpenPanel?.("intelligence");
+            // Reuse the panel's existing external-run channel rather than adding a
+            // second one — it already drives runBuild through a ref, so the goal
+            // cannot go stale.
+            window.dispatchEvent(
+              new CustomEvent("lifemark-intelligence-run", {
+                detail: { goal: routed.goal ?? userMessage },
+              }),
+            );
           }
 
           if (data.status === "patches_failed") {
@@ -3314,8 +3369,18 @@ ${(f.content ?? "").slice(0, 8000)}
                     const missingPkgs = findMissingPackages(generatedFiles, pkgJsonFile?.content ?? null);
                     if (missingPkgs.length > 0 && pkgJsonFile?.content) {
                       // Lovable parity: sync package.json silently; preview installs deps.
+                      // Silent only for ALLOWED packages — a refused one has to be
+                      // said out loud, or the user just gets an import that never
+                      // resolves and no idea why.
                       const sync = syncPackageJsonDeps(updatedFiles as Array<{ path: string; content: string }>, pkgJsonFile.content);
-                      if (sync) {
+                      if (sync && sync.rejectedPackages.length > 0) {
+                        toast({
+                          title: "Some packages were not installed",
+                          description: describeRejectedPackages(sync.rejectedPackages),
+                          variant: "destructive",
+                        });
+                      }
+                      if (sync && sync.addedPackages.length > 0) {
                         try {
                           const supabase = createClient();
                           await (supabase as any).from("project_files").upsert({

@@ -60,7 +60,10 @@ const ROUTE_MAX_DURATION_SECONDS = 300;
 
 /** Skip the QA self-verify loop when fewer than ~60s of the route budget remain. */
 const VERIFY_TIME_CUTOFF_MS = (ROUTE_MAX_DURATION_SECONDS - 60) * 1000;
-const INITIATIVE_MAX_CREDITS = 5;
+// Imported rather than redeclared: lib/ai/initiative-routing quotes this exact
+// number to the user when it promotes a build to the team, and a local copy here
+// would let the quote and the reservation drift apart.
+import { INITIATIVE_MAX_CREDITS } from "@/lib/ai/initiative-routing";
 
 interface Body {
   projectId: string;

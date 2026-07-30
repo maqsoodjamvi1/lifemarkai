@@ -7,49 +7,20 @@ import { selectRelevantFiles } from "@/lib/ai/context-selector";
 import { classifyBuildIntent } from "@/lib/ai/build-intent";
 import { WEBSITE_HEADER_CONTRACT } from "@/lib/ai/website-header-contract";
 import { NEXTJS_RULES } from "@/lib/ai/prompts/nextjs-rules";
+import { renderPackageAllowlistPrompt } from "@/lib/ai/package-allowlist";
+import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/prompts/auto-fix";
 
 // ─── ALLOWED PACKAGES ALLOWLIST ───────────────────────────────────────────────
-// CRITICAL: Only import packages from this list. Never import packages not here.
-const PACKAGE_ALLOWLIST = `
-## ⛔ STRICT PACKAGE ALLOWLIST — Only use these. Never import anything else.
-
-### Always available (Modal live sandbox — Lovable parity):
-- react, react-dom, typescript
-- @tanstack/react-start + @tanstack/react-router — routing + SSR for TanStack Start apps (the target framework; see the TanStack Start blueprint below). Prefer these over react-router-dom for new apps.
-
-### UI & Styling:
-- tailwindcss (via classes only — no import needed)
-- lucide-react (icons — use named imports: import { Home, User } from "lucide-react")
-- framer-motion (animations)
-- clsx or classnames (conditional classes)
-- @radix-ui/react-* (headless UI primitives)
-
-### Data & Forms:
-- react-hook-form (forms)
-- zod (validation — use with react-hook-form)
-- @tanstack/react-query (server state)
-- date-fns (date formatting — NOT moment.js)
-- recharts (charts — NOT chart.js, NOT d3 unless explicitly requested)
-
-### Utilities:
-- uuid (import { v4 as uuidv4 } — for client-side IDs only)
-- zustand (global state management)
-
-### Mobile (Capacitor — for iOS/Android export):
-- @capacitor/core
-- @capacitor/cli (devDependency)
-- @capacitor/android (devDependency)
-- @capacitor/ios (devDependency)
-
-### Prefer these over heavier alternatives:
-- fetch instead of axios
-- native JS instead of lodash
-- date-fns instead of moment
-- Tailwind instead of styled-components / MUI / antd
-
-### Modal / Vite live preview (Lovable path):
-Preview runs a real cloud sandbox with \`npm install\`. ANY npm package may be added to package.json — always include packages you import (e.g. @supabase/supabase-js, @stripe/stripe-js, react-router-dom). Prefer the list above when possible.
-`.trim();
+// Generated from lib/ai/package-allowlist.ts — the SAME data that gates what
+// syncPackageJsonDeps will actually write into package.json.
+//
+// This used to be a hand-written string that no code consulted, and it undercut
+// itself: it opened with "STRICT ALLOWLIST — never import anything else" and closed
+// with "ANY npm package may be added to package.json". Models followed the closing
+// line, the installer wrote every hallucinated name as "latest", and npm install
+// 404'd. Rendering the text from the enforced data makes that class of
+// contradiction impossible — the prompt cannot offer what the installer refuses.
+const PACKAGE_ALLOWLIST = renderPackageAllowlistPrompt();
 
 // ─── TANSTACK START BLUEPRINT ─────────────────────────────────────────────────
 // The STRICT app structure for TanStack Start apps (Lovable's default framework).
@@ -1308,7 +1279,13 @@ When the user asks to add, change, or remove menu items, nav links, or header li
 
 // AUTO-FIX mode — error repair loop (canonical copy lives in prompts/auto-fix.ts
 // so the HTTP fix handler can import it without this whole blueprint module).
-export { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/prompts/auto-fix";
+// NOT `export { X } from "…"`. That form re-exports without creating a local
+// binding, and buildRepairPrompt() below interpolates AUTO_FIX_SYSTEM_PROMPT as a
+// value — so the non-enrichment branch of the auto-fix repair prompt referenced an
+// undeclared name. TypeScript flags it (TS2552) and at runtime it is a
+// ReferenceError on the exact path chat.ts takes when validation fails and it
+// calls the escalation model to repair a build. Import, then re-export.
+export { AUTO_FIX_SYSTEM_PROMPT };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers

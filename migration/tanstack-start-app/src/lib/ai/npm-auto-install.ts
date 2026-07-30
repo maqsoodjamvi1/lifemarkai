@@ -2,7 +2,13 @@
  * npm auto-install utility
  * Scans AI-generated files for import statements, finds packages not already
  * in package.json, and returns a list of packages to install.
+ *
+ * Installs are gated by the allowlist in lib/ai/package-allowlist.ts — the same
+ * data that generates the allowlist section of the system prompts. See
+ * `syncPackageJsonDeps` for why that gate exists.
  */
+
+import { resolveAllowedPackage } from "@/lib/ai/package-allowlist";
 
 // Packages that are built-in to Node.js / browser / React and never need installing
 const BUILTIN_PACKAGES = new Set([
@@ -129,14 +135,43 @@ export function buildInstallCommand(packages: string[]): string {
 }
 
 /**
+ * One-line, user-facing explanation of refused imports.
+ *
+ * Refusing silently would trade a broken `npm install` for a mystery unresolved
+ * import, which is not much better. The user needs to know a package was blocked
+ * and that the code referencing it will not run until it stops doing so.
+ */
+export function describeRejectedPackages(rejected: string[]): string {
+  if (rejected.length === 0) return "";
+  const list = rejected.slice(0, 4).join(", ");
+  const more = rejected.length > 4 ? ` +${rejected.length - 4} more` : "";
+  return `Not installed (outside the allowed package list): ${list}${more}. Imports of ${
+    rejected.length === 1 ? "it" : "them"
+  } will not resolve — ask for the feature to be rebuilt with the supported libraries.`;
+}
+
+/**
  * Sync package.json dependencies with all imports found in project files.
- * Adds any missing packages to the `dependencies` section with version "latest".
- * Returns the updated package.json string, or null if no changes were needed.
+ *
+ * ALLOWLIST-GATED. Every candidate goes through `resolveAllowedPackage()`:
+ * - allowed → written at the version the allowlist declares (a real pin for
+ *   anything in the scaffold, so it matches the pre-baked preview image)
+ * - not allowed → NOT written, and returned in `rejectedPackages`
+ *
+ * This used to write every unrecognised import as `"latest"`. One hallucinated
+ * name — or one typo away from a real package — and `npm install` 404'd before
+ * installing anything, so the user got a dead preview instead of a bad import.
+ * Refusing is better on both counts: the import error is specific and local, and
+ * the self-verify / auto-fix loop can rewrite the code to drop the dependency,
+ * which it cannot do for a failed install.
+ *
+ * Returns null when nothing changed. Note that a run which rejects packages but
+ * adds none still returns a result, so callers can report the rejections.
  */
 export function syncPackageJsonDeps(
   allProjectFiles: Array<{ path: string; content: string }>,
   packageJsonContent: string
-): { updated: string; addedPackages: string[] } | null {
+): { updated: string; addedPackages: string[]; rejectedPackages: string[] } | null {
   let pkg: {
     dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;
@@ -167,18 +202,43 @@ export function syncPackageJsonDeps(
     imports.forEach((p) => allImports.add(p));
   }
 
-  const addedPackages = [...allImports].filter((p) => !existingDeps.has(p));
-  if (addedPackages.length === 0) return null;
+  const candidates = [...allImports].filter((p) => !existingDeps.has(p));
+  if (candidates.length === 0) return null;
 
-  // Add missing packages to dependencies with "latest" as a placeholder version
-  const updatedDeps = {
-    ...(pkg.dependencies ?? {}),
-    ...Object.fromEntries(addedPackages.map((p) => [p, "latest"])),
+  // Gate every candidate through the allowlist and pin at the declared version.
+  const addedDeps: Record<string, string> = {};
+  const addedDevDeps: Record<string, string> = {};
+  const addedPackages: string[] = [];
+  const rejectedPackages: string[] = [];
+
+  for (const name of candidates) {
+    const decision = resolveAllowedPackage(name);
+    if (!decision.allowed) {
+      rejectedPackages.push(name);
+      continue;
+    }
+    (decision.dev ? addedDevDeps : addedDeps)[name] = decision.version;
+    addedPackages.push(name);
+  }
+
+  if (addedPackages.length === 0) {
+    // Nothing installable. Still report, so the caller can tell the user which
+    // imports will not resolve rather than leaving a silently broken preview.
+    return rejectedPackages.length > 0
+      ? { updated: packageJsonContent, addedPackages: [], rejectedPackages }
+      : null;
+  }
+
+  const updatedPkg = {
+    ...pkg,
+    dependencies: { ...(pkg.dependencies ?? {}), ...addedDeps },
+    ...(Object.keys(addedDevDeps).length > 0
+      ? { devDependencies: { ...(pkg.devDependencies ?? {}), ...addedDevDeps } }
+      : {}),
   };
-
-  const updatedPkg = { ...pkg, dependencies: updatedDeps };
   return {
     updated: JSON.stringify(updatedPkg, null, 2),
     addedPackages,
+    rejectedPackages,
   };
 }

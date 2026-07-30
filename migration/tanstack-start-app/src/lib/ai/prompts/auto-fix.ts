@@ -1,14 +1,17 @@
 /**
  * Auto-fix system prompt — kept separate from system-prompts.ts so the
  * fix HTTP handler does not pull the full generation blueprint graph.
+ *
+ * The package rules are generated from lib/ai/package-allowlist.ts (which only
+ * imports the dependency-free base-app-deps, so the isolation above still holds).
+ * This block used to be a second hand-written list that named a different set of
+ * packages from the build prompt's list, and neither matched what the installer
+ * would accept. One source now.
  */
 
-const PACKAGE_ALLOWLIST = `
-## Package rules
-- Prefer packages already in the project's package.json.
-- For new Vite/React apps: react, react-dom, typescript, tailwindcss, lucide-react, clsx, zod, @tanstack/react-query, date-fns, zustand, @supabase/supabase-js when a backend is needed.
-- Do not invent private package names.
-`.trim();
+import { renderPackageAllowlistCompact } from "@/lib/ai/package-allowlist";
+
+const PACKAGE_ALLOWLIST = renderPackageAllowlistCompact();
 
 const BUG_FREE_CONTRACT = `
 ## Bug-Free Fix Contract
