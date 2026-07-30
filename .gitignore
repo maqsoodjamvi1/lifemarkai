@@ -94,9 +94,16 @@ phase3-*.ps1
 # scripts/ and is unaffected by these (the patterns are anchored with a leading /).
 /*.ps1
 /*.bat
-/*-result.txt
-/*-console.txt
 /ping.txt
+
+# Transcripts are never source, WHEREVER they land - so these two are deliberately
+# unanchored. The first version anchored them to the root, which promptly bit: a
+# one-shot script was moved into scripts/ "to keep it out of the ignore rule", and it
+# plus its transcript became untracked noise there instead. The mistake was thinking
+# an ignored file cannot be run. Being ignored is exactly what a one-shot script
+# wants: it stays on disk, it runs, and it never enters the repo.
+*-result.txt
+*-console.txt
 
 # The four reusable root helpers, explicitly kept. A negation only works if no
 # PARENT directory is excluded, which holds here since these are at the root.
