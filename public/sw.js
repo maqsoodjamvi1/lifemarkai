@@ -45,6 +45,11 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
+  // Never intercept local dev — stale SW caches break webpack chunk loads.
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+    return;
+  }
+
   // Editor is highly dynamic — bypass SW entirely so chunk recovery works.
   if (url.pathname.startsWith("/editor")) {
     return;

@@ -34,7 +34,15 @@ Remove only if you've committed to the new landing and don't want the rollback p
 
 ## 5. Confirmed dead code — safe to remove
 
-> **STATUS: REMOVED (this session).** The 13 files below were deleted after a per-file guard re-confirmed zero imports. `store/app-store.ts` and `components/ui/fx-button.tsx` were intentionally KEPT for an explicit decision. Post-delete grep found no dangling imports. **Follow-up:** `components/dashboard/branded-urls-section.tsx` was imported only by the now-deleted `workspace-branding-page.tsx`, so it is a **new chain-orphan** (and still carries a stale `Mount: imported into workspace-branding-page.tsx` comment) — remove it too if you want the cleanup complete.
+> **STATUS (updated):** After review, the orphans split into DUPLICATES (stay deleted) and UNIQUE (restored + wired in — "use it if not a duplicate").
+>
+> **Duplicates / redundant — correctly deleted, not restored:** `editor/cloud-panel` (dup of live `LifemarkCloudPanel`), `editor/sandpack-wrapper` (preview uses the fallback engine, not Sandpack), `dashboard/projects-with-groups` (dup of live `ProjectsGrid`), `templates/templates-grid` (superseded), `editor/activity-feed` (dup of `dashboard/activity-feed`), `hooks/use-credits` (superseded by prop-based credits), and `lib/ai/streaming` (redundant barrel re-exporting live `handle-ai-stream`/`xml-stream-parser`).
+>
+> **Restored — unique utilities, preserved for deliberate adoption (NOT safe to blind-wire):** `hooks/use-project` (a full TanStack Query data layer — adopting = refactor away from server-component fetching), `lib/domains/hosting` (target-aware DNS/hosting verification — wire into the domains verify route when that flow is active), `lib/validations` (shared zod schemas — but `projectSchema.name`'s `/^[a-zA-Z0-9\s\-_]+/` regex would reject auto-generated names with non-ASCII/punctuation and BREAK project creation, so loosen the regex before wiring).
+>
+> **Unique — restored & WIRED IN:** `dashboard/recently-visited` → dashboard home; `dashboard/project-insights-card` → dashboard home (it's an account-usage card, props optional); `components/ui/fx-button` (`FxButton`) → the "New Project" primary CTA; `dashboard/workspace-branding-page` → new route `app/(dashboard)/dashboard/settings/branding/page.tsx` + a "Branding" sidebar entry (resolves the user's team; shows a guidance message if they have none).
+>
+> Still KEPT-but-unused for your call: `store/app-store.ts`. Chain-orphan note: `dashboard/branded-urls-section.tsx` was imported only by the branding page — now that the branding page is wired back in, it may be referenced again (verify).
 
 Zero inbound references, verified no dynamic/aliased import, not an entrypoint:
 

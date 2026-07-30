@@ -51,7 +51,7 @@ Open [http://localhost:3000](http://localhost:3000)
 
 ## Architecture Notes
 
-- **Framework**: Next.js 14 App Router
+- **Framework**: Next.js 16 App Router
 - **Auth**: Supabase Auth (email + OAuth)
 - **Database**: Supabase PostgreSQL with RLS
 - **AI**: Multi-model (OpenAI GPT-4o, Anthropic Claude)

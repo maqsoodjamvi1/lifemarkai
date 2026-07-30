@@ -1,9 +1,17 @@
 # Keep the Docker build context small + reproducible.
-node_modules
-.next
-out
-build
-dist
+# NOTE: plain `node_modules` only matches the context root in Docker's matcher —
+# use **/ for nested Start-app deps.
+**/node_modules
+**/.next
+**/out
+**/build
+**/dist
+**/.output
+**/.tmp
+**/.tmp-docker
+**/.tanstack
+**/.vite
+**/coverage
 
 # Desktop / mobile packaging (not part of the web deploy)
 electron
@@ -13,7 +21,7 @@ android
 *.exe
 *.AppImage
 
-# Local env + secrets (inject via Coolify, never bake into the image)
+# Local env + secrets (inject via Coolify / --build-arg, never bake into the image)
 .env
 .env.local
 .env.*.local
@@ -30,7 +38,6 @@ android
 npm-debug.log*
 .cache
 .turbo
-coverage
 *.tsbuildinfo
 
 # Scratch / debug artifacts in the repo root
@@ -45,8 +52,16 @@ install.log
 npm-install.log
 npm-search*.json
 tsconfig-audit*
+.tmp-docker
+.tmp
+kdp-workbooks
+outputs
+gateway/node_modules
 
 # Docs don't need to be in the image
 docs
 *.md
 !README.md
+
+# Fuse / editor junk
+**/.fuse_hidden*

@@ -22,11 +22,20 @@ jobs:
       - name: Type check
         run: npm run type-check
 
-      - name: Code parser tests
-        run: node --test lib/ai/code-parser.test.ts
+      - name: Unit tests
+        run: npm test
 
       - name: Agent mode routing
         run: npx tsx scripts/verify-agent-mode-routing.ts
 
       - name: OpenRouter routing
         run: npx tsx scripts/verify-openrouter-routing.ts
+
+      - name: Intelligence routing heuristics
+        run: npm run verify:intelligence
+
+      - name: Preview transpiler + export contracts
+        run: npm run verify:previews
+
+      - name: Lint
+        run: npm run lint

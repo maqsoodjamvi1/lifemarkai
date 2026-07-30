@@ -1,5 +1,10 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
+import {
+  isAiMaintenanceMode,
+  isCloudProvisioningDisabled,
+  isProviderBackedApiPath,
+} from "@/lib/operational-flags";
 
 export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
@@ -27,6 +32,20 @@ export async function proxy(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
+  if (isAiMaintenanceMode() && isProviderBackedApiPath(pathname)) {
+    return NextResponse.json(
+      { error: "AI is temporarily unavailable while maintenance is in progress." },
+      { status: 503, headers: { "Retry-After": "300" } },
+    );
+  }
+
+  if (isCloudProvisioningDisabled() && pathname === "/api/cloud/provision") {
+    return NextResponse.json(
+      { error: "Cloud provisioning is temporarily unavailable while maintenance is in progress." },
+      { status: 503, headers: { "Retry-After": "300" } },
+    );
+  }
+
   const protectedPaths = ["/dashboard", "/editor", "/settings", "/billing", "/team", "/integrations"];
   const isProtected = protectedPaths.some((p) => pathname.startsWith(p));
   const isAuthPage = pathname === "/login" || pathname === "/signup";
@@ -42,7 +61,8 @@ export async function proxy(request: NextRequest) {
   if (isProtected && !user) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
-    url.searchParams.set("redirect", pathname);
+    url.search = "";
+    url.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
     return NextResponse.redirect(url);
   }
 

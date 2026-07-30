@@ -1,6 +1,6 @@
 # LifemarkAI — Codebase Guide
 
-A full-stack AI-powered app builder (Lovable.dev clone) built with Next.js 14, Supabase, and multi-model AI.
+A full-stack AI-powered app builder (Lovable.dev clone) built with Next.js 16, Supabase, and multi-model AI.
 
 > **LifemarkAI Editor Intelligence** (next-gen, multi-agent "editor intelligence") — design
 > source of truth in **`docs/editor-intelligence/00-overview.md`** … `08-roadmap.md`. Foundation
@@ -13,7 +13,7 @@ A full-stack AI-powered app builder (Lovable.dev clone) built with Next.js 14, S
 
 | Layer | Technology |
 |-------|-----------|
-| Framework | Next.js 14 App Router (TypeScript) |
+| Framework | Next.js 16 App Router (TypeScript) |
 | Database | Supabase (PostgreSQL + RLS + Realtime) |
 | Auth | Supabase Auth (Email + GitHub OAuth) |
 | AI | OpenRouter-first per-task tiers (streaming SSE): Pareto Code router (coding), Fusion (planning/chat/reasoning), DeepSeek V4 Flash (fast) — defaults in `lib/ai/model-defaults.ts`, tiers in `lib/ai/editor-intelligence.ts`; all route via OpenRouter slugs with env overrides + invalid-slug safety net. DALL-E 3 for images |

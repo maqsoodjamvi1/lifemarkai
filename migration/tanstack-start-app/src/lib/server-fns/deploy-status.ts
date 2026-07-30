@@ -1,0 +1,109 @@
+/**
+ * Native deploy status poll (DB + optional Netlify live check).
+ */
+import { createServerFn } from "@tanstack/react-start";
+import { z } from "zod";
+import { zodValidator } from "@tanstack/zod-adapter";
+import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
+
+export const getDeployStatus = createServerFn({ method: "GET" })
+  .validator(zodValidator(z.object({ projectId: z.string().uuid() })))
+  .handler(async ({ data }) => {
+    const supabase = await createClient();
+    const { user } = await getServerUser(supabase);
+    if (!user) return { status: "unauthorized" as const };
+
+    const { data: project } = await (supabase as any)
+      .from("projects")
+      .select("id, deployed_url, status")
+      .eq("id", data.projectId)
+      .eq("user_id", user.id)
+      .single();
+
+    if (!project) return { status: "not_found" as const };
+
+    const { data: deployment } = await (supabase as any)
+      .from("deployments")
+      .select("id, status, url, created_at, error_message")
+      .eq("project_id", data.projectId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (deployment?.id && process.env.NETLIFY_AUTH_TOKEN) {
+      try {
+        const resp = await fetch(
+          `https://api.netlify.com/api/v1/deploys/${deployment.id}`,
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.NETLIFY_AUTH_TOKEN}`,
+            },
+          },
+        );
+        if (resp.ok) {
+          const netlify = (await resp.json()) as {
+            state: string;
+            ssl_url?: string;
+            url?: string;
+            error_message?: string;
+          };
+          const dbStatus =
+            netlify.state === "ready"
+              ? "live"
+              : netlify.state === "error"
+                ? "failed"
+                : "building";
+
+          if (dbStatus !== deployment.status) {
+            await (supabase as any)
+              .from("deployments")
+              .update({
+                status: dbStatus,
+                url: netlify.ssl_url ?? netlify.url,
+              })
+              .eq("id", deployment.id);
+
+            if (dbStatus === "live") {
+              await (supabase as any)
+                .from("projects")
+                .update({
+                  deployed_url: netlify.ssl_url ?? netlify.url,
+                  status: "active",
+                })
+                .eq("id", data.projectId);
+            }
+          }
+
+          return {
+            status: "ok" as const,
+            deployStatus: dbStatus,
+            url: netlify.ssl_url ?? netlify.url ?? deployment.url,
+            deployedAt: deployment.created_at,
+            error: netlify.error_message ?? null,
+          };
+        }
+      } catch {
+        /* fall through to DB */
+      }
+    }
+
+    const url = deployment?.url ?? project.deployed_url ?? null;
+    let deployStatus = deployment?.status ?? project.status ?? "idle";
+    if (
+      url &&
+      (deployStatus === "live" ||
+        deployStatus === "active" ||
+        deployStatus === "deployed")
+    ) {
+      deployStatus = "live";
+    }
+
+    return {
+      status: "ok" as const,
+      deployStatus,
+      url,
+      deployedAt: deployment?.created_at ?? null,
+      error: deployment?.error_message ?? null,
+    };
+  });
