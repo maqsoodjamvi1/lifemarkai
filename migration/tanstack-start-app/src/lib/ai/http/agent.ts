@@ -445,6 +445,22 @@ export async function handleAiAgent(req: Request) {
               { onConflict: "project_id,path" }
             );
           },
+          // Real deletion. The route persists via upsert only, so before this
+          // nothing ever issued a DELETE against project_files: delete_file
+          // returned "Deleted: <path>", the summary said so, and the file was
+          // still in the project and the preview — and reappeared in context next
+          // turn, so the agent could "delete" it over and over.
+          onFileDelete: async (path: string) => {
+            producedBillableWork = true;
+            const cleanPath = path.replace(/\\/g, "/").replace(/^\/+/, "");
+            projectFileMap.delete(cleanPath);
+            await (supabase as any)
+              .from("project_files")
+              .delete()
+              .eq("project_id", projectId)
+              .eq("path", cleanPath);
+            send({ fileDeleted: { path: cleanPath } });
+          },
         });
 
         const supportFiles = ensureCommonGeneratedSupportFiles(Array.from(projectFileMap.values())).filter(

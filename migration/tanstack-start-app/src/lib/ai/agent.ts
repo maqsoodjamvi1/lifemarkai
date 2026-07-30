@@ -58,6 +58,21 @@ export interface AgentRunOptions {
   }>;
   onStep: (step: AgentStep) => void;
   onFileChange: (path: string, content: string) => void;
+  /**
+   * Called when delete_file removes a file, so the caller can persist the
+   * deletion.
+   *
+   * Previously delete_file only removed the entry from the in-memory fileMap and
+   * returned "Deleted: <path>". The route persists exclusively via upsert, so
+   * nothing ever issued a DELETE against project_files: the agent reported
+   * success, its summary said the file was gone, and the file was still in the
+   * project and still in the preview. Worse, it reappeared in context on the next
+   * turn, so the agent could "delete" the same file repeatedly.
+   *
+   * Optional so existing callers keep compiling; when omitted, delete_file now
+   * says so instead of claiming success.
+   */
+  onFileDelete?: (path: string) => void;
 }
 
 export interface AgentResult {
@@ -102,6 +117,7 @@ function buildTools(
   onFileChange: (path: string, content: string) => void,
   projectId?: string,
   deployedUrl?: string | null,
+  onFileDelete?: (path: string) => void,
 ): Record<string, AgentTool> {
   const fileMap = new Map(files.map((f) => [f.path, f.content]));
 
@@ -161,8 +177,17 @@ function buildTools(
       name: "delete_file",
       description: "Delete a file from the project",
       execute: async ({ path }: Record<string, unknown>) => {
-        fileMap.delete(path as string);
-        return `Deleted: ${path}`;
+        const p = path as string;
+        if (!fileMap.has(p)) return `File not found: ${p}`;
+        fileMap.delete(p);
+        // Report honestly. Without a persistence hook the deletion is in-memory
+        // only, and claiming success there is how the agent used to tell users a
+        // file was gone while it was still in the project and the preview.
+        if (!onFileDelete) {
+          return `Removed ${p} from this run's working set, but deletion is NOT persisted in this context — the file still exists in the project. Do not report it as deleted.`;
+        }
+        onFileDelete(p);
+        return `Deleted: ${p}`;
       },
     },
     edit_file: {
@@ -532,6 +557,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
     extraTools,
     onStep,
     onFileChange,
+    onFileDelete,
   } = options;
 
   // Hybrid cascade: if a provider call fails (rate limit / outage / bad
@@ -546,7 +572,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
   let modelIdx = 0;
   let activeModel = chain[modelIdx] ?? model;
 
-  const toolImpls = buildTools(files, onFileChange, projectId, deployedUrl);
+  const toolImpls = buildTools(files, onFileChange, projectId, deployedUrl, onFileDelete);
   const toolDefs = buildToolDefinitions();
 
   // ── External MCP tools (user chat connectors) — additive, namespaced mcp_* ──

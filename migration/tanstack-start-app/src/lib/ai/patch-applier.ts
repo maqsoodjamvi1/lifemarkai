@@ -94,6 +94,18 @@ export function applyPatches(
         });
         continue;
       }
+      // Ambiguity is a failure here too — see the uniqueness note below. A
+      // whitespace-flexible match that hits several sites is even less safe than
+      // an exact one, because the raw-index mapping is approximate.
+      if (normalised.indexOf(normFind) !== normalised.lastIndexOf(normFind)) {
+        results.push({
+          path: patch.path,
+          content: current,
+          applied: false,
+          error: `find string is ambiguous in ${patch.path} (matches more than once, ignoring whitespace) — include more surrounding context so it is unique`,
+        });
+        continue;
+      }
       // Apply the normalised match — find the raw range and replace
       const idx = normalised.indexOf(normFind);
       const rawIdx = mapNormalisedIndexToRaw(current, idx);
@@ -104,7 +116,27 @@ export function applyPatches(
       continue;
     }
 
-    // Exact match — replace first occurrence
+    // UNIQUENESS. PATCH_SYSTEM_PROMPT tells the model that `find` must be copied
+    // verbatim WITH 3-5 surrounding lines "so it is unique". Nothing enforced
+    // that: this did `current.replace(patch.find, ...)`, which silently edits the
+    // FIRST occurrence. A `find` matching several sites therefore patched an
+    // arbitrary one, reported applied: true, and the user was told it worked —
+    // the wrong-location half of the "patches miss" class.
+    //
+    // agent.ts edit_file and xml-stream-parser both already reject ambiguous
+    // matches; this applier was the odd one out. Failing here is safe: chat.ts
+    // treats an unapplied patch as a miss and falls back to a full build.
+    if (current.indexOf(patch.find) !== current.lastIndexOf(patch.find)) {
+      results.push({
+        path: patch.path,
+        content: current,
+        applied: false,
+        error: `find string is ambiguous in ${patch.path} (appears more than once) — include more surrounding context so it is unique`,
+      });
+      continue;
+    }
+
+    // Exact, unique match.
     const updated = current.replace(patch.find, patch.replace);
     fileMap.set(patch.path, updated);
     results.push({ path: patch.path, content: updated, applied: true });
