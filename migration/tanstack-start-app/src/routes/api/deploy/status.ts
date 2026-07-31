@@ -11,7 +11,7 @@ export const Route = createFileRoute("/api/deploy/status")({
         if (!projectId) {
           return Response.json({ error: "projectId required" }, { status: 400 });
         }
-        const result = await getDeployStatus({ data: { projectId } });
+        const result = await getDeployStatus({ projectId });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }

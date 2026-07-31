@@ -1,9 +1,7 @@
 /**
  * Native project env vars (.env.local in project_files). Values never returned in clear.
+ * Plain helpers — not createServerFn (see project-files.ts).
  */
-import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
-import { zodValidator } from "@tanstack/zod-adapter";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import {
@@ -26,94 +24,77 @@ async function loadEnvRecord(
   return data as { id: string; content: string } | null;
 }
 
-export const listEnvKeys = createServerFn({ method: "GET" })
-  .validator(zodValidator(z.object({ projectId: z.string().uuid() })))
-  .handler(async ({ data }) => {
-    const supabase = await createClient();
-    const { user } = await getServerUser(supabase);
-    if (!user) return { status: "unauthorized" as const };
+export async function listEnvKeys(input: { projectId: string }) {
+  const supabase = await createClient();
+  const { user } = await getServerUser(supabase);
+  if (!user) return { status: "unauthorized" as const };
 
-    const access = await getProjectAccess(supabase, data.projectId, user.id);
-    if (!canReadProjectFiles(access)) return { status: "not_found" as const };
+  const access = await getProjectAccess(supabase, input.projectId, user.id);
+  if (!canReadProjectFiles(access)) return { status: "not_found" as const };
 
-    const row = await loadEnvRecord(supabase, data.projectId);
-    const vars = parseEnvFile(row?.content ?? "");
-    return {
-      status: "ok" as const,
-      envVars: Object.keys(vars).map((key) => ({ key, value: "***" })),
-    };
-  });
+  const row = await loadEnvRecord(supabase, input.projectId);
+  const vars = parseEnvFile(row?.content ?? "");
+  return {
+    status: "ok" as const,
+    envVars: Object.keys(vars).map((key) => ({ key, value: "***" })),
+  };
+}
 
-export const upsertEnvVar = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        key: z.string().min(1),
-        value: z.string(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
-    const supabase = await createClient();
-    const { user } = await getServerUser(supabase);
-    if (!user) return { status: "unauthorized" as const };
+export async function upsertEnvVar(input: {
+  projectId: string;
+  key: string;
+  value: string;
+}) {
+  const supabase = await createClient();
+  const { user } = await getServerUser(supabase);
+  if (!user) return { status: "unauthorized" as const };
 
-    const access = await getProjectAccess(supabase, data.projectId, user.id);
-    if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
+  const access = await getProjectAccess(supabase, input.projectId, user.id);
+  if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
 
-    const key = data.key.trim();
-    const row = await loadEnvRecord(supabase, data.projectId);
-    const vars = parseEnvFile(row?.content ?? "");
-    vars[key] = data.value;
-    const content = serializeEnvFile(vars);
+  const key = input.key.trim();
+  const row = await loadEnvRecord(supabase, input.projectId);
+  const vars = parseEnvFile(row?.content ?? "");
+  vars[key] = input.value;
+  const content = serializeEnvFile(vars);
 
-    if (row) {
-      await (supabase as any)
-        .from("project_files")
-        .update({ content, updated_at: new Date().toISOString() })
-        .eq("id", row.id);
-    } else {
-      await (supabase as any).from("project_files").insert({
-        project_id: data.projectId,
-        path: ENV_FILE_PATH,
-        content,
-        language: "plaintext",
-      });
-    }
-
-    return { status: "ok" as const, key };
-  });
-
-export const deleteEnvVar = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        key: z.string().min(1),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
-    const supabase = await createClient();
-    const { user } = await getServerUser(supabase);
-    if (!user) return { status: "unauthorized" as const };
-
-    const access = await getProjectAccess(supabase, data.projectId, user.id);
-    if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
-
-    const key = data.key.trim();
-    const row = await loadEnvRecord(supabase, data.projectId);
-    if (!row) return { status: "ok" as const, key, deleted: false };
-
-    const vars = parseEnvFile(row.content ?? "");
-    if (!(key in vars)) return { status: "ok" as const, key, deleted: false };
-    delete vars[key];
-    const content = serializeEnvFile(vars);
+  if (row) {
     await (supabase as any)
       .from("project_files")
       .update({ content, updated_at: new Date().toISOString() })
       .eq("id", row.id);
+  } else {
+    await (supabase as any).from("project_files").insert({
+      project_id: input.projectId,
+      path: ENV_FILE_PATH,
+      content,
+      language: "plaintext",
+    });
+  }
 
-    return { status: "ok" as const, key, deleted: true };
-  });
+  return { status: "ok" as const, key };
+}
+
+export async function deleteEnvVar(input: { projectId: string; key: string }) {
+  const supabase = await createClient();
+  const { user } = await getServerUser(supabase);
+  if (!user) return { status: "unauthorized" as const };
+
+  const access = await getProjectAccess(supabase, input.projectId, user.id);
+  if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
+
+  const key = input.key.trim();
+  const row = await loadEnvRecord(supabase, input.projectId);
+  if (!row) return { status: "ok" as const, key, deleted: false };
+
+  const vars = parseEnvFile(row.content ?? "");
+  if (!(key in vars)) return { status: "ok" as const, key, deleted: false };
+  delete vars[key];
+  const content = serializeEnvFile(vars);
+  await (supabase as any)
+    .from("project_files")
+    .update({ content, updated_at: new Date().toISOString() })
+    .eq("id", row.id);
+
+  return { status: "ok" as const, key, deleted: true };
+}

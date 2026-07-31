@@ -13,9 +13,7 @@ export const Route = createFileRoute("/api/projects/$id/preview-telemetry")({
   server: {
     handlers: {
       GET: async ({ params }) => {
-        const result = await getPreviewTelemetryFn({
-          data: { projectId: params.id },
-        });
+        const result = await getPreviewTelemetryFn({ projectId: params.id });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -30,11 +28,9 @@ export const Route = createFileRoute("/api/projects/$id/preview-telemetry")({
           return Response.json({ error: "Invalid JSON" }, { status: 400 });
         }
         const result = await postPreviewTelemetry({
-          data: {
-            projectId: params.id,
-            console: Array.isArray(body.console) ? (body.console as any) : undefined,
-            network: Array.isArray(body.network) ? (body.network as any) : undefined,
-          },
+          projectId: params.id,
+          console: Array.isArray(body.console) ? (body.console as any) : undefined,
+          network: Array.isArray(body.network) ? (body.network as any) : undefined,
         });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });

@@ -1228,6 +1228,24 @@ export function PreviewPanel({
       };
     }
     function handler(e: MessageEvent) {
+      // Only the preview iframe may drive this panel.
+      //
+      // The comment above used to justify skipping sender checks because the
+      // srcdoc iframe had an opaque ("null") origin. That engine is retired -
+      // every preview is now a remote `src=` iframe (Modal sandbox, WebContainer,
+      // or the deployed URL), so the sender CAN be identified. Until this check
+      // existed, any window holding a handle to the editor could post here, and
+      // the previewed app is USER-GENERATED CODE: it could fabricate console
+      // lines (which get POSTed to /preview-telemetry) or forge element
+      // selections that drive a visual edit at a selector of its choosing.
+      //
+      // Comparing `e.source` to the live contentWindow rather than parsing
+      // origin strings: it needs no URL bookkeeping, survives redirects and
+      // origin changes, and cannot be spoofed - a window reference is identity,
+      // not a claim. Shape validation below stays, because a compromised preview
+      // is still an untrusted sender.
+      const expected = getPreviewContentWindow();
+      if (expected && e.source !== expected) return;
       const d = e.data as Record<string, unknown> | null;
       if (!d || typeof d !== "object") return;
       if (d.source === "lifemark-veb" && visualEditEnabled) {

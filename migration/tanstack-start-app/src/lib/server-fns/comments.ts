@@ -1,9 +1,7 @@
 /**
  * Native project comments (list / create / patch / delete).
+ * Plain helpers — not createServerFn (see project-files.ts).
  */
-import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
-import { zodValidator } from "@tanstack/zod-adapter";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { assertChatAccess } from "@/lib/project/chat-access";
@@ -128,179 +126,156 @@ async function selectComments(
   return { data: rows, error: null };
 }
 
-export const listComments = createServerFn({ method: "GET" })
-  .validator(zodValidator(z.object({ projectId: z.string().uuid() })))
-  .handler(async ({ data }) => {
-    const supabase = await createClient();
-    const { user } = await getServerUser(supabase);
-    if (!user) return { status: "unauthorized" as const };
+export async function listComments(input: { projectId: string }) {
+  const supabase = await createClient();
+  const { user } = await getServerUser(supabase);
+  if (!user) return { status: "unauthorized" as const };
 
-    const access = await assertChatAccess(supabase, data.projectId, user.id, "read");
-    if (!access.ok) {
-      return { status: "denied" as const, httpStatus: access.status, error: access.error };
-    }
+  const access = await assertChatAccess(supabase, input.projectId, user.id, "read");
+  if (!access.ok) {
+    return { status: "denied" as const, httpStatus: access.status, error: access.error };
+  }
 
-    const { data: rows, error } = await selectComments(supabase, data.projectId);
-    if (error) return { status: "error" as const, message: error.message };
+  const { data: rows, error } = await selectComments(supabase, input.projectId);
+  if (error) return { status: "error" as const, message: error.message };
 
-    const withAuthor = await withAuthors(supabase, rows);
-    return { status: "ok" as const, comments: withAuthor };
-  });
+  const withAuthor = await withAuthors(supabase, rows);
+  return { status: "ok" as const, comments: withAuthor };
+}
 
-export const createComment = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        content: z.string().min(1).max(4000),
-        parent_id: z.string().uuid().nullable().optional(),
-        element_xpath: z.string().nullable().optional(),
-        element_tag: z.string().nullable().optional(),
-        page_path: z.string().nullable().optional(),
-        element_preview: z.string().nullable().optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
-    const supabase = await createClient();
-    const { user } = await getServerUser(supabase);
-    if (!user) return { status: "unauthorized" as const };
+export async function createComment(input: {
+  projectId: string;
+  content: string;
+  parent_id?: string | null;
+  element_xpath?: string | null;
+  element_tag?: string | null;
+  page_path?: string | null;
+  element_preview?: string | null;
+}) {
+  const supabase = await createClient();
+  const { user } = await getServerUser(supabase);
+  if (!user) return { status: "unauthorized" as const };
 
-    const access = await assertChatAccess(supabase, data.projectId, user.id, "write");
-    if (!access.ok) {
-      return { status: "denied" as const, httpStatus: access.status, error: access.error };
-    }
+  const access = await assertChatAccess(supabase, input.projectId, user.id, "write");
+  if (!access.ok) {
+    return { status: "denied" as const, httpStatus: access.status, error: access.error };
+  }
 
-    const content = data.content.trim();
-    if (!content) {
-      return { status: "bad_request" as const, error: "Content is required" };
-    }
+  const content = input.content.trim();
+  if (!content) {
+    return { status: "bad_request" as const, error: "Content is required" };
+  }
 
-    const baseInsert = {
-      project_id: data.projectId,
-      user_id: user.id,
-      content,
-      parent_id: data.parent_id ?? null,
-    };
+  const baseInsert = {
+    project_id: input.projectId,
+    user_id: user.id,
+    content,
+    parent_id: input.parent_id ?? null,
+  };
 
-    const withElement = {
-      ...baseInsert,
-      element_xpath: data.element_xpath ?? null,
-      element_tag: data.element_tag ?? null,
-      page_path: data.page_path ?? null,
-      element_preview: data.element_preview
-        ? String(data.element_preview).slice(0, 120)
-        : null,
-    };
+  const withElement = {
+    ...baseInsert,
+    element_xpath: input.element_xpath ?? null,
+    element_tag: input.element_tag ?? null,
+    page_path: input.page_path ?? null,
+    element_preview: input.element_preview
+      ? String(input.element_preview).slice(0, 120)
+      : null,
+  };
 
-    let result = await (supabase as any)
+  let result = await (supabase as any)
+    .from("project_comments")
+    .insert(withElement)
+    .select(`${BASE_COLUMNS},${ELEMENT_COLUMNS}`)
+    .single();
+
+  if (result.error && missingOptionalColumn(result.error.message)) {
+    result = await (supabase as any)
       .from("project_comments")
-      .insert(withElement)
-      .select(`${BASE_COLUMNS},${ELEMENT_COLUMNS}`)
+      .insert(baseInsert)
+      .select(BASE_COLUMNS)
       .single();
-
-    if (result.error && missingOptionalColumn(result.error.message)) {
-      result = await (supabase as any)
-        .from("project_comments")
-        .insert(baseInsert)
-        .select(BASE_COLUMNS)
-        .single();
-      if (!result.error && result.data) {
-        result.data = {
-          ...result.data,
-          element_xpath: null,
-          element_tag: null,
-          page_path: null,
-          element_preview: null,
-          is_guest: false,
-          guest_name: null,
-        };
-      }
+    if (!result.error && result.data) {
+      result.data = {
+        ...result.data,
+        element_xpath: null,
+        element_tag: null,
+        page_path: null,
+        element_preview: null,
+        is_guest: false,
+        guest_name: null,
+      };
     }
+  }
 
-    if (result.error) return { status: "error" as const, message: result.error.message };
+  if (result.error) return { status: "error" as const, message: result.error.message };
 
-    const [withAuthor] = await withAuthors(supabase, [result.data as CommentRow]);
-    return { status: "ok" as const, comment: withAuthor };
-  });
+  const [withAuthor] = await withAuthors(supabase, [result.data as CommentRow]);
+  return { status: "ok" as const, comment: withAuthor };
+}
 
-export const patchComment = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        commentId: z.string().uuid(),
-        content: z.string().optional(),
-        resolved: z.boolean().optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
-    const supabase = await createClient();
-    const { user } = await getServerUser(supabase);
-    if (!user) return { status: "unauthorized" as const };
+export async function patchComment(input: {
+  projectId: string;
+  commentId: string;
+  content?: string;
+  resolved?: boolean;
+}) {
+  const supabase = await createClient();
+  const { user } = await getServerUser(supabase);
+  if (!user) return { status: "unauthorized" as const };
 
-    const access = await assertChatAccess(supabase, data.projectId, user.id, "write");
-    if (!access.ok) {
-      return { status: "denied" as const, httpStatus: access.status, error: access.error };
+  const access = await assertChatAccess(supabase, input.projectId, user.id, "write");
+  if (!access.ok) {
+    return { status: "denied" as const, httpStatus: access.status, error: access.error };
+  }
+
+  const updates: Record<string, unknown> = {};
+  if (typeof input.content === "string") {
+    const trimmed = input.content.trim();
+    if (!trimmed) {
+      return { status: "bad_request" as const, error: "Content cannot be empty" };
     }
+    updates.content = trimmed;
+  }
+  if (typeof input.resolved === "boolean") {
+    updates.resolved = input.resolved;
+    updates.resolved_by = input.resolved ? user.id : null;
+    updates.resolved_at = input.resolved ? new Date().toISOString() : null;
+  }
+  if (Object.keys(updates).length === 0) {
+    return { status: "bad_request" as const, error: "Nothing to update" };
+  }
 
-    const updates: Record<string, unknown> = {};
-    if (typeof data.content === "string") {
-      const trimmed = data.content.trim();
-      if (!trimmed) {
-        return { status: "bad_request" as const, error: "Content cannot be empty" };
-      }
-      updates.content = trimmed;
-    }
-    if (typeof data.resolved === "boolean") {
-      updates.resolved = data.resolved;
-      updates.resolved_by = data.resolved ? user.id : null;
-      updates.resolved_at = data.resolved ? new Date().toISOString() : null;
-    }
-    if (Object.keys(updates).length === 0) {
-      return { status: "bad_request" as const, error: "Nothing to update" };
-    }
+  const { data: row, error } = await (supabase as any)
+    .from("project_comments")
+    .update(updates)
+    .eq("id", input.commentId)
+    .eq("project_id", input.projectId)
+    .select(`${BASE_COLUMNS},${ELEMENT_COLUMNS}`)
+    .single();
 
-    const { data: row, error } = await (supabase as any)
-      .from("project_comments")
-      .update(updates)
-      .eq("id", data.commentId)
-      .eq("project_id", data.projectId)
-      .select(`${BASE_COLUMNS},${ELEMENT_COLUMNS}`)
-      .single();
+  if (error) return { status: "error" as const, message: error.message };
 
-    if (error) return { status: "error" as const, message: error.message };
+  const [withAuthor] = await withAuthors(supabase, [row as CommentRow]);
+  return { status: "ok" as const, comment: withAuthor };
+}
 
-    const [withAuthor] = await withAuthors(supabase, [row as CommentRow]);
-    return { status: "ok" as const, comment: withAuthor };
-  });
+export async function deleteComment(input: { projectId: string; commentId: string }) {
+  const supabase = await createClient();
+  const { user } = await getServerUser(supabase);
+  if (!user) return { status: "unauthorized" as const };
 
-export const deleteComment = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        commentId: z.string().uuid(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
-    const supabase = await createClient();
-    const { user } = await getServerUser(supabase);
-    if (!user) return { status: "unauthorized" as const };
+  const access = await assertChatAccess(supabase, input.projectId, user.id, "write");
+  if (!access.ok) {
+    return { status: "denied" as const, httpStatus: access.status, error: access.error };
+  }
 
-    const access = await assertChatAccess(supabase, data.projectId, user.id, "write");
-    if (!access.ok) {
-      return { status: "denied" as const, httpStatus: access.status, error: access.error };
-    }
+  const { error } = await (supabase as any)
+    .from("project_comments")
+    .delete()
+    .eq("id", input.commentId)
+    .eq("project_id", input.projectId);
 
-    const { error } = await (supabase as any)
-      .from("project_comments")
-      .delete()
-      .eq("id", data.commentId)
-      .eq("project_id", data.projectId);
-
-    if (error) return { status: "error" as const, message: error.message };
-    return { status: "ok" as const, success: true };
-  });
+  if (error) return { status: "error" as const, message: error.message };
+  return { status: "ok" as const, success: true };
+}

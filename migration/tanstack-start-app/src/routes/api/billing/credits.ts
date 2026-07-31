@@ -13,7 +13,7 @@ export const Route = createFileRoute("/api/billing/credits")({
         const debugZeroCredits =
           request.headers.get("x-debug-zero-credits") === "1" ||
           (request.headers.get("referer") ?? "").includes("debugZeroCredits=1");
-        const result = await getCredits({ data: { debugZeroCredits } });
+        const result = await getCredits({ debugZeroCredits });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }

@@ -52,15 +52,27 @@ function ttlSeconds(): number {
 
 type Alg = "RS256" | "HS256";
 
+/**
+ * HS256 secret: prefer PREVIEW_JWT_SECRET; otherwise derive a stable secret from
+ * SUPABASE_SERVICE_ROLE_KEY so production doesn't 501 when the dedicated env
+ * was never set. Derived (never the raw service-role key as HMAC material).
+ */
+function hsSecret(): string | undefined {
+  if (process.env.PREVIEW_JWT_SECRET) return process.env.PREVIEW_JWT_SECRET;
+  const seed = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!seed) return undefined;
+  return crypto.createHash("sha256").update(`lifemarkai-preview:${seed}`).digest("hex");
+}
+
 function signingAlg(): Alg | null {
   if (pem(process.env.PREVIEW_JWT_PRIVATE_KEY)) return "RS256";
-  if (process.env.PREVIEW_JWT_SECRET) return "HS256";
+  if (hsSecret()) return "HS256";
   return null;
 }
 
 function verifyingAlg(): Alg | null {
   if (pem(process.env.PREVIEW_JWT_PUBLIC_KEY)) return "RS256";
-  if (process.env.PREVIEW_JWT_SECRET) return "HS256";
+  if (hsSecret()) return "HS256";
   return null;
 }
 
@@ -74,7 +86,7 @@ function makeSignature(alg: Alg, signingInput: string): string {
     const key = pem(process.env.PREVIEW_JWT_PRIVATE_KEY)!;
     return crypto.createSign("RSA-SHA256").update(signingInput).sign(key, "base64url");
   }
-  const secret = process.env.PREVIEW_JWT_SECRET!;
+  const secret = hsSecret()!;
   return crypto.createHmac("sha256", secret).update(signingInput).digest("base64url");
 }
 
@@ -128,7 +140,7 @@ export function verifyPreviewToken(token: string): PreviewTokenClaims | null {
         .verify(key, Buffer.from(signature, "base64url"));
       if (!ok) return null;
     } else {
-      const secret = process.env.PREVIEW_JWT_SECRET!;
+      const secret = hsSecret()!;
       const expected = crypto.createHmac("sha256", secret).update(signingInput).digest();
       const got = Buffer.from(signature, "base64url");
       if (expected.length !== got.length || !crypto.timingSafeEqual(expected, got)) {

@@ -43,8 +43,18 @@ ARG NEXT_PUBLIC_APP_URL
 ARG NEXT_PUBLIC_ENABLE_SANDBOX_PREVIEW
 ARG NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
 ARG NEXT_PUBLIC_APP_DOMAIN
+# Sentry. VITE_ vars are INLINED BY VITE AT BUILD TIME, so a DSN supplied only as a
+# runtime env var would cover the server and silently leave the browser reporting
+# nothing. It has to be a build ARG to reach the client bundle. Safe to bake in: a
+# DSN is public by design - it is an ingest endpoint, not a credential, which is why
+# it ships inside every client-side Sentry bundle on the web.
+# SENTRY_RELEASE is optional and lets Sentry group errors by deploy.
+ARG VITE_SENTRY_DSN
+ARG SENTRY_RELEASE
 
-ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
+ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN \
+    SENTRY_RELEASE=$SENTRY_RELEASE \
+    VITE_SUPABASE_URL=$VITE_SUPABASE_URL \
     VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY \
     VITE_APP_URL=$VITE_APP_URL \
     NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL \

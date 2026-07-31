@@ -7,7 +7,8 @@ export const Route = createFileRoute("/api/projects/$id/env/$key")({
     handlers: {
       DELETE: async ({ params }) => {
         const result = await deleteEnvVar({
-          data: { projectId: params.id, key: params.key },
+          projectId: params.id,
+          key: params.key,
         });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });

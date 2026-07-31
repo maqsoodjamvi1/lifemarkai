@@ -64,6 +64,8 @@ From repo root: `npm run dev` → Start on **3001**. Emergency Next: `npm run de
 | Dev `GET /`, `/login` | **PASS** — 200 HTML |
 | `npx vite build` | **PASS** — client 31s + SSR 7.5s, exit 0 (chunk-size warnings only) |
 | Vite SSR OOM / import errors during smoke | **None observed** |
+| Docker image `lifemarkai-start:cutover` | **PASS** (Jul 31 2026) — context ~10 MB; build exit 0 (~6.5 min) |
+| Container smoke (`-p 3000:3000`) | **PASS** — `/api/health` 200 (`runtime:tanstack-start`, `db:ok`); `/health` 200; in-container AI worker `:3010/health` 200 |
 
 ### Memory (approx RSS after smoke)
 
@@ -85,32 +87,19 @@ From repo root: `npm run dev` → Start on **3001**. Emergency Next: `npm run de
 | `tsconfig.json` | Dual `@/*` paths + pin `react`/`react-dom` types (avoid dual `@types/react`) |
 | Small type fixes | next-shims, supabase `setAll`, Link/`navigate` typed routes, SSO fields, projects serializable return |
 
-## Structural-only / blocked on this machine
+## Still open (non-blocking for Docker gate)
 
 | Item | Notes |
 |------|--------|
-| Docker Desktop install | **Blocked** — Docker not installed; WSL not installed; non-admin session; installer download stalled at ~83/592 MB (~55 KB/s). Needs **manual** WSL + Docker Desktop install + reboot (steps below). |
-| Docker image build / container smoke | Blocked until Docker works |
 | Stripe webhook live delivery | Handler reachable; no signed Stripe event soaked |
-| Cron with `CRON_SECRET` | No `CRON_SECRET` in env — unauthorized 403 verified; authorized run not exercised |
+| Cron with `CRON_SECRET` | Unauthorized 403 verified; authorized run not exercised |
 | Modal preview URL ready | Editor preview stayed on "Connecting…"; Modal tokens present; full tunnel paint not confirmed |
 
-### Manual Docker install (required before container verify)
+### Docker rebuild notes (local Windows)
 
-1. **Admin PowerShell:** `wsl --install` then **reboot**.
-2. Install [Docker Desktop](https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe) (or `winget install -e --id Docker.DockerDesktop --source winget`).
-3. Start Docker Desktop; wait until `docker info` succeeds.
-4. From repo root (pass build-args from your env; do not commit secrets):
-   ```powershell
-   docker build -t lifemarkai-start:cutover `
-     --build-arg VITE_SUPABASE_URL=$env:VITE_SUPABASE_URL `
-     --build-arg VITE_SUPABASE_ANON_KEY=$env:VITE_SUPABASE_ANON_KEY `
-     --build-arg VITE_APP_URL=http://localhost:3000 .
-   docker run --rm -p 3000:3000 --env-file .env.local lifemarkai-start:cutover
-   ```
-5. Smoke: `curl http://localhost:3000/api/health` and inside the container hit `127.0.0.1:3010/3011/3012/health`.
-
-Delete incomplete `d:\Projects\lifemarkai\.tmp-docker\DockerDesktopInstaller.exe` before re-downloading.
+- Docker Desktop 29.x; use context `desktop-linux`. Prepend `%LOCALAPPDATA%\Programs\DockerDesktop\resources\bin` to `PATH`.
+- `.env.local` may set `DOCKER_HOST=http://127.0.0.1:2375` (remote tunnel). **Do not** load that into the shell before `docker build`/`docker run` — it breaks Desktop. Strip `DOCKER_*` from `--env-file` for local smoke.
+- Production image runs Start on `:3000` + AI worker on `:3010` (API/sandbox workers retired — routes are native).
 
 ## Native Start API inventory (subset)
 
