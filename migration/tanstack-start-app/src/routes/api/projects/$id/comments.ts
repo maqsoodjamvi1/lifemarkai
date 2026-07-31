@@ -10,7 +10,7 @@ export const Route = createFileRoute("/api/projects/$id/comments")({
   server: {
     handlers: {
       GET: async ({ params }) => {
-        const result = await listComments({ data: { projectId: params.id } });
+        const result = await listComments({ projectId: params.id });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -38,21 +38,19 @@ export const Route = createFileRoute("/api/projects/$id/comments")({
           );
         }
         const result = await createComment({
-          data: {
-            projectId: params.id,
-            content,
-            parent_id:
-              typeof body.parent_id === "string" ? body.parent_id : null,
-            element_xpath:
-              typeof body.element_xpath === "string" ? body.element_xpath : null,
-            element_tag:
-              typeof body.element_tag === "string" ? body.element_tag : null,
-            page_path: typeof body.page_path === "string" ? body.page_path : null,
-            element_preview:
-              typeof body.element_preview === "string"
-                ? body.element_preview
-                : null,
-          },
+          projectId: params.id,
+          content,
+          parent_id:
+            typeof body.parent_id === "string" ? body.parent_id : null,
+          element_xpath:
+            typeof body.element_xpath === "string" ? body.element_xpath : null,
+          element_tag:
+            typeof body.element_tag === "string" ? body.element_tag : null,
+          page_path: typeof body.page_path === "string" ? body.page_path : null,
+          element_preview:
+            typeof body.element_preview === "string"
+              ? body.element_preview
+              : null,
         });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });

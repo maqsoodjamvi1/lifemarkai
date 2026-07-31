@@ -17,13 +17,11 @@ export const Route = createFileRoute("/api/projects/$id/comments/$commentId")({
           return Response.json({ error: "Invalid JSON" }, { status: 400 });
         }
         const result = await patchComment({
-          data: {
-            projectId: params.id,
-            commentId: params.commentId,
-            content: typeof body.content === "string" ? body.content : undefined,
-            resolved:
-              typeof body.resolved === "boolean" ? body.resolved : undefined,
-          },
+          projectId: params.id,
+          commentId: params.commentId,
+          content: typeof body.content === "string" ? body.content : undefined,
+          resolved:
+            typeof body.resolved === "boolean" ? body.resolved : undefined,
         });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
@@ -39,7 +37,8 @@ export const Route = createFileRoute("/api/projects/$id/comments/$commentId")({
       },
       DELETE: async ({ params }) => {
         const result = await deleteComment({
-          data: { projectId: params.id, commentId: params.commentId },
+          projectId: params.id,
+          commentId: params.commentId,
         });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
