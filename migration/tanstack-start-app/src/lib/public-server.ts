@@ -90,7 +90,11 @@ export const resolveAppSlug = createServerFn({ method: "GET" })
     const { data: project } = await (supabase as any)
       .from("projects")
       .select(
-        "id, name, user_id, is_public, visibility, deploy_url, preview_url, description, seo_title, seo_description, og_image_url",
+        // `deployed_url`, NOT `deploy_url`. The wrong name made PostgREST error on
+        // the whole select, so `project` was null and EVERY public app page
+        // returned not_found - the page never rendered at all. Public sharing has
+        // been broken, silently, with nothing logged.
+        "id, name, user_id, is_public, visibility, deployed_url, preview_url, description, seo_title, seo_description, og_image_url",
       )
       .eq("app_slug", data.slug)
       .maybeSingle();
@@ -121,7 +125,7 @@ export const resolveAppSlug = createServerFn({ method: "GET" })
     }
 
     const destination =
-      project.deploy_url || project.preview_url || `/preview/${project.id}`;
+      project.deployed_url || project.preview_url || `/preview/${project.id}`;
 
     return {
       status: "redirect" as const,

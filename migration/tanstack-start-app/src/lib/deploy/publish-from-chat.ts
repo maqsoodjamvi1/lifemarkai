@@ -320,7 +320,11 @@ export async function publishProjectFromChat(
     if (deploymentId) {
       await supabase
         .from("deployments")
-        .update({ status: "failed", error_message: message })
+        // build_log, not error_message - the latter is not a column, so this update
+        // silently failed and a failed deploy was never marked failed. It kept its
+        // previous status forever, which is why builds could appear stuck rather
+        // than errored.
+        .update({ status: "failed", build_log: message })
         .eq("id", deploymentId)
         .then(() => {}, () => {});
     }

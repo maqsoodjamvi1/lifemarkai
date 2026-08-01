@@ -21,7 +21,10 @@ export async function getDeployStatus(input: { projectId: string }) {
 
   const { data: deployment } = await (supabase as any)
     .from("deployments")
-    .select("id, status, url, created_at, error_message")
+    // `error_message` is not a column on deployments (it has build_log). Including
+    // it errored the whole select, so `deployment` was null and deploy status
+    // reported nothing - while `url` sitting right beside it was correct all along.
+    .select("id, status, url, created_at, build_log")
     .eq("project_id", input.projectId)
     .order("created_at", { ascending: false })
     .limit(1)

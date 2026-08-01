@@ -102,13 +102,21 @@ export const Route = createFileRoute("/api/embed/error")({
 
         // Must be a real, PUBLISHED project. Unpublished apps have no visitors, so
         // a write against one is either a mistake or an attack.
+        //
+        // The column is `deployed_url`, NOT `deploy_url`. The first version of this
+        // route guessed the latter, which does not exist: the select errored,
+        // `project` came back null, and every single report was dropped with a 204
+        // - a silent no-op that looked exactly like success. Caught only by running
+        // a real end-to-end write against the live database. Same class as the
+        // health_findings and member_group_members column mistakes earlier in this
+        // project: never assume a column name, read the schema.
         const { data: project } = await supabase
           .from("projects")
-          .select("id, deploy_url")
+          .select("id, deployed_url")
           .eq("id", projectId)
           .maybeSingle();
 
-        if (!project?.deploy_url) {
+        if (!project?.deployed_url) {
           // Same 204 as success: never reveal whether a project id exists.
           return new Response(null, { status: 204, headers });
         }
