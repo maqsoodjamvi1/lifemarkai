@@ -31,6 +31,7 @@ import { TestingPanel } from "./testing-panel";
 import { DesignGuidancePanel } from "./design-guidance-panel";
 import { CodeReviewPanel } from "./code-review-panel";
 import { ProblemsPanel } from "./problems-panel";
+import { AppErrorsPanel } from "./app-errors-panel";
 import { AccessibilityPanel } from "./accessibility-panel";
 import { SchemaPanel } from "./schema-panel";
 import { WebhookPanel } from "./webhook-panel";
@@ -269,6 +270,9 @@ export function SecondaryPanelContent(ctx: LazyPanelContext) {
   if (rightPanel === "publishpanel") return <PublishPanel project={currentProject} />;
   if (rightPanel === "checkout") return <PaymentCheckoutPanel projectId={pid} />;
   if (rightPanel === "problems") return <ProblemsPanel projectId={pid} />;
+  // Distinct from "problems": those are compile-time markers from the editor's own
+  // Monaco. These are runtime errors real visitors hit on the PUBLISHED app.
+  if (rightPanel === "apperrors") return <AppErrorsPanel projectId={pid} />;
   if (rightPanel === "accessibility") return <AccessibilityPanel files={files} onFixWithAI={sendPromptToChat} />;
   if (rightPanel === "schema") return <SchemaPanel files={files} onGenerateMigration={sendPromptToChat} />;
   if (rightPanel === "webhooks") return <WebhookPanel projectId={pid} />;
