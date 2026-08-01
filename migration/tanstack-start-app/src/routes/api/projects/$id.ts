@@ -10,7 +10,7 @@ export const Route = createFileRoute("/api/projects/$id")({
   server: {
     handlers: {
       GET: async ({ params }) => {
-        const result = await getProject({ data: { id: params.id } });
+        const result = await getProject({ id: params.id });
         if (result.status === "not_found") {
           return Response.json({ error: "Not found" }, { status: 404 });
         }
@@ -23,7 +23,7 @@ export const Route = createFileRoute("/api/projects/$id")({
         } catch {
           return Response.json({ error: "Invalid JSON" }, { status: 400 });
         }
-        const result = await updateProject({ data: { id: params.id, patch } });
+        const result = await updateProject({ id: params.id, patch });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -39,7 +39,7 @@ export const Route = createFileRoute("/api/projects/$id")({
         return Response.json(result.project);
       },
       DELETE: async ({ params }) => {
-        const result = await deleteProject({ data: { id: params.id } });
+        const result = await deleteProject({ id: params.id });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }

@@ -1,10 +1,7 @@
 /** Native member-groups — reimplemented off the worker (pure Supabase). */
-import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@/lib/supabase/server";
 
-export const listGroupsOrMembers = createServerFn({ method: "GET" })
-  .validator((d: { groupId?: string }) => d)
-  .handler(async ({ data }) => {
+export async function listGroupsOrMembers(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -27,11 +24,9 @@ export const listGroupsOrMembers = createServerFn({ method: "GET" })
       .eq("user_id", user.id)
       .order("created_at", { ascending: false });
     return { status: "groups" as const, groups: groups ?? [] };
-  });
+}
 
-export const createGroup = createServerFn({ method: "POST" })
-  .validator((d: { name: string; description?: string; color?: string }) => d)
-  .handler(async ({ data }) => {
+export async function createGroup(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -51,11 +46,9 @@ export const createGroup = createServerFn({ method: "POST" })
       .single();
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const, group: row };
-  });
+}
 
-export const updateGroup = createServerFn({ method: "POST" })
-  .validator((d: { groupId: string; name?: string; description?: string; color?: string }) => d)
-  .handler(async ({ data }) => {
+export async function updateGroup(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -75,11 +68,9 @@ export const updateGroup = createServerFn({ method: "POST" })
       .eq("user_id", user.id);
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const };
-  });
+}
 
-export const setGroupMembership = createServerFn({ method: "POST" })
-  .validator((d: { groupId: string; memberId: string; action: "add" | "remove" }) => d)
-  .handler(async ({ data }) => {
+export async function setGroupMembership(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -110,11 +101,9 @@ export const setGroupMembership = createServerFn({ method: "POST" })
       .insert({ group_id: data.groupId, member_id: data.memberId });
     if (error && error.code !== "23505") return { status: "error" as const, message: error.message };
     return { status: "ok" as const };
-  });
+}
 
-export const deleteGroup = createServerFn({ method: "POST" })
-  .validator((d: { groupId: string }) => d)
-  .handler(async ({ data }) => {
+export async function deleteGroup(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -127,4 +116,4 @@ export const deleteGroup = createServerFn({ method: "POST" })
       .eq("id", data.groupId)
       .eq("user_id", user.id);
     return { status: "ok" as const };
-  });
+}

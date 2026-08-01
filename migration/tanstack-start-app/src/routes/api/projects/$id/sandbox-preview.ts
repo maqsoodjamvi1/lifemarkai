@@ -53,7 +53,24 @@ function isSandboxGoneError(err: unknown): boolean {
   );
 }
 
+/** One cold-boot at a time per project — concurrent POSTs were terminating
+ *  each other's fresh Modal sandboxes ("user termination request"). */
+const bootInflight = new Map<string, Promise<Response>>();
+
 async function handlePOST(req: Request, params: any) {
+  const { id: projectId } = params;
+  const existing = bootInflight.get(projectId);
+  if (existing) {
+    return existing;
+  }
+  const run = handlePOSTUnlocked(req, params).finally(() => {
+    if (bootInflight.get(projectId) === run) bootInflight.delete(projectId);
+  });
+  bootInflight.set(projectId, run);
+  return run;
+}
+
+async function handlePOSTUnlocked(req: Request, params: any) {
   const { id: projectId } = params;
 
   const supabase = await createClient();
@@ -183,7 +200,7 @@ async function handlePOST(req: Request, params: any) {
     // the next attempt finds no id and provisions a fresh sandbox.
     if (isSandboxGoneError(result.error)) {
       console.warn(
-        `[sandbox-preview] stored sandbox is gone (${result.error}) — clearing sandbox_id so the next run provisions fresh`,
+        `[sandbox-preview] stored sandbox is gone (${result.error}) — clearing sandbox_id and cold-booting once`,
       );
       await (supabase as any)
         .from("projects")
@@ -192,22 +209,62 @@ async function handlePOST(req: Request, params: any) {
           metadata: {
             ...prevMeta,
             sandbox_id: null,
-            sandbox_phase: "idle",
-            sandbox_phase_detail: null,
+            sandbox_phase: "creating",
+            sandbox_phase_detail: "Sandbox expired — starting a fresh one…",
             sandbox_updated_at: new Date().toISOString(),
           },
         })
         .eq("id", projectId);
 
+      // Heal in this same request. Returning retryable alone left the editor on
+      // "Preview could not start" whenever the client didn't auto-repost.
+      const retry = await provider.runProject({
+        files,
+        port,
+        startCommand,
+        projectId,
+        onProgress: (phase, detail) => persistPhase(phase, detail),
+      });
+
+      if (retry.ok) {
+        const { error: previewUrlErr } = await (supabase as any)
+          .from("projects")
+          .update({
+            preview_url: retry.previewUrl,
+            metadata: {
+              ...prevMeta,
+              sandbox_id: retry.sandboxId,
+              sandbox_port: port,
+              sandbox_provider: getSandboxProviderId(),
+              sandbox_phase: "ready",
+              sandbox_phase_detail: null,
+              sandbox_updated_at: new Date().toISOString(),
+            },
+          })
+          .eq("id", projectId);
+        if (previewUrlErr) {
+          console.warn("[sandbox-preview] failed to persist preview_url:", previewUrlErr.message);
+        }
+        return Response.json({
+          enabled: true,
+          ok: true,
+          previewUrl: retry.previewUrl,
+          sandboxId: retry.sandboxId,
+          logs: retry.logs,
+          provider: getSandboxProviderId(),
+          phase: "ready",
+          sandboxName: sandboxNameForProject(projectId),
+          recovered: true,
+        });
+      }
+
       return Response.json({
         enabled: true,
         ok: false,
-        // `retryable` tells the client this is worth another go immediately,
-        // as opposed to a genuine build failure that will repeat.
         retryable: true,
-        phase: "idle",
-        error: "The preview sandbox had expired. Cleared it — start the preview again.",
-        logs: result.logs,
+        phase: "error",
+        error: retry.error ?? "The preview sandbox had expired and could not be restarted.",
+        logs: retry.logs ?? result.logs,
       });
     }
 

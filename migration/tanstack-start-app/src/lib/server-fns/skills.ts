@@ -1,13 +1,10 @@
 /**
  * Native workspace skills — list / create / update / delete / increment use.
  */
-import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
-import { zodValidator } from "@tanstack/zod-adapter";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 
-export const listSkills = createServerFn({ method: "GET" }).handler(async () => {
+export async function listSkills() {
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);
   if (!user) return { status: "unauthorized" as const };
@@ -30,21 +27,9 @@ export const listSkills = createServerFn({ method: "GET" }).handler(async () => 
     custom: userSkills.data ?? [],
     builtin: builtinSkills.data ?? [],
   };
-});
+}
 
-export const createSkill = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        name: z.string().min(1),
-        description: z.string().nullable().optional(),
-        prompt: z.string().min(1),
-        icon: z.string().optional(),
-        tags: z.array(z.string()).optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function createSkill(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -70,23 +55,9 @@ export const createSkill = createServerFn({ method: "POST" })
 
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const, skill: row };
-  });
+}
 
-export const patchSkill = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        id: z.string().uuid(),
-        name: z.string().optional(),
-        description: z.string().nullable().optional(),
-        prompt: z.string().optional(),
-        icon: z.string().optional(),
-        tags: z.array(z.string()).optional(),
-        incrementUse: z.boolean().optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function patchSkill(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -124,11 +95,9 @@ export const patchSkill = createServerFn({ method: "POST" })
 
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const, kind: "update" as const, skill: row };
-  });
+}
 
-export const deleteSkill = createServerFn({ method: "POST" })
-  .validator(zodValidator(z.object({ id: z.string().uuid() })))
-  .handler(async ({ data }) => {
+export async function deleteSkill(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -141,4 +110,4 @@ export const deleteSkill = createServerFn({ method: "POST" })
 
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const, ok: true };
-  });
+}

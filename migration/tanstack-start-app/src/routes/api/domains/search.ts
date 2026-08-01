@@ -7,7 +7,7 @@ export const Route = createFileRoute("/api/domains/search")({
     handlers: {
       POST: async ({ request }) => {
         const body = (await request.json().catch(() => ({}))) as { query?: string; years?: number };
-        const r = await searchDomains({ data: { query: body.query ?? "", years: body.years } });
+        const r = await searchDomains({ query: body.query ?? "", years: body.years });
         if (r.status === "unauthorized") return Response.json({ error: "Unauthorized" }, { status: 401 });
         if (r.status === "bad_request") return Response.json({ error: r.message }, { status: 400 });
         return Response.json(r.payload);

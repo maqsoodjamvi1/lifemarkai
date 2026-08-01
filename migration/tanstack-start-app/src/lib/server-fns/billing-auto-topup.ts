@@ -1,10 +1,9 @@
 /** Native billing/auto-topup — reimplemented off the worker (ported lib/stripe). */
-import { createServerFn } from "@tanstack/react-start";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { stripe } from "@/lib/stripe/client";
 import { CREDIT_PACKS } from "@/lib/stripe/plans";
 
-export const getAutoTopup = createServerFn({ method: "GET" }).handler(async () => {
+export async function getAutoTopup() {
   const supabase = await createClient();
   const {
     data: { user },
@@ -38,7 +37,7 @@ export const getAutoTopup = createServerFn({ method: "GET" }).handler(async () =
     hasCard: !!card,
     card,
   };
-});
+}
 
 interface AutoTopupBody {
   action?: "setup-card" | "save-card" | "remove-card";
@@ -48,9 +47,7 @@ interface AutoTopupBody {
   amount?: number;
 }
 
-export const updateAutoTopup = createServerFn({ method: "POST" })
-  .validator((d: AutoTopupBody) => d)
-  .handler(async ({ data }) => {
+export async function updateAutoTopup(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -128,4 +125,4 @@ export const updateAutoTopup = createServerFn({ method: "POST" })
     if (data.amount !== undefined) updates.auto_topup_amount = data.amount;
     await (admin as any).from("profiles").update(updates).eq("id", user.id);
     return { status: "ok" as const };
-  });
+}

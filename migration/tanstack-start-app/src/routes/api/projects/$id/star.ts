@@ -6,7 +6,7 @@ export const Route = createFileRoute("/api/projects/$id/star")({
   server: {
     handlers: {
       POST: async ({ params }) => {
-        const r = await toggleProjectStar({ data: { projectId: params.id } });
+        const r = await toggleProjectStar({ projectId: params.id });
         if (r.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -19,7 +19,7 @@ export const Route = createFileRoute("/api/projects/$id/star")({
         return Response.json({ starred: r.starred, count: r.count });
       },
       GET: async ({ params }) => {
-        const r = await getProjectStar({ data: { projectId: params.id } });
+        const r = await getProjectStar({ projectId: params.id });
         return Response.json({ starred: r.starred, count: r.count });
       },
     },

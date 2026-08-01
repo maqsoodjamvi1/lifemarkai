@@ -140,14 +140,13 @@ export async function isPreviewReachable(url: string, timeoutMs = 8000): Promise
     }
 
     const fails = reached ? 0 : prev.fails + 1;
-    // Alive on any success. Dead only after repeated failures — and if we've
-    // never once seen it up, trust the caller's stored phase rather than
-    // asserting death from a probe that may simply be blocked.
-    const ok = reached
-      ? true
-      : prev.everOk
-        ? fails < PREVIEW_PROBE_FAILURES_BEFORE_DEAD
-        : true;
+    // Alive on any success. Dead after repeated failures — including the case
+    // where we have NEVER reached the tunnel. Failing open forever left the
+    // editor framing a Modal URL whose container was already terminated
+    // (connection reset) with no self-heal, because phaseOnly kept saying ok.
+    // A blocked probe can still false-negative once; three strikes is enough
+    // to prefer a cold reboot over a permanently blank iframe.
+    const ok = reached ? true : fails < PREVIEW_PROBE_FAILURES_BEFORE_DEAD;
 
     previewProbeCache.set(url, {
       ok,

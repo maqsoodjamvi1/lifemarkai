@@ -16,7 +16,7 @@ export const Route = createFileRoute("/api/account/privacy")({
       },
       PATCH: async ({ request }) => {
         const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-        const r = await updatePrivacy({ data: body });
+        const r = await updatePrivacy(body);
         if (r.status === "unauthorized") return Response.json({ error: "Unauthorized" }, { status: 401 });
         if (r.status === "noop") return Response.json({ error: "Nothing to update" }, { status: 400 });
         if (r.status === "error") return Response.json({ error: r.message }, { status: 500 });

@@ -2,18 +2,13 @@
  * Native domains checkout + purchase — reimplemented off the worker.
  * Ports of app/api/domains/{checkout,purchase} (need lib/plans/gating + stripe).
  */
-import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@/lib/supabase/server";
 import { stripe, getOrCreateCustomer } from "@/lib/stripe/client";
 import { getRegistrar, isPurchaseEnabled, type RegistrantContact } from "@/lib/domains/registrar";
 import { completeDomainPurchase } from "@/lib/domains/complete-domain-purchase";
 import { requireFeature } from "@/lib/plans/gating";
 
-export const createDomainCheckout = createServerFn({ method: "POST" })
-  .validator(
-    (d: { projectId: string; domain: string; priceCents: number; years?: number; contact: RegistrantContact; appUrl: string }) => d,
-  )
-  .handler(async ({ data }) => {
+export async function createDomainCheckout(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -92,13 +87,9 @@ export const createDomainCheckout = createServerFn({ method: "POST" })
 
     await (supabase as any).from("domain_registrations").update({ stripe_ref: session.id }).eq("domain", data.domain.toLowerCase());
     return { status: "ok" as const, url: session.url, sessionId: session.id };
-  });
+}
 
-export const purchaseDomainDirect = createServerFn({ method: "POST" })
-  .validator(
-    (d: { projectId: string; domain: string; contact: RegistrantContact; years?: number; autoRenew?: boolean }) => d,
-  )
-  .handler(async ({ data }) => {
+export async function purchaseDomainDirect(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -126,4 +117,4 @@ export const purchaseDomainDirect = createServerFn({ method: "POST" })
     });
     if (!result.ok) return { status: "registrar_error" as const, message: result.error };
     return { status: "ok" as const, result };
-  });
+}

@@ -4,7 +4,6 @@
  * code-parser + octokit all resolve in src). Returns a status union the route
  * maps to HTTP codes.
  */
-import { createServerFn } from "@tanstack/react-start";
 import { Octokit } from "@octokit/rest";
 import { createClient } from "@/lib/supabase/server";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
@@ -69,9 +68,7 @@ type ImportResult =
   | { status: "ok"; payload: { projectId: string; name: string; filesImported: number; branch: string } }
   | { status: "error"; code: number; message: string; extra?: Record<string, unknown> };
 
-export const importGithubRepo = createServerFn({ method: "POST" })
-  .validator((d: { repoUrl: string; branch?: string }) => d)
-  .handler(async ({ data }): Promise<ImportResult> => {
+export async function importGithubRepo(data: { repoUrl: string; branch?: string }): Promise<ImportResult> {
     const supabase = await createClient();
     const {
       data: { user },
@@ -209,4 +206,4 @@ export const importGithubRepo = createServerFn({ method: "POST" })
         }
       }
     }
-  });
+}

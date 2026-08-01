@@ -1,9 +1,7 @@
 /**
  * Native project messages — list / persist / truncate / restore / clear.
+ * Plain helpers — not createServerFn (see project-files.ts).
  */
-import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
-import { zodValidator } from "@tanstack/zod-adapter";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { assertChatAccess } from "@/lib/project/chat-access";
@@ -21,29 +19,11 @@ function sanitizeMessageContent(role: string, content: unknown): string {
   return role === "user" ? "(empty message)" : "Changes applied.";
 }
 
-const messageRowSchema = z.object({
-  id: z.string().uuid().optional(),
-  role: z.enum(["user", "assistant", "system"]),
-  content: z.string(),
-  mode: z.string().optional(),
-  tokens_used: z.number().nullable().optional(),
-  model: z.string().nullable().optional(),
-  metadata: z.record(z.unknown()).nullable().optional(),
-  rating: z.union([z.literal(1), z.literal(-1), z.null()]).optional(),
-  created_at: z.string().optional(),
-});
-
-export const listMessages = createServerFn({ method: "GET" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        before: z.string().optional(),
-        limit: z.coerce.number().int().min(1).max(500).optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function listMessages(data: {
+  projectId: string;
+  before?: string;
+  limit?: number;
+}) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -70,23 +50,9 @@ export const listMessages = createServerFn({ method: "GET" })
     const hasMore = list.length > limit;
     const page = (hasMore ? list.slice(0, limit) : list).reverse();
     return { status: "ok" as const, messages: page, hasMore };
-  });
+}
 
-export const postMessages = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        restore: z.boolean().optional(),
-        truncate: z.boolean().optional(),
-        afterMessageId: z.string().uuid().optional(),
-        fromCreatedAt: z.string().optional(),
-        includePivot: z.boolean().optional(),
-        messages: z.array(messageRowSchema).optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function postMessages(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -137,8 +103,8 @@ export const postMessages = createServerFn({ method: "POST" })
 
     if (data.restore === true) {
       const payload = rows
-        .filter((m) => m.id && m.content != null)
-        .map((m) => ({
+        .filter((m: any) => m.id && m.content != null)
+        .map((m: any) => ({
           id: m.id,
           project_id: data.projectId,
           role: m.role,
@@ -163,7 +129,7 @@ export const postMessages = createServerFn({ method: "POST" })
 
     const result = await persistChatTurnMessages(
       supabase,
-      rows.map((m) => ({
+      rows.map((m: any) => ({
         project_id: data.projectId,
         role: m.role,
         content: m.content,
@@ -182,11 +148,9 @@ export const postMessages = createServerFn({ method: "POST" })
       status: "ok" as const,
       assistantMessageId: result.assistantMessageId ?? null,
     };
-  });
+}
 
-export const clearMessages = createServerFn({ method: "POST" })
-  .validator(zodValidator(z.object({ projectId: z.string().uuid() })))
-  .handler(async ({ data }) => {
+export async function clearMessages(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -202,21 +166,9 @@ export const clearMessages = createServerFn({ method: "POST" })
       .eq("project_id", data.projectId);
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const };
-  });
+}
 
-export const patchMessage = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        messageId: z.string().uuid(),
-        rating: z.union([z.literal(1), z.literal(-1), z.null()]).optional(),
-        metadata: z.record(z.unknown()).nullable().optional(),
-        mergeMetadata: z.boolean().optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function patchMessage(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -261,18 +213,9 @@ export const patchMessage = createServerFn({ method: "POST" })
       .single();
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const, message };
-  });
+}
 
-export const deleteMessage = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        messageId: z.string().uuid(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function deleteMessage(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -289,4 +232,4 @@ export const deleteMessage = createServerFn({ method: "POST" })
       .eq("project_id", data.projectId);
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const };
-  });
+}

@@ -26,9 +26,7 @@ export const Route = createFileRoute("/api/billing/credits")({
       POST: async ({ request }) => {
         const body = (await request.json().catch(() => ({}))) as { packKey?: string; teamId?: string };
         const appUrl = new URL(request.url).origin;
-        const r = await createCreditPackCheckout({
-          data: { packKey: body.packKey ?? "", teamId: body.teamId, appUrl },
-        });
+        const r = await createCreditPackCheckout({ packKey: body.packKey ?? "", teamId: body.teamId, appUrl });
         if (r.status === "unauthorized") return Response.json({ error: "Unauthorized" }, { status: 401 });
         if (r.status === "bad_request") return Response.json({ error: r.message }, { status: 400 });
         return Response.json({ url: r.url });

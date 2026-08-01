@@ -2,9 +2,7 @@
  * Native projects list/create — Start-owned (no Next hop for dashboard create).
  * Template scaffolding for built-ins pulls from the main repo via relative import.
  */
-import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
-import { zodValidator } from "@tanstack/zod-adapter";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import {
@@ -144,7 +142,7 @@ function getStarterFiles(name: string, framework: string) {
   ];
 }
 
-export const listProjects = createServerFn({ method: "GET" }).handler(async () => {
+export async function listProjects() {
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);
   if (!user) return { status: "unauthorized" as const };
@@ -157,11 +155,9 @@ export const listProjects = createServerFn({ method: "GET" }).handler(async () =
 
   if (error) return { status: "error" as const, message: error.message };
   return { status: "ok" as const, projects: data ?? [] };
-});
+}
 
-export const createProject = createServerFn({ method: "POST" })
-  .validator(zodValidator(projectCreateSchema))
-  .handler(async ({ data }) => {
+export async function createProject(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -238,7 +234,7 @@ export const createProject = createServerFn({ method: "POST" })
 
     if (data.forkFiles && data.forkFiles.length > 0) {
       await (supabase as any).from("project_files").insert(
-        data.forkFiles.map((f) => ({
+        data.forkFiles.map((f: any) => ({
           project_id: project.id,
           path: f.path,
           content: f.content,
@@ -279,7 +275,7 @@ export const createProject = createServerFn({ method: "POST" })
     }
 
     return { status: "ok" as const, project };
-  });
+}
 
 const PUBLIC_PROJECT_SELECT = [
   "id",
@@ -344,9 +340,7 @@ function safeProjectResponse(data: Record<string, unknown>): any {
   return response;
 }
 
-export const getProject = createServerFn({ method: "GET" })
-  .validator(zodValidator(z.object({ id: z.string().uuid() })))
-  .handler(async ({ data }) => {
+export async function getProject(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     const access = await getProjectAccess(supabase, data.id, user?.id);
@@ -363,16 +357,14 @@ export const getProject = createServerFn({ method: "GET" })
       status: "ok" as const,
       project: safeProjectResponse(project as Record<string, unknown>),
     };
-  });
+}
 
 const projectUpdateSchema = z.object({
   id: z.string().uuid(),
   patch: z.record(z.unknown()),
 });
 
-export const updateProject = createServerFn({ method: "POST" })
-  .validator(zodValidator(projectUpdateSchema))
-  .handler(async ({ data }) => {
+export async function updateProject(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -442,11 +434,9 @@ export const updateProject = createServerFn({ method: "POST" })
       status: "ok" as const,
       project: safeProjectResponse(project as Record<string, unknown>),
     };
-  });
+}
 
-export const deleteProject = createServerFn({ method: "POST" })
-  .validator(zodValidator(z.object({ id: z.string().uuid() })))
-  .handler(async ({ data }) => {
+export async function deleteProject(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -462,4 +452,4 @@ export const deleteProject = createServerFn({ method: "POST" })
 
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const, success: true };
-  });
+}

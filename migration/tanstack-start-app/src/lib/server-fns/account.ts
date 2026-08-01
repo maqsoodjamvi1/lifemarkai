@@ -2,10 +2,9 @@
  * Native account server-fns — reimplemented off the worker (pure Supabase).
  * Port of app/api/account/sessions/route.ts.
  */
-import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@/lib/supabase/server";
 
-export const listSessions = createServerFn({ method: "GET" }).handler(async () => {
+export async function listSessions() {
   const supabase = await createClient();
   const {
     data: { user },
@@ -34,10 +33,10 @@ export const listSessions = createServerFn({ method: "GET" }).handler(async () =
       : null,
     auditLog: auditRows ?? [],
   };
-});
+}
 
 /** Sign out all other sessions (global refresh-token revoke). */
-export const signOutOtherSessions = createServerFn({ method: "POST" }).handler(async () => {
+export async function signOutOtherSessions() {
   const supabase = await createClient();
   const {
     data: { user },
@@ -47,4 +46,4 @@ export const signOutOtherSessions = createServerFn({ method: "POST" }).handler(a
   const { error } = await supabase.auth.signOut({ scope: "global" });
   if (error) return { status: "error" as const, message: error.message };
   return { status: "ok" as const };
-});
+}

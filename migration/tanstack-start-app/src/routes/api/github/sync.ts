@@ -7,7 +7,7 @@ export const Route = createFileRoute("/api/github/sync")({
     handlers: {
       POST: async ({ request }) => {
         const body = (await request.json().catch(() => ({}))) as { projectId?: string; action?: string };
-        const r = await githubSync({ data: { projectId: body.projectId ?? "", action: body.action ?? "" } });
+        const r = await githubSync({ projectId: body.projectId ?? "", action: body.action ?? "" });
         switch (r.status) {
           case "unauthorized":
             return Response.json({ error: "Unauthorized" }, { status: 401 });

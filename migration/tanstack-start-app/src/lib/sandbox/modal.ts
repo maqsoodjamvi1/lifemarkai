@@ -296,12 +296,40 @@ export class ModalSandboxProvider implements SandboxProvider {
       "-c",
       `nohup ${startCommand} > /tmp/lifemark-dev.log 2>&1 &`,
     ]);
-    const url = await this.previewUrlFromSandbox(sb, port);
-    const ready = await waitForServer(url, 120_000);
+
+    // Probe from INSIDE the sandbox. The Lifemark host (esp. Docker Desktop)
+    // often cannot hairpin to `*.w.modal.host` — TCP connects then resets —
+    // so waiting on the public tunnel URL falsely reports "Dev server did not
+    // start" even when Vite is healthy. Users' browsers can still load the
+    // tunnel; only the server-side hairpin is broken.
+    const ready = await this.waitForLocalPort(sb, port, 120_000);
     if (!ready) {
       const tail = await this.execProcess(sb, ["bash", "-c", "tail -n 60 /tmp/lifemark-dev.log 2>/dev/null || true"]);
       throw new Error(`Dev server did not start on port ${port}. ${trunc(tail.stdout + tail.stderr, 800)}`);
     }
+  }
+
+  /** Poll `127.0.0.1:<port>` inside the sandbox until the app answers. */
+  private async waitForLocalPort(
+    sb: ModalSandbox,
+    port: number,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const probe = await this.execProcess(sb, [
+        "bash",
+        "-c",
+        // Prefer curl; fall back to node. Treat any HTTP response (incl. 404)
+        // as up — only connection-refused / empty means not listening yet.
+        `code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:${port}/ 2>/dev/null || true); ` +
+          `if [ -n "$code" ] && [ "$code" != "000" ]; then echo UP:$code; exit 0; fi; ` +
+          `node -e "fetch('http://127.0.0.1:${port}/',{signal:AbortSignal.timeout(3000)}).then(r=>{console.log('UP:'+r.status);process.exit(0)}).catch(()=>process.exit(1))" 2>/dev/null || true`,
+      ]);
+      if (/UP:\d+/.test(probe.stdout || "")) return true;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    return false;
   }
 
   async runProject(opts: {
@@ -331,8 +359,8 @@ export class ModalSandboxProvider implements SandboxProvider {
         const name = sandboxNameForProject(opts.projectId);
         try {
           const warm = await modal.sandboxes.fromName(this.appName, name);
-          const previewUrl = await this.previewUrlFromSandbox(warm, port);
-          if (await waitForServer(previewUrl, 8000)) {
+          if (await this.waitForLocalPort(warm, port, 8000)) {
+            const previewUrl = await this.previewUrlFromSandbox(warm, port);
             progress?.("ready", "Reconnected to warm Modal sandbox");
             return { ok: true, sandboxId: warm.sandboxId, previewUrl, logs: "Reconnected to warm Modal sandbox" };
           }
@@ -366,20 +394,42 @@ export class ModalSandboxProvider implements SandboxProvider {
       } catch (createErr) {
         const msg = createErr instanceof Error ? createErr.message : String(createErr);
         // Race: warm lookup missed an existing named sandbox — reclaim it.
+        // Important: a Modal name can outlive the container. fromName() then
+        // succeeds but tunnels/exec throw NOT_FOUND ("Sandbox has already shut
+        // down"). That must NOT abort the cold boot — terminate + recreate.
         if (opts.projectId && /already exists/i.test(msg)) {
           const name = sandboxNameForProject(opts.projectId);
-          const existing = await modal.sandboxes.fromName(this.appName, name);
-          const previewUrl = await this.previewUrlFromSandbox(existing, port);
-          if (await waitForServer(previewUrl, 12_000)) {
-            progress?.("ready", "Reconnected to existing Modal sandbox");
-            return {
-              ok: true,
-              sandboxId: existing.sandboxId,
-              previewUrl,
-              logs: "Reconnected after name conflict",
-            };
+          try {
+            const existing = await modal.sandboxes.fromName(this.appName, name);
+            try {
+              if (await this.waitForLocalPort(existing, port, 12_000)) {
+                const previewUrl = await this.previewUrlFromSandbox(existing, port);
+                progress?.("ready", "Reconnected to existing Modal sandbox");
+                return {
+                  ok: true,
+                  sandboxId: existing.sandboxId,
+                  previewUrl,
+                  logs: "Reconnected after name conflict",
+                };
+              }
+            } catch (reclaimErr) {
+              const reclaimMsg =
+                reclaimErr instanceof Error ? reclaimErr.message : String(reclaimErr);
+              if (
+                !/already shut down|NOT_FOUND|Sandbox .*not found|container ID .*not found/i.test(
+                  reclaimMsg,
+                )
+              ) {
+                throw reclaimErr;
+              }
+              console.warn(
+                `[modal] named sandbox ${name} is gone during reclaim — terminating stale name`,
+              );
+            }
+            await existing.terminate().catch(() => {});
+          } catch {
+            /* name may already be gone */
           }
-          await existing.terminate().catch(() => {});
           sb = await modal.sandboxes.create(app, image, createOpts);
         } else if (/timeout|duration|limit|exceed|too (large|long)|invalid/i.test(msg)) {
           // Defensive: if the plan/API rejects the long (24h) lifetime, don't

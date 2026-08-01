@@ -7,7 +7,7 @@ export const Route = createFileRoute("/api/github/import")({
     handlers: {
       POST: async ({ request }) => {
         const body = (await request.json().catch(() => ({}))) as { repoUrl?: string; branch?: string };
-        const r = await importGithubRepo({ data: { repoUrl: body.repoUrl ?? "", branch: body.branch } });
+        const r = await importGithubRepo({ repoUrl: body.repoUrl ?? "", branch: body.branch });
         if (r.status === "error") {
           return Response.json({ error: r.message, ...(r.extra ?? {}) }, { status: r.code });
         }

@@ -17,7 +17,6 @@ export const Route = createFileRoute("/api/projects/$id/messages/$messageId")({
           return Response.json({ error: "Invalid JSON" }, { status: 400 });
         }
         const result = await patchMessage({
-          data: {
             projectId: params.id,
             messageId: params.messageId,
             rating:
@@ -29,8 +28,7 @@ export const Route = createFileRoute("/api/projects/$id/messages/$messageId")({
                 ? ((body.metadata as Record<string, unknown> | null) ?? null)
                 : undefined,
             mergeMetadata: body.mergeMetadata !== false,
-          },
-        });
+          });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -44,9 +42,7 @@ export const Route = createFileRoute("/api/projects/$id/messages/$messageId")({
         return Response.json({ ok: true, message: result.message });
       },
       DELETE: async ({ params }) => {
-        const result = await deleteMessage({
-          data: { projectId: params.id, messageId: params.messageId },
-        });
+        const result = await deleteMessage({ projectId: params.id, messageId: params.messageId });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }

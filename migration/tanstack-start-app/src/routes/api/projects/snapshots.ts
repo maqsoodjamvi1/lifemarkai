@@ -13,11 +13,9 @@ export const Route = createFileRoute("/api/projects/snapshots")({
       GET: async ({ request }) => {
         const url = new URL(request.url);
         const result = await listOrGetSnapshot({
-          data: {
             projectId: url.searchParams.get("projectId") ?? undefined,
             id: url.searchParams.get("id") ?? undefined,
-          },
-        });
+          });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -45,9 +43,7 @@ export const Route = createFileRoute("/api/projects/snapshots")({
         if (!body.projectId) {
           return Response.json({ error: "projectId required" }, { status: 400 });
         }
-        const result = await createSnapshot({
-          data: { projectId: body.projectId, label: body.label },
-        });
+        const result = await createSnapshot({ projectId: body.projectId, label: body.label });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -73,11 +69,9 @@ export const Route = createFileRoute("/api/projects/snapshots")({
           return Response.json({ error: "snapshotId required" }, { status: 400 });
         }
         const result = await pinSnapshot({
-          data: {
             snapshotId: body.snapshotId,
             isPinned: !!body.isPinned,
-          },
-        });
+          });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -95,7 +89,7 @@ export const Route = createFileRoute("/api/projects/snapshots")({
         if (!id) {
           return Response.json({ error: "id required" }, { status: 400 });
         }
-        const result = await deleteSnapshot({ data: { id } });
+        const result = await deleteSnapshot({ id });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }

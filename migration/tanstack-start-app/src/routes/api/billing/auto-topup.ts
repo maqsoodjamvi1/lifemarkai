@@ -18,7 +18,7 @@ export const Route = createFileRoute("/api/billing/auto-topup")({
       },
       POST: async ({ request }) => {
         const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
-        const r = await updateAutoTopup({ data: body });
+        const r = await updateAutoTopup(body);
         if (r.status === "unauthorized") return Response.json({ error: "Unauthorized" }, { status: 401 });
         if (r.status === "bad_request") return Response.json({ error: r.message }, { status: 400 });
         if (r.status === "client_secret") return Response.json({ clientSecret: r.clientSecret });
