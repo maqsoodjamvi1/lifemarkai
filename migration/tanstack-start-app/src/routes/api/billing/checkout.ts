@@ -11,9 +11,7 @@ export const Route = createFileRoute("/api/billing/checkout")({
           billing?: "monthly" | "yearly";
         };
         const appUrl = new URL(request.url).origin;
-        const r = await createSubscriptionCheckout({
-          data: { plan: body.plan ?? "", billing: body.billing, appUrl },
-        });
+        const r = await createSubscriptionCheckout({ plan: body.plan ?? "", billing: body.billing, appUrl });
         if (r.status === "unauthorized") return Response.json({ error: "Unauthorized" }, { status: 401 });
         if (r.status === "bad_request") return Response.json({ error: r.message }, { status: 400 });
         return Response.json({ url: r.url });

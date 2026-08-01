@@ -2,24 +2,10 @@
  * Native notifications inbox (GET / PATCH / DELETE).
  * POST email-send stays proxied to Next (Resend).
  */
-import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
-import { zodValidator } from "@tanstack/zod-adapter";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 
-export const listNotifications = createServerFn({ method: "GET" })
-  .validator(
-    zodValidator(
-      z
-        .object({
-          limit: z.coerce.number().int().min(1).max(100).optional(),
-          unreadOnly: z.boolean().optional(),
-        })
-        .catch({}),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function listNotifications(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -47,18 +33,9 @@ export const listNotifications = createServerFn({ method: "GET" })
       notifications: rows ?? [],
       unreadCount: typeof countData === "number" ? countData : 0,
     };
-  });
+}
 
-export const markNotifications = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        action: z.enum(["mark_all_read", "mark_read"]),
-        ids: z.array(z.string().uuid()).optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function markNotifications(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -78,18 +55,9 @@ export const markNotifications = createServerFn({ method: "POST" })
     }
 
     return { status: "error" as const, message: "Invalid action" };
-  });
+}
 
-export const deleteNotifications = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        id: z.string().uuid().optional(),
-        clearRead: z.boolean().optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function deleteNotifications(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -108,4 +76,4 @@ export const deleteNotifications = createServerFn({ method: "POST" })
         .eq("is_read", true);
     }
     return { status: "ok" as const, success: true };
-  });
+}

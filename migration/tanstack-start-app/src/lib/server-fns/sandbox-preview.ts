@@ -2,9 +2,6 @@
  * Native sandbox-preview GET (phase poll / reconnect), logs, stop.
  * POST boot + PATCH sync stay proxied to Next (full Modal pipeline).
  */
-import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
-import { zodValidator } from "@tanstack/zod-adapter";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
@@ -18,17 +15,7 @@ async function loadSandbox() {
   return import("@/lib/sandbox");
 }
 
-export const getSandboxPreview = createServerFn({ method: "GET" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        sandboxId: z.string().optional(),
-        phaseOnly: z.boolean().optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function getSandboxPreview(data: any) {
     if (!isSandboxEnabled()) {
       return { status: "disabled" as const, enabled: false, reason: "sandbox_not_configured" };
     }
@@ -292,15 +279,13 @@ export const getSandboxPreview = createServerFn({ method: "GET" })
       provider: getSandboxProviderId(),
       error: expireDetail,
     };
-  });
+}
 
 /**
  * Native cold POST — avoids Vite SSR OOM from loading the Next route adapter
  * (observed: FATAL heap OOM mid-POST while dispatching app/api sandbox-preview).
  */
-export const createSandboxPreview = createServerFn({ method: "POST" })
-  .validator(zodValidator(z.object({ projectId: z.string().uuid() })))
-  .handler(async ({ data }) => {
+export async function createSandboxPreview(data: any) {
     if (!isSandboxEnabled()) {
       return {
         status: "disabled" as const,
@@ -491,19 +476,9 @@ export const createSandboxPreview = createServerFn({ method: "POST" })
       phase: "ready",
       sandboxName: sandboxNameForProject(data.projectId),
     };
-  });
+}
 
-export const getSandboxLogs = createServerFn({ method: "GET" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        sandboxId: z.string().optional(),
-        lines: z.coerce.number().int().min(1).max(500).optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function getSandboxLogs(data: any) {
     if (!isSandboxEnabled()) {
       return { status: "disabled" as const, enabled: false };
     }
@@ -561,18 +536,9 @@ export const getSandboxLogs = createServerFn({ method: "GET" })
         error: err instanceof Error ? err.message : "Failed to read logs",
       };
     }
-  });
+}
 
-export const stopSandbox = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        sandboxId: z.string().min(1),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function stopSandbox(data: any) {
     if (!isSandboxEnabled()) {
       return { status: "disabled" as const, enabled: false };
     }
@@ -600,4 +566,4 @@ export const stopSandbox = createServerFn({ method: "POST" })
       .eq("id", data.projectId);
 
     return { status: "ok" as const, ok: true };
-  });
+}

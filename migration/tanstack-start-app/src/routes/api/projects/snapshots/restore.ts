@@ -24,13 +24,11 @@ export const Route = createFileRoute("/api/projects/snapshots/restore")({
           );
         }
         const result = await restoreSnapshot({
-          data: {
             snapshotId: body.snapshotId,
             projectId: body.projectId,
             dryRun: body.dryRun === true,
             confirmSchema: body.confirmSchema === true,
-          },
-        });
+          });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }

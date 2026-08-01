@@ -7,7 +7,7 @@ export const Route = createFileRoute("/api/domains/purchase")({
     handlers: {
       POST: async ({ request }) => {
         const body = (await request.json().catch(() => ({}))) as any;
-        const r = await purchaseDomainDirect({ data: body });
+        const r = await purchaseDomainDirect(body);
         if (r.status === "unauthorized") return Response.json({ error: "Unauthorized" }, { status: 401 });
         if (r.status === "gated") return Response.json({ error: r.message, requiredPlan: r.requiredPlan }, { status: r.code });
         if (r.status === "unconfigured") return Response.json({ error: r.message }, { status: 501 });

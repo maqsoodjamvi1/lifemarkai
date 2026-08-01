@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowRight, Link2, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { createProject } from "@/lib/server-fns/projects";
 
 interface DashboardHeroProps {
   firstName: string;
@@ -47,22 +46,28 @@ function HeroPromptCreateBox() {
     setError(null);
     try {
       const name = trimmed.slice(0, 50) + (trimmed.length > 50 ? "…" : "");
-      const result = await createProject({
-        data: {
+      const res = await fetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           name,
           description: trimmed.slice(0, 10_000),
           framework,
-        },
+        }),
       });
-      if (result.status === "unauthorized") {
+      if (res.status === 401) {
         throw new Error("Please sign in to create a project");
       }
-      if (result.status !== "ok") {
-        throw new Error(result.message || "Create failed");
+      const project = (await res.json().catch(() => ({}))) as {
+        id?: string;
+        error?: string;
+      };
+      if (!res.ok || !project.id) {
+        throw new Error(project.error || "Create failed");
       }
       await navigate({
         to: "/editor/$projectId",
-        params: { projectId: result.project.id as string },
+        params: { projectId: project.id },
         search: { prompt: trimmed, mode: "build" },
       });
     } catch (err) {

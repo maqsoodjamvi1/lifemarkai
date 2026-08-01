@@ -1,9 +1,6 @@
 /**
  * Sandbox status / keep-alive — flags at import time; Modal SDK on demand.
  */
-import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
-import { zodValidator } from "@tanstack/zod-adapter";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
@@ -13,26 +10,16 @@ import {
 } from "@/lib/sandbox/flags";
 import { debugLog } from "@/lib/debug-log";
 
-export const getSandboxStatus = createServerFn({ method: "GET" }).handler(async () => {
+export async function getSandboxStatus() {
   const enabled = isSandboxEnabled();
   return {
     status: "ok" as const,
     enabled,
     provider: enabled ? getSandboxProviderId() : null,
   };
-});
+}
 
-export const keepAliveSandbox = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        sandboxId: z.string().optional(),
-        previewUrl: z.string().optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function keepAliveSandbox(data: any) {
     if (!isSandboxEnabled()) {
       return { status: "disabled" as const, enabled: false, alive: false };
     }
@@ -116,4 +103,4 @@ export const keepAliveSandbox = createServerFn({ method: "POST" })
         error: err instanceof Error ? err.message : "keep-alive failed",
       };
     }
-  });
+}

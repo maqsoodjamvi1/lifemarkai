@@ -1,8 +1,7 @@
 /** Native account/privacy — reimplemented off the worker (pure Supabase). */
-import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@/lib/supabase/server";
 
-export const getPrivacy = createServerFn({ method: "GET" }).handler(async () => {
+export async function getPrivacy() {
   const supabase = await createClient();
   const {
     data: { user },
@@ -19,13 +18,9 @@ export const getPrivacy = createServerFn({ method: "GET" }).handler(async () => 
     analytics_opt_out: profile?.analytics_opt_out ?? false,
     marketing_emails: profile?.marketing_emails ?? true,
   };
-});
+}
 
-export const updatePrivacy = createServerFn({ method: "POST" })
-  .validator(
-    (d: { training_opt_out?: boolean; analytics_opt_out?: boolean; marketing_emails?: boolean }) => d,
-  )
-  .handler(async ({ data }) => {
+export async function updatePrivacy(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -46,4 +41,4 @@ export const updatePrivacy = createServerFn({ method: "POST" })
       .single();
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const, profile: row };
-  });
+}

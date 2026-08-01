@@ -569,7 +569,22 @@ export class DockerSandboxProvider implements SandboxProvider {
         : `${c.scheme}://${c.publicHost}:${hostPort}`;
       // Wait for a real response — returning before the server listens hands the
       // iframe a dead URL and paints a blank pane.
-      const ready = await waitForServer(previewUrl, Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000));
+      //
+      // When the Lifemark app itself runs in Docker and SANDBOX_PUBLIC_HOST is
+      // localhost/127.0.0.1 (browser-reachable on the Docker Desktop host),
+      // probing that URL from inside the app container hairpins to the app
+      // container — not the published sandbox port. Probe via the host gateway
+      // instead; still return the localhost URL to the browser.
+      const probeHost =
+        !c.routeViaProxy &&
+        (c.publicHost === "localhost" || c.publicHost === "127.0.0.1")
+          ? "host.docker.internal"
+          : null;
+      const probeUrl =
+        probeHost && hostPort != null
+          ? `${c.scheme}://${probeHost}:${hostPort}`
+          : previewUrl;
+      const ready = await waitForServer(probeUrl, Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000));
 
       if (!ready) {
         // ONE-SHOT DIAGNOSTICS. Six deploys were spent guessing at this failure

@@ -26,7 +26,7 @@ export const Route = createFileRoute("/api/projects")({
           body = {};
         }
         try {
-          const result = await createProject({ data: body as any });
+          const result = await createProject(body as any);
           if (result.status === "unauthorized") {
             return Response.json({ error: "Unauthorized" }, { status: 401 });
           }

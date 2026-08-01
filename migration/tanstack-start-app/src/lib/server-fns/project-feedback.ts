@@ -1,10 +1,7 @@
 /** Native projects/[id]/feedback — reimplemented off the worker (pure Supabase). */
-import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@/lib/supabase/server";
 
-export const listFeedback = createServerFn({ method: "GET" })
-  .validator((d: { projectId: string }) => d)
-  .handler(async ({ data }) => {
+export async function listFeedback(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -19,14 +16,10 @@ export const listFeedback = createServerFn({ method: "GET" })
       .limit(100);
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const, feedback: rows ?? [] };
-  });
+}
 
 /** Public — submitted by the embedded widget (no auth). */
-export const submitFeedback = createServerFn({ method: "POST" })
-  .validator(
-    (d: { projectId: string; rating?: number; message?: string; page_url?: string; userAgent?: string }) => d,
-  )
-  .handler(async ({ data }) => {
+export async function submitFeedback(data: any) {
     const supabase = await createClient();
     const { error } = await (supabase as any).from("app_feedback").insert({
       project_id: data.projectId,
@@ -37,4 +30,4 @@ export const submitFeedback = createServerFn({ method: "POST" })
     });
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const };
-  });
+}

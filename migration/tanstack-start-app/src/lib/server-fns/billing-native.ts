@@ -3,16 +3,13 @@
  * lib/stripe subsystem. Ports of app/api/billing/{checkout,portal}/route.ts.
  * The request origin is passed in from the route (needs the Request).
  */
-import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { ensureDevCredits } from "@/lib/dev-credits";
 import { stripe, getOrCreateCustomer, createBillingPortalSession } from "@/lib/stripe/client";
 import { PLANS, CREDIT_PACKS } from "@/lib/stripe/plans";
 
-export const createSubscriptionCheckout = createServerFn({ method: "POST" })
-  .validator((d: { plan: string; billing?: "monthly" | "yearly"; appUrl: string }) => d)
-  .handler(async ({ data }) => {
+export async function createSubscriptionCheckout(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -54,11 +51,9 @@ export const createSubscriptionCheckout = createServerFn({ method: "POST" })
     });
 
     return { status: "ok" as const, url: session.url };
-  });
+}
 
-export const createPortalSession = createServerFn({ method: "POST" })
-  .validator((d: { origin: string }) => d)
-  .handler(async ({ data }) => {
+export async function createPortalSession(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -79,12 +74,10 @@ export const createPortalSession = createServerFn({ method: "POST" })
       `${data.origin}/dashboard/billing`,
     );
     return { status: "ok" as const, url };
-  });
+}
 
 // ── credit pack purchase (one-off Stripe Checkout) ──────────────────────────
-export const createCreditPackCheckout = createServerFn({ method: "POST" })
-  .validator((d: { packKey: string; teamId?: string; appUrl: string }) => d)
-  .handler(async ({ data }) => {
+export async function createCreditPackCheckout(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -136,12 +129,10 @@ export const createCreditPackCheckout = createServerFn({ method: "POST" })
     });
 
     return { status: "ok" as const, url: session.url };
-  });
+}
 
 // ── redeem promotion code ───────────────────────────────────────────────────
-export const redeemPromoCode = createServerFn({ method: "POST" })
-  .validator((d: { code: string }) => d)
-  .handler(async ({ data }) => {
+export async function redeemPromoCode(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -182,7 +173,7 @@ export const redeemPromoCode = createServerFn({ method: "POST" })
       return { status: "error" as const, code: 500, message: err instanceof Error ? err.message : "Failed to apply coupon." };
     }
     return { status: "ok" as const, message: "Promo code applied! Your discount is active." };
-  });
+}
 
 // ── student discount (one-time 50% off 3 months) ────────────────────────────
 const STUDENT_COUPON_PARAMS = {
@@ -193,9 +184,7 @@ const STUDENT_COUPON_PARAMS = {
   max_redemptions: 1,
 };
 
-export const grantStudentDiscount = createServerFn({ method: "POST" })
-  .validator((d: { eduEmail: string }) => d)
-  .handler(async ({ data }) => {
+export async function grantStudentDiscount(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -245,14 +234,14 @@ export const grantStudentDiscount = createServerFn({ method: "POST" })
 
     await (supabase as any).from("profiles").update({ student_discount_used: true }).eq("id", user.id);
     return { status: "ok" as const, message: "Student discount applied! 50% off for your next 3 months." };
-  });
+}
 
 // ── dev-only credit grant ───────────────────────────────────────────────────
-export const grantDevCredits = createServerFn({ method: "POST" }).handler(async () => {
+export async function grantDevCredits() {
   if (process.env.NODE_ENV !== "development") return { status: "forbidden" as const };
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);
   if (!user) return { status: "unauthorized" as const };
   const credits = (await ensureDevCredits(user.id)) ?? 100;
   return { status: "ok" as const, credits };
-});
+}

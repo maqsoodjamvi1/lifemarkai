@@ -9,7 +9,7 @@ export const Route = createFileRoute("/api/domains")({
     handlers: {
       GET: async ({ request }) => {
         const projectId = new URL(request.url).searchParams.get("projectId") ?? "";
-        const r = await getProjectDomain({ data: { projectId } });
+        const r = await getProjectDomain({ projectId });
         if (r.status === "unauthorized") return unauth();
         if (r.status === "bad_request") return Response.json({ error: r.message }, { status: 400 });
         if (r.status === "not_found") return Response.json({ error: "Not found" }, { status: 404 });
@@ -17,7 +17,7 @@ export const Route = createFileRoute("/api/domains")({
       },
       POST: async ({ request }) => {
         const body = (await request.json().catch(() => ({}))) as { projectId?: string; domain?: string };
-        const r = await setProjectDomain({ data: { projectId: body.projectId ?? "", domain: body.domain ?? "" } });
+        const r = await setProjectDomain({ projectId: body.projectId ?? "", domain: body.domain ?? "" });
         if (r.status === "unauthorized") return unauth();
         if (r.status === "bad_request") return Response.json({ error: r.message }, { status: 400 });
         if (r.status === "not_found") return Response.json({ error: "Project not found" }, { status: 404 });
@@ -25,7 +25,7 @@ export const Route = createFileRoute("/api/domains")({
       },
       DELETE: async ({ request }) => {
         const projectId = new URL(request.url).searchParams.get("projectId") ?? "";
-        const r = await deleteProjectDomain({ data: { projectId } });
+        const r = await deleteProjectDomain({ projectId });
         if (r.status === "unauthorized") return unauth();
         if (r.status === "bad_request") return Response.json({ error: r.message }, { status: 400 });
         return Response.json({ ok: true });

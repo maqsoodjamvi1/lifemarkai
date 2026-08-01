@@ -160,8 +160,44 @@ export function useSandboxPreview(projectId: string) {
   const requestPreview = useCallback(async (): Promise<SandboxPreviewState> => {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
-      const res = await fetch(`/api/projects/${projectId}/sandbox-preview`, { method: "POST" });
-      const data = await res.json();
+      const postOnce = async () => {
+        const res = await fetch(`/api/projects/${projectId}/sandbox-preview`, { method: "POST" });
+        return res.json() as Promise<{
+          enabled?: boolean;
+          ok?: boolean;
+          retryable?: boolean;
+          previewUrl?: string | null;
+          sandboxId?: string | null;
+          provider?: string;
+          error?: string;
+          logs?: string | null;
+          phase?: string | null;
+          phaseDetail?: string | null;
+        }>;
+      };
+
+      let data = await postOnce();
+
+      // Server clears an expired Modal id and asks for one more POST. Do that
+      // automatically — showing "Preview could not start" here left users stuck
+      // on a self-healable failure (observed: Retry / first boot both stopped
+      // after the retryable response).
+      if (data.enabled !== false && !data.ok && data.retryable) {
+        try {
+          sessionStorage.removeItem(storageKey(projectId));
+        } catch { /* private mode */ }
+        sandboxIdRef.current = null;
+        setState((s) => ({
+          ...s,
+          loading: true,
+          error: null,
+          previewUrl: null,
+          sandboxId: null,
+          phase: "creating",
+          phaseDetail: "Sandbox expired — starting a fresh one…",
+        }));
+        data = await postOnce();
+      }
 
       if (!data.enabled) {
         return applyState(emptyState());
@@ -405,8 +441,8 @@ export function useSandboxPreview(projectId: string) {
           const deadPhase =
             data.phase === "error" ||
             data.phase === "unreachable" ||
-            /already finished|already completed|FAILED_PRECONDITION|terminated/i.test(
-              data.phaseDetail ?? "",
+            /already finished|already completed|FAILED_PRECONDITION|terminated|Container no longer exists|no longer responding/i.test(
+              `${data.phaseDetail ?? ""} ${data.error ?? ""}`,
             );
           if (deadPhase && !coldRetryRef.current) {
             coldRetryRef.current = true;

@@ -2,7 +2,6 @@
  * Native GitHub server-fns — reimplemented off the worker using the ported
  * lib/github/client (Octokit). Ports of app/api/github/{connect,commits,sync}.
  */
-import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@/lib/supabase/server";
 import {
   getCommitHistory,
@@ -17,9 +16,7 @@ import {
 import { logger } from "@/lib/logger";
 
 // ── OAuth callback: exchange code → token, save to profile ───────────────────
-export const completeGithubConnect = createServerFn({ method: "GET" })
-  .validator((d: { code: string | null; projectId: string | null }) => d)
-  .handler(async ({ data }) => {
+export async function completeGithubConnect(data: any) {
     if (!data.code) return { status: "denied" as const, redirectPath: "/dashboard?error=github_denied" };
 
     const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
@@ -57,12 +54,10 @@ export const completeGithubConnect = createServerFn({ method: "GET" })
         ? `/editor/${data.projectId}?github=connected`
         : "/dashboard?github=connected",
     };
-  });
+}
 
 // ── Commit history ──────────────────────────────────────────────────────────
-export const getRepoCommits = createServerFn({ method: "GET" })
-  .validator((d: { owner: string; repo: string; perPage: number }) => d)
-  .handler(async ({ data }) => {
+export async function getRepoCommits(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -83,7 +78,7 @@ export const getRepoCommits = createServerFn({ method: "GET" })
     } catch (error: any) {
       return { status: "error" as const, message: error?.message ?? "Failed to fetch commits" };
     }
-  });
+}
 
 // ── Sync (create / push / pull / pr / status) ────────────────────────────────
 function projectBranchName(projectName: string, projectId: string): string {
@@ -102,9 +97,7 @@ const LANG_MAP: Record<string, string> = {
   sql: "sql", sh: "shell", yaml: "yaml", yml: "yaml",
 };
 
-export const githubSync = createServerFn({ method: "POST" })
-  .validator((d: { projectId: string; action: string }) => d)
-  .handler(async ({ data }) => {
+export async function githubSync(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -201,4 +194,4 @@ export const githubSync = createServerFn({ method: "POST" })
     }
 
     return { status: "unknown_action" as const };
-  });
+}

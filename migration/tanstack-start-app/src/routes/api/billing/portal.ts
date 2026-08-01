@@ -7,7 +7,7 @@ export const Route = createFileRoute("/api/billing/portal")({
     handlers: {
       POST: async ({ request }) => {
         const origin = request.headers.get("origin") ?? new URL(request.url).origin;
-        const r = await createPortalSession({ data: { origin } });
+        const r = await createPortalSession({ origin });
         if (r.status === "unauthorized") return Response.json({ error: "Unauthorized" }, { status: 401 });
         if (r.status === "bad_request") return Response.json({ error: r.message }, { status: 400 });
         return Response.json({ url: r.url });

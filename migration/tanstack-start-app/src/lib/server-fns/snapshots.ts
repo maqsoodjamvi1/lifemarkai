@@ -1,9 +1,6 @@
 /**
  * Native project snapshots — list / reconstruct / create / pin / delete / restore.
  */
-import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
-import { zodValidator } from "@tanstack/zod-adapter";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import {
@@ -68,16 +65,7 @@ function detectSchemaChanges(
   };
 }
 
-export const listOrGetSnapshot = createServerFn({ method: "GET" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid().optional(),
-        id: z.string().uuid().optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function listOrGetSnapshot(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -122,18 +110,9 @@ export const listOrGetSnapshot = createServerFn({ method: "GET" })
       .limit(50);
 
     return { status: "ok" as const, kind: "list" as const, snapshots: rows ?? [] };
-  });
+}
 
-export const createSnapshot = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        projectId: z.string().uuid(),
-        label: z.string().optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function createSnapshot(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -262,18 +241,9 @@ export const createSnapshot = createServerFn({ method: "POST" })
         isDelta: !insertPayload.is_baseline,
       },
     };
-  });
+}
 
-export const pinSnapshot = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        snapshotId: z.string().uuid(),
-        isPinned: z.boolean(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function pinSnapshot(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -300,11 +270,9 @@ export const pinSnapshot = createServerFn({ method: "POST" })
 
     if (error) return { status: "error" as const, message: error.message };
     return { status: "ok" as const, snapshot: row };
-  });
+}
 
-export const deleteSnapshot = createServerFn({ method: "POST" })
-  .validator(zodValidator(z.object({ id: z.string().uuid() })))
-  .handler(async ({ data }) => {
+export async function deleteSnapshot(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -321,20 +289,9 @@ export const deleteSnapshot = createServerFn({ method: "POST" })
 
     await (supabase as any).from("project_snapshots").delete().eq("id", data.id);
     return { status: "ok" as const, ok: true };
-  });
+}
 
-export const restoreSnapshot = createServerFn({ method: "POST" })
-  .validator(
-    zodValidator(
-      z.object({
-        snapshotId: z.string().uuid(),
-        projectId: z.string().uuid(),
-        dryRun: z.boolean().optional(),
-        confirmSchema: z.boolean().optional(),
-      }),
-    ),
-  )
-  .handler(async ({ data }) => {
+export async function restoreSnapshot(data: any) {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
@@ -434,4 +391,4 @@ export const restoreSnapshot = createServerFn({ method: "POST" })
       files: restoredFiles ?? [],
       message: `Restored to "${snapMeta.label}"`,
     };
-  });
+}

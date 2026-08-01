@@ -14,9 +14,7 @@ export const Route = createFileRoute("/api/projects/$id/views")({
         const body = (await request.json().catch(() => ({}))) as { referrer?: unknown };
         const referrer = typeof body.referrer === "string" ? body.referrer.slice(0, 255) : null;
 
-        const r = await recordProjectView({
-          data: { projectId: params.id, ip, referrer, countryCode },
-        });
+        const r = await recordProjectView({ projectId: params.id, ip, referrer, countryCode });
         if (r.status === "forbidden") return Response.json({ ok: false }, { status: 403 });
         return Response.json({ ok: true });
       },

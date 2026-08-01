@@ -7,9 +7,7 @@ export const Route = createFileRoute("/api/github/connect")({
     handlers: {
       GET: async ({ request }) => {
         const url = new URL(request.url);
-        const r = await completeGithubConnect({
-          data: { code: url.searchParams.get("code"), projectId: url.searchParams.get("state") },
-        });
+        const r = await completeGithubConnect({ code: url.searchParams.get("code"), projectId: url.searchParams.get("state") });
         return new Response(null, {
           status: 302,
           headers: { Location: new URL(r.redirectPath, request.url).toString() },

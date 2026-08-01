@@ -5,16 +5,11 @@
  * Header/IP extraction stays in the route handler (needs the Request); the
  * privacy-safe hashing + DB writes live here.
  */
-import { createServerFn } from "@tanstack/react-start";
 import { createHash } from "node:crypto";
 import { createClient } from "@/lib/supabase/server";
 
 // ── Public view tracking ───────────────────────────────────────────────────
-export const recordProjectView = createServerFn({ method: "POST" })
-  .validator(
-    (d: { projectId: string; ip: string; referrer: string | null; countryCode: string | null }) => d,
-  )
-  .handler(async ({ data }) => {
+export async function recordProjectView(data: any) {
     const supabase = await createClient();
     const { data: project } = await (supabase as any)
       .from("projects")
@@ -38,12 +33,10 @@ export const recordProjectView = createServerFn({ method: "POST" })
       country_code: data.countryCode,
     });
     return { status: "ok" as const };
-  });
+}
 
 // ── Community star toggle ───────────────────────────────────────────────────
-export const toggleProjectStar = createServerFn({ method: "POST" })
-  .validator((d: { projectId: string }) => d)
-  .handler(async ({ data }) => {
+export async function toggleProjectStar(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -90,12 +83,10 @@ export const toggleProjectStar = createServerFn({ method: "POST" })
       .eq("id", data.projectId);
 
     return { status: "ok" as const, starred, count: newCount };
-  });
+}
 
 /** Read current user's star state + public count (no auth required). */
-export const getProjectStar = createServerFn({ method: "GET" })
-  .validator((d: { projectId: string }) => d)
-  .handler(async ({ data }) => {
+export async function getProjectStar(data: any) {
     const supabase = await createClient();
     const {
       data: { user },
@@ -118,4 +109,4 @@ export const getProjectStar = createServerFn({ method: "GET" })
       .single();
 
     return { status: "ok" as const, starred: !!existing, count };
-  });
+}

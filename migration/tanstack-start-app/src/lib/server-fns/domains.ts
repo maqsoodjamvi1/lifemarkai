@@ -3,7 +3,6 @@
  * Ports of app/api/domains/{route,search,verify,entri}. checkout+purchase
  * are separate (need lib/plans/gating).
  */
-import { createServerFn } from "@tanstack/react-start";
 import { lookup } from "node:dns/promises";
 import { createClient } from "@/lib/supabase/server";
 import { getRegistrar, isPurchaseEnabled } from "@/lib/domains/registrar";
@@ -34,9 +33,7 @@ async function requireUser() {
   return { supabase, user };
 }
 
-export const getProjectDomain = createServerFn({ method: "GET" })
-  .validator((d: { projectId: string }) => d)
-  .handler(async ({ data }) => {
+export async function getProjectDomain(data: any) {
     const { supabase, user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.projectId) return { status: "bad_request" as const, message: "projectId required" };
@@ -52,11 +49,9 @@ export const getProjectDomain = createServerFn({ method: "GET" })
       customDomain: (project as any).custom_domain ?? null,
       deployedUrl: project.deployed_url ?? null,
     };
-  });
+}
 
-export const setProjectDomain = createServerFn({ method: "POST" })
-  .validator((d: { projectId: string; domain: string }) => d)
-  .handler(async ({ data }) => {
+export async function setProjectDomain(data: any) {
     const { supabase, user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.projectId || !data.domain) return { status: "bad_request" as const, message: "projectId and domain required" };
@@ -98,11 +93,9 @@ export const setProjectDomain = createServerFn({ method: "POST" })
         message: "Domain saved. Configure the DNS records below and SSL provisions automatically within minutes.",
       },
     };
-  });
+}
 
-export const deleteProjectDomain = createServerFn({ method: "POST" })
-  .validator((d: { projectId: string }) => d)
-  .handler(async ({ data }) => {
+export async function deleteProjectDomain(data: any) {
     const { supabase, user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.projectId) return { status: "bad_request" as const, message: "projectId required" };
@@ -112,11 +105,9 @@ export const deleteProjectDomain = createServerFn({ method: "POST" })
       .eq("id", data.projectId)
       .eq("user_id", user.id);
     return { status: "ok" as const };
-  });
+}
 
-export const searchDomains = createServerFn({ method: "POST" })
-  .validator((d: { query: string; years?: number }) => d)
-  .handler(async ({ data }) => {
+export async function searchDomains(data: any) {
     const { user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.query || data.query.trim().length < 2) return { status: "bad_request" as const, message: "query required" };
@@ -134,11 +125,9 @@ export const searchDomains = createServerFn({ method: "POST" })
     }
     const suggestions = await registrar.search(data.query.trim(), Math.min(Math.max(data.years ?? 1, 1), 10));
     return { status: "ok" as const, payload: { configured: true, registrar: registrar.id, suggestions } };
-  });
+}
 
-export const verifyDomain = createServerFn({ method: "POST" })
-  .validator((d: { domain: string; projectId: string }) => d)
-  .handler(async ({ data }) => {
+export async function verifyDomain(data: any) {
     const { supabase, user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.domain || !data.projectId) return { status: "bad_request" as const, message: "domain and projectId required" };
@@ -173,11 +162,9 @@ export const verifyDomain = createServerFn({ method: "POST" })
           : error ?? "Domain not yet resolving — check DNS records and wait for propagation.",
       },
     };
-  });
+}
 
-export const entriConnect = createServerFn({ method: "POST" })
-  .validator((d: { projectId: string; domain: string }) => d)
-  .handler(async ({ data }) => {
+export async function entriConnect(data: any) {
     const { supabase, user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.projectId || !data.domain) return { status: "bad_request" as const, message: "projectId and domain are required" };
@@ -211,4 +198,4 @@ export const entriConnect = createServerFn({ method: "POST" })
           : "Add these DNS records at your domain provider, then verify.",
       },
     };
-  });
+}

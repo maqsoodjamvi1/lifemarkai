@@ -1,4 +1,3 @@
-import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 
@@ -11,7 +10,7 @@ export type ActivityEvent = {
   createdAt: string;
 };
 
-export const listActivity = createServerFn({ method: "GET" }).handler(async () => {
+export async function listActivity() {
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);
   if (!user) return { status: "unauthorized" as const };
@@ -102,4 +101,4 @@ export const listActivity = createServerFn({ method: "GET" }).handler(async () =
 
   events.sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
   return { status: "ok" as const, events: events.slice(0, 15) };
-});
+}

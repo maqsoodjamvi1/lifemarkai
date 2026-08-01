@@ -36,7 +36,6 @@ export const Route = createFileRoute("/api/skills")({
           );
         }
         const result = await createSkill({
-          data: {
             name,
             description:
               typeof body.description === "string" ? body.description : null,
@@ -45,8 +44,7 @@ export const Route = createFileRoute("/api/skills")({
             tags: Array.isArray(body.tags)
               ? body.tags.filter((t): t is string => typeof t === "string")
               : undefined,
-          },
-        });
+          });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -71,7 +69,6 @@ export const Route = createFileRoute("/api/skills")({
           return Response.json({ error: "Invalid JSON" }, { status: 400 });
         }
         const result = await patchSkill({
-          data: {
             id,
             name: typeof body.name === "string" ? body.name : undefined,
             description:
@@ -86,8 +83,7 @@ export const Route = createFileRoute("/api/skills")({
               ? body.tags.filter((t): t is string => typeof t === "string")
               : undefined,
             incrementUse: body.incrementUse === true,
-          },
-        });
+          });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
@@ -108,7 +104,7 @@ export const Route = createFileRoute("/api/skills")({
         if (!id) {
           return Response.json({ error: "id required" }, { status: 400 });
         }
-        const result = await deleteSkill({ data: { id } });
+        const result = await deleteSkill({ id });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
         }
