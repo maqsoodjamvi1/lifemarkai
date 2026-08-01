@@ -174,6 +174,39 @@ export async function readLiveBuildFile(
   return null;
 }
 
+/**
+ * Rewrite a built index.html's root-absolute asset URLs to sit under `base`.
+ *
+ * `vite build` emits `<script src="/assets/index-4f3c1b.js">`. Served at
+ * `lifemarkai.com/preview-by-slug/my-app`, the browser resolves that against the
+ * ORIGIN, requests `lifemarkai.com/assets/index-4f3c1b.js`, and gets the app's
+ * own 404 page — HTML where JavaScript was expected, which surfaces as
+ * "Unexpected token '<'" and sends you looking for a syntax error that does not
+ * exist. The document loads, nothing renders, and the console blames the wrong
+ * thing.
+ *
+ * Prefixing keeps every asset under the one route that exists, and works
+ * unchanged whether the app is reached by path or by hostname.
+ *
+ * Only root-absolute paths are touched. Protocol-relative (`//cdn…`), absolute
+ * (`https://…`), `data:`, `blob:`, anchors and already-relative URLs are left
+ * exactly as they are — rewriting those would break external resources.
+ */
+export function rewriteAssetPaths(html: string, base: string): string {
+  const prefix = `/${String(base).replace(/^\/+|\/+$/g, "")}`;
+  return html.replace(
+    /\b(src|href)=("|')\/(?!\/)([^"']*)\2/g,
+    (whole, attr: string, quote: string, rest: string) => {
+      // Idempotent on purpose. Applying this twice used to yield
+      // /preview-by-slug/app/preview-by-slug/app/assets/… — every asset 404s and
+      // the page renders blank, from a function that looks obviously correct in
+      // isolation. Caught by asserting the second application, not the first.
+      if (`/${rest}` === prefix || `/${rest}`.startsWith(`${prefix}/`)) return whole;
+      return `${attr}=${quote}${prefix}/${rest}${quote}`;
+    },
+  );
+}
+
 /** Turn a stored file into an HTTP response with correct bytes and headers. */
 export function buildFileResponse(file: StoredBuildFile): Response {
   const body =
