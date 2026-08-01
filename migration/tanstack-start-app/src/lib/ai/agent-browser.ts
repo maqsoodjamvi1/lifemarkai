@@ -154,8 +154,9 @@ export async function browsePreview(args: BrowsePreviewArgs): Promise<string> {
     if (action === "screenshot") {
       const buf: Buffer = await page.screenshot({ type: "jpeg", quality: 55, fullPage: false });
       let screenshotUrl: string | null = null;
-      // Persist to Storage so chat can show a thumbnail (Lovable parity) without
-      // stuffing multi-MB base64 into the agent observation.
+      // Persist to the `previews` STORAGE bucket (migration 032 / 159 — not a
+      // Postgres table) so chat can show a thumbnail without stuffing multi-MB
+      // base64 into the agent observation.
       if (args.projectId) {
         try {
           const { createAdminClient } = await import("@/lib/supabase/server");

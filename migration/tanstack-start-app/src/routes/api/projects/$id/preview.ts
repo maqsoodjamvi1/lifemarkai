@@ -6,7 +6,8 @@ import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 
 /**
  * Native /api/projects/:id/preview — accept a base64 screenshot from the build
- * capture, upload to the previews storage bucket, update projects.preview_url.
+ * capture, upload to the `previews` STORAGE bucket (migration 032 / 159 — not a
+ * Postgres table), then update projects.preview_url.
  */
 export const Route = createFileRoute("/api/projects/$id/preview")({
   server: {
