@@ -403,6 +403,40 @@ export async function updateProject(data: any) {
       Object.entries(requestedFields).filter(([key]) => PROJECT_UPDATE_FIELDS.has(key)),
     );
 
+    // ── keep `visibility` and `is_public` from drifting apart ────────────────
+    //
+    // Two columns answer "who can see this app" and only ONE is enforced: the RLS
+    // policies on projects gate on `is_public`. Nothing reads `visibility` at the
+    // database level. The publish panel writes only `visibility`, so the two
+    // silently diverged - 25 projects ended up marked visibility='public' with
+    // is_public=false, which meant RLS hid them from anonymous visitors and every
+    // /app/:slug returned 404 while the owner believed the app was public.
+    //
+    // Both fields are owner-only (OWNER_ONLY_PROJECT_FIELDS), so deriving one from
+    // the other adds no new authority - it only stops an owner from reaching a
+    // state that cannot be expressed coherently.
+    //
+    // `visibility` is authoritative because it carries three states and is what the
+    // UI actually sets. When only `is_public` is supplied, it is mapped back:
+    // true -> "public"; false -> "private" rather than "workspace", because false
+    // is a request to STOP being publicly visible and the conservative reading is
+    // the right one for an access control (fail closed, not "slightly less open").
+    //
+    // This is a stopgap. The real fix is collapsing both into `publish_audience` -
+    // see docs/access-model-consolidation.md. Until then, this guarantees the
+    // invariant `is_public === (visibility === "public")` for every write that goes
+    // through this function.
+    if ("visibility" in updateFields || "is_public" in updateFields) {
+      const nextVisibility =
+        typeof updateFields.visibility === "string"
+          ? updateFields.visibility
+          : updateFields.is_public === true
+            ? "public"
+            : "private";
+      updateFields.visibility = nextVisibility;
+      updateFields.is_public = nextVisibility === "public";
+    }
+
     if (generate_slug) {
       let slugName =
         typeof updateFields.name === "string" ? (updateFields.name as string) : undefined;
