@@ -430,7 +430,11 @@ async function handlePOST(req: Request) {
         .from("deployments")
         .update({
           status: "failed",
-          error_message: err instanceof Error ? err.message : "Unknown error",
+          // build_log, not error_message. `error_message` is a field on NETLIFY's
+          // status response (typed above), not a column on our deployments table -
+          // which is how the wrong name got here. The update silently failed, so a
+          // failed deploy kept its old status and looked stuck rather than errored.
+          build_log: err instanceof Error ? err.message : "Unknown error",
         } as Record<string, unknown>)
         .eq("id", deployment.id);
     }

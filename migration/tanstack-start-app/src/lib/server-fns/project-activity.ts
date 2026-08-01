@@ -53,7 +53,9 @@ export async function getProjectActivity(input: {
 
   const { data: deploys } = await (supabase as any)
     .from("deployments")
-    .select("id, status, deploy_url, created_at, provider")
+    // The deployments table's column is `url`. `deploy_url` does not exist, so this
+    // select errored and the activity feed silently showed no deployments at all.
+    .select("id, status, url, created_at, provider")
     .eq("project_id", input.projectId)
     .order("created_at", { ascending: false })
     .limit(20);
@@ -62,7 +64,7 @@ export async function getProjectActivity(input: {
       id: `deploy_${d.id}`,
       type: "deploy",
       title: `Deployed — ${d.status}`,
-      detail: d.deploy_url ?? undefined,
+      detail: d.url ?? undefined,
       created_at: d.created_at,
       meta: { provider: d.provider ?? "netlify", status: d.status },
     });

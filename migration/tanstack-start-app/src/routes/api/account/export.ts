@@ -17,7 +17,10 @@ export const Route = createFileRoute("/api/account/export")({
           Promise.resolve(null),
           (supabase as any)
             .from("deployments")
-            .select("id, project_id, status, deploy_url, created_at, projects!inner(user_id)")
+            // `url`, not `deploy_url` - the wrong name errored the select, so the
+            // account export silently omitted every deployment. A GDPR export that
+            // quietly drops a section is worse than one that fails loudly.
+            .select("id, project_id, status, url, created_at, projects!inner(user_id)")
             .eq("projects.user_id", user.id),
         ]);
 
@@ -51,7 +54,7 @@ export const Route = createFileRoute("/api/account/export")({
             id: m.id, project_id: m.project_id, role: m.role, content: m.content, created_at: m.created_at,
           })),
           deployments: (deploymentsRes.data ?? []).map((d: Record<string, unknown>) => ({
-            id: d.id, project_id: d.project_id, status: d.status, deploy_url: d.deploy_url, created_at: d.created_at,
+            id: d.id, project_id: d.project_id, status: d.status, url: d.url, created_at: d.created_at,
           })),
         };
 
