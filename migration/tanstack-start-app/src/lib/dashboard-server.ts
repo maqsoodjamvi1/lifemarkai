@@ -38,6 +38,7 @@ export const fetchDashboardShell = createServerFn({ method: "GET" }).handler(
         .from("projects")
         .select("id, name, updated_at")
         .eq("user_id", user.id)
+        .neq("status", "archived")
         .order("updated_at", { ascending: false })
         .limit(8),
     ]);
@@ -65,6 +66,11 @@ export const fetchDashboardHome = createServerFn({ method: "GET" }).handler(
           .from("projects")
           .select("*, project_files(count)")
           .eq("user_id", user.id)
+          // Archived projects are hidden, not deleted. Before this, `status` was
+          // written but nothing ever read it - every project in the database had
+          // status 'active' and archiving one would have changed precisely nothing
+          // while appearing to work. The filter is what gives the status meaning.
+          .neq("status", "archived")
           .order("updated_at", { ascending: false }),
         (supabase as any).from("profiles").select("*").eq("id", user.id).single(),
         (supabase as any)

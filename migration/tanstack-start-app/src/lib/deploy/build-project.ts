@@ -21,6 +21,7 @@ import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
 import { fixHtmlEntry } from "@/lib/preview/patch-vite-for-webcontainer";
+import { isTextAsset } from "@/lib/deploy/asset-kind";
 
 // Same Vite entry candidates the preview repair uses, so a deploy build doesn't
 // die on a mis-pointed index.html entry script (e.g. /src/main.ts vs .tsx).
@@ -32,6 +33,11 @@ const BUILD_ENTRY_CANDIDATES = [
 export interface BuildFile {
   path: string;
   content: string;
+  /**
+   * How `content` is encoded. Absent means utf8, so existing callers that only
+   * ever handled text keep working unchanged.
+   */
+  encoding?: "utf8" | "base64";
 }
 
 /** True when the project looks like a buildable Vite app. */
@@ -80,11 +86,22 @@ async function readDirRecursive(dir: string, base = dir): Promise<BuildFile[]> {
       out.push(...(await readDirRecursive(full, base)));
     } else {
       const rel = path.relative(base, full).replace(/\\/g, "/");
-      // Read text where sensible; base64 only matters for binary assets, which
-      // the deploy providers accept as utf-8 here (generated apps rarely ship
-      // binaries — images come from URLs). Keep it simple: utf-8.
-      const content = await fs.readFile(full, "utf-8");
-      out.push({ path: rel, content });
+      // Binaries must NOT be read as utf-8.
+      //
+      // The previous comment here reasoned that generated apps "rarely ship
+      // binaries — images come from URLs", and read everything as utf-8. But
+      // `vite build` emits a favicon, and any project that imports an image or a
+      // font gets one in dist/ regardless of what the source looked like.
+      // `readFile(png, "utf-8")` does not throw: it returns a string with every
+      // invalid byte sequence replaced by U+FFFD. The asset then stores, serves
+      // and renders as a broken image, with nothing logged anywhere. Decide by
+      // extension and base64 anything that is not known to be text.
+      if (isTextAsset(rel)) {
+        out.push({ path: rel, content: await fs.readFile(full, "utf-8"), encoding: "utf8" });
+      } else {
+        const buf = await fs.readFile(full);
+        out.push({ path: rel, content: buf.toString("base64"), encoding: "base64" });
+      }
     }
   }
   return out;

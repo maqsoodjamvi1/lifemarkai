@@ -392,8 +392,46 @@ async function handlePOST(req: Request) {
         });
         deployedUrl = await deployToNetlify(site.id, fileMap);
       } else {
-        // ── Simulated deployment (fallback / lifemarkai provider) ──
-        await new Promise((r) => setTimeout(r, 2500));
+        // ── Self-hosted deployment (lifemarkai provider) ──
+        //
+        // This branch used to be a 2500ms sleep followed by `lifemarkUrl()`. It
+        // reported success, wrote an {app_slug}.apps.lifemarkai.com URL to
+        // projects.deployed_url, and produced nothing — every one of those URLs
+        // led to a 503. Now it compiles the project and stores the output, and
+        // the URL is only written if there is something behind it.
+        const { publishBuild } = await import("@/lib/deploy/publish-build");
+        const buildLog: string[] = [];
+        const result = await publishBuild(projectId, projectFiles, (line) => {
+          buildLog.push(line);
+        });
+
+        if (!result.ok) {
+          // The failure reason goes in build_log, NOT an `error` column —
+          // `deployments` has no such column, and writing to one that does not
+          // exist makes PostgREST reject the whole update, so the row would
+          // have stayed "building" forever with nothing recorded. Checked
+          // against information_schema rather than assumed.
+          await (supabase as any)
+            .from("deployments")
+            .update({
+              status: "failed",
+              build_log: [`[publish] FAILED: ${result.detail}`, ...buildLog]
+                .join("\n")
+                .slice(0, 20000),
+            })
+            .eq("id", deployment.id);
+          logger.error("deploy.publish_failed", {
+            deploymentId: deployment.id,
+            projectId,
+            detail: result.detail,
+          });
+          return;
+        }
+
+        await (supabase as any)
+          .from("deployments")
+          .update({ build_log: buildLog.join("\n").slice(0, 20000) })
+          .eq("id", deployment.id);
         deployedUrl = lifemarkUrl();
       }
 

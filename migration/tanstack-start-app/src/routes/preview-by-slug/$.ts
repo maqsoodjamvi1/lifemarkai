@@ -2,11 +2,24 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { servePreviewHtml } from "@/lib/preview/serve-preview";
+import { appSlugFromHost } from "@/lib/deploy/apps-host";
+import { readLiveBuildFile, buildFileResponse } from "@/lib/deploy/build-store";
 
 /**
- * Native /preview-by-slug/$ — TRUE NATIVE (no worker).
- * Resolves app_slug -> project id, enforces visibility, renders inline so the
- * clean slug host keeps its URL. Ported from app/preview-by-slug/[slug].
+ * Serves a published app.
+ *
+ * TWO ways in, and the difference matters:
+ *
+ *  1. `<slug>.apps.lifemarkai.com/whatever` — Traefik matches the wildcard host
+ *     and prefixes the path with `/preview-by-slug`. The slug is in the HOST and
+ *     the splat is the app's own path (`/`, `/assets/x.js`, `/about`). Traefik
+ *     can rewrite a path but cannot move the host into it, so the host is read
+ *     here.
+ *  2. `lifemarkai.com/preview-by-slug/<slug>` — the slug is the first path
+ *     segment. Kept working because existing links use it.
+ *
+ * Getting these the wrong way round serves `/assets/index.js` as if "assets"
+ * were an app slug, so the host is checked FIRST and decides the interpretation.
  */
 function notFoundHtml(): Response {
   return new Response(
@@ -15,15 +28,29 @@ function notFoundHtml(): Response {
   );
 }
 
-async function handleGET(_req: Request, params: any) {
+function resolveRequest(req: Request, params: any): { slug: string; assetPath: string } | null {
   const splat = String(params?._splat ?? "").replace(/^\/+/, "");
-  const slug = splat.split("/").filter(Boolean)[0];
-  if (!slug) return notFoundHtml();
+  const hostSlug = appSlugFromHost(req.headers.get("host"));
+
+  if (hostSlug) {
+    // Host carries the identity; the whole splat is the app's own path.
+    return { slug: hostSlug, assetPath: splat };
+  }
+
+  const segments = splat.split("/").filter(Boolean);
+  if (!segments.length) return null;
+  return { slug: segments[0], assetPath: segments.slice(1).join("/") };
+}
+
+async function handleGET(req: Request, params: any): Promise<Response> {
+  const resolved = resolveRequest(req, params);
+  if (!resolved) return notFoundHtml();
+  const { slug, assetPath } = resolved;
 
   const admin = createAdminClient();
   const { data: project } = await (admin as any)
     .from("projects")
-    .select("id, user_id, is_public, visibility")
+    .select("id, user_id, is_public, visibility, live_build_id")
     .eq("app_slug", slug)
     .maybeSingle();
 
@@ -48,6 +75,19 @@ async function handleGET(_req: Request, params: any) {
     }
   }
 
+  // Access has been decided. Serve the stored production build if one exists —
+  // this is the whole point of publishing, and it needs no running container.
+  if (project.live_build_id) {
+    const file = await readLiveBuildFile(project.id as string, assetPath);
+    if (file) return buildFileResponse(file);
+    // A published project missing a requested asset is a genuine 404. Falling
+    // through to the live-preview path here would answer a missing `.js` with
+    // an HTML page and produce "Unexpected token '<'" in the console.
+    return notFoundHtml();
+  }
+
+  // Not published yet: fall back to the editor preview behaviour (warm sandbox
+  // redirect, or the "no build available" notice).
   return servePreviewHtml(project.id as string);
 }
 

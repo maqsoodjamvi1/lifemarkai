@@ -713,21 +713,38 @@ export function ProjectSettingsPanel({ project, profile, onProjectUpdate }: Proj
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-3">
             <div className="p-3 rounded-lg bg-red-500/[0.08] border border-red-500/20 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-slate-400">These actions are irreversible. Proceed with caution.</p>
+              <p className="text-xs text-slate-400">
+                Deleting a project is permanent and cannot be undone. Archiving is reversible.
+              </p>
             </div>
 
+            {/*
+              Archiving is the ONLY reversible action in this panel, and until now it
+              was a one-way door: the button always wrote "archived" and there was no
+              control anywhere in the UI to write it back. Restoring meant a hand-written
+              UPDATE. The button now reflects the project's actual state and toggles.
+            */}
             <div className="p-4 rounded-xl border border-white/[0.06] space-y-3">
               <div>
-                <p className="text-sm font-medium text-white">Archive Project</p>
-                <p className="text-xs text-slate-500 mt-0.5">Hide from dashboard but keep all data.</p>
+                <p className="text-sm font-medium text-white">
+                  {project.status === "archived" ? "Restore Project" : "Archive Project"}
+                </p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {project.status === "archived"
+                    ? "This project is archived and hidden from your dashboard. Restoring brings it back — nothing was deleted."
+                    : "Hide from your dashboard. Every file, message and setting is kept, and you can restore it from here at any time."}
+                </p>
               </div>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => save({ status: "archived" })}
+                disabled={saving}
+                onClick={() =>
+                  save({ status: project.status === "archived" ? "active" : "archived" })
+                }
                 className="h-7 text-xs border-white/[0.08] text-slate-400 hover:text-white"
               >
-                Archive
+                {project.status === "archived" ? "Restore" : "Archive"}
               </Button>
             </div>
 
