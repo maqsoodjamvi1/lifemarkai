@@ -515,13 +515,21 @@ export function injectVebBridgeIntoNextLayout(source: string): string {
   if (source.includes("lifemark-veb-ready")) return source;
   const escaped = JSON.stringify(getPreviewBridgeScripts());
   const tag = `<script dangerouslySetInnerHTML={{ __html: ${escaped} }} />`;
-  if (/<\/body>/i.test(source)) {
-    return source.replace(/<\/body>/i, `${tag}\n</body>`);
+  // JSX documents may close the body with lowercase `</body>` (Next layouts,
+  // current TSS scaffold) OR a capitalized component `</Body>` (older TanStack
+  // Start API). The old code matched case-insensitively but REPLACED with a
+  // hard-coded lowercase `</body>` — that left `<Body>` unclosed, a JSX
+  // SyntaxError that 500'd the whole preview at SSR ("Expected corresponding
+  // JSX closing tag for <Body>"). Preserve whatever closing tag the file uses.
+  const bodyClose = source.match(/<\/body>/i);
+  if (bodyClose) {
+    return source.replace(bodyClose[0], `${tag}\n${bodyClose[0]}`);
   }
   // Common pattern: <body>{children}</body> already handled; otherwise append
-  // before the final closing parenthesis of the default export return.
-  const htmlClose = source.lastIndexOf("</html>");
-  if (htmlClose >= 0) {
+  // before the final closing </html>/</Html>, whichever case the file uses.
+  const htmlCloseMatch = source.match(/<\/html>/i);
+  if (htmlCloseMatch) {
+    const htmlClose = source.lastIndexOf(htmlCloseMatch[0]);
     return `${source.slice(0, htmlClose)}${tag}\n${source.slice(htmlClose)}`;
   }
   return `${source}\n${tag}\n`;
