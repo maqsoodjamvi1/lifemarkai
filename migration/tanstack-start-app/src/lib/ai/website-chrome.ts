@@ -126,8 +126,8 @@ export function assessWebsiteChrome(
   if (!needsWebsiteChrome(all, opts)) return [];
 
   const missing: string[] = [];
-  if (!hasSiteHeader(all)) missing.push("a site header");
-  if (!hasSiteFooter(all)) missing.push("a site footer");
+  if (!hasSiteHeader(all)) missing.push("site header");
+  if (!hasSiteFooter(all)) missing.push("site footer");
   if (missing.length === 0) return [];
 
   return [
@@ -348,25 +348,35 @@ function addImport(source: string, line: string): string {
  * one we understand — a wrong edit to the document root is far worse than a
  * missing header, so we decline rather than guess.
  */
-function mountInRootShell(source: string, importPrefix: string): string | null {
+function mountInRootShell(
+  source: string,
+  importPrefix: string,
+  need: { header: boolean; footer: boolean },
+): string | null {
   const body = source.match(/<body([^>]*)>([\s\S]*?)<\/body>/i);
   if (!body) return null;
   const inner = body[2];
-  if (/<Header\s*\/>/.test(inner)) return null;
+  if (/<Header\s*\/>/.test(inner) || /<Footer\s*\/>/.test(inner)) return null;
   const childrenMatches = inner.match(/\{\s*children\s*\}/g);
   if (!childrenMatches || childrenMatches.length !== 1) return null;
 
+  const before = need.header ? "<Header />\n        " : "";
+  const after = need.footer ? "\n        <Footer />" : "";
   const mounted = inner.replace(
     /\{\s*children\s*\}/,
-    "<Header />\n        {children}\n        <Footer />",
+    `${before}{children}${after}`,
   );
   let out =
     source.slice(0, body.index ?? 0) +
     `<body${body[1]}>${mounted}</body>` +
     source.slice((body.index ?? 0) + body[0].length);
 
-  out = addImport(out, `import { Header } from "${importPrefix}components/layout/Header";`);
-  out = addImport(out, `import { Footer } from "${importPrefix}components/layout/Footer";`);
+  if (need.header) {
+    out = addImport(out, `import { Header } from "${importPrefix}components/layout/Header";`);
+  }
+  if (need.footer) {
+    out = addImport(out, `import { Footer } from "${importPrefix}components/layout/Footer";`);
+  }
   return out;
 }
 
@@ -375,8 +385,11 @@ function mountInRootShell(source: string, importPrefix: string): string | null {
  * returns. Only fires on the single-`return (...)` shape; anything else is
  * declined for the same reason as above.
  */
-function mountInAppShell(source: string): string | null {
-  if (/<Header\s*\/>/.test(source)) return null;
+function mountInAppShell(
+  source: string,
+  need: { header: boolean; footer: boolean },
+): string | null {
+  if (/<Header\s*\/>/.test(source) || /<Footer\s*\/>/.test(source)) return null;
   // Only the unambiguous shape: one `return (` in the whole file, closing at EOF.
   if ((source.match(/\breturn\s*\(/g) ?? []).length !== 1) return null;
   const ret = source.match(/return\s*\(\s*([\s\S]*?)\s*\)\s*;?\s*\}\s*$/);
@@ -384,12 +397,14 @@ function mountInAppShell(source: string): string | null {
   const inner = ret[1].trim();
   if (!inner.startsWith("<")) return null;
 
-  const wrapped = `return (\n    <>\n      <Header />\n      ${inner
+  const before = need.header ? "      <Header />\n" : "";
+  const after = need.footer ? "\n      <Footer />" : "";
+  const wrapped = `return (\n    <>\n${before}      ${inner
     .split("\n")
-    .join("\n      ")}\n      <Footer />\n    </>\n  );\n}\n`;
+    .join("\n      ")}${after}\n    </>\n  );\n}\n`;
   let out = source.slice(0, ret.index ?? 0) + wrapped;
-  out = addImport(out, `import { Header } from "./components/layout/Header";`);
-  out = addImport(out, `import { Footer } from "./components/layout/Footer";`);
+  if (need.header) out = addImport(out, `import { Header } from "./components/layout/Header";`);
+  if (need.footer) out = addImport(out, `import { Footer } from "./components/layout/Footer";`);
   return out;
 }
 
@@ -406,10 +421,15 @@ export function ensureWebsiteChrome<T extends ChromeFile>(
 ): T[] {
   const all = effective(files, existingFiles);
   if (!needsWebsiteChrome(all, opts)) return files;
-  // Act only on the total-absence case — a site with SOME chrome is the model's
-  // design decision, and the `missing_site_chrome` issue above already asked it
-  // to complete the set. Synthesising half a set risks fighting a real layout.
-  if (hasSiteHeader(all) || hasSiteFooter(all)) return files;
+
+  // Each half is filled independently. The first cut of this function only acted
+  // when BOTH were missing, on the theory that a partly-chromed site was a
+  // deliberate design. A live build disproved it: the model produced Hero,
+  // Features, ClassSchedule, Testimonials, Pricing, Contact and a Footer — and
+  // no header at all. "Footer exists" is not evidence that the missing header
+  // was intentional; it is the single most common shape of this bug.
+  const need = { header: !hasSiteHeader(all), footer: !hasSiteFooter(all) };
+  if (!need.header && !need.footer) return files;
 
   const shell = findRootShell(all);
   const appShell = findAppShell(all);
@@ -419,8 +439,8 @@ export function ensureWebsiteChrome<T extends ChromeFile>(
   const isTss = !!shell && isTanStackStart(all);
   // `src/routes/__root.tsx` → components live at `../components/...`.
   const mounted = isTss
-    ? mountInRootShell(target.content, "../")
-    : mountInAppShell(target.content);
+    ? mountInRootShell(target.content, "../", need)
+    : mountInAppShell(target.content, need);
   if (!mounted) return files;
 
   const brand = brandFrom(all, opts.brand);
@@ -433,8 +453,8 @@ export function ensureWebsiteChrome<T extends ChromeFile>(
     else out.push(entry);
   };
 
-  put("src/components/layout/Header.tsx", headerSource(brand));
-  put("src/components/layout/Footer.tsx", footerSource(brand));
+  if (need.header) put("src/components/layout/Header.tsx", headerSource(brand));
+  if (need.footer) put("src/components/layout/Footer.tsx", footerSource(brand));
 
   const shellIndex = out.findIndex((f) => norm(f.path) === norm(target.path));
   const shellEntry = {
