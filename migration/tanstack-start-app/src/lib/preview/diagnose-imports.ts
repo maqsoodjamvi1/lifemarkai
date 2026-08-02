@@ -47,6 +47,40 @@ function isProjectImportSpec(spec: string): boolean {
   return spec.startsWith(".") || spec.startsWith("@/") || spec.startsWith("src/");
 }
 
+/**
+ * Specifiers that are NOT JavaScript modules and must never be export-checked.
+ *
+ * This checker feeds the preview-healing prompt, so a false positive here is not
+ * cosmetic — it becomes an instruction to the repair model. The canonical
+ * TanStack Start document root opens with
+ *
+ *     import appCss from "../styles.css?url";
+ *
+ * which is correct and required (the `?url` is what makes Vite hand back a URL
+ * for the `links: [{ rel: "stylesheet", href: appCss }]` entry). The checker
+ * resolved it as a source module, found no `export default` in a stylesheet, and
+ * reported `src/styles.css has no default export`. The repair pass duly "fixed"
+ * it by deleting the `?url` — leaving `appCss` undefined and the stylesheet href
+ * broken. That is how a working preview turned into an unstyled one, twice.
+ *
+ * Same class of bug for `src/routeTree.gen`: the tanstackStart() Vite plugin
+ * writes it at dev and build time, so it is correctly absent from the project's
+ * files, and `import { routeTree } from "./routeTree.gen"` is correct code that
+ * this checker reported as a missing file / missing named export.
+ */
+const ASSET_EXTENSION_RE =
+  /\.(css|scss|sass|less|styl|svg|png|jpe?g|gif|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|mp3|wav|json|txt|md|glsl|wasm)$/i;
+
+function isNonModuleSpec(spec: string): boolean {
+  // Any Vite query suffix — ?url, ?raw, ?inline, ?worker — is an instruction to
+  // the bundler, not part of a module path.
+  if (spec.includes("?")) return true;
+  const bare = spec.split("?")[0];
+  if (ASSET_EXTENSION_RE.test(bare)) return true;
+  if (/routeTree\.gen$/.test(bare.replace(/\.[jt]sx?$/, ""))) return true;
+  return false;
+}
+
 function fileIndex(files: DiagnosableFile[]): Map<string, DiagnosableFile> {
   const idx = new Map<string, DiagnosableFile>();
   for (const f of files) {
@@ -160,6 +194,7 @@ export function diagnoseBrokenImports(files: DiagnosableFile[]): string[] {
   for (const file of files) {
     if (!/\.(tsx?|jsx?)$/i.test(file.path)) continue;
     for (const imp of parseRelativeImports(file)) {
+      if (isNonModuleSpec(imp.spec)) continue;
       const resolved = resolveRelativeImport(imp.fromFile, imp.spec);
       const target = findFile(idx, resolved);
 

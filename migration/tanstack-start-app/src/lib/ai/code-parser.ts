@@ -1,5 +1,6 @@
 import { salvageFilesFromStreamJson } from "./streaming-file-extractor";
 import { ensureCommonGeneratedSupportFiles } from "./generated-support-files";
+import { assessWebsiteChrome } from "./website-chrome";
 import { parseFileUpdateBlocks } from "./xml-stream-parser";
 
 export interface ValidationError {
@@ -1348,6 +1349,12 @@ export function assessGenerationQuality(
   const all = [...byPath.values()];
   const paths = new Set(all.map((f) => f.path));
   const appType = opts.appType;
+
+  // Site chrome. Every check in this function measures VOLUME — file count,
+  // component count, page richness — and a build can clear all of them while
+  // rendering a naked hero with no header, no nav and no footer. That is what
+  // shipped. See lib/ai/website-chrome.ts for the full account.
+  errors.push(...assessWebsiteChrome(files, existingFiles, { appType }));
   // Next.js App Router project — pages are app/**/page.tsx and the main page is
   // app/page.tsx; components/lib live at the project root instead of src/.
   const isNextProject = all.some(

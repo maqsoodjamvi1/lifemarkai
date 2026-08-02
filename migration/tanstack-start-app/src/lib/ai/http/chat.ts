@@ -42,6 +42,8 @@ import {
 } from "@/lib/ai/text-edit";
 import { parseAIResponse, validateGeneratedFiles, assessGenerationQuality, shouldAutoFix, needsBuildContinuation, detectLanguage, type ParsedFile } from "@/lib/ai/code-parser";
 import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
+import { ensureWebsiteChrome } from "@/lib/ai/website-chrome";
+import { alignGeneratedPackageJson, stripGeneratedRouteTree } from "@/lib/preview/align-package-json";
 import { StreamingFileExtractor } from "@/lib/ai/streaming-file-extractor";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { validateApiKey } from "@/lib/api/api-key";
@@ -2091,6 +2093,38 @@ The user has expressed frustration. Do the following:
                 safeEnqueue(
                   encoder.encode(`data: ${JSON.stringify({ status: "no_files", message: "The model didn't produce files in the required format. Try again, or switch to a stronger model." })}\n\n`)
                 );
+              }
+            }
+
+            // ── Post-generation guarantees ────────────────────────────────
+            // Everything above is the model's work checked against prompts. The
+            // three passes below are deterministic and run last, so a bad turn
+            // degrades into a plain build rather than a broken one.
+            if (mode === "build" && finalFiles.length > 0) {
+              // 1. `src/routeTree.gen.ts` belongs to the tanstackStart() Vite
+              //    plugin, never to the model.
+              finalFiles = stripGeneratedRouteTree(finalFiles);
+
+              // 2. Header + footer. A landing page without site chrome is not a
+              //    landing page; the prompt asked, this makes sure.
+              finalFiles = ensureWebsiteChrome(finalFiles, existingFiles, {
+                appType: buildIntent?.appType,
+                brand: projectData?.name ?? undefined,
+              });
+
+              // 3. Pin every dependency we own. One React-18-only version next
+              //    to the React 19 base set aborts `npm install` with ERESOLVE,
+              //    which the user experiences as a preview that never boots.
+              const pkgIndex = finalFiles.findIndex((f) => f.path === "package.json");
+              if (pkgIndex >= 0) {
+                const aligned = alignGeneratedPackageJson(finalFiles[pkgIndex].content);
+                if (aligned.changed.length > 0) {
+                  finalFiles[pkgIndex] = { ...finalFiles[pkgIndex], content: aligned.content };
+                  logger.info("ai.chat.package_pins_aligned", {
+                    projectId,
+                    changed: aligned.changed,
+                  });
+                }
               }
             }
 
