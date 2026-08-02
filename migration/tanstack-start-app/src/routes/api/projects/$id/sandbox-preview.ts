@@ -53,6 +53,35 @@ function isSandboxGoneError(err: unknown): boolean {
   );
 }
 
+/**
+ * projects.preview_url is SHARED with the thumbnail-capture route
+ * (api/projects/$id/preview.ts), which writes a Supabase-storage .jpg — or even
+ * a data: URL — into the same column. When that happened after a sandbox boot,
+ * the phaseOnly poll handed the screenshot URL to the editor as the "tunnel",
+ * the iframe tried to frame supabase.co, X-Frame-Options blocked it, and the
+ * preview showed "refused to connect" while claiming phase ready.
+ *
+ * Only URLs on a sandbox tunnel host may be treated as a live preview. Anything
+ * else stored in preview_url is a thumbnail and must be ignored here — the
+ * reconnect paths below will then re-discover the real tunnel and re-persist it.
+ */
+function isSandboxTunnelUrl(value: unknown): value is string {
+  if (typeof value !== "string" || !/^https?:\/\//i.test(value)) return false;
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    const domain = (process.env.SANDBOX_PREVIEW_DOMAIN || "preview.lifemarkai.com")
+      .trim()
+      .toLowerCase();
+    return (
+      host === domain ||
+      host.endsWith(`.${domain}`) ||
+      host.endsWith(".modal.host")
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** One cold-boot at a time per project — concurrent POSTs were terminating
  *  each other's fresh Modal sandboxes ("user termination request"). */
 const bootInflight = new Map<string, Promise<Response>>();
@@ -342,14 +371,20 @@ async function handleGET(req: Request, params: any) {
     const phase = typeof meta.sandbox_phase === "string" ? meta.sandbox_phase : null;
     const phaseDetail =
       typeof meta.sandbox_phase_detail === "string" ? meta.sandbox_phase_detail : null;
-    const claimsReady = phase === "ready" && Boolean(project?.preview_url);
+    // A thumbnail .jpg in preview_url must NOT count as a live tunnel — see
+    // isSandboxTunnelUrl. Treat it as "no stored preview" so the client falls
+    // through to the reconnect path, which re-persists the real tunnel URL.
+    const storedTunnelUrl = isSandboxTunnelUrl(project?.preview_url)
+      ? (project!.preview_url as string)
+      : null;
+    const claimsReady = phase === "ready" && Boolean(storedTunnelUrl);
 
     // The stored phase only tells us what we BELIEVED last time. Modal tunnels
     // expire (~24h), so verify the tunnel is actually serving before reporting
     // ok — otherwise the client renders a broken iframe with no error and the
     // dead-sandbox self-heal never triggers. Cached + de-duplicated, so this
     // costs at most one short request per URL per 10s across all pollers.
-    const previewUrlForProbe = project?.preview_url as string | undefined;
+    const previewUrlForProbe = storedTunnelUrl ?? undefined;
     // NON-BLOCKING: reads the cached verdict and refreshes in the background.
     // Awaiting the probe here made every poll wait out the network timeout when
     // the tunnel was down, which stacked requests and froze the editor page.
@@ -372,7 +407,7 @@ async function handleGET(req: Request, params: any) {
     return Response.json({
       enabled: true,
       ok: alive,
-      previewUrl: alive ? project?.preview_url ?? null : null,
+      previewUrl: alive ? storedTunnelUrl : null,
       sandboxId,
       // Surface the stale-tunnel case distinctly so the UI can offer a restart
       // instead of spinning on a "ready" that will never paint.
