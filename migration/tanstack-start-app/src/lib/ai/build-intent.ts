@@ -395,14 +395,43 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
     appType = "marketing-website";
   }
 
+  const blueprint = APP_SHELL_APP_TYPES.has(appType)
+    ? `${BLUEPRINTS[appType](niche)}\n${APP_SHELL_CONTRACT}`
+    : BLUEPRINTS[appType](niche);
+
   return {
     appType,
     niche,
     statusLabel: STATUS_LABELS[appType](niche, prompt),
-    blueprint: BLUEPRINTS[appType](niche),
+    blueprint,
     minFiles: MIN_FILES_BY_TYPE[appType],
   };
 }
+
+/** App types that must render as an admin panel, not a website. */
+const APP_SHELL_APP_TYPES = new Set(["pos", "erp", "crm", "admin-dashboard"]);
+
+/**
+ * Appended to every management-system blueprint (POS/ERP/CRM/admin).
+ *
+ * WHY THIS EXISTS — observed on a live POS build: the model produced working
+ * Register/Inventory/Dashboard/Receipts pages but rendered them INSIDE the
+ * scaffold's marketing chrome (phone/social contact strip on top, "Your
+ * Brand" footer with About/Services/Careers links below), used placeholder
+ * "Sample Product" rows on two pages while a third had its own rich seed
+ * data, and left dead "Edit" buttons. The result read as a website wearing a
+ * POS costume. These rules are the difference between that and an admin
+ * panel.
+ */
+const APP_SHELL_CONTRACT = `
+## Admin App Shell — MANDATORY (this is a management system, NOT a website)
+- Layout: create \`src/layouts/AppLayout.tsx\` with a fixed LEFT SIDEBAR (product name at top, icon + label nav for every module, active-route highlight, collapsible on mobile) and a slim topbar (current page title, search, user avatar chip). EVERY route renders inside this shell.
+- The scaffold's website chrome must NOT survive: rewrite \`src/App.tsx\` to render AppLayout and REMOVE the \`<Header />\` / \`<Footer />\` imports. No phone/email contact strip, no social icons, no marketing footer, no Home/About/Services/Contact links anywhere in the app.
+- Route "/" REDIRECTS to the main working screen (e.g. /dashboard or /register). An internal tool has no landing page.
+- ONE shared data layer read by EVERY page: seed \`src/data/*.ts\` with realistic domain data (30+ products with stock/category/price, 15+ sales/orders with dates spread over recent weeks, customers) and expose it through one store or context. NEVER render placeholder rows like "Sample Product" — every page shows the same seeded entities, and a record created in the UI (a sale at the register, a new product) must immediately appear on every other page that reads that entity (dashboard stats, reports, receipts), because they read the SAME store.
+- Real CRUD, not decoration: products (create/edit/delete via dialog forms that mutate the store), sales/orders (created by the register/order flow, viewable, voidable), customers. A visible "Edit" or "Delete" button that does nothing is a FAILED module.
+- Reports/dashboard numbers are COMPUTED from the seeded sales data (sum revenue, count orders, rank top products) — never hardcoded figures that contradict the tables.
+`;
 
 /** Short directive appended to the user message so models always see the build goal. */
 export function buildUserDirective(intent: BuildIntent): string {
