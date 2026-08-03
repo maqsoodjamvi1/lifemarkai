@@ -165,10 +165,67 @@ function ensureSupabaseEnv<T extends { path: string; content?: string | null }>(
   return [...files, { path: ".env", content: placeholder } as unknown as T];
 }
 
+
+/**
+ * Point Vite's HMR client at the tunnel instead of at localhost.
+ *
+ * The sandbox serves the app over HTTPS at `<hash>.preview.lifemarkai.com`, but
+ * Vite's injected HMR client derives its websocket URL from `server.port` — so
+ * it tries `ws://localhost:5173`, the browser refuses a plaintext websocket from
+ * an HTTPS page, and every preview shows:
+ *
+ *     [vite] failed to connect to websocket
+ *
+ * The overlay reports that as an app error, which is worse than cosmetic: the
+ * editor's error bridge picks it up, the preview is marked "paused", and the
+ * self-repair pass starts editing the user's `vite.config.ts` to chase a
+ * platform networking detail it cannot fix from inside the project.
+ *
+ * The fix belongs HERE, not in the scaffold. This module already rewrites files
+ * on their way into the sandbox and nowhere else, so the user's own
+ * vite.config.ts stays clean for local `npm run dev` and for export, while the
+ * sandbox copy gets `protocol: "wss"` + `clientPort: 443`.
+ */
+function ensureViteTunnelHmr<T extends { path: string; content?: string | null }>(
+  files: T[],
+): T[] {
+  const idx = files.findIndex((f) =>
+    /^vite\.config\.(t|j)sx?$/.test(f.path.replace(/\\/g, "/")),
+  );
+  if (idx < 0) return files;
+  const source = files[idx].content ?? "";
+  if (!source.trim() || /clientPort/.test(source)) return files;
+
+  const hmr = `hmr: { protocol: "wss", clientPort: 443, overlay: false },`;
+
+  let patched: string | null = null;
+  // `server: { … }` present — inject at the top of the object.
+  const serverBlock = source.match(/server\s*:\s*\{/);
+  if (serverBlock && serverBlock.index !== undefined) {
+    const at = serverBlock.index + serverBlock[0].length;
+    patched = `${source.slice(0, at)}\n    ${hmr}${source.slice(at)}`;
+  } else {
+    // No `server` key — add one to the top-level defineConfig object.
+    const define = source.match(/defineConfig\s*\(\s*(?:\([^)]*\)\s*=>\s*)?\(?\s*\{/);
+    if (define && define.index !== undefined) {
+      const at = define.index + define[0].length;
+      patched = `${source.slice(0, at)}\n  server: { host: true, allowedHosts: true, ${hmr} },${source.slice(at)}`;
+    }
+  }
+  if (!patched) return files;
+
+  const out = [...files];
+  out[idx] = { ...files[idx], content: patched } as T;
+  return out;
+}
+
 /** Vite host + VEB bridge + optional guest comments for cloud sandbox previews. */
 export function patchSandboxPreviewFiles<T extends { path: string; content?: string | null }>(
   files: T[],
   opts?: WebContainerPatchOpts,
 ): T[] {
-  return patchFilesForWebContainer(ensureSupabaseEnv(ensureViteEntryFiles(files)), opts);
+  return patchFilesForWebContainer(
+    ensureViteTunnelHmr(ensureSupabaseEnv(ensureViteEntryFiles(files))),
+    opts,
+  );
 }
