@@ -351,9 +351,27 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
     };
   }
 
-  if (ECOMMERCE_KEYWORDS.test(prompt)) appType = "ecommerce";
+  // POS is checked BEFORE ecommerce, deliberately. A real POS prompt almost
+  // always also contains storefront vocabulary — "product catalog", "shopping
+  // cart", "checkout" — because a cashier terminal HAS a catalog, a cart and a
+  // checkout. With ecommerce first, "a point of sale system for a retail store
+  // with a product catalog grid and shopping cart" classified as ECOMMERCE and
+  // the model built an online store with a marketing header (observed live).
+  // The POS keywords are explicit terminal terms ("point of sale", "cash
+  // register", "cashier station") that never describe an online shop, so when
+  // both match, POS is what the user said. Plain e-commerce prompts contain no
+  // POS terms and still land on ecommerce below.
+  // Same logic for the explicit system names "ERP" and "CRM": a user who says
+  // "an ERP for my store with a product catalog" said ERP; only the GENERIC
+  // erp/crm vocabulary ("inventory management", "sales pipeline") stays below
+  // ecommerce so "online store with inventory management" still builds a shop.
+  const explicitErp = /\b(erp|enterprise resource planning)\b/i.test(prompt);
+  const explicitCrm = /\b(crm|customer relationship management)\b/i.test(prompt);
+  if (POS_KEYWORDS.test(prompt)) appType = "pos";
+  else if (explicitErp) appType = "erp";
+  else if (explicitCrm) appType = "crm";
+  else if (ECOMMERCE_KEYWORDS.test(prompt)) appType = "ecommerce";
   else if (ERP_KEYWORDS.test(prompt)) appType = "erp";
-  else if (POS_KEYWORDS.test(prompt)) appType = "pos";
   else if (CRM_KEYWORDS.test(prompt)) appType = "crm";
   else if (BOOKING_KEYWORDS.test(prompt)) appType = "booking";
   else if (MARKETPLACE_KEYWORDS.test(prompt)) appType = "marketplace";
