@@ -27,6 +27,14 @@
  * shells, which use a sidebar instead of marketing chrome.
  */
 
+import {
+  SITE_FOOTER_PATH,
+  SITE_HEADER_PATH,
+  deriveBrand,
+  siteFooterSource as footerSource,
+  siteHeaderSource as headerSource,
+} from "@/lib/templates/site-chrome";
+
 export interface ChromeFile {
   path: string;
   content: string;
@@ -61,8 +69,8 @@ const FOOTER_FILE_RE = /(^|\/)(footer|site-?footer)\.(tsx|jsx)$/i;
 const SHELL_OR_PAGE_RE =
   /^(src\/routes\/.+|src\/pages\/.+|src\/App|app\/layout|app\/page|app\/.+\/page)\.(tsx|jsx)$/i;
 
-/** Markers of an admin/dashboard shell, which is exempt from this contract. */
-const APP_SHELL_MARKER_RE = /<aside[\s>]|(^|\/)(sidebar|side-?nav|app-?shell)\.(tsx|jsx)$/i;
+/** A dedicated sidebar/app-shell component — the mark of an admin layout. */
+const APP_SHELL_PATH_RE = /(^|\/)(sidebar|side-?nav|app-?shell)\.(tsx|jsx)$/i;
 
 function isTanStackStart(files: ChromeFile[]): boolean {
   return files.some((f) => /^src\/routes\/__root\.(tsx|jsx)$/.test(norm(f.path)));
@@ -79,23 +87,52 @@ function findAppShell(files: ChromeFile[]): ChromeFile | undefined {
 /** Merge existing project files with this turn's output; later wins. */
 function effective(files: ChromeFile[], existing: ChromeFile[]): ChromeFile[] {
   const byPath = new Map<string, ChromeFile>();
-  for (const f of existing) byPath.set(norm(f.path), f);
-  for (const f of files) byPath.set(norm(f.path), f);
+  // `content` is NOT NULL in the type but IS nullable in `project_files`, and
+  // callers hand us rows straight from that table. Normalise once, here, rather
+  // than making every predicate below defensive.
+  const put = (f: ChromeFile) =>
+    byPath.set(norm(f.path), { ...f, content: f.content ?? "" });
+  for (const f of existing) put(f);
+  for (const f of files) put(f);
   return [...byPath.values()];
 }
 
-export function hasSiteHeader(all: ChromeFile[]): boolean {
-  if (all.some((f) => HEADER_FILE_RE.test(norm(f.path)))) return true;
+/**
+ * Chrome counts as present only when something RENDERS it.
+ *
+ * The first version of these predicates returned true as soon as a file named
+ * `Header.tsx` existed anywhere. That was survivable while the scaffold shipped
+ * no chrome. It is not survivable now that it does: `src/components/layout/
+ * Header.tsx` is present in every project from birth, so a file-existence check
+ * is permanently true, and the guarantee could never fire again. The exact
+ * failure it stopped catching is the common one — the model rewrites
+ * `__root.tsx` or `App.tsx`, drops the `<Header />` line, leaves the component
+ * file behind, and the page renders with no header while every check reports
+ * success.
+ *
+ * So: look at what the shell and the pages actually render — a literal
+ * `<header>`/`<footer>` element, or a component whose name reads as site chrome.
+ */
+const HEADER_RENDER_RE = /<(header|Header|Navbar|NavBar|SiteHeader|TopBar|TopNav)[\s/>]/;
+const FOOTER_RENDER_RE = /<(footer|Footer|SiteFooter)[\s/>]/;
+
+function rendersChrome(all: ChromeFile[], re: RegExp): boolean {
   return all.some(
-    (f) => SHELL_OR_PAGE_RE.test(norm(f.path)) && /<header[\s>]/i.test(f.content),
+    (f) => SHELL_OR_PAGE_RE.test(norm(f.path)) && re.test(f.content ?? ""),
   );
 }
 
+export function hasSiteHeader(all: ChromeFile[]): boolean {
+  return rendersChrome(all, HEADER_RENDER_RE);
+}
+
 export function hasSiteFooter(all: ChromeFile[]): boolean {
-  if (all.some((f) => FOOTER_FILE_RE.test(norm(f.path)))) return true;
-  return all.some(
-    (f) => SHELL_OR_PAGE_RE.test(norm(f.path)) && /<footer[\s>]/i.test(f.content),
-  );
+  return rendersChrome(all, FOOTER_RENDER_RE);
+}
+
+/** A chrome component file already exists — reuse it instead of overwriting. */
+function hasChromeComponentFile(all: ChromeFile[], re: RegExp): boolean {
+  return all.some((f) => re.test(norm(f.path)));
 }
 
 /** True when this build is a public website that owes the user header + footer. */
@@ -104,10 +141,15 @@ export function needsWebsiteChrome(
   opts: EnsureChromeOptions = {},
 ): boolean {
   if (opts.appType && APP_SHELL_TYPES.has(opts.appType)) return false;
-  // A sidebar shell anywhere in the project means this is an app, not a site.
-  if (all.some((f) => APP_SHELL_MARKER_RE.test(norm(f.path)) || APP_SHELL_MARKER_RE.test(f.content))) {
-    return false;
-  }
+  // A dedicated sidebar component means this is an app shell, not a site.
+  if (all.some((f) => APP_SHELL_PATH_RE.test(norm(f.path)))) return false;
+  // An `<aside>` in the ROOT SHELL is a layout sidebar. An `<aside>` anywhere
+  // else is a related-posts rail, a table of contents, a filter column — a
+  // normal part of a blog, docs site or storefront. Testing every file's
+  // content, as this once did, silently exempted exactly the public websites
+  // that most need chrome.
+  const shellFile = findRootShell(all) ?? findAppShell(all);
+  if (shellFile && /<aside[\s>]/i.test(shellFile.content ?? "")) return false;
   // There must be something page-shaped to hang the chrome on.
   return all.some((f) => SHELL_OR_PAGE_RE.test(norm(f.path)));
 }
@@ -147,188 +189,24 @@ export function assessWebsiteChrome(
 
 // ─── Synthesised chrome (layer 2 — only when the model still did not deliver) ──
 
+/** Strip anything that would not survive being spliced into JSX text. */
+function sanitizeBrand(value: string): string {
+  return value.replace(/[{}<>`$\\]/g, "").replace(/\s+/g, " ").trim().slice(0, 40) || "Your Brand";
+}
+
 function brandFrom(all: ChromeFile[], brand?: string): string {
-  if (brand && brand.trim()) {
-    // Project names arrive as the original prompt ("A landing page for a coffee
-    // shop called BrewHaus with..."), so prefer a trailing proper noun when the
-    // string is clearly a sentence rather than a name.
-    const trimmed = brand.trim();
-    if (trimmed.length <= 32 && !/\s(a|an|the|for|with|called)\s/i.test(trimmed)) {
-      return trimmed;
-    }
-    const called = trimmed.match(/\bcalled\s+([A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*)?)/);
-    if (called) return called[1];
-  }
+  const fromName = deriveBrand(brand, "");
+  if (fromName) return fromName;
+  // Fall back to the document title the model already chose:
+  // "BrewHaus — Coffee Shop" → "BrewHaus".
   const root = all.find((f) => /^src\/routes\/__root\.(tsx|jsx)$/.test(norm(f.path)));
-  const title = root?.content.match(/title:\s*["'`]([^"'`]+)["'`]/);
-  if (title) return title[1].split(/\s+[—–|-]\s+/)[0].trim();
-  return "Studio";
-}
-
-const NAV_LINKS = ["Home", "About", "Services", "Contact"];
-
-function headerSource(brand: string): string {
-  const links = NAV_LINKS.map(
-    (l) =>
-      `            <a href="#${l.toLowerCase()}" className="text-sm font-medium text-neutral-200 transition-colors hover:text-white">${l}</a>`,
-  ).join("\n");
-  const mobileLinks = NAV_LINKS.map(
-    (l) =>
-      `              <a href="#${l.toLowerCase()}" onClick={() => setOpen(false)} className="rounded-md px-2 py-2 text-sm font-medium text-neutral-200 hover:bg-white/5 hover:text-white">${l}</a>`,
-  ).join("\n");
-
-  return `import { useState } from "react";
-import { Facebook, Instagram, Linkedin, Mail, Menu as MenuIcon, Phone, X } from "lucide-react";
-
-/**
- * Site header — a compact top bar (contact + social) above a sticky main row
- * (logo, menu links, CTA). Sticky rather than fixed, so the sections below keep
- * normal document flow.
- */
-export function Header() {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <header className="sticky top-0 z-50 w-full border-b border-white/10 bg-neutral-950/80 backdrop-blur">
-      <div className="hidden border-b border-white/5 bg-white/[0.03] md:block">
-        <div className="mx-auto flex h-9 max-w-6xl items-center justify-between px-4 text-xs text-neutral-400">
-          <div className="flex items-center gap-4">
-            <a href="tel:+15550143927" className="flex items-center gap-1.5 hover:text-white">
-              <Phone className="h-3.5 w-3.5" aria-hidden="true" />
-              (555) 014-3927
-            </a>
-            <a href="mailto:hello@${brand.toLowerCase().replace(/[^a-z0-9]/g, "")}.com" className="flex items-center gap-1.5 hover:text-white">
-              <Mail className="h-3.5 w-3.5" aria-hidden="true" />
-              hello@${brand.toLowerCase().replace(/[^a-z0-9]/g, "")}.com
-            </a>
-          </div>
-          <div className="flex items-center gap-3">
-            <a href="#" aria-label="Facebook" className="hover:text-white"><Facebook className="h-4 w-4" /></a>
-            <a href="#" aria-label="Instagram" className="hover:text-white"><Instagram className="h-4 w-4" /></a>
-            <a href="#" aria-label="LinkedIn" className="hover:text-white"><Linkedin className="h-4 w-4" /></a>
-          </div>
-        </div>
-      </div>
-
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
-        <a href="#" className="text-lg font-bold tracking-tight text-white">
-          ${brand}
-        </a>
-
-        <nav className="hidden items-center gap-7 md:flex">
-${links}
-        </nav>
-
-        <div className="flex items-center gap-2">
-          <a
-            href="#contact"
-            className="hidden rounded-lg bg-white px-4 py-2 text-sm font-semibold text-neutral-900 transition-colors hover:bg-neutral-200 md:inline-flex"
-          >
-            Get in touch
-          </a>
-          <button
-            type="button"
-            aria-label={open ? "Close menu" : "Open menu"}
-            aria-expanded={open}
-            onClick={() => setOpen((v) => !v)}
-            className="inline-flex items-center justify-center rounded-md p-2 text-neutral-200 hover:bg-white/5 md:hidden"
-          >
-            {open ? <X className="h-5 w-5" /> : <MenuIcon className="h-5 w-5" />}
-          </button>
-        </div>
-      </div>
-
-      {open && (
-        <div className="border-t border-white/10 md:hidden">
-          <nav className="mx-auto flex max-w-6xl flex-col gap-1 px-4 py-3">
-${mobileLinks}
-          </nav>
-        </div>
-      )}
-    </header>
-  );
-}
-
-export default Header;
-`;
-}
-
-function footerSource(brand: string): string {
-  return `import { Facebook, Instagram, Linkedin, Mail, MapPin, Phone } from "lucide-react";
-
-/** Site footer — brand blurb, link columns, contact details, copyright. */
-export function Footer() {
-  const year = new Date().getFullYear();
-
-  return (
-    <footer className="border-t border-white/10 bg-neutral-950 text-neutral-400">
-      <div className="mx-auto grid max-w-6xl gap-10 px-4 py-14 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="space-y-3">
-          <p className="text-lg font-bold tracking-tight text-white">${brand}</p>
-          <p className="text-sm leading-relaxed">
-            Built for people who care about the details. Come say hello — we are open
-            seven days a week.
-          </p>
-          <div className="flex items-center gap-3 pt-1">
-            <a href="#" aria-label="Facebook" className="hover:text-white"><Facebook className="h-4 w-4" /></a>
-            <a href="#" aria-label="Instagram" className="hover:text-white"><Instagram className="h-4 w-4" /></a>
-            <a href="#" aria-label="LinkedIn" className="hover:text-white"><Linkedin className="h-4 w-4" /></a>
-          </div>
-        </div>
-
-        <div>
-          <p className="mb-3 text-sm font-semibold text-white">Explore</p>
-          <ul className="space-y-2 text-sm">
-            <li><a href="#home" className="hover:text-white">Home</a></li>
-            <li><a href="#about" className="hover:text-white">About</a></li>
-            <li><a href="#services" className="hover:text-white">Services</a></li>
-            <li><a href="#contact" className="hover:text-white">Contact</a></li>
-          </ul>
-        </div>
-
-        <div>
-          <p className="mb-3 text-sm font-semibold text-white">Company</p>
-          <ul className="space-y-2 text-sm">
-            <li><a href="#" className="hover:text-white">Careers</a></li>
-            <li><a href="#" className="hover:text-white">Press</a></li>
-            <li><a href="#" className="hover:text-white">Privacy</a></li>
-            <li><a href="#" className="hover:text-white">Terms</a></li>
-          </ul>
-        </div>
-
-        <div>
-          <p className="mb-3 text-sm font-semibold text-white">Get in touch</p>
-          <ul className="space-y-2 text-sm">
-            <li className="flex items-start gap-2">
-              <MapPin className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-              128 Harbour Lane, Portland, OR
-            </li>
-            <li className="flex items-center gap-2">
-              <Phone className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <a href="tel:+15550143927" className="hover:text-white">(555) 014-3927</a>
-            </li>
-            <li className="flex items-center gap-2">
-              <Mail className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <a href="mailto:hello@${brand.toLowerCase().replace(/[^a-z0-9]/g, "")}.com" className="hover:text-white">
-                hello@${brand.toLowerCase().replace(/[^a-z0-9]/g, "")}.com
-              </a>
-            </li>
-          </ul>
-        </div>
-      </div>
-
-      <div className="border-t border-white/10">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 px-4 py-5 text-xs sm:flex-row">
-          <p>&copy; {year} ${brand}. All rights reserved.</p>
-          <p>Built with LifemarkAI.</p>
-        </div>
-      </div>
-    </footer>
-  );
-}
-
-export default Footer;
-`;
+  const title = root?.content?.match(/title:\s*["'`]([^"'`]+)["'`]/);
+  const fromTitle = title ? title[1].split(/\s+[—–|-]\s+/)[0].trim() : "";
+  // The scaffold ships `title: "LifemarkAI App"`. Reading it back would brand a
+  // user's coffee shop with the platform's own name in the logo slot, the
+  // footer copyright and the placeholder email address.
+  if (fromTitle && !/lifemark/i.test(fromTitle)) return sanitizeBrand(fromTitle);
+  return "Your Brand";
 }
 
 /** Add an import line just below the last existing import. */
@@ -356,7 +234,10 @@ function mountInRootShell(
   const body = source.match(/<body([^>]*)>([\s\S]*?)<\/body>/i);
   if (!body) return null;
   const inner = body[2];
-  if (/<Header\s*\/>/.test(inner) || /<Footer\s*\/>/.test(inner)) return null;
+  // Decline only for the half we are about to add — a mounted <Footer /> must
+  // not block adding the missing <Header />, which is the whole point of `need`.
+  if (need.header && /<Header\s*\/>/.test(inner)) return null;
+  if (need.footer && /<Footer\s*\/>/.test(inner)) return null;
   const childrenMatches = inner.match(/\{\s*children\s*\}/g);
   if (!childrenMatches || childrenMatches.length !== 1) return null;
 
@@ -381,28 +262,65 @@ function mountInRootShell(
 }
 
 /**
- * Mount the chrome in a Vite SPA's `src/App.tsx` by wrapping whatever it
- * returns. Only fires on the single-`return (...)` shape; anything else is
- * declined for the same reason as above.
+ * Find the JSX a component returns, by balanced parens rather than by regex.
+ *
+ * The regex version required the file to END at the closing brace, so it only
+ * ever matched `export default function App() { return ( … ); }`. Both shapes
+ * this codebase actually generates —
+ *
+ *     const App = () => ( … );      export default App;
+ *     function App() { return ( … ); }   export default App;
+ *
+ * — end with an `export default` line and were silently declined, which made
+ * the whole Vite/SPA branch of the guarantee dead code.
+ */
+function findReturnedJsx(source: string): { start: number; end: number } | null {
+  const opener = /(?:\breturn\s*|=>\s*)\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = opener.exec(source)) !== null) {
+    const open = m.index + m[0].length - 1; // index of the "("
+    let depth = 0;
+    for (let i = open; i < source.length; i++) {
+      const c = source[i];
+      if (c === "(") depth++;
+      else if (c === ")") {
+        depth--;
+        if (depth === 0) {
+          const inner = source.slice(open + 1, i).trim();
+          // The first balanced group that actually contains JSX wins; an early
+          // `return (someCall())` is skipped rather than mangled.
+          if (inner.startsWith("<")) return { start: open + 1, end: i };
+          break;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Mount the chrome in a Vite SPA's `src/App.tsx` by wrapping what it returns.
+ * Declines when no JSX return can be located — a wrong edit to the app shell is
+ * far worse than a missing header.
  */
 function mountInAppShell(
   source: string,
   need: { header: boolean; footer: boolean },
 ): string | null {
-  if (/<Header\s*\/>/.test(source) || /<Footer\s*\/>/.test(source)) return null;
-  // Only the unambiguous shape: one `return (` in the whole file, closing at EOF.
-  if ((source.match(/\breturn\s*\(/g) ?? []).length !== 1) return null;
-  const ret = source.match(/return\s*\(\s*([\s\S]*?)\s*\)\s*;?\s*\}\s*$/);
-  if (!ret) return null;
-  const inner = ret[1].trim();
+  if (need.header && /<Header\s*\/>/.test(source)) return null;
+  if (need.footer && /<Footer\s*\/>/.test(source)) return null;
+
+  const span = findReturnedJsx(source);
+  if (!span) return null;
+  const inner = source.slice(span.start, span.end).trim();
   if (!inner.startsWith("<")) return null;
 
   const before = need.header ? "      <Header />\n" : "";
   const after = need.footer ? "\n      <Footer />" : "";
-  const wrapped = `return (\n    <>\n${before}      ${inner
-    .split("\n")
-    .join("\n      ")}${after}\n    </>\n  );\n}\n`;
-  let out = source.slice(0, ret.index ?? 0) + wrapped;
+  const body = inner.split("\n").join("\n      ");
+  const wrapped = `\n    <>\n${before}      ${body}${after}\n    </>\n  `;
+
+  let out = source.slice(0, span.start) + wrapped + source.slice(span.end);
   if (need.header) out = addImport(out, `import { Header } from "./components/layout/Header";`);
   if (need.footer) out = addImport(out, `import { Footer } from "./components/layout/Footer";`);
   return out;
@@ -453,8 +371,15 @@ export function ensureWebsiteChrome<T extends ChromeFile>(
     else out.push(entry);
   };
 
-  if (need.header) put("src/components/layout/Header.tsx", headerSource(brand));
-  if (need.footer) put("src/components/layout/Footer.tsx", footerSource(brand));
+  // Mount always; write the component only when there is nothing to mount. A
+  // project whose Header.tsx the model styled must keep that file — the bug we
+  // are fixing is the missing MOUNT, not missing markup.
+  if (need.header && !hasChromeComponentFile(all, HEADER_FILE_RE)) {
+    put(SITE_HEADER_PATH, headerSource(brand));
+  }
+  if (need.footer && !hasChromeComponentFile(all, FOOTER_FILE_RE)) {
+    put(SITE_FOOTER_PATH, footerSource(brand));
+  }
 
   const shellIndex = out.findIndex((f) => norm(f.path) === norm(target.path));
   const shellEntry = {

@@ -73,7 +73,7 @@ const ALLOWED_FRAMEWORKS = new Set([
 function getStarterFiles(name: string, framework: string) {
   const safeName = name.replace(/[^a-zA-Z0-9]/g, "") || "app";
   if (framework === "tanstack-start" || framework === "tanstack") {
-    return tanstackStartScaffold();
+    return tanstackStartScaffold({}, name);
   }
   // "react" is the Lovable shape: Vite + React 18 + shadcn + react-router-dom,
   // mirroring a real Lovable export file-for-file. See lovable-vite-scaffold.ts.

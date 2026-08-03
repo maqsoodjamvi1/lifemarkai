@@ -16,6 +16,7 @@
  */
 
 import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "@/lib/preview/base-app-deps";
+import { deriveBrand, siteChromeFiles } from "@/lib/templates/site-chrome";
 
 export interface ScaffoldFile {
   path: string;
@@ -142,6 +143,8 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import appCss from "../styles.css?url";
+import { Header } from "../components/layout/Header";
+import { Footer } from "../components/layout/Footer";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -170,7 +173,9 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
         <HeadContent />
       </head>
       <body>
+        <Header />
         {children}
+        <Footer />
         <Scripts />
       </body>
     </html>
@@ -186,15 +191,15 @@ export const Route = createFileRoute("/")({
 
 function Home() {
   return (
-    <main className="min-h-screen flex items-center justify-center bg-neutral-950 text-neutral-100">
-      <div className="text-center space-y-3">
-        <h1 className="text-4xl font-bold tracking-tight">Welcome</h1>
-        <p className="text-neutral-400">
-          Your TanStack Start app is ready. Edit{" "}
-          <code className="rounded bg-neutral-800 px-1.5 py-0.5 text-sm">src/routes/index.tsx</code>{" "}
-          to begin.
+    <main id="home" className="bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
+      <section className="mx-auto max-w-6xl px-4 py-24 text-center">
+        <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">Welcome</h1>
+        <p className="mx-auto mt-4 max-w-xl text-neutral-600 dark:text-neutral-400">
+          Your app is ready. Edit{" "}
+          <code className="rounded bg-neutral-100 px-1.5 py-0.5 text-sm dark:bg-neutral-800">src/routes/index.tsx</code>{" "}
+          to begin, or ask the assistant to build the page you want.
         </p>
-      </div>
+      </section>
     </main>
   );
 }
@@ -213,7 +218,13 @@ export function cn(...inputs: ClassValue[]) {
  * Return the full TanStack Start scaffold. `pkgExtra` merges into dependencies
  * (parity with the Vite-React scaffold helper).
  */
-export function tanstackStartScaffold(pkgExtra: Record<string, string> = {}): ScaffoldFile[] {
+export function tanstackStartScaffold(
+  pkgExtra: Record<string, string> = {},
+  projectName?: string,
+): ScaffoldFile[] {
+  // Every new site starts WITH a header and footer. See lib/templates/site-chrome.ts
+  // for why this belongs in the scaffold rather than only in a post-build check.
+  const chrome = siteChromeFiles(deriveBrand(projectName));
   return [
     { path: "package.json", language: "json", content: PACKAGE_JSON(pkgExtra) },
     { path: "tsconfig.json", language: "json", content: TSCONFIG },
@@ -225,6 +236,7 @@ export function tanstackStartScaffold(pkgExtra: Record<string, string> = {}): Sc
     { path: "src/routes/__root.tsx", language: "typescriptreact", content: ROOT_TSX },
     { path: "src/routes/index.tsx", language: "typescriptreact", content: INDEX_TSX },
     { path: "src/lib/utils.ts", language: "typescript", content: UTILS_TS },
+    ...chrome,
   ];
 }
 

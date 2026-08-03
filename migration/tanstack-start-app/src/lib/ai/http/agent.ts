@@ -14,6 +14,8 @@ import {
 } from "@/lib/credits";
 import { computeCreditCost, maxCreditCostForMode, AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
 import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
+import { ensureWebsiteChrome } from "@/lib/ai/website-chrome";
+import { alignGeneratedPackageJson } from "@/lib/preview/align-package-json";
 import { autoWireAi } from "@/lib/ai/auto-wire-ai";
 import {
   parseCloudToolPermissions,
@@ -481,8 +483,52 @@ export async function handleAiAgent(req: Request) {
             send({ fileUpdated: { path: file.path, content: file.content.slice(0, 100) + "..." } });
           }
         }
+        // ── Post-generation guarantees ────────────────────────────────────
+        // Parity with the chat build path. The agent is the PRIMARY build path
+        // for new projects (see the comment above the intelligence block), so a
+        // guarantee wired only into chat.ts silently does not apply to most
+        // builds — which is exactly what a live test showed: a landing page
+        // arrived with a UI kit, an index route, and no header or footer at all.
+        // See lib/ai/website-chrome.ts and lib/preview/align-package-json.ts.
+        const guaranteed: Array<{ path: string; content: string; language?: string }> = [];
+        try {
+          const current = Array.from(projectFileMap.values()).map((file) => ({
+            path: file.path,
+            content: file.content ?? "",
+            language: (file as { language?: string }).language ?? detectLanguage(file.path),
+          }));
+          const withChrome = ensureWebsiteChrome(current, [], {
+            brand: (projectRow as { name?: string } | null)?.name ?? undefined,
+          });
+          for (const file of withChrome) {
+            if (file.path === "package.json") {
+              const aligned = alignGeneratedPackageJson(file.content);
+              if (aligned.changed.length > 0) file.content = aligned.content;
+            }
+            const prev = projectFileMap.get(file.path);
+            if (!prev || (prev.content ?? "") !== file.content) guaranteed.push(file);
+          }
+          if (guaranteed.length > 0) {
+            await (supabase as any).from("project_files").upsert(
+              guaranteed.map((file) => ({
+                project_id: projectId,
+                path: file.path,
+                content: file.content,
+                language: file.language ?? detectLanguage(file.path),
+              })),
+              { onConflict: "project_id,path" },
+            );
+            for (const file of guaranteed) {
+              projectFileMap.set(file.path, { path: file.path, content: file.content, language: file.language });
+              send({ fileUpdated: { path: file.path, content: file.content.slice(0, 100) + "..." } });
+            }
+          }
+        } catch {
+          // Never fail a build over a guarantee pass.
+        }
+
         const filesChanged = Array.from(
-          new Set([...(Array.isArray(result.filesChanged) ? result.filesChanged : []), ...supportFiles.map((file) => file.path)]),
+          new Set([...(Array.isArray(result.filesChanged) ? result.filesChanged : []), ...supportFiles.map((file) => file.path), ...guaranteed.map((file) => file.path)]),
         );
 
         // Save agent task as messages — including a compact persisted work

@@ -43,6 +43,22 @@ function pathVariants(resolved: string): string[] {
   ].map(normalizePath);
 }
 
+/**
+ * Comments are legal inside an import clause and models write them:
+ *
+ *     import {
+ *       Button, // primary
+ *       Card,
+ *     } from "@/components/ui/kit";
+ *
+ * A naive comma split glues `// primary` onto `Card`, so `Card` is looked up as
+ * the symbol `"// primary\n  Card"`, never found, and reported as a broken
+ * import — straight into the healing prompt, which then "fixes" working code.
+ */
+function stripImportComments(clause: string): string {
+  return clause.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+}
+
 function isProjectImportSpec(spec: string): boolean {
   return spec.startsWith(".") || spec.startsWith("@/") || spec.startsWith("src/");
 }
@@ -116,7 +132,7 @@ function hasNamedExport(content: string, name: string): boolean {
   if (typeRe.test(content)) return true;
   // export { Name } / export type { Name } / export { Foo as Name }
   for (const match of content.matchAll(/\bexport\s+(?:type\s+)?\{([^}]+)\}/g)) {
-    for (const raw of match[1].split(",")) {
+    for (const raw of stripImportComments(match[1]).split(",")) {
       const parts = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/i).map((s) => s.trim());
       const exported = parts[parts.length - 1];
       if (exported === name) return true;
@@ -154,7 +170,7 @@ function parseRelativeImports(file: DiagnosableFile): ParsedImport[] {
     new RegExp(`\\bimport\\s+(?:type\\s+)?\\{([^}]+)\\}\\s+from\\s+['"]${specPattern}['"]\\s*;?`, "g");
   while ((m = namedOnly.exec(content)) !== null) {
     if (!isProjectImportSpec(m[2])) continue;
-    const named = m[1]
+    const named = stripImportComments(m[1])
       .split(",")
       // `import { type Foo, Bar }` — strip the inline type keyword so the
       // symbol name (not "type Foo") is what we look up.
@@ -168,7 +184,7 @@ function parseRelativeImports(file: DiagnosableFile): ParsedImport[] {
     new RegExp(`\\bimport\\s+(?!type\\b)(\\w+)\\s*,\\s*\\{([^}]+)\\}\\s+from\\s+['"]${specPattern}['"]\\s*;?`, "g");
   while ((m = mixed.exec(content)) !== null) {
     if (!isProjectImportSpec(m[3])) continue;
-    const named = m[2]
+    const named = stripImportComments(m[2])
       .split(",")
       .map((s) => s.trim().split(/\s+as\s+/)[0].trim())
       .filter((s) => s !== "type")

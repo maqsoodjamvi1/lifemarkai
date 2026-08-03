@@ -26,6 +26,41 @@ import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "@/lib/preview/
 /** TanStack Start's Vite plugin requires Vite 7+; the SPA scaffold pins 5. */
 const TANSTACK_VITE_PIN = "^7.0.0";
 
+/**
+ * Lowest version a range can resolve to. `^1.1.2` → [1,1,2]. Anything we cannot
+ * parse (a git URL, `latest`, a complex range) returns null and is left alone.
+ */
+function minVersion(range: string): [number, number, number] | null {
+  const m = /^[\^~>=\s]*(\d+)\.(\d+)\.(\d+)/.exec(range.trim());
+  if (!m) return null;
+  return [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function isBelow(a: [number, number, number], b: [number, number, number]): boolean {
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] < b[i];
+  }
+  return false;
+}
+
+/**
+ * Our pins are a FLOOR, not an override.
+ *
+ * The first version replaced every version we happened to have an opinion
+ * about, which meant a plain Vite project got 26 rewrites on its first build
+ * turn — `react-router-dom ^6.30.1 → ^6.28.0`, `typescript ^5.8.3 → ^5.5.0`,
+ * `vite ^5.4.19 → ^5.4.0` and so on. Every one of those is a DOWNGRADE inside
+ * the same major: harmless to resolution, but it rewrites package.json under
+ * the user on turn one, throws away pins that `lovable-vite-scaffold.ts` says
+ * were read out of a real Lovable export rather than guessed, and triggers a
+ * pointless reinstall in the sandbox.
+ *
+ * The actual failure this function exists to prevent is a version resolving
+ * BELOW what the rest of the tree needs — `vaul@^0.9.4` next to React 19 aborts
+ * `npm install` with ERESOLVE and the preview never boots. That is a floor
+ * check, so this is a floor check. A newer version than ours is the model being
+ * current, and is left exactly as written.
+ */
 function alignSection(
   section: unknown,
   pins: Record<string, string>,
@@ -36,6 +71,9 @@ function alignSection(
   for (const [name, version] of Object.entries(deps)) {
     const pin = pins[name];
     if (!pin || typeof version !== "string" || version === pin) continue;
+    const floor = minVersion(pin);
+    const actual = minVersion(version);
+    if (!floor || !actual || !isBelow(actual, floor)) continue;
     deps[name] = pin;
     changed.push(`${name}: ${version} → ${pin}`);
   }
@@ -65,21 +103,37 @@ export function alignGeneratedPackageJson(content: string): AlignResult {
 
   const root = pkg as Record<string, unknown>;
   const changed: string[] = [];
+  const deps = (root.dependencies ?? {}) as Record<string, unknown>;
+  const dev = (root.devDependencies ?? {}) as Record<string, unknown>;
+
+  // TanStack Start's Vite plugin peers on `vite >= 7`, while the base dev set
+  // pins vite ^5 for the plain SPA scaffold. Decide which app this is BEFORE
+  // aligning, and skip `vite` for TanStack projects — aligning first and
+  // restoring afterwards produced a self-cancelling pair of entries
+  // ("vite: ^7 → ^5", "vite: ^5 → ^7"), which made `changed` permanently
+  // non-empty and rewrote package.json on turns where nothing had changed.
+  //
+  // The check reads BOTH sections: a model that files the build-time plugin
+  // host under devDependencies is making a defensible choice, and looking only
+  // at `dependencies` meant those projects were quietly downgraded to vite ^5 —
+  // producing the exact ERESOLVE this function exists to prevent.
+  const isTanStack =
+    typeof deps["@tanstack/react-start"] === "string" ||
+    typeof dev["@tanstack/react-start"] === "string";
+
+  const devPins = isTanStack
+    ? Object.fromEntries(
+        Object.entries(BASE_APP_DEV_DEPENDENCIES).filter(([name]) => name !== "vite"),
+      )
+    : BASE_APP_DEV_DEPENDENCIES;
 
   alignSection(root.dependencies, BASE_APP_DEPENDENCIES, changed);
-  alignSection(root.devDependencies, BASE_APP_DEV_DEPENDENCIES, changed);
+  alignSection(root.devDependencies, devPins, changed);
 
-  // TanStack Start apps: the base dev pin (vite ^5) violates the plugin's
-  // `vite >= 7` peer, which is its own ERESOLVE. Raise it only for those apps
-  // so the plain Vite SPA scaffold keeps the version it was built against.
-  const deps = (root.dependencies ?? {}) as Record<string, unknown>;
-  if (typeof deps["@tanstack/react-start"] === "string") {
-    const dev = (root.devDependencies ?? {}) as Record<string, unknown>;
-    if (typeof dev.vite === "string" && dev.vite !== TANSTACK_VITE_PIN) {
-      changed.push(`vite: ${dev.vite} → ${TANSTACK_VITE_PIN}`);
-      dev.vite = TANSTACK_VITE_PIN;
-      root.devDependencies = dev;
-    }
+  if (isTanStack && typeof dev.vite === "string" && dev.vite !== TANSTACK_VITE_PIN) {
+    changed.push(`vite: ${dev.vite} → ${TANSTACK_VITE_PIN}`);
+    dev.vite = TANSTACK_VITE_PIN;
+    root.devDependencies = dev;
   }
 
   if (changed.length === 0) return { content, changed };

@@ -30,6 +30,7 @@
  * shape of the apps the platform GENERATES.
  */
 import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "@/lib/preview/base-app-deps";
+import { deriveBrand, siteChromeFiles } from "@/lib/templates/site-chrome";
 
 export interface ScaffoldFile {
   path: string;
@@ -40,8 +41,8 @@ export interface ScaffoldFile {
 /** Deps observed in the real export, merged over the shared base set. */
 export const LOVABLE_VITE_DEPENDENCIES: Record<string, string> = {
   ...BASE_APP_DEPENDENCIES,
-  react: "^18.3.1",
-  "react-dom": "^18.3.1",
+  react: "^19.2.0",
+  "react-dom": "^19.2.0",
   "react-router-dom": "^6.30.1",
   "@tanstack/react-query": "^5.83.0",
   "@supabase/supabase-js": "^2.104.0",
@@ -52,16 +53,16 @@ export const LOVABLE_VITE_DEPENDENCIES: Record<string, string> = {
   clsx: "^2.1.1",
   "tailwind-merge": "^2.6.0",
   "tailwindcss-animate": "^1.0.7",
-  "lucide-react": "^0.462.0",
+  "lucide-react": "^0.468.0",
   sonner: "^1.7.4",
   cmdk: "^1.1.1",
-  vaul: "^0.9.9",
-  "next-themes": "^0.3.0",
+  vaul: "^1.1.2",
+  "next-themes": "^0.4.4",
   "date-fns": "^3.6.0",
   recharts: "^2.15.4",
   "embla-carousel-react": "^8.6.0",
   "input-otp": "^1.4.2",
-  "react-day-picker": "^8.10.1",
+  "react-day-picker": "^9.4.0",
   "react-resizable-panels": "^2.1.9",
 };
 
@@ -75,8 +76,8 @@ export const LOVABLE_VITE_DEV_DEPENDENCIES: Record<string, string> = {
   autoprefixer: "^10.4.21",
   postcss: "^8.5.6",
   "@types/node": "^22.16.5",
-  "@types/react": "^18.3.23",
-  "@types/react-dom": "^18.3.7",
+  "@types/react": "^19.0.0",
+  "@types/react-dom": "^19.0.0",
 };
 
 const PACKAGE_JSON = (name: string) =>
@@ -393,6 +394,8 @@ const APP_TSX = `import { QueryClient, QueryClientProvider } from "@tanstack/rea
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import Header from "@/components/layout/Header";
+import Footer from "@/components/layout/Footer";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 
@@ -403,11 +406,13 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <BrowserRouter>
+        <Header />
         <Routes>
           <Route path="/" element={<Index />} />
           {/* Add all custom routes ABOVE the catch-all "*" route. */}
           <Route path="*" element={<NotFound />} />
         </Routes>
+        <Footer />
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
@@ -560,6 +565,8 @@ export function lovableViteScaffold(name = "My App"): ScaffoldFile[] {
     { path: "src/lib/utils.ts", language: "typescript", content: UTILS_TS },
     { path: "src/components/ui/sonner.tsx", language: "typescriptreact", content: UI_SONNER },
     { path: "src/components/ui/tooltip.tsx", language: "typescriptreact", content: UI_TOOLTIP },
+    // Every new site starts WITH a header and footer — see lib/templates/site-chrome.ts.
+    ...siteChromeFiles(deriveBrand(name)),
   ];
 }
 
