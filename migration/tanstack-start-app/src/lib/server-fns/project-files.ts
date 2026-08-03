@@ -15,6 +15,7 @@ import {
   getProjectAccess,
 } from "@/lib/project/access";
 import { sanitizeGeneratedFile } from "@/lib/ai/html-sanity";
+import { pushFileToRunningSandbox } from "@/lib/preview/push-to-sandbox";
 
 async function requireUser() {
   const supabase = await createClient();
@@ -70,6 +71,8 @@ export async function upsertProjectFile(input: {
   if (error || !file) {
     return { status: "error" as const, message: "Could not save the file. Try again." };
   }
+  // Keep the live preview in step with the database — see push-to-sandbox.ts.
+  pushFileToRunningSandbox(supabase, input.projectId, input.path, content);
   return { status: "ok" as const, file };
 }
 
@@ -114,6 +117,15 @@ export async function patchProjectFile(input: {
 
   if (error || !file) {
     return { status: "error" as const, message: error?.message ?? "Update failed" };
+  }
+  if (updatePayload.content !== undefined) {
+    // Keep the live preview in step with the database — see push-to-sandbox.ts.
+    pushFileToRunningSandbox(
+      supabase,
+      input.projectId,
+      (file as { path?: string }).path ?? input.path ?? "",
+      updatePayload.content,
+    );
   }
   return { status: "ok" as const, file };
 }

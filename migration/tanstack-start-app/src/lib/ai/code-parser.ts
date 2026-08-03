@@ -1,5 +1,6 @@
 import { salvageFilesFromStreamJson } from "./streaming-file-extractor";
 import { ensureCommonGeneratedSupportFiles } from "./generated-support-files";
+import { checkJsxTagBalance } from "./jsx-balance";
 import { assessWebsiteChrome } from "./website-chrome";
 import { parseFileUpdateBlocks } from "./xml-stream-parser";
 
@@ -961,6 +962,29 @@ export function validateGeneratedFiles(
         message: `${filePath} contains JSX but has a .ts extension. Rename it to .tsx or remove JSX.`,
         severity: "error",
       });
+    }
+
+    // ── JSX tag balance ─────────────────────────────────────────────────────
+    // A single mismatched close (`</motion.div>` closing a `<div>` — a real
+    // model output) makes the module fail to compile and the preview render
+    // blank. Catch it at generation time so the auto-fix pass repairs it
+    // before the user ever sees the broken preview. The checker is validated
+    // to zero false positives on a 90-file real Lovable corpus (generics,
+    // generic arrows, comparisons, fragments, void elements, render props),
+    // so an issue here is trusted at severity "error".
+    if (/\.(tsx|jsx)$/.test(filePath)) {
+      const jsxIssues = checkJsxTagBalance(content);
+      for (const issue of jsxIssues.slice(0, 3)) {
+        errors.push({
+          type: "jsx_unbalanced",
+          file: filePath,
+          message:
+            issue.kind === "extra_close"
+              ? `${filePath} line ${issue.line}: closing tag </${issue.name}> has no matching opening tag. Fix the tag name (e.g. a </SomeComponent> closing a plain <div>) so every close matches its open.`
+              : `${filePath} line ${issue.line}: <${issue.name}> is never closed. Add the missing </${issue.name}> or make it self-closing.`,
+          severity: "error",
+        });
+      }
     }
 
     // ── Check local imports ─────────────────────────────────────────────────

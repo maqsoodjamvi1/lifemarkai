@@ -11,6 +11,7 @@ import {
   settleCreditReservation,
 } from "@/lib/credits";
 import type { PreviewRuntimeError, PreviewErrorKind } from "@/lib/preview/preview-error-bridge";
+import { pushFileToRunningSandbox } from "@/lib/preview/push-to-sandbox";
 
 /**
  * Free daily "Try to fix" quota (Lovable parity — error fixes are Lovable's
@@ -281,6 +282,13 @@ Return the fixed files as JSON.`;
               : "javascript",
         });
       }
+
+      // The whole point of an auto-fix is replacing the file the preview is
+      // currently choking on — so the fix must reach the RUNNING container,
+      // not just the database. This was the observed stale-preview bug: the
+      // repair saved to the DB while the sandbox kept serving the broken file
+      // until the container was destroyed by hand.
+      pushFileToRunningSandbox(supabase, projectId, fixedFile.path, fixedFile.content);
     }
 
     const { recordEditorIntelligenceBuild } = await import(

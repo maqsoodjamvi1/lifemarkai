@@ -94,6 +94,7 @@ import {
   resolveBudgetAwareModel,
 } from "@/lib/ai/cost-controls";
 import { resolveSmartModel } from "@/lib/ai/editor-intelligence";
+import { pushFileToRunningSandbox } from "@/lib/preview/push-to-sandbox";
 
 // Generation + backend wiring + self-verification can exceed a minute on
 // complex builds (Lovable budgets 15 min for agent runs).
@@ -1869,6 +1870,10 @@ The user has expressed frustration. Do the following:
                 await (supabase as any).from("project_files").upsert({
                   project_id: projectId, path: pr.path, content: pr.content, language: langMap[lang] ?? lang,
                 }, { onConflict: "project_id,path" });
+                // Reach the RUNNING preview container too — a DB-only save
+                // leaves the sandbox serving the pre-patch file until the
+                // container is recreated (observed stale-preview bug).
+                pushFileToRunningSandbox(supabase, projectId, pr.path, pr.content);
               }
               for (const pr of failed) {
                 logger.warn("ai.chat.patch_failed", { projectId, path: pr.path, error: pr.error });
@@ -2181,14 +2186,20 @@ The user has expressed frustration. Do the following:
               // of sync with what the model "finished" (Lovable: preview = latest).
               const { sanitizeGeneratedFile } = await import("@/lib/ai/html-sanity");
               for (const file of parsedFiles) {
+                const sanitized = sanitizeGeneratedFile(file.path, file.content);
                 await (supabase as any).from("project_files").upsert({
                   project_id: projectId,
                   path: file.path,
                   // Guards against continuation rounds appending a second full
                   // document to html files (observed corruption in the wild).
-                  content: sanitizeGeneratedFile(file.path, file.content),
+                  content: sanitized,
                   language: file.language,
                 }, { onConflict: "project_id,path" });
+                // Sync the final (sanitized/repaired) content into the running
+                // sandbox — the container was created from the scaffold before
+                // the build finished, so without this the preview keeps the
+                // scaffold until it is destroyed by hand.
+                pushFileToRunningSandbox(supabase, projectId, file.path, sanitized);
               }
 
                             // empty desktop <nav>. Force About/Services/Contact into the real header.
@@ -2224,6 +2235,7 @@ The user has expressed frustration. Do the following:
                       content: pr.content,
                       language,
                     }, { onConflict: "project_id,path" });
+                    pushFileToRunningSandbox(supabase, projectId, pr.path, pr.content);
                   }
                   logger.info("ai.chat.build_deterministic_menu", {
                     projectId,
@@ -2578,6 +2590,9 @@ The user has expressed frustration. Do the following:
                 streamedFiles.map((f) => ({ project_id: projectId, path: f.path, content: f.content, language: f.language })),
                 { onConflict: "project_id,path" },
               );
+              for (const f of streamedFiles) {
+                pushFileToRunningSandbox(supabase, projectId, f.path, f.content);
+              }
             } catch { /* best-effort */ }
           }
           if (!reservationFinalized) {

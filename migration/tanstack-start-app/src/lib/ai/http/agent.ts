@@ -34,6 +34,7 @@ import {
 import { isSimpleEditorRequest, maxOutputTokensForRequest, resolveBudgetAwareModel } from "@/lib/ai/cost-controls";
 import { resolveSmartModel } from "@/lib/ai/editor-intelligence";
 import { persistChatTurnMessages } from "@/lib/ai/persist-chat-turn";
+import { pushFileToRunningSandbox } from "@/lib/preview/push-to-sandbox";
 
 
 export async function handleAiAgent(req: Request) {
@@ -446,6 +447,9 @@ export async function handleAiAgent(req: Request) {
               { project_id: projectId, path: cleanPath, content, language: detectLanguage(cleanPath) },
               { onConflict: "project_id,path" }
             );
+            // And into the RUNNING preview container — the DB alone leaves the
+            // sandbox serving the old file (observed stale-preview bug).
+            pushFileToRunningSandbox(supabase, projectId, cleanPath, content);
           },
           // Real deletion. The route persists via upsert only, so before this
           // nothing ever issued a DELETE against project_files: delete_file
@@ -481,6 +485,7 @@ export async function handleAiAgent(req: Request) {
           for (const file of supportFiles) {
             projectFileMap.set(file.path, { path: file.path, content: file.content, language: file.language });
             send({ fileUpdated: { path: file.path, content: file.content.slice(0, 100) + "..." } });
+            pushFileToRunningSandbox(supabase, projectId, file.path, file.content);
           }
         }
         // ── Post-generation guarantees ────────────────────────────────────
@@ -521,6 +526,7 @@ export async function handleAiAgent(req: Request) {
             for (const file of guaranteed) {
               projectFileMap.set(file.path, { path: file.path, content: file.content, language: file.language });
               send({ fileUpdated: { path: file.path, content: file.content.slice(0, 100) + "..." } });
+              pushFileToRunningSandbox(supabase, projectId, file.path, file.content);
             }
           }
         } catch {
