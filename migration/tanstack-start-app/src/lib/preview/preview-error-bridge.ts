@@ -77,7 +77,34 @@ export function isNoisePreviewError(
   // one. Genuine crashes (ReferenceError, SyntaxError, undefined.map) still
   // freeze — they don't match any of these shapes.
   if (isHydrationRecoveryNoise(m)) return true;
+  if (isDevServerTransportNoise(m)) return true;
   return false;
+}
+
+/**
+ * Vite dev-server transport chatter — the HMR websocket, not the app.
+ *
+ * The sandbox serves previews over HTTPS through a tunnel while Vite's injected
+ * client derives its websocket URL from `server.port`, so it announces
+ *
+ *     [vite] failed to connect to websocket
+ *
+ * on a preview whose page is rendering perfectly. Treating that as an app error
+ * was not merely noisy — it HIJACKED THE BUILD. The error arrived while the
+ * first build was still streaming, the self-repair pass took the turn to "fix"
+ * it, and the user got the bare scaffold instead of the app they asked for.
+ * Reproduced twice in a row: "a landing page for a dental clinic" and "a
+ * landing page for a fitness studio" both returned 25 files, an untouched
+ * starter Index.tsx, and zero feature components.
+ *
+ * HMR transport is the platform's problem (see patch-sandbox-preview-files.ts,
+ * which points the client at wss/443). It is never something the generated
+ * project can fix, so it must never reach the repair loop.
+ */
+export function isDevServerTransportNoise(message: string): boolean {
+  return /\[vite\][^]*?(failed to connect to websocket|websocket connection|server connection lost|hmr)|failed to connect to websocket|websocketserver|error setting up websocket|\[hmr\]/i.test(
+    message,
+  );
 }
 
 /** SSR hydration-recovery errors/warnings — the app recovers and renders. */
@@ -112,6 +139,10 @@ export const PREVIEW_ERROR_BRIDGE_SCRIPT = `(function() {
     // SSR hydration-recovery noise — React discards server HTML and re-renders
     // on the client; the app still works. Never pause the preview over it.
     if (/hydration failed because|error while hydrating|an error occurred during hydration|expected server html to contain|did not match server-rendered|text content does not match server-rendered|hydration mismatch|validateDOMNesting|failed to execute 'removechild' on 'node'|minified react error #4(18|23|25)\\b/i.test(m)) return true;
+    // Vite dev-server transport chatter (HMR websocket behind the preview
+    // tunnel). The page renders fine; only the hot-reload socket is unhappy,
+    // and nothing inside the generated project can fix it.
+    if (/failed to connect to websocket|\\[vite\\].*websocket|\\[vite\\].*server connection lost|\\[hmr\\]/i.test(m)) return true;
     return false;
   }
   function dedupe(msg) {
