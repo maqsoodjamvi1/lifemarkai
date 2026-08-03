@@ -197,7 +197,7 @@ export async function createProject(data: any) {
 
     // Coerce rather than insert something projects_framework_check will reject:
     // a constraint violation surfaces as an opaque 500 on the create path.
-    const framework = ALLOWED_FRAMEWORKS.has(requested) ? requested : "tanstack-start";
+    const framework = ALLOWED_FRAMEWORKS.has(requested) ? requested : "react";
 
     const { data: project, error } = await (supabase as any)
       .from("projects")

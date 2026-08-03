@@ -27,7 +27,7 @@ const SUGGESTIONS = [
 
 export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
   const [prompt, setPrompt] = useState("");
-  const [framework, setFramework] = useState<Framework>("tanstack-start");
+  const [framework, setFramework] = useState<Framework>("react");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);

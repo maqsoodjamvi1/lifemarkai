@@ -828,8 +828,9 @@ function buildFrameworkContract(framework: string): string {
   if (TANSTACK_FRAMEWORKS.has(framework)) {
     return [TANSTACK_START_BLUEPRINT, TANSTACK_IMPORT_RULES].join("\n\n---\n\n");
   }
-  // Vite/SPA frameworks (react, vue, svelte) keep the original contract.
-  return [VITE_RULES, IMPORT_RULES, LOVABLE_PATTERNS, FILE_STRUCTURE].join(
+  // Vite/SPA frameworks (react, vue, svelte) keep the original contract, with
+  // the explicit Lovable directory layout in front of it.
+  return [LOVABLE_PROJECT_STRUCTURE, VITE_RULES, IMPORT_RULES, LOVABLE_PATTERNS, FILE_STRUCTURE].join(
     "\n\n---\n\n",
   );
 }
@@ -841,16 +842,67 @@ function buildFrameworkContract(framework: string): string {
  * shipped to TanStack builds because it lives in the Output Format section
  * rather than in the framework rules.
  */
+/**
+ * The generated-project layout, taken from a REAL Lovable export rather than
+ * invented. Generated apps are Lovable-shaped Vite + React + TypeScript
+ * projects, so the model gets the directory contract explicitly instead of
+ * inferring it — inference is how a build ends up with `src/lib/supabase.ts` on
+ * one turn and `src/utils/supabaseClient.ts` on the next, then imports that
+ * resolve to neither.
+ */
+const LOVABLE_PROJECT_STRUCTURE = `
+## Project structure — MANDATORY (this is the exact layout)
+
+\`\`\`
+index.html                        <div id="root"> + <script src="/src/main.tsx">
+vite.config.ts                    @vitejs/plugin-react-swc, "@" -> ./src
+components.json                   shadcn/ui config
+tailwind.config.ts                TypeScript, NOT .js
+tsconfig.json / tsconfig.app.json / tsconfig.node.json
+src/main.tsx                      createRoot(document.getElementById("root")!).render(<App />)
+src/App.tsx                       providers + <BrowserRouter> + <Routes>
+src/index.css                     @tailwind directives + HSL design tokens in :root
+src/pages/Index.tsx               the home page ("/")
+src/pages/NotFound.tsx            the "*" catch-all
+src/pages/<Name>.tsx              one file per route
+src/components/ui/<name>.tsx      shadcn primitives — lowercase filenames
+src/components/layout/Header.tsx  site header, mounted in App.tsx
+src/components/layout/Footer.tsx  site footer, mounted in App.tsx
+src/components/<Feature>.tsx      feature components, PascalCase
+src/hooks/use-<name>.ts(x)        hooks — kebab-case filenames
+src/lib/utils.ts                  cn() helper
+src/integrations/supabase/client.ts   THE Supabase client, when Supabase is used
+src/integrations/supabase/types.ts    generated Database types
+supabase/migrations/<ts>_<name>.sql   schema
+public/                           static assets served from /
+\`\`\`
+
+RULES — not suggestions:
+- Import anything under src/ with the \`@/\` alias:
+  \`import { Button } from "@/components/ui/button"\`. Relative paths are for siblings only.
+- Routing is \`react-router-dom\` v6, declared in App.tsx. Never file-based routing.
+- The Supabase client lives at \`src/integrations/supabase/client.ts\`, imported as
+  \`import { supabase } from "@/integrations/supabase/client"\`. Never \`src/lib/supabase.ts\`,
+  never a second client, never \`createClient\` inline in a component.
+- shadcn/ui files under \`src/components/ui/\` are lowercase (\`button.tsx\`, \`card.tsx\`).
+  Your own components are PascalCase (\`ProductCard.tsx\`).
+- Colours come from the semantic tokens in index.css (\`bg-background\`, \`text-foreground\`,
+  \`bg-primary\`): define the tokens, then use them. No hardcoded hex in components.
+- NEVER emit \`src/routes/__root.tsx\`, \`src/router.tsx\`, \`src/routeTree.gen.ts\` or an
+  \`app/\` directory — those belong to TanStack Start and Next.js and will break this build.
+`.trim();
+
 const VITE_SCAFFOLD_LIST = `Minimum scaffold (always include):
-    index.html, vite.config.ts, tsconfig.json, package.json, tailwind.config.js,
-    postcss.config.js, src/main.tsx, src/index.css, src/App.tsx,
+    index.html, vite.config.ts, tsconfig.json, tsconfig.app.json, tsconfig.node.json,
+    package.json, components.json, tailwind.config.ts, postcss.config.js,
+    src/main.tsx, src/index.css, src/App.tsx, src/vite-env.d.ts,
     src/lib/utils.ts, src/lib/types.ts, src/data/<domain-data>.ts
 
 PLUS the feature files, e.g. for a typical site/store:
-    src/components/ui/Button.tsx, src/components/ui/Card.tsx, src/components/ui/Badge.tsx,
+    src/components/ui/button.tsx, src/components/ui/card.tsx, src/components/ui/badge.tsx,
     src/components/layout/Header.tsx, src/components/layout/Footer.tsx,
     src/components/<Feature>Card.tsx, ...
-    src/pages/Home.tsx, src/pages/<Other>.tsx, ...
+    src/pages/Index.tsx, src/pages/<Other>.tsx, src/pages/NotFound.tsx, ...
     src/hooks/use<Domain>.ts
 
 App.tsx wires the router + layout; it must NOT contain the whole app. The Home/
@@ -964,7 +1016,7 @@ When the user asks to create a website, app, ERP, POS, CRM, or management system
  * buildFrameworkContract() for what that produced.
  */
 export function buildAppGenerationSystemPrompt(
-  framework: string = "tanstack-start",
+  framework: string = "react",
 ): string {
   const engine = TANSTACK_FRAMEWORKS.has(framework)
     ? "TanStack Start (React + TypeScript, SSR)"
@@ -988,7 +1040,7 @@ ${frameworkNeutralBlocks(framework)}`;
  * directly when the project is not a Next.js app.
  */
 export const APP_GENERATION_SYSTEM_PROMPT =
-  buildAppGenerationSystemPrompt("tanstack-start");
+  buildAppGenerationSystemPrompt("react");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CHAT mode — conversational assistant

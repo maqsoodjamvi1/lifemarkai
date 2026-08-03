@@ -18,7 +18,10 @@ const SUGGESTIONS = [
 
 function HeroPromptCreateBox() {
   const [prompt, setPrompt] = useState("");
-  const [framework, setFramework] = useState<Framework>("tanstack-start");
+  // Vite + React + TypeScript is the default: it is the stack Lovable itself
+  // generates, it publishes (an SSR build has no index.html to serve), and it
+  // has no whole-document hydration for a browser extension to break.
+  const [framework, setFramework] = useState<Framework>("react");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);

@@ -545,6 +545,85 @@ export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider };
  * shadcn primitives are NOT all pre-installed — the AI adds the ones a build
  * actually uses under src/components/ui/, exactly as Lovable does.
  */
+
+// ─── Files a real Lovable export always carries ───────────────────────────────
+// Verified against an actual `replica-ray-project` export, not reconstructed
+// from memory. They cost nothing to install and they are what makes a generated
+// project read as a normal Vite + React + TypeScript repo rather than a
+// half-scaffolded one: a .gitignore so `git init` does not stage node_modules,
+// a README, the vestigial App.css Vite leaves behind (Lovable ships it and does
+// NOT import it — kept identical), the canonical mobile-breakpoint hook that
+// shadcn's sidebar/drawer components import, and a public/ directory.
+const LOVABLE_GITIGNORE = `# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+`;
+
+const LOVABLE_README = (name: string) => `# ${name}
+
+Built with LifemarkAI.
+
+## Getting started
+
+\`\`\`sh
+npm install
+npm run dev
+\`\`\`
+
+## Stack
+
+Vite · React · TypeScript · Tailwind CSS · shadcn/ui · React Router
+`;
+
+const LOVABLE_APP_CSS = `#root {
+  margin: 0 auto;
+}
+`;
+
+const LOVABLE_USE_MOBILE = `import * as React from "react";
+
+const MOBILE_BREAKPOINT = 768;
+
+export function useIsMobile() {
+  const [isMobile, setIsMobile] = React.useState<boolean | undefined>(undefined);
+
+  React.useEffect(() => {
+    const mql = window.matchMedia(\`(max-width: \${MOBILE_BREAKPOINT - 1}px)\`);
+    const onChange = () => {
+      setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
+    };
+    mql.addEventListener("change", onChange);
+    setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+
+  return !!isMobile;
+}
+`;
+
+const LOVABLE_ROBOTS = `User-agent: *
+Allow: /
+`;
+
 export function lovableViteScaffold(name = "My App"): ScaffoldFile[] {
   return [
     { path: "index.html", language: "html", content: INDEX_HTML(name) },
@@ -565,6 +644,11 @@ export function lovableViteScaffold(name = "My App"): ScaffoldFile[] {
     { path: "src/lib/utils.ts", language: "typescript", content: UTILS_TS },
     { path: "src/components/ui/sonner.tsx", language: "typescriptreact", content: UI_SONNER },
     { path: "src/components/ui/tooltip.tsx", language: "typescriptreact", content: UI_TOOLTIP },
+    { path: "src/App.css", language: "css", content: LOVABLE_APP_CSS },
+    { path: "src/hooks/use-mobile.tsx", language: "typescriptreact", content: LOVABLE_USE_MOBILE },
+    { path: ".gitignore", language: "plaintext", content: LOVABLE_GITIGNORE },
+    { path: "README.md", language: "markdown", content: LOVABLE_README(name) },
+    { path: "public/robots.txt", language: "plaintext", content: LOVABLE_ROBOTS },
     // Every new site starts WITH a header and footer — see lib/templates/site-chrome.ts.
     ...siteChromeFiles(deriveBrand(name)),
   ];

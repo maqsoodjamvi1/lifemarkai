@@ -23,7 +23,7 @@ type AIStyle = "concise" | "detailed" | "creative";
 // to open on "nextjs" and not offer TanStack Start at all, so every new user was
 // onboarded onto the framework the platform had already moved off.
 const FRAMEWORKS: { id: Framework; label: string; desc: string; icon: string }[] = [
-  { id: "tanstack-start", label: "TanStack Start", desc: "Full-stack React, SSR (default)", icon: "🏁" },
+  { id: "tanstack-start", label: "TanStack Start", desc: "Full-stack React, SSR", icon: "🏁" },
   { id: "nextjs",  label: "Next.js",  desc: "Full-stack React, App Router", icon: "▲" },
   { id: "react",   label: "React",    desc: "Client-side SPA",              icon: "⚛" },
   { id: "vue",     label: "Vue 3",    desc: "Progressive framework",        icon: "🟢" },
@@ -60,7 +60,7 @@ export function WorkspaceSetupWizard({ onComplete, onSkip }: WorkspaceSetupWizar
   const [checkingGithub, setCheckingGithub] = useState(false);
   const [state, setState] = useState<WizardState>({
     workspaceName: "",
-    framework: "tanstack-start",
+    framework: "react",
     aiStyle: "concise",
     githubConnected: false,
     skipGithub: false,
