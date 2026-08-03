@@ -63,12 +63,22 @@ function extractNiche(prompt: string): string | null {
     /create\s+(?:a\s+)?([a-z][\w\s&-]{2,40}?)\s+(?:website|landing|app)/i,
     /(?:website|site|app)\s+for\s+([a-z][\w\s&-]{2,40})/i,
     /change\s+(?:this\s+)?(?:website\s+)?(?:services?\s+)?to\s+([a-z][\w\s&-]{2,40})/i,
+    // "manage my bakery business", "track our salon inventory" — the noun
+    // between the verb and the business-word is the niche.
+    /\b(?:manage|track|run)\s+(?:my\s+|our\s+)?([a-z][\w\s&-]{2,30}?)\s+(?:business|store|shop|company|inventory|sales|operations)\b/i,
+    // "for my boutique" (end of clause) — common in casual prompts.
+    /\bfor\s+my\s+([a-z][\w\s&-]{2,30}?)(?:[.,!?]|$)/i,
   ];
   for (const re of patterns) {
     const m = prompt.match(re);
     if (m?.[1]) {
       const niche = m[1].trim().replace(/\s+/g, " ");
-      if (niche.length >= 3 && !/^(the|a|an|my|our)$/i.test(niche)) return niche;
+      if (
+        niche.length >= 3 &&
+        !/^(the|a|an|my|our|this|that|some|any|new)$/i.test(niche)
+      ) {
+        return niche;
+      }
     }
   }
   return null;
@@ -76,6 +86,79 @@ function extractNiche(prompt: string): string | null {
 
 function titleCase(s: string): string {
   return s.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Weighted-scoring RESCUE for vague "vibe" prompts — runs ONLY when the
+ * explicit keyword chain above it found nothing (general-app) or fell through
+ * to the weak build-verb+app-word admin default. It never overrides a chain
+ * decision, so every validated classification keeps its exact result.
+ *
+ * The idea (and most of the vocabulary) comes from an external rewrite that
+ * scored EVERY prompt this way — that version was rejected because (a) its
+ * explicit-name check used substring matching, so "posts" classified as POS
+ * and "interpreter" as ERP, and (b) full-time scoring regressed cases the
+ * ordered chain resolves deliberately ("online store with inventory
+ * management" → ERP instead of ecommerce). As a fallback behind the chain,
+ * with word-boundary plural-tolerant patterns, the good part survives: a
+ * prompt like "something for teachers to give quizzes and track grades"
+ * lands on education instead of a generic app.
+ */
+const VAGUE_SIGNALS: Array<{ type: BuildAppType; regex: RegExp; weight: number }> = [
+  { type: "pos", regex: /\b(cashiers?|registers?|receipts?|tills?|barcodes?)\b/i, weight: 2 },
+  { type: "erp", regex: /\b(suppliers?|warehouses?|stock|reorder|logistics|production|procurement|invoices?|invoicing)\b/i, weight: 2 },
+  { type: "crm", regex: /\b(leads?|deals?|pipelines?|prospects?|follow[- ]?ups?|opportunit(y|ies))\b/i, weight: 2 },
+  { type: "ecommerce", regex: /\b(carts?|checkout|shipping)\b/i, weight: 2 },
+  { type: "ecommerce", regex: /\b(stores?|shops?|sell(ing)?|products?)\b/i, weight: 1 },
+  { type: "booking", regex: /\b(appointments?|reservations?|slots?|availability|schedul(e|es|ing)|calendars?)\b/i, weight: 2 },
+  { type: "marketplace", regex: /\b(listings?|sellers?|buyers?|vendors?|auctions?|bids?|classifieds?)\b/i, weight: 2 },
+  { type: "education", regex: /\b(courses?|lessons?|quiz(zes)?|assignments?|grades?|certificates?|instructors?|students?|teachers?)\b/i, weight: 2 },
+  { type: "social", regex: /\b(posts?|comments?|likes?|followers?|follow(ing)?|friends?|feeds?|profiles?|groups?|share|sharing)\b/i, weight: 2 },
+  { type: "admin-dashboard", regex: /\b(dashboards?|analytics|metrics|kpis?|monitoring)\b/i, weight: 2 },
+  { type: "saas", regex: /\b(subscriptions?|billing|tenants?|pricing tiers?)\b/i, weight: 2 },
+];
+
+/** Niche-word associations — a small nudge, not a decider. */
+const NICHE_TYPE_BOOSTS: Array<{ type: BuildAppType; regex: RegExp }> = [
+  { type: "ecommerce", regex: /\b(fashion|clothing|shoes?|electronics|grocery|boutique)\b/i },
+  { type: "booking", regex: /\b(salon|spa|clinic|dentist|doctor|barber|hotel|restaurant|rental)\b/i },
+  { type: "education", regex: /\b(course|tutor|student|school|university|academy)\b/i },
+  { type: "marketplace", regex: /\b(vendor|seller|buyer|classified|auction)\b/i },
+  { type: "social", regex: /\b(community|forum|network|club)\b/i },
+];
+
+const VAGUE_SCORE_THRESHOLD = 4;
+
+function rescueVagueIntent(prompt: string, niche: string | null): BuildAppType | null {
+  const scores = new Map<BuildAppType, number>();
+  for (const { type, regex, weight } of VAGUE_SIGNALS) {
+    // Count DISTINCT vocabulary hits, not just "regex matched": one stray
+    // domain word ("orders") is noise, but "leads, follow-ups AND prospects"
+    // is a CRM prompt. Two distinct terms clear the threshold; one does not.
+    const seen = new Set<string>();
+    const g = new RegExp(regex.source, "gi");
+    for (const m of prompt.matchAll(g)) {
+      seen.add(m[0].toLowerCase().replace(/s$/, ""));
+    }
+    if (seen.size > 0) {
+      const hits = Math.min(seen.size, 3);
+      scores.set(type, (scores.get(type) ?? 0) + weight * hits);
+    }
+  }
+  if (niche) {
+    for (const { type, regex } of NICHE_TYPE_BOOSTS) {
+      if (regex.test(niche)) scores.set(type, (scores.get(type) ?? 0) + 3);
+    }
+  }
+  let best: BuildAppType | null = null;
+  let bestScore = 0;
+  for (const [type, score] of scores) {
+    if (score > bestScore) {
+      best = type;
+      bestScore = score;
+    }
+  }
+  return bestScore >= VAGUE_SCORE_THRESHOLD ? best : null;
 }
 
 const BLUEPRINTS: Record<BuildAppType, (niche: string | null) => string> = {
@@ -382,7 +465,17 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
   else if (WEBSITE_KEYWORDS.test(prompt) || (niche && wantsBuild && !APP_KEYWORDS.test(prompt))) {
     appType = "marketing-website";
   } else if (wantsBuild && APP_KEYWORDS.test(prompt)) {
-    appType = "admin-dashboard";
+    // Weak default: "build an app for X" says nothing about WHAT the app is.
+    // Let the vague-prompt scorer upgrade it when domain vocabulary points
+    // somewhere specific; keep admin-dashboard when nothing scores.
+    appType = rescueVagueIntent(prompt, niche) ?? "admin-dashboard";
+  }
+
+  // Nothing matched at all — casual phrasing with no system name or build
+  // verb ("something for teachers to give quizzes and track grades"). Score
+  // the domain vocabulary before settling for the generic blueprint.
+  if (appType === "general-app") {
+    appType = rescueVagueIntent(prompt, niche) ?? "general-app";
   }
 
   // "change services to cargo" / "rebrand the site" → marketing rebrand.
