@@ -219,13 +219,102 @@ function ensureViteTunnelHmr<T extends { path: string; content?: string | null }
   return out;
 }
 
+/**
+ * Known Tailwind ecosystem plugins the model reaches for, with the pin to
+ * install when it does. Anything else bare-imported by a tailwind/postcss
+ * config falls back to "latest" — a slightly loose version beats a preview
+ * that cannot compile CSS at all.
+ */
+const TAILWIND_PLUGIN_PINS: Record<string, string> = {
+  "@tailwindcss/typography": "^0.5.15",
+  "@tailwindcss/forms": "^0.5.9",
+  "@tailwindcss/aspect-ratio": "^0.4.2",
+  "@tailwindcss/container-queries": "^0.1.1",
+  "tailwindcss-animate": "^1.0.7",
+  daisyui: "^4.12.14",
+};
+
+const CONFIG_NODE_BUILTINS = new Set([
+  "path", "fs", "url", "os", "module", "process", "node:path", "node:fs", "node:url",
+]);
+
+/**
+ * Make every package a tailwind/postcss config loads actually installable.
+ *
+ * OBSERVED FAILURE (POS build, live): the model wrote
+ * `plugins: [require("@tailwindcss/typography")]` into tailwind.config.ts but
+ * never added the package to package.json. postcss then dies loading the
+ * config, Vite returns 500 for EVERY stylesheet, and the preview renders a
+ * blank white page with only a console error — the worst failure shape,
+ * because the app code itself is fine.
+ *
+ * A config file is not application code: its imports are resolved by node at
+ * dev-server boot, so the fix is mechanical — collect every bare-module
+ * specifier the configs mention and merge the missing ones into
+ * devDependencies before the sandbox's npm install runs.
+ *
+ * NOTE: this runs on the CONTAINER-CREATION upload path. The live push
+ * (push-to-sandbox) deliberately does not re-run it — a mid-session config
+ * edit that adds a brand-new package needs an npm install anyway, which only
+ * happens on preview restart.
+ */
+function ensureTailwindPluginDeps<T extends { path: string; content?: string | null }>(
+  files: T[],
+): T[] {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\/+/, "");
+  const configs = files.filter(
+    (f) => /^(tailwind|postcss)\.config\.(c|m)?(t|j)s$/.test(norm(f.path)) && f.content,
+  );
+  if (configs.length === 0) return files;
+
+  const rootOf = (spec: string): string =>
+    spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
+
+  const wanted = new Set<string>();
+  for (const c of configs) {
+    const src = c.content ?? "";
+    for (const m of src.matchAll(/require\(\s*["']([^"'./][^"']*)["']\s*\)/g)) {
+      wanted.add(rootOf(m[1]));
+    }
+    for (const m of src.matchAll(/import\s+[\w{}\s,*$]+\s+from\s+["']([^"'./][^"']*)["']/g)) {
+      wanted.add(rootOf(m[1]));
+    }
+  }
+  wanted.delete("tailwindcss");
+  wanted.delete("autoprefixer");
+  wanted.delete("postcss");
+  for (const b of CONFIG_NODE_BUILTINS) wanted.delete(b);
+  if (wanted.size === 0) return files;
+
+  const pkgIdx = files.findIndex((f) => norm(f.path) === "package.json");
+  if (pkgIdx < 0 || files[pkgIdx].content == null) return files;
+  try {
+    const pkg = JSON.parse(files[pkgIdx].content as string) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const have = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+    const missing = [...wanted].filter((name) => !have[name]);
+    if (missing.length === 0) return files;
+    pkg.devDependencies = { ...(pkg.devDependencies ?? {}) };
+    for (const name of missing) {
+      pkg.devDependencies[name] = TAILWIND_PLUGIN_PINS[name] ?? "latest";
+    }
+    const out = [...files];
+    out[pkgIdx] = { ...files[pkgIdx], content: `${JSON.stringify(pkg, null, 2)}\n` } as T;
+    return out;
+  } catch {
+    return files; // malformed package.json is reported elsewhere
+  }
+}
+
 /** Vite host + VEB bridge + optional guest comments for cloud sandbox previews. */
 export function patchSandboxPreviewFiles<T extends { path: string; content?: string | null }>(
   files: T[],
   opts?: WebContainerPatchOpts,
 ): T[] {
   return patchFilesForWebContainer(
-    ensureViteTunnelHmr(ensureSupabaseEnv(ensureViteEntryFiles(files))),
+    ensureViteTunnelHmr(ensureSupabaseEnv(ensureTailwindPluginDeps(ensureViteEntryFiles(files)))),
     opts,
   );
 }
