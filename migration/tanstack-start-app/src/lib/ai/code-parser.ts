@@ -1,6 +1,6 @@
 import { salvageFilesFromStreamJson } from "./streaming-file-extractor";
 import { ensureCommonGeneratedSupportFiles } from "./generated-support-files";
-import { checkJsxTagBalance } from "./jsx-balance";
+import { checkJsxTagBalance, findUnterminatedStrings } from "./jsx-balance";
 import { assessWebsiteChrome } from "./website-chrome";
 import { parseFileUpdateBlocks } from "./xml-stream-parser";
 
@@ -972,6 +972,24 @@ export function validateGeneratedFiles(
     // to zero false positives on a 90-file real Lovable corpus (generics,
     // generic arrows, comparisons, fragments, void elements, render props),
     // so an issue here is trusted at severity "error".
+    // ── Unterminated string literals ────────────────────────────────────────
+    // A raw quote inside a quoted value — `name: "19" Server Rack 42U"` from a
+    // real wholesale catalogue build. esbuild rejects the module and the
+    // preview goes white with only a transform error in the console, which is
+    // the hardest failure for a user to interpret. Data files are where
+    // product names live, so .ts/.js is exactly the right scope (see
+    // findUnterminatedStrings for why .tsx is excluded).
+    if (/\.(ts|js)$/.test(filePath) && !/\.d\.ts$/.test(filePath)) {
+      for (const line of findUnterminatedStrings(content).slice(0, 3)) {
+        errors.push({
+          type: "unterminated_string",
+          file: filePath,
+          message: `${filePath} line ${line}: a string literal is not closed on this line — an unescaped quote inside the value ended it early (e.g. \`"19" Server Rack"\`). Escape it (\\") , swap the surrounding quotes, or write it as a word ("19-inch").`,
+          severity: "error",
+        });
+      }
+    }
+
     if (/\.(tsx|jsx)$/.test(filePath)) {
       const jsxIssues = checkJsxTagBalance(content);
       for (const issue of jsxIssues.slice(0, 3)) {

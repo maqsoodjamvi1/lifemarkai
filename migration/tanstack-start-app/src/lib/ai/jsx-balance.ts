@@ -291,3 +291,133 @@ export function checkJsxTagBalance(content: string): JsxBalanceIssue[] {
     line: content.slice(0, x.pos).split("\n").length,
   }));
 }
+
+/**
+ * Unterminated string literals — a raw quote inside a quoted value.
+ *
+ * WHY. A live ERP build seeded a wholesale catalogue and wrote
+ *
+ *     name: "19" Server Rack 42U",
+ *
+ * because 19" is how that product is actually named. In a double-quoted
+ * literal the inch mark closes the string, the rest of the line becomes
+ * garbage, esbuild fails the whole module, and the preview goes white with
+ * only a transform error in the console. Product catalogues are FULL of this:
+ * inch marks on racks and monitors, feet on cables, apostrophes in
+ * "Chef's Special" inside single quotes.
+ *
+ * The rule that catches it exactly: a `'` or `"` literal in JS/TS may not
+ * contain a raw newline. So if a quote opens and the line ends before a
+ * matching close, the literal was terminated early by an unescaped quote.
+ * Template literals (backticks) legally span lines and are consumed whole;
+ * escapes and comments are skipped.
+ *
+ * Scoped to .ts/.js on purpose — in .tsx, apostrophes inside JSX TEXT
+ * ("It's included") are not string literals at all, and telling the two apart
+ * needs the full JSX tokenizer above. Data files are where this bug lives.
+ */
+/** Keywords after which a `/` begins a regex literal, not a division. */
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  "return", "typeof", "case", "in", "of", "instanceof", "new", "delete",
+  "void", "throw", "do", "else", "yield", "await", "match", "replace",
+  "split", "test", "search", "matchAll",
+]);
+
+export function findUnterminatedStrings(content: string): number[] {
+  const hits: number[] = [];
+  const src = content;
+  let line = 1;
+  // Last significant character and word, for telling a regex literal from
+  // division — without this, `/<script[^>]+type=["']…/` in a real Lovable edge
+  // function reads as an unterminated string and the file is rejected.
+  let lastSig = "\n";
+  let lastWord = "";
+
+  const regexAllowed = () =>
+    REGEX_PRECEDING_KEYWORDS.has(lastWord) || /[(,=:[!&|?{};\n+\-*%<>~^]/.test(lastSig);
+
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === "\n") { line++; lastSig = "\n"; lastWord = ""; continue; }
+    if (/\s/.test(c)) continue;
+    if (c === "\\") { i++; continue; }
+    if (/[A-Za-z0-9_$]/.test(c)) {
+      let w = "";
+      while (i < src.length && /[A-Za-z0-9_$]/.test(src[i])) { w += src[i]; i++; }
+      i--;
+      lastSig = w[w.length - 1];
+      lastWord = w;
+      continue;
+    }
+    if (c === "`") {
+      i++;
+      while (i < src.length && src[i] !== "`") {
+        if (src[i] === "\\") i++;
+        else if (src[i] === "\n") line++;
+        i++;
+      }
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "/") {
+      while (i < src.length && src[i] !== "\n") i++;
+      line++;
+      continue;
+    }
+    if (c === "/" && src[i + 1] === "*") {
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) {
+        if (src[i] === "\n") line++;
+        i++;
+      }
+      i++;
+      lastSig = "/";
+      lastWord = "";
+      continue;
+    }
+    if (c === "/" && regexAllowed()) {
+      // Regex literal: quotes inside it are ordinary characters. `/` does not
+      // terminate the pattern while inside a `[…]` character class.
+      let j = i + 1;
+      let inClass = false;
+      let closed = false;
+      while (j < src.length) {
+        const d = src[j];
+        if (d === "\\") { j += 2; continue; }
+        if (d === "\n") break; // regex literals cannot span lines
+        if (d === "[") inClass = true;
+        else if (d === "]") inClass = false;
+        else if (d === "/" && !inClass) { closed = true; break; }
+        j++;
+      }
+      if (closed) {
+        i = j;
+        lastSig = "/";
+        lastWord = "";
+        continue;
+      }
+      // Not a real regex — fall through and treat as an operator.
+      lastSig = "/";
+      lastWord = "";
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      const quote = c;
+      const openedAt = line;
+      i++;
+      let closed = false;
+      while (i < src.length) {
+        if (src[i] === "\\") { i += 2; continue; }
+        if (src[i] === "\n") break;
+        if (src[i] === quote) { closed = true; break; }
+        i++;
+      }
+      if (!closed) hits.push(openedAt);
+      lastSig = quote;
+      lastWord = "";
+      continue;
+    }
+    lastSig = c;
+    lastWord = "";
+  }
+  return hits;
+}
