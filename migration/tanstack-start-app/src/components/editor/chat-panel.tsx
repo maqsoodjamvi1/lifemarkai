@@ -67,6 +67,7 @@ import {
   type LovableSecretBannerState,
 } from "./lovable";
 import { parseLineRefs, removeLineRefFromInput } from "@/lib/editor/parse-line-refs";
+import { describeAiFailure, readErrorBody } from "@/lib/editor/ai-failure";
 import { formatGuestCommentsForAi } from "@/lib/editor/format-guest-comments";
 import { formatErrorsForHealing } from "@/lib/preview/preview-error-bridge";
 import type { ChatSearchMode } from "@/lib/editor/search-chat-messages";
@@ -2038,26 +2039,33 @@ export function ChatPanel({
       });
 
       if (!res.ok) {
-        if (res.status === 423) {
-          toast({
-            title: "Project is Live — auto-fix blocked",
-            description: "Switch to Test environment to apply fixes.",
-            variant: "destructive",
-          });
-          onMessagesUpdate(messages);
-          return;
-        }
-        if (res.status === 402) {
-          toast({
-            title: "No free fixes left",
-            description: "Daily free Try-to-fix quota used. Add credits to keep auto-fixing.",
-            variant: "destructive",
-          });
-          setFreeFixesRemaining(0);
-          onMessagesUpdate(messages);
-          return;
-        }
-        throw new Error(`Fix API ${res.status}`);
+        // "Try to fix" is a button, not a typed prompt, so there is no user
+        // message to preserve — but the failure still has to be legible.
+        // Previously a 402 always read "daily free quota used", which is wrong
+        // whenever the real cause is the platform's provider balance: the user
+        // waits for a quota that resets tomorrow while nothing ever works.
+        const rawError = await readErrorBody(res);
+        const described = describeAiFailure({ status: res.status, rawError });
+        const fixErrMsg: Message = {
+          id: `fix-error-${Date.now()}`,
+          project_id: project.id,
+          role: "assistant",
+          content: described.chatMarkdown,
+          tokens_used: null,
+          model: null,
+          mode: "build",
+          metadata: null,
+          rating: null,
+          created_at: new Date().toISOString(),
+        };
+        onMessagesUpdate([...messages, fixErrMsg]);
+        toast({
+          title: described.title,
+          description: described.summary,
+          variant: "destructive",
+        });
+        if (res.status === 402 && !described.isPlatformFault) setFreeFixesRemaining(0);
+        return;
       }
 
       const data = (await res.json()) as {
@@ -2565,6 +2573,40 @@ export function ChatPanel({
     const baseMessages = historyOverride ?? messages;
     onMessagesUpdate([...baseMessages, tempUserMsg]);
 
+    /**
+     * Report a failure without erasing what the user typed.
+     *
+     * Every failure path used to call `onMessagesUpdate(baseMessages)`, which
+     * is the message list from BEFORE the optimistic user message — so the
+     * prompt the user had just written vanished from the thread along with any
+     * chance of resending it, leaving a five-second toast as the only evidence
+     * anything had happened at all. That is the "nothing happens when I hit
+     * send" report. Keep `tempUserMsg`, and put the explanation under it.
+     */
+    const failInChat = (input: { status?: number; rawError?: string | null }) => {
+      const described = describeAiFailure(input);
+      const errMsg: Message = {
+        id: `ai-error-${Date.now()}`,
+        project_id: project.id,
+        role: "assistant",
+        content: described.chatMarkdown,
+        tokens_used: null,
+        model: null,
+        mode: (effectiveMode === "patch" ? "build" : effectiveMode) as
+          | "chat" | "plan" | "build" | "agent",
+        metadata: null,
+        rating: null,
+        created_at: new Date().toISOString(),
+      };
+      onMessagesUpdate([...baseMessages, tempUserMsg, errMsg]);
+      toast({
+        title: described.title,
+        description: described.summary,
+        variant: "destructive",
+      });
+      return described;
+    };
+
     try {
       // If user sent an image without a custom message (or only the auto-suggested mockup prompt),
       // prepend a strong mockup-to-code system instruction so the AI knows to reproduce the UI.
@@ -2733,12 +2775,14 @@ ${(f.content ?? "").slice(0, 8000)}
               return;
             }
           }
-          if (res.status === 402) {
-            toast({
-              title: "Insufficient credits",
-              description: "Agent mode needs at least 5 credits.",
-              variant: "destructive",
-            });
+          const described = failInChat({
+            status: res.status,
+            rawError: await readErrorBody(res),
+          });
+          if (res.status === 402 && !described.isPlatformFault) {
+            // Only re-read the balance for a USER-level 402. On a platform
+            // 402 the user's credits are untouched, and refetching them would
+            // repaint a number that had nothing to do with the failure.
             try {
               const cr = await fetch("/api/billing/credits");
               if (cr.ok) {
@@ -2746,10 +2790,8 @@ ${(f.content ?? "").slice(0, 8000)}
                 if (typeof newCredits === "number") onCreditsUpdate(newCredits);
               }
             } catch {}
-            onMessagesUpdate(baseMessages);
-            return;
           }
-          throw new Error(`Agent API error: ${res.status}`);
+          return;
         }
 
         const reader = res.body.getReader();
@@ -2948,25 +2990,11 @@ ${(f.content ?? "").slice(0, 8000)}
               }
 
               if (data.error) {
-                // Persist the failure in-chat (a toast alone vanishes in 5s and
-                // the thread looks silently ignored — see the chat-flow handler).
-                const rawErr = String(data.error);
-                const agentErrMsg: Message = {
-                  id: `agent-error-${Date.now()}`,
-                  project_id: project.id,
-                  role: "assistant",
-                  content: /402|insufficient credits/i.test(rawErr)
-                    ? "⚠️ **The AI provider account is out of credits** — the agent run failed before making changes. Top up at https://openrouter.ai/settings/credits and retry."
-                    : `⚠️ **Agent run failed** — no changes were made:\n\n\`\`\`\n${rawErr.slice(0, 400)}\n\`\`\``,
-                  tokens_used: null,
-                  model: null,
-                  mode: effectiveMode,
-                  metadata: null,
-                  rating: null,
-                  created_at: new Date().toISOString(),
-                };
-                onMessagesUpdate([...baseMessages, agentErrMsg]);
-                toast({ title: "Agent Error", description: rawErr.slice(0, 200), variant: "destructive" });
+                // Same treatment as every other failure: keep the user's
+                // message, explain the cause under it. Shares describeAiFailure
+                // with the pre-stream paths so a 402 cannot mean one thing here
+                // and something else two hundred lines away.
+                failInChat({ rawError: String(data.error) });
               }
             } catch {}
           }
@@ -3034,44 +3062,21 @@ ${(f.content ?? "").slice(0, 8000)}
       });
 
       if (!res.ok || !res.body) {
-        if (res.status === 402) {
-          toast({
-            title: "Insufficient credits",
-            description: "Add credits or upgrade your plan to continue building.",
-            variant: "destructive",
-          });
+        // Every non-2xx lands here, including the ones that used to fall
+        // through to a bare `throw new Error("API error: 500")` and surface as
+        // a toast the user could easily miss. The server's error body is read
+        // rather than discarded — it is the only thing that distinguishes a
+        // user out of credits from the platform's provider account being empty,
+        // and telling the first story to the second user sends them to buy
+        // credits that cannot possibly help.
+        const described = failInChat({
+          status: res.status,
+          rawError: await readErrorBody(res),
+        });
+        if (res.status === 402 && !described.isPlatformFault) {
           onCreditsUpdate(0);
-          onMessagesUpdate(baseMessages);
         }
-        // Live-environment lock (migration 046): the route refuses code writes
-        // on Live. Without THIS branch the user only saw a cryptic
-        // "API error: 423" toast and kept re-asking ("nothing is changed").
-        // Surface it as a persistent in-chat message with the fix.
-        if (res.status === 423) {
-          const lockedMsg: Message = {
-            id: `env-locked-${Date.now()}`,
-            project_id: project.id,
-            role: "assistant",
-            content:
-              "🔒 **This project is in Live mode — edits are locked.**\n\n" +
-              "Live protects your published app from accidental changes, so Build/Agent requests are rejected (nothing was changed and no credits were spent).\n\n" +
-              "**To make changes:** switch the environment to **Test** (the Test / Live toggle in the top bar), build and preview there, then promote back to Live when you're happy.",
-            tokens_used: null,
-            model: null,
-            mode: effectiveMode,
-            metadata: null,
-            rating: null,
-            created_at: new Date().toISOString(),
-          };
-          onMessagesUpdate([...baseMessages, lockedMsg]);
-          toast({
-            title: "Project is Live — changes locked",
-            description: "Switch to the Test environment (top bar) to edit.",
-            variant: "destructive",
-          });
-          return;
-        }
-        throw new Error(`API error: ${res.status}`);
+        return;
       }
 
       let accumulated = "";
@@ -3636,27 +3641,9 @@ ${(f.content ?? "").slice(0, 8000)}
               // A 5s toast alone is easy to miss — the thread then looks like
               // the AI silently ignored the request (this hid a drained
               // OpenRouter balance for days: every build 402'd invisibly).
-              // Persist a readable in-chat error with the actual cause.
-              const raw = String(data.error);
-              const friendly = /402|insufficient credits/i.test(raw)
-                ? "**The AI provider account is out of credits.** Every model call is failing, so no changes can be generated.\n\nFix: top up the OpenRouter balance at https://openrouter.ai/settings/credits — then resend your request."
-                : /429|rate limit/i.test(raw)
-                  ? "**The AI provider is rate-limiting requests.** Wait a minute and resend."
-                  : `**The AI provider returned an error**, so no changes were made:\n\n\`\`\`\n${raw.slice(0, 400)}\n\`\`\``;
-              const errMsg: Message = {
-                id: `ai-error-${Date.now()}`,
-                project_id: project.id,
-                role: "assistant",
-                content: `⚠️ ${friendly}`,
-                tokens_used: null,
-                model: null,
-                mode: effectiveMode,
-                metadata: null,
-                rating: null,
-                created_at: new Date().toISOString(),
-              };
-              onMessagesUpdate([...baseMessages, errMsg]);
-              toast({ title: "AI Error", description: raw.slice(0, 200), variant: "destructive" });
+              // Persist a readable in-chat error with the actual cause, and
+              // keep the user's message so it can be resent.
+              failInChat({ rawError: String(data.error) });
             }
           } catch {}
         };
