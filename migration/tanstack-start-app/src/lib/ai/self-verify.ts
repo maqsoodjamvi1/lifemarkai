@@ -131,6 +131,22 @@ function extractAppRoutes(files: ProjectFile[]): string[] {
 
 const ROUTE_SETTLE_MS = 1_500;
 
+/**
+ * Placeholder copy a half-finished page renders instead of its module.
+ *
+ * Observed on a live ERP build: five modules came out rich and complete while
+ * `/inventory` rendered 143 characters — "This generated section is ready to
+ * customize." The route was not blank and threw nothing, so a crash-and-blank
+ * check passed it, and the user opens the one page they most wanted to see and
+ * finds a stub. Continuation passes make this common: the model runs out of
+ * budget and leaves a placeholder behind intending to come back.
+ */
+const STUB_PAGE_RE =
+  /\b(ready to customi[sz]e|coming soon|content goes here|placeholder (?:page|content|section)|generated section|under construction|todo:? add|lorem ipsum)\b/i;
+
+/** Below this, a page that isn't blank is still not a page. */
+const STUB_TEXT_CHARS = 320;
+
 /** Render the preview HTML or navigate a live URL in headless Chromium. */
 async function renderAndCollectErrors(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -232,6 +248,7 @@ async function renderAndCollectErrors(
     // reported — a route we could not LOAD is not a route that crashed.
     if (isLive && routes.length > 0) {
       const base = (liveUrl as string).replace(/\/+$/, "");
+      const measured: Array<{ route: string; textLen: number }> = [];
       for (const route of routes) {
         currentRoute = route;
         try {
@@ -245,11 +262,41 @@ async function renderAndCollectErrors(
           .evaluate(() => {
             const text = ((document.body && document.body.innerText) || "").trim();
             const root = document.getElementById("root");
-            return { textLen: text.length, childCount: root ? root.children.length : 0 };
+            return {
+              textLen: text.length,
+              childCount: root ? root.children.length : 0,
+              text: text.slice(0, 400),
+            };
           })
-          .catch(() => ({ textLen: 999, childCount: 1 }));
-        if (errors.length === before && routeDiag.textLen < 3 && routeDiag.childCount === 0) {
+          .catch(() => ({ textLen: 999, childCount: 1, text: "" }));
+        if (errors.length > before) continue; // already reported a crash here
+        if (routeDiag.textLen < 3 && routeDiag.childCount === 0) {
           errors.push(`[route ${route}] Route renders a blank page — the component crashed or renders nothing.`);
+          continue;
+        }
+        // A page that renders placeholder copy is a missing page wearing a
+        // page's clothes. Name it so the fixer builds the real module.
+        if (STUB_PAGE_RE.test(routeDiag.text)) {
+          errors.push(
+            `[route ${route}] Route renders placeholder copy instead of a real page. Build this module for real: full data table or content, actions, and realistic seeded rows from the shared data layer.`,
+          );
+          continue;
+        }
+        measured.push({ route, textLen: routeDiag.textLen });
+      }
+
+      // Relative thinness: one near-empty module beside five full ones is a
+      // gap, even without placeholder wording. Compared against the median so
+      // a uniformly compact app never trips it.
+      if (measured.length >= 3) {
+        const lens = measured.map((m) => m.textLen).sort((a, b) => a - b);
+        const median = lens[Math.floor(lens.length / 2)];
+        for (const m of measured) {
+          if (m.textLen < STUB_TEXT_CHARS && m.textLen * 4 < median) {
+            errors.push(
+              `[route ${m.route}] Route is nearly empty (${m.textLen} characters) while the rest of the app is substantially fuller — this module was left unfinished. Build it out with real content and data.`,
+            );
+          }
         }
       }
       currentRoute = "/";
