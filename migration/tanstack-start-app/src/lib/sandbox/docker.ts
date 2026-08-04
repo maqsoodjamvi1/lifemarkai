@@ -425,6 +425,40 @@ export class DockerSandboxProvider implements SandboxProvider {
       // across two vite servers → the browser assembles the app from two React
       // copies → "more than one copy of React" → blank preview. Tear those down
       // before creating the replacement.
+      // WARM PATH — reuse this project's existing container instead of
+      // destroying it.
+      //
+      // A cold boot's cost is almost entirely `npm install`: ~340 packages into
+      // an empty cache, 40-90s of spinner. And it was paid far more often than
+      // it needed to be, because the container is where node_modules lives and
+      // every boot began by deleting the container. Reopen a project after the
+      // host GC's 3h idle window and you reinstall from scratch — the same
+      // dependencies, over the network, again.
+      //
+      // A container that still exists still has node_modules, so restarting it
+      // and re-syncing the files skips the install entirely. writeFiles already
+      // diffs against a content-hash manifest, so an unchanged project uploads
+      // nothing at all. This is the difference between a 60-second open and a
+      // 3-second one.
+      //
+      // Reuse is strictly safer than the create path for the duplicate-router
+      // hazard too: it is the same single container, so Traefik never sees two
+      // backends for the project's hostname.
+      if (opts.projectId) {
+        const reused = await this.reuseProjectContainer({
+          projectId: opts.projectId,
+          image: c.image,
+          innerPort,
+          startCommand: opts.startCommand,
+          files: opts.files,
+          progress,
+          readyBudgetMs: Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000),
+        });
+        if (reused) return reused;
+      }
+
+      // No reusable container (first ever boot, GC removed it, or the image
+      // changed) — fall through to a full cold provision.
       if (opts.projectId) {
         progress("cleanup", "Removing previous sandbox for project");
         await this.removeProjectContainers(opts.projectId);
@@ -671,6 +705,124 @@ export class DockerSandboxProvider implements SandboxProvider {
     } catch (err) {
       claimedPorts.delete(hostPort);
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * Bring this project's existing container back into service, or return null.
+   *
+   * Returns null (never throws) whenever reuse isn't safe or doesn't work, so
+   * the caller falls through to a normal cold provision. The bar for "safe":
+   *
+   *   • exactly one container, newest wins — extras are removed, because two
+   *     live containers share the project's stable hostname and Traefik would
+   *     round-robin them into the two-copies-of-React blank preview;
+   *   • the image matches the currently configured SANDBOX_IMAGE, so bumping
+   *     the image actually takes effect instead of pinning projects to
+   *     whatever they first booted on;
+   *   • node_modules is present — a container without it saves nothing, and
+   *     the cold path handles it better.
+   */
+  private async reuseProjectContainer(opts: {
+    projectId: string;
+    image: string;
+    innerPort: number;
+    startCommand?: string;
+    files: SandboxFile[];
+    progress: (phase: string, detail?: string) => void;
+    readyBudgetMs: number;
+  }): Promise<SandboxRunResult | null> {
+    const { projectId, image, innerPort, files, progress } = opts;
+    try {
+      const filters = encodeURIComponent(
+        JSON.stringify({ label: [`lifemark.project=${projectId}`] }),
+      );
+      const listed = await docker("GET", `/v1.43/containers/json?all=1&filters=${filters}`);
+      if (listed.status >= 400) return null;
+
+      let containers: Array<{ Id: string; Image: string; State: string; Created: number }> = [];
+      try {
+        containers = JSON.parse(listed.text) as typeof containers;
+      } catch {
+        return null;
+      }
+      if (containers.length === 0) return null;
+
+      containers.sort((a, b) => (b.Created ?? 0) - (a.Created ?? 0));
+      const [keep, ...extras] = containers;
+      // Dedupe before anything else — a leftover duplicate is the blank-preview
+      // bug waiting to happen, whether or not we end up reusing `keep`.
+      await Promise.all(
+        extras.map((ctr) =>
+          docker("DELETE", `/v1.43/containers/${ctr.Id}?force=true&v=true`).catch(() => undefined),
+        ),
+      );
+
+      if (keep.Image && image && keep.Image !== image) return null;
+
+      const id = keep.Id;
+      if (keep.State !== "running") {
+        progress("creating", "Waking the existing sandbox");
+        const started = await docker("POST", `/v1.43/containers/${id}/start`);
+        // 304 = already running, which is a race we are happy to lose.
+        if (started.status >= 400 && started.status !== 304) return null;
+      }
+
+      // Prove the project survived. A container whose APP_DIR or node_modules
+      // is gone (a failed earlier boot, a manual cleanup) has nothing to offer.
+      const probe = await this.exec(
+        id,
+        `[ -d node_modules ] && [ -f package.json ] && echo LM_WARM`,
+      );
+      if (!probe.stdout.includes("LM_WARM")) return null;
+
+      progress("writing", "Syncing changed files");
+      // Incremental by content hash — an unchanged project writes nothing, so
+      // vite is not disturbed at all and HMR keeps whatever state it had.
+      const { written } = await this.writeFiles(id, files);
+
+      let logs = "";
+      // Only reinstall when the dependency manifest itself moved. A source-only
+      // edit needs no install, and running one anyway would hand back the very
+      // cold-start cost this path exists to avoid.
+      if (written.some((p) => p === "package.json" || p.endsWith("/package.json"))) {
+        progress("installing", "Updating dependencies");
+        const res = await this.exec(
+          id,
+          "npm install --no-audit --no-fund --prefer-offline --progress=false --loglevel=error",
+        );
+        logs += res.stdout + res.stderr;
+        if (res.exitCode && res.exitCode !== 0) {
+          // A broken install on a warm container is a real failure, but the
+          // cold path may still succeed from a clean tree — let it try.
+          return null;
+        }
+      }
+
+      // The supervisor loop is an exec, and execs do not survive a container
+      // stop. Probe first: if vite is already answering, this was a live
+      // container and there is nothing to start.
+      let up = await this.waitForLocalServer(id, innerPort, 1500);
+      if (!up) {
+        const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
+        progress("starting", cmd);
+        const supervised =
+          `while true; do ${cmd} >> ${DEV_LOG} 2>&1; ` +
+          `echo "[supervisor] dev server exited ($(date -u +%H:%M:%S)); restarting" >> ${DEV_LOG}; ` +
+          `sleep 1; done`;
+        await this.exec(id, supervised, APP_DIR, false, true);
+        up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
+      }
+
+      const previewUrl = await this.getPreviewUrl(id);
+      if (!previewUrl) return null;
+
+      // Keep the GC's idle clock honest: this container was just used.
+      void this.exec(id, "touch /tmp/.lm-keepalive", "/", false, true).catch(() => undefined);
+
+      return { ok: true, sandboxId: id, previewUrl, ready: up, logs: trunc(logs, 4000) };
+    } catch {
+      return null;
     }
   }
 

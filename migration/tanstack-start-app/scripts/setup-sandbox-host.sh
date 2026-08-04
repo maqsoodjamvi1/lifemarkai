@@ -154,8 +154,16 @@ say "Stale sandbox cleanup"
 cat >/usr/local/bin/lifemark-sandbox-gc <<'GC'
 #!/usr/bin/env bash
 # lifemark-sandbox-gc [IDLE_HOURS] [MAX_HOURS]
-#   Reap sandboxes idle (no keep-alive touch) > IDLE_HOURS (default 3), or
-#   older than the MAX_HOURS hard cap (default 48). Always dedupe per project.
+#   Idle sandboxes are STOPPED. Removal is reserved for the MAX_HOURS hard cap.
+#   Always dedupe per project.
+#
+# Why stop rather than remove: node_modules lives inside the container. Removing
+# an idle sandbox throws away ~340 installed packages, so the next time that
+# project is opened the app reinstalls all of them over the network — 40-90
+# seconds of spinner for dependencies that were already sitting on this disk.
+# A stopped container costs only disk and starts again in about a second, and
+# the app's warm path starts it, re-syncs whatever changed, and skips the
+# install entirely.
 IDLE_HOURS="${1:-3}"
 MAX_HOURS="${2:-48}"
 now=$(date -u +%s)
@@ -172,17 +180,25 @@ docker ps --filter "label=lifemark.sandbox=1" --format '{{.ID}} {{.Label "lifema
     docker rm -f "$dup" >/dev/null 2>&1 && echo "removed duplicate $dup"
   done
 
-# 2) Idle reap (stopped containers can't answer exec -> fall back to age).
+# 2) Idle -> stop (keeps node_modules); past the hard cap -> remove.
+#    A stopped container can't answer exec, so its keep-alive marker can't be
+#    read; it is already idle by definition, and only the age cap applies.
 docker ps -aq --filter "label=lifemark.sandbox=1" | while read -r id; do
   created=$(docker inspect -f '{{.Created}}' "$id" 2>/dev/null) || continue
   cts=$(date -u -d "$created" +%s 2>/dev/null) || continue
   age=$(( now - cts ))
+  if [ "$age" -gt $(( MAX_HOURS * 3600 )) ]; then
+    docker rm -f "$id" >/dev/null 2>&1 && echo "removed $id (age ${age}s > cap)"
+    continue
+  fi
+  running=$(docker inspect -f '{{.State.Running}}' "$id" 2>/dev/null || echo false)
+  [ "$running" = "true" ] || continue
   last=$(docker exec "$id" stat -c %Y /tmp/.lm-keepalive 2>/dev/null || echo "$cts")
   case "$last" in (*[!0-9]*) last="$cts";; esac
   [ "$last" -lt "$cts" ] && last="$cts"
   idle=$(( now - last ))
-  if [ "$idle" -gt $(( IDLE_HOURS * 3600 )) ] || [ "$age" -gt $(( MAX_HOURS * 3600 )) ]; then
-    docker rm -f "$id" >/dev/null 2>&1 && echo "removed $id (idle ${idle}s, age ${age}s)"
+  if [ "$idle" -gt $(( IDLE_HOURS * 3600 )) ]; then
+    docker stop -t 5 "$id" >/dev/null 2>&1 && echo "stopped $id (idle ${idle}s) — node_modules kept"
   fi
 done
 GC
