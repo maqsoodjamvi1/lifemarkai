@@ -54,6 +54,22 @@ const DEV_LOG = "/tmp/lifemark-dev.log";
 const SYNC_MANIFEST = ".lm-sync-manifest.json";
 
 /**
+ * Optional pre-installed node_modules baked into the sandbox image.
+ *
+ * A cold boot's wall-clock is dominated by `npm install` — a Vite + React +
+ * shadcn scaffold resolves to ~340 packages, pulled over the network into an
+ * empty cache, which is 40-90s of the user staring at a spinner. Every
+ * generated app shares almost exactly the same dependency set, so installing it
+ * once at image build time and hardlinking it in makes the per-boot install a
+ * delta reconcile against a warm cache.
+ *
+ * Feature-detected: if the configured SANDBOX_IMAGE doesn't ship this path,
+ * everything below is skipped and boots behave exactly as before. See
+ * `docker/Dockerfile.sandbox` for the image that provides it.
+ */
+const BASE_MODULES = "/opt/lm-base/node_modules";
+
+/**
  * Project directory INSIDE the node user's own home — not /app.
  *
  * VERIFIED ON A REAL DAEMON, do not "simplify" this back to /app:
@@ -525,8 +541,32 @@ export class DockerSandboxProvider implements SandboxProvider {
 
       let logs = "";
       if (opts.files.some((f) => f.path.endsWith("package.json"))) {
-        progress("installing", "Installing dependencies");
-        const res = await this.exec(id, "npm install --no-audit --no-fund");
+        // Seed from the image's prebuilt modules when it has them. `cp -al`
+        // hardlinks rather than copies: near-instant and near-zero extra disk,
+        // and npm replaces (unlinks + writes) rather than mutating in place, so
+        // the shared inodes stay intact for the next container. Falls back to a
+        // real copy on filesystems without hardlink support, and to nothing at
+        // all on an image that doesn't ship the base — all three are correct,
+        // they just differ in how much of the install is left to do.
+        const seeded = await this.exec(
+          id,
+          `if [ -d ${BASE_MODULES} ] && [ ! -d node_modules ]; then ` +
+            `cp -al ${BASE_MODULES} node_modules 2>/dev/null || cp -a ${BASE_MODULES} node_modules; ` +
+            `echo seeded; fi`,
+        );
+        if (seeded.stdout.includes("seeded")) {
+          progress("installing", "Reusing prebuilt dependencies");
+        } else {
+          progress("installing", "Installing dependencies");
+        }
+        // --prefer-offline: use anything already in the cache instead of
+        // revalidating it over the network, which is most of the install once
+        // the base modules are present. --progress/--loglevel keep npm from
+        // streaming tens of thousands of lines back through the exec socket.
+        const res = await this.exec(
+          id,
+          "npm install --no-audit --no-fund --prefer-offline --progress=false --loglevel=error",
+        );
         logs += res.stdout + res.stderr;
         if (res.exitCode && res.exitCode !== 0) {
           return { ok: false, error: `npm install failed (exit ${res.exitCode}).`, logs: trunc(logs) };
@@ -567,24 +607,32 @@ export class DockerSandboxProvider implements SandboxProvider {
       const previewUrl = c.routeViaProxy
         ? `https://${previewHost}`
         : `${c.scheme}://${c.publicHost}:${hostPort}`;
-      // Wait for a real response — returning before the server listens hands the
-      // iframe a dead URL and paints a blank pane.
+
+      // READINESS IS MEASURED INSIDE THE CONTAINER, not through the tunnel.
       //
-      // When the Lifemark app itself runs in Docker and SANDBOX_PUBLIC_HOST is
-      // localhost/127.0.0.1 (browser-reachable on the Docker Desktop host),
-      // probing that URL from inside the app container hairpins to the app
-      // container — not the published sandbox port. Probe via the host gateway
-      // instead; still return the localhost URL to the browser.
-      const probeHost =
-        !c.routeViaProxy &&
-        (c.publicHost === "localhost" || c.publicHost === "127.0.0.1")
-          ? "host.docker.internal"
-          : null;
-      const probeUrl =
-        probeHost && hostPort != null
-          ? `${c.scheme}://${probeHost}:${hostPort}`
-          : previewUrl;
-      const ready = await waitForServer(probeUrl, Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000));
+      // The old probe fetched `https://<project>.<preview-domain>` from the app
+      // server, which makes boot time depend on things that have nothing to do
+      // with whether the app is up:
+      //
+      //   • Traefik obtains that hostname's certificate through the ACME
+      //     HTTP-01 challenge on FIRST USE. Until it completes, an HTTPS fetch
+      //     throws a TLS error, which the probe cannot distinguish from "vite
+      //     isn't listening" — so a project whose dev server was serving in 15s
+      //     could still burn the entire 120s budget waiting on issuance.
+      //   • Traefik answers 502 for a booting backend, and the probe has to
+      //     special-case that (see backendResponding) to avoid reading the
+      //     proxy's own liveness as the app's.
+      //   • It requires the app server to be able to reach its own public
+      //     hostname, which is a hairpin through the edge on most hosts.
+      //
+      // `wget` against 127.0.0.1 inside the container answers the only question
+      // that matters — is the dev server accepting requests? — in milliseconds,
+      // with no TLS, no DNS and no proxy in the path. Requesting `/` rather
+      // than just opening a socket is deliberate: it makes Vite start its
+      // dependency pre-bundling pass now, during boot, instead of on the user's
+      // first paint.
+      const readyBudget = Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000);
+      const ready = await this.waitForLocalServer(id, innerPort, readyBudget);
 
       if (!ready) {
         // ONE-SHOT DIAGNOSTICS. Six deploys were spent guessing at this failure
@@ -610,12 +658,56 @@ export class DockerSandboxProvider implements SandboxProvider {
         ok: true,
         sandboxId: id,
         previewUrl,
+        // Report readiness HONESTLY. Returning ok:true unconditionally is what
+        // put "Bad Gateway" in the preview pane: the caller persisted phase
+        // "ready", the editor framed the URL, and Traefik answered 502 because
+        // vite was still coming up. The container is fine — the supervisor loop
+        // keeps trying — so this is "not yet", not "failed", and the phase
+        // poller flips it to ready as soon as the tunnel actually answers.
+        ready,
         logs: trunc(logs, 4000),
       };
     } catch (err) {
       claimedPorts.delete(hostPort);
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
+  }
+
+  /**
+   * Poll the dev server from INSIDE the container until it answers.
+   *
+   * Each attempt is one `exec` over the Docker socket — a few tens of
+   * milliseconds, no network egress — so this can poll tightly at first and
+   * report readiness within a second of vite binding the port, rather than up
+   * to a full poll interval late.
+   *
+   * `wget -q -O /dev/null -T 3` treats any HTTP response as success, including
+   * a 404: the question is whether the server is accepting requests, and the
+   * dev server answering *anything* proves that. Busybox wget ships in
+   * node:*-alpine; on a Debian-based image `curl` is the fallback and the
+   * `nc -z` third branch covers an image with neither.
+   */
+  private async waitForLocalServer(
+    sandboxId: string,
+    port: number,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    const probe =
+      `wget -q -O /dev/null -T 3 http://127.0.0.1:${port}/ 2>/dev/null || ` +
+      `curl -fsS -m 3 -o /dev/null http://127.0.0.1:${port}/ 2>/dev/null || ` +
+      `nc -z 127.0.0.1 ${port} 2>/dev/null`;
+    const deadline = Date.now() + timeoutMs;
+    // Back off from 250ms to 2s: a warm boot answers almost immediately and
+    // shouldn't pay a fixed poll interval, while a cold npm-install boot
+    // shouldn't hammer the socket for two minutes.
+    let delay = 250;
+    while (Date.now() < deadline) {
+      const res = await this.exec(sandboxId, `${probe} && echo LM_UP`);
+      if (res.stdout.includes("LM_UP")) return true;
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(delay * 1.5, 2000);
+    }
+    return false;
   }
 
   /**
@@ -784,7 +876,22 @@ export class DockerSandboxProvider implements SandboxProvider {
     } catch { /* treat as running */ }
     const previewUrl = await this.getPreviewUrl(sandboxId);
     if (!previewUrl) return { ok: false, error: "Could not resolve the container's port." };
-    return { ok: true, sandboxId, previewUrl };
+
+    // "Running" is a statement about the container, not about the app. The
+    // container's pid 1 is `sleep infinity`, so it stays Running through a vite
+    // crash, an OOM of the dev server, and the entire cold-start window — every
+    // one of which serves a 502 through Traefik. Reconnect is the editor's
+    // FIRST call on every open, so answering ok:true here on that evidence
+    // alone is a direct route to Bad Gateway in the pane.
+    //
+    // A short local probe settles it. It costs one exec (~100ms) when the app
+    // is up, which is the common case; when it's down, waiting a beat is
+    // exactly what the caller needs to know about.
+    const innerPort = await this.portFor(sandboxId).catch(() => null);
+    const ready =
+      innerPort == null ? true : await this.waitForLocalServer(sandboxId, innerPort, 2500);
+
+    return { ok: true, sandboxId, previewUrl, ready };
   }
 
   async keepAlive(
@@ -820,7 +927,55 @@ export class DockerSandboxProvider implements SandboxProvider {
       // outage — `restarted` tells the client to bump its reload nonce.
       return { alive: true, tunnelHealthy: true, restarted: true };
     }
+
+    // The tunnel is not answering US. That is not the same as the app being
+    // down, and the difference matters enormously: `tunnelHealthy: false`
+    // makes the client tear down the container and cold-boot a replacement.
+    // Right after a first boot the hostname's certificate may still be
+    // mid-issuance (ACME HTTP-01), so an HTTPS probe from this server fails
+    // while the user's browser — moments later, once the cert lands — would
+    // have been served fine. Rebooting there is not just wasteful, it restarts
+    // the same race and can loop.
+    //
+    // So before condemning the sandbox, ask the app directly. If it answers on
+    // localhost the problem is the edge, and the right move is to leave the
+    // container alone and let the next heartbeat re-probe.
+    const innerPort = await this.portFor(sandboxId).catch(() => null);
+    if (innerPort != null) {
+      const localUp = await this.waitForLocalServer(sandboxId, innerPort, 4000);
+      // `restarted` is set on purpose. We got here because the tunnel refused
+      // us at least twice, which means the iframe may be sitting on a Bad
+      // Gateway page — and browsers never retry those on their own. The client
+      // reads this as "bump the reload nonce", which is exactly the recovery
+      // needed, whereas tunnelHealthy:false would throw away a container whose
+      // app is demonstrably serving.
+      if (localUp) return { alive: true, tunnelHealthy: true, restarted: true };
+    }
     return { alive: true, tunnelHealthy: false };
+  }
+
+  /** The port the dev server was started on, read back from the container. */
+  private async portFor(sandboxId: string): Promise<number | null> {
+    const res = await docker("GET", `/v1.43/containers/${sandboxId}/json`);
+    if (res.status >= 400) return null;
+    try {
+      const info = JSON.parse(res.text) as {
+        Config?: { ExposedPorts?: Record<string, unknown>; Labels?: Record<string, string> };
+      };
+      // Proxy mode records it on the Traefik service label; port mode exposes
+      // exactly one port. Either way there is only ever one dev server.
+      for (const [k, v] of Object.entries(info.Config?.Labels ?? {})) {
+        if (/^traefik\.http\.services\..+\.loadbalancer\.server\.port$/.test(k)) {
+          const n = Number(v);
+          if (Number.isFinite(n)) return n;
+        }
+      }
+      const exposed = Object.keys(info.Config?.ExposedPorts ?? {})[0];
+      const n = Number((exposed ?? "").split("/")[0]);
+      return Number.isFinite(n) ? n : null;
+    } catch {
+      return null;
+    }
   }
 
   /**

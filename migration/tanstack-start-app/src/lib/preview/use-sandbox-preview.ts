@@ -96,6 +96,7 @@ export function useSandboxPreview(projectId: string) {
         return res.json() as Promise<{
           enabled?: boolean;
           ok?: boolean;
+          waking?: boolean;
           previewUrl?: string | null;
           sandboxId?: string | null;
           provider?: string;
@@ -112,7 +113,10 @@ export function useSandboxPreview(projectId: string) {
       );
 
       // 2) Stale ID → clear + project-named reconnect (no sandboxId query).
-      if (storedId && data.enabled !== false && !(data.ok && data.previewUrl)) {
+      //    `waking` is explicitly NOT stale: the id resolved to a live container
+      //    whose app is still coming up. Re-querying without the id would throw
+      //    away a good sandbox and lose the flag that says so.
+      if (storedId && data.enabled !== false && !data.waking && !(data.ok && data.previewUrl)) {
         try {
           sessionStorage.removeItem(storageKey(projectId));
         } catch { /* private mode */ }
@@ -121,6 +125,24 @@ export function useSandboxPreview(projectId: string) {
 
       if (!data.enabled) {
         return applyState(emptyState());
+      }
+
+      // Warm container, app not serving yet. Hold the spinner and let the phase
+      // poll promote it — cold-booting here would destroy a container that is
+      // very likely seconds away from answering.
+      if (data.waking) {
+        return applyState({
+          enabled: true,
+          previewUrl: null,
+          sandboxId: data.sandboxId ?? null,
+          provider: typeof data.provider === "string" ? data.provider : null,
+          loading: true,
+          error: null,
+          logs: null,
+          phase: "starting",
+          phaseDetail:
+            typeof data.phaseDetail === "string" ? data.phaseDetail : "Waking your app…",
+        });
       }
 
       if (data.ok && data.previewUrl) {
@@ -165,6 +187,7 @@ export function useSandboxPreview(projectId: string) {
         return res.json() as Promise<{
           enabled?: boolean;
           ok?: boolean;
+          ready?: boolean;
           retryable?: boolean;
           previewUrl?: string | null;
           sandboxId?: string | null;
@@ -201,6 +224,28 @@ export function useSandboxPreview(projectId: string) {
 
       if (!data.enabled) {
         return applyState(emptyState());
+      }
+
+      // The sandbox exists but its dev server hadn't answered yet. This is a
+      // normal cold boot, not a failure — keep the spinner up and stay in the
+      // polling state so the phase poll can adopt the URL the instant a probe
+      // confirms it. Settling here (loading:false, no URL) would stop the poll
+      // effect dead and leave the pane blank forever.
+      if (data.ok && data.ready === false) {
+        return applyState({
+          enabled: true,
+          previewUrl: null,
+          sandboxId: data.sandboxId ?? null,
+          provider: typeof data.provider === "string" ? data.provider : null,
+          loading: true,
+          error: null,
+          logs: data.logs ?? null,
+          phase: typeof data.phase === "string" ? data.phase : "starting",
+          phaseDetail:
+            typeof data.phaseDetail === "string"
+              ? data.phaseDetail
+              : "Starting your app…",
+        });
       }
 
       return applyState({
@@ -255,6 +300,10 @@ export function useSandboxPreview(projectId: string) {
       setState((s) => ({ ...s, loading: true, phase: "creating", phaseDetail: "Connecting…" }));
       const reconnected = await reconnectPreview();
       if (reconnected.previewUrl) return;
+      // "starting" means reconnect found a live sandbox whose app hasn't
+      // answered yet. Cold-booting on top of that would delete the container
+      // it just found and restart a boot that is already nearly done.
+      if (reconnected.phase === "starting") return;
       setState((s) => ({ ...s, phase: "creating", phaseDetail: "Cold start…" }));
       await requestPreview();
     })();
@@ -372,12 +421,66 @@ export function useSandboxPreview(projectId: string) {
         schedule(delay * 2);
       }, delay);
     };
-    schedule(6000);
+    // 6s was too tight and caused reload churn that read as flakiness. A dev
+    // server that has just booted still has to run Vite's dependency
+    // pre-bundling pass on the first request, and on a large generated app
+    // that alone can outlast 6s — so the watchdog was reloading iframes that
+    // were mid-first-paint, throwing away the optimizer's progress and making
+    // the preview slower in exactly the case it was meant to rescue.
+    schedule(12_000);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
   }, [state.enabled, state.previewUrl, state.phase]);
+
+  /** A boot parked at "starting" must not spin forever.
+   *
+   *  Withholding the URL until a probe confirms it is what keeps Bad Gateway
+   *  out of the pane, but it moves the failure mode: an app that genuinely
+   *  cannot start now shows a spinner instead of an error. The dev-log tail,
+   *  OOM status and process table are already attached to the boot response, so
+   *  after a grace window surface them rather than leaving the user guessing. */
+  const stallRecoveryRef = useRef(0);
+  useEffect(() => {
+    if (state.phase !== "starting" || state.previewUrl) return;
+    const timer = window.setTimeout(() => {
+      // First stall gets one cold boot. The container may be wedged in a way
+      // the in-container supervisor can't fix (a poisoned node_modules, a port
+      // already bound by a zombie), and a fresh one is the standard cure.
+      if (stallRecoveryRef.current === 0) {
+        stallRecoveryRef.current = 1;
+        try { sessionStorage.removeItem(storageKey(projectId)); } catch { /* private */ }
+        sandboxIdRef.current = null;
+        setState((s) => ({
+          ...s,
+          previewUrl: null,
+          sandboxId: null,
+          loading: true,
+          error: null,
+          phase: "creating",
+          phaseDetail: "Taking longer than usual — starting fresh…",
+        }));
+        void requestPreview();
+        return;
+      }
+      // Second stall: a fresh sandbox didn't help, so this is the app, not the
+      // infrastructure. Say so and show the boot log rather than spinning.
+      setState((s) => {
+        if (s.phase !== "starting" || s.previewUrl) return s;
+        return {
+          ...s,
+          loading: false,
+          phase: "error",
+          error:
+            "Your app did not finish starting. The log below usually says why — " +
+            "a dependency that failed to install, a syntax error in an entry file, " +
+            "or the app running out of memory.",
+        };
+      });
+    }, 90_000);
+    return () => window.clearTimeout(timer);
+  }, [state.phase, state.previewUrl, projectId, requestPreview]);
 
   /** Poll Modal boot phase while cold-starting (metadata updates from POST).
    *  ALSO keeps polling in the error state: a failed boot used to freeze the

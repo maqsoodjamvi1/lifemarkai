@@ -16,6 +16,7 @@ import {
   getSandboxProvider,
   getSandboxProviderId,
   getPreviewProbeState,
+  forgetPreviewProbe,
   isPreviewReachable,
   peekPreviewReachable,
   isSandboxEnabled,
@@ -301,6 +302,20 @@ async function handlePOSTUnlocked(req: Request, params: any) {
     return Response.json({ enabled: true, ok: false, error: result.error, logs: result.logs });
   }
 
+  // The container from the previous boot is gone, but its URL is the same
+  // (hostnames are stable per project) and the probe cache still holds that
+  // container's verdict — including, after a crash, three recorded failures.
+  // Carrying that over would make the fresh sandbox look dead on arrival.
+  forgetPreviewProbe(result.previewUrl);
+
+  // `ok` means provisioned; `ready` means the dev server actually answered.
+  // Conflating them is what framed a URL Traefik could only 502 — so when the
+  // server hasn't come up yet, persist everything needed to keep watching but
+  // DO NOT claim ready. The container is alive and its supervisor is still
+  // starting the dev server; the phaseOnly poll below promotes it to ready the
+  // moment the tunnel answers a probe.
+  const bootReady = result.ready !== false;
+
   // Persist the live preview URL + sandbox id for reconnects (Lovable warm-session parity).
   const { error: previewUrlErr } = await (supabase as any)
     .from("projects")
@@ -311,8 +326,10 @@ async function handlePOSTUnlocked(req: Request, params: any) {
         sandbox_id: result.sandboxId,
         sandbox_port: port,
         sandbox_provider: getSandboxProviderId(),
-        sandbox_phase: "ready",
-        sandbox_phase_detail: null,
+        sandbox_phase: bootReady ? "ready" : "starting",
+        sandbox_phase_detail: bootReady
+          ? null
+          : "Starting your app — the first run takes a moment.",
         sandbox_updated_at: new Date().toISOString(),
       },
     })
@@ -324,11 +341,17 @@ async function handlePOSTUnlocked(req: Request, params: any) {
   return Response.json({
     enabled: true,
     ok: true,
-    previewUrl: result.previewUrl,
+    ready: bootReady,
+    // Withhold the URL until the app answers. Handing it over early is the
+    // whole "Bad Gateway in the preview pane" failure.
+    previewUrl: bootReady ? result.previewUrl : null,
     sandboxId: result.sandboxId,
     logs: result.logs,
     provider: getSandboxProviderId(),
-    phase: "ready",
+    phase: bootReady ? "ready" : "starting",
+    phaseDetail: bootReady
+      ? null
+      : "Starting your app — the first run takes a moment.",
     sandboxName: sandboxNameForProject(projectId),
   });
 }
@@ -378,6 +401,45 @@ async function handleGET(req: Request, params: any) {
       ? (project!.preview_url as string)
       : null;
     const claimsReady = phase === "ready" && Boolean(storedTunnelUrl);
+
+    // PROMOTION: a boot that returned before its dev server answered is parked
+    // at phase "starting" with its URL already persisted. This poll is what
+    // finishes the boot — the moment a probe actually succeeds against that
+    // URL, the preview is genuinely serving and can be handed to the editor.
+    //
+    // Only "verified" counts. peekPreviewReachable deliberately fails OPEN, so
+    // its `true` also means "never checked" — promoting on that would put us
+    // right back to framing a URL nothing has confirmed. getPreviewProbeState
+    // distinguishes the two, and the first poll's background probe means the
+    // real verdict lands within a poll interval or two.
+    if (!claimsReady && storedTunnelUrl && phase !== "error") {
+      peekPreviewReachable(storedTunnelUrl); // warms the cache in the background
+      if (getPreviewProbeState(storedTunnelUrl).state === "verified") {
+        void (supabase as any)
+          .from("projects")
+          .update({
+            metadata: {
+              ...meta,
+              sandbox_phase: "ready",
+              sandbox_phase_detail: null,
+              sandbox_updated_at: new Date().toISOString(),
+            },
+          })
+          .eq("id", projectId)
+          .then(() => {})
+          .catch(() => {});
+        return Response.json({
+          enabled: true,
+          ok: true,
+          previewUrl: storedTunnelUrl,
+          sandboxId,
+          previewProbe: "verified",
+          phase: "ready",
+          phaseDetail: null,
+          provider: getSandboxProviderId(),
+        });
+      }
+    }
 
     // The stored phase only tells us what we BELIEVED last time. Modal tunnels
     // expire (~24h), so verify the tunnel is actually serving before reporting
@@ -474,6 +536,14 @@ async function handleGET(req: Request, params: any) {
   const port = storedPort ?? detectSandboxStart([]).port;
   const result = await provider.reconnect(sandboxId, port);
   if (result.ok && result.previewUrl) {
+    // A warm container is not the same as a serving app — the sandbox's pid 1
+    // outlives a dead dev server, so reconnect can succeed against a container
+    // that answers only 502. This is the editor's first call on every open, so
+    // handing the URL over on container liveness alone put Bad Gateway in the
+    // pane at exactly the moment the user arrived. Park it at "starting"
+    // instead and let the phase poll promote it once a probe confirms.
+    const warmReady = result.ready !== false;
+
     // Persist the EFFECTIVE sandbox id too — updating only preview_url leaves
     // metadata.sandbox_id stale, and phaseOnly polls hand that stale id back to
     // the client, whose later syncs then hit a dead sandbox forever.
@@ -484,10 +554,33 @@ async function handleGET(req: Request, params: any) {
         metadata: {
           ...meta,
           sandbox_id: result.sandboxId ?? sandboxId,
+          ...(warmReady
+            ? {}
+            : {
+                sandbox_phase: "starting",
+                sandbox_phase_detail: "Waking your app…",
+              }),
           sandbox_updated_at: new Date().toISOString(),
         },
       })
       .eq("id", projectId);
+
+    if (!warmReady) {
+      return Response.json({
+        enabled: true,
+        ok: false,
+        // `waking` is what separates "this sandbox needs another moment" from
+        // "there is no sandbox". Without it the client reads ok:false as the
+        // latter and cold-boots — tearing down a perfectly good container
+        // because its dev server happened to be mid-restart.
+        waking: true,
+        sandboxId: result.sandboxId ?? sandboxId,
+        reconnected: true,
+        provider: getSandboxProviderId(),
+        phase: "starting",
+        phaseDetail: "Waking your app…",
+      });
+    }
 
     return Response.json({
       enabled: true,

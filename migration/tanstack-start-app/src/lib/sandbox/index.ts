@@ -24,6 +24,20 @@ export interface SandboxRunResult {
   sandboxId?: string;
   /** Live, publicly reachable preview URL of the running app. */
   previewUrl?: string;
+  /**
+   * Did the dev server actually answer before we returned?
+   *
+   * `ok` means "the sandbox was provisioned" — it does NOT mean the app is
+   * serving. Those two were conflated, so a boot whose dev server hadn't come
+   * up yet still reported ready, the editor framed the URL, and the user got
+   * Traefik's **502 Bad Gateway** inside the preview pane. Callers must treat
+   * `ready === false` as "keep waiting", not as a failure: the container is
+   * alive and its supervisor is still bringing the server up, so the phase
+   * poller promotes it the moment the tunnel answers.
+   *
+   * Undefined from providers that don't report it — treat as ready.
+   */
+  ready?: boolean;
   /** stdout/stderr from the install/build/run step (truncated). */
   logs?: string;
   error?: string;
