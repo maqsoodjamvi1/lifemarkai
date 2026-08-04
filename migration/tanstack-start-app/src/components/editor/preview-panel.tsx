@@ -37,7 +37,11 @@ import {
   WC_UNAVAILABLE_KEY,
   type PreviewEngine,
 } from "@/lib/preview/resolve-preview-engine";
-import { sandboxUrlWithPath } from "@/lib/preview/sandbox-url";
+import {
+  isSamePreviewOrigin,
+  normalizeSandboxPathname,
+  sandboxUrlWithPath,
+} from "@/lib/preview/sandbox-url";
 import { getPreviewBarLabel } from "@/lib/preview/preview-url";
 import { useSandboxPreview } from "@/lib/preview/use-sandbox-preview";
 import { usePreviewErrorGuard } from "@/hooks/use-preview-error-guard";
@@ -632,11 +636,24 @@ export function PreviewPanel({
   /** Hard iframe path — soft-nav updates previewPath only (VEB postMessage). */
   const [sandboxIframePath, setSandboxIframePath] = useState("/");
   const [sandboxSyncInstalling, setSandboxSyncInstalling] = useState(false);
+  // Bridge liveness — used to remount when the iframe escapes to an OAuth host
+  // (Supabase/Google) where our injected bridge no longer runs.
+  const sandboxBridgeAliveRef = useRef(false);
+  const sandboxPingTokenRef = useRef(0);
+  const sandboxPongTokenRef = useRef(0);
+  const sandboxEscapeRemountAtRef = useRef(0);
+  const sandboxUrlLiveRef = useRef(sandboxUrl);
+  sandboxUrlLiveRef.current = sandboxUrl;
 
   // Reset hard path when a new Modal tunnel comes up.
   useEffect(() => {
     if (sandboxUrl) setSandboxIframePath("/");
   }, [sandboxUrl, sandboxId]);
+
+  // Fresh iframe mount → require a new bridge handshake before escape detection.
+  useEffect(() => {
+    sandboxBridgeAliveRef.current = false;
+  }, [sandboxUrl, refreshKey, sandboxReloadNonce]);
   const previewBarLabel = useMemo(
     () =>
       getPreviewBarLabel({
@@ -1386,21 +1403,49 @@ export function PreviewPanel({
       // URL sync — the iframe boot script reports its current path on initial
       // mount and on every history change so the address bar stays in sync
       // with react-router navigations inside the running app.
+      if (d.type === "lifemark-preview-pong") {
+        const token = d.token;
+        if (typeof token === "number") {
+          sandboxPongTokenRef.current = token;
+          sandboxBridgeAliveRef.current = true;
+        }
+      }
       if (d.type === "lifemark-preview-location") {
         const pathname = d.pathname;
+        const origin = typeof d.origin === "string" ? d.origin : null;
+        const href = typeof d.href === "string" ? d.href : null;
+        const expectedBase = sandboxUrlLiveRef.current;
+        // Bridge still running but document origin left the sandbox tunnel
+        // (rare — usually the bridge is gone and ping/pong catches it).
+        if (
+          expectedBase &&
+          ((origin && !isSamePreviewOrigin(expectedBase, origin)) ||
+            (href && !isSamePreviewOrigin(expectedBase, href)))
+        ) {
+          const now = Date.now();
+          if (now - sandboxEscapeRemountAtRef.current > 2500) {
+            sandboxEscapeRemountAtRef.current = now;
+            sandboxBridgeAliveRef.current = false;
+            setSandboxIframePath("/");
+            setRefreshKey((k) => k + 1);
+          }
+          return;
+        }
         if (typeof pathname === "string" && pathname.length > 0) {
-          setPreviewPath(pathname);
+          const normalized = normalizeSandboxPathname(pathname);
+          sandboxBridgeAliveRef.current = true;
+          setPreviewPath(normalized);
           // Don't clobber whatever the user is typing into the address bar.
-          if (!urlEditing) setUrlInput(pathname);
+          if (!urlEditing) setUrlInput(normalized);
           // Record in the back/forward history — unless this location change
           // was caused by a back/forward click itself.
           if (navSuppressRef.current) {
             navSuppressRef.current = false;
           } else {
             setRouteNav((prev) =>
-              prev.stack[prev.idx] === pathname
+              prev.stack[prev.idx] === normalized
                 ? prev
-                : { stack: [...prev.stack.slice(0, prev.idx + 1), pathname], idx: prev.idx + 1 },
+                : { stack: [...prev.stack.slice(0, prev.idx + 1), normalized], idx: prev.idx + 1 },
             );
           }
         }
@@ -2724,6 +2769,25 @@ export function PreviewPanel({
                 onLoad={() => {
                   transitionPreviewMachine("ready", "sandbox iframe loaded");
                   window.dispatchEvent(new CustomEvent("lifemark-preview-settled", { detail: { ok: true } }));
+                  // Detect OAuth / external full-page navigations: after the
+                  // bridge has been alive once, a subsequent load with no pong
+                  // means the iframe left our app (e.g. supabase.co).
+                  const expectAlive = sandboxBridgeAliveRef.current;
+                  const token = ++sandboxPingTokenRef.current;
+                  sandboxIframeRef.current?.contentWindow?.postMessage(
+                    { type: "lifemark-preview-ping", token },
+                    "*",
+                  );
+                  window.setTimeout(() => {
+                    if (sandboxPongTokenRef.current === token) return;
+                    if (!expectAlive) return;
+                    const now = Date.now();
+                    if (now - sandboxEscapeRemountAtRef.current < 2500) return;
+                    sandboxEscapeRemountAtRef.current = now;
+                    sandboxBridgeAliveRef.current = false;
+                    setSandboxIframePath("/");
+                    setRefreshKey((k) => k + 1);
+                  }, 900);
                 }}
                 onError={() => {
                   // Dead tunnel (sandbox expired between renders) — reconnect to

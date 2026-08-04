@@ -650,6 +650,7 @@ export class DockerSandboxProvider implements SandboxProvider {
         logs +=
           `\n[preview] dev server did not answer in time.` +
           `\n[preview] container OOMKilled=${oom}` +
+          `\n[preview] probe=inner:${innerPort} (127.0.0.1 inside the container)` +
           `\n[preview] --- ${DEV_LOG} (tail) ---\n${devLog.stdout.trim() || "(empty)"}` +
           `\n[preview] --- processes ---\n${procs.stdout.trim() || "(none)"}`;
       }

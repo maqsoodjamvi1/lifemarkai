@@ -323,7 +323,18 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
 // sync work identically on both engines.
 //
 //   iframe -> parent: { source:'lifemark-preview', type:'error'|'success'|'log', text }
-//   iframe -> parent: { type:'lifemark-preview-location', pathname }
+//   iframe -> parent: { type:'lifemark-preview-location', pathname, origin, href }
+//   parent -> iframe: { type:'lifemark-preview-ping', token }
+//   iframe -> parent: { type:'lifemark-preview-pong', token }
+//
+// The ping/pong is a liveness handshake, and it answers a question the parent
+// cannot otherwise ask: has the iframe navigated AWAY from the previewed app?
+// An OAuth flow (Supabase, Google) is a full-page navigation to a third-party
+// origin where this script does not run — so the absence of a pong is the
+// signal, and the parent can restore the preview instead of leaving a login
+// page from another site rendered in the pane with no way back. `origin`/`href`
+// on the location message cover the rarer inverse: a bridge still alive on a
+// document that is no longer ours.
 export const PREVIEW_RUNTIME_SCRIPT = `(function(){
   if (window.parent === window) return;
   var hadRuntimeError = false;
@@ -343,8 +354,16 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
     try { window.parent.postMessage({ source:'lifemark-preview', type:type, text:String(text) }, '*'); } catch(e){}
   }
   function loc(){
-    try { window.parent.postMessage({ type:'lifemark-preview-location', pathname: location.pathname + location.search + location.hash }, '*'); } catch(e){}
+    try { window.parent.postMessage({ type:'lifemark-preview-location', pathname: location.pathname + location.search + location.hash, origin: location.origin, href: location.href }, '*'); } catch(e){}
   }
+  // Liveness handshake. Answering proves this document is still the previewed
+  // app; silence after a navigation means the frame left for another origin,
+  // where this script does not exist to answer.
+  window.addEventListener('message', function(e){
+    var d = e && e.data;
+    if (!d || typeof d !== 'object' || d.type !== 'lifemark-preview-ping') return;
+    try { window.parent.postMessage({ type:'lifemark-preview-pong', token: d.token, origin: location.origin, href: location.href }, '*'); } catch(err){}
+  });
   window.addEventListener('error', function(e){
     var where = e.filename ? (' (' + String(e.filename).split('/').pop() + ':' + e.lineno + ':' + e.colno + ')') : '';
     post('error', (e.message || 'Runtime error') + where);
