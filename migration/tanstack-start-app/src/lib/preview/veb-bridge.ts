@@ -414,8 +414,49 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
     if (!hadRuntimeError && mounted) post('success', 'ok');
     loc();
   }
+  // Report what the app actually PAINTED, not merely that this script is alive.
+  //
+  // The parent's blank-preview watchdog used to accept any bridge message as
+  // proof of a paint — but every one of them (veb-ready, location, pong, a
+  // console log) fires as soon as the document executes, which is before React
+  // has rendered anything. So the watchdog was satisfied by a page that was
+  // still white, and its whole reason for existing never fired. Observed live:
+  // a cold sandbox painted blank, the bridge reported success, the editor
+  // showed white for over a minute, and only a manual reload fixed it.
+  //
+  // Element count and rendered height are the difference between "React
+  // mounted an empty shell" and "there is something on screen". Sampled a few
+  // times because a cold Vite still has dependency pre-bundling to finish, so
+  // the first sample can legitimately be empty on an app that is fine.
+  var paintPollsLeft = 25;
+  function reportPaint() {
+    try {
+      var root = document.getElementById('root') || document.body;
+      if (!root) return false;
+      var rect = root.getBoundingClientRect();
+      var nodes = root.querySelectorAll('*').length;
+      var textLen = (root.innerText || '').trim().length;
+      window.parent.postMessage({
+        type: 'lifemark-preview-painted',
+        nodes: nodes,
+        textLen: textLen,
+        height: Math.round(rect.height)
+      }, '*');
+      return nodes >= 3 && (textLen > 0 || rect.height > 40);
+    } catch (e) { return false; }
+  }
+  // Poll once a second until there is something on screen, rather than taking
+  // a couple of fixed samples. A cold Vite still has dependency pre-bundling
+  // ahead of it, so an app that is perfectly healthy can be legitimately empty
+  // for several seconds — and a sample that stops before it paints would tell
+  // the parent to throw away exactly the work that was about to finish.
+  function pollPaint() {
+    if (reportPaint() || --paintPollsLeft <= 0) return;
+    setTimeout(pollPaint, 1000);
+  }
   window.addEventListener('load', function(){
     setTimeout(maybePostSuccess, 1200);
+    setTimeout(pollPaint, 800);
   });
   // Keep the parent address bar in sync with client-side routing.
   var _push = history.pushState, _replace = history.replaceState;

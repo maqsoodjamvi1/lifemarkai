@@ -380,24 +380,38 @@ export function useSandboxPreview(projectId: string) {
    *  failed/blank document on their own. Every health signal was green, so no
    *  recovery path fired and the user had to click reload manually.
    *
-   *  The sandbox patcher injects the VEB bridge into every app's index.html,
-   *  and the bridge posts `lifemark-veb-ready` to the parent as soon as the
-   *  app's HTML actually executes. That makes "did the iframe REALLY paint the
-   *  app?" observable: if no bridge ping arrives within 6s of ready, force the
-   *  iframe to reload via reloadNonce (3 attempts, doubling backoff), which
-   *  re-fetches from the now-healthy vite. */
+   *  WHAT COUNTS AS A PAINT. This used to accept any bridge message —
+   *  `lifemark-veb-ready`, a location update, any `lifemark-preview` log. All
+   *  of those fire when the document EXECUTES, which is before React has
+   *  rendered a single element, so the watchdog was satisfied by a page that
+   *  was still white and never fired once. Reproduced live: a cold sandbox
+   *  painted blank, the bridge reported ready and then success, the editor sat
+   *  on a white pane for over a minute, and only a manual reload fixed it —
+   *  the exact failure this watchdog was written to catch, walking straight
+   *  past it.
+   *
+   *  So the guest now measures the app instead of itself and posts
+   *  `lifemark-preview-painted` with the root's element count, text length and
+   *  rendered height. Only real content clears the watchdog; anything else is
+   *  proof of life, not proof of paint. When nothing paints, reload via
+   *  reloadNonce (3 attempts, doubling backoff) against the now-warm vite. */
   const paintAttemptsRef = useRef(0);
   const lastPaintPingRef = useRef(0);
   useEffect(() => {
     if (!state.enabled || !state.previewUrl) return;
     const onMsg = (e: MessageEvent) => {
-      const d = e.data as { type?: string; source?: string } | null;
+      const d = e.data as
+        | { type?: string; source?: string; nodes?: number; textLen?: number; height?: number }
+        | null;
       if (!d || typeof d !== "object") return;
-      if (
-        d.type === "lifemark-veb-ready" ||
-        d.type === "lifemark-preview-location" ||
-        d.source === "lifemark-preview"
-      ) {
+      if (d.type !== "lifemark-preview-painted") return;
+      // A mounted-but-empty shell satisfies "root.innerHTML is non-empty", so
+      // that is not enough. Require actual elements AND either visible text or
+      // real height — the difference between a rendered app and a wrapper div.
+      const nodes = typeof d.nodes === "number" ? d.nodes : 0;
+      const textLen = typeof d.textLen === "number" ? d.textLen : 0;
+      const height = typeof d.height === "number" ? d.height : 0;
+      if (nodes >= 3 && (textLen > 0 || height > 40)) {
         lastPaintPingRef.current = Date.now();
         paintAttemptsRef.current = 0;
       }
