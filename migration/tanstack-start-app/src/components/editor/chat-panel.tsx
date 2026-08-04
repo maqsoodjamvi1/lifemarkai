@@ -4592,6 +4592,11 @@ ${(f.content ?? "").slice(0, 8000)}
       return;
     }
     setSearchLoading(true);
+    // Clearing the debounce timer is not enough: a request already in flight
+    // still resolves and writes its hits. Typing fast means an older, slower
+    // response can land after a newer one and paint results for a query the
+    // user has moved on from — with the spinner already cleared.
+    let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
         const res = await fetch(
@@ -4602,6 +4607,7 @@ ${(f.content ?? "").slice(0, 8000)}
           cached?: boolean;
           fallback?: boolean;
         };
+        if (cancelled) return;
         const ids = new Set((data.hits ?? []).map((h) => h.id));
         setSearchHitIds(ids);
         setSearchMatchCount(ids.size);
@@ -4610,14 +4616,18 @@ ${(f.content ?? "").slice(0, 8000)}
         );
         if (ids.size > 0) rememberSearchQuery(q);
       } catch {
+        if (cancelled) return;
         setSearchHitIds(null);
         setSearchMatchCount(0);
         setSearchSource(null);
       } finally {
-        setSearchLoading(false);
+        if (!cancelled) setSearchLoading(false);
       }
     }, 320);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [searchQuery, searchMode, project.id, rememberSearchQuery]);
 
   // Prefetch analyze sandbox availability (gates binary file-gen formats).

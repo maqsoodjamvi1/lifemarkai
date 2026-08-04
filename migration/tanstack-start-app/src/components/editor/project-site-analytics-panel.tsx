@@ -15,7 +15,7 @@
  * Files etc.) is preserved and now lives under the "activity" panel slot.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
@@ -145,13 +145,29 @@ export function ProjectSiteAnalyticsPanel({ project }: { project: Project }) {
   // We track the active metric so the area chart updates accordingly.
   const [activeMetric, setActiveMetric] = useState<"visitors" | "pageviews">("visitors");
 
+  // Every fetch here — manual refresh, range switch, and the 15s poll — writes
+  // to the same `data`. A monotonic token makes the newest request the only one
+  // allowed to land, so switching 7d → 90d can't be undone by the 7d response
+  // (or by a poll fired under the old range) arriving a moment later.
+  const reqSeqRef = useRef(0);
+  // The spinner is owned by `load` alone, so it gets its own token — a poll
+  // bumping reqSeqRef must never strand `loading` at true.
+  const loadSeqRef = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++reqSeqRef.current;
+    const loadSeq = ++loadSeqRef.current;
     setLoading(true);
     try {
       const res = await fetch(`/api/projects/${project.id}/analytics?range=${range}`);
-      if (res.ok) setData(await res.json());
+      if (seq !== reqSeqRef.current) return;
+      if (res.ok) {
+        const json = (await res.json()) as SiteAnalyticsResponse;
+        if (seq !== reqSeqRef.current) return;
+        setData(json);
+      }
     } finally {
-      setLoading(false);
+      if (loadSeq === loadSeqRef.current) setLoading(false);
     }
   }, [project.id, range]);
 
@@ -160,10 +176,11 @@ export function ProjectSiteAnalyticsPanel({ project }: { project: Project }) {
   // Poll the live counter every 15s so the "current visitors" pill stays fresh.
   useEffect(() => {
     const id = setInterval(() => {
+      const seq = ++reqSeqRef.current;
       void fetch(`/api/projects/${project.id}/analytics?range=${range}`)
         .then((r) => r.ok ? r.json() : null)
         .then((d: SiteAnalyticsResponse | null) => {
-          if (d) setData(d);
+          if (d && seq === reqSeqRef.current) setData(d);
         })
         .catch(() => {});
     }, 15_000);

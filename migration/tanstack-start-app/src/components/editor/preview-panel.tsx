@@ -1609,10 +1609,19 @@ export function PreviewPanel({
   useEffect(() => {
     if (previewEngine !== "sandbox" || !sandboxId || previewFiles.length === 0) return;
     const payload = previewFiles.map((f) => ({ path: f.path, content: f.content ?? "" }));
+    // Clearing the 800ms debounce is not enough. Once a sync is in flight this
+    // effect can be torn down and re-run (every edit changes previewFiles), and
+    // the old run keeps going: it can fire the destructive "Preview out of
+    // date" toast for a sync the newer run has already succeeded at, and its
+    // trailing timers can flip the machine to "ready" while that newer sync is
+    // still loading. Supersede the whole run, timers included.
+    let superseded = false;
+    const trailing: number[] = [];
     const timer = window.setTimeout(() => {
       void (async () => {
         transitionPreviewMachine("loading", "sandbox file sync");
         const result = await syncSandboxFiles(payload);
+        if (superseded) return;
         if (!result.ok) {
           setConsoleLines((prev) => [
             ...prev.slice(-99),
@@ -1639,20 +1648,31 @@ export function PreviewPanel({
         setSandboxSyncInstalling(!!result.installing);
         if (result.installing) {
           // Dep install runs in background; show status briefly then ready for HMR.
-          window.setTimeout(() => setSandboxSyncInstalling(false), 12_000);
+          trailing.push(
+            window.setTimeout(() => {
+              if (!superseded) setSandboxSyncInstalling(false);
+            }, 12_000),
+          );
         }
         // Brief grace for Vite HMR, then mark ready so UrlBarPill stops spinning.
-        window.setTimeout(() => {
-          transitionPreviewMachine("ready", "sandbox sync applied");
-          window.dispatchEvent(
-            new CustomEvent("lifemark-preview-settled", {
-              detail: { ok: true, installing: !!result.installing },
-            }),
-          );
-        }, result.installing ? 2500 : 600);
+        trailing.push(
+          window.setTimeout(() => {
+            if (superseded) return;
+            transitionPreviewMachine("ready", "sandbox sync applied");
+            window.dispatchEvent(
+              new CustomEvent("lifemark-preview-settled", {
+                detail: { ok: true, installing: !!result.installing },
+              }),
+            );
+          }, result.installing ? 2500 : 600),
+        );
       })();
     }, 800);
-    return () => window.clearTimeout(timer);
+    return () => {
+      superseded = true;
+      window.clearTimeout(timer);
+      for (const t of trailing) window.clearTimeout(t);
+    };
   }, [previewEngine, sandboxId, previewFiles, syncSandboxFiles, transitionPreviewMachine]);
 
   // Pull Modal Vite/Next logs into the Console tab + agent telemetry (Lovable parity).
