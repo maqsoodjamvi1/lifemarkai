@@ -7,12 +7,20 @@ import {
   isNoisePreviewError,
   parsePreviewErrorClear,
   parsePreviewErrorMessage,
+  parsePreviewReady,
   type PreviewErrorKind,
   type PreviewErrorReport,
   type PreviewRuntimeError,
 } from "@/lib/preview/preview-error-bridge";
 
 export type PreviewGuardPhase = "idle" | "healthy" | "frozen" | "healing";
+
+/**
+ * Silence required after a fresh preview boots before the pause auto-lifts.
+ * Crashes surface within a few hundred ms of mount; this is comfortably past
+ * that while still clearing a stale banner faster than a user would notice.
+ */
+const RESUME_GRACE_MS = 2_500;
 
 export interface UsePreviewErrorGuardOptions {
   /** Preview iframe ref (WebContainer or Sandpack) — optional source filter */
@@ -58,6 +66,8 @@ export function usePreviewErrorGuard(
   const seenErrorsRef = useRef<Set<string>>(new Set());
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const healingRef = useRef(false);
+  /** Pending auto-resume; see handlePreviewReady. */
+  const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Keep heal callback in a ref so flushReport/startHealing stay referentially
   // stable — an inline onHealRequest from PreviewPanel used to recreate the
   // whole API object every render and thrash dependent effects.
@@ -105,10 +115,55 @@ export function usePreviewErrorGuard(
     }
   }, [buildReport]);
 
+  const cancelAutoResume = useCallback(() => {
+    if (resumeTimerRef.current) {
+      clearTimeout(resumeTimerRef.current);
+      resumeTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * A fresh preview document booted — decide whether the pause still applies.
+   *
+   * Two things must happen, and the order matters:
+   *
+   * 1. Forget the previous document's errors AND their dedupe keys. Keeping
+   *    the keys would be actively dangerous: `pushError` suppresses a message
+   *    it has already seen, so a bug that survives the reload would be
+   *    swallowed and we would auto-resume onto a still-broken app. Clearing
+   *    them lets a genuine repeat re-report and re-freeze.
+   *
+   * 2. Wait a grace window before declaring health. A crash usually fires
+   *    within a few hundred milliseconds of mount, so silence across the
+   *    window is real evidence rather than an optimistic guess. Any error
+   *    arriving during it cancels the resume via `pushError`.
+   *
+   * Healing owns its own transition (completeHealing / failHealing), so this
+   * stays out of the way while a repair is in flight.
+   */
+  const handlePreviewReady = useCallback(() => {
+    errorsRef.current = [];
+    seenErrorsRef.current.clear();
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    if (healingRef.current) return;
+    cancelAutoResume();
+    resumeTimerRef.current = setTimeout(() => {
+      resumeTimerRef.current = null;
+      if (errorsRef.current.length > 0) return; // it broke again — stay frozen
+      setReport((prev) => (prev === null ? prev : null));
+      setPhase((prev) => (prev === "frozen" ? "healthy" : prev));
+    }, RESUME_GRACE_MS);
+  }, [cancelAutoResume]);
+
   const pushError = useCallback(
     (err: PreviewRuntimeError) => {
       if (isNoisePreviewError(err.message, { filename: err.filename, stack: err.stack })) return;
       if (healingRef.current) return;
+      // Real evidence of breakage — an auto-resume in flight is now wrong.
+      cancelAutoResume();
       const key = `${err.kind}:${err.message}`;
       if (seenErrorsRef.current.has(key)) return;
       seenErrorsRef.current.add(key);
@@ -121,7 +176,7 @@ export function usePreviewErrorGuard(
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(flushReport, debounceMs);
     },
-    [debounceMs, flushReport, maxErrors],
+    [cancelAutoResume, debounceMs, flushReport, maxErrors],
   );
 
   // Retract errors of a given kind (used by the bridge's late-mount CLEAR:
@@ -169,6 +224,11 @@ export function usePreviewErrorGuard(
         return;
       }
 
+      if (parsePreviewReady(e.data)) {
+        handlePreviewReady();
+        return;
+      }
+
       const cleared = parsePreviewErrorClear(e.data);
       if (cleared) {
         clearErrorKind(cleared);
@@ -187,19 +247,30 @@ export function usePreviewErrorGuard(
 
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [iframeRef, clearErrorKind, parseLegacyPreviewMessage, pushError, strictIframeSource]);
+  }, [
+    iframeRef,
+    clearErrorKind,
+    handlePreviewReady,
+    parseLegacyPreviewMessage,
+    pushError,
+    strictIframeSource,
+  ]);
+
+  // Never leave a resume timer running past unmount.
+  useEffect(() => cancelAutoResume, [cancelAutoResume]);
 
   const clearErrors = useCallback(() => {
     errorsRef.current = [];
     seenErrorsRef.current.clear();
     healingRef.current = false;
+    cancelAutoResume();
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
     setReport((prev) => (prev === null ? prev : null));
     setPhase((prev) => (prev === "healthy" ? prev : "healthy"));
-  }, []);
+  }, [cancelAutoResume]);
 
   const enterHealingPhase = useCallback(() => {
     if (healingRef.current) return;

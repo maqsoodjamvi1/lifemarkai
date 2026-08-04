@@ -66,52 +66,7 @@ export function isNoisePreviewError(
   // runtime/bundler error, which is still caught above. So never let the
   // empty-root heuristic ALONE freeze the preview.
   if (/preview root is empty/i.test(m)) return true;
-  // SSR hydration-recovery noise (TanStack Start / any SSR app). A hydration
-  // mismatch makes React discard the server HTML and re-render on the client —
-  // the app STILL RENDERS. The recovery cascade throws "Hydration failed…",
-  // "There was an error while hydrating…", NotFoundError removeChild (React
-  // tearing out server nodes that extensions/SSR shifted), validateDOMNesting
-  // warnings, and minified React #418/#423/#425. Treating these as fatal froze
-  // working TSS previews with "Preview paused" AND fed the credit-consuming
-  // self-repair loop, which then "fixed" a working __root.tsx into a broken
-  // one. Genuine crashes (ReferenceError, SyntaxError, undefined.map) still
-  // freeze — they don't match any of these shapes.
-  if (isHydrationRecoveryNoise(m)) return true;
-  if (isDevServerTransportNoise(m)) return true;
   return false;
-}
-
-/**
- * Vite dev-server transport chatter — the HMR websocket, not the app.
- *
- * The sandbox serves previews over HTTPS through a tunnel while Vite's injected
- * client derives its websocket URL from `server.port`, so it announces
- *
- *     [vite] failed to connect to websocket
- *
- * on a preview whose page is rendering perfectly. Treating that as an app error
- * was not merely noisy — it HIJACKED THE BUILD. The error arrived while the
- * first build was still streaming, the self-repair pass took the turn to "fix"
- * it, and the user got the bare scaffold instead of the app they asked for.
- * Reproduced twice in a row: "a landing page for a dental clinic" and "a
- * landing page for a fitness studio" both returned 25 files, an untouched
- * starter Index.tsx, and zero feature components.
- *
- * HMR transport is the platform's problem (see patch-sandbox-preview-files.ts,
- * which points the client at wss/443). It is never something the generated
- * project can fix, so it must never reach the repair loop.
- */
-export function isDevServerTransportNoise(message: string): boolean {
-  return /\[vite\][^]*?(failed to connect to websocket|websocket connection|server connection lost|hmr)|failed to connect to websocket|websocketserver|error setting up websocket|\[hmr\]/i.test(
-    message,
-  );
-}
-
-/** SSR hydration-recovery errors/warnings — the app recovers and renders. */
-export function isHydrationRecoveryNoise(message: string): boolean {
-  return /hydration failed because|error while hydrating|an error occurred during hydration|expected server html to contain|did not match server-rendered|text content does not match server-rendered|hydration mismatch|validateDOMNesting|failed to execute 'removechild' on 'node'|minified react error #4(18|23|25)\b/i.test(
-    message,
-  );
 }
 
 /** Preview rendered undefined components (bad import / export mismatch). */
@@ -136,13 +91,6 @@ export const PREVIEW_ERROR_BRIDGE_SCRIPT = `(function() {
     var blob = m + "\\n" + String(filename || "") + "\\n" + String(stack || "");
     if (/chrome-extension:\\/\\/|moz-extension:\\/\\/|safari-web-extension:\\/\\/|safari-extension:\\/\\/|webkit-masked-url:/i.test(blob)) return true;
     if (/\\binpage\\.js\\b/i.test(blob) && /emit|ethereum|wallet|metamask|solana|web3/i.test(blob)) return true;
-    // SSR hydration-recovery noise — React discards server HTML and re-renders
-    // on the client; the app still works. Never pause the preview over it.
-    if (/hydration failed because|error while hydrating|an error occurred during hydration|expected server html to contain|did not match server-rendered|text content does not match server-rendered|hydration mismatch|validateDOMNesting|failed to execute 'removechild' on 'node'|minified react error #4(18|23|25)\\b/i.test(m)) return true;
-    // Vite dev-server transport chatter (HMR websocket behind the preview
-    // tunnel). The page renders fine; only the hot-reload socket is unhappy,
-    // and nothing inside the generated project can fix it.
-    if (/failed to connect to websocket|\\[vite\\].*websocket|\\[vite\\].*server connection lost|\\[hmr\\]/i.test(m)) return true;
     return false;
   }
   function dedupe(msg) {
@@ -374,6 +322,25 @@ export function parsePreviewErrorClear(data: unknown): PreviewErrorKind | null {
   const d = data as Record<string, unknown>;
   if (d.source !== "lifemark-preview-errors" || d.type !== "preview-error-clear") return null;
   return (d.kind as PreviewErrorKind) ?? "empty-root";
+}
+
+/**
+ * The bridge announcing it just booted inside a FRESH preview document.
+ *
+ * This is the signal that lets a paused preview un-pause itself. Until it was
+ * consumed, "Preview paused" was a one-way door: an error froze the overlay,
+ * the code got repaired, the sandbox hot-reloaded, the app came back perfectly
+ * — and the banner stayed up forever, because nothing ever retracted the
+ * original error. Observed live on a project rendering 3.8 KB of correct
+ * content underneath its own overlay.
+ *
+ * A new document means the previous document's errors are unverifiable
+ * history, so the guard restarts evidence-gathering from scratch.
+ */
+export function parsePreviewReady(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  const d = data as Record<string, unknown>;
+  return d.source === "lifemark-preview-errors" && d.type === "preview-error-ready";
 }
 
 export function parsePreviewErrorMessage(data: unknown): PreviewRuntimeError | null {
