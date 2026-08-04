@@ -48,10 +48,9 @@ import type {
   SandboxRunResult,
 } from "./index";
 import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared";
+import { SYNC_MANIFEST, filesToPrune } from "./prune-files";
 
 const DEV_LOG = "/tmp/lifemark-dev.log";
-/** Content-hash manifest for incremental writeFiles — lives in APP_DIR. */
-const SYNC_MANIFEST = ".lm-sync-manifest.json";
 
 /**
  * Optional pre-installed node_modules baked into the sandbox image.
@@ -68,6 +67,30 @@ const SYNC_MANIFEST = ".lm-sync-manifest.json";
  * `docker/Dockerfile.sandbox` for the image that provides it.
  */
 const BASE_MODULES = "/opt/lm-base/node_modules";
+
+/**
+ * Marker embedded in the dev-server supervisor's command line.
+ *
+ * Reuse has to answer "is a supervisor already running in here?" before it
+ * starts one. Getting that wrong means TWO `while true; do vite; done` loops
+ * racing for the same port: each keeps losing the bind, exiting, and being
+ * restarted a second later, so the preview flaps between working and refused
+ * indefinitely — a worse failure than the cold start it was avoiding.
+ *
+ * A marker in the args is the reliable test: it survives in `ps` output for as
+ * long as the supervising shell lives, and dies with it. A pidfile would have
+ * to be cleaned up by a process that may have been killed.
+ */
+const SUPERVISOR_TAG = "LM_SUPERVISOR";
+
+/** The dev-server supervisor loop — one definition, used by both boot paths. */
+function supervisorCommand(cmd: string): string {
+  return (
+    `while true; do ${cmd} >> ${DEV_LOG} 2>&1; ` +
+    `echo "[supervisor] dev server exited ($(date -u +%H:%M:%S)); restarting" >> ${DEV_LOG}; ` +
+    `sleep 1; done # ${SUPERVISOR_TAG}`
+  );
+}
 
 /**
  * Project directory INSIDE the node user's own home — not /app.
@@ -632,11 +655,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       //     (config restart, crash, OOM-of-the-process) is back within a second.
       //     Init:true (tini as pid 1) reaps the exited children so they don't
       //     pile up as zombies across restarts.
-      const supervised =
-        `while true; do ${cmd} >> ${DEV_LOG} 2>&1; ` +
-        `echo "[supervisor] dev server exited ($(date -u +%H:%M:%S)); restarting" >> ${DEV_LOG}; ` +
-        `sleep 1; done`;
-      await this.exec(id, supervised, APP_DIR, false, true);
+      await this.exec(id, supervisorCommand(cmd), APP_DIR, false, true);
 
       const previewUrl = c.routeViaProxy
         ? `https://${previewHost}`
@@ -776,6 +795,20 @@ export class DockerSandboxProvider implements SandboxProvider {
       );
       if (!probe.stdout.includes("LM_WARM")) return null;
 
+      // Remove files the project no longer has.
+      //
+      // The cold path got this for free: a fresh container starts empty, so a
+      // renamed or deleted file simply is not there. Reuse inherits the old
+      // disk, and writeFiles only ever adds or overwrites — so without this, a
+      // file the user renamed yesterday is still sitting in the container,
+      // still being served, and still importable. That is the kind of
+      // difference that makes a warm preview behave unlike a cold one, which
+      // is exactly what nobody can debug.
+      //
+      // Safe here specifically because `files` is the project's COMPLETE file
+      // set read from the database. Never do this from an incremental caller.
+      await this.pruneRemovedFiles(id, files);
+
       progress("writing", "Syncing changed files");
       // Incremental by content hash — an unchanged project writes nothing, so
       // vite is not disturbed at all and HMR keeps whatever state it had.
@@ -800,18 +833,32 @@ export class DockerSandboxProvider implements SandboxProvider {
       }
 
       // The supervisor loop is an exec, and execs do not survive a container
-      // stop. Probe first: if vite is already answering, this was a live
-      // container and there is nothing to start.
+      // stop — so a woken container needs one started, while a container that
+      // was merely idle already has one.
+      //
+      // Which it is MUST be decided by looking, not by whether vite answers
+      // right now. A supervisor whose vite is mid-restart answers nothing for a
+      // second or two, and starting a second loop on that evidence gives the
+      // container two of them, each stealing the port from the other on every
+      // cycle. That flaps the preview indefinitely and is far worse than the
+      // cold start being avoided.
       let up = await this.waitForLocalServer(id, innerPort, 1500);
       if (!up) {
-        const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
-        progress("starting", cmd);
-        const supervised =
-          `while true; do ${cmd} >> ${DEV_LOG} 2>&1; ` +
-          `echo "[supervisor] dev server exited ($(date -u +%H:%M:%S)); restarting" >> ${DEV_LOG}; ` +
-          `sleep 1; done`;
-        await this.exec(id, supervised, APP_DIR, false, true);
-        up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
+        const running = await this.exec(
+          id,
+          `ps 2>/dev/null | grep -q "[${SUPERVISOR_TAG[0]}]${SUPERVISOR_TAG.slice(1)}" && echo LM_SUP_UP`,
+          "/",
+        );
+        if (running.stdout.includes("LM_SUP_UP")) {
+          // Someone is already supervising — give its restart loop the time it
+          // needs rather than adding a competitor.
+          up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
+        } else {
+          const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
+          progress("starting", cmd);
+          await this.exec(id, supervisorCommand(cmd), APP_DIR, false, true);
+          up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
+        }
       }
 
       const previewUrl = await this.getPreviewUrl(id);
@@ -823,6 +870,43 @@ export class DockerSandboxProvider implements SandboxProvider {
       return { ok: true, sandboxId: id, previewUrl, ready: up, logs: trunc(logs, 4000) };
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Delete files present in the container's sync manifest but absent from the
+   * project's current file set — renames and deletions, in other words.
+   *
+   * ONLY call this with a complete file set. Given a partial one it would read
+   * every unsent file as deleted and empty the project.
+   *
+   * Deliberately conservative: it can only remove paths the manifest says WE
+   * uploaded, so nothing the container generated (node_modules, .vite caches,
+   * the manifest itself) is reachable, and a missing or unparseable manifest
+   * removes nothing at all.
+   */
+  private async pruneRemovedFiles(sandboxId: string, files: SandboxFile[]): Promise<void> {
+    try {
+      const read = await this.exec(
+        sandboxId,
+        `cat ${APP_DIR}/${SYNC_MANIFEST} 2>/dev/null || true`,
+        "/",
+      );
+      const raw = read.stdout ?? "";
+      const start = raw.indexOf("{");
+      const end = raw.lastIndexOf("}");
+      if (start < 0 || end <= start) return;
+
+      const prev = JSON.parse(raw.slice(start, end + 1)) as Record<string, string>;
+      const gone = filesToPrune(Object.keys(prev), files.map((f) => f.path));
+      if (gone.length === 0) return;
+
+      // Single exec, quoted paths. Directories left behind are harmless; only
+      // files are served.
+      const quoted = gone.map((p) => `'${p.replace(/'/g, `'\\''`)}'`).join(" ");
+      await this.exec(sandboxId, `rm -f -- ${quoted}`, APP_DIR);
+    } catch {
+      /* pruning is an optimisation of correctness, never a reason to fail a boot */
     }
   }
 
