@@ -53,22 +53,6 @@ import { SYNC_MANIFEST, filesToPrune } from "./prune-files";
 const DEV_LOG = "/tmp/lifemark-dev.log";
 
 /**
- * Optional pre-installed node_modules baked into the sandbox image.
- *
- * A cold boot's wall-clock is dominated by `npm install` — a Vite + React +
- * shadcn scaffold resolves to ~340 packages, pulled over the network into an
- * empty cache, which is 40-90s of the user staring at a spinner. Every
- * generated app shares almost exactly the same dependency set, so installing it
- * once at image build time and hardlinking it in makes the per-boot install a
- * delta reconcile against a warm cache.
- *
- * Feature-detected: if the configured SANDBOX_IMAGE doesn't ship this path,
- * everything below is skipped and boots behave exactly as before. See
- * `docker/Dockerfile.sandbox` for the image that provides it.
- */
-const BASE_MODULES = "/opt/lm-base/node_modules";
-
-/**
  * Marker embedded in the dev-server supervisor's command line.
  *
  * Reuse has to answer "is a supervisor already running in here?" before it
@@ -598,24 +582,25 @@ export class DockerSandboxProvider implements SandboxProvider {
 
       let logs = "";
       if (opts.files.some((f) => f.path.endsWith("package.json"))) {
-        // Seed from the image's prebuilt modules when it has them. `cp -al`
-        // hardlinks rather than copies: near-instant and near-zero extra disk,
-        // and npm replaces (unlinks + writes) rather than mutating in place, so
-        // the shared inodes stay intact for the next container. Falls back to a
-        // real copy on filesystems without hardlink support, and to nothing at
-        // all on an image that doesn't ship the base — all three are correct,
-        // they just differ in how much of the install is left to do.
-        const seeded = await this.exec(
-          id,
-          `if [ -d ${BASE_MODULES} ] && [ ! -d node_modules ]; then ` +
-            `cp -al ${BASE_MODULES} node_modules 2>/dev/null || cp -a ${BASE_MODULES} node_modules; ` +
-            `echo seeded; fi`,
+        // Nothing is copied or linked into place. When the image already ships
+        // node_modules at this path (see docker/sandbox/Dockerfile), it is
+        // simply there, in a shared read-only layer, and npm reconciles it in
+        // place — writing only what actually differs.
+        //
+        // This used to hardlink a staged copy from /opt/lm-base, which was
+        // worse than doing nothing: on overlayfs, linking a file out of a lower
+        // layer forces a copy-up, so every container paid the full 301MB of the
+        // base tree into its own writable layer. Measured: 28,199 files. With
+        // the modules already at the final path, that cost is paid once per
+        // host instead of once per project — which is what makes keeping idle
+        // sandboxes around affordable at all.
+        const prebuilt = await this.exec(id, `[ -d node_modules ] && echo LM_PREBUILT`);
+        progress(
+          "installing",
+          prebuilt.stdout.includes("LM_PREBUILT")
+            ? "Reconciling dependencies"
+            : "Installing dependencies",
         );
-        if (seeded.stdout.includes("seeded")) {
-          progress("installing", "Reusing prebuilt dependencies");
-        } else {
-          progress("installing", "Installing dependencies");
-        }
         // --prefer-offline: use anything already in the cache instead of
         // revalidating it over the network, which is most of the install once
         // the base modules are present. --progress/--loglevel keep npm from

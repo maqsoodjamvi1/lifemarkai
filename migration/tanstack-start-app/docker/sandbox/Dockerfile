@@ -1,14 +1,29 @@
 # Preview sandbox runtime with the generated-app dependency set pre-installed.
 #
-# A cold preview boot is dominated by `npm install`: the Lovable-shaped scaffold
-# every generated app starts from resolves to ~340 packages, and in a fresh
-# container with an empty cache that is 40-90 seconds of the user watching a
-# spinner. Those packages are nearly identical across apps, so installing them
-# once here turns each boot's install into a delta reconcile — a few seconds.
+# This image solves two problems at once, and the second one is the reason the
+# dependencies are installed at the FINAL path rather than staged somewhere.
 #
-# The provider feature-detects /opt/lm-base/node_modules (see BASE_MODULES in
-# src/lib/sandbox/docker.ts). Nothing here is required: on an image without it
-# boots still work, just at the old speed.
+# SPEED. A cold boot is dominated by `npm install`: the Lovable-shaped scaffold
+# every generated app starts from resolves to ~340 packages — measured at 301MB
+# across 28,199 files — and in a fresh container with an empty cache that is
+# 40-90 seconds of the user watching a spinner. Installing it once here turns
+# each boot's install into a delta reconcile.
+#
+# DISK. Image layers are shared, read-only, across every container on the host;
+# a container's own storage holds only what it CHANGES. So installing into
+# /home/node/app — the exact directory the sandbox runs from — means every
+# preview shares one 301MB copy, and each container costs only its source files
+# plus whatever dependencies that project added beyond the base. That is what
+# makes it affordable to keep idle sandboxes around instead of deleting them
+# (see the host GC), which is in turn what removes the reinstall on reopen.
+#
+# Staging the modules elsewhere and copying them in at boot would undo exactly
+# that: on overlayfs, hardlinking or copying a file out of a lower layer forces
+# a copy-up into the container's writable layer, so every sandbox would pay the
+# full 301MB again — the arrangement this image exists to avoid.
+#
+# Nothing here is required. On any other image boots still work, just at the old
+# speed and the old per-container disk cost.
 #
 # ── Build and publish ────────────────────────────────────────────────────────
 #   node scripts/gen-sandbox-base-package.mjs      # refresh package.json first
@@ -20,7 +35,7 @@
 #
 # Rebuild whenever the scaffold's dependency versions change. A stale image is
 # not a correctness problem — npm reconciles whatever differs — it just gives
-# back some of the speed.
+# back some of the speed, and grows each container's delta.
 
 FROM node:22-alpine
 
@@ -28,18 +43,22 @@ FROM node:22-alpine
 # wget and nc the probe prefers.
 RUN apk add --no-cache curl
 
-RUN mkdir -p /opt/lm-base && chown node:node /opt/lm-base
-WORKDIR /opt/lm-base
+# The sandbox's working directory, created here so it is owned by `node` before
+# anything runs as that user. The provider deliberately does not set WorkingDir
+# on the container (Docker would recreate it root-owned, and CAP_CHOWN is
+# dropped so nothing could fix that) — it already exists in this image instead.
+RUN mkdir -p /home/node/app && chown -R node:node /home/node/app
+WORKDIR /home/node/app
 COPY --chown=node:node package.json ./
 
 # Install AS `node`, with lifecycle scripts left ON.
 #
-# Both details matter. Running as node means the tree is already owned by the
-# user the sandbox runs as, so the provider's `cp -al` can hardlink it —
-# protected_hardlinks blocks linking to files you neither own nor can write.
-# And --ignore-scripts would be a trap here: esbuild's postinstall is what puts
-# its platform binary in place, so skipping it produces an image whose vite
-# cannot start, in a way that only shows up at preview time.
+# Both details matter. Running as node means the tree is owned by the user the
+# sandbox runs as, so a project's own `npm install` can reconcile it in place
+# rather than being denied and rebuilding from scratch. And --ignore-scripts
+# would be a trap: esbuild's postinstall is what puts its platform binary in
+# place, so skipping it produces an image whose vite cannot start — a failure
+# that only shows up at preview time.
 USER node
 RUN npm install --no-audit --no-fund --loglevel=error
 
@@ -49,9 +68,8 @@ RUN npm install --no-audit --no-fund --loglevel=error
 # purpose of this one. Generated apps ship no lockfile, so every boot's install
 # re-resolves the tree against the registry; `--prefer-offline` turns that into
 # local reads, but only if the metadata and tarballs are still here. npm's cache
-# for the node user lands in /home/node/.npm, which is exactly where the
-# provider points npm_config_cache — so what this build downloaded is what every
-# sandbox reads. Trading a few hundred MB of image (pulled once per host) for
-# tens of seconds off every cold preview is the whole point.
+# for the node user lands in /home/node/.npm, exactly where the provider points
+# npm_config_cache — so what this build downloaded is what every sandbox reads,
+# from one shared layer.
 
 WORKDIR /home/node

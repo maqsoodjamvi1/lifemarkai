@@ -153,19 +153,28 @@ fi
 say "Stale sandbox cleanup"
 cat >/usr/local/bin/lifemark-sandbox-gc <<'GC'
 #!/usr/bin/env bash
-# lifemark-sandbox-gc [IDLE_HOURS] [MAX_HOURS]
-#   Idle sandboxes are STOPPED. Removal is reserved for the MAX_HOURS hard cap.
-#   Always dedupe per project.
+# lifemark-sandbox-gc [IDLE_HOURS] [MAX_HOURS] [MAX_STOPPED]
+#   Idle sandboxes are STOPPED. Removal is reserved for the MAX_HOURS hard cap
+#   and for the MAX_STOPPED disk guard. Always dedupe per project.
 #
 # Why stop rather than remove: node_modules lives inside the container. Removing
-# an idle sandbox throws away ~340 installed packages, so the next time that
-# project is opened the app reinstalls all of them over the network — 40-90
-# seconds of spinner for dependencies that were already sitting on this disk.
-# A stopped container costs only disk and starts again in about a second, and
-# the app's warm path starts it, re-syncs whatever changed, and skips the
-# install entirely.
+# an idle sandbox throws away the installed dependency tree, so the next time
+# that project is opened the app reinstalls it over the network — 40-90 seconds
+# of spinner for packages that were already sitting on this disk. A stopped
+# container starts again in about a second, and the app's warm path starts it,
+# re-syncs whatever changed, and skips the install entirely.
+#
+# What that costs, and why MAX_STOPPED exists. The dependency tree measures
+# 301MB across 28,199 files. On the PREBUILT sandbox image those files live in
+# a shared read-only image layer, so every container reads the same copy and a
+# stopped sandbox costs only its source and whatever it added — a few MB, and
+# this guard will never bind. On a plain node:22-alpine each container installs
+# its own copy into its own writable layer, so idle sandboxes cost ~300MB each
+# and unbounded retention would fill the disk. Keeping the N most recently used
+# bounds that at roughly N x 300MB no matter how many projects exist.
 IDLE_HOURS="${1:-3}"
 MAX_HOURS="${2:-48}"
+MAX_STOPPED="${3:-20}"
 now=$(date -u +%s)
 
 # 1) One container per project — newest wins.
@@ -201,14 +210,33 @@ docker ps -aq --filter "label=lifemark.sandbox=1" | while read -r id; do
     docker stop -t 5 "$id" >/dev/null 2>&1 && echo "stopped $id (idle ${idle}s) — node_modules kept"
   fi
 done
+
+# 3) Disk guard — keep only the MAX_STOPPED most recently finished sandboxes.
+#    Sorted by FinishedAt (when it was last stopped), newest first, so the ones
+#    removed are the least recently used rather than merely the oldest: a
+#    long-lived project someone opens daily outranks one created yesterday and
+#    abandoned. Set MAX_STOPPED to 0 to disable.
+if [ "$MAX_STOPPED" -gt 0 ]; then
+  docker ps -aq --filter "label=lifemark.sandbox=1" --filter "status=exited" \
+  | while read -r id; do
+      fin=$(docker inspect -f '{{.State.FinishedAt}}' "$id" 2>/dev/null) || continue
+      fts=$(date -u -d "$fin" +%s 2>/dev/null || echo 0)
+      echo "$fts $id"
+    done \
+  | sort -rn \
+  | awk -v keep="$MAX_STOPPED" 'NR > keep { print $2 }' \
+  | while read -r old; do
+      docker rm -f "$old" >/dev/null 2>&1 && echo "removed $old (beyond $MAX_STOPPED most-recent stopped)"
+    done
+fi
 GC
 chmod +x /usr/local/bin/lifemark-sandbox-gc
 ok "installed /usr/local/bin/lifemark-sandbox-gc (idle-aware + per-project dedupe)"
 
 if command -v crontab >/dev/null 2>&1; then
   ( crontab -l 2>/dev/null | grep -v lifemark-sandbox-gc; \
-    echo "*/10 * * * * /usr/local/bin/lifemark-sandbox-gc 3 48 >/dev/null 2>&1" ) | crontab -
-  ok "cron installed: every 10 min, reap idle>3h or age>48h, dedupe per project"
+    echo "*/10 * * * * /usr/local/bin/lifemark-sandbox-gc 3 48 20 >/dev/null 2>&1" ) | crontab -
+  ok "cron installed: every 10 min — stop idle>3h, remove age>48h, keep 20 most-recent stopped, dedupe per project"
 else
   warn "no crontab — run lifemark-sandbox-gc periodically or containers accumulate"
 fi
