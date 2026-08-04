@@ -186,7 +186,7 @@ function ensureSupabaseEnv<T extends { path: string; content?: string | null }>(
  * vite.config.ts stays clean for local `npm run dev` and for export, while the
  * sandbox copy gets `protocol: "wss"` + `clientPort: 443`.
  */
-function ensureViteTunnelHmr<T extends { path: string; content?: string | null }>(
+export function ensureViteTunnelHmr<T extends { path: string; content?: string | null }>(
   files: T[],
 ): T[] {
   const idx = files.findIndex((f) =>
@@ -194,22 +194,42 @@ function ensureViteTunnelHmr<T extends { path: string; content?: string | null }
   );
   if (idx < 0) return files;
   const source = files[idx].content ?? "";
-  if (!source.trim() || /clientPort/.test(source)) return files;
+  if (!source.trim()) return files;
 
-  const hmr = `hmr: { protocol: "wss", clientPort: 443, overlay: false },`;
+  // Every key the sandbox needs, added only when the config lacks it.
+  //
+  // `allowedHosts` was the expensive omission. `ensureViteEntryFiles` writes a
+  // correct config when the model ships NONE — but a model that writes its own
+  // `vite.config.ts` (a 45-file ERP build did exactly this) hits Vite 5's host
+  // check, and the preview renders one line of black text:
+  //
+  //     Blocked request. This host (…preview.lifemarkai.com) is not allowed.
+  //
+  // Which reads to the user as "the app it just built is broken". The old
+  // version of this function bailed early whenever `clientPort` was already
+  // present and only ever injected `hmr`, so a hand-written config was left
+  // without `host` or `allowedHosts` in every case.
+  const needed: string[] = [];
+  if (!/\bclientPort\b/.test(source)) {
+    needed.push(`hmr: { protocol: "wss", clientPort: 443, overlay: false },`);
+  }
+  if (!/\ballowedHosts\b/.test(source)) needed.push(`allowedHosts: true,`);
+  if (!/\bhost\s*:/.test(source)) needed.push(`host: true,`);
+  if (needed.length === 0) return files;
 
+  const injection = needed.join("\n    ");
   let patched: string | null = null;
-  // `server: { … }` present — inject at the top of the object.
+  // `server: { … }` present — inject the missing keys at the top of the object.
   const serverBlock = source.match(/server\s*:\s*\{/);
   if (serverBlock && serverBlock.index !== undefined) {
     const at = serverBlock.index + serverBlock[0].length;
-    patched = `${source.slice(0, at)}\n    ${hmr}${source.slice(at)}`;
+    patched = `${source.slice(0, at)}\n    ${injection}${source.slice(at)}`;
   } else {
     // No `server` key — add one to the top-level defineConfig object.
     const define = source.match(/defineConfig\s*\(\s*(?:\([^)]*\)\s*=>\s*)?\(?\s*\{/);
     if (define && define.index !== undefined) {
       const at = define.index + define[0].length;
-      patched = `${source.slice(0, at)}\n  server: { host: true, allowedHosts: true, ${hmr} },${source.slice(at)}`;
+      patched = `${source.slice(0, at)}\n  server: {\n    ${injection}\n  },${source.slice(at)}`;
     }
   }
   if (!patched) return files;

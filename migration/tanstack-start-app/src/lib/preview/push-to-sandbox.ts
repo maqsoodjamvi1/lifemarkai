@@ -17,6 +17,7 @@
  * cold, mid-install, or gone; the next full boot uploads everything anyway.
  */
 import { getSandboxProvider, isSandboxEnabled } from "@/lib/sandbox";
+import { ensureViteTunnelHmr } from "@/lib/preview/patch-sandbox-preview-files";
 
 /** Writes are deduped per project so a burst of agent saves coalesces. */
 const pending = new Map<string, Map<string, string>>();
@@ -77,10 +78,25 @@ async function flush(
   if (!sandboxId) return; // no live sandbox — the next boot uploads everything
 
   const provider = getSandboxProvider();
-  // The Docker provider content-hashes against its in-container manifest, so
-  // re-pushing an unchanged file is a no-op and this stays cheap.
-  await provider.writeFiles(
-    sandboxId,
+
+  // Files uploaded at CONTAINER CREATION go through patchSandboxPreviewFiles;
+  // files pushed here mid-session were going in raw, and that asymmetry had
+  // teeth. A build wrote its own `vite.config.ts` with no `server` block, this
+  // sync replaced the patched scaffold copy with it, and the preview died with
+  //
+  //     Blocked request. This host (…preview.lifemarkai.com) is not allowed.
+  //
+  // — a perfectly good 45-file ERP rendering one line of black text. Any
+  // file-local sandbox transform must therefore run on this path too.
+  //
+  // Only file-LOCAL transforms belong here: the set-level ones (synthesising a
+  // missing entry, injecting Supabase env, adding tailwind plugin deps) need
+  // the whole project and a fresh `npm install`, which only happens on boot.
+  const patched = ensureViteTunnelHmr(
     [...files.entries()].map(([path, content]) => ({ path, content })),
   );
+
+  // The Docker provider content-hashes against its in-container manifest, so
+  // re-pushing an unchanged file is a no-op and this stays cheap.
+  await provider.writeFiles(sandboxId, patched);
 }
