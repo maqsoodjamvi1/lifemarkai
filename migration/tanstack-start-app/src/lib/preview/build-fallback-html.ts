@@ -1670,9 +1670,29 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
         window.parent.postMessage({
           type: 'lifemark-preview-location',
           pathname: path,
+          origin: window.location.origin,
+          href: window.location.href,
         }, '*');
       } catch (e) {}
     }
+
+    // Liveness handshake — the same contract the sandbox bridge speaks (see
+    // veb-bridge.ts). The parent pings after every iframe load and reads
+    // silence as "this frame navigated away from the app". Without an answer
+    // here, a fallback preview that had reported a location once would be
+    // mistaken for an escaped frame on its next load and reset to "/".
+    window.addEventListener('message', function (e) {
+      var d = e && e.data;
+      if (!d || typeof d !== 'object' || d.type !== 'lifemark-preview-ping') return;
+      try {
+        window.parent.postMessage({
+          type: 'lifemark-preview-pong',
+          token: d.token,
+          origin: window.location.origin,
+          href: window.location.href,
+        }, '*');
+      } catch (err) {}
+    });
 
     // Patch history methods so SPA navigations are observable.
     var origPush = window.history.pushState;
