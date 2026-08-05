@@ -14,6 +14,13 @@ import type { PreviewRuntimeError, PreviewErrorKind } from "@/lib/preview/previe
 import { pushFileToRunningSandbox } from "@/lib/preview/push-to-sandbox";
 import { guardFileWrite } from "@/lib/ai/guard-file-write";
 import { logger } from "@/lib/logger";
+import {
+  typecheckRunningSandbox,
+  SANDBOX_PUSH_SETTLE_MS,
+} from "@/lib/preview/typecheck-project";
+import { fingerprintDiagnostic, scoreRepair } from "@/lib/ai/failure-fingerprint";
+import { recordRepairOutcome } from "@/lib/ai/record-outcome";
+import { isFatal } from "@/lib/sandbox/tsc-diagnostics";
 
 /**
  * Free daily "Try to fix" quota (Lovable parity — error fixes are Lovable's
@@ -259,6 +266,22 @@ Return the fixed files as JSON.`;
     const parsed = await parseFixResponse(rawContent, fileList);
     parsed.files = ensureCommonGeneratedSupportFiles(parsed.files, fileList);
 
+    // Snapshot the compiler's view BEFORE touching anything. This is the only
+    // objective label available for "did the fix help" — the runtime error that
+    // triggered this repair only reports the first thing that crashed, and the
+    // regex validators cannot see across a package boundary at all.
+    const beforeCheck = await typecheckRunningSandbox(supabase, projectId);
+    const fixStartedAt = Date.now();
+
+    // Enough to put back what this attempt overwrites, if it turns out to have
+    // made things worse. Only files that actually get written are recorded.
+    const restorePoints = new Map<
+      string,
+      { id: string | null; previous: string | null }
+    >();
+    const written: string[] = [];
+    const rejected: string[] = [];
+
     for (const fixedFile of parsed.files) {
       const { data: existing } = await (supabase as any)
         .from("project_files")
@@ -286,8 +309,15 @@ Return the fixed files as JSON.`;
           code: verdict.code,
           reason: verdict.reason,
         });
+        rejected.push(fixedFile.path);
         continue;
       }
+
+      restorePoints.set(fixedFile.path, {
+        id: existing?.id ?? null,
+        previous: existing?.content ?? null,
+      });
+      written.push(fixedFile.path);
 
       if (existing) {
         await (supabase as any)
@@ -313,6 +343,67 @@ Return the fixed files as JSON.`;
       // repair saved to the DB while the sandbox kept serving the broken file
       // until the container was destroyed by hand.
       pushFileToRunningSandbox(supabase, projectId, fixedFile.path, fixedFile.content);
+    }
+
+    // ── Verify, then keep ────────────────────────────────────────────────────
+    //
+    // The gap the write guard could not close. That guard is a structural check
+    // on one file at a time, and it says so in its own header: it cannot know
+    // that `@tanstack/react-router` stopped exporting `Body`, because only
+    // something holding the installed .d.ts files can. This can, and it is
+    // looking at the project as a whole after the write landed.
+    //
+    // A repair that introduces a compile error the project did not have is not
+    // a partial success — it is the ratchet, and every later round is handed
+    // the damage as context. Putting the old content back costs one failed fix
+    // the user can retry; leaving it costs the project.
+    if (beforeCheck && written.length > 0) {
+      await new Promise((r) => setTimeout(r, SANDBOX_PUSH_SETTLE_MS));
+      const afterCheck = await typecheckRunningSandbox(supabase, projectId);
+
+      if (afterCheck) {
+        const before = beforeCheck.diagnostics.map(fingerprintDiagnostic);
+        const after = afterCheck.diagnostics.map(fingerprintDiagnostic);
+        const score = scoreRepair(before, after);
+
+        // Only NEW app-breaking diagnostics trigger a rollback. A fix that
+        // leaves a new implicit-any behind while clearing a missing import is
+        // still a fix; one that leaves a new missing module behind is not.
+        const brokeSomething = afterCheck.diagnostics.some(
+          (d) => isFatal(d) && score.introduced.includes(fingerprintDiagnostic(d).fingerprint),
+        );
+
+        if (brokeSomething) {
+          logger.warn("ai.fix.rolled_back", {
+            projectId,
+            files: written,
+            introduced: score.introduced.slice(0, 5),
+          });
+          for (const [path, point] of restorePoints) {
+            if (point.previous == null) continue; // nothing to go back to
+            if (point.id) {
+              await (supabase as any)
+                .from("project_files")
+                .update({ content: point.previous, updated_at: new Date().toISOString() })
+                .eq("id", point.id);
+            }
+            pushFileToRunningSandbox(supabase, projectId, path, point.previous);
+          }
+        }
+
+        recordRepairOutcome({
+          projectId,
+          userId: user.id,
+          stage: "autofix",
+          model: result?.model,
+          signal: "typecheck",
+          before,
+          after,
+          filesWritten: brokeSomething ? [] : written,
+          filesRejected: rejected,
+          durationMs: Date.now() - fixStartedAt,
+        });
+      }
     }
 
     const { recordEditorIntelligenceBuild } = await import(
