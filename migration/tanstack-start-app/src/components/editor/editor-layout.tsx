@@ -35,6 +35,7 @@ import { useRecordProjectVisit } from "@/hooks/use-recent-projects";
 import type { Project, ProjectFile, Message, Profile } from "@/types/database";
 import type { PreviewErrorReport, PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import { saveApprovedPlan } from "@/lib/editor/save-approved-plan";
+import { useToast } from "@/hooks/use-toast";
 import {
   pickActiveFileAfterUpdate,
   resolvePromptMode,
@@ -169,6 +170,7 @@ export function EditorLayout({
   initialPanel,
 }: EditorLayoutProps) {
   const navigate = useNavigate();
+  const { toast } = useToast();
   // Record this project visit for the dashboard "Recently visited" rail
   useRecordProjectVisit({ id: project.id, name: project.name, framework: project.framework ?? "react" });
 
@@ -708,18 +710,48 @@ export function EditorLayout({
     setActiveFile((prev) => (prev?.id === updatedFile.id ? updatedFile : prev));
 
     // Persist visual edits / inline updates (Lovable parity — WYSIWYG survives refresh)
+    //
+    // This was a PATCH carrying only `path`, and PATCH's very first check is
+    // `if (!body.fileId) return 400`. So every visual edit, every packages-panel
+    // change and every env-file edit 400'd, silently: `res.ok` was never read
+    // and `.catch()` does not fire for an HTTP error status. The user watched
+    // the change appear in the editor, got charged a credit for it
+    // (preview-panel claims one before calling this), and lost it on reload.
+    //
+    // POST is the path-addressed upsert — the right verb when the caller knows
+    // the path but not the row id, which is exactly the visual-edit case.
     if (updatedFile.path && updatedFile.content !== undefined) {
-      void fetch(`/api/projects/${project.id}/files`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          path: updatedFile.path,
-          content: updatedFile.content,
-          language: updatedFile.language,
-        }),
-      }).catch(() => {});
+      void (async () => {
+        try {
+          const res = await fetch(`/api/projects/${project.id}/files`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              path: updatedFile.path,
+              content: updatedFile.content,
+              language: updatedFile.language,
+            }),
+          });
+          if (!res.ok) {
+            // Silence here is what made this invisible for so long. A failed
+            // save must be visible: the user is about to keep working on top of
+            // an edit the server never accepted.
+            toast({
+              title: "Change not saved",
+              description: `${updatedFile.path} could not be saved (${res.status}). Reload before making more changes.`,
+              variant: "destructive",
+            });
+          }
+        } catch {
+          toast({
+            title: "Change not saved",
+            description: `${updatedFile.path} could not be saved — you appear to be offline.`,
+            variant: "destructive",
+          });
+        }
+      })();
     }
-  }, [project.id]);
+  }, [project.id, toast]);
 
   /** Lovable-style file sync: full project listings REPLACE (drop orphans);
    *  single-file panel edits MERGE so we don't wipe the tree.

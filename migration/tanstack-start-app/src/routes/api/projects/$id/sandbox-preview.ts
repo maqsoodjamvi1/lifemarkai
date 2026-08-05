@@ -91,7 +91,15 @@ async function handlePOST(req: Request, params: any) {
   const { id: projectId } = params;
   const existing = bootInflight.get(projectId);
   if (existing) {
-    return existing;
+    // .clone(), not the same object. A Response body is a single-use
+    // ReadableStream: handing one instance to two in-flight requests leaves the
+    // second reading a locked, already-consumed body, which surfaces as a 500
+    // or a truncated payload. The client then fails to parse it and collapses
+    // the whole preview to `enabled: false`, disabling every recovery path it
+    // has. Concurrent boots are routine here — the boot effect, the 90s stall
+    // recovery, the keepalive's dead-sandbox detection, the phase poller and
+    // the Retry button can all fire one, never mind a second browser tab.
+    return existing.then((res) => res.clone());
   }
   const run = handlePOSTUnlocked(req, params).finally(() => {
     if (bootInflight.get(projectId) === run) bootInflight.delete(projectId);

@@ -50,7 +50,17 @@ export function useSandboxPreview(projectId: string) {
   const bootedRef = useRef(false);
   const statusCheckedRef = useRef(false);
 
+  /**
+   * The latest state, readable from a callback without becoming a dependency.
+   *
+   * Needed by the catch blocks below, which must preserve `enabled` rather than
+   * reset it — and cannot close over `state` without re-creating every callback
+   * on each render.
+   */
+  const stateRef = useRef(state);
+
   const applyState = useCallback((next: SandboxPreviewState) => {
+    stateRef.current = next;
     sandboxIdRef.current = next.sandboxId;
     if (projectId) {
       try {
@@ -171,13 +181,17 @@ export function useSandboxPreview(projectId: string) {
         phaseDetail: typeof data.phaseDetail === "string" ? data.phaseDetail : "Cold start…",
       });
     } catch (err) {
-      return applyState(
-        emptyState({
-          error: err instanceof Error ? err.message : "Reconnect failed",
-        }),
-      );
+      // Keep `enabled`. See the note on the requestPreview catch below: routing
+      // a transient network error through emptyState() turns "one fetch failed"
+      // into "this project has no preview backend", and every recovery effect
+      // in this hook is gated on `enabled`.
+      return applyState({
+        ...stateRef.current,
+        loading: false,
+        error: err instanceof Error ? err.message : "Reconnect failed",
+      });
     }
-  }, [applyState, emptyState, projectId]);
+  }, [applyState, projectId]);
 
   const requestPreview = useCallback(async (): Promise<SandboxPreviewState> => {
     setState((s) => ({ ...s, loading: true, error: null }));
@@ -260,13 +274,26 @@ export function useSandboxPreview(projectId: string) {
         phaseDetail: typeof data.phaseDetail === "string" ? data.phaseDetail : null,
       });
     } catch (err) {
-      return applyState(
-        emptyState({
-          error: err instanceof Error ? err.message : "Request failed",
-        }),
-      );
+      // `enabled` MUST survive a failed request.
+      //
+      // emptyState() hardcodes `enabled: false`, and every self-healing path in
+      // this hook — the phase poll, the keepalive heartbeat, the paint watchdog
+      // — is gated on it. So a single DNS wobble against Supabase during a cold
+      // boot (getProjectAccess throws by design on a transient error, the POST
+      // route has no try/catch, res.json() then throws here) permanently
+      // disabled every recovery mechanism for the rest of the session. The
+      // preview could not come back even after the network did, and the pane it
+      // lands on has no Retry button.
+      //
+      // A failed fetch means "this attempt failed", not "this project has no
+      // preview backend". Report the error, keep the capability.
+      return applyState({
+        ...stateRef.current,
+        loading: false,
+        error: err instanceof Error ? err.message : "Request failed",
+      });
     }
-  }, [applyState, emptyState, projectId]);
+  }, [applyState, projectId]);
 
   /** Preflight: know Modal is configured before boot (skip WebContainer). */
   const [statusResolved, setStatusResolved] = useState(false);
