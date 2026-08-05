@@ -51,6 +51,7 @@ import type {
 import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared";
 import { SYNC_MANIFEST, filesToPrune } from "./prune-files";
 import { parseTscOutput } from "./tsc-diagnostics";
+import { dependenciesAlreadySatisfied } from "./deps-satisfied";
 
 const DEV_LOG = "/tmp/lifemark-dev.log";
 
@@ -99,6 +100,20 @@ function supervisorCommand(cmd: string): string {
  * the root-owned dir). It is passed per-exec instead.
  */
 const APP_DIR = "/home/node/app";
+
+/**
+ * Wall-clock ceiling on `npm install` inside a sandbox.
+ *
+ * Neither `exec` nor `docker()` sets a socket timeout, so an install that
+ * wedges — a registry that accepts the connection and never answers, a
+ * postinstall script waiting on stdin — held the preview request open with no
+ * bound at all. The 120s readiness budget further down does not help: it only
+ * starts once the install returns.
+ *
+ * Four minutes is well past the 40-90s a genuinely cold install takes on this
+ * host, so a healthy slow install is never cut off.
+ */
+const INSTALL_TIMEOUT_SEC = 240;
 
 /**
  * Accept whatever shape the host was configured as.
@@ -647,12 +662,45 @@ export class DockerSandboxProvider implements SandboxProvider {
         return { ok: false, error: `could not create ${APP_DIR}: ${trunc(mk.stdout + mk.stderr, 300)}` };
       }
 
+      // READ THE IMAGE'S OWN package.json BEFORE THE UPLOAD OVERWRITES IT.
+      //
+      // This is the only moment it exists. It is the manifest the image's
+      // node_modules was installed from, and comparing it against what we are
+      // about to upload is what lets the install below be skipped when it
+      // provably cannot change anything. Doing it in the same exec as the
+      // node_modules probe keeps it to one round trip.
+      const baseline = await this.exec(
+        id,
+        `[ -d node_modules ] && echo LM_PREBUILT; echo LM_PKG_START; cat package.json 2>/dev/null`,
+      );
+      const hasPrebuiltModules = baseline.stdout.includes("LM_PREBUILT");
+      const baselinePackageJson = baseline.stdout.includes("LM_PKG_START")
+        ? baseline.stdout.slice(baseline.stdout.indexOf("LM_PKG_START") + "LM_PKG_START".length)
+        : null;
+
       progress("writing", `Uploading ${opts.files.length} files`);
+      // Ship the sync manifest with the cold upload too.
+      //
+      // `writeFiles` writes one on every warm sync, but the cold path never
+      // did — so the SECOND boot of a project found no manifest, concluded it
+      // knew nothing about the container's disk, and re-uploaded every file.
+      // That rewrites vite.config.ts's mtime, which vite treats as a config
+      // change and answers with a full server restart: a Bad Gateway on first
+      // paint, on the boot that was supposed to be the fast one.
+      const coldHashes: Record<string, string> = {};
+      for (const f of opts.files) {
+        coldHashes[f.path.replace(/\\/g, "/")] = createHash("sha1")
+          .update(f.content ?? "")
+          .digest("hex");
+      }
       const put = await docker(
         "PUT",
         `/v1.43/containers/${id}/archive?path=${encodeURIComponent(APP_DIR)}`,
         undefined,
-        buildTar(opts.files),
+        buildTar([
+          ...opts.files,
+          { path: SYNC_MANIFEST, content: JSON.stringify(coldHashes) },
+        ]),
       );
       if (put.status >= 400) {
         return { ok: false, error: `file upload failed (${put.status}): ${trunc(put.text, 300)}` };
@@ -684,24 +732,67 @@ export class DockerSandboxProvider implements SandboxProvider {
         // the modules already at the final path, that cost is paid once per
         // host instead of once per project — which is what makes keeping idle
         // sandboxes around affordable at all.
-        const prebuilt = await this.exec(id, `[ -d node_modules ] && echo LM_PREBUILT`);
-        progress(
-          "installing",
-          prebuilt.stdout.includes("LM_PREBUILT")
-            ? "Reconciling dependencies"
-            : "Installing dependencies",
+        // SKIP THE INSTALL WHEN IT PROVABLY CANNOT CHANGE ANYTHING.
+        //
+        // The `[ -d node_modules ]` probe has been here for a long time, but
+        // its answer only ever picked between two progress strings — the
+        // install ran either way. For a freshly generated app that is pure
+        // overhead: the scaffold's dependency set IS the set the image was
+        // built from, so npm re-resolves the root and then stats 28,199 files
+        // to conclude there is nothing to do. On one CPU that is the single
+        // largest phase of a first preview.
+        //
+        // `dependenciesAlreadySatisfied` answers a deliberately narrow
+        // question — is this the same dependency set npm already resolved? —
+        // by exact key-and-spec equality, and fails closed on anything else:
+        // one extra package, one changed caret, one REMOVED package (npm
+        // prunes, so a subset is real work), an unreadable manifest, a missing
+        // tree. The comparison runs against the FINAL package.json, after the
+        // toolchain/tailwind/auto-install passes have mutated it, so any pin
+        // those passes add forces the install to happen.
+        const projectPackageJson =
+          opts.files.find((f) => f.path === "package.json")?.content ??
+          opts.files.find((f) => f.path.endsWith("/package.json"))?.content ??
+          null;
+        const depCheck = dependenciesAlreadySatisfied(
+          baselinePackageJson,
+          projectPackageJson,
+          hasPrebuiltModules,
         );
-        // --prefer-offline: use anything already in the cache instead of
-        // revalidating it over the network, which is most of the install once
-        // the base modules are present. --progress/--loglevel keep npm from
-        // streaming tens of thousands of lines back through the exec socket.
-        const res = await this.exec(
-          id,
-          "npm install --no-audit --no-fund --prefer-offline --progress=false --loglevel=error",
-        );
-        logs += res.stdout + res.stderr;
-        if (res.exitCode && res.exitCode !== 0) {
-          return { ok: false, error: `npm install failed (exit ${res.exitCode}).`, logs: trunc(logs) };
+
+        if (depCheck.satisfied) {
+          logs += `\n[preview] skipped npm install — ${depCheck.reason}\n`;
+          progress("installing", "Dependencies already prepared");
+        } else {
+          progress(
+            "installing",
+            hasPrebuiltModules ? "Reconciling dependencies" : "Installing dependencies",
+          );
+          // --prefer-offline: use anything already in the cache instead of
+          // revalidating it over the network, which is most of the install once
+          // the base modules are present. --progress/--loglevel keep npm from
+          // streaming tens of thousands of lines back through the exec socket.
+          //
+          // `timeout` because neither `exec` nor `docker()` sets one: a wedged
+          // install held the whole request open indefinitely, and the 120s
+          // readiness budget below does not start until this returns. Same
+          // pattern as the typecheck exec.
+          const res = await this.exec(
+            id,
+            `timeout ${INSTALL_TIMEOUT_SEC} npm install --no-audit --no-fund --prefer-offline --progress=false --loglevel=error; echo "LM_NPM_EXIT:$?"`,
+          );
+          logs += res.stdout + res.stderr;
+          const npmExit = Number(/LM_NPM_EXIT:(\d+)/.exec(res.stdout + res.stderr)?.[1] ?? "0");
+          if (npmExit === 124) {
+            return {
+              ok: false,
+              error: `Installing dependencies took longer than ${INSTALL_TIMEOUT_SEC}s and was stopped. ${depCheck.reason}.`,
+              logs: trunc(logs),
+            };
+          }
+          if (npmExit !== 0) {
+            return { ok: false, error: `npm install failed (exit ${npmExit}).`, logs: trunc(logs) };
+          }
         }
       }
 
