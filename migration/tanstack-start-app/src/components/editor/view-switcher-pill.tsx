@@ -63,7 +63,7 @@ export function ViewSwitcherPill({
               "relative z-10 flex h-6 shrink-0 items-center overflow-hidden rounded-full outline-none transition-colors duration-150",
               "disabled:cursor-not-allowed disabled:opacity-50",
               isActive
-                ? "text-[#0066FF] dark:text-[#4d94ff]"
+                ? "text-[#1F55F1] dark:text-[#4d94ff]"
                 : "cursor-pointer text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] active:scale-[0.97]",
               isActive ? "px-2" : "px-1.5",
             )}
