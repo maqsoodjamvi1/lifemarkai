@@ -23,6 +23,7 @@ import { ECONOMY_CODING_MODEL, getDefaultAiModel } from "@/lib/ai/model-defaults
 import { selectModelChain, applyModelAdapter } from "@/lib/ai/model-catalog";
 import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/system-prompts";
 import { buildPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
+import { guardFileWrite } from "@/lib/ai/guard-file-write";
 import type { ProjectFile } from "@/types/database";
 
 export interface SelfVerifyResult {
@@ -530,6 +531,21 @@ export async function runSelfVerification(opts: {
       }
 
       for (const f of fixedFiles) {
+        // Same reasoning as the auto-fix route: this loop is driven by a
+        // failing preview, so an unvalidated write turns one bad model response
+        // into a ratchet that every later round makes worse. Refusing a suspect
+        // write leaves the last working version in place and lets the round be
+        // reported as "still broken", which is the truth.
+        const verdict = guardFileWrite({
+          path: f.path,
+          next: f.content,
+          previous: files.find((pf) => pf.path === f.path)?.content ?? null,
+        });
+        if (!verdict.ok) {
+          emit(`Skipped an unsafe fix to ${f.path} — ${verdict.reason ?? verdict.code}`);
+          continue;
+        }
+
         const language = f.path.endsWith(".tsx") ? "typescriptreact"
           : f.path.endsWith(".ts") ? "typescript"
           : f.path.endsWith(".css") ? "css"

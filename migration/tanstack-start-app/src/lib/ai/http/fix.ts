@@ -12,6 +12,8 @@ import {
 } from "@/lib/credits";
 import type { PreviewRuntimeError, PreviewErrorKind } from "@/lib/preview/preview-error-bridge";
 import { pushFileToRunningSandbox } from "@/lib/preview/push-to-sandbox";
+import { guardFileWrite } from "@/lib/ai/guard-file-write";
+import { logger } from "@/lib/logger";
 
 /**
  * Free daily "Try to fix" quota (Lovable parity — error fixes are Lovable's
@@ -260,10 +262,32 @@ Return the fixed files as JSON.`;
     for (const fixedFile of parsed.files) {
       const { data: existing } = await (supabase as any)
         .from("project_files")
-        .select("id")
+        .select("id, content")
         .eq("project_id", projectId)
         .eq("path", fixedFile.path)
         .single();
+
+      // An auto-fix is triggered BY a broken preview, so a bad fix does not
+      // merely fail — it feeds itself. The damaged file becomes the context for
+      // the next fix, and each round is handed something worse. Two separate
+      // corruptions in one evening came through this exact write: a package.json
+      // that reached three concatenated copies of itself, and a working root
+      // route rewritten to import an API removed before TanStack Router 1.0.
+      // Skipping a suspect write costs one retry; taking it can cost the file.
+      const verdict = guardFileWrite({
+        path: fixedFile.path,
+        next: fixedFile.content,
+        previous: existing?.content ?? null,
+      });
+      if (!verdict.ok) {
+        logger.warn("ai.fix.write_rejected", {
+          projectId,
+          path: fixedFile.path,
+          code: verdict.code,
+          reason: verdict.reason,
+        });
+        continue;
+      }
 
       if (existing) {
         await (supabase as any)
