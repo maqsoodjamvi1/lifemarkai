@@ -336,7 +336,47 @@ const claimedPorts = new Set<number>();
  */
 const inflightRuns = new Map<string, Promise<SandboxRunResult>>();
 
-function claimPort(): number | null {
+function releasePort(port: number | null | undefined): void {
+  if (typeof port === "number" && Number.isFinite(port)) claimedPorts.delete(port);
+}
+
+/**
+ * Drop claims for ports no Docker container is actually publishing.
+ *
+ * `claimedPorts` is a process-local guess at what is in use, and it only ever
+ * grew: nothing released a port when a container was removed by
+ * `removeProjectContainers`, by the idle GC, or by anything outside this
+ * process. In port mode that made exhaustion a matter of time — after
+ * (portHi - portLo) boots every preview failed with "No free port in
+ * <lo>-<hi>. Raise SANDBOX_PORT_RANGE" while the host sat nearly idle, and
+ * only restarting the app server cleared it.
+ *
+ * Docker knows the real answer, so ask it: anything still published by a live
+ * container stays claimed, everything else is free. One list call, and only
+ * on the path where we would otherwise have to fail.
+ */
+async function reconcileClaimedPorts(): Promise<void> {
+  const filters = encodeURIComponent(JSON.stringify({ label: ["lifemark.sandbox=1"] }));
+  const res = await docker("GET", `/v1.43/containers/json?all=1&filters=${filters}`);
+  if (res.status >= 400) return; // can't verify — keep the conservative set
+  let list: Array<{ Ports?: Array<{ PublicPort?: number }> }> = [];
+  try {
+    list = JSON.parse(res.text) as typeof list;
+  } catch {
+    return;
+  }
+  const live = new Set<number>();
+  for (const ctr of list) {
+    for (const p of ctr.Ports ?? []) {
+      if (typeof p.PublicPort === "number") live.add(p.PublicPort);
+    }
+  }
+  for (const p of Array.from(claimedPorts)) {
+    if (!live.has(p)) claimedPorts.delete(p);
+  }
+}
+
+function firstFreePort(): number | null {
   const c = cfg();
   for (let p = c.portLo; p <= c.portHi; p++) {
     if (!claimedPorts.has(p)) {
@@ -345,6 +385,15 @@ function claimPort(): number | null {
     }
   }
   return null;
+}
+
+async function claimPort(): Promise<number | null> {
+  const direct = firstFreePort();
+  if (direct !== null) return direct;
+  // The range looks full. Verify that against Docker before failing — the
+  // usual cause is stale claims, not a genuinely saturated host.
+  await reconcileClaimedPorts().catch(() => {});
+  return firstFreePort();
 }
 
 export class DockerSandboxProvider implements SandboxProvider {
@@ -404,10 +453,19 @@ export class DockerSandboxProvider implements SandboxProvider {
     const innerPort = opts.port ?? 5173;
     // In proxy mode Traefik reaches the container over the shared network, so
     // there is no host port to claim and no range to exhaust.
-    const hostPort = c.routeViaProxy ? null : claimPort();
+    const hostPort = c.routeViaProxy ? null : await claimPort();
     if (!c.routeViaProxy && hostPort == null) {
       return { ok: false, error: `No free port in ${c.portLo}-${c.portHi}. Raise SANDBOX_PORT_RANGE.` };
     }
+    /**
+     * Set only when a container is actually publishing `hostPort`. Everything
+     * below returns early on a dozen different failures — warm reuse (which
+     * uses the EXISTING container's port and never touches this one), a failed
+     * create, a failed start, a failed mkdir, a failed npm install — and each
+     * of those used to walk out holding the claim forever. The `finally`
+     * releases unless the port was genuinely handed to a container.
+     */
+    let portCommitted = false;
     // Hostname is STABLE PER PROJECT, deliberately not per sandbox.
     //
     // Coolify's Traefik issues certs via the ACME **HTTP-01** challenge
@@ -538,10 +596,11 @@ export class DockerSandboxProvider implements SandboxProvider {
         },
       });
       if (create.status >= 400) {
-        claimedPorts.delete(hostPort);
         return { ok: false, error: `docker create failed (${create.status}): ${trunc(create.text, 400)}` };
       }
       const id = (JSON.parse(create.text) as { Id: string }).Id;
+      // From here the container owns the binding, so the claim is real.
+      portCommitted = true;
 
       const start = await docker("POST", `/v1.43/containers/${id}/start`);
       if (start.status >= 400) {
@@ -709,8 +768,9 @@ export class DockerSandboxProvider implements SandboxProvider {
         logs: trunc(logs, 4000),
       };
     } catch (err) {
-      claimedPorts.delete(hostPort);
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      if (!portCommitted) releasePort(hostPort);
     }
   }
 
@@ -746,7 +806,13 @@ export class DockerSandboxProvider implements SandboxProvider {
       const listed = await docker("GET", `/v1.43/containers/json?all=1&filters=${filters}`);
       if (listed.status >= 400) return null;
 
-      let containers: Array<{ Id: string; Image: string; State: string; Created: number }> = [];
+      let containers: Array<{
+        Id: string;
+        Image: string;
+        State: string;
+        Created: number;
+        Ports?: Array<{ PublicPort?: number }>;
+      }> = [];
       try {
         containers = JSON.parse(listed.text) as typeof containers;
       } catch {
@@ -758,11 +824,21 @@ export class DockerSandboxProvider implements SandboxProvider {
       const [keep, ...extras] = containers;
       // Dedupe before anything else — a leftover duplicate is the blank-preview
       // bug waiting to happen, whether or not we end up reusing `keep`.
+      for (const ctr of extras) {
+        for (const p of ctr.Ports ?? []) releasePort(p.PublicPort);
+      }
       await Promise.all(
         extras.map((ctr) =>
           docker("DELETE", `/v1.43/containers/${ctr.Id}?force=true&v=true`).catch(() => undefined),
         ),
       );
+      // The container we are about to reuse already publishes its port —
+      // re-assert the claim so a concurrent cold boot can't hand the same port
+      // to a second container. (Reuse skips `claimPort` entirely, so without
+      // this the port would look free.)
+      for (const p of keep.Ports ?? []) {
+        if (typeof p.PublicPort === "number") claimedPorts.add(p.PublicPort);
+      }
 
       if (keep.Image && image && keep.Image !== image) return null;
 
@@ -1288,11 +1364,17 @@ export class DockerSandboxProvider implements SandboxProvider {
     );
     const res = await docker("GET", `/v1.43/containers/json?all=1&filters=${filters}`);
     if (res.status >= 400) return;
-    let list: Array<{ Id: string }> = [];
+    let list: Array<{ Id: string; Ports?: Array<{ PublicPort?: number }> }> = [];
     try {
-      list = JSON.parse(res.text) as Array<{ Id: string }>;
+      list = JSON.parse(res.text) as typeof list;
     } catch {
       return;
+    }
+    // Hand the host ports back. Removal here was the single biggest source of
+    // the port leak: every cold boot removes the project's previous container
+    // and its port stayed claimed for the life of the process.
+    for (const ctr of list) {
+      for (const p of ctr.Ports ?? []) releasePort(p.PublicPort);
     }
     await Promise.all(
       list.map((ctr) =>
