@@ -24,6 +24,8 @@ import { selectModelChain, applyModelAdapter } from "@/lib/ai/model-catalog";
 import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/system-prompts";
 import { buildPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
 import { guardFileWrite } from "@/lib/ai/guard-file-write";
+import { fingerprintError } from "@/lib/ai/failure-fingerprint";
+import { recordRepairOutcome } from "@/lib/ai/record-outcome";
 import type { ProjectFile } from "@/types/database";
 
 export interface SelfVerifyResult {
@@ -439,8 +441,44 @@ export async function runSelfVerification(opts: {
       anchor: ECONOMY_CODING_MODEL,
     });
 
+    // A repair attempt cannot be scored at the moment it is made — only the
+    // next render says whether it worked. So each attempt is held here and
+    // settled at the top of the following round, against what that render
+    // found. This is what makes the recorded outcome an observation rather
+    // than the model's own opinion of its work.
+    let pending: {
+      before: ReturnType<typeof fingerprintError>[];
+      round: number;
+      model?: string;
+      written: string[];
+      rejected: string[];
+      startedAt: number;
+    } | null = null;
+
+    const settle = (after: string[]) => {
+      if (!pending) return;
+      recordRepairOutcome({
+        projectId,
+        userId: opts.userId,
+        stage: "self_verify",
+        round: pending.round,
+        model: pending.model,
+        // Labels come from a render, so they only cover the routes the sweep
+        // actually reached. Stored explicitly because a success rate measured
+        // this way is not comparable with one measured by the compiler.
+        signal: "runtime",
+        before: pending.before,
+        after: after.map((message) => fingerprintError(message, "runtime")),
+        filesWritten: pending.written,
+        filesRejected: pending.rejected,
+        durationMs: Date.now() - pending.startedAt,
+      });
+      pending = null;
+    };
+
     for (let round = 0; round <= maxRounds; round++) {
       result.rounds = round + 1;
+      const roundStartedAt = Date.now();
       const html = buildFallbackHtml(files);
 
       // Broken module contracts — a file imported but never created, or a symbol
@@ -475,6 +513,10 @@ export async function runSelfVerification(opts: {
           errors = visualIssues.slice(0, 3);
         }
       }
+
+      // Settle the previous round's attempt against what this render found,
+      // before any early return can skip it.
+      settle(errors);
 
       if (errors.length === 0) {
         result.passed = true;
@@ -530,6 +572,9 @@ export async function runSelfVerification(opts: {
         return result;
       }
 
+      const written: string[] = [];
+      const rejected: string[] = [];
+
       for (const f of fixedFiles) {
         // Same reasoning as the auto-fix route: this loop is driven by a
         // failing preview, so an unvalidated write turns one bad model response
@@ -543,8 +588,10 @@ export async function runSelfVerification(opts: {
         });
         if (!verdict.ok) {
           emit(`Skipped an unsafe fix to ${f.path} — ${verdict.reason ?? verdict.code}`);
+          rejected.push(f.path);
           continue;
         }
+        written.push(f.path);
 
         const language = f.path.endsWith(".tsx") ? "typescriptreact"
           : f.path.endsWith(".ts") ? "typescript"
@@ -566,6 +613,17 @@ export async function runSelfVerification(opts: {
         else files = [...files, { path: f.path, content: f.content, language } as ProjectFile];
       }
       result.fixesApplied += 1;
+      // Hold the attempt open. It cannot be scored yet — the label is whatever
+      // the NEXT round's render finds, and the only honest verdict on a repair
+      // is what the code does afterwards, not what the model claimed.
+      pending = {
+        before: errors.map((message) => fingerprintError(message, "runtime")),
+        round: round + 1,
+        model: fix?.model,
+        written,
+        rejected,
+        startedAt: roundStartedAt,
+      };
       // Let the sandbox push (1.2s debounce) and Vite's reload land before the
       // next round re-renders the live preview, or round N+1 tests round N's code.
       await new Promise((resolve) => setTimeout(resolve, 4_000));
