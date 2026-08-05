@@ -38,7 +38,24 @@ export interface UseComposerDockControllerArgs {
   setQueuePaused: (value: boolean | ((prev: boolean) => boolean)) => void;
   setEditingQueueId: (value: string | null) => void;
   setEditingQueueText: (value: string) => void;
-  sendMessage: (text: string, mode?: EditorMode) => void | Promise<void>;
+  /**
+   * Mirrors chat-panel's `sendMessage`. The 4th parameter is load-bearing and
+   * was missing from this type: the clarify handlers below pass
+   * `{ forceBuild: true }`, and without it the enriched answer re-matches the
+   * clarify triggers and the questions loop forever. TypeScript reported
+   * "Expected 1-2 arguments, but got 4" here and nobody saw it, because the
+   * build script is `vite build` with no typecheck step. Do not "fix" that
+   * error by deleting the extra arguments — widen this type, as here.
+   */
+  sendMessage: (
+    text: string,
+    mode?: EditorMode,
+    // Typed `undefined` rather than the real Message[]: this consumer never
+    // overrides history, and naming the type here would drag chat-panel's
+    // message shape into the composer's public surface for no benefit.
+    historyOverride?: undefined,
+    opts?: { forceBuild?: boolean },
+  ) => void | Promise<void>;
   runtimeErrorsDismissed?: boolean;
   onFixRuntimeErrors?: () => void;
   onDismissRuntimeErrors?: () => void;

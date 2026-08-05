@@ -97,6 +97,7 @@ import {
   looksLikeEditRequest,
   DEFAULT_CODING_MODEL,
 } from "@/lib/ai/editor-intelligence";
+import { countUserAuthoredFiles, isGreenfieldProject } from "@/lib/ai/scaffold-files";
 import { isNoisePreviewError, type PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import {
   getAutoFixAttempts,
@@ -209,53 +210,6 @@ function waitForPreviewSuccess(timeoutMs = 10_000): Promise<boolean> {
 }
 
 
-/**
- * Files that exist in a brand-new project because the SCAFFOLD put them there,
- * not because anyone built anything yet.
- *
- * This list is the difference between "edit the user's app" and "build the
- * user's app", and getting it wrong silently breaks the product. The router
- * below used to ask `files.length > 8`, on the reasonable-sounding theory that
- * a project with more than eight files must already contain real work. That
- * held when the scaffold was small. It is now 25 files — index.html, three
- * tsconfigs, components.json, the Header/Footer chrome, use-mobile, App.css,
- * README, .gitignore and the rest — so EVERY new project cleared the threshold
- * before its first build, every first build was routed to the surgical agent,
- * and the agent did what a surgical agent does: read Index.tsx, change almost
- * nothing, finish. Three consecutive live builds returned the bare scaffold
- * with an untouched 432-byte starter page and no feature components at all.
- *
- * So count what the USER has, not what the template left behind.
- */
-const SCAFFOLD_FILE_RE =
-  /^(index\.html|package\.json|package-lock\.json|vite\.config\.(t|j)s|components\.json|tsconfig(\.app|\.node)?\.json|tailwind\.config\.(t|j)s|postcss\.config\.js|eslint\.config\.js|\.gitignore|README\.md|public\/.*|src\/(main|App)\.tsx|src\/App\.css|src\/index\.css|src\/styles\.css|src\/vite-env\.d\.ts|src\/lib\/utils\.ts|src\/hooks\/use-mobile\.tsx|src\/pages\/(Index|NotFound)\.tsx|src\/components\/ui\/.*|src\/components\/layout\/(Header|Footer)\.tsx|src\/router\.tsx|src\/routeTree\.gen\.ts|src\/routes\/(__root|index)\.tsx)$/;
-
-/** A home page this large is the user's app, not the starter placeholder. */
-const GROWN_HOME_PAGE_CHARS = 1500;
-
-function countUserAuthoredFiles(
-  files: Array<{ path: string; content?: string | null }>,
-): number {
-  let count = 0;
-  for (const f of files) {
-    const path = (f.path ?? "").replace(/\\/g, "/");
-    if (!SCAFFOLD_FILE_RE.test(path)) {
-      count += 1;
-      continue;
-    }
-    // An app can legitimately live entirely inside the home page. Once that
-    // file has clearly grown past the placeholder, treat it as real work so a
-    // follow-up request edits it instead of rebuilding over the top.
-    if (
-      /^src\/(pages\/Index|routes\/index)\.tsx$/.test(path) &&
-      (f.content ?? "").length > GROWN_HOME_PAGE_CHARS
-    ) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 export function ChatPanel({
   project, messages, files, activeFile, mode, credits, starterPrompt,
   previewError, previewRuntimeErrors = [], pendingFixPrompt, pendingFileRef,
@@ -272,7 +226,12 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const intelCtx = useMemo(
     () => ({
-      fileCount: files.length,
+      // Every consumer of `fileCount` — the patch/agent router, the model
+      // picker, the free-build check — is asking "does this project already
+      // contain work?". `files.length` answers a different question, and on a
+      // new project answers it wrong by 25. Fixed once, here at the source,
+      // rather than at each of the dozen places that reads it.
+      fileCount: countUserAuthoredFiles(files),
       hasPreviewError: !!previewError,
       hasCredits: credits > 0,
       activeFilePath: activeFile?.path,
@@ -3132,7 +3091,7 @@ ${(f.content ?? "").slice(0, 8000)}
           clarifyFirst:
             effectiveMode === "build" &&
             !opts?.forceBuild &&
-            ((clarifyFirst && files.length === 0) || dbClarifyIntent),
+            ((clarifyFirst && isGreenfieldProject(files)) || dbClarifyIntent),
           ...(effectiveMode === "build" && designTemplateId ? { templateId: designTemplateId } : {}),
           // If @mentions present, only send those files for context (saves tokens + focuses AI)
           files: mentionedFilesForAI
@@ -6225,7 +6184,7 @@ ${(f.content ?? "").slice(0, 8000)}
             mobileDisabled={noCredits || isLocked || streaming}
             mode={mode}
             clarifyFirst={clarifyFirst}
-            showClarifyToggle={(mode === "build" || mode === "agent") && files.length === 0}
+            showClarifyToggle={(mode === "build" || mode === "agent") && isGreenfieldProject(files)}
             onModeChange={onModeChange}
             onToggleClarify={() => setClarifyFirst((v) => !v)}
             multiAgent={multiAgent}
