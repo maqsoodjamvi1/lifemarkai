@@ -1332,6 +1332,21 @@ The user has expressed frustration. Do the following:
         // dropped on a client/proxy abort). Only flushed when NOT completed normally,
         // so a successful build's final/verified content is never clobbered.
         const streamedFiles: Array<{ path: string; content: string; language: string }> = [];
+        /**
+         * Every in-flight mid-stream upsert.
+         *
+         * They were fire-and-forget with NO ordering relative to the final
+         * upsert loop, which writes the parsed, sanitized, repaired content.
+         * A mid-stream write issued late — or just slow, same pool, different
+         * round-trip — could land AFTER the final one and leave the row
+         * holding raw streamed text, silently undoing the repair. A write that
+         * goes backwards, with nothing in the logs to say so.
+         *
+         * Draining this before the final loop makes the ordering explicit:
+         * every optimistic write has settled before the authoritative one is
+         * issued, so last-write-wins means what it says.
+         */
+        const midStreamWrites: Array<Promise<unknown>> = [];
         let completedNormally = false;
         let reservationFinalized = false;
         let finalCreditCost: number | null = null;
@@ -1467,14 +1482,47 @@ The user has expressed frustration. Do the following:
           ? new StreamingFileExtractor(async (file) => {
               if (streamedFilePaths.has(file.path)) return; // dedupe
               streamedFilePaths.add(file.path);
-              streamedFiles.push({ path: file.path, content: file.content, language: file.language });
-              // Fire-and-forget upsert so it doesn't block streaming
-              void (supabase as any).from("project_files").upsert({
-                project_id: projectId,
-                path: file.path,
-                content: file.content,
-                language: file.language,
-              }, { onConflict: "project_id,path" });
+              // Sanitize HERE too, not only in the final loop. The extractor
+              // emits a file the moment its closing delimiter arrives, and a
+              // continuation round can append a SECOND full document to an
+              // html file — observed corruption in the wild. Writing the raw
+              // text mid-stream meant the preview picked up the doubled
+              // version and rendered it, seconds before the final pass fixed
+              // the row. Sanitizing both places keeps the DB and the preview
+              // honest at every instant, not just at the end.
+              const { sanitizeGeneratedFile } = await import("@/lib/ai/html-sanity");
+              const safeContent = sanitizeGeneratedFile(file.path, file.content);
+              streamedFiles.push({ path: file.path, content: safeContent, language: file.language });
+              // Not awaited — that would stall the stream — but TRACKED, so
+              // the final upsert loop can drain it and win the ordering.
+              // A failure here is recoverable (the final loop rewrites every
+              // file) but must not be invisible.
+              midStreamWrites.push(
+                Promise.resolve(
+                  (supabase as any).from("project_files").upsert({
+                    project_id: projectId,
+                    path: file.path,
+                    content: safeContent,
+                    language: file.language,
+                  }, { onConflict: "project_id,path" }),
+                )
+                  .then((res: { error?: { message?: string } | null }) => {
+                    if (res?.error) {
+                      logger.warn("ai.chat.midstream_upsert_failed", {
+                        projectId,
+                        path: file.path,
+                        error: res.error.message,
+                      });
+                    }
+                  })
+                  .catch((err: unknown) => {
+                    logger.warn("ai.chat.midstream_upsert_threw", {
+                      projectId,
+                      path: file.path,
+                      error: err instanceof Error ? err.message : String(err),
+                    });
+                  }),
+              );
               // Notify client that a file is available early
               safeEnqueue(
                 encoder.encode(`data: ${JSON.stringify({ streamedFile: file.path })}\n\n`)
@@ -2184,6 +2232,16 @@ The user has expressed frustration. Do the following:
               // Always upsert FINAL parsed/repaired content. Mid-stream upserts are
               // for UX only — skipping here left autofix/repair changes on disk out
               // of sync with what the model "finished" (Lovable: preview = latest).
+              //
+              // Drain the optimistic writes FIRST. They are issued without
+              // await, so an in-flight one could otherwise land after this
+              // loop and overwrite repaired content with the raw stream.
+              // `allSettled` because a failed optimistic write must not stop
+              // the authoritative one — this loop is exactly its recovery.
+              if (midStreamWrites.length > 0) {
+                await Promise.allSettled(midStreamWrites);
+                midStreamWrites.length = 0;
+              }
               const { sanitizeGeneratedFile } = await import("@/lib/ai/html-sanity");
               for (const file of parsedFiles) {
                 const sanitized = sanitizeGeneratedFile(file.path, file.content);
@@ -2586,14 +2644,38 @@ The user has expressed frustration. Do the following:
           // success so final/verified content is never overwritten by mid-stream text.
           if (!completedNormally && streamedFiles.length > 0) {
             try {
-              await (supabase as any).from("project_files").upsert(
+              // Same ordering hazard as the success path: an optimistic write
+              // still in flight would land on top of this backstop. Let them
+              // finish first so this batch is genuinely last.
+              if (midStreamWrites.length > 0) {
+                await Promise.allSettled(midStreamWrites);
+                midStreamWrites.length = 0;
+              }
+              const { error: backstopError } = await (supabase as any).from("project_files").upsert(
                 streamedFiles.map((f) => ({ project_id: projectId, path: f.path, content: f.content, language: f.language })),
                 { onConflict: "project_id,path" },
               );
-              for (const f of streamedFiles) {
-                pushFileToRunningSandbox(supabase, projectId, f.path, f.content);
+              if (backstopError) {
+                // The whole point of this block is that an interrupted build
+                // never silently loses work. A swallowed failure here means
+                // exactly that, so at minimum leave a trace.
+                logger.error(
+                  "ai.chat.interrupted_build_persist_failed",
+                  new Error(backstopError.message ?? String(backstopError)),
+                  { projectId, paths: streamedFiles.map((f) => f.path).slice(0, 10) },
+                );
+              } else {
+                for (const f of streamedFiles) {
+                  pushFileToRunningSandbox(supabase, projectId, f.path, f.content);
+                }
               }
-            } catch { /* best-effort */ }
+            } catch (backstopThrew) {
+              logger.error(
+                "ai.chat.interrupted_build_persist_threw",
+                backstopThrew instanceof Error ? backstopThrew : new Error(String(backstopThrew)),
+                { projectId },
+              );
+            }
           }
           if (!reservationFinalized) {
             try {
