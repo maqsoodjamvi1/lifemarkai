@@ -1347,6 +1347,32 @@ The user has expressed frustration. Do the following:
          * issued, so last-write-wins means what it says.
          */
         const midStreamWrites: Array<Promise<unknown>> = [];
+        /**
+         * Wait for every optimistic write issued so far, including any issued
+         * WHILE waiting.
+         *
+         * A single `allSettled(midStreamWrites)` snapshots the array: anything
+         * pushed during that await is neither waited on nor carried forward,
+         * and zeroing the array afterwards discards it outright. Splicing in a
+         * loop is the difference between "we waited" and "we waited for the
+         * ones that had already started".
+         *
+         * `timeoutMs` bounds it because this also runs in the response's
+         * `finally`: an upsert that never settles would otherwise hold the SSE
+         * socket open and delay credit settlement behind it.
+         */
+        const drainMidStreamWrites = async (timeoutMs = 5_000) => {
+          const deadline = Date.now() + timeoutMs;
+          while (midStreamWrites.length > 0 && Date.now() < deadline) {
+            const batch = midStreamWrites.splice(0, midStreamWrites.length);
+            await Promise.race([
+              Promise.allSettled(batch),
+              new Promise((resolve) =>
+                setTimeout(resolve, Math.max(0, deadline - Date.now())),
+              ),
+            ]);
+          }
+        };
         let completedNormally = false;
         let reservationFinalized = false;
         let finalCreditCost: number | null = null;
@@ -1477,9 +1503,19 @@ The user has expressed frustration. Do the following:
           );
         }
 
+        // Loaded ONCE, before the extractor exists. Doing this `await import`
+        // inside the callback put a microtask boundary between a file being
+        // emitted and its write entering `midStreamWrites` — and a drain
+        // landing in that gap would miss the write it was added to order.
+        // The last file of a build is the likeliest to be in that window and
+        // the one the repair pass most often rewrites.
+        const { sanitizeGeneratedFile: sanitizeStreamedFile } = await import(
+          "@/lib/ai/html-sanity"
+        );
+
         // In build mode, stream-upsert each file to DB as soon as it completes
         const fileExtractor = mode === "build"
-          ? new StreamingFileExtractor(async (file) => {
+          ? new StreamingFileExtractor((file) => {
               if (streamedFilePaths.has(file.path)) return; // dedupe
               streamedFilePaths.add(file.path);
               // Sanitize HERE too, not only in the final loop. The extractor
@@ -1490,8 +1526,7 @@ The user has expressed frustration. Do the following:
               // version and rendered it, seconds before the final pass fixed
               // the row. Sanitizing both places keeps the DB and the preview
               // honest at every instant, not just at the end.
-              const { sanitizeGeneratedFile } = await import("@/lib/ai/html-sanity");
-              const safeContent = sanitizeGeneratedFile(file.path, file.content);
+              const safeContent = sanitizeStreamedFile(file.path, file.content);
               streamedFiles.push({ path: file.path, content: safeContent, language: file.language });
               // Not awaited — that would stall the stream — but TRACKED, so
               // the final upsert loop can drain it and win the ordering.
@@ -2238,10 +2273,7 @@ The user has expressed frustration. Do the following:
               // loop and overwrite repaired content with the raw stream.
               // `allSettled` because a failed optimistic write must not stop
               // the authoritative one — this loop is exactly its recovery.
-              if (midStreamWrites.length > 0) {
-                await Promise.allSettled(midStreamWrites);
-                midStreamWrites.length = 0;
-              }
+              await drainMidStreamWrites();
               const { sanitizeGeneratedFile } = await import("@/lib/ai/html-sanity");
               for (const file of parsedFiles) {
                 const sanitized = sanitizeGeneratedFile(file.path, file.content);
@@ -2638,6 +2670,12 @@ The user has expressed frustration. Do the following:
           );
         } finally {
           clearInterval(heartbeat);
+          // Unconditional drain. The success-path drain lives inside
+          // `if (parsedFiles.length > 0)`, so a build that streamed files but
+          // parsed none left writes in flight with `completedNormally` true —
+          // past both drains, and past the backstop below. This catches that
+          // and is a no-op whenever an earlier drain already ran.
+          await drainMidStreamWrites();
           // Durability backstop: if the build did NOT complete normally (client/proxy
           // abort, or an error before the save path), persist whatever streamed so an
           // interrupted build never results in "no change". Idempotent; skipped on
@@ -2647,10 +2685,7 @@ The user has expressed frustration. Do the following:
               // Same ordering hazard as the success path: an optimistic write
               // still in flight would land on top of this backstop. Let them
               // finish first so this batch is genuinely last.
-              if (midStreamWrites.length > 0) {
-                await Promise.allSettled(midStreamWrites);
-                midStreamWrites.length = 0;
-              }
+              await drainMidStreamWrites();
               const { error: backstopError } = await (supabase as any).from("project_files").upsert(
                 streamedFiles.map((f) => ({ project_id: projectId, path: f.path, content: f.content, language: f.language })),
                 { onConflict: "project_id,path" },

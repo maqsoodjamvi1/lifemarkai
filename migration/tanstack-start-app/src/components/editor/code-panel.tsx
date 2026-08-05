@@ -857,7 +857,12 @@ export function CodePanel({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fileId: target.id, content }),
         });
-        if (!res.ok) throw new Error("Failed to save");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } else {
+        // No handler and no project: this tab has nowhere to save to. Falling
+        // through to "Saved" told the user their work was on the server when
+        // nothing had been sent anywhere.
+        throw new Error("no save target");
       }
       dirtyRef.current.delete(target.id);
       forceRender((n) => n + 1);
@@ -866,8 +871,18 @@ export function CodePanel({
       );
       onFileChange?.({ ...target, content });
       toast({ title: "Saved", description: target.path });
-    } catch {
-      toast({ title: "Save failed", variant: "destructive" });
+    } catch (err) {
+      // `onSave` already toasts something specific ("your session expired…",
+      // "you appear to be offline…") and marks the error. Adding a bare "Save
+      // failed" on top of it stacked two toasts for one failure and buried the
+      // one that said what to do.
+      if (!(err as { reported?: boolean } | null)?.reported) {
+        toast({
+          title: "Save failed",
+          description: `${target.path} was not saved${err instanceof Error && err.message ? ` (${err.message})` : ""}. It is still marked unsaved.`,
+          variant: "destructive",
+        });
+      }
     } finally {
       setSaving(false);
     }

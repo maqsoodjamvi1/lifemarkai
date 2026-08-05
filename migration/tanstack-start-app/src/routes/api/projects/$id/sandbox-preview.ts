@@ -323,6 +323,20 @@ async function handlePOSTUnlocked(req: Request, params: any) {
         });
       }
 
+      // AWAIT the terminal phase, don't fire-and-forget it. Two reasons:
+      // writes are now serialized, so this one queues behind every progress
+      // write of a 60-90s boot and the handler would return long before it
+      // ran (and on a runtime that reclaims the invocation after the response,
+      // never); and this return previously wrote no phase at all, so a client
+      // polling the project row kept reading "creating"/"installing" and sat
+      // on the spinner while the response said "error".
+      await writeMeta({
+        sandbox_phase: "error",
+        sandbox_phase_detail:
+          retry.error ?? "The preview sandbox had expired and could not be restarted.",
+        sandbox_provider: getSandboxProviderId(),
+        sandbox_updated_at: new Date().toISOString(),
+      });
       return Response.json({
         enabled: true,
         ok: false,
@@ -333,7 +347,12 @@ async function handlePOSTUnlocked(req: Request, params: any) {
       });
     }
 
-    persistPhase("error", result.error);
+    await writeMeta({
+      sandbox_phase: "error",
+      sandbox_phase_detail: result.error ?? null,
+      sandbox_provider: getSandboxProviderId(),
+      sandbox_updated_at: new Date().toISOString(),
+    });
     return Response.json({ enabled: true, ok: false, error: result.error, logs: result.logs });
   }
 

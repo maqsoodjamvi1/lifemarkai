@@ -55,6 +55,10 @@ import { LovablePreviewInteractionToolbar } from "./lovable/preview-interaction-
 import { LovablePreviewStatusPill } from "./lovable/preview-status-pill";
 import { LovableVersionPreviewBanner } from "./lovable/version-preview-banner";
 import { ratePreviewMetric, type PreviewPerfSnapshot } from "@/lib/preview/preview-perf-bridge";
+import {
+  describePreviewError,
+  shouldShowRawPreviewDiagnostics,
+} from "@/lib/preview/preview-error-copy";
 import { PreviewCommentPins } from "./preview-comment-pins";
 import { createClient } from "@/lib/supabase/client";
 
@@ -634,6 +638,13 @@ export function PreviewPanel({
   } = useSandboxPreview(projectId ?? "");
   const sandboxIdLiveRef = useRef(sandboxId);
   sandboxIdLiveRef.current = sandboxId;
+  const previewErrorCopy = useMemo(
+    () => describePreviewError(sandboxError),
+    [sandboxError],
+  );
+  const showRawDiagnostics = shouldShowRawPreviewDiagnostics(
+    process.env.NODE_ENV === "development",
+  );
   /** Hard iframe path — soft-nav updates previewPath only (VEB postMessage). */
   const [sandboxIframePath, setSandboxIframePath] = useState("/");
   const [sandboxSyncInstalling, setSandboxSyncInstalling] = useState(false);
@@ -2658,28 +2669,33 @@ export function PreviewPanel({
               {!sandboxError && (
                 <Loader2 className="w-6 h-6 animate-spin text-violet-400/70 mx-auto mb-3" />
               )}
+              {/* The generic "Something went wrong while starting your app"
+                  that used to live here threw away everything the docker
+                  provider deliberately collects — the dev-log tail, the
+                  process table, OOMKilled — and left nobody, user or us, with
+                  any evidence. The first version of this fix over-corrected
+                  and painted the raw provider string, which names the
+                  container runtime, the missing environment variables and the
+                  exhausted host port range. `describePreviewError` is the
+                  middle: a sentence the user can act on, including whether
+                  retrying is even worth it, with the raw text and boot log
+                  kept for developers. */}
               <p className="text-sm font-medium text-foreground/80 mb-1">
-                {sandboxError ? "Preview could not start" : "Starting live preview"}
+                {sandboxError ? previewErrorCopy.title : "Starting live preview"}
               </p>
               <p className="text-xs text-muted-foreground/60 leading-relaxed">
-                {/* `sandboxError` was thrown away here in favour of a sentence
-                    that says nothing. At this exact moment it holds things like
-                    "npm install failed (exit 1)", "Upload reported success but
-                    /home/node/app is empty — the archive did not extract", or
-                    the stall message naming the three usual causes. The docker
-                    provider gathers the dev-log tail, the process table and
-                    OOMKilled specifically so this is diagnosable; showing
-                    "Something went wrong" instead threw away the only evidence
-                    the user — or we — would ever get. */}
-                {sandboxError || modalPhaseLabel || "Spinning up your app…"}
+                {sandboxError
+                  ? previewErrorCopy.description
+                  : modalPhaseLabel || "Spinning up your app…"}
               </p>
-              {sandboxError && sandboxLogs && (
+              {sandboxError && showRawDiagnostics && (
                 <details className="mt-3 text-left">
                   <summary className="text-[11px] text-muted-foreground/70 cursor-pointer hover:text-foreground/80 select-none">
-                    Show the boot log
+                    Developer detail
                   </summary>
                   <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-black/40 p-2 text-[10px] leading-relaxed text-muted-foreground/80 whitespace-pre-wrap break-all">
-                    {sandboxLogs.slice(-4000)}
+                    {sandboxError}
+                    {sandboxLogs ? `\n\n${sandboxLogs.slice(-4000)}` : ""}
                   </pre>
                 </details>
               )}
