@@ -232,15 +232,44 @@ export async function createProject(data: any) {
       /* non-critical */
     }
 
+    /**
+     * A project with no files is a dead end, so never report one as created.
+     *
+     * All three seeding paths below inserted and returned `ok` without looking
+     * at the result. On failure the API answered 201, the client navigated to
+     * the editor, and the user landed on an empty file tree with a preview that
+     * answers "Project has no files." Duplicating a project hit the same hole:
+     * `res.ok` was true and the copy was empty.
+     *
+     * Deleting the orphan row is the right cleanup — a half-created project the
+     * user can see but not use is worse than no project, because it looks like
+     * something they could recover.
+     */
+    const seedFiles = async (
+      rows: Array<Record<string, unknown>>,
+      what: string,
+    ): Promise<{ status: "error"; message: string } | null> => {
+      if (rows.length === 0) return null;
+      const { error } = await (supabase as any).from("project_files").insert(rows);
+      if (!error) return null;
+      await (supabase as any).from("projects").delete().eq("id", project.id);
+      return {
+        status: "error" as const,
+        message: `Could not create the project's ${what}: ${error.message}`,
+      };
+    };
+
     if (data.forkFiles && data.forkFiles.length > 0) {
-      await (supabase as any).from("project_files").insert(
+      const failed = await seedFiles(
         data.forkFiles.map((f: any) => ({
           project_id: project.id,
           path: f.path,
           content: f.content,
           language: f.language ?? "plaintext",
         })),
+        "copied files",
       );
+      if (failed) return failed;
       return { status: "ok" as const, project };
     }
 
@@ -258,20 +287,24 @@ export async function createProject(data: any) {
         }
       }
       if (templateFiles && templateFiles.length > 0) {
-        await (supabase as any).from("project_files").insert(
+        const failed = await seedFiles(
           templateFiles.map((f: { path: string; content: string; language: string }) => ({
             project_id: project.id,
             path: f.path,
             content: f.content,
             language: f.language,
           })),
+          "template files",
         );
+        if (failed) return failed;
       }
     } else {
       const starterFiles = getStarterFiles(data.name, framework);
-      await (supabase as any).from("project_files").insert(
+      const failed = await seedFiles(
         starterFiles.map((f) => ({ project_id: project.id, ...f })),
+        "starter files",
       );
+      if (failed) return failed;
     }
 
     return { status: "ok" as const, project };
