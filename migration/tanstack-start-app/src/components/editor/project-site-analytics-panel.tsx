@@ -84,7 +84,7 @@ function KpiTile({
       onClick={onClick}
       className={`flex-1 min-w-[120px] text-left rounded-xl border p-3 transition-colors ${
         selected
-          ? "border-[#0066FF]/50 bg-[#0066FF]/5"
+          ? "border-[#1F55F1]/50 bg-[#1F55F1]/5"
           : "border-border/60 hover:bg-muted/30"
       }`}
     >
@@ -121,7 +121,7 @@ function BreakdownTile({
             return (
               <div key={r.label} className="relative">
                 <div
-                  className="absolute inset-y-0 left-0 rounded-md bg-[#0066FF]/15"
+                  className="absolute inset-y-0 left-0 rounded-md bg-[#1F55F1]/15"
                   style={{ width: `${pct}%` }}
                 />
                 <div className="relative flex items-center justify-between px-2 py-1 text-[11px]">
@@ -274,8 +274,8 @@ export function ProjectSiteAnalyticsPanel({ project }: { project: Project }) {
               <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -22, bottom: 0 }}>
                 <defs>
                   <linearGradient id="visitorsArea" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#0066FF" stopOpacity={0.35} />
-                    <stop offset="100%" stopColor="#0066FF" stopOpacity={0} />
+                    <stop offset="0%" stopColor="#1F55F1" stopOpacity={0.35} />
+                    <stop offset="100%" stopColor="#1F55F1" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <XAxis
@@ -303,7 +303,7 @@ export function ProjectSiteAnalyticsPanel({ project }: { project: Project }) {
                 <Area
                   type="monotone"
                   dataKey={activeMetric}
-                  stroke="#0066FF"
+                  stroke="#1F55F1"
                   strokeWidth={2}
                   fill="url(#visitorsArea)"
                 />

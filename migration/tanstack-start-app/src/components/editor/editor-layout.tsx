@@ -488,7 +488,17 @@ export function EditorLayout({
   useEffect(() => {
     if (isMobile) return;
     try {
-      const key = `react-resizable-panels:lifemark-editor-split-${project.id}`;
+      // Must match the PanelGroup autoSaveId below, version suffix included.
+      // It did not, for two versions: this guard was reading a key nothing
+      // ever wrote, so a saved zero-width chat column was never repaired.
+      const key = `react-resizable-panels:lifemark-editor-split-v3-${project.id}`;
+      // Superseded layouts are dead weight and would otherwise sit in
+      // localStorage forever, one entry per project.
+      for (const stale of ["", "-v2"]) {
+        localStorage.removeItem(
+          `react-resizable-panels:lifemark-editor-split${stale}-${project.id}`,
+        );
+      }
       const raw = localStorage.getItem(key);
       if (raw) {
         const parsed = JSON.parse(raw) as {
@@ -1683,11 +1693,11 @@ export function EditorLayout({
       ) : (
       /* ── Desktop layout ──────────────────────────────────────────────────── */
       <div className="flex-1 overflow-hidden">
-        <PanelGroup direction="horizontal" autoSaveId={`lifemark-editor-split-v2-${pid}`} className="h-full">
+        <PanelGroup direction="horizontal" autoSaveId={`lifemark-editor-split-v3-${pid}`} className="h-full">
           {/* Left Panel — Chat only (Lovable-style) */}
           <Panel
             ref={chatPanelRef}
-            defaultSize={28}
+            defaultSize={22}
             minSize={14}
             maxSize={50}
             collapsedSize={0}

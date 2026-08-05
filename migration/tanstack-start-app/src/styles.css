@@ -84,10 +84,20 @@
    ────────────────────────────────────────────────────────────────────────── */
 @layer base {
   :root {
-    --bg-base: oklch(0.99 0.004 95);
+    /* NEUTRAL, AND THE CANVAS SITS BELOW THE CARDS.
+       Measured off Lovable's editor rather than guessed: page #fafafa
+       (oklch 0.971 0 0), preview pane #f5f5f5, composer pure white — all at
+       chroma ZERO. Ours carried 0.003–0.004 chroma at hue 95, which is
+       yellow, so every surface read faintly cream and the editor looked warm
+       beside theirs.
+       The lightness ORDER matters as much as the hue. Their canvas is darker
+       than the things on it, so panels read as surfaces floating on a page.
+       Ours had the canvas at 0.99 and cards at 0.975 — the background was
+       brighter than the cards — which is why nothing appeared to lift off it. */
+    --bg-base: oklch(0.971 0 0);
     --bg-primary-pulse: oklch(1 0 0);
-    --bg-secondary-pulse: oklch(0.975 0.003 95);
-    --bg-muted: oklch(0.95 0.004 95);
+    --bg-secondary-pulse: oklch(1 0 0);
+    --bg-muted: oklch(0.955 0 0);
     --bg-translucent: oklch(1 0 0 / 0.6);
     --bg-accent: oklch(0.58 0.19 258);
     --bg-inverse: oklch(0.16 0.01 260);
@@ -281,11 +291,19 @@ section [style*="opacity: 0"] {
     0 4px 16px oklch(0 0 0 / 0.08),
     0 0 0 0.5px var(--border-translucent);
 }
+/* A RING, NOT A DROP SHADOW.
+   This was `0 8px 32px black/10%` + `0 2px 8px black/4%` — a heavy, floaty
+   shadow that made the composer look like it was hovering an inch above the
+   page. Lovable's equivalent surface has no drop shadow at all: measured, it
+   is two hairline rings, white then near-white, which reads as a crisp edge
+   rather than a lifted object. Now that the canvas is darker than the cards
+   (see --bg-base), the card already separates from the background on its own
+   and the shadow was doing nothing but adding weight. */
 .shadow-surface-xl {
   box-shadow:
-    0 8px 32px oklch(0 0 0 / 0.10),
-    0 2px 8px oklch(0 0 0 / 0.04),
-    0 0 0 0.5px var(--border-default);
+    0 0 0 1px oklch(1 0 0),
+    0 0 0 1.5px oklch(0.92 0 0),
+    0 1px 2px oklch(0 0 0 / 0.03);
 }
 
 .prose-pulse {
