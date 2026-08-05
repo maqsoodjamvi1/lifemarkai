@@ -7,7 +7,7 @@ interface DashboardHeroProps {
   firstName: string;
 }
 
-type Framework = "tanstack-start" | "react" | "next" | "vue" | "svelte";
+type Framework = "react" | "tanstack-start" | "next" | "vue" | "svelte";
 
 const SUGGESTIONS = [
   "SaaS dashboard with analytics and user management",
@@ -97,7 +97,7 @@ function HeroPromptCreateBox() {
       />
       <div className="flex flex-wrap items-center gap-2 px-3 pb-3">
         <div className="flex gap-1">
-          {(["tanstack-start", "react", "next", "vue", "svelte"] as const).map((fw) => (
+          {(["react", "tanstack-start", "next", "vue", "svelte"] as const).map((fw) => (
             <button
               key={fw}
               type="button"
