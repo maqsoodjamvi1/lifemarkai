@@ -148,7 +148,15 @@ export function LovableComposerInputArea({
 
       <LovableComposerCharacterCounter length={input.length} />
 
-      {!isLocked && !noCredits && (
+      {/* Only once there is something to estimate. This row used to render
+          whenever the user had credits and was not locked — which is almost
+          always — so an empty composer permanently carried a line reading
+          "Est. 1 credit" plus the card's 8px gap. That is the whole of the
+          29px by which our composer stood taller than Lovable's: theirs is
+          100px at rest (12 padding + 40 input + 8 gap + 28 footer + 12), ours
+          was 129. The estimate still appears the moment it can differ from the
+          baseline, which is the only moment anyone reads it. */}
+      {!isLocked && !noCredits && (input.length > 0 || hasAttachments || (contextFileCount ?? 0) > 0) && (
         <LovableComposerEstimatedCredits
           mode={rest.mode}
           inputLength={input.length}

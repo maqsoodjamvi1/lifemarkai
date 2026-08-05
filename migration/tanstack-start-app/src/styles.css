@@ -291,19 +291,37 @@ section [style*="opacity: 0"] {
     0 4px 16px oklch(0 0 0 / 0.08),
     0 0 0 0.5px var(--border-translucent);
 }
-/* A RING, NOT A DROP SHADOW.
-   This was `0 8px 32px black/10%` + `0 2px 8px black/4%` — a heavy, floaty
-   shadow that made the composer look like it was hovering an inch above the
-   page. Lovable's equivalent surface has no drop shadow at all: measured, it
-   is two hairline rings, white then near-white, which reads as a crisp edge
-   rather than a lifted object. Now that the canvas is darker than the cards
-   (see --bg-base), the card already separates from the background on its own
-   and the shadow was doing nothing but adding weight. */
+/* THREE RINGS AND A SIX-STOP RAMP — read off Lovable's computed style, not
+   approximated. This was `0 8px 32px black/10%` + `0 2px 8px black/4%`: two
+   stops, one of them heavy, which made the composer look like it was hovering
+   an inch above the page. An earlier pass at parity replaced it with two
+   hairline rings and nothing else, on the guess that Lovable used no drop
+   shadow at all. That guess was wrong — this is the measured value.
+
+   The structure is worth naming, because it is not obvious. The first three
+   stops are rings at zero blur: white, a near-white hairline, then a warm grey
+   at 16%. Together they draw a crisp edge that survives both on white cards
+   and against the slightly darker canvas. The remaining six are a ramp — each
+   roughly doubling the blur while pulling the spread further negative, and
+   every one at the SAME 0.04 alpha. Stacking equal-alpha layers that way
+   approximates real light falloff, which a single large blur cannot; that is
+   the difference between reading as "floating" and reading as "resting". The
+   uniform alpha also stops the shadow developing a visible edge as it fades.
+
+   Do not merge these stops to shorten the declaration. The cost is a long
+   line; the benefit is that every card in the editor sits at the right
+   apparent height. */
 .shadow-surface-xl {
   box-shadow:
     0 0 0 1px oklch(1 0 0),
-    0 0 0 1.5px oklch(0.92 0 0),
-    0 1px 2px oklch(0 0 0 / 0.03);
+    0 0 0 1px oklch(0.9851 0 107),
+    0 0 0 2px oklch(0.5674 0.009 106.68 / 0.16),
+    0 2px 1px 0 oklch(0 0 0 / 0.04),
+    0 2px 1px -0.5px oklch(0 0 0 / 0.04),
+    0 4px 3px -1.5px oklch(0 0 0 / 0.04),
+    0 7px 6px -3px oklch(0 0 0 / 0.04),
+    0 13px 12px -6px oklch(0 0 0 / 0.04),
+    0 25px 24px -12px oklch(0 0 0 / 0.04);
 }
 
 .prose-pulse {
