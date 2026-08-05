@@ -1,11 +1,11 @@
 import {
   diagnoseBrokenImports,
   type DiagnosableFile,
-} from "./diagnose-imports";
+} from "./diagnose-imports.ts";
 import {
   diagnoseRuntimeErrors,
-} from "./diagnose-runtime";
-import type { PreviewRuntimeError } from "./preview-error-bridge";
+} from "./diagnose-runtime.ts";
+import type { PreviewRuntimeError } from "./preview-error-bridge.ts";
 
 export function buildPreviewDiagnosis(
   files: DiagnosableFile[],

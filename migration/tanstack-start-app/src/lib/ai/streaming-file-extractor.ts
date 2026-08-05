@@ -28,7 +28,17 @@ export class StreamingFileExtractor {
   private inString = false;
   private escape = false;
 
-  constructor(private readonly onFile: OnFileExtracted) {}
+  // Written out longhand rather than as a `private readonly` constructor
+  // parameter property. Parameter properties are the one TypeScript feature
+  // that needs real emit rather than type stripping, so `node --test
+  // --experimental-strip-types` throws ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX on
+  // this line and takes every test that transitively imports this file with
+  // it. Identical at runtime; keeps the file testable.
+  private readonly onFile: OnFileExtracted;
+
+  constructor(onFile: OnFileExtracted) {
+    this.onFile = onFile;
+  }
 
   /**
    * Feed the next chunk of the stream into the extractor.

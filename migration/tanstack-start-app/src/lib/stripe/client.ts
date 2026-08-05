@@ -1,5 +1,5 @@
 import Stripe from "stripe";
-import { PLANS, CREDIT_PACKS, type PlanId } from "./plans";
+import { PLANS, CREDIT_PACKS, type PlanId } from "./plans.ts";
 
 export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: "2024-06-20",

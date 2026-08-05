@@ -14,7 +14,7 @@
  * - E2B SDK is dependency-optional (dynamic import).
  */
 
-import type { TscDiagnostic } from "./tsc-diagnostics";
+import type { TscDiagnostic } from "./tsc-diagnostics.ts";
 
 export type { TscDiagnostic };
 
@@ -183,9 +183,9 @@ export interface SandboxProvider {
   kill(sandboxId: string): Promise<void>;
 }
 
-import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared";
-import { ModalSandboxProvider } from "./modal";
-import { DockerSandboxProvider } from "./docker";
+import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared.ts";
+import { ModalSandboxProvider } from "./modal.ts";
+import { DockerSandboxProvider } from "./docker.ts";
 export {
   detectSandboxStart,
   sandboxNameForProject,
@@ -194,7 +194,7 @@ export {
   getPreviewProbeState,
   forgetPreviewProbe,
 } from "./shared";
-export { ModalSandboxProvider } from "./modal";
+export { ModalSandboxProvider } from "./modal.ts";
 
 const DEFAULT_PORT = 3000;
 

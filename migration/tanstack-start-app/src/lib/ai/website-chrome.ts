@@ -33,7 +33,7 @@ import {
   deriveBrand,
   siteFooterSource as footerSource,
   siteHeaderSource as headerSource,
-} from "@/lib/templates/site-chrome";
+} from "../templates/site-chrome.ts";
 
 export interface ChromeFile {
   path: string;

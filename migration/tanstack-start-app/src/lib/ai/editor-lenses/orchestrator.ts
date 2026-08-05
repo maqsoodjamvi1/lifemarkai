@@ -15,7 +15,7 @@
  */
 import { generateAI } from "@/lib/ai/generate";
 import type { AIMessage } from "@/lib/ai/provider";
-import { getRole, resolveTier, TEAM_ROLE_IDS } from "./roles";
+import { getRole, resolveTier, TEAM_ROLE_IDS } from "./roles.ts";
 import type {
   AgentRoleId,
   AutonomyGates,

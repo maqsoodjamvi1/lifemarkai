@@ -1,4 +1,4 @@
-import type { AIModel } from "./provider";
+import type { AIModel } from "./provider.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OpenRouter-first model lineup. Router slugs keep LifemarkAI from being pinned

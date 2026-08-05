@@ -48,10 +48,10 @@ import type {
   SandboxRunResult,
   TypecheckResult,
 } from "./index";
-import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared";
-import { SYNC_MANIFEST, filesToPrune } from "./prune-files";
-import { parseTscOutput } from "./tsc-diagnostics";
-import { dependenciesAlreadySatisfied } from "./deps-satisfied";
+import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared.ts";
+import { SYNC_MANIFEST, filesToPrune } from "./prune-files.ts";
+import { parseTscOutput } from "./tsc-diagnostics.ts";
+import { dependenciesAlreadySatisfied } from "./deps-satisfied.ts";
 
 const DEV_LOG = "/tmp/lifemark-dev.log";
 

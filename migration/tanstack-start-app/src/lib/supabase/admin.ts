@@ -1,2 +1,2 @@
 // Admin client re-export for backwards compatibility
-export { createAdminClient } from "./server";
+export { createAdminClient } from "./server.ts";
