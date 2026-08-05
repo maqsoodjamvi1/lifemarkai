@@ -393,6 +393,50 @@ export async function handleAiAgent(req: Request) {
           projectFileMap.set(path, { path, content: String(file.content ?? ""), language: detectLanguage(path) });
         }
 
+        // ── Pre-agent snapshot ───────────────────────────────────────────────
+        //
+        // The chat build route has taken one of these before every turn for a
+        // long time; this route never did, and this route is where most edits
+        // to a real project actually go — the client switches to it as soon as
+        // the project has any user-authored files. So the default editing path
+        // was the one with no way back.
+        //
+        // It matters more here than in chat, because the agent is the only
+        // caller that issues real DELETEs against project_files. An agent that
+        // removed or rewrote the wrong file left nothing to restore, and the
+        // Undo button made it worse rather than better: with no snapshot from
+        // this turn, Undo fetched the most recent snapshot in the project — one
+        // from some earlier chat build — and silently threw away every agent
+        // turn since.
+        //
+        // Best-effort by design: a snapshot failure must not cost the user
+        // their turn. But it is awaited, because a snapshot written after the
+        // agent has already started deleting files is not a snapshot.
+        let preAgentSnapshotId: string | null = null;
+        {
+          const current = Array.from(projectFileMap.values());
+          if (current.length > 0) {
+            try {
+              const { data: preSnap } = await (supabase as any)
+                .from("project_snapshots")
+                .insert({
+                  project_id: projectId,
+                  user_id: user.id,
+                  label: `Auto-save before: ${String(rawTask ?? task).slice(0, 60)}`,
+                  is_baseline: true,
+                  files: current,
+                  patches: null,
+                  parent_id: null,
+                })
+                .select("id")
+                .single();
+              preAgentSnapshotId = (preSnap as { id: string } | null)?.id ?? null;
+            } catch {
+              preAgentSnapshotId = null; // never fail the turn over a snapshot
+            }
+          }
+        }
+
         const result = await runAgent({
           task,
           projectId,
@@ -459,12 +503,23 @@ export async function handleAiAgent(req: Request) {
           onFileDelete: async (path: string) => {
             producedBillableWork = true;
             const cleanPath = path.replace(/\\/g, "/").replace(/^\/+/, "");
-            projectFileMap.delete(cleanPath);
-            await (supabase as any)
+            const { error: deleteError } = await (supabase as any)
               .from("project_files")
               .delete()
               .eq("project_id", projectId)
               .eq("path", cleanPath);
+
+            // Report the truth. An unchecked delete meant a failed one still
+            // announced "Deleted: <path>" to the user and dropped the file from
+            // the agent's own working map — so the agent proceeded as though it
+            // were gone, while the project and the preview still had it. That
+            // divergence is worse than the failure: the next turn is reasoning
+            // about a file set that does not exist.
+            if (deleteError) {
+              send({ fileDeleteFailed: { path: cleanPath, error: deleteError.message } });
+              return;
+            }
+            projectFileMap.delete(cleanPath);
             send({ fileDeleted: { path: cleanPath } });
           },
         });
@@ -570,6 +625,12 @@ export async function handleAiAgent(req: Request) {
                 files_changed: filesChanged,
                 agent_trace: traceSteps,
                 ...(workSeconds ? { work_seconds: workSeconds } : {}),
+                // Carries the per-message "Revert to this version" affordance,
+                // which agent turns simply did not have. Without it the only
+                // recovery was the global Undo, which restored whatever the
+                // last CHAT build had saved — usually far further back than the
+                // user intended, and silently.
+                ...(preAgentSnapshotId ? { snapshot_id: preAgentSnapshotId } : {}),
               },
             },
           ],

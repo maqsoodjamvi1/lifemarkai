@@ -1356,13 +1356,38 @@ export function ChatPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ snapshotId: snapshot.id, projectId: project.id }),
       });
-      if (!restoreRes.ok) throw new Error("Restore failed");
-      const { files: restoredFiles } = await restoreRes.json();
-      if (restoredFiles) onFilesUpdate(restoredFiles);
+      const payload = (await restoreRes.json().catch(() => null)) as
+        | { status?: string; message?: string; files?: unknown[] }
+        | null;
+
+      // "Nothing to undo" used to be the message for EVERY failure here,
+      // including a restore that 500'd — which, given the restore route deletes
+      // before it inserts, is precisely the moment the user most needs to know
+      // something went wrong rather than being told there was nothing to do.
+      if (!restoreRes.ok || payload?.status === "error") {
+        throw new Error(
+          payload?.message || `Restore failed (${restoreRes.status})`,
+        );
+      }
+
+      const restoredFiles = payload?.files;
+      // `replace: true` is not optional. A revert that REMOVES files is the
+      // normal case, and without it the merge heuristic keeps the deleted files
+      // in the tree and keeps syncing them to the sandbox — so the revert
+      // appears not to have worked.
+      if (Array.isArray(restoredFiles) && restoredFiles.length > 0) {
+        onFilesUpdate(restoredFiles as ProjectFile[], { replace: true });
+      }
       setCanUndo(false);
       toast({ title: "Undone", description: `Restored: ${snapshot.label ?? "previous state"}` });
-    } catch {
-      toast({ title: "Nothing to undo", variant: "destructive" });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const nothingToUndo = /no snapshot/i.test(message);
+      toast({
+        title: nothingToUndo ? "Nothing to undo" : "Undo failed",
+        description: nothingToUndo ? undefined : message,
+        variant: "destructive",
+      });
     } finally {
       setUndoing(false);
     }
@@ -1388,17 +1413,38 @@ export function ChatPanel({
           body: JSON.stringify({ snapshotId, projectId: project.id, confirmSchema: true }),
         });
       }
-      if (!res.ok) throw new Error(`Restore failed (${res.status})`);
-      const { message: restoreMsg } = (await res.json()) as { message?: string };
+      const restorePayload = (await res.json().catch(() => null)) as
+        | { status?: string; message?: string }
+        | null;
+      // The route can answer 200 with status:"error" — it refuses a restore
+      // that would empty the project, and reports a failed insert after it has
+      // already put the files back. Reading only res.ok would show "Reverted"
+      // over a project that was not.
+      if (!res.ok || restorePayload?.status === "error") {
+        throw new Error(restorePayload?.message || `Restore failed (${res.status})`);
+      }
+      const restoreMsg = restorePayload?.message;
 
       // Refresh files from DB (same pattern as triggerAutoFix)
       const supabase = createClient();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: updatedFiles } = await (supabase as any)
+      const { data: updatedFiles, error: refreshError } = await (supabase as any)
         .from("project_files")
         .select("*")
         .eq("project_id", project.id);
-      if (updatedFiles) onFilesUpdate(updatedFiles);
+      if (refreshError) {
+        // The restore succeeded server-side; only the refresh failed. Saying so
+        // beats leaving the editor showing pre-revert content that the user's
+        // next keystroke would then write back over the restored files.
+        toast({
+          title: "Reverted — reload to see it",
+          description: "The revert was applied but the editor could not refresh.",
+        });
+      }
+      // replace:true — a revert that removes files must remove them here too.
+      if (Array.isArray(updatedFiles) && updatedFiles.length > 0) {
+        onFilesUpdate(updatedFiles, { replace: true });
+      }
       window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
         detail: { files: updatedFiles ?? undefined, reason: "project-reverted" },
       }));
