@@ -22,6 +22,32 @@ export type PreviewGuardPhase = "idle" | "healthy" | "frozen" | "healing";
  */
 const RESUME_GRACE_MS = 2_500;
 
+/**
+ * Hard ceiling on the "Self-repairing…" state.
+ *
+ * Entering `healing` is cheap — a click, or an auto-heal — but LEAVING it
+ * depends on someone else eventually calling `completeHealing()` or
+ * `failHealing()`. Every one of those callers is a different component
+ * reacting to a window event, and each has its own early returns: the chat
+ * panel drops the heal prompt when credits are exhausted or a build is
+ * already streaming, a navigation unmounts the listener mid-repair, a
+ * network error skips the dispatch. When any of those fire, nothing calls
+ * back, `freezePreview` stays true, and the overlay shows a spinner with no
+ * "Try to fix" button — a one-way door out of a working editor.
+ *
+ * Rather than chase every caller (and every future one), this timer makes
+ * the state unable to be permanent: after the ceiling we fall back to
+ * `frozen`, which still shows the errors but restores "Try to fix" and
+ * "Resume". A repair that really is still running will call
+ * `completeHealing()` when it lands and clear the banner anyway, so a
+ * false timeout costs the user nothing but an early button.
+ *
+ * 90s is past the p99 of a real /api/ai/fix round-trip (model call, file
+ * write, preview reboot, 12s settle wait) so a healthy repair is never
+ * interrupted.
+ */
+const HEAL_TIMEOUT_MS = 90_000;
+
 export interface UsePreviewErrorGuardOptions {
   /** Preview iframe ref (WebContainer or Sandpack) — optional source filter */
   iframeRef?: React.RefObject<HTMLIFrameElement | null>;
@@ -68,6 +94,34 @@ export function usePreviewErrorGuard(
   const healingRef = useRef(false);
   /** Pending auto-resume; see handlePreviewReady. */
   const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Ceiling on `healing`; see HEAL_TIMEOUT_MS. */
+  const healTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const disarmHealWatchdog = useCallback(() => {
+    if (healTimerRef.current) {
+      clearTimeout(healTimerRef.current);
+      healTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Enter healing and guarantee an exit. Every path that sets
+   * `healingRef.current = true` goes through here so none of them can leave
+   * the overlay spinning forever when its completion callback never arrives.
+   */
+  const beginHealing = useCallback(() => {
+    healingRef.current = true;
+    disarmHealWatchdog();
+    healTimerRef.current = setTimeout(() => {
+      healTimerRef.current = null;
+      if (!healingRef.current) return; // finished normally in the meantime
+      healingRef.current = false;
+      // Back to `frozen`, not `healthy`: the errors were never proven fixed,
+      // so we keep showing them — but with the repair and resume controls the
+      // healing overlay hides.
+      setPhase((prev) => (prev === "healing" ? "frozen" : prev));
+    }, HEAL_TIMEOUT_MS);
+  }, [disarmHealWatchdog]);
   // Keep heal callback in a ref so flushReport/startHealing stay referentially
   // stable — an inline onHealRequest from PreviewPanel used to recreate the
   // whole API object every render and thrash dependent effects.
@@ -109,11 +163,11 @@ export function usePreviewErrorGuard(
     if (autoHealRef.current && onHealRequestRef.current) {
       const prompt = buildHealingPrompt(r.errors);
       if (!prompt) return;
-      healingRef.current = true;
+      beginHealing();
       setPhase("healing");
       onHealRequestRef.current(prompt, r);
     }
-  }, [buildReport]);
+  }, [buildReport, beginHealing]);
 
   const cancelAutoResume = useCallback(() => {
     if (resumeTimerRef.current) {
@@ -197,13 +251,14 @@ export function usePreviewErrorGuard(
     }
     if (errorsRef.current.length === 0) {
       healingRef.current = false;
+      disarmHealWatchdog();
       setReport((prev) => (prev === null ? prev : null));
       setPhase((prev) => (prev === "healthy" ? prev : "healthy"));
     } else {
       // Real errors remain — refresh the report without the retracted kind.
       setReport(buildReport());
     }
-  }, [buildReport]);
+  }, [buildReport, disarmHealWatchdog]);
 
   const parseLegacyPreviewMessage = useCallback((data: unknown): PreviewRuntimeError | null => {
     if (!data || typeof data !== "object") return null;
@@ -256,27 +311,34 @@ export function usePreviewErrorGuard(
     strictIframeSource,
   ]);
 
-  // Never leave a resume timer running past unmount.
-  useEffect(() => cancelAutoResume, [cancelAutoResume]);
+  // Never leave a timer running past unmount.
+  useEffect(
+    () => () => {
+      cancelAutoResume();
+      disarmHealWatchdog();
+    },
+    [cancelAutoResume, disarmHealWatchdog],
+  );
 
   const clearErrors = useCallback(() => {
     errorsRef.current = [];
     seenErrorsRef.current.clear();
     healingRef.current = false;
     cancelAutoResume();
+    disarmHealWatchdog();
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
     setReport((prev) => (prev === null ? prev : null));
     setPhase((prev) => (prev === "healthy" ? prev : "healthy"));
-  }, [cancelAutoResume]);
+  }, [cancelAutoResume, disarmHealWatchdog]);
 
   const enterHealingPhase = useCallback(() => {
     if (healingRef.current) return;
-    healingRef.current = true;
+    beginHealing();
     setPhase((prev) => (prev === "healing" ? prev : "healing"));
-  }, []);
+  }, [beginHealing]);
 
   const startHealing = useCallback(() => {
     const r = buildReport();
@@ -293,8 +355,13 @@ export function usePreviewErrorGuard(
 
   const failHealing = useCallback(() => {
     healingRef.current = false;
-    setPhase((prev) => (prev === "frozen" ? prev : "frozen"));
-  }, []);
+    disarmHealWatchdog();
+    // Only ever a DEMOTION out of healing. This used to force "frozen" from
+    // any phase, so a heal-failed that arrived late — after the preview had
+    // already recovered and the guard had cleared — re-froze a working
+    // preview and showed an error card for errors that no longer existed.
+    setPhase((prev) => (prev === "healing" ? "frozen" : prev));
+  }, [disarmHealWatchdog]);
 
   const freezePreview = phase === "frozen" || phase === "healing";
 

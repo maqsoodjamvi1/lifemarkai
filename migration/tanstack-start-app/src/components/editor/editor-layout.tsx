@@ -876,20 +876,62 @@ export function EditorLayout({
   // Live keystrokes are debounced: one state sync + one PATCH per idle period,
   // instead of a whole-shell re-render + API call on EVERY Monaco keystroke.
   // Explicit saves (⌘S in CodePanel) remain immediate via handleCodeSave.
+  /**
+   * A failed save has to be loud.
+   *
+   * This was `if (res.ok) setLastSaved(...)` with no else, and a catch that only
+   * reached the console. So a 401 from an expired session, a 404 or a 500 were
+   * indistinguishable from success: the user kept typing while the "Saved"
+   * timestamp sat frozen at their last real write — which reads as "nothing has
+   * changed since then", not "nothing has saved since then" — and the work was
+   * gone on reload. Session expiry is the common case, and it is precisely the
+   * one where someone types for an hour first.
+   *
+   * Deduped by failure kind, because this runs on a 500ms keystroke debounce and
+   * a toast per keystroke would be its own bug.
+   */
+  const saveFailureRef = useRef<string | null>(null);
   const persistFileContent = useCallback(
     async (fileId: string, content: string) => {
+      const fail = (key: string, title: string, description: string) => {
+        if (saveFailureRef.current === key) return; // already told them
+        saveFailureRef.current = key;
+        toast({ title, description, variant: "destructive" });
+      };
+
       try {
         const res = await fetch(`/api/projects/${project.id}/files`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fileId, content }),
         });
-        if (res.ok) setLastSaved(new Date());
-      } catch (e) {
-        console.error("Save failed:", e);
+        if (res.ok) {
+          setLastSaved(new Date());
+          saveFailureRef.current = null;
+          return;
+        }
+        if (res.status === 401 || res.status === 403) {
+          fail(
+            "auth",
+            "Your session expired — changes are NOT saving",
+            "Sign in again in another tab, then keep working here. Do not reload this tab until a save succeeds.",
+          );
+          return;
+        }
+        fail(
+          `http-${res.status}`,
+          "Changes are NOT saving",
+          `The server rejected the save (${res.status}). Copy anything important before reloading this tab.`,
+        );
+      } catch {
+        fail(
+          "offline",
+          "Changes are NOT saving",
+          "You appear to be offline. Edits exist only in this tab until the connection returns.",
+        );
       }
     },
-    [project.id]
+    [project.id, toast]
   );
 
   const pendingCodeChangeRef = useRef<{
