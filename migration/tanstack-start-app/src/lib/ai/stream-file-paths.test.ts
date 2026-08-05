@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createStreamedFilePathTracker } from "./stream-file-paths";
+import { createStreamedFilePathTracker } from "./stream-file-paths.ts";
 
 test("tracks file paths split across streaming chunks", () => {
   const tracker = createStreamedFilePathTracker();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeArrayResponse } from "./array-response";
+import { normalizeArrayResponse } from "./array-response.ts";
 
 test("normalizeArrayResponse accepts canonical bare arrays", () => {
   const projects = [{ id: "one" }];

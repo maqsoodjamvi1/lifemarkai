@@ -8,7 +8,7 @@
  * the detected app type + what the project already contains. Rotating pools
  * keep chips fresh across builds without a model call.
  */
-import { classifyBuildIntent, type BuildAppType } from "./build-intent";
+import { classifyBuildIntent, type BuildAppType } from "./build-intent.ts";
 
 const GENERIC_POOL = [
   "Add a dark mode toggle",

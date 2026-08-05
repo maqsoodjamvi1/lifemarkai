@@ -8,8 +8,8 @@
  * builder. Robust: heuristic fallback + always-include entries + hard budgets,
  * and small projects skip selection entirely.
  */
-import { generateAI } from "./generate";
-import { getFastAiModel } from "./model-defaults";
+import { generateAI } from "./generate.ts";
+import { getFastAiModel } from "./model-defaults.ts";
 
 export interface FileRef {
   path: string;

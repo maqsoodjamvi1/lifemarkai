@@ -3,7 +3,7 @@ import {
   type WebContainerPatchOpts,
 } from "./patch-vite-for-webcontainer";
 import { isTanStackStartProject } from "@/lib/templates/tanstack-start-scaffold";
-import { ensureTypecheckToolchain } from "./ensure-toolchain";
+import { ensureTypecheckToolchain } from "./ensure-toolchain.ts";
 import { LOVABLE_VITE_DEV_DEPENDENCIES } from "@/lib/templates/lovable-vite-scaffold";
 
 /**

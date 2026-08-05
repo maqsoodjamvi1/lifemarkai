@@ -8,7 +8,7 @@
  */
 import { MODEL_TIERS } from "@/lib/ai/editor-intelligence";
 import type { AIModel } from "@/lib/ai/provider";
-import type { AgentRole, AgentRoleId, ModelTierName, ResolvedModel } from "./types";
+import type { AgentRole, AgentRoleId, ModelTierName, ResolvedModel } from "./types.ts";
 
 /** Resolve a tier name to a concrete provider model. */
 export function resolveTier(tier: ModelTierName): ResolvedModel {

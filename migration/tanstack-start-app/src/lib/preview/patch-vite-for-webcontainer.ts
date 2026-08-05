@@ -171,7 +171,7 @@ export function patchReactPluginBabelConfig(content: string): string {
   );
 }
 
-import { injectGuestCommentsIntoHtml } from "./inject-guest-comments";
+import { injectGuestCommentsIntoHtml } from "./inject-guest-comments.ts";
 import {
   injectVebBridgeIntoHtml,
   injectVebBridgeIntoJsxDocument,

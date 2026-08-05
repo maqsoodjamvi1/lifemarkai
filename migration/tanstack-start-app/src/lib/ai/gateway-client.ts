@@ -13,8 +13,8 @@
  *   return generateAI(options);   // fallback
  */
 
-import type { GenerateOptions, GenerateResult, AIModel } from "./provider";
-import { getDefaultAiModel } from "./model-defaults";
+import type { GenerateOptions, GenerateResult, AIModel } from "./provider.ts";
+import { getDefaultAiModel } from "./model-defaults.ts";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 

@@ -1,8 +1,8 @@
-import { salvageFilesFromStreamJson } from "./streaming-file-extractor";
-import { ensureCommonGeneratedSupportFiles } from "./generated-support-files";
-import { checkJsxTagBalance, findUnterminatedStrings } from "./jsx-balance";
-import { assessWebsiteChrome } from "./website-chrome";
-import { parseFileUpdateBlocks } from "./xml-stream-parser";
+import { salvageFilesFromStreamJson } from "./streaming-file-extractor.ts";
+import { ensureCommonGeneratedSupportFiles } from "./generated-support-files.ts";
+import { checkJsxTagBalance, findUnterminatedStrings } from "./jsx-balance.ts";
+import { assessWebsiteChrome } from "./website-chrome.ts";
+import { parseFileUpdateBlocks } from "./xml-stream-parser.ts";
 
 export interface ValidationError {
   type: string;
