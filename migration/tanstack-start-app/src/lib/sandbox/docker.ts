@@ -46,9 +46,11 @@ import type {
   SandboxFile,
   SandboxProvider,
   SandboxRunResult,
+  TypecheckResult,
 } from "./index";
 import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared";
 import { SYNC_MANIFEST, filesToPrune } from "./prune-files";
+import { parseTscOutput } from "./tsc-diagnostics";
 
 const DEV_LOG = "/tmp/lifemark-dev.log";
 
@@ -1060,6 +1062,71 @@ export class DockerSandboxProvider implements SandboxProvider {
     // install, vite restart) on real changes instead of on what the client
     // happened to send — the editor's baseline sync sends the FULL file set.
     return { written: toWrite.map((f) => norm(f.path)) };
+  }
+
+  /**
+   * Type-check the project in place, with its own installed dependencies.
+   *
+   * This is the only correctness check in the system that can distinguish a
+   * real import from a plausible-looking one. Everything else — the ~580 lines
+   * of `validateGeneratedFiles`, the export-contract scanner, the JSX balance
+   * tokenizer — is a regex over source text, and no amount of regex can know
+   * whether `@tanstack/react-router` actually exports `Body` at the version
+   * this project installed. The compiler can, because it is reading the very
+   * `.d.ts` files sitting in this container.
+   *
+   * Deliberately NOT on the boot critical path. `tsc` on a generated app takes
+   * seconds, and blocking first paint on it would trade a real regression in
+   * perceived speed for a check whose findings are just as useful ten seconds
+   * later. Callers should fire this after the preview reports ready.
+   */
+  async typecheckProject(
+    sandboxId: string,
+    opts: { timeoutSec?: number } = {},
+  ): Promise<TypecheckResult> {
+    const timeoutSec = Math.max(10, Math.min(opts.timeoutSec ?? 90, 300));
+    const started = Date.now();
+
+    // `npx tsc` would try to DOWNLOAD TypeScript when the project has none,
+    // which on a sandbox with no npm registry access hangs until the timeout
+    // and on one with access silently installs a package the project never
+    // asked for. Probe for the locally installed binary instead, and report
+    // "unavailable" rather than inventing a toolchain.
+    const probe = await this.exec(
+      sandboxId,
+      `[ -x node_modules/.bin/tsc ] && echo LM_TSC_OK`,
+    );
+    if (!probe.stdout.includes("LM_TSC_OK")) {
+      return {
+        available: false,
+        diagnostics: [],
+        durationMs: Date.now() - started,
+        reason: "no local TypeScript in the project",
+      };
+    }
+
+    // --pretty false is required, not cosmetic: the exec allocates a TTY, so
+    // tsc's default pretty output would come back colour-escaped and split
+    // across several lines per diagnostic, which is unparseable.
+    // Exit code 124 is `timeout`'s signal that it killed the process.
+    const res = await this.exec(
+      sandboxId,
+      `timeout ${timeoutSec} node_modules/.bin/tsc --noEmit --pretty false 2>&1; echo "LM_TSC_EXIT:$?"`,
+    );
+
+    const raw = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+    const exitMatch = raw.match(/LM_TSC_EXIT:(\d+)/);
+    const exitCode = exitMatch ? Number(exitMatch[1]) : undefined;
+    const timedOut = exitCode === 124 || exitCode === 137;
+
+    return {
+      available: true,
+      diagnostics: parseTscOutput(raw.replace(/LM_TSC_EXIT:\d+\s*$/, ""), {
+        appDir: APP_DIR,
+      }),
+      durationMs: Date.now() - started,
+      timedOut,
+    };
   }
 
   async getPreviewUrl(sandboxId: string): Promise<string> {
