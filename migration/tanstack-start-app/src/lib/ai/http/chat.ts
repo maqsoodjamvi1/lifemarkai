@@ -20,6 +20,7 @@ import {
 import { buildTemplateRefinementBlock } from "@/lib/ai/template-refine";
 import { pickStarterTemplate } from "@/lib/templates/starter-catalog";
 import { buildDesignDirectionBlock } from "@/lib/ai/design-directions";
+import { isGreenfieldProject } from "@/lib/ai/scaffold-files";
 import { applyPatches, collapsePatchResults, parsePatchResponse } from "@/lib/ai/patch-applier";
 import { buildPersistedAssistantContent } from "@/lib/ai/persist-message-mode";
 import { persistChatTurnMessages } from "@/lib/ai/persist-chat-turn";
@@ -211,8 +212,15 @@ export async function handleAiChat(req: Request) {
     // In Build mode, "why is the cart empty?" / "explain how auth works" must
     // NOT regenerate the app. Downgrade informational queries to chat (cheaper
     // + prose answer); action requests ("add", "fix", "change"…) still build.
+    //
+    // Both downgrades are gated on the project containing REAL work, not on it
+    // containing files. A new project holds a 25-file scaffold, which used to
+    // satisfy `files.length > 0` and `files.length > 8` on the very first
+    // message — so a first build could be routed to the surgical patch
+    // pipeline and asked to find-and-replace inside a placeholder.
     let autoRoutedPatch = false;
-    if (mode === "build" && body.forceBuild !== true && Array.isArray(files) && files.length > 0 && typeof message === "string") {
+    const hasRealWork = Array.isArray(files) && !isGreenfieldProject(files);
+    if (mode === "build" && body.forceBuild !== true && hasRealWork && typeof message === "string") {
       try {
         const { isInformationalQuery, isSmallSurgicalEdit } = await import("@/lib/ai/build-intent");
         if (isInformationalQuery(message)) {
@@ -694,20 +702,40 @@ export async function handleAiChat(req: Request) {
       //  2. otherwise, on a first build, auto-detect the niche from the prompt
       //     ("ecommerce store like Shopify" → storefront baseline);
       //  3. if no niche matches (or it's a restyle), fall back to a design direction.
+      //
+      // `isGreenfieldProject`, NOT `files.length === 0`. Projects are created
+      // with a 25-file scaffold already in them, so the length test has been
+      // false on every first build since scaffolding was introduced — which
+      // silently skipped both the starter template AND the design baseline for
+      // exactly the request that needed them most.
+      const greenfield = isGreenfieldProject(files);
       const autoTemplateId =
-        templateId ?? (files.length === 0 ? pickStarterTemplate(message) : null);
+        templateId ?? (greenfield ? pickStarterTemplate(message) : null);
       if (autoTemplateId) {
         systemPrompt += buildTemplateRefinementBlock(autoTemplateId);
-      } else if (files.length === 0 || isRestyleRequest) {
+      } else if (greenfield || isRestyleRequest) {
         systemPrompt += buildDesignDirectionBlock(message);
       }
 
       // ── Incremental edit safety (Lovable-style preservation) ────────────────
-      // On a follow-up build (project already has files), this is an EDIT, not a
-      // from-scratch rebuild. Without this, a full regeneration silently drops
-      // prior work — most painfully replacing real image URLs with placeholder
-      // icons. Instruct the model to preserve everything it isn't asked to change.
-      if (files.length > 0) {
+      // On a follow-up build (project already has REAL work in it), this is an
+      // EDIT, not a from-scratch rebuild. Without this, a full regeneration
+      // silently drops prior work — most painfully replacing real image URLs
+      // with placeholder icons. Instruct the model to preserve everything it
+      // isn't asked to change.
+      //
+      // The condition was `files.length > 0`, and that is the bug a customer
+      // reported as "I say hi and it never builds". Every project is born with
+      // a 25-file scaffold, so this branch fired on the FIRST message of every
+      // new project: the model was told, in capitals, "this is an edit to an
+      // EXISTING app, not a rebuild… return ONLY the files you actually change…
+      // keep existing copy, data, routes and component structure". Asked to
+      // edit a placeholder it had never seen a request for, it correctly
+      // concluded there was nothing to change and returned prose. The format
+      // retry then failed too, and the customer got "No files generated".
+      //
+      // Nothing was broken downstream. The model did as it was told.
+      if (!greenfield) {
         systemPrompt +=
           `\n\n---\n# INCREMENTAL EDIT — return ONLY the files you change (unchanged files are auto-preserved)\n` +
           `This is an edit to an EXISTING app, not a rebuild. Files are saved by PATH (merge/upsert), so any file you do NOT return is kept exactly as it is. Strict rules:\n` +
