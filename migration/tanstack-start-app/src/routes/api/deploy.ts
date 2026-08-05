@@ -92,6 +92,13 @@ async function deployToNetlify(
   const deadline = Date.now() + 60_000;
   let liveUrl = deploy.ssl_url || deploy.url || "";
 
+  // Falling out of this loop on the DEADLINE is not success. `liveUrl` was
+  // seeded from the create response, so the caller used to receive a URL,
+  // write status "live", set `projects.deployed_url`, clear the
+  // unpublished-changes dot and email the user "your app is live" — for a site
+  // that was still building, or had errored after we stopped watching. Throw
+  // instead, so a slow deploy is reported as unfinished rather than as done.
+  let ready = false;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 3000));
     const status = await netlifyFetch<NetlifyDeploy>(
@@ -99,11 +106,18 @@ async function deployToNetlify(
     );
     if (status.state === "ready") {
       liveUrl = status.ssl_url || status.url || liveUrl;
+      ready = true;
       break;
     }
     if (status.state === "error") {
       throw new Error(status.error_message ?? "Netlify build failed");
     }
+  }
+
+  if (!ready) {
+    throw new Error(
+      "Netlify is still building after 60 seconds. The deploy may still finish — check your Netlify dashboard before publishing again.",
+    );
   }
 
   return liveUrl;
@@ -158,20 +172,40 @@ async function deployToVercel(
   const deployId = deploy.id;
   let liveUrl = `https://${deploy.url}`;
 
+  // Same hazard as Netlify above, with one extra: `if (!statusRes.ok) break`
+  // treated a single transient 5xx from Vercel as "done", so one bad poll
+  // reported a mid-build deployment as live. Transient failures are now
+  // tolerated (keep polling until the deadline) and only a READY state counts
+  // as ready.
+  let ready = false;
+  let lastPollError: string | null = null;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 3000));
     const statusRes = await fetch(`${VERCEL_API}/v13/deployments/${deployId}`, {
       headers: { Authorization: `Bearer ${VERCEL_TOKEN}` },
     });
-    if (!statusRes.ok) break;
+    if (!statusRes.ok) {
+      lastPollError = `Vercel API ${statusRes.status}`;
+      continue;
+    }
+    lastPollError = null;
     const status = await statusRes.json() as VercelDeployment;
     if (status.readyState === "READY") {
       liveUrl = status.alias?.[0] ? `https://${status.alias[0]}` : `https://${status.url}`;
+      ready = true;
       break;
     }
     if (status.readyState === "ERROR" || status.readyState === "CANCELED") {
       throw new Error("Vercel deployment failed");
     }
+  }
+
+  if (!ready) {
+    throw new Error(
+      lastPollError
+        ? `Could not confirm the Vercel deploy finished (${lastPollError}). Check your Vercel dashboard before publishing again.`
+        : "Vercel is still building after 2 minutes. The deploy may still finish — check your Vercel dashboard before publishing again.",
+    );
   }
 
   return liveUrl;

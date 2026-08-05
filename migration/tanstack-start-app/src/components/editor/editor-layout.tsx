@@ -1153,10 +1153,55 @@ export function EditorLayout({
     if (viewMode === "code" || viewMode === "files") setMobilePaneActive("files");
   }, [isMobile, viewMode, rightPanel, leftChatOverlay]);
 
-  const handleEnvUpdateFile = useCallback((path: string, content: string) => {
-    setFiles((prev) => prev.map((f) => (f.path === path ? { ...f, content } : f)));
-    setActiveFile((prev) => (prev?.path === path ? { ...prev, content } : prev));
-  }, []);
+  /**
+   * Persist an .env file edited in the Env panel.
+   *
+   * This used to be `setFiles(...)` and nothing else — pure local state, no
+   * request. The panel called it, cleared its dirty badge and toasted
+   * "Development vars saved", so pasting a Supabase key or an API key looked
+   * exactly like a successful save and was gone on reload. There was already a
+   * persisting version of this next to `handleFileUpdate`; it was simply never
+   * wired up, and the local-only twin won by name.
+   *
+   * Worse when the file did not exist yet: `prev.map` matched nothing but
+   * still produced a new array, so the panel's `useEffect([files])` re-derived
+   * from `files`, found no .env.local and reset to defaults — the pasted
+   * values visibly disappeared one render after the success toast.
+   *
+   * Returns a promise so the panel can wait for the write instead of
+   * announcing it.
+   */
+  const handleEnvUpdateFile = useCallback(
+    async (path: string, content: string) => {
+      setFiles((prev) => {
+        const exists = prev.some((f) => f.path === path);
+        if (exists) return prev.map((f) => (f.path === path ? { ...f, content } : f));
+        return [
+          ...prev,
+          {
+            id: `env-${path}-${Date.now()}`,
+            project_id: project.id,
+            path,
+            content,
+            language: "dotenv",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          } as ProjectFile,
+        ];
+      });
+      setActiveFile((prev) => (prev?.path === path ? { ...prev, content } : prev));
+
+      // POST is the path-addressed upsert: the panel knows the path, and for a
+      // brand new .env.local there is no row id to PATCH.
+      const res = await fetch(`/api/projects/${project.id}/files`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path, content, language: "dotenv" }),
+      });
+      if (!res.ok) throw new Error(`Could not save ${path} (${res.status}).`);
+    },
+    [project.id],
+  );
 
   const handleMessagesUpdate = useCallback((newMessages: Message[]) => {
     setMessages(newMessages);

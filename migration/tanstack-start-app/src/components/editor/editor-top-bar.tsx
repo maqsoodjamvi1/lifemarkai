@@ -439,47 +439,90 @@ export function EditorTopBar({
     setTimeout(() => { renameInputRef.current?.select(); }, 30);
   }, [project.name]);
 
+  /**
+   * `fetch` only rejects on a TRANSPORT failure — an HTTP 401, 403, 404 or 500
+   * resolves normally. All three handlers below awaited a fetch and then went
+   * straight to their success path, so a rejected rename showed the new title
+   * (until reload) and a rejected DELETE navigated the user to the dashboard
+   * with no message at all. Someone deleting a project to remove customer data
+   * would believe it was gone.
+   *
+   * Session expiry is the usual trigger, and it is exactly the case where the
+   * user has been working for an hour first.
+   */
+  const patchProjectName = useCallback(
+    async (name: string) => {
+      const res = await fetch(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401 || res.status === 403
+            ? "Your session expired. Sign in again and retry."
+            : `The server rejected the change (${res.status}).`,
+        );
+      }
+    },
+    [project.id],
+  );
+
   const commitRename = useCallback(async () => {
     const trimmed = renameValue.trim();
     setIsRenaming(false);
     if (!trimmed || trimmed === project.name) return;
     try {
-      await fetch(`/api/projects/${project.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
-      });
+      await patchProjectName(trimmed);
       onRename?.(trimmed);
-    } catch {
-      toast({ title: "Failed to rename project", variant: "destructive" });
+    } catch (err) {
+      setRenameValue(project.name);
+      toast({
+        title: "Project was not renamed",
+        description: err instanceof Error ? err.message : "Please try again.",
+        variant: "destructive",
+      });
     }
-  }, [renameValue, project.name, project.id, onRename]);
+  }, [renameValue, project.name, patchProjectName, onRename]);
 
   const handleDeleteProject = useCallback(async () => {
     try {
-      await fetch(`/api/projects/${project.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/projects/${project.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401 || res.status === 403
+            ? "Your session expired. Sign in again and retry."
+            : `The server rejected the delete (${res.status}).`,
+        );
+      }
       setShowDeleteDialog(false);
       navigate({ to: "/dashboard" });
-    } catch {
-      toast({ title: "Failed to delete project", variant: "destructive" });
+    } catch (err) {
+      // Deliberately leave the dialog open: navigating away would tell the
+      // user the project is gone when it is not.
+      toast({
+        title: "Project was NOT deleted",
+        description: err instanceof Error ? err.message : "Please try again.",
+        variant: "destructive",
+      });
     }
-  }, [project.id, router]);
+  }, [project.id, navigate]);
 
   const handleRenameProject = useCallback(async () => {
     const trimmed = renameValue.trim();
     if (!trimmed || trimmed === project.name) { setShowRenameDialog(false); return; }
     try {
-      await fetch(`/api/projects/${project.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
-      });
+      await patchProjectName(trimmed);
       onRename?.(trimmed);
       setShowRenameDialog(false);
-    } catch {
-      toast({ title: "Failed to rename project", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Project was not renamed",
+        description: err instanceof Error ? err.message : "Please try again.",
+        variant: "destructive",
+      });
     }
-  }, [renameValue, project.name, project.id, onRename]);
+  }, [renameValue, project.name, patchProjectName, onRename]);
 
   const loadShareCollaborators = useCallback(async () => {
     setShareCollabLoading(true);
@@ -571,10 +614,35 @@ export function EditorTopBar({
     setTimeout(() => setShareCopied(false), 2000);
   }
 
-  // Poll deploy status while deploying
+  // Poll deploy status while deploying.
+  //
+  // The ceiling is the point. This loop only ever exited on live/failed/401,
+  // and there are real ways the deployment row never leaves "building": the
+  // queue path enqueues with nothing consuming it, and the fallback path
+  // fires its work in a `void (async () => …)()` AFTER the response is
+  // returned, so a recycled serverless instance never runs the update that
+  // would set either terminal state. The button then said "Publishing…"
+  // forever, the unpublished-changes dot never cleared, and reloading put the
+  // user straight back into it because the mount-time sync reads the same
+  // stuck row.
   useEffect(() => {
     if (deployStatus !== "deploying") return;
+    // 15 minutes: longer than any successful deploy we have measured,
+    // including a cold Vercel build, and short enough that nobody sits in
+    // front of it wondering.
+    const deadline = Date.now() + 15 * 60_000;
     const interval = setInterval(async () => {
+      if (Date.now() > deadline) {
+        clearInterval(interval);
+        setDeployStatus("failed");
+        toast({
+          title: "Publish is taking too long",
+          description:
+            "We stopped waiting after 15 minutes. It may still finish on its own — check your hosting dashboard, or press Publish again.",
+          variant: "destructive",
+        });
+        return;
+      }
       try {
         const res = await fetch(`/api/deploy/status?projectId=${project.id}`, { credentials: "include" });
         if (!res.ok) {
