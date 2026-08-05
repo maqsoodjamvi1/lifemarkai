@@ -42,11 +42,20 @@ const RESUME_GRACE_MS = 2_500;
  * `completeHealing()` when it lands and clear the banner anyway, so a
  * false timeout costs the user nothing but an early button.
  *
- * 90s is past the p99 of a real /api/ai/fix round-trip (model call, file
- * write, preview reboot, 12s settle wait) so a healthy repair is never
- * interrupted.
+ * Sizing this needs the REAL path, not the one it looks like. A heal does not
+ * call /api/ai/fix — it goes through the chat panel to /api/ai/chat as a build,
+ * which can spend several continuation rounds with the model, then auto-wire,
+ * then self-verify, then wait on a sandbox whose own readiness budget is 120s,
+ * then wait a further 12s for the preview to settle. 90s — the first number
+ * here — sat *below* the sandbox budget alone, so it fired during healthy
+ * repairs and offered a "Try to fix" button that could only answer "a build is
+ * already running". A backstop that trips on the normal path is not a
+ * backstop.
+ *
+ * Six minutes is past anything a successful repair has taken while still being
+ * shorter than a user's patience for a spinner that will never move.
  */
-const HEAL_TIMEOUT_MS = 90_000;
+const HEAL_TIMEOUT_MS = 360_000;
 
 export interface UsePreviewErrorGuardOptions {
   /** Preview iframe ref (WebContainer or Sandpack) — optional source filter */
@@ -311,11 +320,17 @@ export function usePreviewErrorGuard(
     strictIframeSource,
   ]);
 
-  // Never leave a timer running past unmount.
+  // Never leave a timer running past unmount. The debounce matters as much as
+  // the other two: a pending flushReport fires after cleanup, calls
+  // beginHealing, and arms a fresh watchdog on a component that is gone.
   useEffect(
     () => () => {
       cancelAutoResume();
       disarmHealWatchdog();
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
     },
     [cancelAutoResume, disarmHealWatchdog],
   );

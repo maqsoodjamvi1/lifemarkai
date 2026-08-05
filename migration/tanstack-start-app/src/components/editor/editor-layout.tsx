@@ -770,6 +770,29 @@ export function EditorLayout({
     timer: ReturnType<typeof setTimeout>;
   } | null>(null);
 
+  /**
+   * Contents this session has already held for a file: what it was when the
+   * user started typing, and everything we have sent to the server for it.
+   *
+   * Used to tell a genuine external rewrite from an echo. A file refetch that
+   * races an in-flight PATCH comes back with the PRE-patch text — different
+   * from the current local content, so a naive comparison reads it as
+   * "somebody rewrote this" and cancels the user's pending keystrokes with a
+   * message about the AI that is simply untrue. That text is one we have seen
+   * before; a real AI rewrite is not.
+   *
+   * Bounded per file — only the last few matter, and this lives for the whole
+   * editing session.
+   */
+  const seenContentRef = useRef<Map<string, string[]>>(new Map());
+  const rememberContent = useCallback((fileId: string, content: string) => {
+    const history = seenContentRef.current.get(fileId) ?? [];
+    if (history.includes(content)) return;
+    history.push(content);
+    if (history.length > 8) history.shift();
+    seenContentRef.current.set(fileId, history);
+  }, []);
+
   const handleFilesUpdate = useCallback((
     updatedFiles: ProjectFile[],
     opts?: { replace?: boolean },
@@ -843,7 +866,20 @@ export function EditorLayout({
     const pendingEdit = pendingCodeChangeRef.current;
     if (pendingEdit) {
       const pendingPath = prev.find((f) => f.id === pendingEdit.fileId)?.path;
-      if (pendingPath && changedPaths.includes(pendingPath)) {
+      const incoming = pendingPath
+        ? updatedFiles.find((f) => f.path === pendingPath)?.content
+        : undefined;
+      // Only a genuinely NEW body counts. A refetch that races an in-flight
+      // PATCH returns the pre-PATCH text, which differs from local content but
+      // is something this session has already held — cancelling on that threw
+      // away the user's keystrokes and blamed an AI rewrite that never
+      // happened. `seenContentRef` is what separates the two.
+      const external =
+        pendingPath != null &&
+        incoming != null &&
+        incoming !== pendingEdit.content &&
+        !(seenContentRef.current.get(pendingEdit.fileId) ?? []).includes(incoming);
+      if (external) {
         clearTimeout(pendingEdit.timer);
         pendingCodeChangeRef.current = null;
         toast({
@@ -930,7 +966,7 @@ export function EditorLayout({
    */
   const saveFailureRef = useRef<string | null>(null);
   const persistFileContent = useCallback(
-    async (fileId: string, content: string) => {
+    async (fileId: string, content: string, opts?: { explicit?: boolean }) => {
       /**
        * Report once per failure kind, then THROW.
        *
@@ -941,21 +977,32 @@ export function EditorLayout({
        * write that never landed. Callers that fire-and-forget (the keystroke
        * debounce, the unmount flush) attach `.catch` — the toast is their
        * report.
+       *
+       * Two details the first version got wrong:
+       *
+       * `explicit` — the dedupe exists because this runs on a 500ms keystroke
+       * debounce and a toast per keystroke would be its own bug. But it also
+       * silenced the ⌘S the user pressed *because* of the first toast. A save
+       * the user asked for always reports; only the automatic ones dedupe.
+       *
+       * `reported` on the error — the code panel has its own catch that
+       * toasts "Save failed". With the throw added, one failure produced two
+       * toasts, and the bare one was the less useful of the pair. The flag
+       * lets the caller stay quiet because it knows the user has already been
+       * told something specific.
        */
-      // The variable, not just the arrow, carries the `never` return type:
-      // TS only uses a call as a control-flow terminator when the annotation
-      // is on the declaration. Without it, `res` reads as possibly-unassigned
-      // after the catch.
       const fail: (key: string, title: string, description: string) => never = (
         key,
         title,
         description,
       ) => {
-        if (saveFailureRef.current !== key) {
+        if (opts?.explicit || saveFailureRef.current !== key) {
           saveFailureRef.current = key;
           toast({ title, description, variant: "destructive" });
         }
-        throw new Error(`${title} (${key})`);
+        const err = new Error(`${title} (${key})`) as Error & { reported?: boolean };
+        err.reported = true;
+        throw err;
       };
 
       // Only the transport is wrapped. Keeping the response handling out of
@@ -999,13 +1046,15 @@ export function EditorLayout({
 
   const commitCodeChange = useCallback(
     (fileId: string, content: string) => {
+      // Everything we send is an "echo" we may see again from a later refetch.
+      rememberContent(fileId, content);
       setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, content } : f)));
       setActiveFile((prev) => (prev?.id === fileId ? { ...prev, content } : prev));
       // Autosave path: `persistFileContent` has already told the user why it
       // failed, so swallow here rather than raise an unhandled rejection.
       void persistFileContent(fileId, content).catch(() => {});
     },
-    [persistFileContent]
+    [persistFileContent, rememberContent]
   );
 
   // Flush a pending debounced edit on unmount so typed content isn't lost.
@@ -1024,6 +1073,9 @@ export function EditorLayout({
     (content: string) => {
       if (!activeFile) return;
       const fileId = activeFile.id;
+      // The body this edit started from — a later refetch may still be
+      // carrying it, and that must not read as an external rewrite.
+      rememberContent(fileId, activeFile.content ?? "");
       const pending = pendingCodeChangeRef.current;
       if (pending) {
         clearTimeout(pending.timer);
@@ -1040,13 +1092,18 @@ export function EditorLayout({
         }, 500),
       };
     },
-    [activeFile, commitCodeChange]
+    [activeFile, commitCodeChange, rememberContent]
   );
 
   // Immediate save — used by CodePanel's explicit ⌘S / Save button.
   const handleCodeSave = useCallback(
     async (content: string) => {
-      if (!activeFile) return;
+      if (!activeFile) {
+        // Returning quietly here resolved the promise the code panel awaits,
+        // so it cleared the tab's dirty flag and printed "Saved" for a write
+        // with no destination — the same lie the throw above exists to stop.
+        throw new Error("No file is open to save.");
+      }
       const fileId = activeFile.id;
       const pending = pendingCodeChangeRef.current;
       if (pending?.fileId === fileId) {
@@ -1055,7 +1112,7 @@ export function EditorLayout({
       }
       setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, content } : f)));
       setActiveFile((prev) => (prev?.id === fileId ? { ...prev, content } : prev));
-      await persistFileContent(fileId, content);
+      await persistFileContent(fileId, content, { explicit: true });
     },
     [activeFile, persistFileContent]
   );

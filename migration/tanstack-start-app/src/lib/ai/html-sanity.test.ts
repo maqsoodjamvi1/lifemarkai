@@ -84,14 +84,69 @@ test("an embedded doc followed by a REAL concatenation still splits correctly", 
   assert.equal(out, DOC_B);
 });
 
-test("a stray DOCTYPE with no closing </html> before it is left alone", () => {
-  // Truncated/streaming output — splitting here would throw away the only
-  // content present.
+test("a stray DOCTYPE inside <pre> in still-streaming output is left alone", () => {
+  // Splitting here would throw away the only content present.
   const partial = `<!DOCTYPE html>
 <html><body>
   <pre><!DOCTYPE html></pre>
   <p>still writing`;
   assert.equal(dedupeHtmlDocument(partial), partial);
+});
+
+// ── The other corruption shape: the first document was CUT OFF ──────────────
+// A continuation round is requested precisely BECAUSE the model hit its output
+// ceiling, so the first copy usually has no </html> at all. An earlier version
+// of this file required one and therefore missed the common case.
+
+test("catches a truncated first document followed by a complete one", () => {
+  const truncated = `<!DOCTYPE html>
+<html>
+  <head><title>First</title></head>
+  <body><p>half a sen`;
+  const out = dedupeHtmlDocument(`${truncated}${DOC_B}`);
+  assert.equal(out, DOC_B);
+  assert.ok(!out.includes("half a sen"));
+});
+
+test("catches a truncated first document separated by a code fence", () => {
+  const truncated = `<!DOCTYPE html>\n<html><body><p>cut`;
+  const out = dedupeHtmlDocument(`${truncated}\n\`\`\`\n${DOC_B}`);
+  assert.equal(out, DOC_B);
+});
+
+test("a truncated first doc containing a template still splits at the real seam", () => {
+  const truncated = `<!DOCTYPE html>
+<html><body>
+  <template><!DOCTYPE html><html><body>t</body></html></template>
+  <p>cut off mid-`;
+  const out = dedupeHtmlDocument(`${truncated}${DOC_B}`);
+  assert.equal(out, DOC_B);
+});
+
+test("does not split when the trailing DOCTYPE has no document after it", () => {
+  // Streaming: the second copy has only just started. Splitting would discard
+  // the complete first document in favour of two lines.
+  const partial = `${DOC_A}\n<!DOCTYPE html>\n<html>`;
+  assert.equal(dedupeHtmlDocument(partial), partial);
+});
+
+test("a DOCTYPE inside an iframe srcdoc attribute is never a split point", () => {
+  const page = `<!DOCTYPE html>
+<html><body>
+  <iframe srcdoc='<!DOCTYPE html><html><body>a</body></html>'></iframe>
+  <iframe srcdoc="<!DOCTYPE html><html><body>b</body></html>"></iframe>
+  <main>real content</main>
+</body></html>`;
+  assert.equal(dedupeHtmlDocument(page), page);
+});
+
+test("a DOCTYPE inside an HTML comment is never a split point", () => {
+  const page = `<!DOCTYPE html>
+<html><body>
+  <!-- was: <!DOCTYPE html><html><body>old</body></html> -->
+  <main>real content</main>
+</body></html>`;
+  assert.equal(dedupeHtmlDocument(page), page);
 });
 
 test("sanitizeGeneratedFile only touches html files", () => {
