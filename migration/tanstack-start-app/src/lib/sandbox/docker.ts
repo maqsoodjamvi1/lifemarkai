@@ -116,6 +116,16 @@ const APP_DIR = "/home/node/app";
 const INSTALL_TIMEOUT_SEC = 240;
 
 /**
+ * Written by the image build ONLY after it has verified its own `npm install`
+ * reaches a fixed point — i.e. that a second install adds nothing.
+ *
+ * Its absence is what makes the install-skip fail closed on any image that has
+ * not made that promise, including every image built before the marker
+ * existed. Never create this at runtime.
+ */
+const DEPS_VERIFIED_MARKER = "/home/node/.lm-deps-verified";
+
+/**
  * Accept whatever shape the host was configured as.
  *
  * People naturally paste a full URL ("http://1.2.3.4/") rather than a bare
@@ -666,14 +676,40 @@ export class DockerSandboxProvider implements SandboxProvider {
       //
       // This is the only moment it exists. It is the manifest the image's
       // node_modules was installed from, and comparing it against what we are
-      // about to upload is what lets the install below be skipped when it
-      // provably cannot change anything. Doing it in the same exec as the
-      // node_modules probe keeps it to one round trip.
+      // about to upload is one of the two conditions for skipping the install
+      // below. Doing it in the same exec as the other probes keeps it to one
+      // round trip.
+      //
+      // THE SECOND CONDITION IS A MARKER FILE, AND IT IS NOT OPTIONAL.
+      //
+      // Matching manifests are NOT sufficient on their own, which I learned by
+      // measuring rather than reasoning. Running the exact install command
+      // against a pristine `lifemark-sandbox:base22`, with the image's own
+      // unmodified package.json, reports:
+      //
+      //     added 3 packages in 2s
+      //
+      // and the three are platform-specific optional binaries fetched from the
+      // registry on a cache miss: @swc/core-linux-x64-gnu,
+      // @rollup/rollup-linux-x64-gnu, @napi-rs/lzma-linux-x64-gnu. So the
+      // image's node_modules is incomplete with respect to its OWN manifest —
+      // and the first of those is what @vitejs/plugin-react-swc loads to
+      // transform JSX. Skipping on manifest equality alone would have left it
+      // absent and the dev server would never have started.
+      //
+      // Hence: skip only when the image explicitly asserts its tree is
+      // complete, by carrying this marker. `base22` does not have it, so the
+      // skip is inert until an image is built that verifies its own install
+      // (see docker/sandbox/Dockerfile). Adding the marker is what turns the
+      // optimisation on; nothing here has to change.
       const baseline = await this.exec(
         id,
-        `[ -d node_modules ] && echo LM_PREBUILT; echo LM_PKG_START; cat package.json 2>/dev/null`,
+        `[ -d node_modules ] && echo LM_PREBUILT; ` +
+          `[ -f ${DEPS_VERIFIED_MARKER} ] && echo LM_DEPS_VERIFIED; ` +
+          `echo LM_PKG_START; cat package.json 2>/dev/null`,
       );
       const hasPrebuiltModules = baseline.stdout.includes("LM_PREBUILT");
+      const treeVerifiedComplete = baseline.stdout.includes("LM_DEPS_VERIFIED");
       const baselinePackageJson = baseline.stdout.includes("LM_PKG_START")
         ? baseline.stdout.slice(baseline.stdout.indexOf("LM_PKG_START") + "LM_PKG_START".length)
         : null;
@@ -757,7 +793,10 @@ export class DockerSandboxProvider implements SandboxProvider {
         const depCheck = dependenciesAlreadySatisfied(
           baselinePackageJson,
           projectPackageJson,
-          hasPrebuiltModules,
+          // Both conditions, deliberately ANDed here rather than inside the
+          // pure function: a tree can exist and still be incomplete, which is
+          // exactly what base22 does. See the marker note above.
+          hasPrebuiltModules && treeVerifiedComplete,
         );
 
         if (depCheck.satisfied) {

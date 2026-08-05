@@ -62,6 +62,38 @@ COPY --chown=node:node package.json ./
 USER node
 RUN npm install --no-audit --no-fund --loglevel=error
 
+# REACH A FIXED POINT, THEN PROVE IT.
+#
+# One `npm install` is not enough, and that is measured, not assumed. Running
+# the provider's exact install command against the base22 image — with the
+# image's own unmodified package.json — reported:
+#
+#     added 3 packages in 2s
+#
+# fetching @swc/core-linux-x64-gnu, @rollup/rollup-linux-x64-gnu and
+# @napi-rs/lzma-linux-x64-gnu from the registry on a cache MISS. Those are
+# platform-specific optional binaries the first pass resolves but does not
+# land, and the first of them is what @vitejs/plugin-react-swc loads to
+# transform JSX. So every preview boot was paying a network round trip for
+# three packages this image was supposed to already have.
+#
+# The second install lands them. The check then asserts a THIRD install changes
+# nothing, and writes the marker only if so. The provider skips its per-boot
+# install only when that marker is present — so an image that cannot make this
+# promise keeps today's behaviour instead of shipping a preview that cannot
+# start.
+RUN npm install --no-audit --no-fund --loglevel=error \
+ && npm install --no-audit --no-fund --loglevel=error 2>&1 | tee /tmp/lm-verify.log \
+ && if grep -qE 'added [0-9]+ package|removed [0-9]+ package|changed [0-9]+ package' /tmp/lm-verify.log; then \
+      echo "BASE IMAGE NOT AT A FIXED POINT - install still changes the tree:"; \
+      cat /tmp/lm-verify.log; \
+      echo "(marker not written; sandboxes will keep installing per boot)"; \
+    else \
+      touch /home/node/.lm-deps-verified; \
+      echo "deps verified complete - per-boot npm install can be skipped"; \
+    fi \
+ && rm -f /tmp/lm-verify.log
+
 # The npm cache is deliberately NOT cleaned.
 #
 # Cleaning it is the reflex for slimming an image, and it would defeat the
