@@ -38,11 +38,60 @@ export function isBrowserExtensionError(
   ) {
     return true;
   }
-  // Wallet inpage scripts often omit the scheme in truncated console text.
-  if (/\binpage\.js\b/i.test(blob) && /emit|ethereum|wallet|metamask|solana|web3/i.test(blob)) {
+  // `inpage.js` on its own is enough.
+  //
+  // It used to also require a wallet word (ethereum/metamask/solana/…) in the
+  // same blob, and that extra condition is what let a real case through. A
+  // multi-chain wallet extension patches the scheduler — `postMessage`,
+  // `setImmediate` — so React's own work loop runs THROUGH it, and the stack
+  // reads:
+  //
+  //     at U (index-<hash>.js:2:9832)
+  //     at de (index-<hash>.js:2:10209)
+  //     at run (inpage.js:1:1898085)
+  //     at runIfPresent (inpage.js:1:1898212)
+  //     at onGlobalMessage (inpage.js:1:1897412)
+  //
+  // No wallet word anywhere — just React frames sitting on top of the
+  // extension's shim. `inpage.js` is not a filename any Vite or React app
+  // produces; it is the conventional name for an extension's page-context
+  // inject. Seeing it at all means the page is not running alone.
+  if (/\binpage\.js\b/i.test(blob)) return true;
+  // The provider adapters those extensions register, in case the frame that
+  // named the file was trimmed out of a truncated stack.
+  if (
+    /\b(Ethereum|Solana|Cosmos|Tron|Ton|Bitcoin|BinanceWeb3)(Adapter|Provider)\b|\bProvidersManager\b|IN_PAGE_CHANNEL_NODE_ID/i.test(
+      blob,
+    )
+  ) {
     return true;
   }
   return false;
+}
+
+/**
+ * React's production error codes for "hydration was abandoned".
+ *
+ * A minified React error carries no component, no file and no line — the whole
+ * point of minification is that the message is a number. There is nothing in
+ * it for the auto-fixer to act on, so putting one into the healing loop can
+ * only produce a guess, and guesses on a hydration error cost credits and
+ * change files at random.
+ *
+ *   418  hydration failed, the initial UI does not match the server
+ *   422  error while hydrating this Suspense boundary
+ *   423  error while hydrating; the whole root switches to client rendering
+ *
+ * 425 (text content does not match) is deliberately EXCLUDED: it is the one
+ * hydration code that reliably indicates an application bug — a timestamp or a
+ * random value rendered during SSR — and the fixer handles those well.
+ *
+ * Development builds are unaffected: previews run `vite dev`, where React
+ * emits the full message with a component stack, and those still come through
+ * unless they are document-level (see isDocumentHydrationMismatch).
+ */
+export function isMinifiedReactHydrationError(message: string): boolean {
+  return /(?:Minified React error|invariant=)\s*#?\s*(418|422|423)\b/i.test(message);
 }
 
 /** Skip React/console noise that is not actionable for the healing loop. */
@@ -67,6 +116,7 @@ export function isNoisePreviewError(
   // empty-root heuristic ALONE freeze the preview.
   if (/preview root is empty/i.test(m)) return true;
   if (isDocumentHydrationMismatch(m)) return true;
+  if (isMinifiedReactHydrationError(m)) return true;
   return false;
 }
 
