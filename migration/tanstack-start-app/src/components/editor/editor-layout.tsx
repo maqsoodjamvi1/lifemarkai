@@ -893,36 +893,43 @@ export function EditorLayout({
   const saveFailureRef = useRef<string | null>(null);
   const persistFileContent = useCallback(
     async (fileId: string, content: string) => {
-      const fail = (key: string, title: string, description: string) => {
-        if (saveFailureRef.current === key) return; // already told them
-        saveFailureRef.current = key;
-        toast({ title, description, variant: "destructive" });
+      /**
+       * Report once per failure kind, then THROW.
+       *
+       * The throw matters as much as the toast. `handleCodeSave` is the
+       * `onSave` prop the code panel awaits for ⌘S and Save All; when this
+       * function swallowed failures and returned normally, the panel counted
+       * the tab as written, cleared its dirty flag and printed "Saved" over a
+       * write that never landed. Callers that fire-and-forget (the keystroke
+       * debounce, the unmount flush) attach `.catch` — the toast is their
+       * report.
+       */
+      // The variable, not just the arrow, carries the `never` return type:
+      // TS only uses a call as a control-flow terminator when the annotation
+      // is on the declaration. Without it, `res` reads as possibly-unassigned
+      // after the catch.
+      const fail: (key: string, title: string, description: string) => never = (
+        key,
+        title,
+        description,
+      ) => {
+        if (saveFailureRef.current !== key) {
+          saveFailureRef.current = key;
+          toast({ title, description, variant: "destructive" });
+        }
+        throw new Error(`${title} (${key})`);
       };
 
+      // Only the transport is wrapped. Keeping the response handling out of
+      // the try is deliberate: `fail` throws, and a catch around it would
+      // swallow a 403 and re-report it as "you appear to be offline".
+      let res: Response;
       try {
-        const res = await fetch(`/api/projects/${project.id}/files`, {
+        res = await fetch(`/api/projects/${project.id}/files`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fileId, content }),
         });
-        if (res.ok) {
-          setLastSaved(new Date());
-          saveFailureRef.current = null;
-          return;
-        }
-        if (res.status === 401 || res.status === 403) {
-          fail(
-            "auth",
-            "Your session expired — changes are NOT saving",
-            "Sign in again in another tab, then keep working here. Do not reload this tab until a save succeeds.",
-          );
-          return;
-        }
-        fail(
-          `http-${res.status}`,
-          "Changes are NOT saving",
-          `The server rejected the save (${res.status}). Copy anything important before reloading this tab.`,
-        );
       } catch {
         fail(
           "offline",
@@ -930,6 +937,24 @@ export function EditorLayout({
           "You appear to be offline. Edits exist only in this tab until the connection returns.",
         );
       }
+
+      if (res.ok) {
+        setLastSaved(new Date());
+        saveFailureRef.current = null;
+        return;
+      }
+      if (res.status === 401 || res.status === 403) {
+        fail(
+          "auth",
+          "Your session expired — changes are NOT saving",
+          "Sign in again in another tab, then keep working here. Do not reload this tab until a save succeeds.",
+        );
+      }
+      fail(
+        `http-${res.status}`,
+        "Changes are NOT saving",
+        `The server rejected the save (${res.status}). Copy anything important before reloading this tab.`,
+      );
     },
     [project.id, toast]
   );
@@ -944,7 +969,9 @@ export function EditorLayout({
     (fileId: string, content: string) => {
       setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, content } : f)));
       setActiveFile((prev) => (prev?.id === fileId ? { ...prev, content } : prev));
-      void persistFileContent(fileId, content);
+      // Autosave path: `persistFileContent` has already told the user why it
+      // failed, so swallow here rather than raise an unhandled rejection.
+      void persistFileContent(fileId, content).catch(() => {});
     },
     [persistFileContent]
   );
@@ -956,7 +983,7 @@ export function EditorLayout({
       if (pending) {
         clearTimeout(pending.timer);
         pendingCodeChangeRef.current = null;
-        void persistFileContent(pending.fileId, pending.content);
+        void persistFileContent(pending.fileId, pending.content).catch(() => {});
       }
     };
   }, [persistFileContent]);

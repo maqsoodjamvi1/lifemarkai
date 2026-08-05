@@ -878,6 +878,13 @@ export function CodePanel({
     if (!dirtyTabs.length) return;
     setSaving(true);
     let saved = 0;
+    /**
+     * Tabs whose write did not land. They correctly stay dirty — but a dirty
+     * dot is invisible next to a green "N files saved ✓", and that pairing is
+     * exactly how someone closes the tab believing their work reached the
+     * server. Collect the failures and name them.
+     */
+    const failedPaths: string[] = [];
     await Promise.allSettled(
       dirtyTabs.map(async (target) => {
         const content = contentRef.current.get(target.id) ?? target.content ?? "";
@@ -890,7 +897,12 @@ export function CodePanel({
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ fileId: target.id, content }),
             });
-            if (!res.ok) throw new Error("Failed");
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          } else {
+            // Neither a save handler nor a project id: nothing wrote this tab
+            // anywhere. Falling through to `saved++` claimed success for a
+            // write that never had a destination.
+            throw new Error("no save target");
           }
           dirtyRef.current.delete(target.id);
           setOpenTabs((prev) =>
@@ -898,11 +910,26 @@ export function CodePanel({
           );
           onFileChange?.({ ...target, content });
           saved++;
-        } catch { /* individual tab save failure — continue */ }
+        } catch {
+          failedPaths.push(target.path);
+        }
       })
     );
     setSaving(false);
     forceRender((n) => n + 1);
+    if (failedPaths.length > 0) {
+      const shown = failedPaths.slice(0, 4).join(", ");
+      const more = failedPaths.length > 4 ? `, +${failedPaths.length - 4} more` : "";
+      toast({
+        title:
+          failedPaths.length === dirtyTabs.length
+            ? "Nothing was saved"
+            : `${failedPaths.length} of ${dirtyTabs.length} files did NOT save`,
+        description: `Still unsaved: ${shown}${more}. They remain open and marked dirty — don't close this tab until they save.`,
+        variant: "destructive",
+      });
+      return;
+    }
     if (saved > 0) toast({ description: saved + " file" + (saved !== 1 ? "s" : "") + " saved ✓" });
   }
 
