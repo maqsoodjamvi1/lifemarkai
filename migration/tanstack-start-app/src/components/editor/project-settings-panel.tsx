@@ -314,7 +314,17 @@ export function ProjectSettingsPanel({ project, profile, onProjectUpdate }: Proj
   const username = profile?.username ?? profile?.email?.split("@")[0] ?? "user";
   const shareUrl = slug ? `${appUrl}/p/${username}/${slug}` : null;
 
-  async function save(fields: Record<string, unknown>) {
+  /**
+   * Returns whether the write landed, so callers that flipped a control
+   * optimistically can put it back.
+   *
+   * The visibility switch matters most here: it used to `setIsPublic(v)` and
+   * then fire this, and a rejected save left the switch reading "Private"
+   * while the project was still public — the displayed state and the enforced
+   * state disagreeing indefinitely, on an access control, behind a toast the
+   * user may well have dismissed.
+   */
+  async function save(fields: Record<string, unknown>): Promise<boolean> {
     setSaving(true);
     try {
       const res = await fetch(`/api/projects/${project.id}`, {
@@ -322,26 +332,44 @@ export function ProjectSettingsPanel({ project, profile, onProjectUpdate }: Proj
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(fields),
       });
-      if (!res.ok) throw new Error("Failed to save");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const updated = await res.json();
       onProjectUpdate(updated);
       toast({ title: "Settings saved" });
+      return true;
     } catch {
-      toast({ title: "Failed to save settings", variant: "destructive" });
+      toast({
+        title: "Failed to save settings",
+        description: "Nothing was changed. Check that you are still signed in, then try again.",
+        variant: "destructive",
+      });
+      return false;
     } finally {
       setSaving(false);
     }
   }
 
   async function generateSlug() {
-    const res = await fetch(`/api/projects/${project.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ generate_slug: true }),
-    });
-    const updated = await res.json();
-    setSlug(updated.slug ?? "");
-    onProjectUpdate({ slug: updated.slug });
+    // No res.ok, no catch and no toast: a failure produced
+    // `updated.slug === undefined`, so this silently blanked the share URL.
+    try {
+      const res = await fetch(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ generate_slug: true }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const updated = await res.json();
+      if (!updated?.slug) throw new Error("no slug returned");
+      setSlug(updated.slug);
+      onProjectUpdate({ slug: updated.slug });
+    } catch {
+      toast({
+        title: "Could not generate a link",
+        description: "Your existing share link is unchanged. Try again in a moment.",
+        variant: "destructive",
+      });
+    }
   }
 
   function copyShareUrl() {
@@ -446,9 +474,19 @@ export function ProjectSettingsPanel({ project, profile, onProjectUpdate }: Proj
               <Switch
                 checked={isPublic}
                 onCheckedChange={async (v) => {
+                  const prevPublic = isPublic;
+                  const prevRemix = remixEnabled;
                   setIsPublic(v);
                   if (!v) setRemixEnabled(false);
-                  await save({ is_public: v, remix_enabled: v ? remixEnabled : false });
+                  const ok = await save({ is_public: v, remix_enabled: v ? remixEnabled : false });
+                  // Put the switch back if the write was rejected. Leaving it
+                  // where the user dropped it made the label disagree with
+                  // what is actually enforced — on the control that decides
+                  // whether strangers can read the project.
+                  if (!ok) {
+                    setIsPublic(prevPublic);
+                    setRemixEnabled(prevRemix);
+                  }
                 }}
               />
             </div>
@@ -468,8 +506,9 @@ export function ProjectSettingsPanel({ project, profile, onProjectUpdate }: Proj
                 checked={remixEnabled}
                 disabled={!isPublic}
                 onCheckedChange={async (v) => {
+                  const prev = remixEnabled;
                   setRemixEnabled(v);
-                  await save({ remix_enabled: v });
+                  if (!(await save({ remix_enabled: v }))) setRemixEnabled(prev);
                 }}
               />
             </div>

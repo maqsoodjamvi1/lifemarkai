@@ -287,7 +287,20 @@ export async function deleteSnapshot(data: any) {
     const access = await getProjectAccess(supabase, snap.project_id, user.id);
     if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
 
-    await (supabase as any).from("project_snapshots").delete().eq("id", data.id);
+    // The result was discarded and `ok: true` returned regardless, so a
+    // rejected delete looked identical to a successful one — and the panel
+    // then removed the row from its list optimistically, so the version
+    // "disappeared" and came back on reload.
+    const { error } = await (supabase as any)
+      .from("project_snapshots")
+      .delete()
+      .eq("id", data.id);
+    if (error) {
+      return {
+        status: "error" as const,
+        message: error.message ?? "Could not delete this version.",
+      };
+    }
     return { status: "ok" as const, ok: true };
 }
 
@@ -352,16 +365,31 @@ export async function restoreSnapshot(data: any) {
       };
     }
 
+    // This is the ONLY way back from what follows, and the worst-case error
+    // message below explicitly promises the user it exists ("Your previous
+    // version is saved as …"). Its result was discarded — and the scenario
+    // where that matters is precisely one where writes to project_snapshots
+    // are already failing, so the promise was most likely false at the exact
+    // moment the project was empty. Refuse to start instead.
     if (currentFiles && currentFiles.length > 0) {
-      await (supabase as any).from("project_snapshots").insert({
-        project_id: data.projectId,
-        user_id: user.id,
-        label: `Auto-save before restore to "${snapMeta.label}"`,
-        is_baseline: true,
-        files: currentFiles,
-        patches: null,
-        parent_id: null,
-      });
+      const { error: autoSaveError } = await (supabase as any)
+        .from("project_snapshots")
+        .insert({
+          project_id: data.projectId,
+          user_id: user.id,
+          label: `Auto-save before restore to "${snapMeta.label}"`,
+          is_baseline: true,
+          files: currentFiles,
+          patches: null,
+          parent_id: null,
+        });
+      if (autoSaveError) {
+        return {
+          status: "error" as const,
+          message:
+            "Could not save a restore point for your current files, so the restore was not started. Nothing has changed — try again in a moment.",
+        };
+      }
     }
 
     // ── The most destructive few lines in the codebase ───────────────────────

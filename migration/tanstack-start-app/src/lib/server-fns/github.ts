@@ -161,15 +161,50 @@ export async function githubSync(data: any) {
 
     if (action === "pull") {
       const files = await pullFiles(token, repo, branch);
+      // Every upsert's `{ error }` was discarded and the count returned was
+      // the number FETCHED from GitHub, not the number written. A pull that
+      // stored nothing reported "N files updated".
+      const failedPaths: string[] = [];
       for (const file of files) {
         const ext = file.path.split(".").pop()?.toLowerCase() ?? "";
-        await (supabase as any).from("project_files").upsert(
+        const { error } = await (supabase as any).from("project_files").upsert(
           { project_id: projectId, path: file.path, content: file.content, language: LANG_MAP[ext] ?? "plaintext" },
           { onConflict: "project_id,path" },
         );
+        if (error) failedPaths.push(file.path);
       }
-      logger.info("github.sync.pull", { projectId, branch, fileCount: files.length });
-      return { status: "ok" as const, payload: { files: files.length, branch } };
+      if (failedPaths.length > 0) {
+        logger.error("github.sync.pull_write_failed", new Error("project_files upsert failed"), {
+          projectId,
+          branch,
+          failed: failedPaths.length,
+          paths: failedPaths.slice(0, 10),
+        });
+      }
+      logger.info("github.sync.pull", {
+        projectId,
+        branch,
+        fileCount: files.length - failedPaths.length,
+      });
+      return {
+        status: "ok" as const,
+        payload: {
+          files: files.length - failedPaths.length,
+          failed: failedPaths.length,
+          branch,
+          // The editor holds the PRE-pull content in memory. Without handing
+          // the new files back, the next keystroke autosave PATCHes the stale
+          // version straight over what was just pulled — the user pulls a
+          // teammate's work and silently overwrites it.
+          pulledFiles: files
+            .filter((f) => !failedPaths.includes(f.path))
+            .map((f) => ({
+              path: f.path,
+              content: f.content,
+              language: LANG_MAP[f.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext",
+            })),
+        },
+      };
     }
 
     if (action === "pr") {

@@ -110,7 +110,13 @@ export function DeployHistoryPanel({ project, onFilesRefresh }: DeployHistoryPan
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      toast({ title: "Rolled back!", description: `Restored ${data.fileCount} files.` });
+      toast({
+        title: "Rolled back!",
+        description:
+          typeof data.staleFilesRemaining === "number"
+            ? `Restored ${data.fileCount} files. ${data.staleFilesRemaining} newer file${data.staleFilesRemaining === 1 ? "" : "s"} could not be removed and are still in your project.`
+            : `Restored ${data.fileCount} files.`,
+      });
       onFilesRefresh?.();
     } catch (err) {
       toast({ title: "Rollback failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
