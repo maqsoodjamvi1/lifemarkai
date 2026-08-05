@@ -3,6 +3,8 @@ import {
   type WebContainerPatchOpts,
 } from "./patch-vite-for-webcontainer";
 import { isTanStackStartProject } from "@/lib/templates/tanstack-start-scaffold";
+import { ensureTypecheckToolchain } from "./ensure-toolchain";
+import { BASE_APP_DEV_DEPENDENCIES } from "./base-app-deps";
 
 /**
  * Synthesize missing Vite entry files. Incremental builds return only CHANGED
@@ -333,8 +335,19 @@ export function patchSandboxPreviewFiles<T extends { path: string; content?: str
   files: T[],
   opts?: WebContainerPatchOpts,
 ): T[] {
+  // ensureTypecheckToolchain runs on the sandbox path, not only at generation
+  // time, because the projects that need it most already exist: one whose
+  // package.json lost `typescript` on an earlier turn never regains it until
+  // something rewrites that file, and the sandbox sync is the one step every
+  // project passes through on every boot.
   return patchFilesForWebContainer(
-    ensureViteTunnelHmr(ensureSupabaseEnv(ensureTailwindPluginDeps(ensureViteEntryFiles(files)))),
+    ensureViteTunnelHmr(
+      ensureSupabaseEnv(
+        ensureTailwindPluginDeps(
+          ensureTypecheckToolchain(ensureViteEntryFiles(files), BASE_APP_DEV_DEPENDENCIES),
+        ),
+      ),
+    ),
     opts,
   );
 }
