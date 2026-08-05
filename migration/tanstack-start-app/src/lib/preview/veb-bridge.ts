@@ -2,8 +2,47 @@
  * Visual Edit Bridge for the WebContainer preview engine.
  */
 
-import { PREVIEW_ERROR_BRIDGE_SCRIPT } from "./preview-error-bridge";
-import { PREVIEW_PERF_SCRIPT } from "./preview-perf-bridge";
+import { PREVIEW_ERROR_BRIDGE_SCRIPT } from "./preview-error-bridge.ts";
+import { PREVIEW_PERF_SCRIPT } from "./preview-perf-bridge.ts";
+
+/**
+ * ─── EVERYTHING BELOW IS INLINED INTO THE CUSTOMER'S HTML ───────────────────
+ *
+ * These template literals become the body of a `<script>` element in the
+ * user's page. Two consequences, both learned the hard way:
+ *
+ * 1. NO `</script>` ANYWHERE IN THE STRING — not in code, not in a comment,
+ *    not inside a JS string literal. An HTML parser does not understand
+ *    JavaScript: it ends the script element at the first `</script>` it sees,
+ *    whatever the context. I put a long explanatory comment in here that
+ *    happened to contain one, and the rest of the bridge spilled out of the
+ *    tag as raw markup. Vite then handed it to PostCSS, which reported
+ *    `Unknown word if` at `index.html?html-proxy&index=0.css` — a CSS parse
+ *    error, for JavaScript, from a comment. `assertNoScriptTerminator` below
+ *    now makes that impossible to ship.
+ *
+ * 2. Explanation goes HERE, in the module, not in the injected string. The
+ *    injected code is shipped to every preview on every load; prose in it is
+ *    bytes on the customer's wire and one more thing that can be misparsed.
+ *
+ * ─── WHY THE STYLE IS DEFERRED ──────────────────────────────────────────────
+ *
+ * `ensureVebStyle` is called only when the editor turns visual-edit or
+ * comment-pin mode on. It used to run at the top level, creating a style
+ * element and appending it to document.head the moment the browser parsed
+ * this script — which is before React hydrates.
+ *
+ * In a client-rendered Vite app that is harmless. In a server-rendered one it
+ * is fatal, and TanStack Start (the default for new projects) is server
+ * rendered: React hydrates the document, walks the head, finds a child the
+ * server never sent, and abandons hydration. Every SSR preview, every load.
+ * The reported stack named the customer's root route, so the auto-fixer spent
+ * real credits rewriting a file that was never wrong.
+ *
+ * The preferred mechanism is adoptedStyleSheets, which adds no element to the
+ * document at all and so is invisible to React's reconciler even when it does
+ * run.
+ */
 export const VEB_BRIDGE_SCRIPT = `(function() {
   if (window.parent === window) return;
   var enabled = false;
@@ -23,36 +62,8 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
   var style = null;
   var lmSheet = null;
 
-  /**
-   * DO NOT TOUCH THE DOM BEFORE THE APP HAS HYDRATED.
-   *
-   * This used to create a <style> and append it to document.head at parse
-   * time, on the top-level pass of this script. In a client-rendered Vite app
-   * that is harmless. In a server-rendered one — TanStack Start, which is the
-   * DEFAULT framework for new projects — it is fatal, and it broke EVERY
-   * preview of EVERY SSR project on EVERY load:
-   *
-   *   1. the server sends <html><head>…</head><body>…<script>this</script></body>
-   *   2. the browser parses down to this inline script and runs it immediately
-   *   3. we append a <style> into <head>
-   *   4. React hydrates the whole document, walks <head>, finds a child the
-   *      server never rendered, and gives up:
-   *
-   *        Warning: Expected server HTML to contain a matching <head> in <html>
-   *        Uncaught Error: Hydration failed because the initial UI does not
-   *          match what was rendered on the server
-   *        Warning: An error occurred during hydration. The server HTML was
-   *          replaced with client content in <#document>
-   *
-   * The stack blamed the customer's __root.tsx, so the auto-fixer kept trying
-   * to repair a file that was never wrong — a repair loop that could not
-   * terminate, on a bug we injected ourselves.
-   *
-   * Now: nothing happens until the editor actually turns a mode on, which is
-   * always long after hydration. And the preferred mechanism adds no element
-   * to the document at all — adoptedStyleSheets is invisible to React's
-   * reconciler, so even the deferred case cannot reintroduce this.
-   */
+  // Deferred on purpose — see the note above VEB_BRIDGE_SCRIPT. Nothing here
+  // may run before the app has hydrated.
   function ensureVebStyle() {
     if (lmSheet || (style && style.parentNode)) return;
     try {
@@ -593,9 +604,39 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
   });
 })();`;
 
+/**
+ * Refuse to emit a bridge that would break out of its own `<script>` element.
+ *
+ * An HTML parser ends a script element at the first `</script`, regardless of
+ * whether JavaScript considers that position to be inside a string or a
+ * comment. Anything after it stops being script and becomes markup — which is
+ * how a prose comment in this file once ended up being parsed as CSS by
+ * PostCSS, reported as `Unknown word if` in `index.html?html-proxy&index=0.css`.
+ *
+ * The `</script` match is intentionally loose (no closing `>`, any case, any
+ * whitespace before it) because that is exactly how permissive real parsers
+ * are. Throwing here turns a silent, confusing preview corruption into a loud
+ * failure at the only place that can produce it.
+ */
+export function assertNoScriptTerminator(script: string, label: string): string {
+  const offender = /<\s*\/\s*script/i.exec(script);
+  if (offender) {
+    const at = offender.index;
+    throw new Error(
+      `${label} contains "${offender[0]}" at offset ${at}, which would close the ` +
+        `<script> element it is inlined into and spill the rest into the page as markup. ` +
+        `Context: ...${script.slice(Math.max(0, at - 80), at + 80)}...`,
+    );
+  }
+  return script;
+}
+
 /** Combined preview bridges (VEB + runtime + errors + perf). */
 export function getPreviewBridgeScripts(): string {
-  return `${VEB_BRIDGE_SCRIPT}\n${PREVIEW_RUNTIME_SCRIPT}\n${PREVIEW_ERROR_BRIDGE_SCRIPT}\n${PREVIEW_PERF_SCRIPT}`;
+  return assertNoScriptTerminator(
+    `${VEB_BRIDGE_SCRIPT}\n${PREVIEW_RUNTIME_SCRIPT}\n${PREVIEW_ERROR_BRIDGE_SCRIPT}\n${PREVIEW_PERF_SCRIPT}`,
+    "preview bridge",
+  );
 }
 
 /** Inject both bridges into an index.html document (idempotent). */
