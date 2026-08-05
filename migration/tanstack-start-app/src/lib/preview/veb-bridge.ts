@@ -10,9 +10,7 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
   var commentPinEnabled = false;
   var editTextMode = false;
   var hovered = null;
-  var style = document.createElement('style');
-  style.id = 'lm-veb-style';
-  style.textContent = [
+  var LM_VEB_CSS = [
     '.lm-hover{outline:2px solid #7c3aed!important;outline-offset:2px;cursor:pointer!important}',
     '.lm-selected{outline:2px solid #0e90e8!important;outline-offset:2px}',
     '.lm-multi{outline:2px solid #38bdf8!important;outline-offset:2px}',
@@ -22,13 +20,68 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
     '.lm-comment-pin-marker{position:fixed;width:22px;height:22px;margin:0;padding:0;border:2px solid #fff;border-radius:9999px;background:#7c3aed;color:#fff;font:700 11px/18px system-ui,sans-serif;text-align:center;cursor:pointer;pointer-events:auto;box-shadow:0 2px 8px rgba(0,0,0,.35);z-index:2147483647}',
     '.lm-comment-pin-marker:hover{transform:scale(1.08);background:#6d28d9}'
   ].join('');
-  if (!style.parentNode) document.head.appendChild(style);
+  var style = null;
+  var lmSheet = null;
+
+  /**
+   * DO NOT TOUCH THE DOM BEFORE THE APP HAS HYDRATED.
+   *
+   * This used to create a <style> and append it to document.head at parse
+   * time, on the top-level pass of this script. In a client-rendered Vite app
+   * that is harmless. In a server-rendered one — TanStack Start, which is the
+   * DEFAULT framework for new projects — it is fatal, and it broke EVERY
+   * preview of EVERY SSR project on EVERY load:
+   *
+   *   1. the server sends <html><head>…</head><body>…<script>this</script></body>
+   *   2. the browser parses down to this inline script and runs it immediately
+   *   3. we append a <style> into <head>
+   *   4. React hydrates the whole document, walks <head>, finds a child the
+   *      server never rendered, and gives up:
+   *
+   *        Warning: Expected server HTML to contain a matching <head> in <html>
+   *        Uncaught Error: Hydration failed because the initial UI does not
+   *          match what was rendered on the server
+   *        Warning: An error occurred during hydration. The server HTML was
+   *          replaced with client content in <#document>
+   *
+   * The stack blamed the customer's __root.tsx, so the auto-fixer kept trying
+   * to repair a file that was never wrong — a repair loop that could not
+   * terminate, on a bug we injected ourselves.
+   *
+   * Now: nothing happens until the editor actually turns a mode on, which is
+   * always long after hydration. And the preferred mechanism adds no element
+   * to the document at all — adoptedStyleSheets is invisible to React's
+   * reconciler, so even the deferred case cannot reintroduce this.
+   */
+  function ensureVebStyle() {
+    if (lmSheet || (style && style.parentNode)) return;
+    try {
+      if (typeof CSSStyleSheet === 'function' &&
+          'adoptedStyleSheets' in document &&
+          typeof CSSStyleSheet.prototype.replaceSync === 'function') {
+        var sheet = new CSSStyleSheet();
+        sheet.replaceSync(LM_VEB_CSS);
+        document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
+        lmSheet = sheet;
+        return;
+      }
+    } catch (e) { lmSheet = null; }
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'lm-veb-style';
+      style.textContent = LM_VEB_CSS;
+    }
+    if (!style.parentNode) document.head.appendChild(style);
+  }
 
   var pinLayer = null;
   var activePins = [];
 
   function ensurePinLayer() {
     if (pinLayer && pinLayer.parentNode) return pinLayer;
+    // The pin styles are part of the same deferred sheet. This runs only in
+    // response to a user action, so it is always past hydration.
+    ensureVebStyle();
     pinLayer = document.createElement('div');
     pinLayer.id = 'lm-comment-pins';
     document.documentElement.appendChild(pinLayer);
@@ -236,12 +289,13 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
     var d = e.data || {};
     if (d.type === 'lifemark-veb-mode') {
       enabled = !!d.enabled;
-      if (enabled) { if (!style.parentNode) document.head.appendChild(style); }
-      else { clearMarks(); }
+      if (enabled) ensureVebStyle();
+      else clearMarks();
     }
     if (d.type === 'lifemark-comment-pin-mode') {
       commentPinEnabled = !!d.enabled;
-      if (!commentPinEnabled) clearMarks();
+      if (commentPinEnabled) ensureVebStyle();
+      else clearMarks();
     }
     if (d.type === 'lifemark-veb-edit-text-mode') {
       editTextMode = !!d.enabled;

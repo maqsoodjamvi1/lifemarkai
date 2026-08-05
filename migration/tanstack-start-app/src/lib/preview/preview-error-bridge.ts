@@ -66,6 +66,67 @@ export function isNoisePreviewError(
   // runtime/bundler error, which is still caught above. So never let the
   // empty-root heuristic ALONE freeze the preview.
   if (/preview root is empty/i.test(m)) return true;
+  if (isDocumentHydrationMismatch(m)) return true;
+  return false;
+}
+
+/**
+ * A hydration mismatch reported against the DOCUMENT shell — <html>, <head>,
+ * <body>, #document — rather than against page content.
+ *
+ * These are not application bugs, and the AI cannot fix them, because nothing
+ * in the app's render caused them: something mutated the document between the
+ * server's HTML arriving and React hydrating it. Browser extensions are the
+ * usual suspect in the wild (password managers and grammar checkers add
+ * attributes to <body>) — and for a long time WE were the suspect here. The
+ * visual-edit bridge appended a <style> into <head> at parse time, which broke
+ * every server-rendered preview on every load.
+ *
+ * Letting these reach the healing loop was expensive in the most literal
+ * sense. The stack names the customer's __root.tsx, so the auto-fixer spent
+ * real credits rewriting a file that was never wrong, failed, and tried again.
+ *
+ * Deliberately NARROW. A hydration mismatch inside page CONTENT — a div, a
+ * paragraph, text differing between server and client — IS an application bug
+ * (Date.now() during render, reading localStorage while server-rendering) and
+ * the AI fixes those well. Those still come through untouched.
+ */
+export function isDocumentHydrationMismatch(message: string): boolean {
+  const m = message.trim();
+
+  // Family 1: "Expected server HTML to contain a matching <CHILD> in <PARENT>".
+  // Note this one does NOT contain the word "hydration" — gating on that was
+  // the first thing I got wrong here, and it is the message the customer
+  // actually saw most.
+  //
+  // Only the CHILD decides. `<div> in <body>` is a real application bug (the
+  // app rendered a div the server didn't); `<head> in <html>` is the document
+  // shell being mutated from outside React.
+  if (/expected server html to contain a matching/i.test(m)) {
+    const explicit = /matching\s+<\s*([a-z#][\w#-]*)\s*>\s+in\s+</i.exec(m);
+    if (explicit) return /^(html|head|body)$/i.test(explicit[1]!);
+    // The console often logs React's raw format string with its arguments
+    // appended instead of substituted:
+    //   "…a matching <%s> in <%s>.%s head html"
+    // The arguments arrive in order, so the first is still the child.
+    const positional = /%s(?:\.%s)?\s+([a-z#][\w#-]*)\s+([a-z#][\w#-]*)/i.exec(m);
+    if (positional) return /^(html|head|body)$/i.test(positional[1]!);
+    return false;
+  }
+
+  // Family 2: hydration was abandoned and the document was rebuilt. React only
+  // says this about the document itself.
+  if (/server html was replaced with client content/i.test(m)) return true;
+
+  // Family 3: the generic companion error. React emits this alongside the
+  // specific warning above for EVERY hydration failure, including real
+  // content-level ones — but it carries no location, so on its own it can
+  // never tell the fixer what to change. Previews run Vite dev with the
+  // development React build, where the specific warning is always emitted too,
+  // so suppressing this one loses no signal for genuine bugs while removing
+  // the message that drove the loop.
+  if (/hydration failed because the initial ui does not match/i.test(m)) return true;
+
   return false;
 }
 
