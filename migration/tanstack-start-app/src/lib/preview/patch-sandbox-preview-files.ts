@@ -4,7 +4,7 @@ import {
 } from "./patch-vite-for-webcontainer";
 import { isTanStackStartProject } from "@/lib/templates/tanstack-start-scaffold";
 import { ensureTypecheckToolchain } from "./ensure-toolchain";
-import { BASE_APP_DEV_DEPENDENCIES } from "./base-app-deps";
+import { LOVABLE_VITE_DEV_DEPENDENCIES } from "@/lib/templates/lovable-vite-scaffold";
 
 /**
  * Synthesize missing Vite entry files. Incremental builds return only CHANGED
@@ -340,11 +340,20 @@ export function patchSandboxPreviewFiles<T extends { path: string; content?: str
   // package.json lost `typescript` on an earlier turn never regains it until
   // something rewrites that file, and the sandbox sync is the one step every
   // project passes through on every boot.
+  //
+  // The pins are LOVABLE_VITE_DEV_DEPENDENCIES, not BASE_APP_DEV_DEPENDENCIES.
+  // The base set still pins `@types/react` and `@types/react-dom` at ^18.3.1,
+  // while the scaffold and the sandbox image are both on React 19 — so
+  // repairing a project that had lost its types used to re-add the React 18
+  // ones: types that disagree with the runtime, that npm has to fetch over the
+  // network because the image has 19 baked in, and that replace the prebuilt
+  // copies. The Lovable set is a superset of the base set with those two
+  // corrected, so this is strictly the same repair with the right versions.
   return patchFilesForWebContainer(
     ensureViteTunnelHmr(
       ensureSupabaseEnv(
         ensureTailwindPluginDeps(
-          ensureTypecheckToolchain(ensureViteEntryFiles(files), BASE_APP_DEV_DEPENDENCIES),
+          ensureTypecheckToolchain(ensureViteEntryFiles(files), LOVABLE_VITE_DEV_DEPENDENCIES),
         ),
       ),
     ),

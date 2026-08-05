@@ -325,12 +325,33 @@ export function useSandboxPreview(projectId: string) {
     bootedRef.current = true;
     void (async () => {
       setState((s) => ({ ...s, loading: true, phase: "creating", phaseDetail: "Connecting…" }));
-      const reconnected = await reconnectPreview();
-      if (reconnected.previewUrl) return;
-      // "starting" means reconnect found a live sandbox whose app hasn't
-      // answered yet. Cold-booting on top of that would delete the container
-      // it just found and restart a boot that is already nearly done.
-      if (reconnected.phase === "starting") return;
+
+      // Only try to reconnect when there is something to reconnect TO.
+      //
+      // On a first-ever preview sessionStorage is empty, so this reconnect was
+      // a GET that could not possibly succeed — and it was not cheap. The
+      // route pays the full auth stack (getSession then getUser, sequential),
+      // the project-access lookup and a projects read before it reaches the
+      // line that says "no sandbox id" and gives up: four sequential database
+      // round trips blocking the cold boot, to learn what an empty
+      // sessionStorage key already said.
+      //
+      // The warm path is untouched — a stored id still reconnects first, and
+      // "starting" still short-circuits the cold boot.
+      let storedId: string | null = null;
+      try {
+        storedId = sessionStorage.getItem(storageKey(projectId));
+      } catch { /* private mode */ }
+
+      if (storedId) {
+        const reconnected = await reconnectPreview();
+        if (reconnected.previewUrl) return;
+        // "starting" means reconnect found a live sandbox whose app hasn't
+        // answered yet. Cold-booting on top of that would delete the container
+        // it just found and restart a boot that is already nearly done.
+        if (reconnected.phase === "starting") return;
+      }
+
       setState((s) => ({ ...s, phase: "creating", phaseDetail: "Cold start…" }));
       await requestPreview();
     })();
