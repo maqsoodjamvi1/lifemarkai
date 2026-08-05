@@ -626,6 +626,7 @@ export function PreviewPanel({
     sandboxId,
     loading: sandboxLoading,
     error: sandboxError,
+    logs: sandboxLogs,
     phase: sandboxPhase,
     phaseDetail: sandboxPhaseDetail,
     statusResolved: sandboxStatusResolved,
@@ -2638,7 +2639,19 @@ export function PreviewPanel({
               <p className="text-xs text-muted-foreground/40">Loading preview…</p>
             </div>
           </div>
-        ) : previewEngine === "sandbox" && !sandboxUrl ? (
+        ) : previewEngine === "sandbox" &&
+          !sandboxUrl &&
+          // `previewEngine` flips to "sandbox" the moment the project has ANY
+          // files — it is a statement about which engine we would use, NOT
+          // about whether that engine is reachable. So when the backend is
+          // down or unconfigured (`enabled: false`, and no error because
+          // nothing was ever attempted) this branch used to swallow the case
+          // and paint "Starting live preview" with a spinner forever: the
+          // `!sandboxStatusResolved` and "Live preview unavailable" panes
+          // below — the only ones with a Retry button — were unreachable.
+          // Fall through once the status check has come back negative, unless
+          // there is a real error to show here.
+          (sandboxEnabled || !sandboxStatusResolved || Boolean(sandboxError)) ? (
           /* Modal-only: wait / error / retry — never fake with srcdoc/WC/esbuild */
           <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
             <div className="text-center max-w-sm px-4">
@@ -2649,10 +2662,27 @@ export function PreviewPanel({
                 {sandboxError ? "Preview could not start" : "Starting live preview"}
               </p>
               <p className="text-xs text-muted-foreground/60 leading-relaxed">
-                {sandboxError
-                  ? "Something went wrong while starting your app. Retry below — this usually resolves itself."
-                  : (modalPhaseLabel || "Spinning up your app…")}
+                {/* `sandboxError` was thrown away here in favour of a sentence
+                    that says nothing. At this exact moment it holds things like
+                    "npm install failed (exit 1)", "Upload reported success but
+                    /home/node/app is empty — the archive did not extract", or
+                    the stall message naming the three usual causes. The docker
+                    provider gathers the dev-log tail, the process table and
+                    OOMKilled specifically so this is diagnosable; showing
+                    "Something went wrong" instead threw away the only evidence
+                    the user — or we — would ever get. */}
+                {sandboxError || modalPhaseLabel || "Spinning up your app…"}
               </p>
+              {sandboxError && sandboxLogs && (
+                <details className="mt-3 text-left">
+                  <summary className="text-[11px] text-muted-foreground/70 cursor-pointer hover:text-foreground/80 select-none">
+                    Show the boot log
+                  </summary>
+                  <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-black/40 p-2 text-[10px] leading-relaxed text-muted-foreground/80 whitespace-pre-wrap break-all">
+                    {sandboxLogs.slice(-4000)}
+                  </pre>
+                </details>
+              )}
               {sandboxError && (
                 <div className="mt-4 flex items-center justify-center gap-2">
                   <button

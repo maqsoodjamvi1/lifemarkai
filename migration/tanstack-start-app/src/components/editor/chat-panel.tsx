@@ -463,6 +463,16 @@ export function ChatPanel({
   const skipDesignPreviewOnceRef = useRef(false);
   /** True while overlay/manual heal is running — blocks competing auto-fix. */
   const healActiveRef = useRef(false);
+  /**
+   * True once a heal has handed off to the post-stream settle watcher
+   * (`waitForPreviewSuccess`), which resolves the heal asynchronously up to
+   * 12s AFTER the stream itself finishes. Without this flag the stream's
+   * `finally` would see `healActiveRef` still latched, conclude the repair had
+   * died, and fire heal-failed while a perfectly good repair was still
+   * settling — turning every successful self-repair into a false "Preview
+   * paused". The watcher clears it when it settles either way.
+   */
+  const healSettlingRef = useRef(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editInput, setEditInput] = useState("");
   // Per-message per-file accept/revert state
@@ -1802,15 +1812,45 @@ export function ChatPanel({
   // Populate input when user clicks "Fix with AI" on the error banner in preview panel
   useEffect(() => {
     if (!pendingFixPrompt || credits <= 0) {
-      if (pendingFixPrompt && credits <= 0) onPendingFixConsumed?.();
+      if (pendingFixPrompt && credits <= 0) {
+        onPendingFixConsumed?.();
+        // The preview panel already flipped its guard to "healing" the moment
+        // it handed us this prompt — the overlay is now showing
+        // "Self-repairing…" with no way out. Dropping the prompt here without
+        // saying so left that spinner up for the rest of the session. Tell the
+        // guard the repair is not happening so it falls back to the actionable
+        // "Preview paused" card, and say why in the chat.
+        if (pendingFixPrompt.startsWith("Fix the preview/runtime errors")) {
+          window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+          toast({
+            title: "Out of credits",
+            description: "Self-repair needs credits. The preview is unpaused so you can keep editing.",
+            variant: "destructive",
+          });
+        }
+      }
       return;
     }
     const prompt = pendingFixPrompt;
     onPendingFixConsumed?.();
     // Healing overlay sends structured prompt — one-click send (Lovable self-repair)
     if (prompt.startsWith("Fix the preview/runtime errors")) {
+      // `sendMessage` silently returns when a build is already streaming. That
+      // return used to strand the healing overlay exactly like the credits
+      // case above, because nothing downstream ever reported the failure.
+      if (streaming || sendingRef.current) {
+        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+        toast({
+          title: "Already working",
+          description: "A build is still running — try the fix again once it finishes.",
+        });
+        return;
+      }
       healActiveRef.current = true;
-      void sendMessage(appendPreviewDiagnosis(prompt, files), "build");
+      void sendMessage(appendPreviewDiagnosis(prompt, files), "build").catch(() => {
+        healActiveRef.current = false;
+        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+      });
       return;
     }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- consume preview fix request into composer state
@@ -2201,6 +2241,19 @@ export function ChatPanel({
       onMessagesUpdate([...messagesWithFixing, errMsg]);
     } finally {
       setAutoFixing(false);
+      // Both of these were only reset on the happy path. A throw anywhere
+      // above — the fetch, the Supabase refetch, a JSON parse — left
+      // `healActiveRef` latched true, which permanently disabled the auto-fix
+      // effect for the rest of the session, and left the preview overlay
+      // spinning on "Self-repairing…" with no button. Releasing them in
+      // `finally` makes both states impossible to strand. Re-dispatching
+      // heal-failed after a successful heal-done is harmless: the guard has
+      // already cleared and `failHealing` only moves a still-frozen phase.
+      const stranded = healActiveRef.current;
+      healActiveRef.current = false;
+      if (stranded) {
+        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+      }
     }
   }
 
@@ -2949,9 +3002,11 @@ ${(f.content ?? "").slice(0, 8000)}
                     }));
                   }
                   if (healActiveRef.current) {
+                    healSettlingRef.current = true;
                     void (async () => {
                       const previewOk = await waitForPreviewSuccess(12_000);
                       healActiveRef.current = false;
+                      healSettlingRef.current = false;
                       if (previewOk) {
                         window.dispatchEvent(new CustomEvent("lifemark-preview-heal-done"));
                         onAutoFixComplete?.();
@@ -3441,9 +3496,11 @@ ${(f.content ?? "").slice(0, 8000)}
                     detail: { files: updatedFiles, reason: "agent-files-updated" },
                   }));
                   if (healActiveRef.current) {
+                    healSettlingRef.current = true;
                     void (async () => {
                       const previewOk = await waitForPreviewSuccess(12_000);
                       healActiveRef.current = false;
+                      healSettlingRef.current = false;
                       if (previewOk) {
                         window.dispatchEvent(new CustomEvent("lifemark-preview-heal-done"));
                         onAutoFixComplete?.();
@@ -3774,6 +3831,15 @@ ${(f.content ?? "").slice(0, 8000)}
           if (unmountedRef.current) return; // panel gone — drop the retry
           void sendMessage(retry, "build", undefined, { forceBuild: true });
         }, 250);
+      }
+      // A self-repair send that never reached its completion handler — the
+      // stream threw, the user pressed Stop, the response carried no files.
+      // The success paths inside the stream clear `healActiveRef` themselves,
+      // so anything still latched here means the repair died silently and the
+      // preview overlay is sitting on "Self-repairing…" with no way out.
+      if (healActiveRef.current && !healSettlingRef.current) {
+        healActiveRef.current = false;
+        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
       }
     }
   }
