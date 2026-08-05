@@ -757,6 +757,19 @@ export function EditorLayout({
    *  single-file panel edits MERGE so we don't wipe the tree.
    *  Never replace with an empty payload when we already have files — that
    *  blanked the editor/preview after a failed refresh. */
+  /**
+   * The debounced keystroke save waiting to fire, if any.
+   *
+   * Declared up here — above `handleFilesUpdate` rather than next to the
+   * autosave code that owns it — because `handleFilesUpdate` has to be able
+   * to cancel it. See the note there.
+   */
+  const pendingCodeChangeRef = useRef<{
+    fileId: string;
+    content: string;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+
   const handleFilesUpdate = useCallback((
     updatedFiles: ProjectFile[],
     opts?: { replace?: boolean },
@@ -815,6 +828,31 @@ export function EditorLayout({
       next = Array.from(map.values());
     }
 
+    // CANCEL A PENDING KEYSTROKE SAVE FOR A FILE SOMEONE ELSE JUST REWROTE.
+    //
+    // Typing schedules a PATCH 500ms out, carrying the editor buffer as it was
+    // when the last key landed. If an AI build, an agent write, a snapshot
+    // restore or a panel edit rewrites that same file inside the window, the
+    // timer still fires and PATCHes the PRE-rewrite buffer over the new
+    // content — a full revert of the change the user just asked for, with no
+    // error anywhere, seconds after it appeared. (This is the shape of a write
+    // that "reverted itself a couple of minutes later".)
+    //
+    // The incoming content is authoritative and strictly newer, so the stale
+    // buffer loses. Say so rather than dropping the keystrokes silently.
+    const pendingEdit = pendingCodeChangeRef.current;
+    if (pendingEdit) {
+      const pendingPath = prev.find((f) => f.id === pendingEdit.fileId)?.path;
+      if (pendingPath && changedPaths.includes(pendingPath)) {
+        clearTimeout(pendingEdit.timer);
+        pendingCodeChangeRef.current = null;
+        toast({
+          title: "Your unsaved edits were replaced",
+          description: `${pendingPath} was rewritten while you were typing. Use Undo in the chat to get the previous version back.`,
+        });
+      }
+    }
+
     filesRef.current = next;
     setFiles(next);
 
@@ -831,7 +869,7 @@ export function EditorLayout({
       });
     }
     // Keep chat visible on mobile after file sync — user can open Preview via bottom nav.
-  }, [editorMode, handleFocusPreview, isMobile]);
+  }, [editorMode, handleFocusPreview, isMobile, toast]);
 
   const handleFileCreate = useCallback((newFile: ProjectFile) => {
     setFiles((prev) => [...prev, newFile]);
@@ -958,12 +996,6 @@ export function EditorLayout({
     },
     [project.id, toast]
   );
-
-  const pendingCodeChangeRef = useRef<{
-    fileId: string;
-    content: string;
-    timer: ReturnType<typeof setTimeout>;
-  } | null>(null);
 
   const commitCodeChange = useCallback(
     (fileId: string, content: string) => {

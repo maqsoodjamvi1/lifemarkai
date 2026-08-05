@@ -192,21 +192,56 @@ async function handlePOSTUnlocked(req: Request, params: any) {
     ? (existing.metadata as Record<string, unknown>)
     : {};
 
+  /**
+   * The project's metadata as THIS request currently believes it to be.
+   *
+   * Every write below is a whole-object `update`, and they all used to spread
+   * the same `prevMeta` snapshot taken before any of them ran. Two ways that
+   * lost data, both observed as "the preview forgot its sandbox":
+   *
+   *   • `persistPhase` is fire-and-forget. A progress callback in flight when
+   *     the final write lands (or one issued just after it, since the
+   *     provider keeps reporting) re-applies the OLD snapshot on top and
+   *     erases `sandbox_id` / `sandbox_port`. The next poll finds no id and
+   *     cold-boots a project that was already running.
+   *   • On the zombie-recovery path the snapshot still holds the DEAD
+   *     sandbox_id — the one we just deliberately cleared — so a late phase
+   *     write resurrects the corpse and the "self-healing" retry heals into
+   *     the same stuck state.
+   *
+   * Merging into the live object instead of the snapshot fixes both, and
+   * chaining the writes keeps them from reordering against each other.
+   */
+  let liveMeta: Record<string, unknown> = { ...prevMeta };
+  let metaWriteChain: Promise<unknown> = Promise.resolve();
+
+  const writeMeta = (
+    patch: Record<string, unknown>,
+    extraColumns: Record<string, unknown> = {},
+  ): Promise<{ error?: { message?: string } | null }> => {
+    liveMeta = { ...liveMeta, ...patch };
+    const snapshot = { ...liveMeta };
+    const next = metaWriteChain.then(() =>
+      (supabase as any)
+        .from("projects")
+        .update({ ...extraColumns, metadata: snapshot })
+        .eq("id", projectId),
+    );
+    // The chain must never reject, or one failed write would strand all the
+    // ones behind it.
+    metaWriteChain = next.catch(() => undefined);
+    return next.catch((err: unknown) => ({
+      error: { message: err instanceof Error ? err.message : String(err) },
+    }));
+  };
+
   const persistPhase = (phase: string, detail?: string) => {
-    void (supabase as any)
-      .from("projects")
-      .update({
-        metadata: {
-          ...prevMeta,
-          sandbox_phase: phase,
-          sandbox_phase_detail: detail ?? null,
-          sandbox_provider: getSandboxProviderId(),
-          sandbox_updated_at: new Date().toISOString(),
-        },
-      })
-      .eq("id", projectId)
-      .then(() => {})
-      .catch(() => {});
+    void writeMeta({
+      sandbox_phase: phase,
+      sandbox_phase_detail: detail ?? null,
+      sandbox_provider: getSandboxProviderId(),
+      sandbox_updated_at: new Date().toISOString(),
+    });
   };
 
   const provider = getSandboxProvider();
@@ -240,19 +275,15 @@ async function handlePOSTUnlocked(req: Request, params: any) {
       console.warn(
         `[sandbox-preview] stored sandbox is gone (${result.error}) — clearing sandbox_id and cold-booting once`,
       );
-      await (supabase as any)
-        .from("projects")
-        .update({
-          preview_url: null,
-          metadata: {
-            ...prevMeta,
-            sandbox_id: null,
-            sandbox_phase: "creating",
-            sandbox_phase_detail: "Sandbox expired — starting a fresh one…",
-            sandbox_updated_at: new Date().toISOString(),
-          },
-        })
-        .eq("id", projectId);
+      await writeMeta(
+        {
+          sandbox_id: null,
+          sandbox_phase: "creating",
+          sandbox_phase_detail: "Sandbox expired — starting a fresh one…",
+          sandbox_updated_at: new Date().toISOString(),
+        },
+        { preview_url: null },
+      );
 
       // Heal in this same request. Returning retryable alone left the editor on
       // "Preview could not start" whenever the client didn't auto-repost.
@@ -265,21 +296,17 @@ async function handlePOSTUnlocked(req: Request, params: any) {
       });
 
       if (retry.ok) {
-        const { error: previewUrlErr } = await (supabase as any)
-          .from("projects")
-          .update({
-            preview_url: retry.previewUrl,
-            metadata: {
-              ...prevMeta,
-              sandbox_id: retry.sandboxId,
-              sandbox_port: port,
-              sandbox_provider: getSandboxProviderId(),
-              sandbox_phase: "ready",
-              sandbox_phase_detail: null,
-              sandbox_updated_at: new Date().toISOString(),
-            },
-          })
-          .eq("id", projectId);
+        const { error: previewUrlErr } = await writeMeta(
+          {
+            sandbox_id: retry.sandboxId,
+            sandbox_port: port,
+            sandbox_provider: getSandboxProviderId(),
+            sandbox_phase: "ready",
+            sandbox_phase_detail: null,
+            sandbox_updated_at: new Date().toISOString(),
+          },
+          { preview_url: retry.previewUrl },
+        );
         if (previewUrlErr) {
           console.warn("[sandbox-preview] failed to persist preview_url:", previewUrlErr.message);
         }
@@ -325,23 +352,19 @@ async function handlePOSTUnlocked(req: Request, params: any) {
   const bootReady = result.ready !== false;
 
   // Persist the live preview URL + sandbox id for reconnects (Lovable warm-session parity).
-  const { error: previewUrlErr } = await (supabase as any)
-    .from("projects")
-    .update({
-      preview_url: result.previewUrl,
-      metadata: {
-        ...prevMeta,
-        sandbox_id: result.sandboxId,
-        sandbox_port: port,
-        sandbox_provider: getSandboxProviderId(),
-        sandbox_phase: bootReady ? "ready" : "starting",
-        sandbox_phase_detail: bootReady
-          ? null
-          : "Starting your app — the first run takes a moment.",
-        sandbox_updated_at: new Date().toISOString(),
-      },
-    })
-    .eq("id", projectId);
+  const { error: previewUrlErr } = await writeMeta(
+    {
+      sandbox_id: result.sandboxId,
+      sandbox_port: port,
+      sandbox_provider: getSandboxProviderId(),
+      sandbox_phase: bootReady ? "ready" : "starting",
+      sandbox_phase_detail: bootReady
+        ? null
+        : "Starting your app — the first run takes a moment.",
+      sandbox_updated_at: new Date().toISOString(),
+    },
+    { preview_url: result.previewUrl },
+  );
   if (previewUrlErr) {
     console.warn("[sandbox-preview] failed to persist preview_url:", previewUrlErr.message);
   }
