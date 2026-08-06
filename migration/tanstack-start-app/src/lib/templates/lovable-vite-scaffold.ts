@@ -394,8 +394,7 @@ const APP_TSX = `import { QueryClient, QueryClientProvider } from "@tanstack/rea
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import Header from "@/components/layout/Header";
-import Footer from "@/components/layout/Footer";
+import SiteChrome from "@/components/layout/SiteChrome";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 
@@ -406,13 +405,17 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <BrowserRouter>
-        <Header />
-        <Routes>
-          <Route path="/" element={<Index />} />
-          {/* Add all custom routes ABOVE the catch-all "*" route. */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-        <Footer />
+        {/* SiteChrome shows the site header/footer on PUBLIC routes and
+            nothing under /admin/*, so one app serves a public website AND an
+            internal admin area. Do not mount Header/Footer directly. */}
+        <SiteChrome>
+          <Routes>
+            <Route path="/" element={<Index />} />
+            {/* Public pages go here. Admin screens go under /admin/* and
+                render inside their own AppLayout, with no site chrome. */}
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </SiteChrome>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
@@ -650,7 +653,7 @@ export function lovableViteScaffold(name = "My App"): ScaffoldFile[] {
     { path: "README.md", language: "markdown", content: LOVABLE_README(name) },
     { path: "public/robots.txt", language: "plaintext", content: LOVABLE_ROBOTS },
     // Every new site starts WITH a header and footer — see lib/templates/site-chrome.ts.
-    ...siteChromeFiles(deriveBrand(name)),
+    ...siteChromeFiles(deriveBrand(name), "react-router"),
   ];
 }
 

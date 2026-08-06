@@ -143,8 +143,7 @@ import {
   Scripts,
 } from "@tanstack/react-router";
 import appCss from "../styles.css?url";
-import { Header } from "../components/layout/Header";
-import { Footer } from "../components/layout/Footer";
+import { SiteChrome } from "../components/layout/SiteChrome";
 
 export const Route = createRootRoute({
   head: () => ({
@@ -173,9 +172,7 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
         <HeadContent />
       </head>
       <body>
-        <Header />
-        {children}
-        <Footer />
+        <SiteChrome>{children}</SiteChrome>
         <Scripts />
       </body>
     </html>
@@ -224,7 +221,7 @@ export function tanstackStartScaffold(
 ): ScaffoldFile[] {
   // Every new site starts WITH a header and footer. See lib/templates/site-chrome.ts
   // for why this belongs in the scaffold rather than only in a post-build check.
-  const chrome = siteChromeFiles(deriveBrand(projectName));
+  const chrome = siteChromeFiles(deriveBrand(projectName), "tanstack-start");
   return [
     { path: "package.json", language: "json", content: PACKAGE_JSON(pkgExtra) },
     { path: "tsconfig.json", language: "json", content: TSCONFIG },
