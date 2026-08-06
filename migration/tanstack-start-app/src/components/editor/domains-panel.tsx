@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import type { Project } from "@/types/database";
 import { DomainBuyModal } from "./domain-buy-modal";
+import { launchEntri } from "@/lib/domains/entri-client";
 
 interface DomainsPanelProps {
   project: Project;
@@ -272,20 +273,41 @@ export function DomainsPanel({ project, onProjectUpdate }: DomainsPanelProps) {
     if (!domain) return;
     setConnecting(true);
     try {
-      const res = await fetch("/api/domains", {
+      // Go through the Entri route, which attaches the hostname to the host,
+      // saves the domain, and — when Entri is configured — returns a token for
+      // the one-click flow. It falls back to `mode: "manual"` with the same DNS
+      // records, so this single call covers both worlds.
+      const res = await fetch("/api/domains/entri", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ projectId: project.id, domain }),
       });
       const data = await res.json() as {
-        domain: string;
-        dnsInstructions: DnsRecord[];
+        mode?: "entri" | "manual";
+        applicationId?: string;
+        token?: string;
+        prefilledDomain?: string;
+        dnsRecords?: Array<{ type: string; host: string; value: string; ttl: number }>;
+        message?: string;
         error?: string;
       };
       if (!res.ok) {
-        toast({ title: "Error", description: data.error ?? "Failed to connect domain", variant: "destructive" });
+        toast({
+          title: "Could not connect domain",
+          description: data.error ?? data.message ?? "Failed to connect domain",
+          variant: "destructive",
+        });
         return;
       }
+
+      // The panel renders records as { type, name, value }; the Entri SDK wants
+      // { type, host, value, ttl }. Same records, two vocabularies.
+      const records: DnsRecord[] = (data.dnsRecords ?? []).map((r) => ({
+        type: r.type,
+        name: r.host,
+        value: r.value,
+      })) as DnsRecord[];
+
       setDomains((prev) => [
         ...prev.filter((d) => d.domain !== domain),
         {
@@ -294,12 +316,38 @@ export function DomainsPanel({ project, onProjectUpdate }: DomainsPanelProps) {
           status: "pending",
           wwwStatus: "pending",
           isPrimary: prev.length === 0,
-          dnsRecords: data.dnsInstructions ?? [],
+          dnsRecords: records,
         },
       ]);
       setConnectInput("");
       setShowConnect(false);
-      toast({ title: "Domain connected", description: "Add the DNS records shown below to activate it." });
+
+      if (data.mode === "entri" && data.applicationId && data.token) {
+        const result = await launchEntri({
+          applicationId: data.applicationId,
+          token: data.token,
+          prefilledDomain: data.prefilledDomain ?? domain,
+          dnsRecords: data.dnsRecords ?? [],
+        });
+        if (result?.success) {
+          toast({ title: "DNS configured", description: "Checking that it has propagated…" });
+          void verifyDomain(domain);
+          return;
+        }
+        // null means the SDK could not load; false means the user closed it.
+        // Either way the domain is saved and the manual records are on screen,
+        // so this is a fallback, not an error.
+        toast({
+          title: "Domain added",
+          description:
+            result === null
+              ? "One-click setup was unavailable — add the DNS records shown below."
+              : "Add the DNS records shown below to activate it.",
+        });
+        return;
+      }
+
+      toast({ title: "Domain added", description: "Add the DNS records shown below to activate it." });
     } finally {
       setConnecting(false);
     }

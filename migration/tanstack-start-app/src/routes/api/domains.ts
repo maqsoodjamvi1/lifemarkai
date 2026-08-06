@@ -21,6 +21,13 @@ export const Route = createFileRoute("/api/domains")({
         if (r.status === "unauthorized") return unauth();
         if (r.status === "bad_request") return Response.json({ error: r.message }, { status: 400 });
         if (r.status === "not_found") return Response.json({ error: "Project not found" }, { status: 404 });
+        // The attach failed. 502 rather than 500: the fault is upstream at the
+        // hosting provider (or in our configuration of it), not in the request.
+        // Without this branch the new status fell through to `r.payload`, which
+        // is undefined on that path — the client would have received `null`
+        // with a 200 and shown a success toast for a domain that was never
+        // attached, which is the exact failure this change exists to end.
+        if (r.status === "hosting_error") return Response.json({ error: r.message }, { status: 502 });
         return Response.json(r.payload);
       },
       DELETE: async ({ request }) => {
