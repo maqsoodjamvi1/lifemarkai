@@ -3018,7 +3018,12 @@ MODAL_TOKEN_SECRET=...
                     <p className="text-muted-foreground">No network activity yet…</p>
                   ) : (
                     networkLines.map((line, i) => (
-                      <div key={i} className="text-foreground/70 truncate">{line.text}</div>
+                      <div key={i} className="text-foreground/70 truncate">
+                        {`${line.method} ${line.url}`}
+                        {line.status != null ? ` — ${line.status}` : ""}
+                        {line.durationMs != null ? ` (${Math.round(line.durationMs)}ms)` : ""}
+                        {line.error ? ` — ${line.error}` : ""}
+                      </div>
                     ))
                   )
                 ) : (

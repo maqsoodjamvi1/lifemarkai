@@ -48,6 +48,10 @@ function parseCsv(text: string): string[][] {
     .map((line) => line.split(";"));
 }
 
+/** Mirrors the 24h revalidate the Next.js fetch option used to provide. */
+const SEMRUSH_TTL_MS = 86_400_000;
+const semrushCache = new Map<string, { body: string; at: number }>();
+
 async function semrushRequest(params: Record<string, string>): Promise<string> {
   const key = process.env.SEMRUSH_API_KEY;
   if (!key) throw new SemrushNotConfiguredError();
@@ -57,12 +61,21 @@ async function semrushRequest(params: Record<string, string>): Promise<string> {
     url.searchParams.set(k, v);
   }
 
-  const res = await fetch(url.toString(), { next: { revalidate: 86_400 } });
+  // `{ next: { revalidate } }` was a Next.js fetch extension. After the
+  // TanStack move it is not merely a type error — it is ignored, so the 24h
+  // cache it promised silently stopped happening and every call hit a metered
+  // API. Keep the contract with a small in-process cache instead.
+  const href = url.toString();
+  const hit = semrushCache.get(href);
+  if (hit && Date.now() - hit.at < SEMRUSH_TTL_MS) return hit.body;
+
+  const res = await fetch(href);
   const body = await res.text();
 
   if (!res.ok || body.startsWith("ERROR")) {
     throw new Error(body.replace(/^ERROR \d+ :: /, "").trim() || `Semrush API error (${res.status})`);
   }
+  semrushCache.set(href, { body, at: Date.now() });
   return body;
 }
 

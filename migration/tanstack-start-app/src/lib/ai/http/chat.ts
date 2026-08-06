@@ -1180,14 +1180,19 @@ The user has expressed frustration. Do the following:
         try {
           const assignments = planSubagents(message, files, rankFilesByKeywords);
           if (assignments.length > 0) {
+            // No onStep callback on purpose. This fan-out runs BEFORE the
+            // response stream is created, so there is no sink to enqueue into
+            // yet. The callback that used to be here referenced `safeEnqueue`,
+            // which is not bound until the ReadableStream opens further down —
+            // so it threw ReferenceError on the FIRST assignment, inside the
+            // try below, and every build silently fell back to the keyword
+            // scan. Parallel subagents never ran once in production.
+            //
+            // Nothing is lost by dropping it: the steps reach the client
+            // anyway, replayed from `subagentSteps` the moment the stream opens.
             const fanout = await runParallelSubagents(
               assignments,
               { projectId, userId },
-              (step) => {
-                safeEnqueue(
-                  encoder.encode(`data: ${JSON.stringify({ subagent: step })}\n\n`),
-                );
-              },
             );
             logger.info("ai.chat.subagents_parallel", {
               projectId,
