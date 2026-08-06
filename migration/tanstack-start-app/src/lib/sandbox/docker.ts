@@ -47,7 +47,7 @@ import type {
   SandboxProvider,
   SandboxRunResult,
   TypecheckResult,
-} from "./index";
+} from "./index.ts";
 import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared.ts";
 import { SYNC_MANIFEST, filesToPrune } from "./prune-files.ts";
 import { parseTscOutput } from "./tsc-diagnostics.ts";

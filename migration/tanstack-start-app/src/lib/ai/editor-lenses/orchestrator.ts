@@ -25,7 +25,7 @@ import type {
   InitiativeCheckpoint,
   EditorIntelligenceEvent,
   EditorTask,
-} from "./types";
+} from "./types.ts";
 
 const DEBATE_MAX_ROUNDS = 2;
 const MAX_PARALLEL_TASKS = 3;

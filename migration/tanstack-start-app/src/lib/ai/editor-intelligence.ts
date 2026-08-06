@@ -16,7 +16,7 @@ import {
   FREE_CODING_MODEL,
   ECONOMY_CODING_MODEL,
   ECONOMY_CHAT_MODEL,
-} from "./model-defaults";
+} from "./model-defaults.ts";
 import { selectModelChain, type ModelStrength } from "./model-catalog.ts";
 
 export { DEFAULT_CODING_MODEL, BALANCED_CODING_MODEL, FAST_CODING_MODEL, DEFAULT_CHAT_MODEL, REASONING_MODEL };

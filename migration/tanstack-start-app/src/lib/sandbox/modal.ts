@@ -11,7 +11,7 @@ import type {
   SandboxFile,
   SandboxProvider,
   SandboxRunResult,
-} from "./index";
+} from "./index.ts";
 import {
   DEFAULT_IDLE_TIMEOUT_MS,
   DEFAULT_TIMEOUT_MS,
@@ -19,7 +19,7 @@ import {
   sandboxNameForProject,
   trunc,
   waitForServer,
-} from "./shared";
+} from "./shared.ts";
 import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "../preview/base-app-deps.ts";
 
 const WORKDIR = "/workspace";
