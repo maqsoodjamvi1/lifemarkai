@@ -361,6 +361,118 @@ export async function handleAiAgent(req: Request) {
     console.warn("[agent] db_query tool setup failed:", err instanceof Error ? err.message : err);
   }
 
+  // ── db_propose_write: the agent may ASK to change live data, never do it ───
+  //
+  // Lovable's agent assigns a staff member to a department and enables a menu
+  // for a user — real row changes on a running app. This is how we do that
+  // without handing a language model an unattended UPDATE against a council's
+  // production database.
+  //
+  // The tool ends at a proposal. It validates the statement, computes the EXACT
+  // number of rows it would affect (sql-write-preview refuses anything it cannot
+  // count precisely), records it as `proposed`, and returns the id. Execution
+  // lives behind an authenticated approval endpoint, so the model has no path to
+  // it at all — not a discouraged path, not a guarded one, none.
+  //
+  // NOTE on permissions: `database: "allow"` does NOT auto-run writes. That
+  // setting was created when this permission meant read-only queries, and
+  // silently re-reading an old consent as "may mutate production without
+  // asking" is not something the user agreed to. `never` blocks proposing;
+  // every other value still requires a human on the approval endpoint.
+  try {
+    const cloudRef = (projectRow as { cloud_project_ref?: string | null } | null)?.cloud_project_ref;
+    const dbPermission = (cloudPermissions as { database?: string } | null)?.database ?? "ask";
+    if (projectRow?.cloud_enabled && cloudRef && dbPermission !== "never") {
+      const { planSqlWrite } = await import("@/lib/cloud/sql-write-preview");
+      const { queryManagedSql } = await import("@/lib/cloud/management");
+      extraTools.push({
+        name: "db_propose_write",
+        description:
+          "Propose a single INSERT/UPDATE/DELETE against this project's live Cloud Postgres. This does NOT run it — it returns the exact number of rows the statement would affect so the user can approve or decline. Use for operational fixes to real data (assign a role, correct a field, enable a flag for a user). Rules: one statement; UPDATE and DELETE must have a WHERE clause; no subqueries; no schema changes. Read first with db_query, then propose using literal values.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sql: { type: "string", description: "A single INSERT, UPDATE or DELETE statement" },
+            reason: { type: "string", description: "One sentence: why this change, in the user's terms" },
+          },
+          required: ["sql", "reason"],
+        },
+        execute: async (args: Record<string, unknown>) => {
+          const sql = String(args.sql ?? "");
+          const reason = String(args.reason ?? "").slice(0, 500);
+
+          const plan = planSqlWrite(sql);
+          if (!plan.ok) return JSON.stringify({ error: plan.reason });
+
+          // Count using the read-only query the planner derived. If this fails,
+          // the whole proposal fails: an approval prompt with no number on it is
+          // the exact thing this design exists to prevent.
+          let previewedRows: number;
+          if (plan.staticCount != null) {
+            previewedRows = plan.staticCount;
+          } else {
+            const counted = await queryManagedSql<{ affected: string | number }>(cloudRef, plan.countQuery!);
+            if (!counted.ok) {
+              return JSON.stringify({
+                error: `Could not determine how many rows this would affect (${counted.error ?? "count failed"}). Not proposing a change nobody can size.`,
+              });
+            }
+            const raw = counted.rows[0]?.affected;
+            const n = typeof raw === "string" ? Number(raw) : raw;
+            if (!Number.isFinite(n)) {
+              return JSON.stringify({ error: "The row count came back unreadable. Not proposing a change nobody can size." });
+            }
+            previewedRows = Number(n);
+          }
+
+          const { data: row, error: auditError } = await (supabase as unknown as {
+            from: (t: string) => {
+              insert: (v: Record<string, unknown>) => {
+                select: (c: string) => { single: () => Promise<{ data: { id: string } | null; error: { message: string } | null }> };
+              };
+            };
+          })
+            .from("project_data_writes")
+            .insert({
+              project_id: projectId,
+              statement: plan.statement,
+              kind: plan.kind,
+              target_table: plan.table,
+              previewed_rows: previewedRows,
+              status: "proposed",
+            })
+            .select("id")
+            .single();
+
+          // No audit row, no proposal. A mutation of a customer's production
+          // data that nothing recorded is not something this product should be
+          // able to produce, so this failure is fatal rather than logged.
+          if (auditError || !row) {
+            return JSON.stringify({
+              error: `Could not record the proposal for audit (${auditError?.message ?? "no row returned"}). Nothing was changed.`,
+            });
+          }
+
+          return JSON.stringify({
+            proposed: true,
+            proposalId: row.id,
+            kind: plan.kind,
+            table: plan.table,
+            statement: plan.statement,
+            rowsAffected: previewedRows,
+            reason,
+            note:
+              previewedRows === 0
+                ? "This currently matches NO rows — say so plainly rather than presenting it as a fix, and re-check the predicate."
+                : "Tell the user what will change and how many rows, then wait. You cannot run this yourself.",
+          });
+        },
+      });
+    }
+  } catch (err) {
+    console.warn("[agent] db_propose_write tool setup failed:", err instanceof Error ? err.message : err);
+  }
+
   const reservationAmount = maxCreditCostForMode("agent");
   const creditReservation = await reserveCredits(supabase, {
     userId: user.id,
