@@ -5,6 +5,7 @@ import {
 import { isTanStackStartProject } from "../templates/tanstack-start-scaffold.ts";
 import { ensureTypecheckToolchain } from "./ensure-toolchain.ts";
 import { LOVABLE_VITE_DEV_DEPENDENCIES } from "../templates/lovable-vite-scaffold.ts";
+import { normalizeProjectImports } from "./normalize-imports.ts";
 
 /**
  * Synthesize missing Vite entry files. Incremental builds return only CHANGED
@@ -353,7 +354,7 @@ export function patchSandboxPreviewFiles<T extends { path: string; content?: str
     ensureViteTunnelHmr(
       ensureSupabaseEnv(
         ensureTailwindPluginDeps(
-          ensureTypecheckToolchain(ensureViteEntryFiles(files), LOVABLE_VITE_DEV_DEPENDENCIES),
+          ensureTypecheckToolchain(ensureViteEntryFiles(normalizeProjectImports(files)), LOVABLE_VITE_DEV_DEPENDENCIES),
         ),
       ),
     ),
