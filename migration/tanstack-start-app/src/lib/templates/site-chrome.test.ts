@@ -9,6 +9,7 @@ import {
   siteChromeShellSource,
 } from "./site-chrome.ts";
 import { lovableViteScaffold } from "./lovable-vite-scaffold.ts";
+import { ensureWebsiteChrome, hasSiteFooter, hasSiteHeader } from "../ai/website-chrome.ts";
 import { tanstackStartScaffold } from "./tanstack-start-scaffold.ts";
 
 const fileAt = (files: Array<{ path: string; content: string }>, path: string) => {
@@ -114,4 +115,39 @@ test("both scaffolds still ship the header and footer themselves", () => {
     assert.ok(files.some((f) => f.path === "src/components/layout/Header.tsx"));
     assert.ok(files.some((f) => f.path === "src/components/layout/Footer.tsx"));
   }
+});
+
+/**
+ * The two halves of the chrome system have to agree, and they silently did not.
+ *
+ * `website-chrome` decides whether a build is missing its header by scanning the
+ * SHELL for <Header />. Moving that mount into SiteChrome removed the literal
+ * from both scaffolds, and SiteChrome.tsx lives in components/layout, which
+ * SHELL_OR_PAGE_RE does not scan — so every fresh project read as header-less
+ * and the guarantee grafted a SECOND header into the shell, duplicating chrome
+ * on public pages and making it global again, back onto /admin.
+ */
+test("the chrome guarantee leaves a fresh scaffold untouched", () => {
+  for (const files of [lovableViteScaffold("Acme"), tanstackStartScaffold({}, "Acme")]) {
+    const all = files.map((f) => ({ path: f.path, content: f.content }));
+    assert.equal(hasSiteHeader(all), true, "header should read as present");
+    assert.equal(hasSiteFooter(all), true, "footer should read as present");
+    // NOT needsWebsiteChrome: that answers "is this a public website that OWES
+    // chrome?", which is true for a scaffold and always was. The property that
+    // matters is that ensureWebsiteChrome finds nothing missing and hands the
+    // input straight back.
+    assert.equal(ensureWebsiteChrome(all), all, "guarantee must not modify it");
+  }
+});
+
+test("a shell that drops SiteChrome is still reported as missing chrome", () => {
+  const files = lovableViteScaffold("Acme").map((f) => ({ path: f.path, content: f.content }));
+  const app = files.find((f) => f.path === "src/App.tsx");
+  assert.ok(app);
+  // The failure the guarantee exists for: the model rewrites the shell and drops
+  // the mount, leaving the component files behind.
+  app.content = app.content.replace(/<SiteChrome>|<\/SiteChrome>/g, "");
+  assert.equal(hasSiteHeader(files), false);
+  assert.equal(hasSiteFooter(files), false);
+  assert.notEqual(ensureWebsiteChrome(files), files, "guarantee must step in");
 });
