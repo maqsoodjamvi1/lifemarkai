@@ -1239,9 +1239,13 @@ export function EditorTopBar({
                   off Lovable's Share button (58×28, background #F5F5F5).
                   Ours was 32px with an outline and a drop shadow, which made
                   it compete with Publish instead of sitting under it. */}
+              {/* Lovable's Share, property for property: 58x28, 14px/400,
+                  padding 4px 9px, gap 4px, bg oklch(0.9699 0 107), text
+                  oklch(0.1 0 0), no border, no shadow — and NO ICON. Theirs
+                  renders an svg at 0x0; the button is text only, which is most
+                  of why ours measured 79 against their 58. */}
               <Button variant="ghost" size="sm"
-                className="h-7 gap-1.5 text-[13px] font-medium flex-shrink-0 rounded-full px-3 bg-muted border-0 text-foreground shadow-none hover:bg-muted/70">
-                <Users className="h-3.5 w-3.5" />
+                className="h-7 gap-1 text-sm font-normal flex-shrink-0 rounded-full px-[9px] py-1 bg-[oklch(0.9699_0_107)] border-0 text-[oklch(0.1_0_0)] shadow-none hover:bg-[oklch(0.94_0_107)]">
                 Share
               </Button>
             </DropdownMenuTrigger>
@@ -1399,9 +1403,13 @@ export function EditorTopBar({
                 <Button
                   size="sm"
                   disabled={isDeploying}
-                  className="relative h-7 gap-1.5 text-[13px] font-semibold bg-[#1F55F1] hover:bg-[#1142DE] text-white border-0 rounded-full px-3 shadow-none"
+                  // 82x28, 14px/400, padding 4px 9px 4px 8px, gap 4px, no
+                  // icon — Lovable's exact values. The spinner stays on the
+                  // publishing state; a control that changes nothing while it
+                  // works reads as broken.
+                  className="relative h-7 gap-1 text-sm font-normal bg-[#1F55F1] hover:bg-[#1142DE] text-white border-0 rounded-full pl-2 pr-[9px] py-1 shadow-none"
                 >
-                  {isDeploying ? <><Loader2 className="h-3 w-3 animate-spin" />Publishing…</> : <><Rocket className="h-3 w-3" />Publish</>}
+                  {isDeploying ? <><Loader2 className="h-3 w-3 animate-spin" />Publishing…</> : "Publish"}
                   {hasUnpublishedChanges && !isDeploying && (
                     <span
                       className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-background"
