@@ -113,8 +113,18 @@ function effective(files: ChromeFile[], existing: ChromeFile[]): ChromeFile[] {
  * So: look at what the shell and the pages actually render — a literal
  * `<header>`/`<footer>` element, or a component whose name reads as site chrome.
  */
-const HEADER_RENDER_RE = /<(header|Header|Navbar|NavBar|SiteHeader|TopBar|TopNav)[\s/>]/;
-const FOOTER_RENDER_RE = /<(footer|Footer|SiteFooter)[\s/>]/;
+//
+// `SiteChrome` counts as BOTH. Since the public-site/admin split, the scaffolds
+// no longer render <Header /> in the shell at all — they render <SiteChrome>,
+// which renders the header and footer itself on public routes. SiteChrome.tsx
+// lives in components/layout and is therefore not scanned by SHELL_OR_PAGE_RE,
+// so without naming it here these predicates report "no chrome" for EVERY
+// freshly scaffolded project — and the guarantee below helpfully mounts a
+// second <Header /> straight into the shell, which both duplicates the chrome
+// on public pages and makes it global again, putting it back on /admin.
+const HEADER_RENDER_RE =
+  /<(header|Header|Navbar|NavBar|SiteHeader|TopBar|TopNav|SiteChrome)[\s/>]/;
+const FOOTER_RENDER_RE = /<(footer|Footer|SiteFooter|SiteChrome)[\s/>]/;
 
 function rendersChrome(all: ChromeFile[], re: RegExp): boolean {
   return all.some(

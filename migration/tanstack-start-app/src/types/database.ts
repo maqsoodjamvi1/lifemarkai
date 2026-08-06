@@ -40,7 +40,22 @@ export type Database = {
           user_id: string;
           name: string;
           description: string | null;
-          framework: "react" | "next" | "vue" | "svelte";
+          /**
+           * Mirrors projects_framework_check as widened by migration 155.
+           * The original 001 list (react/next/vue/svelte) was never updated
+           * here, so "react-native" — written by the composer every time
+           * mobile mode is toggled — was a type error against a value the
+           * database has accepted since 155.
+           */
+          framework:
+            | "react"
+            | "next"
+            | "nextjs"
+            | "vue"
+            | "svelte"
+            | "react-native"
+            | "tanstack-start"
+            | "tanstack";
           status: "active" | "archived" | "building";
           is_public: boolean;
           preview_url: string | null;
