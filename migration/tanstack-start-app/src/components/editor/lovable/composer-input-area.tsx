@@ -2,8 +2,6 @@
 import type { RefObject } from "react";
 import type { LeftPanel } from "@/components/editor/editor-layout";
 import { ChatTiptapInput, type ChatInputHandle } from "@/components/editor/chat-tiptap-input";
-import { LovableSecurityIssuesBar } from "./security-issues-bar";
-import { LovableLiveLockBanner } from "./live-lock-banner";
 import {
   LovableComposerCharacterCounter,
   lovableComposerInputRingClass,
@@ -109,17 +107,15 @@ export function LovableComposerInputArea({
     <>
       <LovableComposerOverlays {...overlayProps} />
 
-      {!isLocked && (
-        <LovableSecurityIssuesBar
-          issueCount={securityIssueCount}
-          noCredits={noCredits}
-          freeFixesRemaining={freeFixesRemaining}
-          onViewIssues={onViewSecurityIssues}
-          onFixAll={onFixAllSecurityIssues}
-        />
-      )}
+      {/* The security bar and the lock banner used to render HERE, inside the
+          composer card. That put a 51px row plus the card's 8px gap above the
+          input and made the card 163px against Lovable's 100 — measured on
+          production, not guessed.
 
-      {isLocked && <LovableLiveLockBanner />}
+          Their card holds exactly two children: the input and the footer row.
+          Anything else belongs above the card, in the shell, where it can be as
+          tall as it needs without changing the shape of the thing you type
+          into. Both now render there; see chat-panel.tsx. */}
 
       {/* Lovable dump: #chatinput CSS-grid host + always-mounted sibling placeholder */}
       <div

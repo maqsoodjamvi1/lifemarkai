@@ -972,6 +972,121 @@ export function EditorTopBar({
           className={cn("flex items-center gap-0.5 flex-1 justify-center min-w-0", isMobile && "justify-start gap-1")}
         >
 
+          {/* Status, notifications and tools live on the LEFT. Lovable's
+              right cluster is exactly Share and Publish, and anything else
+              sitting beside them competes with the only button in the row
+              that ships. Moved, not removed. */}
+          <NotificationsBell projectId={project.id} className="hidden sm:flex" />
+
+          {/* ── Status & tools — one control instead of nine ──────────────────
+              This bar used to carry, loose and side by side: an autosave
+              label, a Test/Live pill, a deploy-status pill, a credits pill,
+              two dividers, and a three-icon cluster for open-in-new-tab /
+              refresh / comments. Measured against Lovable's editor at the
+              same viewport width, their right cluster holds exactly two
+              controls — Share and Publish — and ours held thirteen. That
+              difference is most of why the two editors read differently at a
+              glance, far more than any single colour or radius.
+
+              Nothing is gone. Open-in-new-tab and refresh were already
+              duplicated by the centre URL pill, so those two are simply
+              redundant; the rest moved in here. The dot on the trigger
+              carries anything that genuinely needs attention — low credits,
+              a failed deploy — outward, so collapsing the cluster cannot
+              hide bad news. */}
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Project status and tools"
+                    className="relative h-7 w-7 rounded-full text-foreground/70 hover:text-foreground hover:bg-muted flex-shrink-0"
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                    {statusNeedsAttention && (
+                      <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-red-500 ring-2 ring-background" />
+                    )}
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent>Status &amp; tools</TooltipContent>
+            </Tooltip>
+
+            <DropdownMenuContent align="end" className="w-64">
+              {/* Credits */}
+              <div className="flex items-center justify-between px-2 py-1.5 text-xs">
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <Zap className="h-3.5 w-3.5" /> Credits
+                </span>
+                <span className={`font-semibold tabular-nums ${
+                  creditsLow ? "text-red-600 dark:text-red-400"
+                  : creditsMed ? "text-yellow-700 dark:text-yellow-400"
+                  : "text-foreground"
+                }`}>
+                  {creditsDisplay}
+                </span>
+              </div>
+
+              {/* Deploy status — only once there is a deploy to report on. */}
+              {deployStatus !== "idle" && (
+                <DropdownMenuItem
+                  className="text-xs gap-2"
+                  disabled={!(deployStatus === "deployed" && liveUrl)}
+                  onClick={() => {
+                    if (deployStatus === "deployed" && liveUrl) {
+                      window.open(liveUrl, "_blank", "noopener,noreferrer");
+                    }
+                  }}
+                >
+                  {deployStatus === "deploying"
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                    : <span className={`w-2 h-2 rounded-full ml-1 mr-0.5 ${deployStatus === "deployed" ? "bg-emerald-500" : "bg-red-500"}`} />}
+                  <span className="flex-1">
+                    {deployStatus === "deploying" ? "Deploying…" : deployStatus === "deployed" ? "Live" : "Deploy failed"}
+                  </span>
+                  {deployStatus === "deployed" && liveUrl && <ExternalLink className="w-3 h-3 opacity-60" />}
+                </DropdownMenuItem>
+              )}
+
+              {/* Autosave — a status line, not an action. */}
+              {savedLabel && (
+                <div className="px-2 py-1.5 text-[11px] text-muted-foreground tabular-nums">
+                  {savedLabel}
+                </div>
+              )}
+
+              <DropdownMenuSeparator />
+
+              {/* Test / Live environment switcher */}
+              <DropdownMenuItem
+                className="text-xs gap-2"
+                disabled={envSaving}
+                onSelect={(e) => { e.preventDefault(); void handleEnvironmentToggle(); }}
+              >
+                {envSaving
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : environment === "live"
+                    ? <Globe className="w-3.5 h-3.5 text-emerald-600" />
+                    : <Lock className="w-3.5 h-3.5" />}
+                <span className="flex-1">
+                  {environment === "live" ? "Live — AI edits locked" : "Test — AI edits on"}
+                </span>
+                <span className="text-[10px] text-muted-foreground">
+                  {environment === "live" ? "Switch to Test" : "Switch to Live"}
+                </span>
+              </DropdownMenuItem>
+
+              <DropdownMenuItem
+                className="text-xs gap-2"
+                onClick={() => openSecondaryPanel("comments", onRightPanelChange)}
+              >
+                <MessageCircle className="w-3.5 h-3.5" /> Comments
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           {!isMobile && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1095,13 +1210,20 @@ export function EditorTopBar({
           />
         </div>
 
-        {/* ── Right: Lovable-style compact action bar ── */}
-        <div className="flex items-center gap-0.5 flex-shrink-0">
+        {/* ── Right: Share and Publish. Nothing else. ────────────────────────
+            Measured at the same viewport, Lovable's right cluster is exactly
+            two buttons. Ours was thirteen, then four, and four still reads as
+            a toolbar beside their two.
+
+            Notifications and the status menu are not deleted — they moved to
+            the left group below. The unread badge and the attention dot still
+            work there; they just stop competing with the only button in this
+            row that ships something. Gap 8px, matching theirs. */}
+        <div className="flex items-center gap-2 flex-shrink-0">
 
           {/* Notifications — kept inline because its unread badge is the only
               thing in this cluster that has to be seen without being asked
               for. Everything else moved into the status menu below. */}
-          <NotificationsBell projectId={project.id} className="hidden sm:flex" />
 
           {/* Presence avatars */}
           {presenceUsers.length > 0 && (
@@ -1123,114 +1245,6 @@ export function EditorTopBar({
             </div>
           )}
 
-          {/* ── Status & tools — one control instead of nine ──────────────────
-              This bar used to carry, loose and side by side: an autosave
-              label, a Test/Live pill, a deploy-status pill, a credits pill,
-              two dividers, and a three-icon cluster for open-in-new-tab /
-              refresh / comments. Measured against Lovable's editor at the
-              same viewport width, their right cluster holds exactly two
-              controls — Share and Publish — and ours held thirteen. That
-              difference is most of why the two editors read differently at a
-              glance, far more than any single colour or radius.
-
-              Nothing is gone. Open-in-new-tab and refresh were already
-              duplicated by the centre URL pill, so those two are simply
-              redundant; the rest moved in here. The dot on the trigger
-              carries anything that genuinely needs attention — low credits,
-              a failed deploy — outward, so collapsing the cluster cannot
-              hide bad news. */}
-          <DropdownMenu>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Project status and tools"
-                    className="relative h-7 w-7 rounded-full text-foreground/70 hover:text-foreground hover:bg-muted flex-shrink-0"
-                  >
-                    <MoreHorizontal className="h-4 w-4" />
-                    {statusNeedsAttention && (
-                      <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-red-500 ring-2 ring-background" />
-                    )}
-                  </Button>
-                </DropdownMenuTrigger>
-              </TooltipTrigger>
-              <TooltipContent>Status &amp; tools</TooltipContent>
-            </Tooltip>
-
-            <DropdownMenuContent align="end" className="w-64">
-              {/* Credits */}
-              <div className="flex items-center justify-between px-2 py-1.5 text-xs">
-                <span className="flex items-center gap-1.5 text-muted-foreground">
-                  <Zap className="h-3.5 w-3.5" /> Credits
-                </span>
-                <span className={`font-semibold tabular-nums ${
-                  creditsLow ? "text-red-600 dark:text-red-400"
-                  : creditsMed ? "text-yellow-700 dark:text-yellow-400"
-                  : "text-foreground"
-                }`}>
-                  {creditsDisplay}
-                </span>
-              </div>
-
-              {/* Deploy status — only once there is a deploy to report on. */}
-              {deployStatus !== "idle" && (
-                <DropdownMenuItem
-                  className="text-xs gap-2"
-                  disabled={!(deployStatus === "deployed" && liveUrl)}
-                  onClick={() => {
-                    if (deployStatus === "deployed" && liveUrl) {
-                      window.open(liveUrl, "_blank", "noopener,noreferrer");
-                    }
-                  }}
-                >
-                  {deployStatus === "deploying"
-                    ? <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600" />
-                    : <span className={`w-2 h-2 rounded-full ml-1 mr-0.5 ${deployStatus === "deployed" ? "bg-emerald-500" : "bg-red-500"}`} />}
-                  <span className="flex-1">
-                    {deployStatus === "deploying" ? "Deploying…" : deployStatus === "deployed" ? "Live" : "Deploy failed"}
-                  </span>
-                  {deployStatus === "deployed" && liveUrl && <ExternalLink className="w-3 h-3 opacity-60" />}
-                </DropdownMenuItem>
-              )}
-
-              {/* Autosave — a status line, not an action. */}
-              {savedLabel && (
-                <div className="px-2 py-1.5 text-[11px] text-muted-foreground tabular-nums">
-                  {savedLabel}
-                </div>
-              )}
-
-              <DropdownMenuSeparator />
-
-              {/* Test / Live environment switcher */}
-              <DropdownMenuItem
-                className="text-xs gap-2"
-                disabled={envSaving}
-                onSelect={(e) => { e.preventDefault(); void handleEnvironmentToggle(); }}
-              >
-                {envSaving
-                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  : environment === "live"
-                    ? <Globe className="w-3.5 h-3.5 text-emerald-600" />
-                    : <Lock className="w-3.5 h-3.5" />}
-                <span className="flex-1">
-                  {environment === "live" ? "Live — AI edits locked" : "Test — AI edits on"}
-                </span>
-                <span className="text-[10px] text-muted-foreground">
-                  {environment === "live" ? "Switch to Test" : "Switch to Live"}
-                </span>
-              </DropdownMenuItem>
-
-              <DropdownMenuItem
-                className="text-xs gap-2"
-                onClick={() => openSecondaryPanel("comments", onRightPanelChange)}
-              >
-                <MessageCircle className="w-3.5 h-3.5" /> Comments
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
 
           {/* ── Share panel — Lovable-style ── */}
           <DropdownMenu open={shareOpen} onOpenChange={setShareOpen}>

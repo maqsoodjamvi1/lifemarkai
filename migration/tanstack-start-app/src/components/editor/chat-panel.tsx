@@ -29,6 +29,8 @@ import {
   LovableChatComposerShell,
   LovableComposerMobileSheet,
   LovableChatInputCard,
+  LovableSecurityIssuesBar,
+  LovableLiveLockBanner,
   LovableChatTimeline,
   type LovableChatTimelineHandle,
   LovableChatHeader,
@@ -6105,6 +6107,27 @@ ${(f.content ?? "").slice(0, 8000)}
           onDismissSecretBanner={() => setSecretBanner(null)}
           onOpenSecrets={() => onOpenPanel?.("secrets")}
         />
+
+        {/* Above the card, not inside it. Lovable's composer card holds exactly
+            two children and measures 100px; with these two in there ours
+            measured 163. They are full-width notices, they were never part of
+            the thing you type into, and out here they can be as tall as they
+            need to be. */}
+        {!isLocked && (
+          <LovableSecurityIssuesBar
+            issueCount={securityIssueCount}
+            noCredits={noCredits}
+            freeFixesRemaining={freeFixesRemaining}
+            onViewIssues={() => onOpenPanel?.("security")}
+            onFixAll={() => {
+              void triggerAutoFix(
+                `Fix all ${securityIssueCount} security issue${securityIssueCount === 1 ? "" : "s"} in this project. ` +
+                  "Review findings (secrets, XSS, auth/RLS gaps, unsafe deps), apply the safest fix for each, and keep the app building.",
+              );
+            }}
+          />
+        )}
+        {isLocked && <LovableLiveLockBanner />}
 
         <LovableChatInputCard isDragging={isDragging}>
           <LovableComposerInputArea
