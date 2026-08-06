@@ -119,7 +119,10 @@ export function VoiceMode({ onTranscript, disabled }: VoiceModeProps) {
         variant="ghost"
         size="icon"
         aria-label={state === "recording" ? "Stop voice recording" : "Start voice recording"}
-        className={`w-8 h-8 transition-colors ${
+        // 28px, not 32. Every other control in the composer footer is 28, and
+        // so is every one of Lovable's; this single 32px button made the whole
+        // footer row 32 and the card 4px taller than theirs.
+        className={`w-7 h-7 rounded-full transition-colors ${
           state === "recording" ? "text-red-400 bg-red-500/10 hover:bg-red-500/20" :
           state === "processing" ? "text-yellow-400" : "text-muted-foreground hover:text-foreground"
         }`}
