@@ -98,6 +98,9 @@ import {
   DEFAULT_CODING_MODEL,
 } from "@/lib/ai/editor-intelligence";
 import { countUserAuthoredFiles, isGreenfieldProject } from "@/lib/ai/scaffold-files";
+
+/** Label AND identity for the scope-guard override chip — compared by value. */
+const SCOPE_OVERRIDE_CHIP = "Build it anyway";
 import { isNoisePreviewError, type PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import {
   getAutoFixAttempts,
@@ -379,6 +382,11 @@ export function ChatPanel({
   const [autoFixing, setAutoFixing] = useState(false);
   const [autoFixAttempts, setAutoFixAttempts] = useState(0);
   const [lastFixedError, setLastFixedError] = useState<string | null>(null);
+  // The prompt the scope guard paused on, held so the user can override it with
+  // one click. Without this the guard is a dead end: its message invites you to
+  // say "go ahead", but a fresh "go ahead" is just a new prompt that carries no
+  // forceBuild flag and no memory of what it was agreeing to.
+  const [scopeHeldPrompt, setScopeHeldPrompt] = useState<string | null>(null);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const [attachedImageName, setAttachedImageName] = useState<string | null>(null);
   const [chatAnnotateOpen, setChatAnnotateOpen] = useState(false);
@@ -2398,6 +2406,10 @@ export function ChatPanel({
     // have a fresh budget against whatever this build produces.
     clearAutoFixLedger(project.id);
     setAutoFixAttempts(0);
+    // Any new message supersedes a paused one, so the override chip should not
+    // outlive the question that raised it. If this send trips the guard too,
+    // the stream handler sets it again.
+    setScopeHeldPrompt(null);
 
     let effectiveMode = resolvePromptMode(userMessage, intelCtx, overrideMode);
     // ── Lovable machinery parity: BUILDS RUN THE FULL AGENT LOOP ────────────
@@ -3152,6 +3164,14 @@ ${(f.content ?? "").slice(0, 8000)}
       const processChatStreamEvent = async (data: Record<string, unknown>) => {
         try {
           if (data.chunk) return;
+
+          // The scope guard paused instead of building. Its message is already
+          // streaming in as an ordinary assistant reply; all that's needed here
+          // is to remember what it paused on so the chip below can override.
+          if (data.scope_query === true) {
+            setScopeHeldPrompt(userMessage);
+            return;
+          }
 
           if (data.status === "no_files") {
             toast({
@@ -4755,6 +4775,10 @@ ${(f.content ?? "").slice(0, 8000)}
   // Follow-up suggestion chips (Lovable parity): static, zero-cost pool keyed
   // to the last build prompt + current files. Only shown once a build exists.
   const followUpChips = useMemo(() => {
+    // Takes precedence over everything: the user asked for something, we
+    // stopped to ask a question, and the one thing they must always be able to
+    // do is overrule us.
+    if (scopeHeldPrompt) return [SCOPE_OVERRIDE_CHIP];
     // Lovable dump: horizontal chip “Re-run full security scan” above composer.
     if (securityIssueCount > 0) {
       return ["Re-run full security scan"];
@@ -4766,7 +4790,7 @@ ${(f.content ?? "").slice(0, 8000)}
       if (messages[i]?.role === "user") { lastPrompt = messages[i].content; break; }
     }
     return suggestFollowUps(lastPrompt, files.map((f) => f.path), 4);
-  }, [latestSnapshotMessageId, messages, files, securityIssueCount]);
+  }, [latestSnapshotMessageId, messages, files, securityIssueCount, scopeHeldPrompt]);
 
   const composerLineRefs = useMemo(() => parseLineRefs(input), [input]);
 
@@ -6032,6 +6056,14 @@ ${(f.content ?? "").slice(0, 8000)}
           streaming={streaming}
           followUpChips={followUpChips}
           onSelectFollowUp={(chip) => {
+            if (chip === SCOPE_OVERRIDE_CHIP && scopeHeldPrompt) {
+              const held = scopeHeldPrompt;
+              setScopeHeldPrompt(null);
+              // forceBuild is what makes this an override rather than a loop —
+              // the held prompt still matches whatever the guard caught.
+              void sendMessage(held, "build", undefined, { forceBuild: true });
+              return;
+            }
             if (chip === "Re-run full security scan") {
               onOpenPanel?.("security");
               void triggerAutoFix(
