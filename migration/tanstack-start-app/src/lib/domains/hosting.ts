@@ -42,6 +42,18 @@ async function netlify<T>(path: string, opts: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Raised when hosting isn't configured, so callers can say so instead of
+ *  reporting a success that never happened. */
+export class HostingNotConfiguredError extends Error {
+  constructor() {
+    super(
+      "Custom domains need NETLIFY_AUTH_TOKEN (or PLATFORM_APEX_IPS) configured on the server. " +
+        "The domain was not attached to any host.",
+    );
+    this.name = "HostingNotConfiguredError";
+  }
+}
+
 class NetlifyHostingTarget implements HostingTarget {
   readonly id = "netlify" as const;
   apexARecords(): string[] {
@@ -50,15 +62,44 @@ class NetlifyHostingTarget implements HostingTarget {
   subdomainCname(projectId: string): string {
     return `${siteName(projectId)}.netlify.app`;
   }
-  async attachHostname(projectId: string, domain: string): Promise<void> {
-    if (!NETLIFY_TOKEN) return; // no-op in local mode (parity with current route)
+  /**
+   * Look up the project's site, CREATING it when absent.
+   *
+   * The old code did `if (site) attach…` with no else, so attaching a domain to
+   * a project that had never been published found no site and quietly did
+   * nothing — while the caller still told the user "SSL provisions
+   * automatically within minutes". The user then pointed real DNS at a host
+   * that had never heard of their domain, and waited for a certificate that
+   * could never arrive. Adding a domain before the first publish is the normal
+   * order to do it in, so this was the common case, not the edge case.
+   */
+  private async getOrCreateSite(projectId: string): Promise<{ id: string; name: string }> {
+    const name = siteName(projectId);
     const sites = await netlify<Array<{ id: string; name: string }>>(
-      `/sites?name=${encodeURIComponent(siteName(projectId))}`,
+      `/sites?name=${encodeURIComponent(name)}`,
     );
-    const site = sites.find((s) => s.name === siteName(projectId));
-    if (site) await netlify(`/sites/${site.id}/aliases`, { method: "POST", body: JSON.stringify({ alias: domain }) });
+    const existing = sites.find((s) => s.name === name);
+    if (existing) return existing;
+    return netlify<{ id: string; name: string }>("/sites", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+  }
+  async attachHostname(projectId: string, domain: string): Promise<void> {
+    // Throw rather than no-op. A silent return here is indistinguishable from
+    // success to every caller, which is exactly how a misconfigured server
+    // ended up promising users working custom domains.
+    if (!NETLIFY_TOKEN) throw new HostingNotConfiguredError();
+    const site = await this.getOrCreateSite(projectId);
+    await netlify(`/sites/${site.id}/aliases`, {
+      method: "POST",
+      body: JSON.stringify({ alias: domain }),
+    });
   }
   async detachHostname(projectId: string, domain: string): Promise<void> {
+    // Detach stays lenient: removing a domain from a project that was never
+    // attached is already the desired end state, so there is nothing to warn
+    // about and nothing for the user to fix.
     if (!NETLIFY_TOKEN) return;
     const sites = await netlify<Array<{ id: string; name: string }>>(
       `/sites?name=${encodeURIComponent(siteName(projectId))}`,
