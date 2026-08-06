@@ -3112,12 +3112,21 @@ ${(f.content ?? "").slice(0, 8000)}
             ? mentionedFilesForAI
             : files.map((f) => ({ path: f.path, content: f.content })),
           ...(imageToSend ? { imageBase64: imageToSend, imageFileName: imageNameToSend } : {}),
+          // `queuedText` is `string | { name, content } | null`: live sends carry
+          // the object, but the QUEUE serialises the attachment down to a bare
+          // string (see where queued items are built), losing the filename.
+          // Reading .name/.content off the union unnarrowed meant a queued
+          // message sent `{ name: undefined, content: undefined }` — the
+          // attachment was silently dropped every time.
           ...(textToSend
             ? {
-                attachedFile: {
-                  name: textToSend.name,
-                  content: textToSend.content.slice(0, 20000),
-                },
+                attachedFile:
+                  typeof textToSend === "string"
+                    ? { name: "attachment.txt", content: textToSend.slice(0, 20000) }
+                    : {
+                        name: textToSend.name,
+                        content: textToSend.content.slice(0, 20000),
+                      },
               }
             : {}),
           // Lovable-agent parity: the AI always sees the CURRENT preview
