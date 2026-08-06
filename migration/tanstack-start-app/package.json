@@ -11,7 +11,8 @@
     "prebuild": "node scripts/build-ai-http.mjs",
     "build": "vite build",
     "start": "node .output/server/index.mjs",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "sandbox:base-pkg": "node scripts/gen-sandbox-base-package.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

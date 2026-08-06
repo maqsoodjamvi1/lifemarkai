@@ -1,7 +1,7 @@
 import type { EditorMode } from "@/components/editor/editor-layout";
-import type { ProjectFile } from "@/types/database";
-import { classifyBuildIntent, shouldAutoBuildMode } from "./build-intent";
-import type { AIModel } from "./provider";
+import type { ProjectFile } from "../../types/database.ts";
+import { classifyBuildIntent, shouldAutoBuildMode } from "./build-intent.ts";
+import type { AIModel } from "./provider.ts";
 import {
   BALANCED_CODING_MODEL,
   DEFAULT_CODING_MODEL,
@@ -16,8 +16,8 @@ import {
   FREE_CODING_MODEL,
   ECONOMY_CODING_MODEL,
   ECONOMY_CHAT_MODEL,
-} from "./model-defaults";
-import { selectModelChain, type ModelStrength } from "./model-catalog";
+} from "./model-defaults.ts";
+import { selectModelChain, type ModelStrength } from "./model-catalog.ts";
 
 export { DEFAULT_CODING_MODEL, BALANCED_CODING_MODEL, FAST_CODING_MODEL, DEFAULT_CHAT_MODEL, REASONING_MODEL };
 

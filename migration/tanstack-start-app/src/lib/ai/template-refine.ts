@@ -9,7 +9,7 @@
  *
  * See lib/templates/starter-catalog.ts.
  */
-import { getStarterTemplate } from "@/lib/templates/starter-catalog";
+import { getStarterTemplate } from "../templates/starter-catalog.ts";
 import {
   ensureWebsiteHeaderSections,
   WEBSITE_HEADER_CONTRACT,

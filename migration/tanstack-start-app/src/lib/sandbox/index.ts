@@ -14,6 +14,10 @@
  * - E2B SDK is dependency-optional (dynamic import).
  */
 
+import type { TscDiagnostic } from "./tsc-diagnostics.ts";
+
+export type { TscDiagnostic };
+
 export interface SandboxFile {
   path: string;
   content: string;
@@ -24,6 +28,20 @@ export interface SandboxRunResult {
   sandboxId?: string;
   /** Live, publicly reachable preview URL of the running app. */
   previewUrl?: string;
+  /**
+   * Did the dev server actually answer before we returned?
+   *
+   * `ok` means "the sandbox was provisioned" — it does NOT mean the app is
+   * serving. Those two were conflated, so a boot whose dev server hadn't come
+   * up yet still reported ready, the editor framed the URL, and the user got
+   * Traefik's **502 Bad Gateway** inside the preview pane. Callers must treat
+   * `ready === false` as "keep waiting", not as a failure: the container is
+   * alive and its supervisor is still bringing the server up, so the phase
+   * poller promotes it the moment the tunnel answers.
+   *
+   * Undefined from providers that don't report it — treat as ready.
+   */
+  ready?: boolean;
   /** stdout/stderr from the install/build/run step (truncated). */
   logs?: string;
   error?: string;
@@ -33,6 +51,26 @@ export interface CommandResult {
   stdout: string;
   stderr: string;
   exitCode?: number;
+}
+
+/** Outcome of type-checking a project inside its own sandbox. */
+export interface TypecheckResult {
+  /**
+   * Did the check actually run?
+   *
+   * False when the project has no local TypeScript — a legitimate state for a
+   * plain-JS app, and NOT the same as "no errors". Callers must not read an
+   * unavailable check as a clean bill of health.
+   */
+  available: boolean;
+  /** Project-relative diagnostics, dependency noise already removed. */
+  diagnostics: TscDiagnostic[];
+  /** Wall time of the check, for deciding whether it is worth keeping. */
+  durationMs?: number;
+  /** The check was killed at its time limit; diagnostics are partial. */
+  timedOut?: boolean;
+  /** Why it could not run, when `available` is false. */
+  reason?: string;
 }
 
 /** A streamed Claude Code event (stream-json JSONL line). */
@@ -112,6 +150,19 @@ export interface SandboxProvider {
     sandboxId: string,
     files: SandboxFile[],
   ): Promise<void | { written: string[] }>;
+  /**
+   * Type-check the project in place, using its OWN installed dependencies.
+   *
+   * Optional because it only makes sense where the provider has a real
+   * filesystem with node_modules on it. Where it is available it is the only
+   * check in the system that can tell a real import from a plausible-looking
+   * one — every other check is a regex over source text, which cannot know
+   * whether a package actually exports the name being imported.
+   */
+  typecheckProject?(
+    sandboxId: string,
+    opts?: { timeoutSec?: number },
+  ): Promise<TypecheckResult>;
   /** Re-derive the live preview URL for a running sandbox. */
   getPreviewUrl(sandboxId: string, port?: number): Promise<string>;
   /** Reconnect to an existing sandbox if still alive (Lovable warm-session parity). */
@@ -132,9 +183,9 @@ export interface SandboxProvider {
   kill(sandboxId: string): Promise<void>;
 }
 
-import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared";
-import { ModalSandboxProvider } from "./modal";
-import { DockerSandboxProvider } from "./docker";
+import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared.ts";
+import { ModalSandboxProvider } from "./modal.ts";
+import { DockerSandboxProvider } from "./docker.ts";
 export {
   detectSandboxStart,
   sandboxNameForProject,
@@ -142,8 +193,8 @@ export {
   peekPreviewReachable,
   getPreviewProbeState,
   forgetPreviewProbe,
-} from "./shared";
-export { ModalSandboxProvider } from "./modal";
+} from "./shared.ts";
+export { ModalSandboxProvider } from "./modal.ts";
 
 const DEFAULT_PORT = 3000;
 

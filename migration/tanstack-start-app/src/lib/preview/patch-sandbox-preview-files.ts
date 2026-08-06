@@ -1,8 +1,11 @@
 import {
   patchFilesForWebContainer,
   type WebContainerPatchOpts,
-} from "./patch-vite-for-webcontainer";
-import { isTanStackStartProject } from "@/lib/templates/tanstack-start-scaffold";
+} from "./patch-vite-for-webcontainer.ts";
+import { isTanStackStartProject } from "../templates/tanstack-start-scaffold.ts";
+import { ensureTypecheckToolchain } from "./ensure-toolchain.ts";
+import { LOVABLE_VITE_DEV_DEPENDENCIES } from "../templates/lovable-vite-scaffold.ts";
+import { normalizeProjectImports } from "./normalize-imports.ts";
 
 /**
  * Synthesize missing Vite entry files. Incremental builds return only CHANGED
@@ -165,10 +168,196 @@ function ensureSupabaseEnv<T extends { path: string; content?: string | null }>(
   return [...files, { path: ".env", content: placeholder } as unknown as T];
 }
 
+
+/**
+ * Point Vite's HMR client at the tunnel instead of at localhost.
+ *
+ * The sandbox serves the app over HTTPS at `<hash>.preview.lifemarkai.com`, but
+ * Vite's injected HMR client derives its websocket URL from `server.port` — so
+ * it tries `ws://localhost:5173`, the browser refuses a plaintext websocket from
+ * an HTTPS page, and every preview shows:
+ *
+ *     [vite] failed to connect to websocket
+ *
+ * The overlay reports that as an app error, which is worse than cosmetic: the
+ * editor's error bridge picks it up, the preview is marked "paused", and the
+ * self-repair pass starts editing the user's `vite.config.ts` to chase a
+ * platform networking detail it cannot fix from inside the project.
+ *
+ * The fix belongs HERE, not in the scaffold. This module already rewrites files
+ * on their way into the sandbox and nowhere else, so the user's own
+ * vite.config.ts stays clean for local `npm run dev` and for export, while the
+ * sandbox copy gets `protocol: "wss"` + `clientPort: 443`.
+ */
+export function ensureViteTunnelHmr<T extends { path: string; content?: string | null }>(
+  files: T[],
+): T[] {
+  const idx = files.findIndex((f) =>
+    /^vite\.config\.(t|j)sx?$/.test(f.path.replace(/\\/g, "/")),
+  );
+  if (idx < 0) return files;
+  const source = files[idx].content ?? "";
+  if (!source.trim()) return files;
+
+  // Every key the sandbox needs, added only when the config lacks it.
+  //
+  // `allowedHosts` was the expensive omission. `ensureViteEntryFiles` writes a
+  // correct config when the model ships NONE — but a model that writes its own
+  // `vite.config.ts` (a 45-file ERP build did exactly this) hits Vite 5's host
+  // check, and the preview renders one line of black text:
+  //
+  //     Blocked request. This host (…preview.lifemarkai.com) is not allowed.
+  //
+  // Which reads to the user as "the app it just built is broken". The old
+  // version of this function bailed early whenever `clientPort` was already
+  // present and only ever injected `hmr`, so a hand-written config was left
+  // without `host` or `allowedHosts` in every case.
+  const needed: string[] = [];
+  if (!/\bclientPort\b/.test(source)) {
+    needed.push(`hmr: { protocol: "wss", clientPort: 443, overlay: false },`);
+  }
+  if (!/\ballowedHosts\b/.test(source)) needed.push(`allowedHosts: true,`);
+  if (!/\bhost\s*:/.test(source)) needed.push(`host: true,`);
+  if (needed.length === 0) return files;
+
+  const injection = needed.join("\n    ");
+  let patched: string | null = null;
+  // `server: { … }` present — inject the missing keys at the top of the object.
+  const serverBlock = source.match(/server\s*:\s*\{/);
+  if (serverBlock && serverBlock.index !== undefined) {
+    const at = serverBlock.index + serverBlock[0].length;
+    patched = `${source.slice(0, at)}\n    ${injection}${source.slice(at)}`;
+  } else {
+    // No `server` key — add one to the top-level defineConfig object.
+    const define = source.match(/defineConfig\s*\(\s*(?:\([^)]*\)\s*=>\s*)?\(?\s*\{/);
+    if (define && define.index !== undefined) {
+      const at = define.index + define[0].length;
+      patched = `${source.slice(0, at)}\n  server: {\n    ${injection}\n  },${source.slice(at)}`;
+    }
+  }
+  if (!patched) return files;
+
+  const out = [...files];
+  out[idx] = { ...files[idx], content: patched } as T;
+  return out;
+}
+
+/**
+ * Known Tailwind ecosystem plugins the model reaches for, with the pin to
+ * install when it does. Anything else bare-imported by a tailwind/postcss
+ * config falls back to "latest" — a slightly loose version beats a preview
+ * that cannot compile CSS at all.
+ */
+const TAILWIND_PLUGIN_PINS: Record<string, string> = {
+  "@tailwindcss/typography": "^0.5.15",
+  "@tailwindcss/forms": "^0.5.9",
+  "@tailwindcss/aspect-ratio": "^0.4.2",
+  "@tailwindcss/container-queries": "^0.1.1",
+  "tailwindcss-animate": "^1.0.7",
+  daisyui: "^4.12.14",
+};
+
+const CONFIG_NODE_BUILTINS = new Set([
+  "path", "fs", "url", "os", "module", "process", "node:path", "node:fs", "node:url",
+]);
+
+/**
+ * Make every package a tailwind/postcss config loads actually installable.
+ *
+ * OBSERVED FAILURE (POS build, live): the model wrote
+ * `plugins: [require("@tailwindcss/typography")]` into tailwind.config.ts but
+ * never added the package to package.json. postcss then dies loading the
+ * config, Vite returns 500 for EVERY stylesheet, and the preview renders a
+ * blank white page with only a console error — the worst failure shape,
+ * because the app code itself is fine.
+ *
+ * A config file is not application code: its imports are resolved by node at
+ * dev-server boot, so the fix is mechanical — collect every bare-module
+ * specifier the configs mention and merge the missing ones into
+ * devDependencies before the sandbox's npm install runs.
+ *
+ * NOTE: this runs on the CONTAINER-CREATION upload path. The live push
+ * (push-to-sandbox) deliberately does not re-run it — a mid-session config
+ * edit that adds a brand-new package needs an npm install anyway, which only
+ * happens on preview restart.
+ */
+function ensureTailwindPluginDeps<T extends { path: string; content?: string | null }>(
+  files: T[],
+): T[] {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\/+/, "");
+  const configs = files.filter(
+    (f) => /^(tailwind|postcss)\.config\.(c|m)?(t|j)s$/.test(norm(f.path)) && f.content,
+  );
+  if (configs.length === 0) return files;
+
+  const rootOf = (spec: string): string =>
+    spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
+
+  const wanted = new Set<string>();
+  for (const c of configs) {
+    const src = c.content ?? "";
+    for (const m of src.matchAll(/require\(\s*["']([^"'./][^"']*)["']\s*\)/g)) {
+      wanted.add(rootOf(m[1]));
+    }
+    for (const m of src.matchAll(/import\s+[\w{}\s,*$]+\s+from\s+["']([^"'./][^"']*)["']/g)) {
+      wanted.add(rootOf(m[1]));
+    }
+  }
+  wanted.delete("tailwindcss");
+  wanted.delete("autoprefixer");
+  wanted.delete("postcss");
+  for (const b of CONFIG_NODE_BUILTINS) wanted.delete(b);
+  if (wanted.size === 0) return files;
+
+  const pkgIdx = files.findIndex((f) => norm(f.path) === "package.json");
+  if (pkgIdx < 0 || files[pkgIdx].content == null) return files;
+  try {
+    const pkg = JSON.parse(files[pkgIdx].content as string) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const have = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+    const missing = [...wanted].filter((name) => !have[name]);
+    if (missing.length === 0) return files;
+    pkg.devDependencies = { ...(pkg.devDependencies ?? {}) };
+    for (const name of missing) {
+      pkg.devDependencies[name] = TAILWIND_PLUGIN_PINS[name] ?? "latest";
+    }
+    const out = [...files];
+    out[pkgIdx] = { ...files[pkgIdx], content: `${JSON.stringify(pkg, null, 2)}\n` } as T;
+    return out;
+  } catch {
+    return files; // malformed package.json is reported elsewhere
+  }
+}
+
 /** Vite host + VEB bridge + optional guest comments for cloud sandbox previews. */
 export function patchSandboxPreviewFiles<T extends { path: string; content?: string | null }>(
   files: T[],
   opts?: WebContainerPatchOpts,
 ): T[] {
-  return patchFilesForWebContainer(ensureSupabaseEnv(ensureViteEntryFiles(files)), opts);
+  // ensureTypecheckToolchain runs on the sandbox path, not only at generation
+  // time, because the projects that need it most already exist: one whose
+  // package.json lost `typescript` on an earlier turn never regains it until
+  // something rewrites that file, and the sandbox sync is the one step every
+  // project passes through on every boot.
+  //
+  // The pins are LOVABLE_VITE_DEV_DEPENDENCIES, not BASE_APP_DEV_DEPENDENCIES.
+  // The base set still pins `@types/react` and `@types/react-dom` at ^18.3.1,
+  // while the scaffold and the sandbox image are both on React 19 — so
+  // repairing a project that had lost its types used to re-add the React 18
+  // ones: types that disagree with the runtime, that npm has to fetch over the
+  // network because the image has 19 baked in, and that replace the prebuilt
+  // copies. The Lovable set is a superset of the base set with those two
+  // corrected, so this is strictly the same repair with the right versions.
+  return patchFilesForWebContainer(
+    ensureViteTunnelHmr(
+      ensureSupabaseEnv(
+        ensureTailwindPluginDeps(
+          ensureTypecheckToolchain(ensureViteEntryFiles(normalizeProjectImports(files)), LOVABLE_VITE_DEV_DEPENDENCIES),
+        ),
+      ),
+    ),
+    opts,
+  );
 }

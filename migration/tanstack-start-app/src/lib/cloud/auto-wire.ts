@@ -16,13 +16,14 @@
  * Every step is best-effort — wiring failures never fail the build.
  */
 
-import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "@/lib/project/env-file";
+import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "../project/env-file.ts";
 import {
   isManagementConfigured,
   createManagedProject,
   managedProjectUrl,
   runManagedSql,
 } from "@/lib/cloud/management";
+import { persistManagedDbPassword } from "./credentials.ts";
 import {
   parseCloudToolPermissions,
   type CloudToolId,
@@ -157,10 +158,20 @@ export async function autoWireBackend(opts: {
     emit("Connecting a backend to your app…");
     try {
       if (isManagementConfigured()) {
-        const { ref } = await createManagedProject({
+        const { ref, dbPassword } = await createManagedProject({
           projectId,
           region: project.cloud_region ?? "americas",
         });
+        // Supabase shows the Postgres password exactly once, at creation. Save
+        // it before anything else can fail, or this backend can never accept a
+        // direct connection again without a reset — see credentials.ts.
+        const savedPassword = await persistManagedDbPassword(projectId, dbPassword);
+        if (!savedPassword.ok) {
+          result.notes.push(
+            `Backend created, but its database password could not be saved (${savedPassword.error}). ` +
+              "Direct Postgres connections will need a password reset in the Supabase dashboard.",
+          );
+        }
         await supabase
           .from("projects")
           .update({

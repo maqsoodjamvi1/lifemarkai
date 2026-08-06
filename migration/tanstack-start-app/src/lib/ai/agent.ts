@@ -1,10 +1,10 @@
-import { generateAI } from "./generate";
-import type { AIMessage, ToolDefinition, ToolCall } from "./provider";
-import { DEFAULT_CODING_MODEL } from "./model-defaults";
-import { selectModelChain, applyModelAdapter } from "./model-catalog";
-import { AGENT_SYSTEM_PROMPT } from "./system-prompts";
-import { summarizeFile, findDefinition } from "./code-analyzer";
-import { generateAndStoreImage } from "./image-asset";
+import { generateAI } from "./generate.ts";
+import type { AIMessage, ToolDefinition, ToolCall } from "./provider.ts";
+import { DEFAULT_CODING_MODEL } from "./model-defaults.ts";
+import { selectModelChain, applyModelAdapter } from "./model-catalog.ts";
+import { AGENT_SYSTEM_PROMPT } from "./system-prompts.ts";
+import { summarizeFile, findDefinition } from "./code-analyzer.ts";
+import { generateAndStoreImage } from "./image-asset.ts";
 
 export interface AgentTool {
   name: string;

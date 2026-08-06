@@ -6,9 +6,9 @@
  * one place (lib/ai/editor-intelligence.ts). Role system prompts are layered
  * ON TOP of the LifemarkAI base prompts in lib/ai/system-prompts.ts.
  */
-import { MODEL_TIERS } from "@/lib/ai/editor-intelligence";
-import type { AIModel } from "@/lib/ai/provider";
-import type { AgentRole, AgentRoleId, ModelTierName, ResolvedModel } from "./types";
+import { MODEL_TIERS } from "../editor-intelligence.ts";
+import type { AIModel } from "../provider.ts";
+import type { AgentRole, AgentRoleId, ModelTierName, ResolvedModel } from "./types.ts";
 
 /** Resolve a tier name to a concrete provider model. */
 export function resolveTier(tier: ModelTierName): ResolvedModel {

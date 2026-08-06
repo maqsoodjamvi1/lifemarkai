@@ -1,4 +1,4 @@
-import type { AIModel } from "./provider";
+import type { AIModel } from "./provider.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OpenRouter-first model lineup. Router slugs keep LifemarkAI from being pinned
@@ -14,7 +14,17 @@ import type { AIModel } from "./provider";
 // Default to economy-safe approved models. Keep OpenRouter routers out of the
 // default path; Auto mode should choose from the product-approved model set.
 const ROUTER_FRONTIER = "deepseek/deepseek-v4-pro";
-const ROUTER_CODING = "qwen/qwen3-coder";
+// qwen3-coder-next, not qwen3-coder. Verified live against
+// openrouter.ai/api/v1/models/qwen/qwen3-coder-next/endpoints (2026-08-06):
+// $0.12/M in, $0.80/M out, 262k context — against qwen3-coder's $0.30/$1.00.
+// So 2.5x cheaper on input and 20% cheaper on output for the SAME context.
+//
+// The reason to move is not only price. qwen3-coder caps max_completion_tokens
+// at 65k; this one goes to 262k. That ceiling is what decides whether a
+// whole-file rewrite finishes or truncates mid-file, which is the single most
+// visible failure a user can hit — so this is cheaper and more capable at once,
+// not a quality trade.
+const ROUTER_CODING = "qwen/qwen3-coder-next";
 const ROUTER_FAST = "deepseek/deepseek-v4-flash";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,20 +111,42 @@ export const ECONOMY_CHAT_MODEL: AIModel =
 
 /**
  * Cross-vendor REVIEW model (CTO reviews, debate adjudication). Intentionally
- * a DIFFERENT model family than the coding tier (Claude): a same-family
- * reviewer shares the builder's blind spots, so reviews become an echo
- * chamber. GPT-5.2 slug verified against the live OpenRouter catalog (2026).
+ * a DIFFERENT model family than the coding tier: a same-family reviewer shares
+ * the builder's blind spots, so reviews become an echo chamber.
+ *
+ * This pointed at ROUTER_CODING, which made the claim above false — the
+ * reviewer was not merely the same family as the builder, it was the SAME
+ * MODEL, reviewing its own output. Every "cross-vendor review" in the product
+ * was a model agreeing with itself. Pointing it at the frontier router restores
+ * the property the comment always described (DeepSeek reviewing Qwen).
  */
 export const REVIEW_MODEL: AIModel =
-  (process.env.OPENROUTER_REVIEW_MODEL || ROUTER_CODING) as AIModel;
+  (process.env.OPENROUTER_REVIEW_MODEL || ROUTER_FRONTIER) as AIModel;
 
 /**
- * ESCALATION model — strongest available, used only on retry after a task
- * failed with the normal tier (cost-bounded: one escalated attempt per task).
- * Opus 4.8 slug verified against the live OpenRouter catalog (2026).
+ * ESCALATION model — used only on retry after a task failed with the normal
+ * tier (cost-bounded: one escalated attempt per task).
+ *
+ * Was anthropic/claude-opus-4.8 at $5/M in, $25/M out. On a representative
+ * build request (50k in, 8k out) that is $0.45 — against $0.012 for the coding
+ * tier. One escalation cost as much as ~36 normal builds, and more than
+ * Lovable's most expensive message ($0.50 at Pro list price), which put the
+ * "5x cheaper than Lovable" target out of reach on its own.
+ *
+ * deepseek-v4-pro is $0.435/M in, $0.87/M out — verified live against
+ * openrouter.ai/api/v1/models/deepseek/deepseek-v4-pro/endpoints (2026-08-06).
+ * That is $0.029 on the same request: 94% cheaper, a 15x cut.
+ *
+ * It is a real escalation and not just a cheaper slug: 1M context against
+ * Opus's 1M, 384k max output, native reasoning support, and a ~120x cache-read
+ * discount ($0.0036/M) — which matters most here, because escalation retries
+ * the SAME codebase that just failed, so almost all of its input is cache hits.
+ *
+ * Still overridable: set OPENROUTER_ESCALATION_MODEL to put a frontier model
+ * back on this tier without a deploy.
  */
 export const ESCALATION_MODEL: AIModel =
-  (process.env.OPENROUTER_ESCALATION_MODEL || "anthropic/claude-opus-4.8") as AIModel;
+  (process.env.OPENROUTER_ESCALATION_MODEL || ROUTER_FRONTIER) as AIModel;
 
 /**
  * Native image generation.

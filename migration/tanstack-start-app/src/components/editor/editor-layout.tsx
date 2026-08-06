@@ -35,6 +35,7 @@ import { useRecordProjectVisit } from "@/hooks/use-recent-projects";
 import type { Project, ProjectFile, Message, Profile } from "@/types/database";
 import type { PreviewErrorReport, PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import { saveApprovedPlan } from "@/lib/editor/save-approved-plan";
+import { useToast } from "@/hooks/use-toast";
 import {
   pickActiveFileAfterUpdate,
   resolvePromptMode,
@@ -169,6 +170,7 @@ export function EditorLayout({
   initialPanel,
 }: EditorLayoutProps) {
   const navigate = useNavigate();
+  const { toast } = useToast();
   // Record this project visit for the dashboard "Recently visited" rail
   useRecordProjectVisit({ id: project.id, name: project.name, framework: project.framework ?? "react" });
 
@@ -486,7 +488,17 @@ export function EditorLayout({
   useEffect(() => {
     if (isMobile) return;
     try {
-      const key = `react-resizable-panels:lifemark-editor-split-${project.id}`;
+      // Must match the PanelGroup autoSaveId below, version suffix included.
+      // It did not, for two versions: this guard was reading a key nothing
+      // ever wrote, so a saved zero-width chat column was never repaired.
+      const key = `react-resizable-panels:lifemark-editor-split-v3-${project.id}`;
+      // Superseded layouts are dead weight and would otherwise sit in
+      // localStorage forever, one entry per project.
+      for (const stale of ["", "-v2"]) {
+        localStorage.removeItem(
+          `react-resizable-panels:lifemark-editor-split${stale}-${project.id}`,
+        );
+      }
       const raw = localStorage.getItem(key);
       if (raw) {
         const parsed = JSON.parse(raw) as {
@@ -708,23 +720,89 @@ export function EditorLayout({
     setActiveFile((prev) => (prev?.id === updatedFile.id ? updatedFile : prev));
 
     // Persist visual edits / inline updates (Lovable parity — WYSIWYG survives refresh)
+    //
+    // This was a PATCH carrying only `path`, and PATCH's very first check is
+    // `if (!body.fileId) return 400`. So every visual edit, every packages-panel
+    // change and every env-file edit 400'd, silently: `res.ok` was never read
+    // and `.catch()` does not fire for an HTTP error status. The user watched
+    // the change appear in the editor, got charged a credit for it
+    // (preview-panel claims one before calling this), and lost it on reload.
+    //
+    // POST is the path-addressed upsert — the right verb when the caller knows
+    // the path but not the row id, which is exactly the visual-edit case.
     if (updatedFile.path && updatedFile.content !== undefined) {
-      void fetch(`/api/projects/${project.id}/files`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          path: updatedFile.path,
-          content: updatedFile.content,
-          language: updatedFile.language,
-        }),
-      }).catch(() => {});
+      void (async () => {
+        try {
+          const res = await fetch(`/api/projects/${project.id}/files`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              path: updatedFile.path,
+              content: updatedFile.content,
+              language: updatedFile.language,
+            }),
+          });
+          if (!res.ok) {
+            // Silence here is what made this invisible for so long. A failed
+            // save must be visible: the user is about to keep working on top of
+            // an edit the server never accepted.
+            toast({
+              title: "Change not saved",
+              description: `${updatedFile.path} could not be saved (${res.status}). Reload before making more changes.`,
+              variant: "destructive",
+            });
+          }
+        } catch {
+          toast({
+            title: "Change not saved",
+            description: `${updatedFile.path} could not be saved — you appear to be offline.`,
+            variant: "destructive",
+          });
+        }
+      })();
     }
-  }, [project.id]);
+  }, [project.id, toast]);
 
   /** Lovable-style file sync: full project listings REPLACE (drop orphans);
    *  single-file panel edits MERGE so we don't wipe the tree.
    *  Never replace with an empty payload when we already have files — that
    *  blanked the editor/preview after a failed refresh. */
+  /**
+   * The debounced keystroke save waiting to fire, if any.
+   *
+   * Declared up here — above `handleFilesUpdate` rather than next to the
+   * autosave code that owns it — because `handleFilesUpdate` has to be able
+   * to cancel it. See the note there.
+   */
+  const pendingCodeChangeRef = useRef<{
+    fileId: string;
+    content: string;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+
+  /**
+   * Contents this session has already held for a file: what it was when the
+   * user started typing, and everything we have sent to the server for it.
+   *
+   * Used to tell a genuine external rewrite from an echo. A file refetch that
+   * races an in-flight PATCH comes back with the PRE-patch text — different
+   * from the current local content, so a naive comparison reads it as
+   * "somebody rewrote this" and cancels the user's pending keystrokes with a
+   * message about the AI that is simply untrue. That text is one we have seen
+   * before; a real AI rewrite is not.
+   *
+   * Bounded per file — only the last few matter, and this lives for the whole
+   * editing session.
+   */
+  const seenContentRef = useRef<Map<string, string[]>>(new Map());
+  const rememberContent = useCallback((fileId: string, content: string) => {
+    const history = seenContentRef.current.get(fileId) ?? [];
+    if (history.includes(content)) return;
+    history.push(content);
+    if (history.length > 8) history.shift();
+    seenContentRef.current.set(fileId, history);
+  }, []);
+
   const handleFilesUpdate = useCallback((
     updatedFiles: ProjectFile[],
     opts?: { replace?: boolean },
@@ -783,6 +861,44 @@ export function EditorLayout({
       next = Array.from(map.values());
     }
 
+    // CANCEL A PENDING KEYSTROKE SAVE FOR A FILE SOMEONE ELSE JUST REWROTE.
+    //
+    // Typing schedules a PATCH 500ms out, carrying the editor buffer as it was
+    // when the last key landed. If an AI build, an agent write, a snapshot
+    // restore or a panel edit rewrites that same file inside the window, the
+    // timer still fires and PATCHes the PRE-rewrite buffer over the new
+    // content — a full revert of the change the user just asked for, with no
+    // error anywhere, seconds after it appeared. (This is the shape of a write
+    // that "reverted itself a couple of minutes later".)
+    //
+    // The incoming content is authoritative and strictly newer, so the stale
+    // buffer loses. Say so rather than dropping the keystrokes silently.
+    const pendingEdit = pendingCodeChangeRef.current;
+    if (pendingEdit) {
+      const pendingPath = prev.find((f) => f.id === pendingEdit.fileId)?.path;
+      const incoming = pendingPath
+        ? updatedFiles.find((f) => f.path === pendingPath)?.content
+        : undefined;
+      // Only a genuinely NEW body counts. A refetch that races an in-flight
+      // PATCH returns the pre-PATCH text, which differs from local content but
+      // is something this session has already held — cancelling on that threw
+      // away the user's keystrokes and blamed an AI rewrite that never
+      // happened. `seenContentRef` is what separates the two.
+      const external =
+        pendingPath != null &&
+        incoming != null &&
+        incoming !== pendingEdit.content &&
+        !(seenContentRef.current.get(pendingEdit.fileId) ?? []).includes(incoming);
+      if (external) {
+        clearTimeout(pendingEdit.timer);
+        pendingCodeChangeRef.current = null;
+        toast({
+          title: "Your unsaved edits were replaced",
+          description: `${pendingPath} was rewritten while you were typing. Use Undo in the chat to get the previous version back.`,
+        });
+      }
+    }
+
     filesRef.current = next;
     setFiles(next);
 
@@ -799,7 +915,7 @@ export function EditorLayout({
       });
     }
     // Keep chat visible on mobile after file sync — user can open Preview via bottom nav.
-  }, [editorMode, handleFocusPreview, isMobile]);
+  }, [editorMode, handleFocusPreview, isMobile, toast]);
 
   const handleFileCreate = useCallback((newFile: ProjectFile) => {
     setFiles((prev) => [...prev, newFile]);
@@ -844,35 +960,111 @@ export function EditorLayout({
   // Live keystrokes are debounced: one state sync + one PATCH per idle period,
   // instead of a whole-shell re-render + API call on EVERY Monaco keystroke.
   // Explicit saves (⌘S in CodePanel) remain immediate via handleCodeSave.
+  /**
+   * A failed save has to be loud.
+   *
+   * This was `if (res.ok) setLastSaved(...)` with no else, and a catch that only
+   * reached the console. So a 401 from an expired session, a 404 or a 500 were
+   * indistinguishable from success: the user kept typing while the "Saved"
+   * timestamp sat frozen at their last real write — which reads as "nothing has
+   * changed since then", not "nothing has saved since then" — and the work was
+   * gone on reload. Session expiry is the common case, and it is precisely the
+   * one where someone types for an hour first.
+   *
+   * Deduped by failure kind, because this runs on a 500ms keystroke debounce and
+   * a toast per keystroke would be its own bug.
+   */
+  const saveFailureRef = useRef<string | null>(null);
   const persistFileContent = useCallback(
-    async (fileId: string, content: string) => {
+    async (fileId: string, content: string, opts?: { explicit?: boolean }) => {
+      /**
+       * Report once per failure kind, then THROW.
+       *
+       * The throw matters as much as the toast. `handleCodeSave` is the
+       * `onSave` prop the code panel awaits for ⌘S and Save All; when this
+       * function swallowed failures and returned normally, the panel counted
+       * the tab as written, cleared its dirty flag and printed "Saved" over a
+       * write that never landed. Callers that fire-and-forget (the keystroke
+       * debounce, the unmount flush) attach `.catch` — the toast is their
+       * report.
+       *
+       * Two details the first version got wrong:
+       *
+       * `explicit` — the dedupe exists because this runs on a 500ms keystroke
+       * debounce and a toast per keystroke would be its own bug. But it also
+       * silenced the ⌘S the user pressed *because* of the first toast. A save
+       * the user asked for always reports; only the automatic ones dedupe.
+       *
+       * `reported` on the error — the code panel has its own catch that
+       * toasts "Save failed". With the throw added, one failure produced two
+       * toasts, and the bare one was the less useful of the pair. The flag
+       * lets the caller stay quiet because it knows the user has already been
+       * told something specific.
+       */
+      const fail: (key: string, title: string, description: string) => never = (
+        key,
+        title,
+        description,
+      ) => {
+        if (opts?.explicit || saveFailureRef.current !== key) {
+          saveFailureRef.current = key;
+          toast({ title, description, variant: "destructive" });
+        }
+        const err = new Error(`${title} (${key})`) as Error & { reported?: boolean };
+        err.reported = true;
+        throw err;
+      };
+
+      // Only the transport is wrapped. Keeping the response handling out of
+      // the try is deliberate: `fail` throws, and a catch around it would
+      // swallow a 403 and re-report it as "you appear to be offline".
+      let res: Response;
       try {
-        const res = await fetch(`/api/projects/${project.id}/files`, {
+        res = await fetch(`/api/projects/${project.id}/files`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fileId, content }),
         });
-        if (res.ok) setLastSaved(new Date());
-      } catch (e) {
-        console.error("Save failed:", e);
+      } catch {
+        fail(
+          "offline",
+          "Changes are NOT saving",
+          "You appear to be offline. Edits exist only in this tab until the connection returns.",
+        );
       }
-    },
-    [project.id]
-  );
 
-  const pendingCodeChangeRef = useRef<{
-    fileId: string;
-    content: string;
-    timer: ReturnType<typeof setTimeout>;
-  } | null>(null);
+      if (res.ok) {
+        setLastSaved(new Date());
+        saveFailureRef.current = null;
+        return;
+      }
+      if (res.status === 401 || res.status === 403) {
+        fail(
+          "auth",
+          "Your session expired — changes are NOT saving",
+          "Sign in again in another tab, then keep working here. Do not reload this tab until a save succeeds.",
+        );
+      }
+      fail(
+        `http-${res.status}`,
+        "Changes are NOT saving",
+        `The server rejected the save (${res.status}). Copy anything important before reloading this tab.`,
+      );
+    },
+    [project.id, toast]
+  );
 
   const commitCodeChange = useCallback(
     (fileId: string, content: string) => {
+      // Everything we send is an "echo" we may see again from a later refetch.
+      rememberContent(fileId, content);
       setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, content } : f)));
       setActiveFile((prev) => (prev?.id === fileId ? { ...prev, content } : prev));
-      void persistFileContent(fileId, content);
+      // Autosave path: `persistFileContent` has already told the user why it
+      // failed, so swallow here rather than raise an unhandled rejection.
+      void persistFileContent(fileId, content).catch(() => {});
     },
-    [persistFileContent]
+    [persistFileContent, rememberContent]
   );
 
   // Flush a pending debounced edit on unmount so typed content isn't lost.
@@ -882,7 +1074,7 @@ export function EditorLayout({
       if (pending) {
         clearTimeout(pending.timer);
         pendingCodeChangeRef.current = null;
-        void persistFileContent(pending.fileId, pending.content);
+        void persistFileContent(pending.fileId, pending.content).catch(() => {});
       }
     };
   }, [persistFileContent]);
@@ -891,6 +1083,9 @@ export function EditorLayout({
     (content: string) => {
       if (!activeFile) return;
       const fileId = activeFile.id;
+      // The body this edit started from — a later refetch may still be
+      // carrying it, and that must not read as an external rewrite.
+      rememberContent(fileId, activeFile.content ?? "");
       const pending = pendingCodeChangeRef.current;
       if (pending) {
         clearTimeout(pending.timer);
@@ -907,13 +1102,18 @@ export function EditorLayout({
         }, 500),
       };
     },
-    [activeFile, commitCodeChange]
+    [activeFile, commitCodeChange, rememberContent]
   );
 
   // Immediate save — used by CodePanel's explicit ⌘S / Save button.
   const handleCodeSave = useCallback(
     async (content: string) => {
-      if (!activeFile) return;
+      if (!activeFile) {
+        // Returning quietly here resolved the promise the code panel awaits,
+        // so it cleared the tab's dirty flag and printed "Saved" for a write
+        // with no destination — the same lie the throw above exists to stop.
+        throw new Error("No file is open to save.");
+      }
       const fileId = activeFile.id;
       const pending = pendingCodeChangeRef.current;
       if (pending?.fileId === fileId) {
@@ -922,7 +1122,7 @@ export function EditorLayout({
       }
       setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, content } : f)));
       setActiveFile((prev) => (prev?.id === fileId ? { ...prev, content } : prev));
-      await persistFileContent(fileId, content);
+      await persistFileContent(fileId, content, { explicit: true });
     },
     [activeFile, persistFileContent]
   );
@@ -963,10 +1163,55 @@ export function EditorLayout({
     if (viewMode === "code" || viewMode === "files") setMobilePaneActive("files");
   }, [isMobile, viewMode, rightPanel, leftChatOverlay]);
 
-  const handleEnvUpdateFile = useCallback((path: string, content: string) => {
-    setFiles((prev) => prev.map((f) => (f.path === path ? { ...f, content } : f)));
-    setActiveFile((prev) => (prev?.path === path ? { ...prev, content } : prev));
-  }, []);
+  /**
+   * Persist an .env file edited in the Env panel.
+   *
+   * This used to be `setFiles(...)` and nothing else — pure local state, no
+   * request. The panel called it, cleared its dirty badge and toasted
+   * "Development vars saved", so pasting a Supabase key or an API key looked
+   * exactly like a successful save and was gone on reload. There was already a
+   * persisting version of this next to `handleFileUpdate`; it was simply never
+   * wired up, and the local-only twin won by name.
+   *
+   * Worse when the file did not exist yet: `prev.map` matched nothing but
+   * still produced a new array, so the panel's `useEffect([files])` re-derived
+   * from `files`, found no .env.local and reset to defaults — the pasted
+   * values visibly disappeared one render after the success toast.
+   *
+   * Returns a promise so the panel can wait for the write instead of
+   * announcing it.
+   */
+  const handleEnvUpdateFile = useCallback(
+    async (path: string, content: string) => {
+      setFiles((prev) => {
+        const exists = prev.some((f) => f.path === path);
+        if (exists) return prev.map((f) => (f.path === path ? { ...f, content } : f));
+        return [
+          ...prev,
+          {
+            id: `env-${path}-${Date.now()}`,
+            project_id: project.id,
+            path,
+            content,
+            language: "dotenv",
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          } as ProjectFile,
+        ];
+      });
+      setActiveFile((prev) => (prev?.path === path ? { ...prev, content } : prev));
+
+      // POST is the path-addressed upsert: the panel knows the path, and for a
+      // brand new .env.local there is no row id to PATCH.
+      const res = await fetch(`/api/projects/${project.id}/files`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path, content, language: "dotenv" }),
+      });
+      if (!res.ok) throw new Error(`Could not save ${path} (${res.status}).`);
+    },
+    [project.id],
+  );
 
   const handleMessagesUpdate = useCallback((newMessages: Message[]) => {
     setMessages(newMessages);
@@ -1448,11 +1693,11 @@ export function EditorLayout({
       ) : (
       /* ── Desktop layout ──────────────────────────────────────────────────── */
       <div className="flex-1 overflow-hidden">
-        <PanelGroup direction="horizontal" autoSaveId={`lifemark-editor-split-v2-${pid}`} className="h-full">
+        <PanelGroup direction="horizontal" autoSaveId={`lifemark-editor-split-v3-${pid}`} className="h-full">
           {/* Left Panel — Chat only (Lovable-style) */}
           <Panel
             ref={chatPanelRef}
-            defaultSize={28}
+            defaultSize={22}
             minSize={14}
             maxSize={50}
             collapsedSize={0}

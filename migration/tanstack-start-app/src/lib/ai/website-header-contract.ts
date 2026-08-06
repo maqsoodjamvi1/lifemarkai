@@ -80,7 +80,11 @@ Do NOT use a single-row-only header. Every public website MUST use this two-tier
    - If you must use \`fixed\`, ALSO add matching top padding/spacer on the first content section (≈ top-bar + main-row height, e.g. \`pt-28\` / \`pt-32\`) so content is never hidden under the header
    - Mobile: hamburger that opens the same menu links; logo stays visible
 
-Implement as \`src/components/layout/Header.tsx\` (or \`Navbar.tsx\`) and mount it at the top of \`App.tsx\` / root layout.
+Implement as \`src/components/layout/Header.tsx\` (or \`Navbar.tsx\`) and mount it in the ROOT LAYOUT,
+so every page gets it: \`src/routes/__root.tsx\` for TanStack Start apps (inside \`<body>\`, wrapping
+\`{children}\`), or \`src/App.tsx\` for Vite SPA apps. TanStack Start apps have NO \`App.tsx\`.
+Pair it with \`src/components/layout/Footer.tsx\` mounted in the same place — a public site with a
+header and no footer is an incomplete build, not a style choice.
 Do NOT put contact/social only in the footer — they belong in the top bar as well.
 
 ### Layout / CSS preservation (critical — do not break the rest of the page)

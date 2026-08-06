@@ -9,7 +9,7 @@
  * would accept. One source now.
  */
 
-import { renderPackageAllowlistCompact } from "@/lib/ai/package-allowlist";
+import { renderPackageAllowlistCompact } from "../package-allowlist.ts";
 
 const PACKAGE_ALLOWLIST = renderPackageAllowlistCompact();
 

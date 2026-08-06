@@ -7,7 +7,7 @@ import {
   PanelLeft, PanelsTopLeft, Download,
   Share2, Globe, Lock, Check, Copy, ExternalLink, Shield, Brain, Pencil,
   ToggleLeft, ToggleRight, Trash2,
-  AlignJustify, Camera, BarChart2, Maximize2, RefreshCw,
+  AlignJustify, Camera, BarChart2,
   MessageCircle, Users, Link2, MoreHorizontal, History, LayoutDashboard,
   ChevronRight, UserPlus, CheckCircle2, AlertCircle,
   Cloud, FolderOpen, CreditCard, Search, Pin,
@@ -439,47 +439,90 @@ export function EditorTopBar({
     setTimeout(() => { renameInputRef.current?.select(); }, 30);
   }, [project.name]);
 
+  /**
+   * `fetch` only rejects on a TRANSPORT failure — an HTTP 401, 403, 404 or 500
+   * resolves normally. All three handlers below awaited a fetch and then went
+   * straight to their success path, so a rejected rename showed the new title
+   * (until reload) and a rejected DELETE navigated the user to the dashboard
+   * with no message at all. Someone deleting a project to remove customer data
+   * would believe it was gone.
+   *
+   * Session expiry is the usual trigger, and it is exactly the case where the
+   * user has been working for an hour first.
+   */
+  const patchProjectName = useCallback(
+    async (name: string) => {
+      const res = await fetch(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401 || res.status === 403
+            ? "Your session expired. Sign in again and retry."
+            : `The server rejected the change (${res.status}).`,
+        );
+      }
+    },
+    [project.id],
+  );
+
   const commitRename = useCallback(async () => {
     const trimmed = renameValue.trim();
     setIsRenaming(false);
     if (!trimmed || trimmed === project.name) return;
     try {
-      await fetch(`/api/projects/${project.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
-      });
+      await patchProjectName(trimmed);
       onRename?.(trimmed);
-    } catch {
-      toast({ title: "Failed to rename project", variant: "destructive" });
+    } catch (err) {
+      setRenameValue(project.name);
+      toast({
+        title: "Project was not renamed",
+        description: err instanceof Error ? err.message : "Please try again.",
+        variant: "destructive",
+      });
     }
-  }, [renameValue, project.name, project.id, onRename]);
+  }, [renameValue, project.name, patchProjectName, onRename]);
 
   const handleDeleteProject = useCallback(async () => {
     try {
-      await fetch(`/api/projects/${project.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/projects/${project.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        throw new Error(
+          res.status === 401 || res.status === 403
+            ? "Your session expired. Sign in again and retry."
+            : `The server rejected the delete (${res.status}).`,
+        );
+      }
       setShowDeleteDialog(false);
       navigate({ to: "/dashboard" });
-    } catch {
-      toast({ title: "Failed to delete project", variant: "destructive" });
+    } catch (err) {
+      // Deliberately leave the dialog open: navigating away would tell the
+      // user the project is gone when it is not.
+      toast({
+        title: "Project was NOT deleted",
+        description: err instanceof Error ? err.message : "Please try again.",
+        variant: "destructive",
+      });
     }
-  }, [project.id, router]);
+  }, [project.id, navigate]);
 
   const handleRenameProject = useCallback(async () => {
     const trimmed = renameValue.trim();
     if (!trimmed || trimmed === project.name) { setShowRenameDialog(false); return; }
     try {
-      await fetch(`/api/projects/${project.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: trimmed }),
-      });
+      await patchProjectName(trimmed);
       onRename?.(trimmed);
       setShowRenameDialog(false);
-    } catch {
-      toast({ title: "Failed to rename project", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Project was not renamed",
+        description: err instanceof Error ? err.message : "Please try again.",
+        variant: "destructive",
+      });
     }
-  }, [renameValue, project.name, project.id, onRename]);
+  }, [renameValue, project.name, patchProjectName, onRename]);
 
   const loadShareCollaborators = useCallback(async () => {
     setShareCollabLoading(true);
@@ -571,10 +614,35 @@ export function EditorTopBar({
     setTimeout(() => setShareCopied(false), 2000);
   }
 
-  // Poll deploy status while deploying
+  // Poll deploy status while deploying.
+  //
+  // The ceiling is the point. This loop only ever exited on live/failed/401,
+  // and there are real ways the deployment row never leaves "building": the
+  // queue path enqueues with nothing consuming it, and the fallback path
+  // fires its work in a `void (async () => …)()` AFTER the response is
+  // returned, so a recycled serverless instance never runs the update that
+  // would set either terminal state. The button then said "Publishing…"
+  // forever, the unpublished-changes dot never cleared, and reloading put the
+  // user straight back into it because the mount-time sync reads the same
+  // stuck row.
   useEffect(() => {
     if (deployStatus !== "deploying") return;
+    // 15 minutes: longer than any successful deploy we have measured,
+    // including a cold Vercel build, and short enough that nobody sits in
+    // front of it wondering.
+    const deadline = Date.now() + 15 * 60_000;
     const interval = setInterval(async () => {
+      if (Date.now() > deadline) {
+        clearInterval(interval);
+        setDeployStatus("failed");
+        toast({
+          title: "Publish is taking too long",
+          description:
+            "We stopped waiting after 15 minutes. It may still finish on its own — check your hosting dashboard, or press Publish again.",
+          variant: "destructive",
+        });
+        return;
+      }
       try {
         const res = await fetch(`/api/deploy/status?projectId=${project.id}`, { credentials: "include" });
         if (!res.ok) {
@@ -663,6 +731,12 @@ export function EditorTopBar({
   const creditsDisplay = Number.isInteger(credits)
     ? String(credits)
     : String(Math.round(credits * 100) / 100);
+
+  // The status cluster is collapsed behind one button, so anything the user
+  // would want to know WITHOUT opening it has to travel outward as a dot.
+  // Deliberately narrow: a running deploy and a Test/Live toggle are normal
+  // states, not problems, and dotting them would train people to ignore it.
+  const statusNeedsAttention = creditsLow || deployStatus === "failed";
 
   return (
     <TooltipProvider>
@@ -898,6 +972,121 @@ export function EditorTopBar({
           className={cn("flex items-center gap-0.5 flex-1 justify-center min-w-0", isMobile && "justify-start gap-1")}
         >
 
+          {/* Status, notifications and tools live on the LEFT. Lovable's
+              right cluster is exactly Share and Publish, and anything else
+              sitting beside them competes with the only button in the row
+              that ships. Moved, not removed. */}
+          <NotificationsBell projectId={project.id} className="hidden sm:flex" />
+
+          {/* ── Status & tools — one control instead of nine ──────────────────
+              This bar used to carry, loose and side by side: an autosave
+              label, a Test/Live pill, a deploy-status pill, a credits pill,
+              two dividers, and a three-icon cluster for open-in-new-tab /
+              refresh / comments. Measured against Lovable's editor at the
+              same viewport width, their right cluster holds exactly two
+              controls — Share and Publish — and ours held thirteen. That
+              difference is most of why the two editors read differently at a
+              glance, far more than any single colour or radius.
+
+              Nothing is gone. Open-in-new-tab and refresh were already
+              duplicated by the centre URL pill, so those two are simply
+              redundant; the rest moved in here. The dot on the trigger
+              carries anything that genuinely needs attention — low credits,
+              a failed deploy — outward, so collapsing the cluster cannot
+              hide bad news. */}
+          <DropdownMenu>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Project status and tools"
+                    className="relative h-7 w-7 rounded-full text-foreground/70 hover:text-foreground hover:bg-muted flex-shrink-0"
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                    {statusNeedsAttention && (
+                      <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-red-500 ring-2 ring-background" />
+                    )}
+                  </Button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent>Status &amp; tools</TooltipContent>
+            </Tooltip>
+
+            <DropdownMenuContent align="end" className="w-64">
+              {/* Credits */}
+              <div className="flex items-center justify-between px-2 py-1.5 text-xs">
+                <span className="flex items-center gap-1.5 text-muted-foreground">
+                  <Zap className="h-3.5 w-3.5" /> Credits
+                </span>
+                <span className={`font-semibold tabular-nums ${
+                  creditsLow ? "text-red-600 dark:text-red-400"
+                  : creditsMed ? "text-yellow-700 dark:text-yellow-400"
+                  : "text-foreground"
+                }`}>
+                  {creditsDisplay}
+                </span>
+              </div>
+
+              {/* Deploy status — only once there is a deploy to report on. */}
+              {deployStatus !== "idle" && (
+                <DropdownMenuItem
+                  className="text-xs gap-2"
+                  disabled={!(deployStatus === "deployed" && liveUrl)}
+                  onClick={() => {
+                    if (deployStatus === "deployed" && liveUrl) {
+                      window.open(liveUrl, "_blank", "noopener,noreferrer");
+                    }
+                  }}
+                >
+                  {deployStatus === "deploying"
+                    ? <Loader2 className="w-3.5 h-3.5 animate-spin text-amber-600" />
+                    : <span className={`w-2 h-2 rounded-full ml-1 mr-0.5 ${deployStatus === "deployed" ? "bg-emerald-500" : "bg-red-500"}`} />}
+                  <span className="flex-1">
+                    {deployStatus === "deploying" ? "Deploying…" : deployStatus === "deployed" ? "Live" : "Deploy failed"}
+                  </span>
+                  {deployStatus === "deployed" && liveUrl && <ExternalLink className="w-3 h-3 opacity-60" />}
+                </DropdownMenuItem>
+              )}
+
+              {/* Autosave — a status line, not an action. */}
+              {savedLabel && (
+                <div className="px-2 py-1.5 text-[11px] text-muted-foreground tabular-nums">
+                  {savedLabel}
+                </div>
+              )}
+
+              <DropdownMenuSeparator />
+
+              {/* Test / Live environment switcher */}
+              <DropdownMenuItem
+                className="text-xs gap-2"
+                disabled={envSaving}
+                onSelect={(e) => { e.preventDefault(); void handleEnvironmentToggle(); }}
+              >
+                {envSaving
+                  ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  : environment === "live"
+                    ? <Globe className="w-3.5 h-3.5 text-emerald-600" />
+                    : <Lock className="w-3.5 h-3.5" />}
+                <span className="flex-1">
+                  {environment === "live" ? "Live — AI edits locked" : "Test — AI edits on"}
+                </span>
+                <span className="text-[10px] text-muted-foreground">
+                  {environment === "live" ? "Switch to Test" : "Switch to Live"}
+                </span>
+              </DropdownMenuItem>
+
+              <DropdownMenuItem
+                className="text-xs gap-2"
+                onClick={() => openSecondaryPanel("comments", onRightPanelChange)}
+              >
+                <MessageCircle className="w-3.5 h-3.5" /> Comments
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           {!isMobile && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1021,72 +1210,20 @@ export function EditorTopBar({
           />
         </div>
 
-        {/* ── Right: Lovable-style compact action bar ── */}
-        <div className="flex items-center gap-0.5 flex-shrink-0">
+        {/* ── Right: Share and Publish. Nothing else. ────────────────────────
+            Measured at the same viewport, Lovable's right cluster is exactly
+            two buttons. Ours was thirteen, then four, and four still reads as
+            a toolbar beside their two.
 
-          {/* Autosave indicator */}
-          {savedLabel && (
-            <span className="hidden xl:flex items-center text-[10px] text-muted-foreground/80 select-none tabular-nums mr-1 flex-shrink-0">
-              {savedLabel}
-            </span>
-          )}
+            Notifications and the status menu are not deleted — they moved to
+            the left group below. The unread badge and the attention dot still
+            work there; they just stop competing with the only button in this
+            row that ships something. Gap 8px, matching theirs. */}
+        <div className="flex items-center gap-2 flex-shrink-0">
 
-          {/* Notifications (Lovable dump: aria "Notifications alt+T") */}
-          <NotificationsBell projectId={project.id} className="hidden sm:flex" />
-
-          {/* Test / Live environment switcher */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={() => void handleEnvironmentToggle()}
-                disabled={envSaving}
-                className={`hidden sm:flex items-center gap-1 mr-1 px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 border transition-all ${
-                  environment === "live"
-                    ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25"
-                    : "bg-muted/50 text-foreground/70 border-border hover:bg-muted hover:text-foreground"
-                }`}
-              >
-                {envSaving
-                  ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                  : environment === "live"
-                    ? <Globe className="w-2.5 h-2.5" />
-                    : <Lock className="w-2.5 h-2.5" />}
-                {environment === "live" ? "Live" : "Test"}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="text-xs max-w-[200px] text-center">
-              {environment === "live"
-                ? "Live mode — AI edits locked. Click to switch back to Test."
-                : "Test mode — AI edits enabled. Click to switch to Live (locks AI edits)."}
-            </TooltipContent>
-          </Tooltip>
-
-          {/* Deploy status */}
-          {deployStatus !== "idle" && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={() => deployStatus === "deployed" && liveUrl
-                    ? window.open(liveUrl, "_blank", "noopener,noreferrer")
-                    : undefined}
-                  className={`hidden sm:flex items-center gap-1 mr-1 px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 transition-colors ${
-                    deployStatus === "deployed"
-                      ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/25 cursor-pointer"
-                      : deployStatus === "deploying"
-                      ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
-                      : "bg-red-500/15 text-red-700 dark:text-red-400"
-                  }`}
-                >
-                  {deployStatus === "deploying"
-                    ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                    : <span className={`w-1.5 h-1.5 rounded-full ${deployStatus === "deployed" ? "bg-emerald-400 animate-pulse" : "bg-red-400"}`} />
-                  }
-                  {deployStatus === "deploying" ? "Deploying…" : deployStatus === "deployed" ? "Live" : "Failed"}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>{deployStatus === "deployed" && liveUrl ? liveUrl : deployStatus === "deploying" ? "Deployment in progress…" : "Deployment failed"}</TooltipContent>
-            </Tooltip>
-          )}
+          {/* Notifications — kept inline because its unread badge is the only
+              thing in this cluster that has to be seen without being asked
+              for. Everything else moved into the status menu below. */}
 
           {/* Presence avatars */}
           {presenceUsers.length > 0 && (
@@ -1108,63 +1245,21 @@ export function EditorTopBar({
             </div>
           )}
 
-          {/* Credits */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className={`flex items-center gap-1 px-2 h-7 rounded-full text-xs font-semibold tabular-nums cursor-default select-none flex-shrink-0 ${
-                creditsLow ? "bg-red-500/15 text-red-700 dark:text-red-400 ring-1 ring-red-500/30"
-                : creditsMed ? "bg-yellow-500/15 text-yellow-700 dark:text-yellow-400"
-                : "text-foreground/70"
-              }`}>
-                <Zap className="h-3 w-3" />
-                {creditsDisplay}
-              </div>
-            </TooltipTrigger>
-            <TooltipContent>{creditsDisplay} credits remaining — includes 5 free daily credits</TooltipContent>
-          </Tooltip>
-
-          <div className="h-4 w-px bg-border/60 mx-1 flex-shrink-0" />
-
-          {/* Preview utilities — one compact, clearly-bounded cluster (Lovable-
-              style focused grouping instead of loose icons + double dividers) */}
-          <div className="hidden sm:flex items-center gap-0 rounded-full border border-border/60 bg-background shadow-sm p-0.5 flex-shrink-0">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full text-foreground/70 hover:text-foreground hover:bg-muted"
-                  onClick={openLivePreviewTab}>
-                  <Maximize2 className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Open in new tab</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full text-foreground/70 hover:text-foreground hover:bg-muted"
-                  onClick={() => window.dispatchEvent(new CustomEvent("lifemark-refresh-preview"))}>
-                  <RefreshCw className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Refresh preview</TooltipContent>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full text-foreground/70 hover:text-foreground hover:bg-muted"
-                  onClick={() => openSecondaryPanel("comments", onRightPanelChange)}>
-                  <MessageCircle className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Comments</TooltipContent>
-            </Tooltip>
-          </div>
-
-          <div className="h-4 w-px bg-border/60 mx-1 flex-shrink-0" />
 
           {/* ── Share panel — Lovable-style ── */}
           <DropdownMenu open={shareOpen} onOpenChange={setShareOpen}>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm"
-                className="h-8 gap-1.5 text-[13px] font-medium flex-shrink-0 rounded-full px-3.5 bg-background border-border text-foreground shadow-sm hover:bg-muted/60">
-                <Users className="h-3.5 w-3.5" />
+              {/* 28px tall, filled neutral, no border, no shadow — measured
+                  off Lovable's Share button (58×28, background #F5F5F5).
+                  Ours was 32px with an outline and a drop shadow, which made
+                  it compete with Publish instead of sitting under it. */}
+              {/* Lovable's Share, property for property: 58x28, 14px/400,
+                  padding 4px 9px, gap 4px, bg oklch(0.9699 0 107), text
+                  oklch(0.1 0 0), no border, no shadow — and NO ICON. Theirs
+                  renders an svg at 0x0; the button is text only, which is most
+                  of why ours measured 79 against their 58. */}
+              <Button variant="ghost" size="sm"
+                className="h-7 gap-1 text-sm font-normal flex-shrink-0 rounded-full px-[9px] py-1 bg-[oklch(0.9699_0_107)] border-0 text-[oklch(0.1_0_0)] shadow-none hover:bg-[oklch(0.94_0_107)]">
                 Share
               </Button>
             </DropdownMenuTrigger>
@@ -1302,31 +1397,39 @@ export function EditorTopBar({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* ── Publish — main click deploys; chevron opens settings ── */}
+          {/* ── Publish — one pill that opens the publish panel ────────────────
+              This was a split button: the left half deployed on a single
+              click, the right half opened this same panel. Lovable's is a
+              single 82×28 pill that only opens the panel; the actual deploy
+              is a second, deliberate click on "Publish changes" inside it.
+
+              Two reasons to match them. The narrow one is width — 89 + 33 =
+              122px against their 82, the largest single contributor to our
+              heavier right cluster. The real one is that a one-click deploy
+              to the public internet, sitting next to Share, is a footgun:
+              there is no undo, and the button was previously reachable by
+              anyone who tabbed into the bar. The panel below already carries
+              the provider choice, the domain, and the security gate, so the
+              confirmation step costs a click and buys a chance to notice. */}
           <DropdownMenu>
             <div className="flex items-center flex-shrink-0">
-              <Button
-                size="sm"
-                disabled={isDeploying}
-                onClick={() => { void handleDeploy(deployProvider); }}
-                className="relative h-8 gap-1.5 text-[13px] font-semibold bg-[#0066FF] hover:bg-[#0052cc] text-white border-0 rounded-full rounded-r-none pl-3.5 pr-2.5 shadow-sm"
-              >
-                {isDeploying ? <><Loader2 className="h-3 w-3 animate-spin" />Publishing…</> : <><Rocket className="h-3 w-3" />Publish</>}
-                {hasUnpublishedChanges && !isDeploying && (
-                  <span
-                    className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-background"
-                    title="You have unpublished changes"
-                  />
-                )}
-              </Button>
               <DropdownMenuTrigger asChild>
                 <Button
                   size="sm"
                   disabled={isDeploying}
-                  className="h-8 px-2 text-xs bg-[#0066FF] hover:bg-[#0052cc] text-white border-0 rounded-full rounded-l-none border-l border-white/20 shadow-sm"
-                  aria-label="Publish options"
+                  // 82x28, 14px/400, padding 4px 9px 4px 8px, gap 4px, no
+                  // icon — Lovable's exact values. The spinner stays on the
+                  // publishing state; a control that changes nothing while it
+                  // works reads as broken.
+                  className="relative h-7 gap-1 text-sm font-normal bg-[#1F55F1] hover:bg-[#1142DE] text-white border-0 rounded-full pl-2 pr-[9px] py-1 shadow-none"
                 >
-                  <ChevronDown className="h-3 w-3 opacity-70" />
+                  {isDeploying ? <><Loader2 className="h-3 w-3 animate-spin" />Publishing…</> : "Publish"}
+                  {hasUnpublishedChanges && !isDeploying && (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400 ring-2 ring-background"
+                      title="You have unpublished changes"
+                    />
+                  )}
                 </Button>
               </DropdownMenuTrigger>
             </div>
@@ -1348,7 +1451,7 @@ export function EditorTopBar({
               <div className="px-4 py-3 border-b border-border/60">
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-[11px] font-medium text-muted-foreground">Website URL</span>
-                  <button className="text-[11px] text-[#0066FF] hover:underline"
+                  <button className="text-[11px] text-[#1F55F1] hover:underline"
                     onClick={() => { openSecondaryPanel("domains", onRightPanelChange); }}>
                     Add custom domain
                   </button>
@@ -1379,21 +1482,21 @@ export function EditorTopBar({
                   onClick={handleTogglePublic}
                   disabled={isSharing}
                   className={`w-full flex items-center gap-3 p-2.5 rounded-xl border transition-all ${
-                    project.is_public ? "border-[#0066FF]/30 bg-[#0066FF]/5" : "border-border hover:bg-muted/30"
+                    project.is_public ? "border-[#1F55F1]/30 bg-[#1F55F1]/5" : "border-border hover:bg-muted/30"
                   }`}
                 >
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center ${project.is_public ? "bg-[#0066FF]/15" : "bg-muted"}`}>
-                    <Globe className={`w-4 h-4 ${project.is_public ? "text-[#0066FF]" : "text-muted-foreground"}`} />
+                  <div className={`w-8 h-8 rounded-full flex items-center justify-center ${project.is_public ? "bg-[#1F55F1]/15" : "bg-muted"}`}>
+                    <Globe className={`w-4 h-4 ${project.is_public ? "text-[#1F55F1]" : "text-muted-foreground"}`} />
                   </div>
                   <div className="text-left flex-1">
-                    <p className={`text-xs font-medium ${project.is_public ? "text-[#0066FF]" : "text-foreground"}`}>
+                    <p className={`text-xs font-medium ${project.is_public ? "text-[#1F55F1]" : "text-foreground"}`}>
                       {project.is_public ? "Public" : "Private"}
                     </p>
                     <p className="text-[10px] text-muted-foreground">
                       {project.is_public ? "Anyone with the URL" : "Only you can access"}
                     </p>
                   </div>
-                  {project.is_public && <CheckCircle2 className="w-4 h-4 text-[#0066FF] shrink-0" />}
+                  {project.is_public && <CheckCircle2 className="w-4 h-4 text-[#1F55F1] shrink-0" />}
                 </button>
               </div>
 
@@ -1423,7 +1526,7 @@ export function EditorTopBar({
                   size="sm"
                   onClick={() => { void handleDeploy(deployProvider); }}
                   disabled={isDeploying}
-                  className="w-full h-9 text-sm font-semibold bg-[#0066FF] hover:bg-[#0052cc] text-white"
+                  className="w-full h-9 text-sm font-semibold bg-[#1F55F1] hover:bg-[#1142DE] text-white"
                 >
                   {isDeploying ? (
                     <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Publishing…</>
@@ -1443,7 +1546,7 @@ export function EditorTopBar({
                       onClick={() => setDeployProvider(p)}
                       className={`flex-1 h-7 rounded-lg text-[11px] font-medium border transition-all ${
                         deployProvider === p
-                          ? "bg-[#0066FF]/10 border-[#0066FF]/30 text-[#0066FF]"
+                          ? "bg-[#1F55F1]/10 border-[#1F55F1]/30 text-[#1F55F1]"
                           : "border-border/60 text-muted-foreground hover:bg-muted/40"
                       }`}
                     >
@@ -1480,7 +1583,7 @@ export function EditorTopBar({
           </DialogHeader>
           <div className="py-2">
             <input
-              className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-[#0066FF]/30"
+              className="w-full border border-border rounded-lg px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-[#1F55F1]/30"
               value={renameValue}
               onChange={(e) => setRenameValue(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") void handleRenameProject(); }}

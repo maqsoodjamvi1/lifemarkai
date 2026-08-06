@@ -96,6 +96,9 @@ export const Route = createFileRoute("/api/projects/snapshots")({
         if (result.status === "not_found") {
           return Response.json({ error: "Not found" }, { status: 404 });
         }
+        if (result.status === "error") {
+          return Response.json({ error: result.message }, { status: 500 });
+        }
         return Response.json({ ok: true });
       },
     },

@@ -18,14 +18,28 @@ interface WorkspaceSetupWizardProps {
 type Framework = "tanstack-start" | "nextjs" | "react" | "vue" | "svelte" | "astro" | "remix";
 type AIStyle = "concise" | "detailed" | "creative";
 
-// "tanstack-start" first and marked default, matching the server default in
-// lib/server-fns/projects.ts and the other two create surfaces. This wizard used
-// to open on "nextjs" and not offer TanStack Start at all, so every new user was
-// onboarded onto the framework the platform had already moved off.
+// "react" first, matching the state default below and the server, which
+// resolves to "react" when nothing is sent. The comment that used to sit here
+// claimed tanstack-start was the server default; it was not, and putting SSR
+// first meant new users were onboarded onto it by habit.
+//
+// Client rendering is the right default here, and the reason is measured
+// rather than stylistic. A server-rendered app must HYDRATE: React receives
+// the server's HTML and requires the DOM to be exactly what it expects.
+// Anything that touches the page first breaks that — and on real machines,
+// plenty does. Loading Lovable's own editor in a browser with a multi-chain
+// wallet extension produces 29 console errors from that extension's inpage.js
+// and NOT ONE hydration error, because their app is client-rendered: React
+// builds the DOM itself, so there is nothing to reconcile and nothing to
+// break. The same extension on a server-rendered page yields React #418/#423
+// and a preview that abandons hydration and repaints from scratch.
+//
+// SSR stays fully supported, one click away, for anyone who wants the SEO and
+// first-paint win and accepts that trade.
 const FRAMEWORKS: { id: Framework; label: string; desc: string; icon: string }[] = [
-  { id: "tanstack-start", label: "TanStack Start", desc: "Full-stack React, SSR (default)", icon: "🏁" },
+  { id: "react",   label: "React",    desc: "Client-side SPA — most robust", icon: "⚛" },
+  { id: "tanstack-start", label: "TanStack Start", desc: "Full-stack React, SSR", icon: "🏁" },
   { id: "nextjs",  label: "Next.js",  desc: "Full-stack React, App Router", icon: "▲" },
-  { id: "react",   label: "React",    desc: "Client-side SPA",              icon: "⚛" },
   { id: "vue",     label: "Vue 3",    desc: "Progressive framework",        icon: "🟢" },
   { id: "svelte",  label: "Svelte",   desc: "Compile-time UI",              icon: "🔥" },
   { id: "astro",   label: "Astro",    desc: "Content-first, islands arch",  icon: "🚀" },
@@ -60,7 +74,7 @@ export function WorkspaceSetupWizard({ onComplete, onSkip }: WorkspaceSetupWizar
   const [checkingGithub, setCheckingGithub] = useState(false);
   const [state, setState] = useState<WizardState>({
     workspaceName: "",
-    framework: "tanstack-start",
+    framework: "react",
     aiStyle: "concise",
     githubConnected: false,
     skipGithub: false,

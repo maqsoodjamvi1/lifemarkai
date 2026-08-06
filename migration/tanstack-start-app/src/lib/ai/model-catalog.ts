@@ -19,8 +19,8 @@
  * are still filtered through the approved set below. All ids are OpenRouter
  * slugs and route through the single OPENROUTER_API_KEY.
  */
-import type { AIModel } from "./provider";
-import { DEFAULT_CODING_MODEL, ECONOMY_CODING_MODEL, ECONOMY_CHAT_MODEL, FREE_CODING_MODEL } from "./model-defaults";
+import type { AIModel } from "./provider.ts";
+import { DEFAULT_CODING_MODEL, ECONOMY_CODING_MODEL, ECONOMY_CHAT_MODEL, FREE_CODING_MODEL } from "./model-defaults.ts";
 
 export type ModelStrength =
   | "code"

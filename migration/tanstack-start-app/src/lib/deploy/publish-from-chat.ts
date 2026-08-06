@@ -19,11 +19,11 @@
  * definition of what blocks a publish. If you add a check, add it there, not here.
  */
 
-import { evaluatePublishGate } from "@/lib/security/publish-gate";
-import { buildNetlifyFileMap } from "@/lib/deploy/build-deploy-files";
-import { buildLifemarkDeployUrl } from "@/lib/deploy/branded-deploy-url";
-import { sendDeploymentEmail } from "@/lib/email/resend";
-import { logger } from "@/lib/logger";
+import { evaluatePublishGate } from "../security/publish-gate.ts";
+import { buildNetlifyFileMap } from "./build-deploy-files.ts";
+import { buildLifemarkDeployUrl } from "./branded-deploy-url.ts";
+import { sendDeploymentEmail } from "../email/resend.ts";
+import { logger } from "../logger.ts";
 
 // ── Netlify helpers (mirrored from app/api/deploy/route.ts — not exported there) ──
 

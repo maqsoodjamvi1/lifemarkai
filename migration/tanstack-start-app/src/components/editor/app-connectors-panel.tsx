@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useToast } from "@/hooks/use-toast";
 
 // ─── Connector catalogue ──────────────────────────────────────────────────────
 
@@ -2058,6 +2059,7 @@ interface AppConnectorsPanelProps {
 }
 
 export function AppConnectorsPanel({ projectId }: AppConnectorsPanelProps) {
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState<typeof CATEGORIES[number]>("All");
   const [connected, setConnected] = useState<Set<string>>(new Set());
@@ -2082,16 +2084,37 @@ export function AppConnectorsPanel({ projectId }: AppConnectorsPanelProps) {
   }, [projectId]);
 
   async function handleConnect(id: string, values: Record<string, string>) {
-    // Save each field as an env var
-    await Promise.all(
-      Object.entries(values).map(([key, value]) =>
-        fetch(`/api/projects/${projectId}/env`, {
+    // SEQUENTIAL, and checked.
+    //
+    // `Promise.all` fired every field at once, and each request is a
+    // read-modify-write of the same .env.local row — so they all read the
+    // pre-write content and the last one won. A three-field connector
+    // persisted exactly one key while this function unconditionally marked it
+    // Connected; on the next mount the panel's own completeness check found
+    // the other keys missing and flipped the tile back with no explanation.
+    // (The server serializes these now too, but doing them in order here is
+    // what makes a failure reportable per field.)
+    const failed: string[] = [];
+    for (const [key, value] of Object.entries(values)) {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/env`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ key, value }),
-        })
-      )
-    );
+        });
+        if (!res.ok) failed.push(key);
+      } catch {
+        failed.push(key);
+      }
+    }
+    if (failed.length > 0) {
+      toast({
+        title: "Connection not saved",
+        description: `${failed.join(", ")} could not be stored, so this is not connected yet. Check that you are still signed in, then try again.`,
+        variant: "destructive",
+      });
+      return;
+    }
     setConnected((prev) => new Set([...prev, id]));
   }
 

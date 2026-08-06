@@ -1,8 +1,8 @@
 // Ported to TanStack Start: uses the standard Web Response (was next/server NextResponse).
-import { createAdminClient } from "@/lib/supabase/server";
-import { redirectResponse } from "@/lib/api/redirect";
-import { buildFallbackHtml } from "@/lib/preview/build-fallback-html";
-import type { ProjectFile } from "@/types/database";
+import { createAdminClient } from "../supabase/server.ts";
+import { redirectResponse } from "../api/redirect.ts";
+import { buildFallbackHtml } from "./build-fallback-html.ts";
+import type { ProjectFile } from "../../types/database.ts";
 
 /**
  * Shared preview renderer — used by the editor preview (`/preview/[projectId]`)

@@ -163,7 +163,7 @@ export interface LazyPanelContext {
   handleProjectUpdate: (updates: Partial<Project>) => void;
   handleFilesUpdate: (files: ProjectFile[], opts?: { replace?: boolean }) => void;
   handleFileUpdate: (file: ProjectFile) => void;
-  handleEnvUpdateFile: (path: string, content: string) => void;
+  handleEnvUpdateFile: (path: string, content: string) => void | Promise<void>;
   handleCreditsUpdate: (credits: number) => void;
   sendPromptToChat: (p: string) => void;
 }
@@ -224,6 +224,30 @@ export function SecondaryPanelContent(ctx: LazyPanelContext) {
         gitlabToken={profile?.gitlab_access_token ?? null}
         onProjectUpdated={handleProjectUpdate}
         files={files}
+        onFilesPulled={(pulled) => {
+          // Merge by path into the editor's live file list. Without this the
+          // editor kept the pre-pull content and the next autosave reverted
+          // the pull.
+          const byPath = new Map(files.map((f) => [f.path, f]));
+          for (const p of pulled) {
+            const existing = byPath.get(p.path);
+            byPath.set(
+              p.path,
+              existing
+                ? { ...existing, content: p.content }
+                : ({
+                    id: `pulled-${p.path}`,
+                    project_id: currentProject.id,
+                    path: p.path,
+                    content: p.content,
+                    language: p.language,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                  } as ProjectFile),
+            );
+          }
+          handleFilesUpdate(Array.from(byPath.values()), { replace: true });
+        }}
       />
     );
   }

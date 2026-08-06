@@ -73,8 +73,13 @@ export interface DomainRegistrar {
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 class RegistrarError extends Error {
-  constructor(public registrar: RegistrarId, message: string) {
+  // Assigned in the body rather than declared as a parameter property, so the
+  // file stays loadable under `node --test --experimental-strip-types`.
+  public registrar: RegistrarId;
+
+  constructor(registrar: RegistrarId, message: string) {
     super(`[${registrar}] ${message}`);
+    this.registrar = registrar;
     this.name = "RegistrarError";
   }
 }

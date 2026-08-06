@@ -1,4 +1,4 @@
-import type { ProjectFile } from "@/types/database";
+import type { ProjectFile } from "../../types/database.ts";
 
 /** Escape a class name for use in a CSS selector. */
 function esc(cls: string): string {

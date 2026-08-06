@@ -1,4 +1,4 @@
-import type { ProjectFile } from "@/types/database";
+import type { ProjectFile } from "../../types/database.ts";
 
 /**
  * Next.js App Router support for the srcdoc fallback preview engine

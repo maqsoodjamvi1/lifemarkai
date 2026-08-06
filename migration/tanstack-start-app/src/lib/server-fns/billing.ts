@@ -5,9 +5,9 @@
  * in the production build hit the server-fn RPC resolver and throw
  * "Server function info not found" → 500.
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { ensureDevCredits } from "@/lib/dev-credits";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
+import { ensureDevCredits } from "../dev-credits.ts";
 
 export async function getCredits(input: { debugZeroCredits?: boolean } = {}) {
   const supabase = await createClient();

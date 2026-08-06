@@ -4,8 +4,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { zodValidator } from "@tanstack/zod-adapter";
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
+import { createClient } from "./supabase/server.ts";
+import { getServerUser } from "./supabase/server-user.ts";
 
 export const fetchPublicProfile = createServerFn({ method: "GET" })
   .validator(zodValidator(z.object({ username: z.string().min(1) })))

@@ -3,7 +3,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { servePreviewHtml } from "@/lib/preview/serve-preview";
 import { appSlugFromHost } from "@/lib/deploy/apps-host";
-import { readLiveBuildFile, buildFileResponse } from "@/lib/deploy/build-store";
+import {
+  readLiveBuildFile,
+  buildFileResponse,
+  rewriteAssetPaths,
+} from "@/lib/deploy/build-store";
 
 /**
  * Serves a published app.
@@ -79,7 +83,19 @@ async function handleGET(req: Request, params: any): Promise<Response> {
   // this is the whole point of publishing, and it needs no running container.
   if (project.live_build_id) {
     const file = await readLiveBuildFile(project.id as string, assetPath);
-    if (file) return buildFileResponse(file);
+    if (file) {
+      // The entry document needs its asset URLs pointed back through this route.
+      // Vite emits root-absolute paths (`/assets/…`), which would otherwise
+      // resolve against the origin and 404. Only the HTML is rewritten; the
+      // assets themselves are served byte-for-byte.
+      if (file.path === "index.html" && file.encoding === "utf8") {
+        return buildFileResponse({
+          ...file,
+          content: rewriteAssetPaths(file.content, `preview-by-slug/${slug}`),
+        });
+      }
+      return buildFileResponse(file);
+    }
     // A published project missing a requested asset is a genuine 404. Falling
     // through to the live-preview path here would answer a missing `.js` with
     // an HTML page and produce "Unexpected token '<'" in the console.

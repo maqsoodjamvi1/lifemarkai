@@ -1,5 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
 
 export type ActivityEvent = {
   id: string;

@@ -5,9 +5,9 @@
  * using `auto_topup_last_triggered_at` so a rapid burst of AI calls only fires once.
  */
 
-import { stripe } from "@/lib/stripe/client";
-import { createAdminClient } from "@/lib/supabase/server";
-import { CREDIT_PACKS } from "@/lib/stripe/plans";
+import { stripe } from "./client.ts";
+import { createAdminClient } from "../supabase/server.ts";
+import { CREDIT_PACKS } from "./plans.ts";
 
 /** Minimum seconds between two consecutive auto top-up charges for the same user. */
 const DEBOUNCE_SECS = 60;

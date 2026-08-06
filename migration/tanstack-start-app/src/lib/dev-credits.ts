@@ -1,4 +1,4 @@
-import { createAdminClient } from "@/lib/supabase/server";
+import { createAdminClient } from "./supabase/server.ts";
 
 const DEV_CREDIT_GRANT = 100;
 

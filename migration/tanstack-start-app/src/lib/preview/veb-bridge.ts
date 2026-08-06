@@ -2,17 +2,54 @@
  * Visual Edit Bridge for the WebContainer preview engine.
  */
 
-import { PREVIEW_ERROR_BRIDGE_SCRIPT } from "./preview-error-bridge";
-import { PREVIEW_PERF_SCRIPT } from "./preview-perf-bridge";
+import { PREVIEW_ERROR_BRIDGE_SCRIPT } from "./preview-error-bridge.ts";
+import { PREVIEW_PERF_SCRIPT } from "./preview-perf-bridge.ts";
+
+/**
+ * ─── EVERYTHING BELOW IS INLINED INTO THE CUSTOMER'S HTML ───────────────────
+ *
+ * These template literals become the body of a `<script>` element in the
+ * user's page. Two consequences, both learned the hard way:
+ *
+ * 1. NO `</script>` ANYWHERE IN THE STRING — not in code, not in a comment,
+ *    not inside a JS string literal. An HTML parser does not understand
+ *    JavaScript: it ends the script element at the first `</script>` it sees,
+ *    whatever the context. I put a long explanatory comment in here that
+ *    happened to contain one, and the rest of the bridge spilled out of the
+ *    tag as raw markup. Vite then handed it to PostCSS, which reported
+ *    `Unknown word if` at `index.html?html-proxy&index=0.css` — a CSS parse
+ *    error, for JavaScript, from a comment. `assertNoScriptTerminator` below
+ *    now makes that impossible to ship.
+ *
+ * 2. Explanation goes HERE, in the module, not in the injected string. The
+ *    injected code is shipped to every preview on every load; prose in it is
+ *    bytes on the customer's wire and one more thing that can be misparsed.
+ *
+ * ─── WHY THE STYLE IS DEFERRED ──────────────────────────────────────────────
+ *
+ * `ensureVebStyle` is called only when the editor turns visual-edit or
+ * comment-pin mode on. It used to run at the top level, creating a style
+ * element and appending it to document.head the moment the browser parsed
+ * this script — which is before React hydrates.
+ *
+ * In a client-rendered Vite app that is harmless. In a server-rendered one it
+ * is fatal, and TanStack Start (the default for new projects) is server
+ * rendered: React hydrates the document, walks the head, finds a child the
+ * server never sent, and abandons hydration. Every SSR preview, every load.
+ * The reported stack named the customer's root route, so the auto-fixer spent
+ * real credits rewriting a file that was never wrong.
+ *
+ * The preferred mechanism is adoptedStyleSheets, which adds no element to the
+ * document at all and so is invisible to React's reconciler even when it does
+ * run.
+ */
 export const VEB_BRIDGE_SCRIPT = `(function() {
   if (window.parent === window) return;
   var enabled = false;
   var commentPinEnabled = false;
   var editTextMode = false;
   var hovered = null;
-  var style = document.createElement('style');
-  style.id = 'lm-veb-style';
-  style.textContent = [
+  var LM_VEB_CSS = [
     '.lm-hover{outline:2px solid #7c3aed!important;outline-offset:2px;cursor:pointer!important}',
     '.lm-selected{outline:2px solid #0e90e8!important;outline-offset:2px}',
     '.lm-multi{outline:2px solid #38bdf8!important;outline-offset:2px}',
@@ -22,13 +59,40 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
     '.lm-comment-pin-marker{position:fixed;width:22px;height:22px;margin:0;padding:0;border:2px solid #fff;border-radius:9999px;background:#7c3aed;color:#fff;font:700 11px/18px system-ui,sans-serif;text-align:center;cursor:pointer;pointer-events:auto;box-shadow:0 2px 8px rgba(0,0,0,.35);z-index:2147483647}',
     '.lm-comment-pin-marker:hover{transform:scale(1.08);background:#6d28d9}'
   ].join('');
-  if (!style.parentNode) document.head.appendChild(style);
+  var style = null;
+  var lmSheet = null;
+
+  // Deferred on purpose — see the note above VEB_BRIDGE_SCRIPT. Nothing here
+  // may run before the app has hydrated.
+  function ensureVebStyle() {
+    if (lmSheet || (style && style.parentNode)) return;
+    try {
+      if (typeof CSSStyleSheet === 'function' &&
+          'adoptedStyleSheets' in document &&
+          typeof CSSStyleSheet.prototype.replaceSync === 'function') {
+        var sheet = new CSSStyleSheet();
+        sheet.replaceSync(LM_VEB_CSS);
+        document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
+        lmSheet = sheet;
+        return;
+      }
+    } catch (e) { lmSheet = null; }
+    if (!style) {
+      style = document.createElement('style');
+      style.id = 'lm-veb-style';
+      style.textContent = LM_VEB_CSS;
+    }
+    if (!style.parentNode) document.head.appendChild(style);
+  }
 
   var pinLayer = null;
   var activePins = [];
 
   function ensurePinLayer() {
     if (pinLayer && pinLayer.parentNode) return pinLayer;
+    // The pin styles are part of the same deferred sheet. This runs only in
+    // response to a user action, so it is always past hydration.
+    ensureVebStyle();
     pinLayer = document.createElement('div');
     pinLayer.id = 'lm-comment-pins';
     document.documentElement.appendChild(pinLayer);
@@ -236,12 +300,13 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
     var d = e.data || {};
     if (d.type === 'lifemark-veb-mode') {
       enabled = !!d.enabled;
-      if (enabled) { if (!style.parentNode) document.head.appendChild(style); }
-      else { clearMarks(); }
+      if (enabled) ensureVebStyle();
+      else clearMarks();
     }
     if (d.type === 'lifemark-comment-pin-mode') {
       commentPinEnabled = !!d.enabled;
-      if (!commentPinEnabled) clearMarks();
+      if (commentPinEnabled) ensureVebStyle();
+      else clearMarks();
     }
     if (d.type === 'lifemark-veb-edit-text-mode') {
       editTextMode = !!d.enabled;
@@ -323,7 +388,18 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
 // sync work identically on both engines.
 //
 //   iframe -> parent: { source:'lifemark-preview', type:'error'|'success'|'log', text }
-//   iframe -> parent: { type:'lifemark-preview-location', pathname }
+//   iframe -> parent: { type:'lifemark-preview-location', pathname, origin, href }
+//   parent -> iframe: { type:'lifemark-preview-ping', token }
+//   iframe -> parent: { type:'lifemark-preview-pong', token }
+//
+// The ping/pong is a liveness handshake, and it answers a question the parent
+// cannot otherwise ask: has the iframe navigated AWAY from the previewed app?
+// An OAuth flow (Supabase, Google) is a full-page navigation to a third-party
+// origin where this script does not run — so the absence of a pong is the
+// signal, and the parent can restore the preview instead of leaving a login
+// page from another site rendered in the pane with no way back. `origin`/`href`
+// on the location message cover the rarer inverse: a bridge still alive on a
+// document that is no longer ours.
 export const PREVIEW_RUNTIME_SCRIPT = `(function(){
   if (window.parent === window) return;
   var hadRuntimeError = false;
@@ -343,8 +419,16 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
     try { window.parent.postMessage({ source:'lifemark-preview', type:type, text:String(text) }, '*'); } catch(e){}
   }
   function loc(){
-    try { window.parent.postMessage({ type:'lifemark-preview-location', pathname: location.pathname + location.search + location.hash }, '*'); } catch(e){}
+    try { window.parent.postMessage({ type:'lifemark-preview-location', pathname: location.pathname + location.search + location.hash, origin: location.origin, href: location.href }, '*'); } catch(e){}
   }
+  // Liveness handshake. Answering proves this document is still the previewed
+  // app; silence after a navigation means the frame left for another origin,
+  // where this script does not exist to answer.
+  window.addEventListener('message', function(e){
+    var d = e && e.data;
+    if (!d || typeof d !== 'object' || d.type !== 'lifemark-preview-ping') return;
+    try { window.parent.postMessage({ type:'lifemark-preview-pong', token: d.token, origin: location.origin, href: location.href }, '*'); } catch(err){}
+  });
   window.addEventListener('error', function(e){
     var where = e.filename ? (' (' + String(e.filename).split('/').pop() + ':' + e.lineno + ':' + e.colno + ')') : '';
     post('error', (e.message || 'Runtime error') + where);
@@ -395,8 +479,49 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
     if (!hadRuntimeError && mounted) post('success', 'ok');
     loc();
   }
+  // Report what the app actually PAINTED, not merely that this script is alive.
+  //
+  // The parent's blank-preview watchdog used to accept any bridge message as
+  // proof of a paint — but every one of them (veb-ready, location, pong, a
+  // console log) fires as soon as the document executes, which is before React
+  // has rendered anything. So the watchdog was satisfied by a page that was
+  // still white, and its whole reason for existing never fired. Observed live:
+  // a cold sandbox painted blank, the bridge reported success, the editor
+  // showed white for over a minute, and only a manual reload fixed it.
+  //
+  // Element count and rendered height are the difference between "React
+  // mounted an empty shell" and "there is something on screen". Sampled a few
+  // times because a cold Vite still has dependency pre-bundling to finish, so
+  // the first sample can legitimately be empty on an app that is fine.
+  var paintPollsLeft = 25;
+  function reportPaint() {
+    try {
+      var root = document.getElementById('root') || document.body;
+      if (!root) return false;
+      var rect = root.getBoundingClientRect();
+      var nodes = root.querySelectorAll('*').length;
+      var textLen = (root.innerText || '').trim().length;
+      window.parent.postMessage({
+        type: 'lifemark-preview-painted',
+        nodes: nodes,
+        textLen: textLen,
+        height: Math.round(rect.height)
+      }, '*');
+      return nodes >= 3 && (textLen > 0 || rect.height > 40);
+    } catch (e) { return false; }
+  }
+  // Poll once a second until there is something on screen, rather than taking
+  // a couple of fixed samples. A cold Vite still has dependency pre-bundling
+  // ahead of it, so an app that is perfectly healthy can be legitimately empty
+  // for several seconds — and a sample that stops before it paints would tell
+  // the parent to throw away exactly the work that was about to finish.
+  function pollPaint() {
+    if (reportPaint() || --paintPollsLeft <= 0) return;
+    setTimeout(pollPaint, 1000);
+  }
   window.addEventListener('load', function(){
     setTimeout(maybePostSuccess, 1200);
+    setTimeout(pollPaint, 800);
   });
   // Keep the parent address bar in sync with client-side routing.
   var _push = history.pushState, _replace = history.replaceState;
@@ -479,9 +604,39 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
   });
 })();`;
 
+/**
+ * Refuse to emit a bridge that would break out of its own `<script>` element.
+ *
+ * An HTML parser ends a script element at the first `</script`, regardless of
+ * whether JavaScript considers that position to be inside a string or a
+ * comment. Anything after it stops being script and becomes markup — which is
+ * how a prose comment in this file once ended up being parsed as CSS by
+ * PostCSS, reported as `Unknown word if` in `index.html?html-proxy&index=0.css`.
+ *
+ * The `</script` match is intentionally loose (no closing `>`, any case, any
+ * whitespace before it) because that is exactly how permissive real parsers
+ * are. Throwing here turns a silent, confusing preview corruption into a loud
+ * failure at the only place that can produce it.
+ */
+export function assertNoScriptTerminator(script: string, label: string): string {
+  const offender = /<\s*\/\s*script/i.exec(script);
+  if (offender) {
+    const at = offender.index;
+    throw new Error(
+      `${label} contains "${offender[0]}" at offset ${at}, which would close the ` +
+        `<script> element it is inlined into and spill the rest into the page as markup. ` +
+        `Context: ...${script.slice(Math.max(0, at - 80), at + 80)}...`,
+    );
+  }
+  return script;
+}
+
 /** Combined preview bridges (VEB + runtime + errors + perf). */
 export function getPreviewBridgeScripts(): string {
-  return `${VEB_BRIDGE_SCRIPT}\n${PREVIEW_RUNTIME_SCRIPT}\n${PREVIEW_ERROR_BRIDGE_SCRIPT}\n${PREVIEW_PERF_SCRIPT}`;
+  return assertNoScriptTerminator(
+    `${VEB_BRIDGE_SCRIPT}\n${PREVIEW_RUNTIME_SCRIPT}\n${PREVIEW_ERROR_BRIDGE_SCRIPT}\n${PREVIEW_PERF_SCRIPT}`,
+    "preview bridge",
+  );
 }
 
 /** Inject both bridges into an index.html document (idempotent). */
@@ -515,13 +670,21 @@ export function injectVebBridgeIntoNextLayout(source: string): string {
   if (source.includes("lifemark-veb-ready")) return source;
   const escaped = JSON.stringify(getPreviewBridgeScripts());
   const tag = `<script dangerouslySetInnerHTML={{ __html: ${escaped} }} />`;
-  if (/<\/body>/i.test(source)) {
-    return source.replace(/<\/body>/i, `${tag}\n</body>`);
+  // JSX documents may close the body with lowercase `</body>` (Next layouts,
+  // current TSS scaffold) OR a capitalized component `</Body>` (older TanStack
+  // Start API). The old code matched case-insensitively but REPLACED with a
+  // hard-coded lowercase `</body>` — that left `<Body>` unclosed, a JSX
+  // SyntaxError that 500'd the whole preview at SSR ("Expected corresponding
+  // JSX closing tag for <Body>"). Preserve whatever closing tag the file uses.
+  const bodyClose = source.match(/<\/body>/i);
+  if (bodyClose) {
+    return source.replace(bodyClose[0], `${tag}\n${bodyClose[0]}`);
   }
   // Common pattern: <body>{children}</body> already handled; otherwise append
-  // before the final closing parenthesis of the default export return.
-  const htmlClose = source.lastIndexOf("</html>");
-  if (htmlClose >= 0) {
+  // before the final closing </html>/</Html>, whichever case the file uses.
+  const htmlCloseMatch = source.match(/<\/html>/i);
+  if (htmlCloseMatch) {
+    const htmlClose = source.lastIndexOf(htmlCloseMatch[0]);
     return `${source.slice(0, htmlClose)}${tag}\n${source.slice(htmlClose)}`;
   }
   return `${source}\n${tag}\n`;

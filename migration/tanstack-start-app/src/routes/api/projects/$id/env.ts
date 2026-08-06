@@ -39,6 +39,11 @@ export const Route = createFileRoute("/api/projects/$id/env")({
         if (result.status === "not_found") {
           return Response.json({ error: "Project not found" }, { status: 404 });
         }
+        // The write layer used to discard its `{ error }`, so this answered
+        // `ok: true` for a variable that was never stored.
+        if (result.status === "error") {
+          return Response.json({ error: result.message }, { status: 500 });
+        }
         return Response.json({ ok: true, key: result.key });
       },
       DELETE: async ({ request, params }) => {
@@ -61,6 +66,9 @@ export const Route = createFileRoute("/api/projects/$id/env")({
         }
         if (result.status === "not_found") {
           return Response.json({ error: "Project not found" }, { status: 404 });
+        }
+        if (result.status === "error") {
+          return Response.json({ error: result.message }, { status: 500 });
         }
         return Response.json({ ok: true, key: result.key, deleted: result.deleted });
       },

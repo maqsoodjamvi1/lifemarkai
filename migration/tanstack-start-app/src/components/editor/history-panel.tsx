@@ -405,9 +405,28 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
   async function deleteSnapshot(snap: Snapshot) {
     setDeleting(snap.id);
     try {
-      await fetch(`/api/projects/snapshots?id=${snap.id}`, { method: "DELETE" });
+      // Two layers each used to guarantee a success signal for a failed
+      // delete: the server discarded its `{ error }`, and this ignored the
+      // response and removed the row optimistically. The version vanished
+      // from the list and reappeared on reload.
+      const res = await fetch(`/api/projects/snapshots?id=${snap.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        toast({
+          title: "Version was not deleted",
+          description: body.error ?? `The server rejected the delete (${res.status}).`,
+          variant: "destructive",
+        });
+        return;
+      }
       setSnapshots((prev) => prev.filter((s) => s.id !== snap.id));
       toast({ title: "Version deleted" });
+    } catch {
+      toast({
+        title: "Version was not deleted",
+        description: "You appear to be offline. Try again once you reconnect.",
+        variant: "destructive",
+      });
     } finally {
       setDeleting(null);
     }

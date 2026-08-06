@@ -7,12 +7,19 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowRight, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-// Keep this list and the default in sync with dashboard-hero.tsx and with the
-// server default in lib/server-fns/projects.ts ("tanstack-start"). This box
-// ALWAYS sends an explicit `framework`, so the server default never applies to
-// this path — omitting tanstack-start here silently made "react" the real
-// default for the primary create flow.
-type Framework = "tanstack-start" | "react" | "next" | "vue" | "svelte";
+// Keep this list and the default in sync with dashboard-hero.tsx and with
+// lib/server-fns/projects.ts, which resolves to "react" when nothing is sent.
+// (The comment that used to be here said the server default was
+// "tanstack-start". It is not.) This box ALWAYS sends an explicit `framework`,
+// so whatever is preselected below IS the default for the primary create flow.
+//
+// "react" leads deliberately: it is the Lovable shape, a client-rendered Vite
+// SPA. Client rendering has no hydration step, so nothing a browser extension
+// does to the page can break it — verified by loading Lovable's own editor in
+// a browser with a multi-chain wallet extension installed: 29 errors from the
+// extension, zero hydration errors. Server rendering trades that robustness
+// for SEO and first paint, and stays one click away.
+type Framework = "react" | "tanstack-start" | "next" | "vue" | "svelte";
 
 interface PromptCreateBoxProps {
   variant?: "default" | "hero";
@@ -27,7 +34,7 @@ const SUGGESTIONS = [
 
 export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
   const [prompt, setPrompt] = useState("");
-  const [framework, setFramework] = useState<Framework>("tanstack-start");
+  const [framework, setFramework] = useState<Framework>("react");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -104,7 +111,7 @@ export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
 
       <div className="flex flex-wrap items-center gap-2 px-3 pb-3">
         <div className="flex gap-1">
-          {(["tanstack-start", "react", "next", "vue", "svelte"] as const).map((fw) => (
+          {(["react", "tanstack-start", "next", "vue", "svelte"] as const).map((fw) => (
             <button
               key={fw}
               type="button"

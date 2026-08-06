@@ -3,11 +3,11 @@
  * lib/stripe subsystem. Ports of app/api/billing/{checkout,portal}/route.ts.
  * The request origin is passed in from the route (needs the Request).
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { ensureDevCredits } from "@/lib/dev-credits";
-import { stripe, getOrCreateCustomer, createBillingPortalSession } from "@/lib/stripe/client";
-import { PLANS, CREDIT_PACKS } from "@/lib/stripe/plans";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
+import { ensureDevCredits } from "../dev-credits.ts";
+import { stripe, getOrCreateCustomer, createBillingPortalSession } from "../stripe/client.ts";
+import { PLANS, CREDIT_PACKS } from "../stripe/plans.ts";
 
 export async function createSubscriptionCheckout(data: any) {
     const supabase = await createClient();

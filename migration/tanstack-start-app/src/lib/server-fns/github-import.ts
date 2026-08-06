@@ -5,9 +5,9 @@
  * maps to HTTP codes.
  */
 import { Octokit } from "@octokit/rest";
-import { createClient } from "@/lib/supabase/server";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import { detectLanguage } from "@/lib/ai/code-parser";
+import { createClient } from "../supabase/server.ts";
+import { rateLimitAsync, RATE_LIMITS } from "../rate-limit.ts";
+import { detectLanguage } from "../ai/code-parser.ts";
 import {
   cancelCreditReservation,
   reserveCredits,

@@ -16,6 +16,7 @@
  */
 
 import { createHash } from "crypto";
+import { dnsRecordsForDomain } from "./hosting.ts";
 
 const ENTRI_TOKEN_URL = "https://api.goentri.com/token";
 
@@ -67,18 +68,34 @@ export function domainVerificationToken(domain: string, projectId: string): stri
   return "lifemark-verify=" + createHash("sha256").update(`${domain}:${projectId}:${salt}`).digest("hex").slice(0, 32);
 }
 
-/** DNS records a connected domain must have to serve a LifemarkAI project. */
+/**
+ * DNS records a connected domain must have to serve a LifemarkAI project.
+ *
+ * These now come from `hosting.ts`, which is the module that actually knows
+ * where projects are served, rather than being computed here a second time.
+ *
+ * The hand-rolled version this replaces was wrong in a way no test could catch
+ * and no user could diagnose. It pointed apex domains at 76.76.21.21 — a
+ * VERCEL address — and subdomains at `lifemark-<id>.lifemarkai.app`, while
+ * projects are in fact served by Netlify at 75.2.60.5 / 99.83.190.102 and
+ * `lifemark-<id>.netlify.app`. Anyone who followed these records, by hand or
+ * through Entri's one-click flow, pointed their domain at a host that had never
+ * heard of them.
+ *
+ * It also disagreed with `setProjectDomain`, which independently emitted the
+ * CORRECT Netlify values — so the product gave two different answers to "what
+ * DNS do I need?" depending on which button you pressed. One source of truth
+ * is the fix; verification in hosting.ts reads the same values, so records
+ * shown and records checked can no longer drift apart.
+ */
 export function connectDnsRecords(domain: string, projectId: string): EntriDnsRecord[] {
-  const isApex = domain.split(".").length === 2;
-  const ip = process.env.LIFEMARK_INGRESS_IP || "76.76.21.21";
-  const appHost = `lifemark-${projectId.slice(0, 12)}.${process.env.LIFEMARK_APP_DOMAIN || "lifemarkai.app"}`;
-  const records: EntriDnsRecord[] = [
-    isApex
-      ? { type: "A", host: "@", value: ip, ttl: 3600 }
-      : { type: "CNAME", host: domain.split(".")[0], value: appHost, ttl: 3600 },
-    { type: "TXT", host: "@", value: domainVerificationToken(domain, projectId), ttl: 3600 },
-  ];
-  return records;
+  const verifyToken = domainVerificationToken(domain, projectId);
+  return dnsRecordsForDomain(projectId, domain, verifyToken).map((r) => ({
+    type: r.type as EntriDnsRecord["type"],
+    host: r.name,
+    value: r.value,
+    ttl: 3600,
+  }));
 }
 
 /**

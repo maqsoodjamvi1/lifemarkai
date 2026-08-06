@@ -27,9 +27,9 @@
  * investigation did.
  */
 
-import { generateAI } from "@/lib/ai/generate";
-import { getFastAiModel } from "@/lib/ai/model-defaults";
-import type { SubagentStep } from "@/lib/ai/subagents";
+import { generateAI } from "./generate.ts";
+import { getFastAiModel } from "./model-defaults.ts";
+import type { SubagentStep } from "./subagents.ts";
 
 /** Hard ceiling on concurrent agents. Three is Lovable's shape and the cost anchor. */
 export const MAX_PARALLEL_SUBAGENTS = 3;

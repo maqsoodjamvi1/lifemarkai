@@ -2,8 +2,6 @@
 import type { RefObject } from "react";
 import type { LeftPanel } from "@/components/editor/editor-layout";
 import { ChatTiptapInput, type ChatInputHandle } from "@/components/editor/chat-tiptap-input";
-import { LovableSecurityIssuesBar } from "./security-issues-bar";
-import { LovableLiveLockBanner } from "./live-lock-banner";
 import {
   LovableComposerCharacterCounter,
   lovableComposerInputRingClass,
@@ -109,17 +107,15 @@ export function LovableComposerInputArea({
     <>
       <LovableComposerOverlays {...overlayProps} />
 
-      {!isLocked && (
-        <LovableSecurityIssuesBar
-          issueCount={securityIssueCount}
-          noCredits={noCredits}
-          freeFixesRemaining={freeFixesRemaining}
-          onViewIssues={onViewSecurityIssues}
-          onFixAll={onFixAllSecurityIssues}
-        />
-      )}
+      {/* The security bar and the lock banner used to render HERE, inside the
+          composer card. That put a 51px row plus the card's 8px gap above the
+          input and made the card 163px against Lovable's 100 — measured on
+          production, not guessed.
 
-      {isLocked && <LovableLiveLockBanner />}
+          Their card holds exactly two children: the input and the footer row.
+          Anything else belongs above the card, in the shell, where it can be as
+          tall as it needs without changing the shape of the thing you type
+          into. Both now render there; see chat-panel.tsx. */}
 
       {/* Lovable dump: #chatinput CSS-grid host + always-mounted sibling placeholder */}
       <div
@@ -148,7 +144,15 @@ export function LovableComposerInputArea({
 
       <LovableComposerCharacterCounter length={input.length} />
 
-      {!isLocked && !noCredits && (
+      {/* Only once there is something to estimate. This row used to render
+          whenever the user had credits and was not locked — which is almost
+          always — so an empty composer permanently carried a line reading
+          "Est. 1 credit" plus the card's 8px gap. That is the whole of the
+          29px by which our composer stood taller than Lovable's: theirs is
+          100px at rest (12 padding + 40 input + 8 gap + 28 footer + 12), ours
+          was 129. The estimate still appears the moment it can differ from the
+          baseline, which is the only moment anyone reads it. */}
+      {!isLocked && !noCredits && (input.length > 0 || hasAttachments || (contextFileCount ?? 0) > 0) && (
         <LovableComposerEstimatedCredits
           mode={rest.mode}
           inputLength={input.length}

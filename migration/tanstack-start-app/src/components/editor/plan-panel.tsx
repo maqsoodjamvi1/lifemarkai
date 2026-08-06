@@ -293,7 +293,7 @@ Based on your request, here's a structured approach for implementing this featur
                           <div className="flex gap-2">
                             <Button
                               size="sm"
-                              className="flex-1 h-7 text-xs bg-[#0066FF] hover:bg-[#0052cc] text-white"
+                              className="flex-1 h-7 text-xs bg-[#1F55F1] hover:bg-[#1142DE] text-white"
                               onClick={() => {
                                 // Save edited plan back to the message
                                 setMessages((prev) =>
@@ -345,7 +345,7 @@ Based on your request, here's a structured approach for implementing this featur
                           </Button>
                           <Button
                             size="sm"
-                            className="ml-auto h-7 text-xs gap-1.5 bg-[#0066FF] hover:bg-[#0052cc] text-white"
+                            className="ml-auto h-7 text-xs gap-1.5 bg-[#1F55F1] hover:bg-[#1142DE] text-white"
                             onClick={() => approvePlan(msg.content)}
                           >
                             <CheckCheck className="w-3 h-3" />

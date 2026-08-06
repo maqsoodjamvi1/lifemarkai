@@ -38,11 +38,60 @@ export function isBrowserExtensionError(
   ) {
     return true;
   }
-  // Wallet inpage scripts often omit the scheme in truncated console text.
-  if (/\binpage\.js\b/i.test(blob) && /emit|ethereum|wallet|metamask|solana|web3/i.test(blob)) {
+  // `inpage.js` on its own is enough.
+  //
+  // It used to also require a wallet word (ethereum/metamask/solana/…) in the
+  // same blob, and that extra condition is what let a real case through. A
+  // multi-chain wallet extension patches the scheduler — `postMessage`,
+  // `setImmediate` — so React's own work loop runs THROUGH it, and the stack
+  // reads:
+  //
+  //     at U (index-<hash>.js:2:9832)
+  //     at de (index-<hash>.js:2:10209)
+  //     at run (inpage.js:1:1898085)
+  //     at runIfPresent (inpage.js:1:1898212)
+  //     at onGlobalMessage (inpage.js:1:1897412)
+  //
+  // No wallet word anywhere — just React frames sitting on top of the
+  // extension's shim. `inpage.js` is not a filename any Vite or React app
+  // produces; it is the conventional name for an extension's page-context
+  // inject. Seeing it at all means the page is not running alone.
+  if (/\binpage\.js\b/i.test(blob)) return true;
+  // The provider adapters those extensions register, in case the frame that
+  // named the file was trimmed out of a truncated stack.
+  if (
+    /\b(Ethereum|Solana|Cosmos|Tron|Ton|Bitcoin|BinanceWeb3)(Adapter|Provider)\b|\bProvidersManager\b|IN_PAGE_CHANNEL_NODE_ID/i.test(
+      blob,
+    )
+  ) {
     return true;
   }
   return false;
+}
+
+/**
+ * React's production error codes for "hydration was abandoned".
+ *
+ * A minified React error carries no component, no file and no line — the whole
+ * point of minification is that the message is a number. There is nothing in
+ * it for the auto-fixer to act on, so putting one into the healing loop can
+ * only produce a guess, and guesses on a hydration error cost credits and
+ * change files at random.
+ *
+ *   418  hydration failed, the initial UI does not match the server
+ *   422  error while hydrating this Suspense boundary
+ *   423  error while hydrating; the whole root switches to client rendering
+ *
+ * 425 (text content does not match) is deliberately EXCLUDED: it is the one
+ * hydration code that reliably indicates an application bug — a timestamp or a
+ * random value rendered during SSR — and the fixer handles those well.
+ *
+ * Development builds are unaffected: previews run `vite dev`, where React
+ * emits the full message with a component stack, and those still come through
+ * unless they are document-level (see isDocumentHydrationMismatch).
+ */
+export function isMinifiedReactHydrationError(message: string): boolean {
+  return /(?:Minified React error|invariant=)\s*#?\s*(418|422|423)\b/i.test(message);
 }
 
 /** Skip React/console noise that is not actionable for the healing loop. */
@@ -66,6 +115,68 @@ export function isNoisePreviewError(
   // runtime/bundler error, which is still caught above. So never let the
   // empty-root heuristic ALONE freeze the preview.
   if (/preview root is empty/i.test(m)) return true;
+  if (isDocumentHydrationMismatch(m)) return true;
+  if (isMinifiedReactHydrationError(m)) return true;
+  return false;
+}
+
+/**
+ * A hydration mismatch reported against the DOCUMENT shell — <html>, <head>,
+ * <body>, #document — rather than against page content.
+ *
+ * These are not application bugs, and the AI cannot fix them, because nothing
+ * in the app's render caused them: something mutated the document between the
+ * server's HTML arriving and React hydrating it. Browser extensions are the
+ * usual suspect in the wild (password managers and grammar checkers add
+ * attributes to <body>) — and for a long time WE were the suspect here. The
+ * visual-edit bridge appended a <style> into <head> at parse time, which broke
+ * every server-rendered preview on every load.
+ *
+ * Letting these reach the healing loop was expensive in the most literal
+ * sense. The stack names the customer's __root.tsx, so the auto-fixer spent
+ * real credits rewriting a file that was never wrong, failed, and tried again.
+ *
+ * Deliberately NARROW. A hydration mismatch inside page CONTENT — a div, a
+ * paragraph, text differing between server and client — IS an application bug
+ * (Date.now() during render, reading localStorage while server-rendering) and
+ * the AI fixes those well. Those still come through untouched.
+ */
+export function isDocumentHydrationMismatch(message: string): boolean {
+  const m = message.trim();
+
+  // Family 1: "Expected server HTML to contain a matching <CHILD> in <PARENT>".
+  // Note this one does NOT contain the word "hydration" — gating on that was
+  // the first thing I got wrong here, and it is the message the customer
+  // actually saw most.
+  //
+  // Only the CHILD decides. `<div> in <body>` is a real application bug (the
+  // app rendered a div the server didn't); `<head> in <html>` is the document
+  // shell being mutated from outside React.
+  if (/expected server html to contain a matching/i.test(m)) {
+    const explicit = /matching\s+<\s*([a-z#][\w#-]*)\s*>\s+in\s+</i.exec(m);
+    if (explicit) return /^(html|head|body)$/i.test(explicit[1]!);
+    // The console often logs React's raw format string with its arguments
+    // appended instead of substituted:
+    //   "…a matching <%s> in <%s>.%s head html"
+    // The arguments arrive in order, so the first is still the child.
+    const positional = /%s(?:\.%s)?\s+([a-z#][\w#-]*)\s+([a-z#][\w#-]*)/i.exec(m);
+    if (positional) return /^(html|head|body)$/i.test(positional[1]!);
+    return false;
+  }
+
+  // Family 2: hydration was abandoned and the document was rebuilt. React only
+  // says this about the document itself.
+  if (/server html was replaced with client content/i.test(m)) return true;
+
+  // Family 3: the generic companion error. React emits this alongside the
+  // specific warning above for EVERY hydration failure, including real
+  // content-level ones — but it carries no location, so on its own it can
+  // never tell the fixer what to change. Previews run Vite dev with the
+  // development React build, where the specific warning is always emitted too,
+  // so suppressing this one loses no signal for genuine bugs while removing
+  // the message that drove the loop.
+  if (/hydration failed because the initial ui does not match/i.test(m)) return true;
+
   return false;
 }
 
@@ -322,6 +433,25 @@ export function parsePreviewErrorClear(data: unknown): PreviewErrorKind | null {
   const d = data as Record<string, unknown>;
   if (d.source !== "lifemark-preview-errors" || d.type !== "preview-error-clear") return null;
   return (d.kind as PreviewErrorKind) ?? "empty-root";
+}
+
+/**
+ * The bridge announcing it just booted inside a FRESH preview document.
+ *
+ * This is the signal that lets a paused preview un-pause itself. Until it was
+ * consumed, "Preview paused" was a one-way door: an error froze the overlay,
+ * the code got repaired, the sandbox hot-reloaded, the app came back perfectly
+ * — and the banner stayed up forever, because nothing ever retracted the
+ * original error. Observed live on a project rendering 3.8 KB of correct
+ * content underneath its own overlay.
+ *
+ * A new document means the previous document's errors are unverifiable
+ * history, so the guard restarts evidence-gathering from scratch.
+ */
+export function parsePreviewReady(data: unknown): boolean {
+  if (!data || typeof data !== "object") return false;
+  const d = data as Record<string, unknown>;
+  return d.source === "lifemark-preview-errors" && d.type === "preview-error-ready";
 }
 
 export function parsePreviewErrorMessage(data: unknown): PreviewRuntimeError | null {

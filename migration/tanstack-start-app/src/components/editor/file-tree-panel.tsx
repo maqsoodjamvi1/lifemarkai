@@ -482,18 +482,44 @@ export function FileTreePanel({
       // Delete all files inside the folder
       const prefix = node.path + "/";
       const toDelete = files.filter((f) => f.path.startsWith(prefix) || f.path === node.path);
-      await Promise.all(
-        toDelete.map((f) =>
-          fetch(apiBase, {
-            method: "DELETE",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ fileId: f.id }),
-          })
-        )
+      // Check every response. This used to fire the DELETEs, ignore all of
+      // them, and remove the whole subtree from local state with a success
+      // toast — so an expired session (401) or a server error deleted nothing
+      // and looked identical to a clean delete. The user then kept building
+      // against a tree that did not match the database, and every snapshot,
+      // deploy and GitHub push shipped the files they believed were gone. The
+      // single-file branch below already got this right.
+      const results = await Promise.all(
+        toDelete.map(async (f) => {
+          try {
+            const res = await fetch(apiBase, {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ fileId: f.id }),
+            });
+            return { file: f, ok: res.ok };
+          } catch {
+            return { file: f, ok: false };
+          }
+        }),
       );
-      const deletedIds = new Set(toDelete.map((f) => f.id));
-      onFilesChange(files.filter((f) => !deletedIds.has(f.id)));
-      toast({ title: `Deleted folder "${node.name}"` });
+      const deletedIds = new Set(results.filter((r) => r.ok).map((r) => r.file.id));
+      const failed = results.filter((r) => !r.ok).map((r) => r.file.path);
+      // Only drop what actually went. Anything that failed stays visible, so
+      // the tree keeps matching the server.
+      if (deletedIds.size > 0) onFilesChange(files.filter((f) => !deletedIds.has(f.id)));
+      if (failed.length > 0) {
+        toast({
+          title:
+            deletedIds.size === 0
+              ? `"${node.name}" was not deleted`
+              : `"${node.name}" was only partly deleted`,
+          description: `${failed.length} file${failed.length === 1 ? "" : "s"} could not be removed (${failed.slice(0, 3).join(", ")}${failed.length > 3 ? "…" : ""}). They are still in your project.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: `Deleted folder "${node.name}"` });
+      }
     } else if (node.file) {
       const res = await fetch(apiBase, {
         method: "DELETE",
@@ -619,7 +645,23 @@ export function FileTreePanel({
         const updated = await filesRes.json();
         if (Array.isArray(updated)) onFilesChange(updated);
       }
-      toast({ title: `Imported ${json.imported} file${json.imported !== 1 ? "s" : ""} ✓` });
+      // The route does the honest accounting — it accumulates errors across
+      // the update loop and the batched inserts and returns the count — but
+      // `json.imported` is the number ATTEMPTED, not written, and this
+      // ignored `json.errors` entirely. A 200-file import where every insert
+      // failed still read "Imported 200 files ✓", and the refetch below
+      // quietly returned the unchanged tree.
+      const failed = typeof json.errors === "number" ? json.errors : 0;
+      const landed = Math.max(0, (json.imported ?? 0) - failed);
+      if (failed > 0) {
+        toast({
+          title: landed === 0 ? "Nothing was imported" : "ZIP imported with errors",
+          description: `${landed} file${landed === 1 ? "" : "s"} added, ${failed} could not be saved. Try again, or import a smaller ZIP.`,
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: `Imported ${landed} file${landed !== 1 ? "s" : ""} ✓` });
+      }
     } catch {
       toast({ title: "ZIP import failed", variant: "destructive" });
     } finally {

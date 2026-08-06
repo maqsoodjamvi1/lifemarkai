@@ -7,7 +7,7 @@ interface DashboardHeroProps {
   firstName: string;
 }
 
-type Framework = "tanstack-start" | "react" | "next" | "vue" | "svelte";
+type Framework = "react" | "tanstack-start" | "next" | "vue" | "svelte";
 
 const SUGGESTIONS = [
   "SaaS dashboard with analytics and user management",
@@ -18,7 +18,10 @@ const SUGGESTIONS = [
 
 function HeroPromptCreateBox() {
   const [prompt, setPrompt] = useState("");
-  const [framework, setFramework] = useState<Framework>("tanstack-start");
+  // Vite + React + TypeScript is the default: it is the stack Lovable itself
+  // generates, it publishes (an SSR build has no index.html to serve), and it
+  // has no whole-document hydration for a browser extension to break.
+  const [framework, setFramework] = useState<Framework>("react");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -94,7 +97,7 @@ function HeroPromptCreateBox() {
       />
       <div className="flex flex-wrap items-center gap-2 px-3 pb-3">
         <div className="flex gap-1">
-          {(["tanstack-start", "react", "next", "vue", "svelte"] as const).map((fw) => (
+          {(["react", "tanstack-start", "next", "vue", "svelte"] as const).map((fw) => (
             <button
               key={fw}
               type="button"

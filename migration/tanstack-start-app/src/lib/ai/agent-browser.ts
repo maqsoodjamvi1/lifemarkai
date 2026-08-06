@@ -2,7 +2,7 @@
  * Mid-loop browser tools for the ReAct agent (Lovable parity).
  * Prefers Playwright when available; falls back to HTTP fetch + HTML text.
  */
-import { buildFallbackHtml } from "@/lib/preview/build-fallback-html";
+import { buildFallbackHtml } from "../preview/build-fallback-html.ts";
 
 export type BrowseAction = "navigate" | "click" | "fill" | "screenshot" | "snapshot";
 

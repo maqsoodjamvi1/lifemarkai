@@ -1,7 +1,7 @@
 /** Native billing/auto-topup — reimplemented off the worker (ported lib/stripe). */
-import { createAdminClient, createClient } from "@/lib/supabase/server";
-import { stripe } from "@/lib/stripe/client";
-import { CREDIT_PACKS } from "@/lib/stripe/plans";
+import { createAdminClient, createClient } from "../supabase/server.ts";
+import { stripe } from "../stripe/client.ts";
+import { CREDIT_PACKS } from "../stripe/plans.ts";
 
 export async function getAutoTopup() {
   const supabase = await createClient();

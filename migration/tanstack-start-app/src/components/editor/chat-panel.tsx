@@ -29,6 +29,8 @@ import {
   LovableChatComposerShell,
   LovableComposerMobileSheet,
   LovableChatInputCard,
+  LovableSecurityIssuesBar,
+  LovableLiveLockBanner,
   LovableChatTimeline,
   type LovableChatTimelineHandle,
   LovableChatHeader,
@@ -67,6 +69,7 @@ import {
   type LovableSecretBannerState,
 } from "./lovable";
 import { parseLineRefs, removeLineRefFromInput } from "@/lib/editor/parse-line-refs";
+import { describeAiFailure, readErrorBody } from "@/lib/editor/ai-failure";
 import { formatGuestCommentsForAi } from "@/lib/editor/format-guest-comments";
 import { formatErrorsForHealing } from "@/lib/preview/preview-error-bridge";
 import type { ChatSearchMode } from "@/lib/editor/search-chat-messages";
@@ -96,6 +99,10 @@ import {
   looksLikeEditRequest,
   DEFAULT_CODING_MODEL,
 } from "@/lib/ai/editor-intelligence";
+import { countUserAuthoredFiles, isGreenfieldProject } from "@/lib/ai/scaffold-files";
+
+/** Label AND identity for the scope-guard override chip — compared by value. */
+const SCOPE_OVERRIDE_CHIP = "Build it anyway";
 import { isNoisePreviewError, type PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import {
   getAutoFixAttempts,
@@ -224,7 +231,12 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const intelCtx = useMemo(
     () => ({
-      fileCount: files.length,
+      // Every consumer of `fileCount` — the patch/agent router, the model
+      // picker, the free-build check — is asking "does this project already
+      // contain work?". `files.length` answers a different question, and on a
+      // new project answers it wrong by 25. Fixed once, here at the source,
+      // rather than at each of the dozen places that reads it.
+      fileCount: countUserAuthoredFiles(files),
       hasPreviewError: !!previewError,
       hasCredits: credits > 0,
       activeFilePath: activeFile?.path,
@@ -372,6 +384,11 @@ export function ChatPanel({
   const [autoFixing, setAutoFixing] = useState(false);
   const [autoFixAttempts, setAutoFixAttempts] = useState(0);
   const [lastFixedError, setLastFixedError] = useState<string | null>(null);
+  // The prompt the scope guard paused on, held so the user can override it with
+  // one click. Without this the guard is a dead end: its message invites you to
+  // say "go ahead", but a fresh "go ahead" is just a new prompt that carries no
+  // forceBuild flag and no memory of what it was agreeing to.
+  const [scopeHeldPrompt, setScopeHeldPrompt] = useState<string | null>(null);
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const [attachedImageName, setAttachedImageName] = useState<string | null>(null);
   const [chatAnnotateOpen, setChatAnnotateOpen] = useState(false);
@@ -415,6 +432,16 @@ export function ChatPanel({
   const skipDesignPreviewOnceRef = useRef(false);
   /** True while overlay/manual heal is running — blocks competing auto-fix. */
   const healActiveRef = useRef(false);
+  /**
+   * True once a heal has handed off to the post-stream settle watcher
+   * (`waitForPreviewSuccess`), which resolves the heal asynchronously up to
+   * 12s AFTER the stream itself finishes. Without this flag the stream's
+   * `finally` would see `healActiveRef` still latched, conclude the repair had
+   * died, and fire heal-failed while a perfectly good repair was still
+   * settling — turning every successful self-repair into a false "Preview
+   * paused". The watcher clears it when it settles either way.
+   */
+  const healSettlingRef = useRef(false);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editInput, setEditInput] = useState("");
   // Per-message per-file accept/revert state
@@ -1308,13 +1335,38 @@ export function ChatPanel({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ snapshotId: snapshot.id, projectId: project.id }),
       });
-      if (!restoreRes.ok) throw new Error("Restore failed");
-      const { files: restoredFiles } = await restoreRes.json();
-      if (restoredFiles) onFilesUpdate(restoredFiles);
+      const payload = (await restoreRes.json().catch(() => null)) as
+        | { status?: string; message?: string; files?: unknown[] }
+        | null;
+
+      // "Nothing to undo" used to be the message for EVERY failure here,
+      // including a restore that 500'd — which, given the restore route deletes
+      // before it inserts, is precisely the moment the user most needs to know
+      // something went wrong rather than being told there was nothing to do.
+      if (!restoreRes.ok || payload?.status === "error") {
+        throw new Error(
+          payload?.message || `Restore failed (${restoreRes.status})`,
+        );
+      }
+
+      const restoredFiles = payload?.files;
+      // `replace: true` is not optional. A revert that REMOVES files is the
+      // normal case, and without it the merge heuristic keeps the deleted files
+      // in the tree and keeps syncing them to the sandbox — so the revert
+      // appears not to have worked.
+      if (Array.isArray(restoredFiles) && restoredFiles.length > 0) {
+        onFilesUpdate(restoredFiles as ProjectFile[], { replace: true });
+      }
       setCanUndo(false);
       toast({ title: "Undone", description: `Restored: ${snapshot.label ?? "previous state"}` });
-    } catch {
-      toast({ title: "Nothing to undo", variant: "destructive" });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const nothingToUndo = /no snapshot/i.test(message);
+      toast({
+        title: nothingToUndo ? "Nothing to undo" : "Undo failed",
+        description: nothingToUndo ? undefined : message,
+        variant: "destructive",
+      });
     } finally {
       setUndoing(false);
     }
@@ -1340,17 +1392,38 @@ export function ChatPanel({
           body: JSON.stringify({ snapshotId, projectId: project.id, confirmSchema: true }),
         });
       }
-      if (!res.ok) throw new Error(`Restore failed (${res.status})`);
-      const { message: restoreMsg } = (await res.json()) as { message?: string };
+      const restorePayload = (await res.json().catch(() => null)) as
+        | { status?: string; message?: string }
+        | null;
+      // The route can answer 200 with status:"error" — it refuses a restore
+      // that would empty the project, and reports a failed insert after it has
+      // already put the files back. Reading only res.ok would show "Reverted"
+      // over a project that was not.
+      if (!res.ok || restorePayload?.status === "error") {
+        throw new Error(restorePayload?.message || `Restore failed (${res.status})`);
+      }
+      const restoreMsg = restorePayload?.message;
 
       // Refresh files from DB (same pattern as triggerAutoFix)
       const supabase = createClient();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: updatedFiles } = await (supabase as any)
+      const { data: updatedFiles, error: refreshError } = await (supabase as any)
         .from("project_files")
         .select("*")
         .eq("project_id", project.id);
-      if (updatedFiles) onFilesUpdate(updatedFiles);
+      if (refreshError) {
+        // The restore succeeded server-side; only the refresh failed. Saying so
+        // beats leaving the editor showing pre-revert content that the user's
+        // next keystroke would then write back over the restored files.
+        toast({
+          title: "Reverted — reload to see it",
+          description: "The revert was applied but the editor could not refresh.",
+        });
+      }
+      // replace:true — a revert that removes files must remove them here too.
+      if (Array.isArray(updatedFiles) && updatedFiles.length > 0) {
+        onFilesUpdate(updatedFiles, { replace: true });
+      }
       window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
         detail: { files: updatedFiles ?? undefined, reason: "project-reverted" },
       }));
@@ -1708,15 +1781,45 @@ export function ChatPanel({
   // Populate input when user clicks "Fix with AI" on the error banner in preview panel
   useEffect(() => {
     if (!pendingFixPrompt || credits <= 0) {
-      if (pendingFixPrompt && credits <= 0) onPendingFixConsumed?.();
+      if (pendingFixPrompt && credits <= 0) {
+        onPendingFixConsumed?.();
+        // The preview panel already flipped its guard to "healing" the moment
+        // it handed us this prompt — the overlay is now showing
+        // "Self-repairing…" with no way out. Dropping the prompt here without
+        // saying so left that spinner up for the rest of the session. Tell the
+        // guard the repair is not happening so it falls back to the actionable
+        // "Preview paused" card, and say why in the chat.
+        if (pendingFixPrompt.startsWith("Fix the preview/runtime errors")) {
+          window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+          toast({
+            title: "Out of credits",
+            description: "Self-repair needs credits. The preview is unpaused so you can keep editing.",
+            variant: "destructive",
+          });
+        }
+      }
       return;
     }
     const prompt = pendingFixPrompt;
     onPendingFixConsumed?.();
     // Healing overlay sends structured prompt — one-click send (Lovable self-repair)
     if (prompt.startsWith("Fix the preview/runtime errors")) {
+      // `sendMessage` silently returns when a build is already streaming. That
+      // return used to strand the healing overlay exactly like the credits
+      // case above, because nothing downstream ever reported the failure.
+      if (streaming || sendingRef.current) {
+        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+        toast({
+          title: "Already working",
+          description: "A build is still running — try the fix again once it finishes.",
+        });
+        return;
+      }
       healActiveRef.current = true;
-      void sendMessage(appendPreviewDiagnosis(prompt, files), "build");
+      void sendMessage(appendPreviewDiagnosis(prompt, files), "build").catch(() => {
+        healActiveRef.current = false;
+        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+      });
       return;
     }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- consume preview fix request into composer state
@@ -1991,26 +2094,33 @@ export function ChatPanel({
       });
 
       if (!res.ok) {
-        if (res.status === 423) {
-          toast({
-            title: "Project is Live — auto-fix blocked",
-            description: "Switch to Test environment to apply fixes.",
-            variant: "destructive",
-          });
-          onMessagesUpdate(messages);
-          return;
-        }
-        if (res.status === 402) {
-          toast({
-            title: "No free fixes left",
-            description: "Daily free Try-to-fix quota used. Add credits to keep auto-fixing.",
-            variant: "destructive",
-          });
-          setFreeFixesRemaining(0);
-          onMessagesUpdate(messages);
-          return;
-        }
-        throw new Error(`Fix API ${res.status}`);
+        // "Try to fix" is a button, not a typed prompt, so there is no user
+        // message to preserve — but the failure still has to be legible.
+        // Previously a 402 always read "daily free quota used", which is wrong
+        // whenever the real cause is the platform's provider balance: the user
+        // waits for a quota that resets tomorrow while nothing ever works.
+        const rawError = await readErrorBody(res);
+        const described = describeAiFailure({ status: res.status, rawError });
+        const fixErrMsg: Message = {
+          id: `fix-error-${Date.now()}`,
+          project_id: project.id,
+          role: "assistant",
+          content: described.chatMarkdown,
+          tokens_used: null,
+          model: null,
+          mode: "build",
+          metadata: null,
+          rating: null,
+          created_at: new Date().toISOString(),
+        };
+        onMessagesUpdate([...messages, fixErrMsg]);
+        toast({
+          title: described.title,
+          description: described.summary,
+          variant: "destructive",
+        });
+        if (res.status === 402 && !described.isPlatformFault) setFreeFixesRemaining(0);
+        return;
       }
 
       const data = (await res.json()) as {
@@ -2100,6 +2210,19 @@ export function ChatPanel({
       onMessagesUpdate([...messagesWithFixing, errMsg]);
     } finally {
       setAutoFixing(false);
+      // Both of these were only reset on the happy path. A throw anywhere
+      // above — the fetch, the Supabase refetch, a JSON parse — left
+      // `healActiveRef` latched true, which permanently disabled the auto-fix
+      // effect for the rest of the session, and left the preview overlay
+      // spinning on "Self-repairing…" with no button. Releasing them in
+      // `finally` makes both states impossible to strand. Re-dispatching
+      // heal-failed after a successful heal-done is harmless: the guard has
+      // already cleared and `failHealing` only moves a still-frozen phase.
+      const stranded = healActiveRef.current;
+      healActiveRef.current = false;
+      if (stranded) {
+        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+      }
     }
   }
 
@@ -2285,6 +2408,10 @@ export function ChatPanel({
     // have a fresh budget against whatever this build produces.
     clearAutoFixLedger(project.id);
     setAutoFixAttempts(0);
+    // Any new message supersedes a paused one, so the override chip should not
+    // outlive the question that raised it. If this send trips the guard too,
+    // the stream handler sets it again.
+    setScopeHeldPrompt(null);
 
     let effectiveMode = resolvePromptMode(userMessage, intelCtx, overrideMode);
     // ── Lovable machinery parity: BUILDS RUN THE FULL AGENT LOOP ────────────
@@ -2311,7 +2438,7 @@ export function ChatPanel({
     }
     if (
       effectiveMode === "build" &&
-      files.length > 8 &&
+      countUserAuthoredFiles(files) > 0 &&
       !opts?.forceBuild &&
       !dbClarifyIntent &&
       process.env.NEXT_PUBLIC_AGENT_BUILDS !== "false" &&
@@ -2518,6 +2645,40 @@ export function ChatPanel({
     const baseMessages = historyOverride ?? messages;
     onMessagesUpdate([...baseMessages, tempUserMsg]);
 
+    /**
+     * Report a failure without erasing what the user typed.
+     *
+     * Every failure path used to call `onMessagesUpdate(baseMessages)`, which
+     * is the message list from BEFORE the optimistic user message — so the
+     * prompt the user had just written vanished from the thread along with any
+     * chance of resending it, leaving a five-second toast as the only evidence
+     * anything had happened at all. That is the "nothing happens when I hit
+     * send" report. Keep `tempUserMsg`, and put the explanation under it.
+     */
+    const failInChat = (input: { status?: number; rawError?: string | null }) => {
+      const described = describeAiFailure(input);
+      const errMsg: Message = {
+        id: `ai-error-${Date.now()}`,
+        project_id: project.id,
+        role: "assistant",
+        content: described.chatMarkdown,
+        tokens_used: null,
+        model: null,
+        mode: (effectiveMode === "patch" ? "build" : effectiveMode) as
+          | "chat" | "plan" | "build" | "agent",
+        metadata: null,
+        rating: null,
+        created_at: new Date().toISOString(),
+      };
+      onMessagesUpdate([...baseMessages, tempUserMsg, errMsg]);
+      toast({
+        title: described.title,
+        description: described.summary,
+        variant: "destructive",
+      });
+      return described;
+    };
+
     try {
       // If user sent an image without a custom message (or only the auto-suggested mockup prompt),
       // prepend a strong mockup-to-code system instruction so the AI knows to reproduce the UI.
@@ -2686,12 +2847,14 @@ ${(f.content ?? "").slice(0, 8000)}
               return;
             }
           }
-          if (res.status === 402) {
-            toast({
-              title: "Insufficient credits",
-              description: "Agent mode needs at least 5 credits.",
-              variant: "destructive",
-            });
+          const described = failInChat({
+            status: res.status,
+            rawError: await readErrorBody(res),
+          });
+          if (res.status === 402 && !described.isPlatformFault) {
+            // Only re-read the balance for a USER-level 402. On a platform
+            // 402 the user's credits are untouched, and refetching them would
+            // repaint a number that had nothing to do with the failure.
             try {
               const cr = await fetch("/api/billing/credits");
               if (cr.ok) {
@@ -2699,10 +2862,8 @@ ${(f.content ?? "").slice(0, 8000)}
                 if (typeof newCredits === "number") onCreditsUpdate(newCredits);
               }
             } catch {}
-            onMessagesUpdate(baseMessages);
-            return;
           }
-          throw new Error(`Agent API error: ${res.status}`);
+          return;
         }
 
         const reader = res.body.getReader();
@@ -2814,9 +2975,11 @@ ${(f.content ?? "").slice(0, 8000)}
                     }));
                   }
                   if (healActiveRef.current) {
+                    healSettlingRef.current = true;
                     void (async () => {
                       const previewOk = await waitForPreviewSuccess(12_000);
                       healActiveRef.current = false;
+                      healSettlingRef.current = false;
                       if (previewOk) {
                         window.dispatchEvent(new CustomEvent("lifemark-preview-heal-done"));
                         onAutoFixComplete?.();
@@ -2901,25 +3064,11 @@ ${(f.content ?? "").slice(0, 8000)}
               }
 
               if (data.error) {
-                // Persist the failure in-chat (a toast alone vanishes in 5s and
-                // the thread looks silently ignored — see the chat-flow handler).
-                const rawErr = String(data.error);
-                const agentErrMsg: Message = {
-                  id: `agent-error-${Date.now()}`,
-                  project_id: project.id,
-                  role: "assistant",
-                  content: /402|insufficient credits/i.test(rawErr)
-                    ? "⚠️ **The AI provider account is out of credits** — the agent run failed before making changes. Top up at https://openrouter.ai/settings/credits and retry."
-                    : `⚠️ **Agent run failed** — no changes were made:\n\n\`\`\`\n${rawErr.slice(0, 400)}\n\`\`\``,
-                  tokens_used: null,
-                  model: null,
-                  mode: effectiveMode,
-                  metadata: null,
-                  rating: null,
-                  created_at: new Date().toISOString(),
-                };
-                onMessagesUpdate([...baseMessages, agentErrMsg]);
-                toast({ title: "Agent Error", description: rawErr.slice(0, 200), variant: "destructive" });
+                // Same treatment as every other failure: keep the user's
+                // message, explain the cause under it. Shares describeAiFailure
+                // with the pre-stream paths so a 402 cannot mean one thing here
+                // and something else two hundred lines away.
+                failInChat({ rawError: String(data.error) });
               }
             } catch {}
           }
@@ -2956,7 +3105,7 @@ ${(f.content ?? "").slice(0, 8000)}
           clarifyFirst:
             effectiveMode === "build" &&
             !opts?.forceBuild &&
-            ((clarifyFirst && files.length === 0) || dbClarifyIntent),
+            ((clarifyFirst && isGreenfieldProject(files)) || dbClarifyIntent),
           ...(effectiveMode === "build" && designTemplateId ? { templateId: designTemplateId } : {}),
           // If @mentions present, only send those files for context (saves tokens + focuses AI)
           files: mentionedFilesForAI
@@ -2987,44 +3136,21 @@ ${(f.content ?? "").slice(0, 8000)}
       });
 
       if (!res.ok || !res.body) {
-        if (res.status === 402) {
-          toast({
-            title: "Insufficient credits",
-            description: "Add credits or upgrade your plan to continue building.",
-            variant: "destructive",
-          });
+        // Every non-2xx lands here, including the ones that used to fall
+        // through to a bare `throw new Error("API error: 500")` and surface as
+        // a toast the user could easily miss. The server's error body is read
+        // rather than discarded — it is the only thing that distinguishes a
+        // user out of credits from the platform's provider account being empty,
+        // and telling the first story to the second user sends them to buy
+        // credits that cannot possibly help.
+        const described = failInChat({
+          status: res.status,
+          rawError: await readErrorBody(res),
+        });
+        if (res.status === 402 && !described.isPlatformFault) {
           onCreditsUpdate(0);
-          onMessagesUpdate(baseMessages);
         }
-        // Live-environment lock (migration 046): the route refuses code writes
-        // on Live. Without THIS branch the user only saw a cryptic
-        // "API error: 423" toast and kept re-asking ("nothing is changed").
-        // Surface it as a persistent in-chat message with the fix.
-        if (res.status === 423) {
-          const lockedMsg: Message = {
-            id: `env-locked-${Date.now()}`,
-            project_id: project.id,
-            role: "assistant",
-            content:
-              "🔒 **This project is in Live mode — edits are locked.**\n\n" +
-              "Live protects your published app from accidental changes, so Build/Agent requests are rejected (nothing was changed and no credits were spent).\n\n" +
-              "**To make changes:** switch the environment to **Test** (the Test / Live toggle in the top bar), build and preview there, then promote back to Live when you're happy.",
-            tokens_used: null,
-            model: null,
-            mode: effectiveMode,
-            metadata: null,
-            rating: null,
-            created_at: new Date().toISOString(),
-          };
-          onMessagesUpdate([...baseMessages, lockedMsg]);
-          toast({
-            title: "Project is Live — changes locked",
-            description: "Switch to the Test environment (top bar) to edit.",
-            variant: "destructive",
-          });
-          return;
-        }
-        throw new Error(`API error: ${res.status}`);
+        return;
       }
 
       let accumulated = "";
@@ -3040,6 +3166,14 @@ ${(f.content ?? "").slice(0, 8000)}
       const processChatStreamEvent = async (data: Record<string, unknown>) => {
         try {
           if (data.chunk) return;
+
+          // The scope guard paused instead of building. Its message is already
+          // streaming in as an ordinary assistant reply; all that's needed here
+          // is to remember what it paused on so the chip below can override.
+          if (data.scope_query === true) {
+            setScopeHeldPrompt(userMessage);
+            return;
+          }
 
           if (data.status === "no_files") {
             toast({
@@ -3343,9 +3477,11 @@ ${(f.content ?? "").slice(0, 8000)}
                     detail: { files: updatedFiles, reason: "agent-files-updated" },
                   }));
                   if (healActiveRef.current) {
+                    healSettlingRef.current = true;
                     void (async () => {
                       const previewOk = await waitForPreviewSuccess(12_000);
                       healActiveRef.current = false;
+                      healSettlingRef.current = false;
                       if (previewOk) {
                         window.dispatchEvent(new CustomEvent("lifemark-preview-heal-done"));
                         onAutoFixComplete?.();
@@ -3589,27 +3725,9 @@ ${(f.content ?? "").slice(0, 8000)}
               // A 5s toast alone is easy to miss — the thread then looks like
               // the AI silently ignored the request (this hid a drained
               // OpenRouter balance for days: every build 402'd invisibly).
-              // Persist a readable in-chat error with the actual cause.
-              const raw = String(data.error);
-              const friendly = /402|insufficient credits/i.test(raw)
-                ? "**The AI provider account is out of credits.** Every model call is failing, so no changes can be generated.\n\nFix: top up the OpenRouter balance at https://openrouter.ai/settings/credits — then resend your request."
-                : /429|rate limit/i.test(raw)
-                  ? "**The AI provider is rate-limiting requests.** Wait a minute and resend."
-                  : `**The AI provider returned an error**, so no changes were made:\n\n\`\`\`\n${raw.slice(0, 400)}\n\`\`\``;
-              const errMsg: Message = {
-                id: `ai-error-${Date.now()}`,
-                project_id: project.id,
-                role: "assistant",
-                content: `⚠️ ${friendly}`,
-                tokens_used: null,
-                model: null,
-                mode: effectiveMode,
-                metadata: null,
-                rating: null,
-                created_at: new Date().toISOString(),
-              };
-              onMessagesUpdate([...baseMessages, errMsg]);
-              toast({ title: "AI Error", description: raw.slice(0, 200), variant: "destructive" });
+              // Persist a readable in-chat error with the actual cause, and
+              // keep the user's message so it can be resent.
+              failInChat({ rawError: String(data.error) });
             }
           } catch {}
         };
@@ -3694,6 +3812,15 @@ ${(f.content ?? "").slice(0, 8000)}
           if (unmountedRef.current) return; // panel gone — drop the retry
           void sendMessage(retry, "build", undefined, { forceBuild: true });
         }, 250);
+      }
+      // A self-repair send that never reached its completion handler — the
+      // stream threw, the user pressed Stop, the response carried no files.
+      // The success paths inside the stream clear `healActiveRef` themselves,
+      // so anything still latched here means the repair died silently and the
+      // preview overlay is sitting on "Self-repairing…" with no way out.
+      if (healActiveRef.current && !healSettlingRef.current) {
+        healActiveRef.current = false;
+        window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
       }
     }
   }
@@ -4545,6 +4672,11 @@ ${(f.content ?? "").slice(0, 8000)}
       return;
     }
     setSearchLoading(true);
+    // Clearing the debounce timer is not enough: a request already in flight
+    // still resolves and writes its hits. Typing fast means an older, slower
+    // response can land after a newer one and paint results for a query the
+    // user has moved on from — with the spinner already cleared.
+    let cancelled = false;
     const timer = window.setTimeout(async () => {
       try {
         const res = await fetch(
@@ -4555,6 +4687,7 @@ ${(f.content ?? "").slice(0, 8000)}
           cached?: boolean;
           fallback?: boolean;
         };
+        if (cancelled) return;
         const ids = new Set((data.hits ?? []).map((h) => h.id));
         setSearchHitIds(ids);
         setSearchMatchCount(ids.size);
@@ -4563,14 +4696,18 @@ ${(f.content ?? "").slice(0, 8000)}
         );
         if (ids.size > 0) rememberSearchQuery(q);
       } catch {
+        if (cancelled) return;
         setSearchHitIds(null);
         setSearchMatchCount(0);
         setSearchSource(null);
       } finally {
-        setSearchLoading(false);
+        if (!cancelled) setSearchLoading(false);
       }
     }, 320);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [searchQuery, searchMode, project.id, rememberSearchQuery]);
 
   // Prefetch analyze sandbox availability (gates binary file-gen formats).
@@ -4640,6 +4777,10 @@ ${(f.content ?? "").slice(0, 8000)}
   // Follow-up suggestion chips (Lovable parity): static, zero-cost pool keyed
   // to the last build prompt + current files. Only shown once a build exists.
   const followUpChips = useMemo(() => {
+    // Takes precedence over everything: the user asked for something, we
+    // stopped to ask a question, and the one thing they must always be able to
+    // do is overrule us.
+    if (scopeHeldPrompt) return [SCOPE_OVERRIDE_CHIP];
     // Lovable dump: horizontal chip “Re-run full security scan” above composer.
     if (securityIssueCount > 0) {
       return ["Re-run full security scan"];
@@ -4651,7 +4792,7 @@ ${(f.content ?? "").slice(0, 8000)}
       if (messages[i]?.role === "user") { lastPrompt = messages[i].content; break; }
     }
     return suggestFollowUps(lastPrompt, files.map((f) => f.path), 4);
-  }, [latestSnapshotMessageId, messages, files, securityIssueCount]);
+  }, [latestSnapshotMessageId, messages, files, securityIssueCount, scopeHeldPrompt]);
 
   const composerLineRefs = useMemo(() => parseLineRefs(input), [input]);
 
@@ -5917,6 +6058,14 @@ ${(f.content ?? "").slice(0, 8000)}
           streaming={streaming}
           followUpChips={followUpChips}
           onSelectFollowUp={(chip) => {
+            if (chip === SCOPE_OVERRIDE_CHIP && scopeHeldPrompt) {
+              const held = scopeHeldPrompt;
+              setScopeHeldPrompt(null);
+              // forceBuild is what makes this an override rather than a loop —
+              // the held prompt still matches whatever the guard caught.
+              void sendMessage(held, "build", undefined, { forceBuild: true });
+              return;
+            }
             if (chip === "Re-run full security scan") {
               onOpenPanel?.("security");
               void triggerAutoFix(
@@ -5958,6 +6107,27 @@ ${(f.content ?? "").slice(0, 8000)}
           onDismissSecretBanner={() => setSecretBanner(null)}
           onOpenSecrets={() => onOpenPanel?.("secrets")}
         />
+
+        {/* Above the card, not inside it. Lovable's composer card holds exactly
+            two children and measures 100px; with these two in there ours
+            measured 163. They are full-width notices, they were never part of
+            the thing you type into, and out here they can be as tall as they
+            need to be. */}
+        {!isLocked && (
+          <LovableSecurityIssuesBar
+            issueCount={securityIssueCount}
+            noCredits={noCredits}
+            freeFixesRemaining={freeFixesRemaining}
+            onViewIssues={() => onOpenPanel?.("security")}
+            onFixAll={() => {
+              void triggerAutoFix(
+                `Fix all ${securityIssueCount} security issue${securityIssueCount === 1 ? "" : "s"} in this project. ` +
+                  "Review findings (secrets, XSS, auth/RLS gaps, unsafe deps), apply the safest fix for each, and keep the app building.",
+              );
+            }}
+          />
+        )}
+        {isLocked && <LovableLiveLockBanner />}
 
         <LovableChatInputCard isDragging={isDragging}>
           <LovableComposerInputArea
@@ -6069,7 +6239,7 @@ ${(f.content ?? "").slice(0, 8000)}
             mobileDisabled={noCredits || isLocked || streaming}
             mode={mode}
             clarifyFirst={clarifyFirst}
-            showClarifyToggle={(mode === "build" || mode === "agent") && files.length === 0}
+            showClarifyToggle={(mode === "build" || mode === "agent") && isGreenfieldProject(files)}
             onModeChange={onModeChange}
             onToggleClarify={() => setClarifyFirst((v) => !v)}
             multiAgent={multiAgent}

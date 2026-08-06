@@ -3,27 +3,23 @@
  * Ports of app/api/domains/{route,search,verify,entri}. checkout+purchase
  * are separate (need lib/plans/gating).
  */
-import { lookup } from "node:dns/promises";
-import { createClient } from "@/lib/supabase/server";
-import { getRegistrar, isPurchaseEnabled } from "@/lib/domains/registrar";
+import { createClient } from "../supabase/server.ts";
+import { getRegistrar, isPurchaseEnabled } from "../domains/registrar.ts";
 import {
   buildEntriConnectConfig,
   connectDnsRecords,
   domainVerificationToken,
   isEntriConfigured,
-} from "@/lib/domains/entri";
-
-const NETLIFY_TOKEN = process.env.NETLIFY_AUTH_TOKEN;
-const NETLIFY_API = "https://api.netlify.com/api/v1";
-async function netlifyFetch<T>(path: string, opts: RequestInit = {}): Promise<T> {
-  if (!NETLIFY_TOKEN) throw new Error("NETLIFY_AUTH_TOKEN not configured");
-  const res = await fetch(`${NETLIFY_API}${path}`, {
-    ...opts,
-    headers: { Authorization: `Bearer ${NETLIFY_TOKEN}`, "Content-Type": "application/json", ...opts.headers },
-  });
-  if (!res.ok) throw new Error(`Netlify ${res.status}: ${await res.text()}`);
-  return res.json() as Promise<T>;
-}
+} from "../domains/entri.ts";
+// Hosting lives in one module now. This file used to carry its own Netlify
+// client and its own hand-written DNS record table, which disagreed with the
+// copy in entri.ts — see the note on connectDnsRecords.
+import {
+  dnsRecordsForDomain,
+  getHostingTarget,
+  verifyDomainAgainstTarget,
+  HostingNotConfiguredError,
+} from "../domains/hosting.ts";
 
 async function requireUser() {
   const supabase = await createClient();
@@ -64,33 +60,49 @@ export async function setProjectDomain(data: any) {
 
     const domain = data.domain;
     const projectId = data.projectId;
-    const isApex = domain.split(".").length === 2;
-    let dnsInstructions: { type: string; name: string; value: string }[] = [];
+    const verifyToken = domainVerificationToken(domain, projectId);
+    const dnsInstructions = dnsRecordsForDomain(projectId, domain, verifyToken);
 
-    if (NETLIFY_TOKEN) {
-      try {
-        const siteName = `lifemark-${projectId.slice(0, 12)}`;
-        const sites = await netlifyFetch<Array<{ id: string; name: string }>>(`/sites?name=${encodeURIComponent(siteName)}`);
-        const site = sites.find((s) => s.name === siteName);
-        if (site) await netlifyFetch(`/sites/${site.id}/aliases`, { method: "POST", body: JSON.stringify({ alias: domain }) });
-      } catch (err) {
-        console.error("Netlify domain error:", err);
-      }
-      dnsInstructions = isApex
-        ? [{ type: "A", name: "@", value: "75.2.60.5" }, { type: "A", name: "@", value: "99.83.190.102" }]
-        : [{ type: "CNAME", name: domain.split(".")[0], value: `lifemark-${projectId.slice(0, 12)}.netlify.app` }];
-    } else {
-      dnsInstructions = [{ type: "CNAME", name: isApex ? "@" : domain.split(".")[0], value: `lifemark-${projectId.slice(0, 12)}.lifemarkai.app` }];
+    // Attach FIRST, and let a failure be a failure.
+    //
+    // This used to swallow the error (`catch { console.error }`) and then
+    // return "SSL provisions automatically within minutes" no matter what
+    // happened. Combined with the old attach silently no-opping for any project
+    // that had never been published, the overwhelmingly common outcome was a
+    // confident success message, correct-looking DNS records, and a domain that
+    // could never work. The user's only feedback was that it never went live.
+    //
+    // Saving the domain even when the attach fails would recreate the same lie
+    // one layer down: the panel would show a configured domain the host knows
+    // nothing about. So the row is written only after the host accepts it.
+    try {
+      await getHostingTarget().attachHostname(projectId, domain);
+    } catch (err) {
+      const message = err instanceof HostingNotConfiguredError
+        ? err.message
+        : `Could not attach ${domain} to the hosting target: ${err instanceof Error ? err.message : String(err)}`;
+      return { status: "hosting_error" as const, message };
     }
 
-    await (supabase as any).from("projects").update({ custom_domain: domain } as Record<string, unknown>).eq("id", projectId);
+    await (supabase as any)
+      .from("projects")
+      .update({
+        custom_domain: domain,
+        custom_domain_token: verifyToken,
+        custom_domain_verified: false,
+      } as Record<string, unknown>)
+      .eq("id", projectId);
+
     return {
       status: "ok" as const,
       payload: {
         domain,
         status: "pending_dns",
         dnsInstructions,
-        message: "Domain saved. Configure the DNS records below and SSL provisions automatically within minutes.",
+        verifyToken,
+        message:
+          "Domain attached. Add the DNS records below at your provider — SSL provisions automatically " +
+          "once they propagate and verification passes.",
       },
     };
 }
@@ -99,9 +111,27 @@ export async function deleteProjectDomain(data: any) {
     const { supabase, user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.projectId) return { status: "bad_request" as const, message: "projectId required" };
+
+    // Detach from the host too, not just from our row. Clearing the column
+    // alone left the hostname aliased on Netlify forever: the project stopped
+    // claiming the domain while still answering for it, so the domain could
+    // never be moved to another project and the stale alias kept serving.
+    const { data: project } = await (supabase as any)
+      .from("projects").select("custom_domain").eq("id", data.projectId).eq("user_id", user.id).single();
+    const existing = (project as any)?.custom_domain as string | null | undefined;
+    if (existing) {
+      // Best-effort: a host that already lost the alias should not block the
+      // user from clearing their own setting.
+      await getHostingTarget().detachHostname(data.projectId, existing).catch(() => {});
+    }
+
     await (supabase as any)
       .from("projects")
-      .update({ custom_domain: null } as Record<string, unknown>)
+      .update({
+        custom_domain: null,
+        custom_domain_token: null,
+        custom_domain_verified: false,
+      } as Record<string, unknown>)
       .eq("id", data.projectId)
       .eq("user_id", user.id);
     return { status: "ok" as const };
@@ -132,34 +162,42 @@ export async function verifyDomain(data: any) {
     if (!user) return { status: "unauthorized" as const };
     if (!data.domain || !data.projectId) return { status: "bad_request" as const, message: "domain and projectId required" };
     const { data: project } = await (supabase as any)
-      .from("projects").select("id, custom_domain").eq("id", data.projectId).eq("user_id", user.id).single();
+      .from("projects").select("id, custom_domain, custom_domain_token").eq("id", data.projectId).eq("user_id", user.id).single();
     if (!project) return { status: "not_found" as const };
 
-    let resolved = false;
-    let resolvedTo: string | null = null;
-    let error: string | null = null;
-    try {
-      const addresses = await lookup(data.domain, { all: true });
-      if (addresses.length > 0) {
-        resolved = true;
-        resolvedTo = addresses.map((a) => a.address).join(", ");
-      }
-    } catch (err: unknown) {
-      error = err instanceof Error ? err.message : "DNS lookup failed";
-    }
-    if (resolved) {
-      await (supabase as any).from("projects").update({ custom_domain_verified: true } as Record<string, unknown>).eq("id", data.projectId);
-    }
+    // This used to call dns.lookup() and mark the domain verified if it
+    // resolved to ANYTHING. A domain pointed at Google verified. A domain still
+    // parked at its registrar verified. A domain belonging to someone else
+    // entirely verified — so `custom_domain_verified` certified nothing beyond
+    // "this string is a real domain on the internet", while the UI presented it
+    // as proof the site was live and owned.
+    //
+    // verifyDomainAgainstTarget checks the two things the flag is supposed to
+    // mean: the records point at OUR hosting target, and a TXT token only the
+    // project owner could have been given is present. Both must hold.
+    const verifyToken =
+      (project as any).custom_domain_token ?? domainVerificationToken(data.domain, data.projectId);
+    const result = await verifyDomainAgainstTarget(data.projectId, data.domain, verifyToken);
+
+    await (supabase as any)
+      .from("projects")
+      .update({ custom_domain_verified: result.live } as Record<string, unknown>)
+      .eq("id", data.projectId);
+
     return {
       status: "ok" as const,
       payload: {
         domain: data.domain,
-        resolved,
-        resolvedTo,
-        error,
-        message: resolved
-          ? `Domain resolves to ${resolvedTo}. SSL will provision within minutes.`
-          : error ?? "Domain not yet resolving — check DNS records and wait for propagation.",
+        // `resolved` is kept for the existing panel, but now means "points at
+        // us", not "resolves at all".
+        resolved: result.pointsAtTarget,
+        pointsAtTarget: result.pointsAtTarget,
+        ownershipVerified: result.ownershipVerified,
+        live: result.live,
+        resolvedTo: result.resolved.a?.join(", ") ?? result.resolved.cname?.join(", ") ?? null,
+        expected: result.expected,
+        error: result.live ? null : result.message,
+        message: result.message,
       },
     };
 }
@@ -176,6 +214,22 @@ export async function entriConnect(data: any) {
     if (!project) return { status: "not_found" as const };
 
     const verifyToken = domainVerificationToken(data.domain, data.projectId);
+
+    // Attach to the host here too. This route was writing custom_domain and a
+    // domain_registrations row without ever telling the hosting edge the
+    // hostname existed — so a domain connected through the Entri flow got
+    // perfect DNS pointing at a Netlify site that would not answer for it.
+    // Same call as setProjectDomain, from the same module, so the two connect
+    // paths cannot diverge.
+    try {
+      await getHostingTarget().attachHostname(data.projectId, data.domain);
+    } catch (err) {
+      const message = err instanceof HostingNotConfiguredError
+        ? err.message
+        : `Could not attach ${data.domain} to the hosting target: ${err instanceof Error ? err.message : String(err)}`;
+      return { status: "hosting_error" as const, message };
+    }
+
     await (supabase as any).from("projects").update({
       custom_domain: data.domain, custom_domain_token: verifyToken, custom_domain_verified: false,
     }).eq("id", data.projectId);

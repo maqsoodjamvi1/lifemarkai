@@ -12,7 +12,7 @@
  * strong, opinionated frame to fill.
  */
 
-import { ensureWebsiteHeaderSections } from "@/lib/ai/website-header-contract";
+import { ensureWebsiteHeaderSections } from "../ai/website-header-contract.ts";
 
 export interface DesignTokens {
   /** Tailwind/CSS color values. */

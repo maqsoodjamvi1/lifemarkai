@@ -1,16 +1,26 @@
 // @ts-nocheck
-import { createClientFromRequest } from "@/lib/supabase/request-client";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { getDefaultAiModel } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/prompts/auto-fix";
+import { createClientFromRequest } from "../../supabase/request-client.ts";
+import { getServerUser } from "../../supabase/server-user.ts";
+import { getDefaultAiModel } from "../model-defaults.ts";
+import { rateLimitAsync, RATE_LIMITS } from "../../rate-limit.ts";
+import { AUTO_FIX_SYSTEM_PROMPT } from "../prompts/auto-fix.ts";
 import {
   cancelCreditReservation,
   claimFreeCreditAction,
   reserveCredits,
   settleCreditReservation,
 } from "@/lib/credits";
-import type { PreviewRuntimeError, PreviewErrorKind } from "@/lib/preview/preview-error-bridge";
+import type { PreviewRuntimeError, PreviewErrorKind } from "../../preview/preview-error-bridge.ts";
+import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
+import { guardFileWrite } from "../guard-file-write.ts";
+import { logger } from "../../logger.ts";
+import {
+  typecheckRunningSandbox,
+  SANDBOX_PUSH_SETTLE_MS,
+} from "@/lib/preview/typecheck-project";
+import { fingerprintDiagnostic, scoreRepair } from "../failure-fingerprint.ts";
+import { recordRepairOutcome } from "../record-outcome.ts";
+import { isFatal } from "../../sandbox/tsc-diagnostics.ts";
 
 /**
  * Free daily "Try to fix" quota (Lovable parity — error fixes are Lovable's
@@ -256,13 +266,58 @@ Return the fixed files as JSON.`;
     const parsed = await parseFixResponse(rawContent, fileList);
     parsed.files = ensureCommonGeneratedSupportFiles(parsed.files, fileList);
 
+    // Snapshot the compiler's view BEFORE touching anything. This is the only
+    // objective label available for "did the fix help" — the runtime error that
+    // triggered this repair only reports the first thing that crashed, and the
+    // regex validators cannot see across a package boundary at all.
+    const beforeCheck = await typecheckRunningSandbox(supabase, projectId);
+    const fixStartedAt = Date.now();
+
+    // Enough to put back what this attempt overwrites, if it turns out to have
+    // made things worse. Only files that actually get written are recorded.
+    const restorePoints = new Map<
+      string,
+      { id: string | null; previous: string | null }
+    >();
+    const written: string[] = [];
+    const rejected: string[] = [];
+
     for (const fixedFile of parsed.files) {
       const { data: existing } = await (supabase as any)
         .from("project_files")
-        .select("id")
+        .select("id, content")
         .eq("project_id", projectId)
         .eq("path", fixedFile.path)
         .single();
+
+      // An auto-fix is triggered BY a broken preview, so a bad fix does not
+      // merely fail — it feeds itself. The damaged file becomes the context for
+      // the next fix, and each round is handed something worse. Two separate
+      // corruptions in one evening came through this exact write: a package.json
+      // that reached three concatenated copies of itself, and a working root
+      // route rewritten to import an API removed before TanStack Router 1.0.
+      // Skipping a suspect write costs one retry; taking it can cost the file.
+      const verdict = guardFileWrite({
+        path: fixedFile.path,
+        next: fixedFile.content,
+        previous: existing?.content ?? null,
+      });
+      if (!verdict.ok) {
+        logger.warn("ai.fix.write_rejected", {
+          projectId,
+          path: fixedFile.path,
+          code: verdict.code,
+          reason: verdict.reason,
+        });
+        rejected.push(fixedFile.path);
+        continue;
+      }
+
+      restorePoints.set(fixedFile.path, {
+        id: existing?.id ?? null,
+        previous: existing?.content ?? null,
+      });
+      written.push(fixedFile.path);
 
       if (existing) {
         await (supabase as any)
@@ -279,6 +334,74 @@ Return the fixed files as JSON.`;
             : fixedFile.path.endsWith(".ts")
               ? "typescript"
               : "javascript",
+        });
+      }
+
+      // The whole point of an auto-fix is replacing the file the preview is
+      // currently choking on — so the fix must reach the RUNNING container,
+      // not just the database. This was the observed stale-preview bug: the
+      // repair saved to the DB while the sandbox kept serving the broken file
+      // until the container was destroyed by hand.
+      pushFileToRunningSandbox(supabase, projectId, fixedFile.path, fixedFile.content);
+    }
+
+    // ── Verify, then keep ────────────────────────────────────────────────────
+    //
+    // The gap the write guard could not close. That guard is a structural check
+    // on one file at a time, and it says so in its own header: it cannot know
+    // that `@tanstack/react-router` stopped exporting `Body`, because only
+    // something holding the installed .d.ts files can. This can, and it is
+    // looking at the project as a whole after the write landed.
+    //
+    // A repair that introduces a compile error the project did not have is not
+    // a partial success — it is the ratchet, and every later round is handed
+    // the damage as context. Putting the old content back costs one failed fix
+    // the user can retry; leaving it costs the project.
+    if (beforeCheck && written.length > 0) {
+      await new Promise((r) => setTimeout(r, SANDBOX_PUSH_SETTLE_MS));
+      const afterCheck = await typecheckRunningSandbox(supabase, projectId);
+
+      if (afterCheck) {
+        const before = beforeCheck.diagnostics.map(fingerprintDiagnostic);
+        const after = afterCheck.diagnostics.map(fingerprintDiagnostic);
+        const score = scoreRepair(before, after);
+
+        // Only NEW app-breaking diagnostics trigger a rollback. A fix that
+        // leaves a new implicit-any behind while clearing a missing import is
+        // still a fix; one that leaves a new missing module behind is not.
+        const brokeSomething = afterCheck.diagnostics.some(
+          (d) => isFatal(d) && score.introduced.includes(fingerprintDiagnostic(d).fingerprint),
+        );
+
+        if (brokeSomething) {
+          logger.warn("ai.fix.rolled_back", {
+            projectId,
+            files: written,
+            introduced: score.introduced.slice(0, 5),
+          });
+          for (const [path, point] of restorePoints) {
+            if (point.previous == null) continue; // nothing to go back to
+            if (point.id) {
+              await (supabase as any)
+                .from("project_files")
+                .update({ content: point.previous, updated_at: new Date().toISOString() })
+                .eq("id", point.id);
+            }
+            pushFileToRunningSandbox(supabase, projectId, path, point.previous);
+          }
+        }
+
+        recordRepairOutcome({
+          projectId,
+          userId: user.id,
+          stage: "autofix",
+          model: result?.model,
+          signal: "typecheck",
+          before,
+          after,
+          filesWritten: brokeSomething ? [] : written,
+          filesRejected: rejected,
+          durationMs: Date.now() - fixStartedAt,
         });
       }
     }

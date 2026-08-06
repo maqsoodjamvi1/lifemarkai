@@ -3,7 +3,7 @@
  * Embeddings are stored as JSONB float arrays (text-embedding-3-small).
  */
 import { createHash } from "crypto";
-import { embedTexts } from "@/lib/ai/embed-text";
+import { embedTexts } from "../ai/embed-text.ts";
 
 export const MESSAGE_EMBED_MODEL = "text-embedding-3-small";
 export const MESSAGE_EMBED_EXCERPT_LEN = 800;

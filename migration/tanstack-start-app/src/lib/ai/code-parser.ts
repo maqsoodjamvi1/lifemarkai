@@ -1,6 +1,8 @@
-import { salvageFilesFromStreamJson } from "./streaming-file-extractor";
-import { ensureCommonGeneratedSupportFiles } from "./generated-support-files";
-import { parseFileUpdateBlocks } from "./xml-stream-parser";
+import { salvageFilesFromStreamJson } from "./streaming-file-extractor.ts";
+import { ensureCommonGeneratedSupportFiles } from "./generated-support-files.ts";
+import { checkJsxTagBalance, findUnterminatedStrings } from "./jsx-balance.ts";
+import { assessWebsiteChrome } from "./website-chrome.ts";
+import { parseFileUpdateBlocks } from "./xml-stream-parser.ts";
 
 export interface ValidationError {
   type: string;
@@ -962,6 +964,47 @@ export function validateGeneratedFiles(
       });
     }
 
+    // ── JSX tag balance ─────────────────────────────────────────────────────
+    // A single mismatched close (`</motion.div>` closing a `<div>` — a real
+    // model output) makes the module fail to compile and the preview render
+    // blank. Catch it at generation time so the auto-fix pass repairs it
+    // before the user ever sees the broken preview. The checker is validated
+    // to zero false positives on a 90-file real Lovable corpus (generics,
+    // generic arrows, comparisons, fragments, void elements, render props),
+    // so an issue here is trusted at severity "error".
+    // ── Unterminated string literals ────────────────────────────────────────
+    // A raw quote inside a quoted value — `name: "19" Server Rack 42U"` from a
+    // real wholesale catalogue build. esbuild rejects the module and the
+    // preview goes white with only a transform error in the console, which is
+    // the hardest failure for a user to interpret. Data files are where
+    // product names live, so .ts/.js is exactly the right scope (see
+    // findUnterminatedStrings for why .tsx is excluded).
+    if (/\.(ts|js)$/.test(filePath) && !/\.d\.ts$/.test(filePath)) {
+      for (const line of findUnterminatedStrings(content).slice(0, 3)) {
+        errors.push({
+          type: "unterminated_string",
+          file: filePath,
+          message: `${filePath} line ${line}: a string literal is not closed on this line — an unescaped quote inside the value ended it early (e.g. \`"19" Server Rack"\`). Escape it (\\") , swap the surrounding quotes, or write it as a word ("19-inch").`,
+          severity: "error",
+        });
+      }
+    }
+
+    if (/\.(tsx|jsx)$/.test(filePath)) {
+      const jsxIssues = checkJsxTagBalance(content);
+      for (const issue of jsxIssues.slice(0, 3)) {
+        errors.push({
+          type: "jsx_unbalanced",
+          file: filePath,
+          message:
+            issue.kind === "extra_close"
+              ? `${filePath} line ${issue.line}: closing tag </${issue.name}> has no matching opening tag. Fix the tag name (e.g. a </SomeComponent> closing a plain <div>) so every close matches its open.`
+              : `${filePath} line ${issue.line}: <${issue.name}> is never closed. Add the missing </${issue.name}> or make it self-closing.`,
+          severity: "error",
+        });
+      }
+    }
+
     // ── Check local imports ─────────────────────────────────────────────────
     const localImports = [
       ...content.matchAll(/from\s+['"](\.[^'"]+)['"]/g),
@@ -1348,6 +1391,12 @@ export function assessGenerationQuality(
   const all = [...byPath.values()];
   const paths = new Set(all.map((f) => f.path));
   const appType = opts.appType;
+
+  // Site chrome. Every check in this function measures VOLUME — file count,
+  // component count, page richness — and a build can clear all of them while
+  // rendering a naked hero with no header, no nav and no footer. That is what
+  // shipped. See lib/ai/website-chrome.ts for the full account.
+  errors.push(...assessWebsiteChrome(files, existingFiles, { appType }));
   // Next.js App Router project — pages are app/**/page.tsx and the main page is
   // app/page.tsx; components/lib live at the project root instead of src/.
   const isNextProject = all.some(
