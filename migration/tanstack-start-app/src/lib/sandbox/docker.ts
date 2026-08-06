@@ -49,6 +49,9 @@ import type {
   TypecheckResult,
 } from "./index.ts";
 import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared.ts";
+
+/** Vite's port inside the sandbox. The heartbeat has no opts.port to read. */
+const DEFAULT_INNER_PORT = 5173;
 import { SYNC_MANIFEST, filesToPrune } from "./prune-files.ts";
 import { parseTscOutput } from "./tsc-diagnostics.ts";
 import { dependenciesAlreadySatisfied } from "./deps-satisfied.ts";
@@ -511,7 +514,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       };
     }
 
-    const innerPort = opts.port ?? 5173;
+    const innerPort = opts.port ?? DEFAULT_INNER_PORT;
     // In proxy mode Traefik reaches the container over the shared network, so
     // there is no host port to claim and no range to exhaust.
     const hostPort = c.routeViaProxy ? null : await claimPort();
@@ -1431,7 +1434,29 @@ export class DockerSandboxProvider implements SandboxProvider {
     );
 
     if (!opts?.previewUrl) return { alive: true };
-    const healthy = await waitForServer(opts.previewUrl, 3000);
+
+    // Docker Desktop does not hairpin published ports. When the Lifemark app is
+    // ITSELF a container and previewUrl is localhost/127.0.0.1, fetching that
+    // URL from here reaches the app container, not the sibling sandbox — it
+    // answers ECONNREFUSED for a perfectly healthy preview. The client reads
+    // `tunnelHealthy: false` as dead and cold-boots a replacement, whose own
+    // heartbeat fails the same way: the endless "Installing dependencies" loop.
+    //
+    // Boot already measures readiness INSIDE the container (waitForLocalServer,
+    // see the long note on that call). The heartbeat has to use the same probe
+    // or it contradicts the check that just passed thirty seconds earlier.
+    const previewHost = (() => {
+      try {
+        return new URL(opts.previewUrl).hostname;
+      } catch {
+        return "";
+      }
+    })();
+    const probeInside = previewHost === "localhost" || previewHost === "127.0.0.1";
+
+    const healthy = probeInside
+      ? await this.waitForLocalServer(sandboxId, DEFAULT_INNER_PORT, 3000)
+      : await waitForServer(opts.previewUrl, 3000);
     if (healthy) return { alive: true, tunnelHealthy: true };
 
     // GRACE WINDOW — the tunnel being down while the container is alive almost
@@ -1442,7 +1467,9 @@ export class DockerSandboxProvider implements SandboxProvider {
     // one-per-project teardown, stacked duplicates behind one hostname and
     // caused the dual-React blank. Wait out the restart window and re-probe;
     // only report dead if the tunnel stays down.
-    const recovered = await waitForServer(opts.previewUrl, 9000);
+    const recovered = probeInside
+      ? await this.waitForLocalServer(sandboxId, DEFAULT_INNER_PORT, 9000)
+      : await waitForServer(opts.previewUrl, 9000);
     if (recovered) {
       // The iframe may be stuck on a connection-reset page from the brief
       // outage — `restarted` tells the client to bump its reload nonce.
