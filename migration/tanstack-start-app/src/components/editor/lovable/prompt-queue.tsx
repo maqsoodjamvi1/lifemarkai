@@ -24,7 +24,12 @@ export interface LovableQueueItem {
   /** Optional screenshot / mockup carried with a queued follow-up. */
   imageBase64?: string | null;
   imageName?: string | null;
-  attachedText?: string | null;
+  /**
+   * The composer holds { name, content }; this used to be typed `string`, so
+   * the persist path called .slice() on an object (TypeError) and the load path
+   * typeof-checked for "string" and threw the attachment away. Both silently.
+   */
+  attachedText?: { name: string; content: string } | null;
 }
 
 interface LovablePromptQueueProps {

@@ -803,18 +803,40 @@ export function ChatPanel({
         }
         if (Array.isArray(data.prompt_queue) && data.prompt_queue.length > 0) {
           setPromptQueue(
-            data.prompt_queue.filter(
-              (q): q is QueueItem =>
-                !!q && typeof q.id === "string" && typeof q.text === "string",
-            ).map((q) => ({
-              id: q.id,
-              text: q.text,
-              repeat: typeof q.repeat === "number" ? q.repeat : 1,
-              remaining: typeof q.remaining === "number" ? q.remaining : 1,
-              imageBase64: typeof q.imageBase64 === "string" ? q.imageBase64 : null,
-              imageName: typeof q.imageName === "string" ? q.imageName : null,
-              attachedText: typeof q.attachedText === "string" ? q.attachedText : null,
-            })),
+            (data.prompt_queue as unknown[])
+              .filter(
+                (raw): raw is Record<string, unknown> =>
+                  !!raw &&
+                  typeof raw === "object" &&
+                  typeof (raw as Record<string, unknown>).id === "string" &&
+                  typeof (raw as Record<string, unknown>).text === "string",
+              )
+              .map((q): QueueItem => {
+                // Tolerate BOTH shapes: anything written before the type was
+                // corrected is a bare string with no filename.
+                const at = q.attachedText;
+                let attachedText: QueueItem["attachedText"] = null;
+                if (typeof at === "string") {
+                  attachedText = { name: "attachment.txt", content: at };
+                } else if (at && typeof at === "object") {
+                  const o = at as Record<string, unknown>;
+                  if (typeof o.content === "string") {
+                    attachedText = {
+                      name: typeof o.name === "string" ? o.name : "attachment.txt",
+                      content: o.content,
+                    };
+                  }
+                }
+                return {
+                  id: q.id as string,
+                  text: q.text as string,
+                  repeat: typeof q.repeat === "number" ? q.repeat : 1,
+                  remaining: typeof q.remaining === "number" ? q.remaining : 1,
+                  imageBase64: typeof q.imageBase64 === "string" ? q.imageBase64 : null,
+                  imageName: typeof q.imageName === "string" ? q.imageName : null,
+                  attachedText,
+                };
+              }),
           );
         }
         try {
@@ -864,7 +886,14 @@ export function ChatPanel({
               repeat: q.repeat,
               remaining: q.remaining,
               ...(image ? { imageBase64: image, imageName: q.imageName ?? null } : {}),
-              ...(q.attachedText ? { attachedText: q.attachedText.slice(0, 50_000) } : {}),
+              ...(q.attachedText
+                ? {
+                    attachedText: {
+                      name: q.attachedText.name,
+                      content: q.attachedText.content.slice(0, 50_000),
+                    },
+                  }
+                : {}),
             };
           }),
         }),
@@ -2390,7 +2419,7 @@ export function ChatPanel({
       branchMeta?: { snapshotId: string | null; branchedAt: string };
       imageBase64?: string | null;
       imageName?: string | null;
-      attachedText?: string | null;
+      attachedText?: { name: string; content: string } | null;
       /** Skip server-side mode downgrades (used by the patch→build fallback retry). */
       forceBuild?: boolean;
     },
@@ -3120,13 +3149,10 @@ ${(f.content ?? "").slice(0, 8000)}
           // attachment was silently dropped every time.
           ...(textToSend
             ? {
-                attachedFile:
-                  typeof textToSend === "string"
-                    ? { name: "attachment.txt", content: textToSend.slice(0, 20000) }
-                    : {
-                        name: textToSend.name,
-                        content: textToSend.content.slice(0, 20000),
-                      },
+                attachedFile: {
+                  name: textToSend.name,
+                  content: textToSend.content.slice(0, 20000),
+                },
               }
             : {}),
           // Lovable-agent parity: the AI always sees the CURRENT preview
