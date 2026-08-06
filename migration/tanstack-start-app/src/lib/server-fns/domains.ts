@@ -214,6 +214,22 @@ export async function entriConnect(data: any) {
     if (!project) return { status: "not_found" as const };
 
     const verifyToken = domainVerificationToken(data.domain, data.projectId);
+
+    // Attach to the host here too. This route was writing custom_domain and a
+    // domain_registrations row without ever telling the hosting edge the
+    // hostname existed — so a domain connected through the Entri flow got
+    // perfect DNS pointing at a Netlify site that would not answer for it.
+    // Same call as setProjectDomain, from the same module, so the two connect
+    // paths cannot diverge.
+    try {
+      await getHostingTarget().attachHostname(data.projectId, data.domain);
+    } catch (err) {
+      const message = err instanceof HostingNotConfiguredError
+        ? err.message
+        : `Could not attach ${data.domain} to the hosting target: ${err instanceof Error ? err.message : String(err)}`;
+      return { status: "hosting_error" as const, message };
+    }
+
     await (supabase as any).from("projects").update({
       custom_domain: data.domain, custom_domain_token: verifyToken, custom_domain_verified: false,
     }).eq("id", data.projectId);
