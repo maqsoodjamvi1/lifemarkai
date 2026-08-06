@@ -136,7 +136,7 @@ const PreviewPanel = dynamic(
 
 export type EditorMode = "chat" | "plan" | "build" | "agent" | "patch";
 export type ViewMode = "preview" | "code" | "both" | "files";
-export type LeftPanel = "chat" | "plan" | "agent" | "intelligence" | "healing" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "dbmanager" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "media" | "code";
+export type LeftPanel = "chat" | "plan" | "agent" | "intelligence" | "healing" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "apperrors" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "dbmanager" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "media" | "code";
 
 interface EditorLayoutProps {
   project: Project;
@@ -1288,6 +1288,10 @@ export function EditorLayout({
     { id: "payments",      label: "Billing",      emoji: "💳" },
     { id: "checkout",      label: "Checkout",     emoji: "🛍️" },
     { id: "problems",   label: "Problems",   emoji: "⚠️" },
+    // Runtime errors real visitors hit on the PUBLISHED app, as opposed to
+    // "Problems", which is Monaco's compile-time markers. The panel shipped
+    // with no union member and no menu row, so it was unreachable.
+    { id: "apperrors",  label: "App Errors", emoji: "🐞" },
     { id: "connectors", label: "Connectors", emoji: "🔗" },
     { id: "accessibility", label: "A11y", emoji: "♿" },
     { id: "schema",        label: "Schema",  emoji: "🗃️" },

@@ -88,7 +88,7 @@ export function createClientFromRequest(req: Request) {
       getAll() {
         return [...jar.entries()].map(([name, value]) => ({ name, value }));
       },
-      setAll(cookiesToSet) {
+      setAll(cookiesToSet: PendingSetCookie[]) {
         for (const { name, value, options } of cookiesToSet) {
           jar.set(name, value);
           pending.push({ name, value, options });

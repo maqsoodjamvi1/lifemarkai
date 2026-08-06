@@ -567,6 +567,10 @@ export function useSandboxPreview(projectId: string) {
           phase?: string | null;
           phaseDetail?: string | null;
           provider?: string;
+          // The route returns this on several failure branches (expired
+          // sandbox, rate limit, 500). The dead-phase check below has always
+          // read it; the type just never admitted it existed.
+          error?: string | null;
         }) => {
           // Only adopt URL once boot reports ready — never a stale preview_url
           // left over from a timed-out Modal sandbox.
