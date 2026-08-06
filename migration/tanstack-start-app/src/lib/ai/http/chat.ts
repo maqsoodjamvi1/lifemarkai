@@ -20,7 +20,8 @@ import {
 import { buildTemplateRefinementBlock } from "@/lib/ai/template-refine";
 import { pickStarterTemplate } from "@/lib/templates/starter-catalog";
 import { buildDesignDirectionBlock } from "@/lib/ai/design-directions";
-import { isGreenfieldProject } from "@/lib/ai/scaffold-files";
+import { countUserAuthoredFiles, isGreenfieldProject } from "@/lib/ai/scaffold-files";
+import { assessRequestScope, formatScopeAssessment } from "@/lib/ai/scope-guard";
 import { applyPatches, collapsePatchResults, parsePatchResponse } from "@/lib/ai/patch-applier";
 import { buildPersistedAssistantContent } from "@/lib/ai/persist-message-mode";
 import { persistChatTurnMessages } from "@/lib/ai/persist-chat-turn";
@@ -617,7 +618,67 @@ export async function handleAiChat(req: Request) {
       });
     }
 
-    const fileCount = Array.isArray(files) ? files.length : 0;
+    // ── Scope guard: ask before building something we shouldn't build blind ──
+    //
+    // Observed in Lovable: given a spec for a 30-subsystem platform pasted into
+    // a working site builder, it declined and asked what the user actually
+    // wanted. We had no equivalent — every prompt was classified and executed,
+    // so the same paste would have started rewriting a working app.
+    //
+    // This never blocks permanently: `forceBuild` skips it, and the message
+    // tells the user so. Placed after the cloud-action block because it follows
+    // the same shape — stream one message, charge nothing, return.
+    if ((mode === "build" || mode === "agent") && body.forceBuild !== true && Array.isArray(files)) {
+      const assessment = assessRequestScope(costPrompt, {
+        userAuthoredFileCount: countUserAuthoredFiles(files),
+      });
+      if (assessment) {
+        const scopeText = formatScopeAssessment(assessment);
+        const scopeEncoder = new TextEncoder();
+        const scopeStream = new ReadableStream({
+          async start(controller) {
+            const { safeEnqueue: scopeEnqueue, safeClose: scopeClose } = createStreamSink(
+              controller,
+              scopeEncoder,
+              req.signal,
+            );
+            scopeEnqueue(scopeEncoder.encode(`data: ${JSON.stringify({ chunk: scopeText })}\n\n`));
+            scopeEnqueue(
+              scopeEncoder.encode(
+                `data: ${JSON.stringify({
+                  done: true,
+                  tokensUsed: 0,
+                  creditsUsed: 0,
+                  scope_query: true,
+                  scopeConcerns: assessment.concerns.map((c) => c.kind),
+                })}\n\n`,
+              ),
+            );
+            scopeClose();
+          },
+        });
+        await persistChatTurnMessages(
+          supabase,
+          [
+            { project_id: projectId, role: "user", content: persistedUserMessage, mode },
+            { project_id: projectId, role: "assistant", content: scopeText, mode },
+          ],
+          { projectId, label: "scope-guard" },
+        );
+        logger.info?.("ai.chat.scope_query", {
+          projectId,
+          userId,
+          kinds: assessment.concerns.map((c) => c.kind).join(","),
+        });
+        return new Response(scopeStream, {
+          headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" },
+        });
+      }
+    }
+
+    // Model selection asks "how big is this project", which is a question about
+    // the user's work, not about the 25-file scaffold every project ships with.
+    const fileCount = Array.isArray(files) ? countUserAuthoredFiles(files) : 0;
     const serverAutoModel = modelManuallySelected === true
       ? model
       : resolveSmartModel(mode, { fileCount, hasPreviewError: false }, costPrompt);
