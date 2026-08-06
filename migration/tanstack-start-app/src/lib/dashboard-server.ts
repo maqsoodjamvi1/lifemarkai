@@ -14,10 +14,10 @@
  * their `loader`, throwing `redirect({ to: "/login" })` when unauthenticated.
  */
 import { createServerFn } from "@tanstack/react-start";
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
+import { createClient } from "./supabase/server.ts";
+import { getServerUser } from "./supabase/server-user.ts";
 import type { User } from "@supabase/supabase-js";
-import type { Profile } from "@/types/database";
+import type { Profile } from "../types/database.ts";
 
 export interface DashboardShell {
   user: User | null;

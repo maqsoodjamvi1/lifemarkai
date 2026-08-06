@@ -2,11 +2,11 @@
  * Native domains checkout + purchase — reimplemented off the worker.
  * Ports of app/api/domains/{checkout,purchase} (need lib/plans/gating + stripe).
  */
-import { createClient } from "@/lib/supabase/server";
-import { stripe, getOrCreateCustomer } from "@/lib/stripe/client";
-import { getRegistrar, isPurchaseEnabled, type RegistrantContact } from "@/lib/domains/registrar";
-import { completeDomainPurchase } from "@/lib/domains/complete-domain-purchase";
-import { requireFeature } from "@/lib/plans/gating";
+import { createClient } from "../supabase/server.ts";
+import { stripe, getOrCreateCustomer } from "../stripe/client.ts";
+import { getRegistrar, isPurchaseEnabled, type RegistrantContact } from "../domains/registrar.ts";
+import { completeDomainPurchase } from "../domains/complete-domain-purchase.ts";
+import { requireFeature } from "../plans/gating.ts";
 
 export async function createDomainCheckout(data: any) {
     const supabase = await createClient();

@@ -2,7 +2,7 @@
  * Native GitHub server-fns — reimplemented off the worker using the ported
  * lib/github/client (Octokit). Ports of app/api/github/{connect,commits,sync}.
  */
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from "../supabase/server.ts";
 import {
   getCommitHistory,
   pushFiles,
@@ -13,7 +13,7 @@ import {
   getBranchStatus,
   createOrGetPR,
 } from "@/lib/github/client";
-import { logger } from "@/lib/logger";
+import { logger } from "../logger.ts";
 
 // ── OAuth callback: exchange code → token, save to profile ───────────────────
 export async function completeGithubConnect(data: any) {

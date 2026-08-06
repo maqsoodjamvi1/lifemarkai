@@ -29,8 +29,8 @@
  * The PLATFORM (LifemarkAI itself) remains TanStack Start. This is only the
  * shape of the apps the platform GENERATES.
  */
-import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "@/lib/preview/base-app-deps";
-import { deriveBrand, siteChromeFiles } from "@/lib/templates/site-chrome";
+import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "../preview/base-app-deps.ts";
+import { deriveBrand, siteChromeFiles } from "./site-chrome.ts";
 
 export interface ScaffoldFile {
   path: string;
@@ -513,7 +513,7 @@ export { Toaster, toast };
 const UI_TOOLTIP = `import * as React from "react";
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 
-import { cn } from "@/lib/utils";
+import { cn } from "../utils.ts";
 
 const TooltipProvider = TooltipPrimitive.Provider;
 

@@ -1,6 +1,6 @@
-import { getBadgeHtml } from "@/lib/badge";
-import { buildFallbackHtml } from "@/lib/preview/build-fallback-html";
-import type { ProjectFile } from "@/types/database";
+import { getBadgeHtml } from "../badge.ts";
+import { buildFallbackHtml } from "../preview/build-fallback-html.ts";
+import type { ProjectFile } from "../../types/database.ts";
 
 export type DeployFile = { path: string; content: string };
 

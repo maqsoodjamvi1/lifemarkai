@@ -2,9 +2,9 @@ import {
   patchFilesForWebContainer,
   type WebContainerPatchOpts,
 } from "./patch-vite-for-webcontainer";
-import { isTanStackStartProject } from "@/lib/templates/tanstack-start-scaffold";
+import { isTanStackStartProject } from "../templates/tanstack-start-scaffold.ts";
 import { ensureTypecheckToolchain } from "./ensure-toolchain.ts";
-import { LOVABLE_VITE_DEV_DEPENDENCIES } from "@/lib/templates/lovable-vite-scaffold";
+import { LOVABLE_VITE_DEV_DEPENDENCIES } from "../templates/lovable-vite-scaffold.ts";
 
 /**
  * Synthesize missing Vite entry files. Incremental builds return only CHANGED

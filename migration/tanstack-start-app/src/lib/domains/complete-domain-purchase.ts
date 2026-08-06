@@ -1,6 +1,6 @@
-import { createAdminClient } from "@/lib/supabase/server";
-import { getRegistrar, type RegistrantContact, type DnsRecord } from "@/lib/domains/registrar";
-import { connectDnsRecords, domainVerificationToken } from "@/lib/domains/entri";
+import { createAdminClient } from "../supabase/server.ts";
+import { getRegistrar, type RegistrantContact, type DnsRecord } from "./registrar.ts";
+import { connectDnsRecords, domainVerificationToken } from "./entri.ts";
 
 export interface CompleteDomainPurchaseInput {
   projectId: string;

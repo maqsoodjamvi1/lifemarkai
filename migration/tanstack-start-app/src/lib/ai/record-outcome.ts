@@ -13,7 +13,7 @@
  * having made things worse, and that is precisely the failure mode worth
  * catching.
  */
-import { createAdminClient } from "@/lib/supabase/server";
+import { createAdminClient } from "../supabase/server.ts";
 import {
   distinctFingerprints,
   scoreRepair,

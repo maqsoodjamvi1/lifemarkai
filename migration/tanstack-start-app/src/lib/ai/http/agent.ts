@@ -1,40 +1,40 @@
-import { createClientFromRequest } from "@/lib/supabase/request-client";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { runAgent, type AgentStep } from "@/lib/ai/agent";
-import { mcpInitialize, mcpListTools, mcpCallTool } from "@/lib/ai/mcp-client";
-import { detectLanguage } from "@/lib/ai/code-parser";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
-import { ensureDevCredits } from "@/lib/dev-credits";
+import { createClientFromRequest } from "../../supabase/request-client.ts";
+import { getServerUser } from "../../supabase/server-user.ts";
+import { runAgent, type AgentStep } from "../agent.ts";
+import { mcpInitialize, mcpListTools, mcpCallTool } from "../mcp-client.ts";
+import { detectLanguage } from "../code-parser.ts";
+import { rateLimitAsync, RATE_LIMITS } from "../../rate-limit.ts";
+import { canWriteProjectFiles, getProjectAccess } from "../../project/access.ts";
+import { ensureDevCredits } from "../../dev-credits.ts";
 import {
   cancelCreditReservation,
   claimDailyCredits,
   reserveCredits,
   settleCreditReservation,
 } from "@/lib/credits";
-import { computeCreditCost, maxCreditCostForMode, AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
-import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
-import { ensureWebsiteChrome } from "@/lib/ai/website-chrome";
-import { alignGeneratedPackageJson } from "@/lib/preview/align-package-json";
-import { autoWireAi } from "@/lib/ai/auto-wire-ai";
+import { computeCreditCost, maxCreditCostForMode, AGENT_MIN_CREDITS } from "../credit-cost.ts";
+import { ensureCommonGeneratedSupportFiles } from "../generated-support-files.ts";
+import { ensureWebsiteChrome } from "../website-chrome.ts";
+import { alignGeneratedPackageJson } from "../../preview/align-package-json.ts";
+import { autoWireAi } from "../auto-wire-ai.ts";
 import {
   parseCloudToolPermissions,
   buildCloudPermissionsPromptBlock,
   shouldBlockCloudAction,
 } from "@/lib/cloud/permissions";
-import { getDefaultAiModel } from "@/lib/ai/model-defaults";
-import { attachSkillsToPrompt } from "@/lib/ai/attach-skills";
+import { getDefaultAiModel } from "../model-defaults.ts";
+import { attachSkillsToPrompt } from "../attach-skills.ts";
 // Same ranked-context builder the build path uses — see the contextSeed comment
 // at the runAgent call site.
-import { buildProjectContext } from "@/lib/ai/system-prompts";
+import { buildProjectContext } from "../system-prompts.ts";
 import {
   buildEditorIntelligencePromptBlock,
   recordEditorIntelligenceBuild,
 } from "@/lib/ai/editor-lenses/persistence";
-import { isSimpleEditorRequest, maxOutputTokensForRequest, resolveBudgetAwareModel } from "@/lib/ai/cost-controls";
-import { resolveSmartModel } from "@/lib/ai/editor-intelligence";
-import { persistChatTurnMessages } from "@/lib/ai/persist-chat-turn";
-import { pushFileToRunningSandbox } from "@/lib/preview/push-to-sandbox";
+import { isSimpleEditorRequest, maxOutputTokensForRequest, resolveBudgetAwareModel } from "../cost-controls.ts";
+import { resolveSmartModel } from "../editor-intelligence.ts";
+import { persistChatTurnMessages } from "../persist-chat-turn.ts";
+import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 
 
 export async function handleAiAgent(req: Request) {

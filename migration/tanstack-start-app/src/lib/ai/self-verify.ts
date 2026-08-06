@@ -14,19 +14,19 @@
  * never throws: a verification failure is reported, not fatal.
  */
 
-import { buildFallbackHtml } from "@/lib/preview/build-fallback-html";
-import { verifyPreviewHtml } from "@/lib/ai/preview-verify";
-import { findContractErrors } from "@/lib/preview/export-contract";
-import { pushFileToRunningSandbox } from "@/lib/preview/push-to-sandbox";
-import { generateAI } from "@/lib/ai/generate";
-import { ECONOMY_CODING_MODEL, getDefaultAiModel } from "@/lib/ai/model-defaults";
-import { selectModelChain, applyModelAdapter } from "@/lib/ai/model-catalog";
-import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/system-prompts";
-import { buildPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
-import { guardFileWrite } from "@/lib/ai/guard-file-write";
-import { fingerprintError } from "@/lib/ai/failure-fingerprint";
-import { recordRepairOutcome } from "@/lib/ai/record-outcome";
-import type { ProjectFile } from "@/types/database";
+import { buildFallbackHtml } from "../preview/build-fallback-html.ts";
+import { verifyPreviewHtml } from "./preview-verify.ts";
+import { findContractErrors } from "../preview/export-contract.ts";
+import { pushFileToRunningSandbox } from "../preview/push-to-sandbox.ts";
+import { generateAI } from "./generate.ts";
+import { ECONOMY_CODING_MODEL, getDefaultAiModel } from "./model-defaults.ts";
+import { selectModelChain, applyModelAdapter } from "./model-catalog.ts";
+import { AUTO_FIX_SYSTEM_PROMPT } from "./system-prompts.ts";
+import { buildPreviewDiagnosis } from "../preview/diagnose-preview.ts";
+import { guardFileWrite } from "./guard-file-write.ts";
+import { fingerprintError } from "./failure-fingerprint.ts";
+import { recordRepairOutcome } from "./record-outcome.ts";
+import type { ProjectFile } from "../../types/database.ts";
 
 export interface SelfVerifyResult {
   engine: "browser" | "static";

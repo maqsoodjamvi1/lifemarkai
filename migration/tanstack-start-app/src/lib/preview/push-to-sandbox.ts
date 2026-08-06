@@ -17,7 +17,7 @@
  * cold, mid-install, or gone; the next full boot uploads everything anyway.
  */
 import { getSandboxProvider, isSandboxEnabled } from "@/lib/sandbox";
-import { ensureViteTunnelHmr } from "@/lib/preview/patch-sandbox-preview-files";
+import { ensureViteTunnelHmr } from "./patch-sandbox-preview-files.ts";
 
 /** Writes are deduped per project so a burst of agent saves coalesces. */
 const pending = new Map<string, Map<string, string>>();

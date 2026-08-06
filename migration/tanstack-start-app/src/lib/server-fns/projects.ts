@@ -3,16 +3,16 @@
  * Template scaffolding for built-ins pulls from the main repo via relative import.
  */
 import { z } from "zod";
-import { createAdminClient, createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
+import { createAdminClient, createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
 import {
   canReadProjectFiles,
   canWriteProjectFiles,
   getProjectAccess,
 } from "@/lib/project/access";
-import { tanstackStartScaffold } from "@/lib/templates/tanstack-start-scaffold";
-import { lovableViteScaffold } from "@/lib/templates/lovable-vite-scaffold";
-import { getTemplateById } from "@/lib/templates/built-in";
+import { tanstackStartScaffold } from "../templates/tanstack-start-scaffold.ts";
+import { lovableViteScaffold } from "../templates/lovable-vite-scaffold.ts";
+import { getTemplateById } from "../templates/built-in.ts";
 
 const PROJECT_SAFE_SELECT = [
   "id",
