@@ -18,6 +18,7 @@
  */
 import { getSandboxProvider, isSandboxEnabled } from "@/lib/sandbox";
 import { ensureViteTunnelHmr } from "./patch-sandbox-preview-files.ts";
+import { repairImportsInFile } from "./normalize-imports.ts";
 
 /** Writes are deduped per project so a burst of agent saves coalesces. */
 const pending = new Map<string, Map<string, string>>();
@@ -56,18 +57,44 @@ export function pushFileToRunningSandbox(
   }
 }
 
+interface MinimalSupabase {
+  from: (table: string) => {
+    select: (cols: string) => {
+      eq: (key: string, value: string) => {
+        maybeSingle: () => Promise<{
+          data: { metadata?: Record<string, unknown> } | null;
+        }>;
+        limit: (n: number) => Promise<{ data: Array<{ path: string }> | null }>;
+      };
+    };
+  };
+}
+
+/**
+ * Every path the project currently has, so a mid-build push can tell a broken
+ * import from one that merely points outside this batch. Paths only — contents
+ * are not needed to resolve a specifier, and pulling them for a 200-file
+ * project on every debounced save would be wasteful.
+ */
+async function projectFilePaths(sb: MinimalSupabase, projectId: string): Promise<string[]> {
+  try {
+    const { data } = await sb
+      .from("project_files")
+      .select("path")
+      .eq("project_id", projectId)
+      .limit(5000);
+    return (data ?? []).map((r) => r.path).filter(Boolean);
+  } catch {
+    return []; // repair is best-effort; the push itself must still happen
+  }
+}
+
 async function flush(
   supabase: unknown,
   projectId: string,
   files: Map<string, string>,
 ): Promise<void> {
-  const sb = supabase as {
-    from: (t: string) => {
-      select: (c: string) => {
-        eq: (k: string, v: string) => { maybeSingle: () => Promise<{ data: { metadata?: Record<string, unknown> } | null }> };
-      };
-    };
-  };
+  const sb = supabase as MinimalSupabase;
   const { data } = await sb
     .from("projects")
     .select("metadata")
@@ -92,9 +119,24 @@ async function flush(
   // Only file-LOCAL transforms belong here: the set-level ones (synthesising a
   // missing entry, injecting Supabase env, adding tailwind plugin deps) need
   // the whole project and a fresh `npm install`, which only happens on boot.
-  const patched = ensureViteTunnelHmr(
-    [...files.entries()].map(([path, content]) => ({ path, content })),
-  );
+  //
+  // Import repair is the exception that has to be given its context back. A
+  // build streams files one at a time, so the WORST moment for a bad specifier
+  // is right here — `src/components/ui/tooltip.tsx` arriving with
+  // `import { cn } from "../utils.ts"` freezes the preview mid-build with
+  // "Failed to resolve import". Resolving it needs the project's path list, so
+  // we fetch that (paths only) rather than skip the repair on this path and
+  // let the auto-fix loop pay a model call for a mechanical mistake.
+  const batch = [...files.entries()].map(([path, content]) => ({ path, content }));
+  const known = new Set<string>(batch.map((f) => f.path));
+  for (const p of await projectFilePaths(sb, projectId)) known.add(p.replace(/\\/g, "/"));
+
+  const repaired = batch.map((f) => ({
+    path: f.path,
+    content: repairImportsInFile(f.path, f.content, known),
+  }));
+
+  const patched = ensureViteTunnelHmr(repaired);
 
   // The Docker provider content-hashes against its in-container manifest, so
   // re-pushing an unchanged file is a no-op and this stays cheap.
