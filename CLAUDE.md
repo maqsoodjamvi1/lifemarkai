@@ -204,3 +204,22 @@ See `.env.local.example` for all required vars. Minimum to run locally:
 Run in order via Supabase dashboard SQL editor or `supabase db push`:
 1. `supabase/migrations/001_initial_schema.sql`
 2. `supabase/migrations/002_add_metadata_and_enhancements.sql`
+
+## Generated apps: public website + admin app
+
+Every generated business app has two surfaces, and they must not bleed into each
+other. The public website lives at `/` and keeps the scaffold's `Header` and
+`Footer`. The admin app lives under `/admin/*` and renders inside its own
+`AppLayout` with a sidebar and no marketing chrome.
+
+The split is enforced by `src/components/layout/SiteChrome.tsx`, emitted by
+`lib/templates/site-chrome.ts`. It is the ONLY place chrome is mounted: it reads
+the current pathname and renders `Header`/`Footer` on public routes and nothing
+under an admin prefix. Scaffolds must never mount `<Header />` or `<Footer />`
+directly — doing so makes the chrome global again, which is what put a "Your
+Brand" marketing bar and a placeholder street address around an ERP admin panel.
+
+App-shell app types (`erp`, `pos`, `crm`, `admin-dashboard`, and the rest of
+`APP_SHELL_APP_TYPES`) are NOT exempt from having a public website. They get both.
+`APP_SHELL_CONTRACT` describes the split; it must never go back to telling the
+model to delete the chrome.
