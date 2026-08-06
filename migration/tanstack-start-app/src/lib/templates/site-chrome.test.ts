@@ -128,20 +128,21 @@ test("both scaffolds still ship the header and footer themselves", () => {
  * on public pages and making it global again, back onto /admin.
  */
 test("the chrome guarantee leaves a fresh scaffold untouched", () => {
+  // Pass the scaffold files straight through: ChromeFile requires `language`,
+  // which they already carry, and mapping to { path, content } only threw it away.
   for (const files of [lovableViteScaffold("Acme"), tanstackStartScaffold({}, "Acme")]) {
-    const all = files.map((f) => ({ path: f.path, content: f.content }));
-    assert.equal(hasSiteHeader(all), true, "header should read as present");
-    assert.equal(hasSiteFooter(all), true, "footer should read as present");
+    assert.equal(hasSiteHeader(files), true, "header should read as present");
+    assert.equal(hasSiteFooter(files), true, "footer should read as present");
     // NOT needsWebsiteChrome: that answers "is this a public website that OWES
     // chrome?", which is true for a scaffold and always was. The property that
     // matters is that ensureWebsiteChrome finds nothing missing and hands the
     // input straight back.
-    assert.equal(ensureWebsiteChrome(all), all, "guarantee must not modify it");
+    assert.equal(ensureWebsiteChrome(files), files, "guarantee must not modify it");
   }
 });
 
 test("a shell that drops SiteChrome is still reported as missing chrome", () => {
-  const files = lovableViteScaffold("Acme").map((f) => ({ path: f.path, content: f.content }));
+  const files = lovableViteScaffold("Acme");
   const app = files.find((f) => f.path === "src/App.tsx");
   assert.ok(app);
   // The failure the guarantee exists for: the model rewrites the shell and drops
