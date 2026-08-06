@@ -70,7 +70,15 @@ function firstSentences(content: string, maxSentences = 2, maxChars = 260): stri
 }
 
 /** User-facing message body — strips internal context blocks and build JSON payloads. */
-export function getDisplayMessageContent(msg: Message): string {
+/**
+ * Takes only the three fields it reads, not a whole Message. Requiring the full
+ * row made it unassignable to `printChatConversation`'s `getDisplayContent`,
+ * which promises callers a narrower shape — a function demanding MORE than its
+ * caller supplies is unsound, and TypeScript was right to say so.
+ */
+export function getDisplayMessageContent(
+  msg: Pick<Message, "role" | "content" | "mode">,
+): string {
   const stripped = stripInternalChatContext(msg.content ?? "");
   if (msg.role === "user") return stripped || "Continue";
 
