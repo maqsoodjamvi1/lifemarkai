@@ -14,7 +14,9 @@ export interface LovableFileGenResult {
 
 interface LovableFileGenResultCardsProps {
   results: LovableFileGenResult[];
-  formatSize: (content: string) => string;
+  // formatLovableFileSize takes the base64 flag too; without it here the
+  // call below is a type error and base64 sizes read ~33% high.
+  formatSize: (content: string, base64?: boolean) => string;
   onDownload: (file: LovableFileGenResult) => void;
   onDismiss: (id: string) => void;
 }
