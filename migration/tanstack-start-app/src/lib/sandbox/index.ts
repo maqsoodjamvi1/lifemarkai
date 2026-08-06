@@ -193,7 +193,7 @@ export {
   peekPreviewReachable,
   getPreviewProbeState,
   forgetPreviewProbe,
-} from "./shared";
+} from "./shared.ts";
 export { ModalSandboxProvider } from "./modal.ts";
 
 const DEFAULT_PORT = 3000;

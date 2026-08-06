@@ -5,7 +5,7 @@ import {
   ECONOMY_CHAT_MODEL,
   ECONOMY_CODING_MODEL,
   FREE_CODING_MODEL,
-} from "./model-defaults";
+} from "./model-defaults.ts";
 import { shouldAutoSelectClaude } from "./model-catalog.ts";
 import { OPENROUTER_MODEL_IDS } from "./openrouter-models.ts";
 
