@@ -7,7 +7,7 @@
  * `findContractErrors` — this module turns those findings into minimal stubs
  * so the rest of the app can still render in the editor preview.
  */
-import type { ProjectFile } from "@/types/database";
+import type { ProjectFile } from "../../types/database.ts";
 import {
   findMissingExports,
   findMissingModules,

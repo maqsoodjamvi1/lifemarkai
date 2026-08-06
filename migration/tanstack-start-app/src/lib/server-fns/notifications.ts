@@ -2,8 +2,8 @@
  * Native notifications inbox (GET / PATCH / DELETE).
  * POST email-send stays proxied to Next (Resend).
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
 
 export async function listNotifications(data: any) {
     const supabase = await createClient();

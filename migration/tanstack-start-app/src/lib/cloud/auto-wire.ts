@@ -16,7 +16,7 @@
  * Every step is best-effort — wiring failures never fail the build.
  */
 
-import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "@/lib/project/env-file";
+import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "../project/env-file.ts";
 import {
   isManagementConfigured,
   createManagedProject,

@@ -1,5 +1,5 @@
 import type { EditorMode } from "@/components/editor/editor-layout";
-import type { ProjectFile } from "@/types/database";
+import type { ProjectFile } from "../../types/database.ts";
 import { classifyBuildIntent, shouldAutoBuildMode } from "./build-intent.ts";
 import type { AIModel } from "./provider.ts";
 import {

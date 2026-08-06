@@ -1,8 +1,8 @@
 /**
  * Native workspace skills — list / create / update / delete / increment use.
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
 
 export async function listSkills() {
   const supabase = await createClient();

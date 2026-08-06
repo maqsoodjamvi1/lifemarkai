@@ -19,7 +19,7 @@ import {
   CONNECTOR_REGISTRY,
   resolveConnectorBaseUrl,
 } from "@/lib/integrations/connector-registry";
-import { ENV_FILE_PATH, parseEnvFile } from "@/lib/project/env-file";
+import { ENV_FILE_PATH, parseEnvFile } from "../project/env-file.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupabaseLike = any;

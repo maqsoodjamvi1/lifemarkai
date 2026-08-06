@@ -7,15 +7,15 @@
  * through the server-fn HTTP fetcher, which threw an unhandled HTTPError and
  * turned every editor save into a 500. Plain functions have no such indirection.
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
 import {
   canReadProjectFiles,
   canWriteProjectFiles,
   getProjectAccess,
 } from "@/lib/project/access";
-import { sanitizeGeneratedFile } from "@/lib/ai/html-sanity";
-import { pushFileToRunningSandbox } from "@/lib/preview/push-to-sandbox";
+import { sanitizeGeneratedFile } from "../ai/html-sanity.ts";
+import { pushFileToRunningSandbox } from "../preview/push-to-sandbox.ts";
 
 async function requireUser() {
   const supabase = await createClient();

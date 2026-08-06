@@ -7,7 +7,7 @@ import {
   getProjectAccess,
   type ProjectAccess,
 } from "@/lib/project/access";
-import type { createClient } from "@/lib/supabase/server";
+import type { createClient } from "../supabase/server.ts";
 
 type Supabase = Awaited<ReturnType<typeof createClient>>;
 

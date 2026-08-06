@@ -2,8 +2,8 @@
  * Native deploy status poll (DB + optional Netlify live check).
  * Plain helper — not createServerFn (see project-files.ts).
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
 
 export async function getDeployStatus(input: { projectId: string }) {
   const supabase = await createClient();

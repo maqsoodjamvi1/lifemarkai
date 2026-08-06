@@ -1,4 +1,4 @@
-import type { ProjectFile } from "@/types/database";
+import type { ProjectFile } from "../../types/database.ts";
 
 export type PreviewEngine = "detecting" | "sandbox" | "webcontainer" | "fallback";
 

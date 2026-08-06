@@ -1,4 +1,4 @@
-import type { Message } from "@/types/database";
+import type { Message } from "../../types/database.ts";
 
 /** Open a print-friendly window for the current chat conversation. */
 export function printChatConversation(opts: {

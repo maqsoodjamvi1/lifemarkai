@@ -6,7 +6,7 @@
  * from the generated `types/database.ts` rows so the orchestrator can be unit
  * tested without a live DB.
  */
-import type { AIModel } from "@/lib/ai/provider";
+import type { AIModel } from "../provider.ts";
 
 /** Internal editor-intelligence lenses + the CTO review persona. */
 export type AgentRoleId =

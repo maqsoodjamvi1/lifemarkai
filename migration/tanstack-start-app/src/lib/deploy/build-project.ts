@@ -20,8 +20,8 @@ import { spawn } from "child_process";
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
-import { fixHtmlEntry } from "@/lib/preview/patch-vite-for-webcontainer";
-import { isTextAsset } from "@/lib/deploy/asset-kind";
+import { fixHtmlEntry } from "../preview/patch-vite-for-webcontainer.ts";
+import { isTextAsset } from "./asset-kind.ts";
 
 // Same Vite entry candidates the preview repair uses, so a deploy build doesn't
 // die on a mis-pointed index.html entry script (e.g. /src/main.ts vs .tsx).

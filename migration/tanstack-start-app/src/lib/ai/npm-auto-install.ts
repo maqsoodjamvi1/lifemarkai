@@ -8,7 +8,7 @@
  * `syncPackageJsonDeps` for why that gate exists.
  */
 
-import { resolveAllowedPackage } from "@/lib/ai/package-allowlist";
+import { resolveAllowedPackage } from "./package-allowlist.ts";
 
 // Packages that are built-in to Node.js / browser / React and never need installing
 const BUILTIN_PACKAGES = new Set([

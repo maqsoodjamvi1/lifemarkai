@@ -2,14 +2,14 @@
  * Native sandbox-preview GET (phase poll / reconnect), logs, stop.
  * POST boot + PATCH sync stay proxied to Next (full Modal pipeline).
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
+import { canReadProjectFiles, getProjectAccess } from "../project/access.ts";
 import {
   getSandboxProviderId,
   isSandboxEnabled,
 } from "@/lib/sandbox/flags";
-import { debugLog } from "@/lib/debug-log";
+import { debugLog } from "../debug-log.ts";
 
 async function loadSandbox() {
   return import("@/lib/sandbox");

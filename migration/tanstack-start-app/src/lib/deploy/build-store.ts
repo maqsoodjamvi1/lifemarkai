@@ -8,7 +8,7 @@
  *
  * Server-only (service-role client). Never import from a client component.
  */
-import { createAdminClient } from "@/lib/supabase/server";
+import { createAdminClient } from "../supabase/server.ts";
 
 export interface StoredBuildFile {
   path: string;
@@ -34,7 +34,7 @@ export {
   normaliseBuildPath,
 } from "@/lib/deploy/asset-kind";
 
-import { isTextAsset, contentTypeFor, normaliseBuildPath } from "@/lib/deploy/asset-kind";
+import { isTextAsset, contentTypeFor, normaliseBuildPath } from "./asset-kind.ts";
 
 /**
  * Store a completed build and make it live.

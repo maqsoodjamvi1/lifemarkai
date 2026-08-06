@@ -2,7 +2,7 @@
  * Build a short, secret-redacted preview of an in-app AI proxy request
  * for activity logs (Lovable parity). Never stores raw credentials.
  */
-import { redactPromptSecrets } from "@/lib/ai/chat-capabilities";
+import { redactPromptSecrets } from "./chat-capabilities.ts";
 
 const MAX_CHARS = 600;
 

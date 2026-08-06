@@ -1,4 +1,4 @@
-import { createAdminClient } from "@/lib/supabase/server";
+import { createAdminClient } from "../supabase/server.ts";
 
 export class ProjectAiCreditLimitError extends Error {
   constructor() {

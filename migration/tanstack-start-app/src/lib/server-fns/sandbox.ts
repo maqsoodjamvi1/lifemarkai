@@ -1,14 +1,14 @@
 /**
  * Sandbox status / keep-alive — flags at import time; Modal SDK on demand.
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
+import { canReadProjectFiles, getProjectAccess } from "../project/access.ts";
 import {
   getSandboxProviderId,
   isSandboxEnabled,
 } from "@/lib/sandbox/flags";
-import { debugLog } from "@/lib/debug-log";
+import { debugLog } from "../debug-log.ts";
 
 export async function getSandboxStatus() {
   const enabled = isSandboxEnabled();

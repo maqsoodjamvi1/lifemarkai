@@ -4,8 +4,8 @@
  * are separate (need lib/plans/gating).
  */
 import { lookup } from "node:dns/promises";
-import { createClient } from "@/lib/supabase/server";
-import { getRegistrar, isPurchaseEnabled } from "@/lib/domains/registrar";
+import { createClient } from "../supabase/server.ts";
+import { getRegistrar, isPurchaseEnabled } from "../domains/registrar.ts";
 import {
   buildEntriConnectConfig,
   connectDnsRecords,

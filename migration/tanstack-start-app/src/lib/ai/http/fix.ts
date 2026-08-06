@@ -1,26 +1,26 @@
 // @ts-nocheck
-import { createClientFromRequest } from "@/lib/supabase/request-client";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { getDefaultAiModel } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/prompts/auto-fix";
+import { createClientFromRequest } from "../../supabase/request-client.ts";
+import { getServerUser } from "../../supabase/server-user.ts";
+import { getDefaultAiModel } from "../model-defaults.ts";
+import { rateLimitAsync, RATE_LIMITS } from "../../rate-limit.ts";
+import { AUTO_FIX_SYSTEM_PROMPT } from "../prompts/auto-fix.ts";
 import {
   cancelCreditReservation,
   claimFreeCreditAction,
   reserveCredits,
   settleCreditReservation,
 } from "@/lib/credits";
-import type { PreviewRuntimeError, PreviewErrorKind } from "@/lib/preview/preview-error-bridge";
-import { pushFileToRunningSandbox } from "@/lib/preview/push-to-sandbox";
-import { guardFileWrite } from "@/lib/ai/guard-file-write";
-import { logger } from "@/lib/logger";
+import type { PreviewRuntimeError, PreviewErrorKind } from "../../preview/preview-error-bridge.ts";
+import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
+import { guardFileWrite } from "../guard-file-write.ts";
+import { logger } from "../../logger.ts";
 import {
   typecheckRunningSandbox,
   SANDBOX_PUSH_SETTLE_MS,
 } from "@/lib/preview/typecheck-project";
-import { fingerprintDiagnostic, scoreRepair } from "@/lib/ai/failure-fingerprint";
-import { recordRepairOutcome } from "@/lib/ai/record-outcome";
-import { isFatal } from "@/lib/sandbox/tsc-diagnostics";
+import { fingerprintDiagnostic, scoreRepair } from "../failure-fingerprint.ts";
+import { recordRepairOutcome } from "../record-outcome.ts";
+import { isFatal } from "../../sandbox/tsc-diagnostics.ts";
 
 /**
  * Free daily "Try to fix" quota (Lovable parity — error fixes are Lovable's

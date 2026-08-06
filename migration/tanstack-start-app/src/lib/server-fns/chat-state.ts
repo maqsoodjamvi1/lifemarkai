@@ -2,9 +2,9 @@
  * Native project chat-state — plain helpers for API routes.
  * (createServerFn from route handlers 500s in production — see project-files.ts)
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { assertChatAccess } from "@/lib/project/chat-access";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
+import { assertChatAccess } from "../project/chat-access.ts";
 
 const EMPTY_STATE = {
   pinned_message_id: null as string | null,

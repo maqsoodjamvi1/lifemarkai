@@ -2,7 +2,7 @@
  * Native account server-fns — reimplemented off the worker (pure Supabase).
  * Port of app/api/account/sessions/route.ts.
  */
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from "../supabase/server.ts";
 
 export async function listSessions() {
   const supabase = await createClient();

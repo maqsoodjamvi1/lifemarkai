@@ -1,7 +1,7 @@
-import type { ProjectFile } from "@/types/database";
-import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
-import { generateFallbackUtilityCss } from "@/lib/preview/generate-fallback-utilities";
-import { healPreviewContractGaps } from "@/lib/preview/heal-preview-contract";
+import type { ProjectFile } from "../../types/database.ts";
+import { ensureCommonGeneratedSupportFiles } from "../ai/generated-support-files.ts";
+import { generateFallbackUtilityCss } from "./generate-fallback-utilities.ts";
+import { healPreviewContractGaps } from "./heal-preview-contract.ts";
 import {
   isNextAppProject,
   nextAppDirName,
@@ -12,7 +12,7 @@ import {
   NEXT_RUNTIME_SHIMS,
   NEXT_VIRTUAL_ENTRY_PATH,
 } from "@/lib/preview/next-app-preview";
-import { PREVIEW_PERF_SCRIPT } from "@/lib/preview/preview-perf-bridge";
+import { PREVIEW_PERF_SCRIPT } from "./preview-perf-bridge.ts";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
 export const PREVIEW_ENGINE_REV = "46";

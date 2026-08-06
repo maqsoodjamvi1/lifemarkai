@@ -2,14 +2,14 @@
  * Native project env vars (.env.local in project_files). Values never returned in clear.
  * Plain helpers — not createServerFn (see project-files.ts).
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
 import {
   canReadProjectFiles,
   canWriteProjectFiles,
   getProjectAccess,
 } from "@/lib/project/access";
-import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "@/lib/project/env-file";
+import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "../project/env-file.ts";
 
 async function loadEnvRecord(
   supabase: Awaited<ReturnType<typeof createClient>>,

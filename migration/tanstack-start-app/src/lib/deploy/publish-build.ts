@@ -14,8 +14,8 @@
  * Server-only: spawns npm/npx and uses the service-role client.
  */
 import { randomUUID } from "crypto";
-import { tryViteBuild, looksLikeViteProject, type BuildFile } from "@/lib/deploy/build-project";
-import { storeBuild } from "@/lib/deploy/build-store";
+import { tryViteBuild, looksLikeViteProject, type BuildFile } from "./build-project.ts";
+import { storeBuild } from "./build-store.ts";
 
 export interface PublishBuildResult {
   ok: boolean;

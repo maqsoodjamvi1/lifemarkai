@@ -28,7 +28,7 @@
  * not carry are allowed without a pin — see `UNPINNED` below.
  */
 
-import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "@/lib/preview/base-app-deps";
+import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "../preview/base-app-deps.ts";
 
 /** Packages Node/the bundler provide; never installed. Mirrors npm-auto-install. */
 export const NEVER_INSTALL = new Set(["react", "react-dom"]);

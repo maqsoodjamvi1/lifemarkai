@@ -1,4 +1,4 @@
-import type { Message } from "@/types/database";
+import type { Message } from "../../types/database.ts";
 
 export type ChatSearchMode = "keyword" | "semantic";
 

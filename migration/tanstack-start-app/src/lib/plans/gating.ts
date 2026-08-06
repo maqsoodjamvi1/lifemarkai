@@ -10,8 +10,8 @@
  * equivalent of Lovable's "Business" tier.)
  */
 
-import type { PlanId } from "@/lib/stripe/plans";
-import { createAdminClient } from "@/lib/supabase/admin";
+import type { PlanId } from "../stripe/plans.ts";
+import { createAdminClient } from "../supabase/admin.ts";
 
 export type GatedFeature =
   // Pro

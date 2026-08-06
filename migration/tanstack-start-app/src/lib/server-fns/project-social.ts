@@ -6,7 +6,7 @@
  * privacy-safe hashing + DB writes live here.
  */
 import { createHash } from "node:crypto";
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from "../supabase/server.ts";
 
 // ── Public view tracking ───────────────────────────────────────────────────
 export async function recordProjectView(data: any) {
