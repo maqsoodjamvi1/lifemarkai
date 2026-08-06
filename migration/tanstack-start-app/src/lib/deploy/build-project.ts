@@ -20,8 +20,8 @@ import { spawn } from "child_process";
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
-import { fixHtmlEntry } from "@/lib/preview/patch-vite-for-webcontainer";
-import { isTextAsset } from "@/lib/deploy/asset-kind";
+import { fixHtmlEntry } from "../preview/patch-vite-for-webcontainer.ts";
+import { isTextAsset } from "./asset-kind.ts";
 
 // Same Vite entry candidates the preview repair uses, so a deploy build doesn't
 // die on a mis-pointed index.html entry script (e.g. /src/main.ts vs .tsx).
@@ -61,7 +61,19 @@ function run(
     const child = spawn(cmd, args, {
       cwd,
       shell: process.platform === "win32", // npm/npx are .cmd shims on Windows
-      env: { ...process.env, CI: "1", npm_config_audit: "false", npm_config_fund: "false" },
+      env: {
+        ...process.env,
+        // The app container runs with NODE_ENV=production, which makes
+        // `npm install` silently omit devDependencies — and generated projects
+        // keep vite (and every build plugin) in devDependencies. npx then
+        // fetched a bare vite whose rollup native binary was never installed:
+        // "Cannot find module '@rollup/rollup-linux-x64-gnu'". A publish build
+        // is a dev-tooling run, so force a dev install.
+        NODE_ENV: "development",
+        CI: "1",
+        npm_config_audit: "false",
+        npm_config_fund: "false",
+      },
     });
     const timer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch {}

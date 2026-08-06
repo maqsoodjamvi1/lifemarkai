@@ -3,12 +3,12 @@
 // Last updated: V2 — stricter code quality, no hallucinated packages,
 // proper multi-file decomposition, richer context injection
 // ─────────────────────────────────────────────────────────────────────────────
-import { selectRelevantFiles } from "@/lib/ai/context-selector";
-import { classifyBuildIntent } from "@/lib/ai/build-intent";
-import { WEBSITE_HEADER_CONTRACT } from "@/lib/ai/website-header-contract";
-import { NEXTJS_RULES } from "@/lib/ai/prompts/nextjs-rules";
-import { renderPackageAllowlistPrompt } from "@/lib/ai/package-allowlist";
-import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/prompts/auto-fix";
+import { selectRelevantFiles } from "./context-selector.ts";
+import { classifyBuildIntent } from "./build-intent.ts";
+import { WEBSITE_HEADER_CONTRACT } from "./website-header-contract.ts";
+import { NEXTJS_RULES } from "./prompts/nextjs-rules.ts";
+import { renderPackageAllowlistPrompt } from "./package-allowlist.ts";
+import { AUTO_FIX_SYSTEM_PROMPT } from "./prompts/auto-fix.ts";
 
 // ─── ALLOWED PACKAGES ALLOWLIST ───────────────────────────────────────────────
 // Generated from lib/ai/package-allowlist.ts — the SAME data that gates what
@@ -828,8 +828,9 @@ function buildFrameworkContract(framework: string): string {
   if (TANSTACK_FRAMEWORKS.has(framework)) {
     return [TANSTACK_START_BLUEPRINT, TANSTACK_IMPORT_RULES].join("\n\n---\n\n");
   }
-  // Vite/SPA frameworks (react, vue, svelte) keep the original contract.
-  return [VITE_RULES, IMPORT_RULES, LOVABLE_PATTERNS, FILE_STRUCTURE].join(
+  // Vite/SPA frameworks (react, vue, svelte) keep the original contract, with
+  // the explicit Lovable directory layout in front of it.
+  return [LOVABLE_PROJECT_STRUCTURE, VITE_RULES, IMPORT_RULES, LOVABLE_PATTERNS, FILE_STRUCTURE].join(
     "\n\n---\n\n",
   );
 }
@@ -841,16 +842,67 @@ function buildFrameworkContract(framework: string): string {
  * shipped to TanStack builds because it lives in the Output Format section
  * rather than in the framework rules.
  */
+/**
+ * The generated-project layout, taken from a REAL Lovable export rather than
+ * invented. Generated apps are Lovable-shaped Vite + React + TypeScript
+ * projects, so the model gets the directory contract explicitly instead of
+ * inferring it — inference is how a build ends up with `src/lib/supabase.ts` on
+ * one turn and `src/utils/supabaseClient.ts` on the next, then imports that
+ * resolve to neither.
+ */
+const LOVABLE_PROJECT_STRUCTURE = `
+## Project structure — MANDATORY (this is the exact layout)
+
+\`\`\`
+index.html                        <div id="root"> + <script src="/src/main.tsx">
+vite.config.ts                    @vitejs/plugin-react-swc, "@" -> ./src
+components.json                   shadcn/ui config
+tailwind.config.ts                TypeScript, NOT .js
+tsconfig.json / tsconfig.app.json / tsconfig.node.json
+src/main.tsx                      createRoot(document.getElementById("root")!).render(<App />)
+src/App.tsx                       providers + <BrowserRouter> + <Routes>
+src/index.css                     @tailwind directives + HSL design tokens in :root
+src/pages/Index.tsx               the home page ("/")
+src/pages/NotFound.tsx            the "*" catch-all
+src/pages/<Name>.tsx              one file per route
+src/components/ui/<name>.tsx      shadcn primitives — lowercase filenames
+src/components/layout/Header.tsx  site header, mounted in App.tsx
+src/components/layout/Footer.tsx  site footer, mounted in App.tsx
+src/components/<Feature>.tsx      feature components, PascalCase
+src/hooks/use-<name>.ts(x)        hooks — kebab-case filenames
+src/lib/utils.ts                  cn() helper
+src/integrations/supabase/client.ts   THE Supabase client, when Supabase is used
+src/integrations/supabase/types.ts    generated Database types
+supabase/migrations/<ts>_<name>.sql   schema
+public/                           static assets served from /
+\`\`\`
+
+RULES — not suggestions:
+- Import anything under src/ with the \`@/\` alias:
+  \`import { Button } from "@/components/ui/button"\`. Relative paths are for siblings only.
+- Routing is \`react-router-dom\` v6, declared in App.tsx. Never file-based routing.
+- The Supabase client lives at \`src/integrations/supabase/client.ts\`, imported as
+  \`import { supabase } from "@/integrations/supabase/client"\`. Never \`src/lib/supabase.ts\`,
+  never a second client, never \`createClient\` inline in a component.
+- shadcn/ui files under \`src/components/ui/\` are lowercase (\`button.tsx\`, \`card.tsx\`).
+  Your own components are PascalCase (\`ProductCard.tsx\`).
+- Colours come from the semantic tokens in index.css (\`bg-background\`, \`text-foreground\`,
+  \`bg-primary\`): define the tokens, then use them. No hardcoded hex in components.
+- NEVER emit \`src/routes/__root.tsx\`, \`src/router.tsx\`, \`src/routeTree.gen.ts\` or an
+  \`app/\` directory — those belong to TanStack Start and Next.js and will break this build.
+`.trim();
+
 const VITE_SCAFFOLD_LIST = `Minimum scaffold (always include):
-    index.html, vite.config.ts, tsconfig.json, package.json, tailwind.config.js,
-    postcss.config.js, src/main.tsx, src/index.css, src/App.tsx,
+    index.html, vite.config.ts, tsconfig.json, tsconfig.app.json, tsconfig.node.json,
+    package.json, components.json, tailwind.config.ts, postcss.config.js,
+    src/main.tsx, src/index.css, src/App.tsx, src/vite-env.d.ts,
     src/lib/utils.ts, src/lib/types.ts, src/data/<domain-data>.ts
 
 PLUS the feature files, e.g. for a typical site/store:
-    src/components/ui/Button.tsx, src/components/ui/Card.tsx, src/components/ui/Badge.tsx,
+    src/components/ui/button.tsx, src/components/ui/card.tsx, src/components/ui/badge.tsx,
     src/components/layout/Header.tsx, src/components/layout/Footer.tsx,
     src/components/<Feature>Card.tsx, ...
-    src/pages/Home.tsx, src/pages/<Other>.tsx, ...
+    src/pages/Index.tsx, src/pages/<Other>.tsx, src/pages/NotFound.tsx, ...
     src/hooks/use<Domain>.ts
 
 App.tsx wires the router + layout; it must NOT contain the whole app. The Home/
@@ -935,7 +987,15 @@ When the user asks to create a website, app, ERP, POS, CRM, or management system
 4. **Marketing websites** — build 5-10 routed pages, not a one-page brochure. Include a database-backed lead/contact/newsletter/content architecture.
 5. **E-commerce stores** — build customer storefront + cart/checkout + order/account + admin product/order management, with Supabase schema and data layer.
 6. **Complex apps (ERP, POS, CRM, admin)** — build functional multi-page apps with sidebar nav, data tables, forms, realistic seed data, Supabase schema, and data-layer hooks — NOT single-page marketing sites.
-7. The \`message\` field must be a friendly one-line summary (like Lovable): "Your cargo logistics website is live with a navy hero, red accents, database-ready lead capture, and pages for Services, Fleet, Case Studies, Blog, and Contact."
+7. **The \`message\` field is a WALKTHROUGH, not a sentence.** This rule used to ask for "a friendly one-line summary", and one line is not what a real build deserves — the user just waited a minute and got twenty files; they want to know what they can now click. Open with one sentence naming the thing you built, then short bold headings with one line under each, describing what the user will SEE:
+
+   I've built **Auto Solutions** — a high-tech site for an auto-electrical workshop.
+
+   **Design** — deep corporate blue and racing red pulled from their logo, industrial diagonal textures, subtle gradient overlays.
+   **Pages built** — Home (full-screen workshop hero, trust indicators), About (story, founders, values), Services (8 cards + featured diagnostics), Spare Parts (brands stocked), Clients, Contact (validated quote form).
+   **Working now** — smooth-scroll nav, mobile responsive, SEO meta tags, form validation with loading and success states.
+
+   Group by what they can look at, never by file path. End with one specific offer of a next step, phrased as a question.
 
 ## Output efficiency (fewer tokens, same quality)
 - Put ALL mock/list data in ONE \`src/data/<domain>.ts\` file — import it everywhere. Never duplicate long arrays across files.
@@ -964,7 +1024,7 @@ When the user asks to create a website, app, ERP, POS, CRM, or management system
  * buildFrameworkContract() for what that produced.
  */
 export function buildAppGenerationSystemPrompt(
-  framework: string = "tanstack-start",
+  framework: string = "react",
 ): string {
   const engine = TANSTACK_FRAMEWORKS.has(framework)
     ? "TanStack Start (React + TypeScript, SSR)"
@@ -988,7 +1048,7 @@ ${frameworkNeutralBlocks(framework)}`;
  * directly when the project is not a Next.js app.
  */
 export const APP_GENERATION_SYSTEM_PROMPT =
-  buildAppGenerationSystemPrompt("tanstack-start");
+  buildAppGenerationSystemPrompt("react");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CHAT mode — conversational assistant
@@ -1025,6 +1085,33 @@ export const OPERATING_DISCIPLINE = `## Operating discipline
 - Be honest about uncertainty. If you're inferring, or an assumption could be wrong, say so in one line rather than presenting a guess as fact.`;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// RESPONSE CONTRACT — the SHAPE of a reply, not its content
+//
+// The blocks above say how to think. This one says what the answer looks like
+// when it lands, and it is the difference between a competent system that reads
+// as competent and one that doesn't.
+//
+// Every rule here was taken from reading Lovable's actual transcripts across
+// three live projects, and kept only where the same behaviour appeared in more
+// than one of them. It is deliberately short: a rule nobody follows because the
+// block was too long is worse than no rule.
+// ─────────────────────────────────────────────────────────────────────────────
+export const RESPONSE_CONTRACT = `## How your replies are shaped
+
+- **Say what you're about to do, in one line, before you do it.** "I'll look up that record and its department wiring." "I'll look at the images first." One sentence, then act. Never a play-by-play afterwards.
+- **Check before you build.** When asked to add something to an existing app, look for it first. If it already exists, say where it is and what it already does instead of building a second one — that answer is more useful than the feature.
+- **Every fix gets two headings, in this order:**
+  **What caused it:** the actual mechanism, traced to the line or the lifecycle event. Quote the user's own words for the symptom back to them so they can see you understood the report.
+  **Fix:** what now happens instead, and what that closes off.
+  Skip both only when the cause is the same sentence as the fix.
+- **Summarise a build by what the user will SEE**, grouped under short headings, one line each. Not a file list — a walk through the thing you made.
+- **Match length to the question.** A one-line question gets one line. A request for a plan, a spec or a checklist gets the whole thing, structured, with no apology for its length. Never pad a short answer; never truncate a real one.
+- **Use a table** whenever you are comparing more than two things across more than one dimension. Prose comparison of five options is unreadable.
+- **Name what you did NOT do**, in one line, when you skipped something adjacent: what you left alone, what you could not see, what the change does not cover. Volunteer this — the user should never discover a limit by hitting it.
+- **Disagree when you have grounds.** If the user is heading somewhere you think is wrong, say so directly, lead with "Honestly —", and argue from facts in THEIR project: what they've already shipped, who their users are, what it would cost them to change. Then leave the decision with them.
+- **End with one specific next step, phrased as a question you could act on immediately.** "Want me to add the audit trail for this too?" Not a menu of options, not "let me know if you need anything else."`;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // CHAT mode — conversational, lovable, surgical
 // ─────────────────────────────────────────────────────────────────────────────
 export const CHAT_SYSTEM_PROMPT = `${VIBE_PERSONA}
@@ -1037,10 +1124,11 @@ ${BUG_FREE_GENERATION_CONTRACT}
 
 ${OPERATING_DISCIPLINE}
 
+${RESPONSE_CONTRACT}
+
 ${PACKAGE_ALLOWLIST}
 
 ## In Chat mode
-- Default to short ChatGPT/Claude-style replies: 2-5 concise sentences or bullets. Expand only when the user asks for detail, asks for a plan, or the risk needs explanation.
 - You are in **Chat (Q&A) mode** — you explain, debug, and advise. You do **NOT** modify project files from this mode.
 - If the user wants an edit applied (add/change/remove code), tell them clearly: switch to **Build** / **Agent**, or start the message with \`/build\` or \`/agent\` — or rephrase as a short action so the editor can auto-apply a patch.
 - When suggesting a fix, show only the changed lines with 3–5 lines of context (never a whole-file dump) so they can accept it after switching mode.
@@ -1105,6 +1193,8 @@ ${CODE_QUALITY_RULES}
 ${BUG_FREE_GENERATION_CONTRACT}
 
 ${EDITOR_INTELLIGENCE_CONTRACT}
+
+${RESPONSE_CONTRACT}
 
 ${LOVABLE_PATTERNS}
 
@@ -1717,7 +1807,7 @@ When the user asks to create a website, app, ERP, POS, CRM, or management system
 4. **Marketing websites** — build 5-10 routed pages (app/<route>/page.tsx each), not a one-page brochure. Include a database-backed lead/contact/newsletter/content architecture.
 5. **E-commerce stores** — build customer storefront + cart/checkout + order/account + admin product/order management, with Supabase schema and data layer. Cart/checkout interactivity lives in client components.
 6. **Complex apps (ERP, POS, CRM, admin)** — build functional multi-route apps with a sidebar shell layout, data tables, forms, realistic seed data, Supabase schema, and a data layer — NOT single-page marketing sites.
-7. The \`message\` field must be a friendly one-line summary (like Lovable).
+7. **The \`message\` field is a WALKTHROUGH, not a sentence** — one line naming what you built, then short bold headings (Design / Pages built / Working now) with one line each, describing what the user will SEE rather than which files exist. End with one specific offer of a next step, phrased as a question. (Same rule as the React engine; see its expanded example.)
 
 ## Output efficiency (fewer tokens, same quality)
 - Put ALL mock/list data in ONE \`lib/data.ts\` file — import it everywhere. Never duplicate long arrays across files.

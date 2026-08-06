@@ -6,8 +6,8 @@
  * - content is never null/empty (NOT NULL constraint)
  * - on RLS / client failure, retries with the service-role admin client
  */
-import { createAdminClient } from "@/lib/supabase/server";
-import { logger } from "@/lib/logger";
+import { createAdminClient } from "../supabase/server.ts";
+import { logger } from "../logger.ts";
 import {
   sanitizeMessageContent,
   toPersistedMessageMode,

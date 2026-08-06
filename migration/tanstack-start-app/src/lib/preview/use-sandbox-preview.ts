@@ -50,7 +50,17 @@ export function useSandboxPreview(projectId: string) {
   const bootedRef = useRef(false);
   const statusCheckedRef = useRef(false);
 
+  /**
+   * The latest state, readable from a callback without becoming a dependency.
+   *
+   * Needed by the catch blocks below, which must preserve `enabled` rather than
+   * reset it — and cannot close over `state` without re-creating every callback
+   * on each render.
+   */
+  const stateRef = useRef(state);
+
   const applyState = useCallback((next: SandboxPreviewState) => {
+    stateRef.current = next;
     sandboxIdRef.current = next.sandboxId;
     if (projectId) {
       try {
@@ -96,6 +106,7 @@ export function useSandboxPreview(projectId: string) {
         return res.json() as Promise<{
           enabled?: boolean;
           ok?: boolean;
+          waking?: boolean;
           previewUrl?: string | null;
           sandboxId?: string | null;
           provider?: string;
@@ -112,7 +123,10 @@ export function useSandboxPreview(projectId: string) {
       );
 
       // 2) Stale ID → clear + project-named reconnect (no sandboxId query).
-      if (storedId && data.enabled !== false && !(data.ok && data.previewUrl)) {
+      //    `waking` is explicitly NOT stale: the id resolved to a live container
+      //    whose app is still coming up. Re-querying without the id would throw
+      //    away a good sandbox and lose the flag that says so.
+      if (storedId && data.enabled !== false && !data.waking && !(data.ok && data.previewUrl)) {
         try {
           sessionStorage.removeItem(storageKey(projectId));
         } catch { /* private mode */ }
@@ -121,6 +135,24 @@ export function useSandboxPreview(projectId: string) {
 
       if (!data.enabled) {
         return applyState(emptyState());
+      }
+
+      // Warm container, app not serving yet. Hold the spinner and let the phase
+      // poll promote it — cold-booting here would destroy a container that is
+      // very likely seconds away from answering.
+      if (data.waking) {
+        return applyState({
+          enabled: true,
+          previewUrl: null,
+          sandboxId: data.sandboxId ?? null,
+          provider: typeof data.provider === "string" ? data.provider : null,
+          loading: true,
+          error: null,
+          logs: null,
+          phase: "starting",
+          phaseDetail:
+            typeof data.phaseDetail === "string" ? data.phaseDetail : "Waking your app…",
+        });
       }
 
       if (data.ok && data.previewUrl) {
@@ -149,13 +181,17 @@ export function useSandboxPreview(projectId: string) {
         phaseDetail: typeof data.phaseDetail === "string" ? data.phaseDetail : "Cold start…",
       });
     } catch (err) {
-      return applyState(
-        emptyState({
-          error: err instanceof Error ? err.message : "Reconnect failed",
-        }),
-      );
+      // Keep `enabled`. See the note on the requestPreview catch below: routing
+      // a transient network error through emptyState() turns "one fetch failed"
+      // into "this project has no preview backend", and every recovery effect
+      // in this hook is gated on `enabled`.
+      return applyState({
+        ...stateRef.current,
+        loading: false,
+        error: err instanceof Error ? err.message : "Reconnect failed",
+      });
     }
-  }, [applyState, emptyState, projectId]);
+  }, [applyState, projectId]);
 
   const requestPreview = useCallback(async (): Promise<SandboxPreviewState> => {
     setState((s) => ({ ...s, loading: true, error: null }));
@@ -165,6 +201,7 @@ export function useSandboxPreview(projectId: string) {
         return res.json() as Promise<{
           enabled?: boolean;
           ok?: boolean;
+          ready?: boolean;
           retryable?: boolean;
           previewUrl?: string | null;
           sandboxId?: string | null;
@@ -203,6 +240,28 @@ export function useSandboxPreview(projectId: string) {
         return applyState(emptyState());
       }
 
+      // The sandbox exists but its dev server hadn't answered yet. This is a
+      // normal cold boot, not a failure — keep the spinner up and stay in the
+      // polling state so the phase poll can adopt the URL the instant a probe
+      // confirms it. Settling here (loading:false, no URL) would stop the poll
+      // effect dead and leave the pane blank forever.
+      if (data.ok && data.ready === false) {
+        return applyState({
+          enabled: true,
+          previewUrl: null,
+          sandboxId: data.sandboxId ?? null,
+          provider: typeof data.provider === "string" ? data.provider : null,
+          loading: true,
+          error: null,
+          logs: data.logs ?? null,
+          phase: typeof data.phase === "string" ? data.phase : "starting",
+          phaseDetail:
+            typeof data.phaseDetail === "string"
+              ? data.phaseDetail
+              : "Starting your app…",
+        });
+      }
+
       return applyState({
         enabled: true,
         previewUrl: data.previewUrl ?? null,
@@ -215,13 +274,26 @@ export function useSandboxPreview(projectId: string) {
         phaseDetail: typeof data.phaseDetail === "string" ? data.phaseDetail : null,
       });
     } catch (err) {
-      return applyState(
-        emptyState({
-          error: err instanceof Error ? err.message : "Request failed",
-        }),
-      );
+      // `enabled` MUST survive a failed request.
+      //
+      // emptyState() hardcodes `enabled: false`, and every self-healing path in
+      // this hook — the phase poll, the keepalive heartbeat, the paint watchdog
+      // — is gated on it. So a single DNS wobble against Supabase during a cold
+      // boot (getProjectAccess throws by design on a transient error, the POST
+      // route has no try/catch, res.json() then throws here) permanently
+      // disabled every recovery mechanism for the rest of the session. The
+      // preview could not come back even after the network did, and the pane it
+      // lands on has no Retry button.
+      //
+      // A failed fetch means "this attempt failed", not "this project has no
+      // preview backend". Report the error, keep the capability.
+      return applyState({
+        ...stateRef.current,
+        loading: false,
+        error: err instanceof Error ? err.message : "Request failed",
+      });
     }
-  }, [applyState, emptyState, projectId]);
+  }, [applyState, projectId]);
 
   /** Preflight: know Modal is configured before boot (skip WebContainer). */
   const [statusResolved, setStatusResolved] = useState(false);
@@ -253,8 +325,33 @@ export function useSandboxPreview(projectId: string) {
     bootedRef.current = true;
     void (async () => {
       setState((s) => ({ ...s, loading: true, phase: "creating", phaseDetail: "Connecting…" }));
-      const reconnected = await reconnectPreview();
-      if (reconnected.previewUrl) return;
+
+      // Only try to reconnect when there is something to reconnect TO.
+      //
+      // On a first-ever preview sessionStorage is empty, so this reconnect was
+      // a GET that could not possibly succeed — and it was not cheap. The
+      // route pays the full auth stack (getSession then getUser, sequential),
+      // the project-access lookup and a projects read before it reaches the
+      // line that says "no sandbox id" and gives up: four sequential database
+      // round trips blocking the cold boot, to learn what an empty
+      // sessionStorage key already said.
+      //
+      // The warm path is untouched — a stored id still reconnects first, and
+      // "starting" still short-circuits the cold boot.
+      let storedId: string | null = null;
+      try {
+        storedId = sessionStorage.getItem(storageKey(projectId));
+      } catch { /* private mode */ }
+
+      if (storedId) {
+        const reconnected = await reconnectPreview();
+        if (reconnected.previewUrl) return;
+        // "starting" means reconnect found a live sandbox whose app hasn't
+        // answered yet. Cold-booting on top of that would delete the container
+        // it just found and restart a boot that is already nearly done.
+        if (reconnected.phase === "starting") return;
+      }
+
       setState((s) => ({ ...s, phase: "creating", phaseDetail: "Cold start…" }));
       await requestPreview();
     })();
@@ -331,24 +428,38 @@ export function useSandboxPreview(projectId: string) {
    *  failed/blank document on their own. Every health signal was green, so no
    *  recovery path fired and the user had to click reload manually.
    *
-   *  The sandbox patcher injects the VEB bridge into every app's index.html,
-   *  and the bridge posts `lifemark-veb-ready` to the parent as soon as the
-   *  app's HTML actually executes. That makes "did the iframe REALLY paint the
-   *  app?" observable: if no bridge ping arrives within 6s of ready, force the
-   *  iframe to reload via reloadNonce (3 attempts, doubling backoff), which
-   *  re-fetches from the now-healthy vite. */
+   *  WHAT COUNTS AS A PAINT. This used to accept any bridge message —
+   *  `lifemark-veb-ready`, a location update, any `lifemark-preview` log. All
+   *  of those fire when the document EXECUTES, which is before React has
+   *  rendered a single element, so the watchdog was satisfied by a page that
+   *  was still white and never fired once. Reproduced live: a cold sandbox
+   *  painted blank, the bridge reported ready and then success, the editor sat
+   *  on a white pane for over a minute, and only a manual reload fixed it —
+   *  the exact failure this watchdog was written to catch, walking straight
+   *  past it.
+   *
+   *  So the guest now measures the app instead of itself and posts
+   *  `lifemark-preview-painted` with the root's element count, text length and
+   *  rendered height. Only real content clears the watchdog; anything else is
+   *  proof of life, not proof of paint. When nothing paints, reload via
+   *  reloadNonce (3 attempts, doubling backoff) against the now-warm vite. */
   const paintAttemptsRef = useRef(0);
   const lastPaintPingRef = useRef(0);
   useEffect(() => {
     if (!state.enabled || !state.previewUrl) return;
     const onMsg = (e: MessageEvent) => {
-      const d = e.data as { type?: string; source?: string } | null;
+      const d = e.data as
+        | { type?: string; source?: string; nodes?: number; textLen?: number; height?: number }
+        | null;
       if (!d || typeof d !== "object") return;
-      if (
-        d.type === "lifemark-veb-ready" ||
-        d.type === "lifemark-preview-location" ||
-        d.source === "lifemark-preview"
-      ) {
+      if (d.type !== "lifemark-preview-painted") return;
+      // A mounted-but-empty shell satisfies "root.innerHTML is non-empty", so
+      // that is not enough. Require actual elements AND either visible text or
+      // real height — the difference between a rendered app and a wrapper div.
+      const nodes = typeof d.nodes === "number" ? d.nodes : 0;
+      const textLen = typeof d.textLen === "number" ? d.textLen : 0;
+      const height = typeof d.height === "number" ? d.height : 0;
+      if (nodes >= 3 && (textLen > 0 || height > 40)) {
         lastPaintPingRef.current = Date.now();
         paintAttemptsRef.current = 0;
       }
@@ -372,12 +483,66 @@ export function useSandboxPreview(projectId: string) {
         schedule(delay * 2);
       }, delay);
     };
-    schedule(6000);
+    // 6s was too tight and caused reload churn that read as flakiness. A dev
+    // server that has just booted still has to run Vite's dependency
+    // pre-bundling pass on the first request, and on a large generated app
+    // that alone can outlast 6s — so the watchdog was reloading iframes that
+    // were mid-first-paint, throwing away the optimizer's progress and making
+    // the preview slower in exactly the case it was meant to rescue.
+    schedule(12_000);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
   }, [state.enabled, state.previewUrl, state.phase]);
+
+  /** A boot parked at "starting" must not spin forever.
+   *
+   *  Withholding the URL until a probe confirms it is what keeps Bad Gateway
+   *  out of the pane, but it moves the failure mode: an app that genuinely
+   *  cannot start now shows a spinner instead of an error. The dev-log tail,
+   *  OOM status and process table are already attached to the boot response, so
+   *  after a grace window surface them rather than leaving the user guessing. */
+  const stallRecoveryRef = useRef(0);
+  useEffect(() => {
+    if (state.phase !== "starting" || state.previewUrl) return;
+    const timer = window.setTimeout(() => {
+      // First stall gets one cold boot. The container may be wedged in a way
+      // the in-container supervisor can't fix (a poisoned node_modules, a port
+      // already bound by a zombie), and a fresh one is the standard cure.
+      if (stallRecoveryRef.current === 0) {
+        stallRecoveryRef.current = 1;
+        try { sessionStorage.removeItem(storageKey(projectId)); } catch { /* private */ }
+        sandboxIdRef.current = null;
+        setState((s) => ({
+          ...s,
+          previewUrl: null,
+          sandboxId: null,
+          loading: true,
+          error: null,
+          phase: "creating",
+          phaseDetail: "Taking longer than usual — starting fresh…",
+        }));
+        void requestPreview();
+        return;
+      }
+      // Second stall: a fresh sandbox didn't help, so this is the app, not the
+      // infrastructure. Say so and show the boot log rather than spinning.
+      setState((s) => {
+        if (s.phase !== "starting" || s.previewUrl) return s;
+        return {
+          ...s,
+          loading: false,
+          phase: "error",
+          error:
+            "Your app did not finish starting. The log below usually says why — " +
+            "a dependency that failed to install, a syntax error in an entry file, " +
+            "or the app running out of memory.",
+        };
+      });
+    }, 90_000);
+    return () => window.clearTimeout(timer);
+  }, [state.phase, state.previewUrl, projectId, requestPreview]);
 
   /** Poll Modal boot phase while cold-starting (metadata updates from POST).
    *  ALSO keeps polling in the error state: a failed boot used to freeze the

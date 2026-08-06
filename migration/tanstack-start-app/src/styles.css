@@ -84,22 +84,47 @@
    ────────────────────────────────────────────────────────────────────────── */
 @layer base {
   :root {
-    --bg-base: oklch(0.99 0.004 95);
+    /* NEUTRAL, AND THE CANVAS SITS BELOW THE CARDS.
+       Measured off Lovable's editor rather than guessed: page #fafafa
+       (oklch 0.971 0 0), preview pane #f5f5f5, composer pure white — all at
+       chroma ZERO. Ours carried 0.003–0.004 chroma at hue 95, which is
+       yellow, so every surface read faintly cream and the editor looked warm
+       beside theirs.
+       The lightness ORDER matters as much as the hue. Their canvas is darker
+       than the things on it, so panels read as surfaces floating on a page.
+       Ours had the canvas at 0.99 and cards at 0.975 — the background was
+       brighter than the cards — which is why nothing appeared to lift off it. */
+    --bg-base: oklch(0.971 0 0);
     --bg-primary-pulse: oklch(1 0 0);
-    --bg-secondary-pulse: oklch(0.975 0.003 95);
-    --bg-muted: oklch(0.95 0.004 95);
+    --bg-secondary-pulse: oklch(1 0 0);
+    --bg-muted: oklch(0.955 0 0);
     --bg-translucent: oklch(1 0 0 / 0.6);
     --bg-accent: oklch(0.58 0.19 258);
     --bg-inverse: oklch(0.16 0.01 260);
-    --fg-primary: oklch(0.22 0.01 260);
-    --fg-secondary: oklch(0.40 0.01 260);
-    --fg-tertiary: oklch(0.55 0.01 260);
-    --fg-quaternary: oklch(0.70 0.008 260);
+    /* TEXT WAS BLUE. Every foreground token sat at hue 260 with chroma 0.01 —
+       a cool grey — so all body copy carried a faint blue cast. This is the
+       same mistake as the warm hue-95 backgrounds fixed above, in the other
+       direction, and it hid because the two tints partly cancelled: cool text
+       on warm paper reads as fine until you set it beside a genuinely neutral
+       page and the whole thing looks like a different brand.
+
+       Lovable's values, read off their editor: strong oklch(0.1 0 0), prose
+       oklch(0.3279 0.005 106.68), tertiary oklch(0.5 0.001 107), border
+       rgb(231,231,230) = oklch(0.9277 0.0013 106.43). Near-zero chroma and a
+       slightly WARM hue, the opposite of where ours sat.
+
+       Note how much darker their primary is: 0.10 against our 0.22. Most of
+       why their editor reads as crisp is that headings and emphasis are nearly
+       black rather than dark grey. */
+    --fg-primary: oklch(0.10 0 0);
+    --fg-secondary: oklch(0.328 0.005 107);
+    --fg-tertiary: oklch(0.50 0.001 107);
+    --fg-quaternary: oklch(0.66 0.001 107);
     --fg-emphasis: oklch(1 0 0);
     --fg-inverse: oklch(0.98 0 0);
-    --fg-accent: oklch(0.55 0.19 258);
-    --border-default: oklch(0.90 0.005 260);
-    --border-translucent: oklch(0.50 0.01 260 / 0.18);
+    --fg-accent: oklch(0.5243 0.2396 264.41);
+    --border-default: oklch(0.9277 0.0013 106.43);
+    --border-translucent: oklch(0.50 0.001 107 / 0.18);
     --border-accent: oklch(0.58 0.19 258);
     --glow-neutral-hover: oklch(0.6 0.01 260 / 0.12);
     --radius-1: 4px;
@@ -141,19 +166,33 @@
   }
 }
 
-/* Custom scrollbar */
+/* SCROLLBAR — Lovable's, measured: scrollbar-width thin, thumb rgb(99,99,99),
+   transparent track.
+
+   The standard properties come first and are what modern Chrome and Firefox
+   honour; the -webkit- rules are kept for older engines that ignore
+   `scrollbar-color`. Both carry the same values, so a scrollbar can never look
+   different depending on which one the browser used.
+
+   Ours was 6px with a `bg-border` thumb, which after the token change above
+   would have been nearly invisible against the page. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(99, 99, 99) transparent;
+}
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
-  @apply bg-transparent;
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  @apply bg-border rounded-full;
+  background: rgb(99, 99, 99);
+  border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-muted-foreground/40;
+  background: rgb(120, 120, 120);
 }
 
 /* Editor-specific scrollbar */
@@ -281,11 +320,37 @@ section [style*="opacity: 0"] {
     0 4px 16px oklch(0 0 0 / 0.08),
     0 0 0 0.5px var(--border-translucent);
 }
+/* THREE RINGS AND A SIX-STOP RAMP — read off Lovable's computed style, not
+   approximated. This was `0 8px 32px black/10%` + `0 2px 8px black/4%`: two
+   stops, one of them heavy, which made the composer look like it was hovering
+   an inch above the page. An earlier pass at parity replaced it with two
+   hairline rings and nothing else, on the guess that Lovable used no drop
+   shadow at all. That guess was wrong — this is the measured value.
+
+   The structure is worth naming, because it is not obvious. The first three
+   stops are rings at zero blur: white, a near-white hairline, then a warm grey
+   at 16%. Together they draw a crisp edge that survives both on white cards
+   and against the slightly darker canvas. The remaining six are a ramp — each
+   roughly doubling the blur while pulling the spread further negative, and
+   every one at the SAME 0.04 alpha. Stacking equal-alpha layers that way
+   approximates real light falloff, which a single large blur cannot; that is
+   the difference between reading as "floating" and reading as "resting". The
+   uniform alpha also stops the shadow developing a visible edge as it fades.
+
+   Do not merge these stops to shorten the declaration. The cost is a long
+   line; the benefit is that every card in the editor sits at the right
+   apparent height. */
 .shadow-surface-xl {
   box-shadow:
-    0 8px 32px oklch(0 0 0 / 0.10),
-    0 2px 8px oklch(0 0 0 / 0.04),
-    0 0 0 0.5px var(--border-default);
+    0 0 0 1px oklch(1 0 0),
+    0 0 0 1px oklch(0.9851 0 107),
+    0 0 0 2px oklch(0.5674 0.009 106.68 / 0.16),
+    0 2px 1px 0 oklch(0 0 0 / 0.04),
+    0 2px 1px -0.5px oklch(0 0 0 / 0.04),
+    0 4px 3px -1.5px oklch(0 0 0 / 0.04),
+    0 7px 6px -3px oklch(0 0 0 / 0.04),
+    0 13px 12px -6px oklch(0 0 0 / 0.04),
+    0 25px 24px -12px oklch(0 0 0 / 0.04);
 }
 
 .prose-pulse {

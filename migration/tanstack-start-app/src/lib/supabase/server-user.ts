@@ -1,5 +1,5 @@
 import type { User } from "@supabase/supabase-js";
-import type { createClient } from "@/lib/supabase/server";
+import type { createClient } from "./server.ts";
 
 type SupabaseServer = Awaited<ReturnType<typeof createClient>>;
 

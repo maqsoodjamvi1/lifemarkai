@@ -16,6 +16,7 @@ import {
   getSandboxProvider,
   getSandboxProviderId,
   getPreviewProbeState,
+  forgetPreviewProbe,
   isPreviewReachable,
   peekPreviewReachable,
   isSandboxEnabled,
@@ -53,6 +54,35 @@ function isSandboxGoneError(err: unknown): boolean {
   );
 }
 
+/**
+ * projects.preview_url is SHARED with the thumbnail-capture route
+ * (api/projects/$id/preview.ts), which writes a Supabase-storage .jpg — or even
+ * a data: URL — into the same column. When that happened after a sandbox boot,
+ * the phaseOnly poll handed the screenshot URL to the editor as the "tunnel",
+ * the iframe tried to frame supabase.co, X-Frame-Options blocked it, and the
+ * preview showed "refused to connect" while claiming phase ready.
+ *
+ * Only URLs on a sandbox tunnel host may be treated as a live preview. Anything
+ * else stored in preview_url is a thumbnail and must be ignored here — the
+ * reconnect paths below will then re-discover the real tunnel and re-persist it.
+ */
+function isSandboxTunnelUrl(value: unknown): value is string {
+  if (typeof value !== "string" || !/^https?:\/\//i.test(value)) return false;
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    const domain = (process.env.SANDBOX_PREVIEW_DOMAIN || "preview.lifemarkai.com")
+      .trim()
+      .toLowerCase();
+    return (
+      host === domain ||
+      host.endsWith(`.${domain}`) ||
+      host.endsWith(".modal.host")
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** One cold-boot at a time per project — concurrent POSTs were terminating
  *  each other's fresh Modal sandboxes ("user termination request"). */
 const bootInflight = new Map<string, Promise<Response>>();
@@ -61,7 +91,15 @@ async function handlePOST(req: Request, params: any) {
   const { id: projectId } = params;
   const existing = bootInflight.get(projectId);
   if (existing) {
-    return existing;
+    // .clone(), not the same object. A Response body is a single-use
+    // ReadableStream: handing one instance to two in-flight requests leaves the
+    // second reading a locked, already-consumed body, which surfaces as a 500
+    // or a truncated payload. The client then fails to parse it and collapses
+    // the whole preview to `enabled: false`, disabling every recovery path it
+    // has. Concurrent boots are routine here — the boot effect, the 90s stall
+    // recovery, the keepalive's dead-sandbox detection, the phase poller and
+    // the Retry button can all fire one, never mind a second browser tab.
+    return existing.then((res) => res.clone());
   }
   const run = handlePOSTUnlocked(req, params).finally(() => {
     if (bootInflight.get(projectId) === run) bootInflight.delete(projectId);
@@ -154,21 +192,56 @@ async function handlePOSTUnlocked(req: Request, params: any) {
     ? (existing.metadata as Record<string, unknown>)
     : {};
 
+  /**
+   * The project's metadata as THIS request currently believes it to be.
+   *
+   * Every write below is a whole-object `update`, and they all used to spread
+   * the same `prevMeta` snapshot taken before any of them ran. Two ways that
+   * lost data, both observed as "the preview forgot its sandbox":
+   *
+   *   • `persistPhase` is fire-and-forget. A progress callback in flight when
+   *     the final write lands (or one issued just after it, since the
+   *     provider keeps reporting) re-applies the OLD snapshot on top and
+   *     erases `sandbox_id` / `sandbox_port`. The next poll finds no id and
+   *     cold-boots a project that was already running.
+   *   • On the zombie-recovery path the snapshot still holds the DEAD
+   *     sandbox_id — the one we just deliberately cleared — so a late phase
+   *     write resurrects the corpse and the "self-healing" retry heals into
+   *     the same stuck state.
+   *
+   * Merging into the live object instead of the snapshot fixes both, and
+   * chaining the writes keeps them from reordering against each other.
+   */
+  let liveMeta: Record<string, unknown> = { ...prevMeta };
+  let metaWriteChain: Promise<unknown> = Promise.resolve();
+
+  const writeMeta = (
+    patch: Record<string, unknown>,
+    extraColumns: Record<string, unknown> = {},
+  ): Promise<{ error?: { message?: string } | null }> => {
+    liveMeta = { ...liveMeta, ...patch };
+    const snapshot = { ...liveMeta };
+    const next = metaWriteChain.then(() =>
+      (supabase as any)
+        .from("projects")
+        .update({ ...extraColumns, metadata: snapshot })
+        .eq("id", projectId),
+    );
+    // The chain must never reject, or one failed write would strand all the
+    // ones behind it.
+    metaWriteChain = next.catch(() => undefined);
+    return next.catch((err: unknown) => ({
+      error: { message: err instanceof Error ? err.message : String(err) },
+    }));
+  };
+
   const persistPhase = (phase: string, detail?: string) => {
-    void (supabase as any)
-      .from("projects")
-      .update({
-        metadata: {
-          ...prevMeta,
-          sandbox_phase: phase,
-          sandbox_phase_detail: detail ?? null,
-          sandbox_provider: getSandboxProviderId(),
-          sandbox_updated_at: new Date().toISOString(),
-        },
-      })
-      .eq("id", projectId)
-      .then(() => {})
-      .catch(() => {});
+    void writeMeta({
+      sandbox_phase: phase,
+      sandbox_phase_detail: detail ?? null,
+      sandbox_provider: getSandboxProviderId(),
+      sandbox_updated_at: new Date().toISOString(),
+    });
   };
 
   const provider = getSandboxProvider();
@@ -202,19 +275,15 @@ async function handlePOSTUnlocked(req: Request, params: any) {
       console.warn(
         `[sandbox-preview] stored sandbox is gone (${result.error}) — clearing sandbox_id and cold-booting once`,
       );
-      await (supabase as any)
-        .from("projects")
-        .update({
-          preview_url: null,
-          metadata: {
-            ...prevMeta,
-            sandbox_id: null,
-            sandbox_phase: "creating",
-            sandbox_phase_detail: "Sandbox expired — starting a fresh one…",
-            sandbox_updated_at: new Date().toISOString(),
-          },
-        })
-        .eq("id", projectId);
+      await writeMeta(
+        {
+          sandbox_id: null,
+          sandbox_phase: "creating",
+          sandbox_phase_detail: "Sandbox expired — starting a fresh one…",
+          sandbox_updated_at: new Date().toISOString(),
+        },
+        { preview_url: null },
+      );
 
       // Heal in this same request. Returning retryable alone left the editor on
       // "Preview could not start" whenever the client didn't auto-repost.
@@ -227,21 +296,17 @@ async function handlePOSTUnlocked(req: Request, params: any) {
       });
 
       if (retry.ok) {
-        const { error: previewUrlErr } = await (supabase as any)
-          .from("projects")
-          .update({
-            preview_url: retry.previewUrl,
-            metadata: {
-              ...prevMeta,
-              sandbox_id: retry.sandboxId,
-              sandbox_port: port,
-              sandbox_provider: getSandboxProviderId(),
-              sandbox_phase: "ready",
-              sandbox_phase_detail: null,
-              sandbox_updated_at: new Date().toISOString(),
-            },
-          })
-          .eq("id", projectId);
+        const { error: previewUrlErr } = await writeMeta(
+          {
+            sandbox_id: retry.sandboxId,
+            sandbox_port: port,
+            sandbox_provider: getSandboxProviderId(),
+            sandbox_phase: "ready",
+            sandbox_phase_detail: null,
+            sandbox_updated_at: new Date().toISOString(),
+          },
+          { preview_url: retry.previewUrl },
+        );
         if (previewUrlErr) {
           console.warn("[sandbox-preview] failed to persist preview_url:", previewUrlErr.message);
         }
@@ -258,6 +323,20 @@ async function handlePOSTUnlocked(req: Request, params: any) {
         });
       }
 
+      // AWAIT the terminal phase, don't fire-and-forget it. Two reasons:
+      // writes are now serialized, so this one queues behind every progress
+      // write of a 60-90s boot and the handler would return long before it
+      // ran (and on a runtime that reclaims the invocation after the response,
+      // never); and this return previously wrote no phase at all, so a client
+      // polling the project row kept reading "creating"/"installing" and sat
+      // on the spinner while the response said "error".
+      await writeMeta({
+        sandbox_phase: "error",
+        sandbox_phase_detail:
+          retry.error ?? "The preview sandbox had expired and could not be restarted.",
+        sandbox_provider: getSandboxProviderId(),
+        sandbox_updated_at: new Date().toISOString(),
+      });
       return Response.json({
         enabled: true,
         ok: false,
@@ -268,26 +347,43 @@ async function handlePOSTUnlocked(req: Request, params: any) {
       });
     }
 
-    persistPhase("error", result.error);
+    await writeMeta({
+      sandbox_phase: "error",
+      sandbox_phase_detail: result.error ?? null,
+      sandbox_provider: getSandboxProviderId(),
+      sandbox_updated_at: new Date().toISOString(),
+    });
     return Response.json({ enabled: true, ok: false, error: result.error, logs: result.logs });
   }
 
+  // The container from the previous boot is gone, but its URL is the same
+  // (hostnames are stable per project) and the probe cache still holds that
+  // container's verdict — including, after a crash, three recorded failures.
+  // Carrying that over would make the fresh sandbox look dead on arrival.
+  forgetPreviewProbe(result.previewUrl);
+
+  // `ok` means provisioned; `ready` means the dev server actually answered.
+  // Conflating them is what framed a URL Traefik could only 502 — so when the
+  // server hasn't come up yet, persist everything needed to keep watching but
+  // DO NOT claim ready. The container is alive and its supervisor is still
+  // starting the dev server; the phaseOnly poll below promotes it to ready the
+  // moment the tunnel answers a probe.
+  const bootReady = result.ready !== false;
+
   // Persist the live preview URL + sandbox id for reconnects (Lovable warm-session parity).
-  const { error: previewUrlErr } = await (supabase as any)
-    .from("projects")
-    .update({
-      preview_url: result.previewUrl,
-      metadata: {
-        ...prevMeta,
-        sandbox_id: result.sandboxId,
-        sandbox_port: port,
-        sandbox_provider: getSandboxProviderId(),
-        sandbox_phase: "ready",
-        sandbox_phase_detail: null,
-        sandbox_updated_at: new Date().toISOString(),
-      },
-    })
-    .eq("id", projectId);
+  const { error: previewUrlErr } = await writeMeta(
+    {
+      sandbox_id: result.sandboxId,
+      sandbox_port: port,
+      sandbox_provider: getSandboxProviderId(),
+      sandbox_phase: bootReady ? "ready" : "starting",
+      sandbox_phase_detail: bootReady
+        ? null
+        : "Starting your app — the first run takes a moment.",
+      sandbox_updated_at: new Date().toISOString(),
+    },
+    { preview_url: result.previewUrl },
+  );
   if (previewUrlErr) {
     console.warn("[sandbox-preview] failed to persist preview_url:", previewUrlErr.message);
   }
@@ -295,11 +391,17 @@ async function handlePOSTUnlocked(req: Request, params: any) {
   return Response.json({
     enabled: true,
     ok: true,
-    previewUrl: result.previewUrl,
+    ready: bootReady,
+    // Withhold the URL until the app answers. Handing it over early is the
+    // whole "Bad Gateway in the preview pane" failure.
+    previewUrl: bootReady ? result.previewUrl : null,
     sandboxId: result.sandboxId,
     logs: result.logs,
     provider: getSandboxProviderId(),
-    phase: "ready",
+    phase: bootReady ? "ready" : "starting",
+    phaseDetail: bootReady
+      ? null
+      : "Starting your app — the first run takes a moment.",
     sandboxName: sandboxNameForProject(projectId),
   });
 }
@@ -342,14 +444,59 @@ async function handleGET(req: Request, params: any) {
     const phase = typeof meta.sandbox_phase === "string" ? meta.sandbox_phase : null;
     const phaseDetail =
       typeof meta.sandbox_phase_detail === "string" ? meta.sandbox_phase_detail : null;
-    const claimsReady = phase === "ready" && Boolean(project?.preview_url);
+    // A thumbnail .jpg in preview_url must NOT count as a live tunnel — see
+    // isSandboxTunnelUrl. Treat it as "no stored preview" so the client falls
+    // through to the reconnect path, which re-persists the real tunnel URL.
+    const storedTunnelUrl = isSandboxTunnelUrl(project?.preview_url)
+      ? (project!.preview_url as string)
+      : null;
+    const claimsReady = phase === "ready" && Boolean(storedTunnelUrl);
+
+    // PROMOTION: a boot that returned before its dev server answered is parked
+    // at phase "starting" with its URL already persisted. This poll is what
+    // finishes the boot — the moment a probe actually succeeds against that
+    // URL, the preview is genuinely serving and can be handed to the editor.
+    //
+    // Only "verified" counts. peekPreviewReachable deliberately fails OPEN, so
+    // its `true` also means "never checked" — promoting on that would put us
+    // right back to framing a URL nothing has confirmed. getPreviewProbeState
+    // distinguishes the two, and the first poll's background probe means the
+    // real verdict lands within a poll interval or two.
+    if (!claimsReady && storedTunnelUrl && phase !== "error") {
+      peekPreviewReachable(storedTunnelUrl); // warms the cache in the background
+      if (getPreviewProbeState(storedTunnelUrl).state === "verified") {
+        void (supabase as any)
+          .from("projects")
+          .update({
+            metadata: {
+              ...meta,
+              sandbox_phase: "ready",
+              sandbox_phase_detail: null,
+              sandbox_updated_at: new Date().toISOString(),
+            },
+          })
+          .eq("id", projectId)
+          .then(() => {})
+          .catch(() => {});
+        return Response.json({
+          enabled: true,
+          ok: true,
+          previewUrl: storedTunnelUrl,
+          sandboxId,
+          previewProbe: "verified",
+          phase: "ready",
+          phaseDetail: null,
+          provider: getSandboxProviderId(),
+        });
+      }
+    }
 
     // The stored phase only tells us what we BELIEVED last time. Modal tunnels
     // expire (~24h), so verify the tunnel is actually serving before reporting
     // ok — otherwise the client renders a broken iframe with no error and the
     // dead-sandbox self-heal never triggers. Cached + de-duplicated, so this
     // costs at most one short request per URL per 10s across all pollers.
-    const previewUrlForProbe = project?.preview_url as string | undefined;
+    const previewUrlForProbe = storedTunnelUrl ?? undefined;
     // NON-BLOCKING: reads the cached verdict and refreshes in the background.
     // Awaiting the probe here made every poll wait out the network timeout when
     // the tunnel was down, which stacked requests and froze the editor page.
@@ -372,7 +519,7 @@ async function handleGET(req: Request, params: any) {
     return Response.json({
       enabled: true,
       ok: alive,
-      previewUrl: alive ? project?.preview_url ?? null : null,
+      previewUrl: alive ? storedTunnelUrl : null,
       sandboxId,
       // Surface the stale-tunnel case distinctly so the UI can offer a restart
       // instead of spinning on a "ready" that will never paint.
@@ -439,6 +586,14 @@ async function handleGET(req: Request, params: any) {
   const port = storedPort ?? detectSandboxStart([]).port;
   const result = await provider.reconnect(sandboxId, port);
   if (result.ok && result.previewUrl) {
+    // A warm container is not the same as a serving app — the sandbox's pid 1
+    // outlives a dead dev server, so reconnect can succeed against a container
+    // that answers only 502. This is the editor's first call on every open, so
+    // handing the URL over on container liveness alone put Bad Gateway in the
+    // pane at exactly the moment the user arrived. Park it at "starting"
+    // instead and let the phase poll promote it once a probe confirms.
+    const warmReady = result.ready !== false;
+
     // Persist the EFFECTIVE sandbox id too — updating only preview_url leaves
     // metadata.sandbox_id stale, and phaseOnly polls hand that stale id back to
     // the client, whose later syncs then hit a dead sandbox forever.
@@ -449,10 +604,33 @@ async function handleGET(req: Request, params: any) {
         metadata: {
           ...meta,
           sandbox_id: result.sandboxId ?? sandboxId,
+          ...(warmReady
+            ? {}
+            : {
+                sandbox_phase: "starting",
+                sandbox_phase_detail: "Waking your app…",
+              }),
           sandbox_updated_at: new Date().toISOString(),
         },
       })
       .eq("id", projectId);
+
+    if (!warmReady) {
+      return Response.json({
+        enabled: true,
+        ok: false,
+        // `waking` is what separates "this sandbox needs another moment" from
+        // "there is no sandbox". Without it the client reads ok:false as the
+        // latter and cold-boots — tearing down a perfectly good container
+        // because its dev server happened to be mid-restart.
+        waking: true,
+        sandboxId: result.sandboxId ?? sandboxId,
+        reconnected: true,
+        provider: getSandboxProviderId(),
+        phase: "starting",
+        phaseDetail: "Waking your app…",
+      });
+    }
 
     return Response.json({
       enabled: true,

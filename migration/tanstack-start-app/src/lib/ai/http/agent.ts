@@ -1,37 +1,40 @@
-import { createClientFromRequest } from "@/lib/supabase/request-client";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { runAgent, type AgentStep } from "@/lib/ai/agent";
-import { mcpInitialize, mcpListTools, mcpCallTool } from "@/lib/ai/mcp-client";
-import { detectLanguage } from "@/lib/ai/code-parser";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
-import { ensureDevCredits } from "@/lib/dev-credits";
+import { createClientFromRequest } from "../../supabase/request-client.ts";
+import { getServerUser } from "../../supabase/server-user.ts";
+import { runAgent, type AgentStep } from "../agent.ts";
+import { mcpInitialize, mcpListTools, mcpCallTool } from "../mcp-client.ts";
+import { detectLanguage } from "../code-parser.ts";
+import { rateLimitAsync, RATE_LIMITS } from "../../rate-limit.ts";
+import { canWriteProjectFiles, getProjectAccess } from "../../project/access.ts";
+import { ensureDevCredits } from "../../dev-credits.ts";
 import {
   cancelCreditReservation,
   claimDailyCredits,
   reserveCredits,
   settleCreditReservation,
 } from "@/lib/credits";
-import { computeCreditCost, maxCreditCostForMode, AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
-import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
-import { autoWireAi } from "@/lib/ai/auto-wire-ai";
+import { computeCreditCost, maxCreditCostForMode, AGENT_MIN_CREDITS } from "../credit-cost.ts";
+import { ensureCommonGeneratedSupportFiles } from "../generated-support-files.ts";
+import { ensureWebsiteChrome } from "../website-chrome.ts";
+import { alignGeneratedPackageJson } from "../../preview/align-package-json.ts";
+import { autoWireAi } from "../auto-wire-ai.ts";
 import {
   parseCloudToolPermissions,
   buildCloudPermissionsPromptBlock,
   shouldBlockCloudAction,
 } from "@/lib/cloud/permissions";
-import { getDefaultAiModel } from "@/lib/ai/model-defaults";
-import { attachSkillsToPrompt } from "@/lib/ai/attach-skills";
+import { getDefaultAiModel } from "../model-defaults.ts";
+import { attachSkillsToPrompt } from "../attach-skills.ts";
 // Same ranked-context builder the build path uses — see the contextSeed comment
 // at the runAgent call site.
-import { buildProjectContext } from "@/lib/ai/system-prompts";
+import { buildProjectContext } from "../system-prompts.ts";
 import {
   buildEditorIntelligencePromptBlock,
   recordEditorIntelligenceBuild,
 } from "@/lib/ai/editor-lenses/persistence";
-import { isSimpleEditorRequest, maxOutputTokensForRequest, resolveBudgetAwareModel } from "@/lib/ai/cost-controls";
-import { resolveSmartModel } from "@/lib/ai/editor-intelligence";
-import { persistChatTurnMessages } from "@/lib/ai/persist-chat-turn";
+import { isSimpleEditorRequest, maxOutputTokensForRequest, resolveBudgetAwareModel } from "../cost-controls.ts";
+import { resolveSmartModel } from "../editor-intelligence.ts";
+import { persistChatTurnMessages } from "../persist-chat-turn.ts";
+import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 
 
 export async function handleAiAgent(req: Request) {
@@ -358,6 +361,118 @@ export async function handleAiAgent(req: Request) {
     console.warn("[agent] db_query tool setup failed:", err instanceof Error ? err.message : err);
   }
 
+  // ── db_propose_write: the agent may ASK to change live data, never do it ───
+  //
+  // Lovable's agent assigns a staff member to a department and enables a menu
+  // for a user — real row changes on a running app. This is how we do that
+  // without handing a language model an unattended UPDATE against a council's
+  // production database.
+  //
+  // The tool ends at a proposal. It validates the statement, computes the EXACT
+  // number of rows it would affect (sql-write-preview refuses anything it cannot
+  // count precisely), records it as `proposed`, and returns the id. Execution
+  // lives behind an authenticated approval endpoint, so the model has no path to
+  // it at all — not a discouraged path, not a guarded one, none.
+  //
+  // NOTE on permissions: `database: "allow"` does NOT auto-run writes. That
+  // setting was created when this permission meant read-only queries, and
+  // silently re-reading an old consent as "may mutate production without
+  // asking" is not something the user agreed to. `never` blocks proposing;
+  // every other value still requires a human on the approval endpoint.
+  try {
+    const cloudRef = (projectRow as { cloud_project_ref?: string | null } | null)?.cloud_project_ref;
+    const dbPermission = (cloudPermissions as { database?: string } | null)?.database ?? "ask";
+    if (projectRow?.cloud_enabled && cloudRef && dbPermission !== "never") {
+      const { planSqlWrite } = await import("@/lib/cloud/sql-write-preview");
+      const { queryManagedSql } = await import("@/lib/cloud/management");
+      extraTools.push({
+        name: "db_propose_write",
+        description:
+          "Propose a single INSERT/UPDATE/DELETE against this project's live Cloud Postgres. This does NOT run it — it returns the exact number of rows the statement would affect so the user can approve or decline. Use for operational fixes to real data (assign a role, correct a field, enable a flag for a user). Rules: one statement; UPDATE and DELETE must have a WHERE clause; no subqueries; no schema changes. Read first with db_query, then propose using literal values.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sql: { type: "string", description: "A single INSERT, UPDATE or DELETE statement" },
+            reason: { type: "string", description: "One sentence: why this change, in the user's terms" },
+          },
+          required: ["sql", "reason"],
+        },
+        execute: async (args: Record<string, unknown>) => {
+          const sql = String(args.sql ?? "");
+          const reason = String(args.reason ?? "").slice(0, 500);
+
+          const plan = planSqlWrite(sql);
+          if (!plan.ok) return JSON.stringify({ error: plan.reason });
+
+          // Count using the read-only query the planner derived. If this fails,
+          // the whole proposal fails: an approval prompt with no number on it is
+          // the exact thing this design exists to prevent.
+          let previewedRows: number;
+          if (plan.staticCount != null) {
+            previewedRows = plan.staticCount;
+          } else {
+            const counted = await queryManagedSql<{ affected: string | number }>(cloudRef, plan.countQuery!);
+            if (!counted.ok) {
+              return JSON.stringify({
+                error: `Could not determine how many rows this would affect (${counted.error ?? "count failed"}). Not proposing a change nobody can size.`,
+              });
+            }
+            const raw = counted.rows[0]?.affected;
+            const n = typeof raw === "string" ? Number(raw) : raw;
+            if (!Number.isFinite(n)) {
+              return JSON.stringify({ error: "The row count came back unreadable. Not proposing a change nobody can size." });
+            }
+            previewedRows = Number(n);
+          }
+
+          const { data: row, error: auditError } = await (supabase as unknown as {
+            from: (t: string) => {
+              insert: (v: Record<string, unknown>) => {
+                select: (c: string) => { single: () => Promise<{ data: { id: string } | null; error: { message: string } | null }> };
+              };
+            };
+          })
+            .from("project_data_writes")
+            .insert({
+              project_id: projectId,
+              statement: plan.statement,
+              kind: plan.kind,
+              target_table: plan.table,
+              previewed_rows: previewedRows,
+              status: "proposed",
+            })
+            .select("id")
+            .single();
+
+          // No audit row, no proposal. A mutation of a customer's production
+          // data that nothing recorded is not something this product should be
+          // able to produce, so this failure is fatal rather than logged.
+          if (auditError || !row) {
+            return JSON.stringify({
+              error: `Could not record the proposal for audit (${auditError?.message ?? "no row returned"}). Nothing was changed.`,
+            });
+          }
+
+          return JSON.stringify({
+            proposed: true,
+            proposalId: row.id,
+            kind: plan.kind,
+            table: plan.table,
+            statement: plan.statement,
+            rowsAffected: previewedRows,
+            reason,
+            note:
+              previewedRows === 0
+                ? "This currently matches NO rows — say so plainly rather than presenting it as a fix, and re-check the predicate."
+                : "Tell the user what will change and how many rows, then wait. You cannot run this yourself.",
+          });
+        },
+      });
+    }
+  } catch (err) {
+    console.warn("[agent] db_propose_write tool setup failed:", err instanceof Error ? err.message : err);
+  }
+
   const reservationAmount = maxCreditCostForMode("agent");
   const creditReservation = await reserveCredits(supabase, {
     userId: user.id,
@@ -388,6 +503,50 @@ export async function handleAiAgent(req: Request) {
           const path = String(file.path ?? "").replace(/\\/g, "/").replace(/^\/+/, "");
           if (!path) continue;
           projectFileMap.set(path, { path, content: String(file.content ?? ""), language: detectLanguage(path) });
+        }
+
+        // ── Pre-agent snapshot ───────────────────────────────────────────────
+        //
+        // The chat build route has taken one of these before every turn for a
+        // long time; this route never did, and this route is where most edits
+        // to a real project actually go — the client switches to it as soon as
+        // the project has any user-authored files. So the default editing path
+        // was the one with no way back.
+        //
+        // It matters more here than in chat, because the agent is the only
+        // caller that issues real DELETEs against project_files. An agent that
+        // removed or rewrote the wrong file left nothing to restore, and the
+        // Undo button made it worse rather than better: with no snapshot from
+        // this turn, Undo fetched the most recent snapshot in the project — one
+        // from some earlier chat build — and silently threw away every agent
+        // turn since.
+        //
+        // Best-effort by design: a snapshot failure must not cost the user
+        // their turn. But it is awaited, because a snapshot written after the
+        // agent has already started deleting files is not a snapshot.
+        let preAgentSnapshotId: string | null = null;
+        {
+          const current = Array.from(projectFileMap.values());
+          if (current.length > 0) {
+            try {
+              const { data: preSnap } = await (supabase as any)
+                .from("project_snapshots")
+                .insert({
+                  project_id: projectId,
+                  user_id: user.id,
+                  label: `Auto-save before: ${String(rawTask ?? task).slice(0, 60)}`,
+                  is_baseline: true,
+                  files: current,
+                  patches: null,
+                  parent_id: null,
+                })
+                .select("id")
+                .single();
+              preAgentSnapshotId = (preSnap as { id: string } | null)?.id ?? null;
+            } catch {
+              preAgentSnapshotId = null; // never fail the turn over a snapshot
+            }
+          }
         }
 
         const result = await runAgent({
@@ -444,6 +603,9 @@ export async function handleAiAgent(req: Request) {
               { project_id: projectId, path: cleanPath, content, language: detectLanguage(cleanPath) },
               { onConflict: "project_id,path" }
             );
+            // And into the RUNNING preview container — the DB alone leaves the
+            // sandbox serving the old file (observed stale-preview bug).
+            pushFileToRunningSandbox(supabase, projectId, cleanPath, content);
           },
           // Real deletion. The route persists via upsert only, so before this
           // nothing ever issued a DELETE against project_files: delete_file
@@ -453,12 +615,23 @@ export async function handleAiAgent(req: Request) {
           onFileDelete: async (path: string) => {
             producedBillableWork = true;
             const cleanPath = path.replace(/\\/g, "/").replace(/^\/+/, "");
-            projectFileMap.delete(cleanPath);
-            await (supabase as any)
+            const { error: deleteError } = await (supabase as any)
               .from("project_files")
               .delete()
               .eq("project_id", projectId)
               .eq("path", cleanPath);
+
+            // Report the truth. An unchecked delete meant a failed one still
+            // announced "Deleted: <path>" to the user and dropped the file from
+            // the agent's own working map — so the agent proceeded as though it
+            // were gone, while the project and the preview still had it. That
+            // divergence is worse than the failure: the next turn is reasoning
+            // about a file set that does not exist.
+            if (deleteError) {
+              send({ fileDeleteFailed: { path: cleanPath, error: deleteError.message } });
+              return;
+            }
+            projectFileMap.delete(cleanPath);
             send({ fileDeleted: { path: cleanPath } });
           },
         });
@@ -479,10 +652,56 @@ export async function handleAiAgent(req: Request) {
           for (const file of supportFiles) {
             projectFileMap.set(file.path, { path: file.path, content: file.content, language: file.language });
             send({ fileUpdated: { path: file.path, content: file.content.slice(0, 100) + "..." } });
+            pushFileToRunningSandbox(supabase, projectId, file.path, file.content);
           }
         }
+        // ── Post-generation guarantees ────────────────────────────────────
+        // Parity with the chat build path. The agent is the PRIMARY build path
+        // for new projects (see the comment above the intelligence block), so a
+        // guarantee wired only into chat.ts silently does not apply to most
+        // builds — which is exactly what a live test showed: a landing page
+        // arrived with a UI kit, an index route, and no header or footer at all.
+        // See lib/ai/website-chrome.ts and lib/preview/align-package-json.ts.
+        const guaranteed: Array<{ path: string; content: string; language?: string }> = [];
+        try {
+          const current = Array.from(projectFileMap.values()).map((file) => ({
+            path: file.path,
+            content: file.content ?? "",
+            language: (file as { language?: string }).language ?? detectLanguage(file.path),
+          }));
+          const withChrome = ensureWebsiteChrome(current, [], {
+            brand: (projectRow as { name?: string } | null)?.name ?? undefined,
+          });
+          for (const file of withChrome) {
+            if (file.path === "package.json") {
+              const aligned = alignGeneratedPackageJson(file.content);
+              if (aligned.changed.length > 0) file.content = aligned.content;
+            }
+            const prev = projectFileMap.get(file.path);
+            if (!prev || (prev.content ?? "") !== file.content) guaranteed.push(file);
+          }
+          if (guaranteed.length > 0) {
+            await (supabase as any).from("project_files").upsert(
+              guaranteed.map((file) => ({
+                project_id: projectId,
+                path: file.path,
+                content: file.content,
+                language: file.language ?? detectLanguage(file.path),
+              })),
+              { onConflict: "project_id,path" },
+            );
+            for (const file of guaranteed) {
+              projectFileMap.set(file.path, { path: file.path, content: file.content, language: file.language });
+              send({ fileUpdated: { path: file.path, content: file.content.slice(0, 100) + "..." } });
+              pushFileToRunningSandbox(supabase, projectId, file.path, file.content);
+            }
+          }
+        } catch {
+          // Never fail a build over a guarantee pass.
+        }
+
         const filesChanged = Array.from(
-          new Set([...(Array.isArray(result.filesChanged) ? result.filesChanged : []), ...supportFiles.map((file) => file.path)]),
+          new Set([...(Array.isArray(result.filesChanged) ? result.filesChanged : []), ...supportFiles.map((file) => file.path), ...guaranteed.map((file) => file.path)]),
         );
 
         // Save agent task as messages — including a compact persisted work
@@ -518,6 +737,12 @@ export async function handleAiAgent(req: Request) {
                 files_changed: filesChanged,
                 agent_trace: traceSteps,
                 ...(workSeconds ? { work_seconds: workSeconds } : {}),
+                // Carries the per-message "Revert to this version" affordance,
+                // which agent turns simply did not have. Without it the only
+                // recovery was the global Undo, which restored whatever the
+                // last CHAT build had saved — usually far further back than the
+                // user intended, and silently.
+                ...(preAgentSnapshotId ? { snapshot_id: preAgentSnapshotId } : {}),
               },
             },
           ],

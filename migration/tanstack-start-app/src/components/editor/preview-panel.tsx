@@ -37,7 +37,11 @@ import {
   WC_UNAVAILABLE_KEY,
   type PreviewEngine,
 } from "@/lib/preview/resolve-preview-engine";
-import { sandboxUrlWithPath } from "@/lib/preview/sandbox-url";
+import {
+  isSamePreviewOrigin,
+  normalizeSandboxPathname,
+  sandboxUrlWithPath,
+} from "@/lib/preview/sandbox-url";
 import { getPreviewBarLabel } from "@/lib/preview/preview-url";
 import { useSandboxPreview } from "@/lib/preview/use-sandbox-preview";
 import { usePreviewErrorGuard } from "@/hooks/use-preview-error-guard";
@@ -51,6 +55,10 @@ import { LovablePreviewInteractionToolbar } from "./lovable/preview-interaction-
 import { LovablePreviewStatusPill } from "./lovable/preview-status-pill";
 import { LovableVersionPreviewBanner } from "./lovable/version-preview-banner";
 import { ratePreviewMetric, type PreviewPerfSnapshot } from "@/lib/preview/preview-perf-bridge";
+import {
+  describePreviewError,
+  shouldShowRawPreviewDiagnostics,
+} from "@/lib/preview/preview-error-copy";
 import { PreviewCommentPins } from "./preview-comment-pins";
 import { createClient } from "@/lib/supabase/client";
 
@@ -622,6 +630,7 @@ export function PreviewPanel({
     sandboxId,
     loading: sandboxLoading,
     error: sandboxError,
+    logs: sandboxLogs,
     phase: sandboxPhase,
     phaseDetail: sandboxPhaseDetail,
     statusResolved: sandboxStatusResolved,
@@ -629,14 +638,34 @@ export function PreviewPanel({
   } = useSandboxPreview(projectId ?? "");
   const sandboxIdLiveRef = useRef(sandboxId);
   sandboxIdLiveRef.current = sandboxId;
+  const previewErrorCopy = useMemo(
+    () => describePreviewError(sandboxError),
+    [sandboxError],
+  );
+  const showRawDiagnostics = shouldShowRawPreviewDiagnostics(
+    process.env.NODE_ENV === "development",
+  );
   /** Hard iframe path — soft-nav updates previewPath only (VEB postMessage). */
   const [sandboxIframePath, setSandboxIframePath] = useState("/");
   const [sandboxSyncInstalling, setSandboxSyncInstalling] = useState(false);
+  // Bridge liveness — used to remount when the iframe escapes to an OAuth host
+  // (Supabase/Google) where our injected bridge no longer runs.
+  const sandboxBridgeAliveRef = useRef(false);
+  const sandboxPingTokenRef = useRef(0);
+  const sandboxPongTokenRef = useRef(0);
+  const sandboxEscapeRemountAtRef = useRef(0);
+  const sandboxUrlLiveRef = useRef(sandboxUrl);
+  sandboxUrlLiveRef.current = sandboxUrl;
 
   // Reset hard path when a new Modal tunnel comes up.
   useEffect(() => {
     if (sandboxUrl) setSandboxIframePath("/");
   }, [sandboxUrl, sandboxId]);
+
+  // Fresh iframe mount → require a new bridge handshake before escape detection.
+  useEffect(() => {
+    sandboxBridgeAliveRef.current = false;
+  }, [sandboxUrl, refreshKey, sandboxReloadNonce]);
   const previewBarLabel = useMemo(
     () =>
       getPreviewBarLabel({
@@ -1386,21 +1415,49 @@ export function PreviewPanel({
       // URL sync — the iframe boot script reports its current path on initial
       // mount and on every history change so the address bar stays in sync
       // with react-router navigations inside the running app.
+      if (d.type === "lifemark-preview-pong") {
+        const token = d.token;
+        if (typeof token === "number") {
+          sandboxPongTokenRef.current = token;
+          sandboxBridgeAliveRef.current = true;
+        }
+      }
       if (d.type === "lifemark-preview-location") {
         const pathname = d.pathname;
+        const origin = typeof d.origin === "string" ? d.origin : null;
+        const href = typeof d.href === "string" ? d.href : null;
+        const expectedBase = sandboxUrlLiveRef.current;
+        // Bridge still running but document origin left the sandbox tunnel
+        // (rare — usually the bridge is gone and ping/pong catches it).
+        if (
+          expectedBase &&
+          ((origin && !isSamePreviewOrigin(expectedBase, origin)) ||
+            (href && !isSamePreviewOrigin(expectedBase, href)))
+        ) {
+          const now = Date.now();
+          if (now - sandboxEscapeRemountAtRef.current > 2500) {
+            sandboxEscapeRemountAtRef.current = now;
+            sandboxBridgeAliveRef.current = false;
+            setSandboxIframePath("/");
+            setRefreshKey((k) => k + 1);
+          }
+          return;
+        }
         if (typeof pathname === "string" && pathname.length > 0) {
-          setPreviewPath(pathname);
+          const normalized = normalizeSandboxPathname(pathname);
+          sandboxBridgeAliveRef.current = true;
+          setPreviewPath(normalized);
           // Don't clobber whatever the user is typing into the address bar.
-          if (!urlEditing) setUrlInput(pathname);
+          if (!urlEditing) setUrlInput(normalized);
           // Record in the back/forward history — unless this location change
           // was caused by a back/forward click itself.
           if (navSuppressRef.current) {
             navSuppressRef.current = false;
           } else {
             setRouteNav((prev) =>
-              prev.stack[prev.idx] === pathname
+              prev.stack[prev.idx] === normalized
                 ? prev
-                : { stack: [...prev.stack.slice(0, prev.idx + 1), pathname], idx: prev.idx + 1 },
+                : { stack: [...prev.stack.slice(0, prev.idx + 1), normalized], idx: prev.idx + 1 },
             );
           }
         }
@@ -1609,10 +1666,19 @@ export function PreviewPanel({
   useEffect(() => {
     if (previewEngine !== "sandbox" || !sandboxId || previewFiles.length === 0) return;
     const payload = previewFiles.map((f) => ({ path: f.path, content: f.content ?? "" }));
+    // Clearing the 800ms debounce is not enough. Once a sync is in flight this
+    // effect can be torn down and re-run (every edit changes previewFiles), and
+    // the old run keeps going: it can fire the destructive "Preview out of
+    // date" toast for a sync the newer run has already succeeded at, and its
+    // trailing timers can flip the machine to "ready" while that newer sync is
+    // still loading. Supersede the whole run, timers included.
+    let superseded = false;
+    const trailing: number[] = [];
     const timer = window.setTimeout(() => {
       void (async () => {
         transitionPreviewMachine("loading", "sandbox file sync");
         const result = await syncSandboxFiles(payload);
+        if (superseded) return;
         if (!result.ok) {
           setConsoleLines((prev) => [
             ...prev.slice(-99),
@@ -1639,20 +1705,31 @@ export function PreviewPanel({
         setSandboxSyncInstalling(!!result.installing);
         if (result.installing) {
           // Dep install runs in background; show status briefly then ready for HMR.
-          window.setTimeout(() => setSandboxSyncInstalling(false), 12_000);
+          trailing.push(
+            window.setTimeout(() => {
+              if (!superseded) setSandboxSyncInstalling(false);
+            }, 12_000),
+          );
         }
         // Brief grace for Vite HMR, then mark ready so UrlBarPill stops spinning.
-        window.setTimeout(() => {
-          transitionPreviewMachine("ready", "sandbox sync applied");
-          window.dispatchEvent(
-            new CustomEvent("lifemark-preview-settled", {
-              detail: { ok: true, installing: !!result.installing },
-            }),
-          );
-        }, result.installing ? 2500 : 600);
+        trailing.push(
+          window.setTimeout(() => {
+            if (superseded) return;
+            transitionPreviewMachine("ready", "sandbox sync applied");
+            window.dispatchEvent(
+              new CustomEvent("lifemark-preview-settled", {
+                detail: { ok: true, installing: !!result.installing },
+              }),
+            );
+          }, result.installing ? 2500 : 600),
+        );
       })();
     }, 800);
-    return () => window.clearTimeout(timer);
+    return () => {
+      superseded = true;
+      window.clearTimeout(timer);
+      for (const t of trailing) window.clearTimeout(t);
+    };
   }, [previewEngine, sandboxId, previewFiles, syncSandboxFiles, transitionPreviewMachine]);
 
   // Pull Modal Vite/Next logs into the Console tab + agent telemetry (Lovable parity).
@@ -2573,21 +2650,55 @@ export function PreviewPanel({
               <p className="text-xs text-muted-foreground/40">Loading preview…</p>
             </div>
           </div>
-        ) : previewEngine === "sandbox" && !sandboxUrl ? (
+        ) : previewEngine === "sandbox" &&
+          !sandboxUrl &&
+          // `previewEngine` flips to "sandbox" the moment the project has ANY
+          // files — it is a statement about which engine we would use, NOT
+          // about whether that engine is reachable. So when the backend is
+          // down or unconfigured (`enabled: false`, and no error because
+          // nothing was ever attempted) this branch used to swallow the case
+          // and paint "Starting live preview" with a spinner forever: the
+          // `!sandboxStatusResolved` and "Live preview unavailable" panes
+          // below — the only ones with a Retry button — were unreachable.
+          // Fall through once the status check has come back negative, unless
+          // there is a real error to show here.
+          (sandboxEnabled || !sandboxStatusResolved || Boolean(sandboxError)) ? (
           /* Modal-only: wait / error / retry — never fake with srcdoc/WC/esbuild */
           <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
             <div className="text-center max-w-sm px-4">
               {!sandboxError && (
                 <Loader2 className="w-6 h-6 animate-spin text-violet-400/70 mx-auto mb-3" />
               )}
+              {/* The generic "Something went wrong while starting your app"
+                  that used to live here threw away everything the docker
+                  provider deliberately collects — the dev-log tail, the
+                  process table, OOMKilled — and left nobody, user or us, with
+                  any evidence. The first version of this fix over-corrected
+                  and painted the raw provider string, which names the
+                  container runtime, the missing environment variables and the
+                  exhausted host port range. `describePreviewError` is the
+                  middle: a sentence the user can act on, including whether
+                  retrying is even worth it, with the raw text and boot log
+                  kept for developers. */}
               <p className="text-sm font-medium text-foreground/80 mb-1">
-                {sandboxError ? "Preview could not start" : "Starting live preview"}
+                {sandboxError ? previewErrorCopy.title : "Starting live preview"}
               </p>
               <p className="text-xs text-muted-foreground/60 leading-relaxed">
                 {sandboxError
-                  ? "Something went wrong while starting your app. Retry below — this usually resolves itself."
-                  : (modalPhaseLabel || "Spinning up your app…")}
+                  ? previewErrorCopy.description
+                  : modalPhaseLabel || "Spinning up your app…"}
               </p>
+              {sandboxError && showRawDiagnostics && (
+                <details className="mt-3 text-left">
+                  <summary className="text-[11px] text-muted-foreground/70 cursor-pointer hover:text-foreground/80 select-none">
+                    Developer detail
+                  </summary>
+                  <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-black/40 p-2 text-[10px] leading-relaxed text-muted-foreground/80 whitespace-pre-wrap break-all">
+                    {sandboxError}
+                    {sandboxLogs ? `\n\n${sandboxLogs.slice(-4000)}` : ""}
+                  </pre>
+                </details>
+              )}
               {sandboxError && (
                 <div className="mt-4 flex items-center justify-center gap-2">
                   <button
@@ -2704,6 +2815,25 @@ export function PreviewPanel({
                 onLoad={() => {
                   transitionPreviewMachine("ready", "sandbox iframe loaded");
                   window.dispatchEvent(new CustomEvent("lifemark-preview-settled", { detail: { ok: true } }));
+                  // Detect OAuth / external full-page navigations: after the
+                  // bridge has been alive once, a subsequent load with no pong
+                  // means the iframe left our app (e.g. supabase.co).
+                  const expectAlive = sandboxBridgeAliveRef.current;
+                  const token = ++sandboxPingTokenRef.current;
+                  sandboxIframeRef.current?.contentWindow?.postMessage(
+                    { type: "lifemark-preview-ping", token },
+                    "*",
+                  );
+                  window.setTimeout(() => {
+                    if (sandboxPongTokenRef.current === token) return;
+                    if (!expectAlive) return;
+                    const now = Date.now();
+                    if (now - sandboxEscapeRemountAtRef.current < 2500) return;
+                    sandboxEscapeRemountAtRef.current = now;
+                    sandboxBridgeAliveRef.current = false;
+                    setSandboxIframePath("/");
+                    setRefreshKey((k) => k + 1);
+                  }, 900);
                 }}
                 onError={() => {
                   // Dead tunnel (sandbox expired between renders) — reconnect to

@@ -13,9 +13,9 @@
  * project_ai_initiatives checkpoints and project_ai_initiative_events. This
  * module stays DB-agnostic and yields events so it is unit-testable.
  */
-import { generateAI } from "@/lib/ai/generate";
-import type { AIMessage } from "@/lib/ai/provider";
-import { getRole, resolveTier, TEAM_ROLE_IDS } from "./roles";
+import { generateAI } from "../generate.ts";
+import type { AIMessage } from "../provider.ts";
+import { getRole, resolveTier, TEAM_ROLE_IDS } from "./roles.ts";
 import type {
   AgentRoleId,
   AutonomyGates,
@@ -25,7 +25,7 @@ import type {
   InitiativeCheckpoint,
   EditorIntelligenceEvent,
   EditorTask,
-} from "./types";
+} from "./types.ts";
 
 const DEBATE_MAX_ROUNDS = 2;
 const MAX_PARALLEL_TASKS = 3;

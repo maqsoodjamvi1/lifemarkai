@@ -54,41 +54,114 @@ export const Route = createFileRoute("/api/deploy/rollback")({
           .select("path, content, language")
           .eq("project_id", projectId);
 
+        // ── The most destructive few lines in this route ──────────────────
+        //
+        // Below, a delete loop removes every current file the snapshot does
+        // not contain. None of the three write phases used to check its
+        // result, and line 91 returned `{ ok: true }` regardless — so if the
+        // upserts failed (RLS, a constraint, a quota) while the deletes
+        // succeeded, the project ended up with FEWER files than it started
+        // with, or with none at all when the snapshot's paths differ from the
+        // current ones, and the panel toasted "Rolled back! Restored N files."
+        //
+        // `restoreSnapshot` in server-fns/snapshots.ts was hardened against
+        // exactly this. This is its unhardened twin; it just wasn't found at
+        // the same time.
+
+        // 1. Safety net FIRST, and refuse to continue without it. Everything
+        //    after this point can lose data, and this row is the only way
+        //    back. Proceeding when it fails is how a recovery message ends up
+        //    pointing at a version that does not exist.
         if (currentFiles && currentFiles.length > 0) {
-          await (supabase as any).from("project_snapshots").insert({
-            project_id: projectId,
-            user_id: user.id,
-            label: `Before rollback to deploy ${deploymentId.slice(0, 8)}`,
-            is_baseline: true,
-            files: currentFiles,
-            patches: null,
-            parent_id: null,
-          });
+          const { error: safetyError } = await (supabase as any)
+            .from("project_snapshots")
+            .insert({
+              project_id: projectId,
+              user_id: user.id,
+              label: `Before rollback to deploy ${deploymentId.slice(0, 8)}`,
+              is_baseline: true,
+              files: currentFiles,
+              patches: null,
+              parent_id: null,
+            });
+          if (safetyError) {
+            logger.error(
+              "deploy.rollback.safety_snapshot_failed",
+              new Error(safetyError.message ?? String(safetyError)),
+              { projectId, deploymentId, userId: user.id },
+            );
+            return Response.json(
+              {
+                error:
+                  "Could not save a restore point for your current files, so the rollback was not started. Nothing has changed. Try again in a moment.",
+              },
+              { status: 500 },
+            );
+          }
         }
 
+        // 2. Write the snapshot's files. A single failure aborts BEFORE the
+        //    delete phase — a half-restored project that still has its own
+        //    files is recoverable; a half-restored project with the rest
+        //    deleted is not.
         for (const file of restoredFiles) {
-          await (supabase as any).from("project_files").upsert({
-            project_id: projectId,
-            path: file.path,
-            content: file.content,
-            language: file.language ?? "plaintext",
-          }, { onConflict: "project_id,path" });
+          const { error: upsertError } = await (supabase as any)
+            .from("project_files")
+            .upsert({
+              project_id: projectId,
+              path: file.path,
+              content: file.content,
+              language: file.language ?? "plaintext",
+            }, { onConflict: "project_id,path" });
+          if (upsertError) {
+            logger.error(
+              "deploy.rollback.restore_write_failed",
+              new Error(upsertError.message ?? String(upsertError)),
+              { projectId, deploymentId, path: file.path },
+            );
+            return Response.json(
+              {
+                error: `Rollback stopped part-way while writing ${file.path}. Nothing was deleted, and your files before the rollback are saved in version history as "Before rollback to deploy ${deploymentId.slice(0, 8)}".`,
+              },
+              { status: 500 },
+            );
+          }
         }
 
+        // 3. Only now remove what the snapshot does not have. A failure here
+        //    leaves extra files behind, which is untidy rather than
+        //    destructive — so report it without failing the rollback.
         const restoredPaths = new Set(restoredFiles.map((f) => f.path));
+        const notRemoved: string[] = [];
         if (currentFiles) {
           const toDelete = currentFiles.filter((f) => !restoredPaths.has(f.path));
           for (const f of toDelete) {
-            await (supabase as any).from("project_files")
+            const { error: deleteError } = await (supabase as any).from("project_files")
               .delete()
               .eq("project_id", projectId)
               .eq("path", f.path);
+            if (deleteError) notRemoved.push(f.path);
           }
+        }
+        if (notRemoved.length > 0) {
+          logger.warn("deploy.rollback.stale_files_remain", {
+            projectId,
+            deploymentId,
+            count: notRemoved.length,
+            paths: notRemoved.slice(0, 10),
+          });
         }
 
         logger.info("deploy.rollback", { projectId, deploymentId, fileCount: restoredFiles.length, userId: user.id });
 
-        return Response.json({ ok: true, fileCount: restoredFiles.length, deployUrl: deployment.url });
+        return Response.json({
+          ok: true,
+          fileCount: restoredFiles.length,
+          deployUrl: deployment.url,
+          // The panel can tell the user their project is back but not clean,
+          // rather than showing an unqualified success.
+          staleFilesRemaining: notRemoved.length || undefined,
+        });
       },
     },
   },

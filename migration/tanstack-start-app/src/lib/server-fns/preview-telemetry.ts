@@ -2,9 +2,9 @@
  * Native preview console/network telemetry buffer.
  * Plain helpers — not createServerFn (see project-files.ts).
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { assertChatAccess } from "@/lib/project/chat-access";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
+import { assertChatAccess } from "../project/chat-access.ts";
 import {
   appendPreviewConsole,
   appendPreviewNetwork,

@@ -10,7 +10,7 @@
  *
  * Server-only: writes via the service-role admin client.
  */
-import { createAdminClient } from "@/lib/supabase/server";
+import { createAdminClient } from "../supabase/server.ts";
 
 export interface AiEvalEntry {
   model: string;

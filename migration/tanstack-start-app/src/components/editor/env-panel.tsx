@@ -15,7 +15,8 @@ import { toast } from "@/hooks/use-toast";
 interface EnvPanelProps {
   projectId: string;
   files: Array<{ path: string; content: string }>;
-  onUpdateFile: (path: string, content: string) => void;
+  /** Must persist, and must reject if it doesn't — see `save()`. */
+  onUpdateFile: (path: string, content: string) => void | Promise<void>;
 }
 
 interface EnvVar {
@@ -239,11 +240,36 @@ export function EnvPanel({ projectId: _projectId, files, onUpdateFile }: EnvPane
     }));
   }
 
-  function save() {
+  const [saving, setSaving] = useState(false);
+
+  /**
+   * Clear the dirty badge and say "saved" only AFTER the write lands.
+   *
+   * Doing it before meant a rejected write still looked like a success, on the
+   * one panel where the values are API keys and secrets — the user pastes
+   * them, sees the confirmation, closes the panel, and finds out at the point
+   * their app can't reach its backend.
+   */
+  async function save() {
+    if (saving) return;
     const content = serializeEnvVars(vars);
-    onUpdateFile(env.file, content);
-    setDirty((prev) => ({ ...prev, [activeEnv]: false }));
-    toast({ title: `${env.label} vars saved` });
+    setSaving(true);
+    try {
+      await onUpdateFile(env.file, content);
+      setDirty((prev) => ({ ...prev, [activeEnv]: false }));
+      toast({ title: `${env.label} vars saved` });
+    } catch (err) {
+      toast({
+        title: `${env.label} vars were NOT saved`,
+        description:
+          err instanceof Error && err.message
+            ? `${err.message} Your values are still here — don't close this panel until a save succeeds.`
+            : "The server rejected the change. Your values are still here — don't close this panel until a save succeeds.",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
   }
 
   function copyAll() {
@@ -299,9 +325,9 @@ export function EnvPanel({ projectId: _projectId, files, onUpdateFile }: EnvPane
               )}
             </AnimatePresence>
           </div>
-          <Button size="sm" onClick={save} disabled={!dirty[activeEnv]}
+          <Button size="sm" onClick={() => void save()} disabled={!dirty[activeEnv] || saving}
             className={`h-7 text-[11px] gap-1 ${dirty[activeEnv] ? "bg-violet-600 hover:bg-violet-500 text-white" : ""}`}>
-            <Save className="h-3 w-3" />Save
+            <Save className="h-3 w-3" />{saving ? "Saving…" : "Save"}
           </Button>
         </div>
       </div>

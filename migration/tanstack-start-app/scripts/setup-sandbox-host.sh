@@ -153,11 +153,28 @@ fi
 say "Stale sandbox cleanup"
 cat >/usr/local/bin/lifemark-sandbox-gc <<'GC'
 #!/usr/bin/env bash
-# lifemark-sandbox-gc [IDLE_HOURS] [MAX_HOURS]
-#   Reap sandboxes idle (no keep-alive touch) > IDLE_HOURS (default 3), or
-#   older than the MAX_HOURS hard cap (default 48). Always dedupe per project.
+# lifemark-sandbox-gc [IDLE_HOURS] [MAX_HOURS] [MAX_STOPPED]
+#   Idle sandboxes are STOPPED. Removal is reserved for the MAX_HOURS hard cap
+#   and for the MAX_STOPPED disk guard. Always dedupe per project.
+#
+# Why stop rather than remove: node_modules lives inside the container. Removing
+# an idle sandbox throws away the installed dependency tree, so the next time
+# that project is opened the app reinstalls it over the network — 40-90 seconds
+# of spinner for packages that were already sitting on this disk. A stopped
+# container starts again in about a second, and the app's warm path starts it,
+# re-syncs whatever changed, and skips the install entirely.
+#
+# What that costs, and why MAX_STOPPED exists. The dependency tree measures
+# 301MB across 28,199 files. On the PREBUILT sandbox image those files live in
+# a shared read-only image layer, so every container reads the same copy and a
+# stopped sandbox costs only its source and whatever it added — a few MB, and
+# this guard will never bind. On a plain node:22-alpine each container installs
+# its own copy into its own writable layer, so idle sandboxes cost ~300MB each
+# and unbounded retention would fill the disk. Keeping the N most recently used
+# bounds that at roughly N x 300MB no matter how many projects exist.
 IDLE_HOURS="${1:-3}"
 MAX_HOURS="${2:-48}"
+MAX_STOPPED="${3:-20}"
 now=$(date -u +%s)
 
 # 1) One container per project — newest wins.
@@ -172,27 +189,54 @@ docker ps --filter "label=lifemark.sandbox=1" --format '{{.ID}} {{.Label "lifema
     docker rm -f "$dup" >/dev/null 2>&1 && echo "removed duplicate $dup"
   done
 
-# 2) Idle reap (stopped containers can't answer exec -> fall back to age).
+# 2) Idle -> stop (keeps node_modules); past the hard cap -> remove.
+#    A stopped container can't answer exec, so its keep-alive marker can't be
+#    read; it is already idle by definition, and only the age cap applies.
 docker ps -aq --filter "label=lifemark.sandbox=1" | while read -r id; do
   created=$(docker inspect -f '{{.Created}}' "$id" 2>/dev/null) || continue
   cts=$(date -u -d "$created" +%s 2>/dev/null) || continue
   age=$(( now - cts ))
+  if [ "$age" -gt $(( MAX_HOURS * 3600 )) ]; then
+    docker rm -f "$id" >/dev/null 2>&1 && echo "removed $id (age ${age}s > cap)"
+    continue
+  fi
+  running=$(docker inspect -f '{{.State.Running}}' "$id" 2>/dev/null || echo false)
+  [ "$running" = "true" ] || continue
   last=$(docker exec "$id" stat -c %Y /tmp/.lm-keepalive 2>/dev/null || echo "$cts")
   case "$last" in (*[!0-9]*) last="$cts";; esac
   [ "$last" -lt "$cts" ] && last="$cts"
   idle=$(( now - last ))
-  if [ "$idle" -gt $(( IDLE_HOURS * 3600 )) ] || [ "$age" -gt $(( MAX_HOURS * 3600 )) ]; then
-    docker rm -f "$id" >/dev/null 2>&1 && echo "removed $id (idle ${idle}s, age ${age}s)"
+  if [ "$idle" -gt $(( IDLE_HOURS * 3600 )) ]; then
+    docker stop -t 5 "$id" >/dev/null 2>&1 && echo "stopped $id (idle ${idle}s) — node_modules kept"
   fi
 done
+
+# 3) Disk guard — keep only the MAX_STOPPED most recently finished sandboxes.
+#    Sorted by FinishedAt (when it was last stopped), newest first, so the ones
+#    removed are the least recently used rather than merely the oldest: a
+#    long-lived project someone opens daily outranks one created yesterday and
+#    abandoned. Set MAX_STOPPED to 0 to disable.
+if [ "$MAX_STOPPED" -gt 0 ]; then
+  docker ps -aq --filter "label=lifemark.sandbox=1" --filter "status=exited" \
+  | while read -r id; do
+      fin=$(docker inspect -f '{{.State.FinishedAt}}' "$id" 2>/dev/null) || continue
+      fts=$(date -u -d "$fin" +%s 2>/dev/null || echo 0)
+      echo "$fts $id"
+    done \
+  | sort -rn \
+  | awk -v keep="$MAX_STOPPED" 'NR > keep { print $2 }' \
+  | while read -r old; do
+      docker rm -f "$old" >/dev/null 2>&1 && echo "removed $old (beyond $MAX_STOPPED most-recent stopped)"
+    done
+fi
 GC
 chmod +x /usr/local/bin/lifemark-sandbox-gc
 ok "installed /usr/local/bin/lifemark-sandbox-gc (idle-aware + per-project dedupe)"
 
 if command -v crontab >/dev/null 2>&1; then
   ( crontab -l 2>/dev/null | grep -v lifemark-sandbox-gc; \
-    echo "*/10 * * * * /usr/local/bin/lifemark-sandbox-gc 3 48 >/dev/null 2>&1" ) | crontab -
-  ok "cron installed: every 10 min, reap idle>3h or age>48h, dedupe per project"
+    echo "*/10 * * * * /usr/local/bin/lifemark-sandbox-gc 3 48 20 >/dev/null 2>&1" ) | crontab -
+  ok "cron installed: every 10 min — stop idle>3h, remove age>48h, keep 20 most-recent stopped, dedupe per project"
 else
   warn "no crontab — run lifemark-sandbox-gc periodically or containers accumulate"
 fi

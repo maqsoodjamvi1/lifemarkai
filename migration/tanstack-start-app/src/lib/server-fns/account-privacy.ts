@@ -1,5 +1,5 @@
 /** Native account/privacy — reimplemented off the worker (pure Supabase). */
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from "../supabase/server.ts";
 
 export async function getPrivacy() {
   const supabase = await createClient();

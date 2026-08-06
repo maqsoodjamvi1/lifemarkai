@@ -3,16 +3,16 @@
  * Template scaffolding for built-ins pulls from the main repo via relative import.
  */
 import { z } from "zod";
-import { createAdminClient, createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
+import { createAdminClient, createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
 import {
   canReadProjectFiles,
   canWriteProjectFiles,
   getProjectAccess,
 } from "@/lib/project/access";
-import { tanstackStartScaffold } from "@/lib/templates/tanstack-start-scaffold";
-import { lovableViteScaffold } from "@/lib/templates/lovable-vite-scaffold";
-import { getTemplateById } from "@/lib/templates/built-in";
+import { tanstackStartScaffold } from "../templates/tanstack-start-scaffold.ts";
+import { lovableViteScaffold } from "../templates/lovable-vite-scaffold.ts";
+import { getTemplateById } from "../templates/built-in.ts";
 
 const PROJECT_SAFE_SELECT = [
   "id",
@@ -73,7 +73,7 @@ const ALLOWED_FRAMEWORKS = new Set([
 function getStarterFiles(name: string, framework: string) {
   const safeName = name.replace(/[^a-zA-Z0-9]/g, "") || "app";
   if (framework === "tanstack-start" || framework === "tanstack") {
-    return tanstackStartScaffold();
+    return tanstackStartScaffold({}, name);
   }
   // "react" is the Lovable shape: Vite + React 18 + shadcn + react-router-dom,
   // mirroring a real Lovable export file-for-file. See lovable-vite-scaffold.ts.
@@ -197,7 +197,7 @@ export async function createProject(data: any) {
 
     // Coerce rather than insert something projects_framework_check will reject:
     // a constraint violation surfaces as an opaque 500 on the create path.
-    const framework = ALLOWED_FRAMEWORKS.has(requested) ? requested : "tanstack-start";
+    const framework = ALLOWED_FRAMEWORKS.has(requested) ? requested : "react";
 
     const { data: project, error } = await (supabase as any)
       .from("projects")
@@ -232,15 +232,44 @@ export async function createProject(data: any) {
       /* non-critical */
     }
 
+    /**
+     * A project with no files is a dead end, so never report one as created.
+     *
+     * All three seeding paths below inserted and returned `ok` without looking
+     * at the result. On failure the API answered 201, the client navigated to
+     * the editor, and the user landed on an empty file tree with a preview that
+     * answers "Project has no files." Duplicating a project hit the same hole:
+     * `res.ok` was true and the copy was empty.
+     *
+     * Deleting the orphan row is the right cleanup — a half-created project the
+     * user can see but not use is worse than no project, because it looks like
+     * something they could recover.
+     */
+    const seedFiles = async (
+      rows: Array<Record<string, unknown>>,
+      what: string,
+    ): Promise<{ status: "error"; message: string } | null> => {
+      if (rows.length === 0) return null;
+      const { error } = await (supabase as any).from("project_files").insert(rows);
+      if (!error) return null;
+      await (supabase as any).from("projects").delete().eq("id", project.id);
+      return {
+        status: "error" as const,
+        message: `Could not create the project's ${what}: ${error.message}`,
+      };
+    };
+
     if (data.forkFiles && data.forkFiles.length > 0) {
-      await (supabase as any).from("project_files").insert(
+      const failed = await seedFiles(
         data.forkFiles.map((f: any) => ({
           project_id: project.id,
           path: f.path,
           content: f.content,
           language: f.language ?? "plaintext",
         })),
+        "copied files",
       );
+      if (failed) return failed;
       return { status: "ok" as const, project };
     }
 
@@ -258,20 +287,24 @@ export async function createProject(data: any) {
         }
       }
       if (templateFiles && templateFiles.length > 0) {
-        await (supabase as any).from("project_files").insert(
+        const failed = await seedFiles(
           templateFiles.map((f: { path: string; content: string; language: string }) => ({
             project_id: project.id,
             path: f.path,
             content: f.content,
             language: f.language,
           })),
+          "template files",
         );
+        if (failed) return failed;
       }
     } else {
       const starterFiles = getStarterFiles(data.name, framework);
-      await (supabase as any).from("project_files").insert(
+      const failed = await seedFiles(
         starterFiles.map((f) => ({ project_id: project.id, ...f })),
+        "starter files",
       );
+      if (failed) return failed;
     }
 
     return { status: "ok" as const, project };

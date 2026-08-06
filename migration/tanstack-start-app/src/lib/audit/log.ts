@@ -7,7 +7,7 @@
  * Server-only: uses the admin client. Do NOT import from client components.
  */
 
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createAdminClient } from "../supabase/admin.ts";
 
 /** Canonical audit action names use a `category.verb` shape. */
 export type AuditCategory = "auth" | "member" | "project" | "billing" | "config" | "security" | "other";

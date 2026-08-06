@@ -1,8 +1,8 @@
 /**
  * Native project snapshots — list / reconstruct / create / pin / delete / restore.
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
 import {
   canReadProjectFiles,
   canWriteProjectFiles,
@@ -287,7 +287,20 @@ export async function deleteSnapshot(data: any) {
     const access = await getProjectAccess(supabase, snap.project_id, user.id);
     if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
 
-    await (supabase as any).from("project_snapshots").delete().eq("id", data.id);
+    // The result was discarded and `ok: true` returned regardless, so a
+    // rejected delete looked identical to a successful one — and the panel
+    // then removed the row from its list optimistically, so the version
+    // "disappeared" and came back on reload.
+    const { error } = await (supabase as any)
+      .from("project_snapshots")
+      .delete()
+      .eq("id", data.id);
+    if (error) {
+      return {
+        status: "error" as const,
+        message: error.message ?? "Could not delete this version.",
+      };
+    }
     return { status: "ok" as const, ok: true };
 }
 
@@ -352,32 +365,107 @@ export async function restoreSnapshot(data: any) {
       };
     }
 
+    // This is the ONLY way back from what follows, and the worst-case error
+    // message below explicitly promises the user it exists ("Your previous
+    // version is saved as …"). Its result was discarded — and the scenario
+    // where that matters is precisely one where writes to project_snapshots
+    // are already failing, so the promise was most likely false at the exact
+    // moment the project was empty. Refuse to start instead.
     if (currentFiles && currentFiles.length > 0) {
-      await (supabase as any).from("project_snapshots").insert({
-        project_id: data.projectId,
-        user_id: user.id,
-        label: `Auto-save before restore to "${snapMeta.label}"`,
-        is_baseline: true,
-        files: currentFiles,
-        patches: null,
-        parent_id: null,
-      });
+      const { error: autoSaveError } = await (supabase as any)
+        .from("project_snapshots")
+        .insert({
+          project_id: data.projectId,
+          user_id: user.id,
+          label: `Auto-save before restore to "${snapMeta.label}"`,
+          is_baseline: true,
+          files: currentFiles,
+          patches: null,
+          parent_id: null,
+        });
+      if (autoSaveError) {
+        return {
+          status: "error" as const,
+          message:
+            "Could not save a restore point for your current files, so the restore was not started. Nothing has changed — try again in a moment.",
+        };
+      }
     }
 
-    await (supabase as any)
+    // ── The most destructive few lines in the codebase ───────────────────────
+    //
+    // This is delete-everything-then-insert, with no transaction. Every failure
+    // mode of the insert leaves the project with ZERO FILES, and the function
+    // used to report `status: "ok"` regardless — the client then showed
+    // "Project reverted" over an empty project. Worse, the client's
+    // `handleFilesUpdate` ignores an empty array, so the file tree still looked
+    // populated and the user only discovered the loss on reload.
+    //
+    // Three guards, in order of how badly they were needed:
+    //
+    // 1. NEVER DELETE TOWARDS NOTHING. `reconstructFromChain` returns [] for a
+    //    baseline whose `files` is an empty array — which passes the `!baseline.files`
+    //    check upstream because [] is truthy. Restoring "nothing" is never what
+    //    a user means by revert, so refuse before touching anything.
+    // 2. CHECK THE INSERT, AND PUT THE FILES BACK IF IT FAILED. Without a
+    //    transaction the only honest recovery is to re-insert what we deleted;
+    //    `currentFiles` is already in hand for the auto-save snapshot above.
+    // 3. VERIFY WHAT LANDED. A silent partial insert is indistinguishable from
+    //    success at the API layer, so count rows before claiming victory.
+    if (files.length === 0) {
+      return {
+        status: "error" as const,
+        message:
+          "That version contains no files, so restoring it would empty the project. Nothing was changed.",
+      };
+    }
+
+    const { error: deleteError } = await (supabase as any)
       .from("project_files")
       .delete()
       .eq("project_id", data.projectId);
 
-    if (files.length > 0) {
-      await (supabase as any).from("project_files").insert(
-        files.map((f) => ({
-          project_id: data.projectId,
-          path: f.path,
-          content: f.content,
-          language: f.language,
-        })),
-      );
+    if (deleteError) {
+      return {
+        status: "error" as const,
+        message: `Could not clear the current files, so nothing was changed: ${deleteError.message}`,
+      };
+    }
+
+    const rows = files.map((f) => ({
+      project_id: data.projectId,
+      path: f.path,
+      content: f.content,
+      language: f.language,
+    }));
+
+    const { error: insertError } = await (supabase as any)
+      .from("project_files")
+      .insert(rows);
+
+    if (insertError) {
+      // The project is empty at this instant. Putting back what we deleted is
+      // the only thing standing between a failed restore and a lost project.
+      let recovered = false;
+      if (currentFiles && currentFiles.length > 0) {
+        const { error: rollbackError } = await (supabase as any)
+          .from("project_files")
+          .insert(
+            currentFiles.map((f: { path: string; content: string; language?: string }) => ({
+              project_id: data.projectId,
+              path: f.path,
+              content: f.content,
+              language: f.language,
+            })),
+          );
+        recovered = !rollbackError;
+      }
+      return {
+        status: "error" as const,
+        message: recovered
+          ? `Restore failed and your files were put back unchanged: ${insertError.message}`
+          : `Restore failed and the files could not be put back automatically: ${insertError.message}. Your previous version is saved as "Auto-save before restore to \\"${snapMeta.label}\\"" in version history.`,
+      };
     }
 
     const { data: restoredFiles } = await (supabase as any)
@@ -385,10 +473,18 @@ export async function restoreSnapshot(data: any) {
       .select("*")
       .eq("project_id", data.projectId);
 
+    if (!restoredFiles || restoredFiles.length === 0) {
+      return {
+        status: "error" as const,
+        message:
+          "The restore did not write any files. Your previous version is saved in version history — please reload before making further changes.",
+      };
+    }
+
     return {
       status: "ok" as const,
       kind: "restored" as const,
-      files: restoredFiles ?? [],
+      files: restoredFiles,
       message: `Restored to "${snapMeta.label}"`,
     };
 }

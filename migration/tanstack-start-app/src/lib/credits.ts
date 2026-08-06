@@ -67,7 +67,7 @@ export async function claimDailyCredits(supabase: any, userId: string): Promise<
 // TanStack Start enforces the boundary via server routes / createServerFn, so the
 // Next-specific guard package is no longer imported.
 
-import { createAdminClient } from "@/lib/supabase/server";
+import { createAdminClient } from "./supabase/server.ts";
 
 /**
  * Atomically reserve credits before starting provider work. The backing RPC

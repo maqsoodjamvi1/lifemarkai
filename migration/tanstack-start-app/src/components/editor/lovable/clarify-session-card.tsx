@@ -96,7 +96,7 @@ export function LovableClarifySessionCard({
     <div
       data-card-focusable
       tabIndex={0}
-      className="mx-3 mb-2 max-w-md rounded-2xl border border-border bg-background shadow-surface-md overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-[#0066FF]/30"
+      className="mx-3 mb-2 max-w-md rounded-2xl border border-border bg-background shadow-surface-md overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-[#1F55F1]/30"
     >
       {/* Header — the question itself, Lovable-style */}
       <div className="flex items-center gap-2 px-4 pt-3.5 pb-3 border-b border-border/60">
@@ -167,7 +167,7 @@ export function LovableClarifySessionCard({
             value={isCustomAnswer || q.type === "text" ? q.answer : ""}
             onChange={(e) => onUpdateQuestion(q.id, e.target.value)}
             placeholder="Write your own…"
-            className="w-full text-xs bg-background border border-border rounded-lg px-3 py-2 text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-[#0066FF]/50"
+            className="w-full text-xs bg-background border border-border rounded-lg px-3 py-2 text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-[#1F55F1]/50"
           />
         </div>
       ) : null}
@@ -209,7 +209,7 @@ export function LovableClarifySessionCard({
           <Button
             size="sm"
             onClick={() => (reviewing ? submit() : setStep((s) => Math.min(total, s + 1)))}
-            className="h-7 px-3.5 text-xs font-semibold rounded-full bg-[#0066FF] hover:bg-[#0052cc] text-white"
+            className="h-7 px-3.5 text-xs font-semibold rounded-full bg-[#1F55F1] hover:bg-[#1142DE] text-white"
           >
             {reviewing ? "Submit" : step === total - 1 ? "Review" : "Next"}
           </Button>

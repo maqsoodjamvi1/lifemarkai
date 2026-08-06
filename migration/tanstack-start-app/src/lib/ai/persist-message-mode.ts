@@ -5,7 +5,7 @@
  * Runtime also uses "patch" for surgical edits. Inserting "patch" fails silently
  * (Supabase returns error, callers ignored it) — chat history never persisted.
  */
-import { parseAIResponse } from "@/lib/ai/code-parser";
+import { parseAIResponse } from "./code-parser.ts";
 
 export type RuntimeEditorMode = "chat" | "agent" | "plan" | "build" | "patch" | string;
 

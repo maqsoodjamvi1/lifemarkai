@@ -30,6 +30,14 @@ interface GitHubPanelProps {
   gitlabToken?: string | null;
   onProjectUpdated: (project: Partial<Project>) => void;
   files?: ProjectFile[];
+  /**
+   * Hand pulled files back to the editor.
+   *
+   * Without this, a pull writes a teammate's work to the database while the
+   * editor keeps the PRE-pull content in memory — and the next keystroke
+   * autosave PATCHes that stale version straight back over it.
+   */
+  onFilesPulled?: (files: Array<{ path: string; content: string; language: string }>) => void;
 }
 
 interface CommitEntry {
@@ -64,6 +72,7 @@ export function GitHubPanel({
   gitlabToken = null,
   onProjectUpdated,
   files = [],
+  onFilesPulled,
 }: GitHubPanelProps) {
   // Detect active provider from project.git_provider (new field) or heuristic
   const detectedProvider: GitProvider =
@@ -191,7 +200,21 @@ export function GitHubPanel({
         setCommitMessage("");
         await loadBranchStatus();
       } else if (action === "pull") {
-        toast({ title: `Pulled from ${providerLabel}`, description: `${data.files} files updated.` });
+        // Push the new content into the editor BEFORE anything else, so a
+        // keystroke landing right now saves on top of the pull rather than
+        // reverting it.
+        if (Array.isArray(data.pulledFiles) && data.pulledFiles.length > 0) {
+          onFilesPulled?.(data.pulledFiles);
+        }
+        if (data.failed > 0) {
+          toast({
+            title: `Pull was incomplete`,
+            description: `${data.files} file${data.files === 1 ? "" : "s"} updated, ${data.failed} could not be saved. Try again before making changes.`,
+            variant: "destructive",
+          });
+        } else {
+          toast({ title: `Pulled from ${providerLabel}`, description: `${data.files} files updated.` });
+        }
         await loadBranchStatus();
       }
     } catch (err: unknown) {

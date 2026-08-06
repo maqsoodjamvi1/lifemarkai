@@ -2,6 +2,44 @@
  * Ensure Vite binds on 0.0.0.0 and HMR works through Modal TLS tunnels
  * (Lovable-style cloud preview) as well as WebContainer.
  */
+/**
+ * THE fix for "the editor goes blank/frozen while a preview boots".
+ *
+ * Previews are served from `<id>.preview.lifemarkai.com` and the editor from
+ * `lifemarkai.com`. Those are different ORIGINS but the same SITE (one
+ * registrable domain), and Chrome's process model is site-keyed by default —
+ * so the previewed app and the editor share a single renderer process, and
+ * therefore a single main thread.
+ *
+ * Measured live, not guessed: a 1-second `setInterval` running in the EDITOR
+ * skipped from 7s straight to 51s while a preview booted in the iframe — a 44
+ * second main-thread stall. During that window the editor could not repaint,
+ * CDP's Runtime.evaluate timed out reporting "the renderer may be frozen", and
+ * the debugging extension disconnected outright. There were ZERO console
+ * errors the whole time, which is exactly the signature of this bug: nothing
+ * is broken, the thread is simply busy running someone else's app. Heavier
+ * generated projects stall longer, which is why only SOME projects looked
+ * blank.
+ *
+ * `Origin-Agent-Cluster: ?1` asks the browser to key this document's agent
+ * cluster by ORIGIN instead of site. Chrome implements that by giving the
+ * origin its own process, so the previewed app gets its own main thread and
+ * can never again stall the editor. Each preview subdomain is already a
+ * distinct origin, so each one lands in its own cluster.
+ *
+ * This is the same isolation Lovable gets structurally by serving previews
+ * from an entirely different registrable domain than their editor. The header
+ * buys it without moving anyone's DNS.
+ *
+ * Safe for our bridges: parent<->preview communication is postMessage only
+ * (see veb-bridge / preview-error-bridge), which is unaffected. The
+ * `contentDocument` reads in the editor are already null cross-origin and are
+ * all guarded; they serve the same-origin srcdoc fallback, which this does not
+ * touch. Nothing in the codebase uses `document.domain`, the one API that
+ * origin-keying actually disables.
+ */
+const ORIGIN_KEYED_HEADERS = 'headers: { "Origin-Agent-Cluster": "?1" },';
+
 export function patchViteConfigForWebContainer(content: string): string {
   let patched = patchReactPluginBabelConfig(content);
   if (!patched.trim()) return patched;
@@ -13,6 +51,10 @@ export function patchViteConfigForWebContainer(content: string): string {
   const hasHost = /host\s*:\s*(true|['"]0\.0\.0\.0['"])/.test(patched);
   const hasHmr = /\bhmr\s*:\s*\{/.test(patched);
   const hasAllowedHosts = /allowedHosts\s*:/.test(patched);
+  // Only skip if the app already sets the header itself — a `headers` block
+  // that does something else still needs origin keying added to it.
+  const hasOriginKeying = /Origin-Agent-Cluster/i.test(patched);
+  const hasHeaders = /\bheaders\s*:\s*\{/.test(patched);
 
   const serverBlock = /server\s*:\s*\{/;
   if (serverBlock.test(patched)) {
@@ -21,12 +63,23 @@ export function patchViteConfigForWebContainer(content: string): string {
       !hasAllowedHosts ? "allowedHosts: true," : "",
       // Modal TLS tunnels terminate on 443 — Vite HMR client must use wss.
       !hasHmr ? 'hmr: { protocol: "wss", clientPort: 443 },' : "",
+      // Own process for the preview — see ORIGIN_KEYED_HEADERS above.
+      !hasOriginKeying && !hasHeaders ? ORIGIN_KEYED_HEADERS : "",
     ]
       .filter(Boolean)
       .map((line) => `\n    ${line}`)
       .join("");
     if (inject) {
       patched = patched.replace(serverBlock, `server: {${inject}`);
+    }
+    // An existing `headers: {` block gets the entry added rather than skipped,
+    // otherwise any app that sets a single header of its own would silently opt
+    // out of process isolation.
+    if (!hasOriginKeying && hasHeaders) {
+      patched = patched.replace(
+        /\bheaders\s*:\s*\{/,
+        'headers: {\n      "Origin-Agent-Cluster": "?1",',
+      );
     }
     return patched;
   }
@@ -35,7 +88,9 @@ export function patchViteConfigForWebContainer(content: string): string {
   if (defineConfig.test(patched)) {
     return patched.replace(
       defineConfig,
-      "defineConfig({\n  server: {\n    host: true,\n    allowedHosts: true,\n    hmr: { protocol: \"wss\", clientPort: 443 },\n  },",
+      "defineConfig({\n  server: {\n    host: true,\n    allowedHosts: true,\n    hmr: { protocol: \"wss\", clientPort: 443 },\n    " +
+        ORIGIN_KEYED_HEADERS +
+        "\n  },",
     );
   }
 
@@ -171,11 +226,11 @@ export function patchReactPluginBabelConfig(content: string): string {
   );
 }
 
-import { injectGuestCommentsIntoHtml } from "./inject-guest-comments";
+import { injectGuestCommentsIntoHtml } from "./inject-guest-comments.ts";
 import {
   injectVebBridgeIntoHtml,
   injectVebBridgeIntoJsxDocument,
-} from "./veb-bridge";
+} from "./veb-bridge.ts";
 
 const NEXT_LAYOUT_RE = /^(src\/)?app\/layout\.(t|j)sx?$/;
 // TanStack Start renders the document from src/routes/__root.tsx — there is no

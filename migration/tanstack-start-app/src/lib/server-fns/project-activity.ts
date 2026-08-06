@@ -2,9 +2,9 @@
  * Native projects/[id]/activity — plain helpers for API route handlers.
  * (createServerFn from route handlers 500s in production — see project-files.ts)
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles, canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
+import { canReadProjectFiles, canWriteProjectFiles, getProjectAccess } from "../project/access.ts";
 
 interface ActivityItem {
   id: string;

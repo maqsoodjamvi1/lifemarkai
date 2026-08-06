@@ -7,6 +7,7 @@ import {
   managedProjectUrl,
   setManagedComputeTier,
 } from "@/lib/cloud/management";
+import { persistManagedDbPassword } from "@/lib/cloud/credentials";
 
 const VALID_REGIONS = ["americas", "europe", "asia-pacific"] as const;
 const VALID_INSTANCES = ["tiny", "mini", "small", "medium", "large"] as const;
@@ -42,14 +43,24 @@ export const Route = createFileRoute("/api/cloud/provision")({
 
         if (isManagementConfigured()) {
           try {
-            const { ref } = await createManagedProject({ projectId, region: chosenRegion });
+            const { ref, dbPassword } = await createManagedProject({ projectId, region: chosenRegion });
+            // Save the one-time Postgres password before anything else can
+            // fail. Supabase never shows it again — see cloud/credentials.ts.
+            const savedPassword = await persistManagedDbPassword(projectId, dbPassword);
             const { error } = await supabase.from("projects").update({
               cloud_enabled: true, cloud_region: chosenRegion, cloud_instance: chosenInstance,
               cloud_status: "provisioning", cloud_project_ref: ref, cloud_supabase_url: managedProjectUrl(ref),
               cloud_provisioned_at: new Date().toISOString(),
             }).eq("id", projectId);
             if (error) return Response.json({ error: error.message }, { status: 500 });
-            return Response.json({ ok: true, region: chosenRegion, instance: chosenInstance, status: "provisioning", ref, message: `Dedicated backend booting in ${chosenRegion} — usually ready in 1–2 minutes.` });
+            return Response.json({
+              ok: true, region: chosenRegion, instance: chosenInstance, status: "provisioning", ref,
+              message: `Dedicated backend booting in ${chosenRegion} — usually ready in 1–2 minutes.`,
+              // Surfaced, not swallowed: a backend whose password we failed to
+              // store still works over REST, so the user would never find out
+              // on their own until the day they need a direct connection.
+              ...(savedPassword.ok ? {} : { warning: `Database password could not be saved (${savedPassword.error}). Reset it in the Supabase dashboard if you need direct Postgres access.` }),
+            });
           } catch (err) {
             return Response.json({ error: err instanceof Error ? err.message : "Provisioning failed" }, { status: 502 });
           }

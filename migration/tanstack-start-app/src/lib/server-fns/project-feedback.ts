@@ -1,5 +1,5 @@
 /** Native projects/[id]/feedback — reimplemented off the worker (pure Supabase). */
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from "../supabase/server.ts";
 
 export async function listFeedback(data: any) {
     const supabase = await createClient();

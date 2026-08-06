@@ -8,8 +8,8 @@
  * is uploaded to Supabase Storage so the URL is stable and embeddable. Returns
  * null on any failure so callers can fall back to a stock image URL.
  */
-import { createAdminClient } from "@/lib/supabase/server";
-import { generateImage, type ImageSize } from "./image-generate";
+import { createAdminClient } from "../supabase/server.ts";
+import { generateImage, type ImageSize } from "./image-generate.ts";
 
 // Reuse the existing public "previews" bucket (already used for screenshots).
 const ASSET_BUCKET = "previews";

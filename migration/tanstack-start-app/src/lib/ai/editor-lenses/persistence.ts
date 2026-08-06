@@ -1,11 +1,11 @@
-import type { AutoWireResult, SelfVerifyResult } from "@/lib/ai/http/result-types";
+import type { AutoWireResult, SelfVerifyResult } from "../http/result-types.ts";
 import {
   EDITOR_LENS_DEFINITIONS,
   type EditorLensRole,
   buildEditorLensSeed,
 } from "@/lib/ai/editor-lenses/persistent-lenses";
-import type { AgentRoleId } from "@/lib/ai/editor-lenses/types";
-import type { EditorIntelligenceEvent, InitiativeCheckpoint } from "@/lib/ai/editor-lenses/types";
+import type { AgentRoleId } from "./types.ts";
+import type { EditorIntelligenceEvent, InitiativeCheckpoint } from "./types.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupabaseClient = any;

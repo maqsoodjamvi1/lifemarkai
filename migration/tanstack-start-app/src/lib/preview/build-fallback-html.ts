@@ -1,7 +1,7 @@
-import type { ProjectFile } from "@/types/database";
-import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
-import { generateFallbackUtilityCss } from "@/lib/preview/generate-fallback-utilities";
-import { healPreviewContractGaps } from "@/lib/preview/heal-preview-contract";
+import type { ProjectFile } from "../../types/database.ts";
+import { ensureCommonGeneratedSupportFiles } from "../ai/generated-support-files.ts";
+import { generateFallbackUtilityCss } from "./generate-fallback-utilities.ts";
+import { healPreviewContractGaps } from "./heal-preview-contract.ts";
 import {
   isNextAppProject,
   nextAppDirName,
@@ -12,7 +12,7 @@ import {
   NEXT_RUNTIME_SHIMS,
   NEXT_VIRTUAL_ENTRY_PATH,
 } from "@/lib/preview/next-app-preview";
-import { PREVIEW_PERF_SCRIPT } from "@/lib/preview/preview-perf-bridge";
+import { PREVIEW_PERF_SCRIPT } from "./preview-perf-bridge.ts";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
 export const PREVIEW_ENGINE_REV = "46";
@@ -1670,9 +1670,29 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
         window.parent.postMessage({
           type: 'lifemark-preview-location',
           pathname: path,
+          origin: window.location.origin,
+          href: window.location.href,
         }, '*');
       } catch (e) {}
     }
+
+    // Liveness handshake — the same contract the sandbox bridge speaks (see
+    // veb-bridge.ts). The parent pings after every iframe load and reads
+    // silence as "this frame navigated away from the app". Without an answer
+    // here, a fallback preview that had reported a location once would be
+    // mistaken for an escaped frame on its next load and reset to "/".
+    window.addEventListener('message', function (e) {
+      var d = e && e.data;
+      if (!d || typeof d !== 'object' || d.type !== 'lifemark-preview-ping') return;
+      try {
+        window.parent.postMessage({
+          type: 'lifemark-preview-pong',
+          token: d.token,
+          origin: window.location.origin,
+          href: window.location.href,
+        }, '*');
+      } catch (err) {}
+    });
 
     // Patch history methods so SPA navigations are observable.
     var origPush = window.history.pushState;

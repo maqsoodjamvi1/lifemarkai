@@ -8,7 +8,7 @@
  * client-side every render of the editor layout.
  */
 
-import type { ProjectFile } from "@/types/database";
+import type { ProjectFile } from "../../types/database.ts";
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 

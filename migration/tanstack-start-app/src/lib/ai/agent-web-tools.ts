@@ -11,7 +11,7 @@
  * can't kill an agent run.
  */
 
-import { fetchReferencePage, isFetchablePublicUrl } from "@/lib/ai/page-reference";
+import { fetchReferencePage, isFetchablePublicUrl } from "./page-reference.ts";
 
 export interface WebSearchResult {
   title: string;

@@ -1,4 +1,4 @@
-import { createAdminClient, createClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "../supabase/server.ts";
 import {
   describeSupabaseError,
   isTransientSupabaseError,

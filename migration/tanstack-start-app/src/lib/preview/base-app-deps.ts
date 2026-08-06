@@ -60,4 +60,10 @@ export const BASE_APP_DEV_DEPENDENCIES: Record<string, string> = {
   tailwindcss: "^3.4.0",
   autoprefixer: "^10.4.0",
   postcss: "^8.4.0",
+  // Tailwind plugins the model routinely registers in tailwind.config without
+  // adding the package (observed live: `require("@tailwindcss/typography")` →
+  // postcss failed to load the config → every stylesheet 500 → blank preview).
+  // Shipping them in the scaffold means that config edit just works.
+  "@tailwindcss/typography": "^0.5.15",
+  "@tailwindcss/forms": "^0.5.9",
 };

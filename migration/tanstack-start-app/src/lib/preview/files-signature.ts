@@ -1,4 +1,4 @@
-import type { ProjectFile } from "@/types/database";
+import type { ProjectFile } from "../../types/database.ts";
 
 /** FNV-1a 32-bit — fast, good enough to catch middle-of-file surgical edits. */
 function hashContent(s: string): string {

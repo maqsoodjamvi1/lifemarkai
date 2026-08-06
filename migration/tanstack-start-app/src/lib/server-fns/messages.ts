@@ -2,10 +2,10 @@
  * Native project messages — list / persist / truncate / restore / clear.
  * Plain helpers — not createServerFn (see project-files.ts).
  */
-import { createClient } from "@/lib/supabase/server";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { assertChatAccess } from "@/lib/project/chat-access";
-import { persistChatTurnMessages } from "@/lib/ai/persist-chat-turn";
+import { createClient } from "../supabase/server.ts";
+import { getServerUser } from "../supabase/server-user.ts";
+import { assertChatAccess } from "../project/chat-access.ts";
+import { persistChatTurnMessages } from "../ai/persist-chat-turn.ts";
 
 function toPersistedMessageMode(mode: string | null | undefined): "chat" | "agent" | "plan" | "build" {
   if (mode === "agent" || mode === "plan" || mode === "build" || mode === "chat") return mode;

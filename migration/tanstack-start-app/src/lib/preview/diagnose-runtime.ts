@@ -1,5 +1,5 @@
-import type { DiagnosableFile } from "./diagnose-imports";
-import type { PreviewRuntimeError } from "./preview-error-bridge";
+import type { DiagnosableFile } from "./diagnose-imports.ts";
+import type { PreviewRuntimeError } from "./preview-error-bridge.ts";
 
 interface SymbolHit {
   path: string;

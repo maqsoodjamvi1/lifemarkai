@@ -1,4 +1,4 @@
-import type { SandboxFile } from "./index";
+import type { SandboxFile } from "./index.ts";
 
 export const DEFAULT_SANDBOX_PORT = 5173;
 

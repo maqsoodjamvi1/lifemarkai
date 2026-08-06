@@ -26,9 +26,9 @@
  * owner set — never silently on every publish.
  */
 
-import { generateAI } from "@/lib/ai/generate";
-import { REVIEW_MODEL } from "@/lib/ai/model-defaults";
-import type { SecurityFinding } from "@/lib/security/scan";
+import { generateAI } from "../ai/generate.ts";
+import { REVIEW_MODEL } from "../ai/model-defaults.ts";
+import type { SecurityFinding } from "./scan.ts";
 
 export type ScanProfile = "basic" | "deep";
 

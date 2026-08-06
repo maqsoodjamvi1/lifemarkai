@@ -156,7 +156,14 @@ export class XmlStreamParser {
   private buffer = "";
   private readonly maxBytes: number;
 
-  constructor(private readonly opts: XmlStreamParserOptions) {
+  // Longhand, not a parameter property — see the note in
+  // streaming-file-extractor.ts: parameter properties are the one TS feature
+  // `node --test --experimental-strip-types` cannot handle, and this class is
+  // imported by code-parser.ts, so the whole parser test suite depended on it.
+  private readonly opts: XmlStreamParserOptions;
+
+  constructor(opts: XmlStreamParserOptions) {
+    this.opts = opts;
     this.maxBytes = opts.maxBufferBytes ?? 2 * 1024 * 1024;
   }
 

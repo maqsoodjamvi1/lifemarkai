@@ -83,7 +83,7 @@ export function LovableStepPlanCard({
         </Button>
         <Button
           size="sm"
-          className="ml-auto h-7 text-xs gap-1.5 bg-[#0066FF] hover:bg-[#0052cc] text-white"
+          className="ml-auto h-7 text-xs gap-1.5 bg-[#1F55F1] hover:bg-[#1142DE] text-white"
           disabled={approved.size === 0}
           onClick={onBuild}
         >
@@ -174,7 +174,7 @@ export function LovablePlanReadyCard({ content, onRefine, onApproveAndBuild }: L
         </Button>
         <Button
           size="sm"
-          className="ml-auto h-7 text-xs gap-1.5 bg-[#0066FF] hover:bg-[#0052cc] text-white"
+          className="ml-auto h-7 text-xs gap-1.5 bg-[#1F55F1] hover:bg-[#1142DE] text-white"
           onClick={() => onApproveAndBuild(draft.trim() || initial)}
           disabled={!(draft.trim() || initial)}
         >

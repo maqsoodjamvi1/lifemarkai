@@ -46,12 +46,38 @@ import type {
   SandboxFile,
   SandboxProvider,
   SandboxRunResult,
-} from "./index";
-import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared";
+  TypecheckResult,
+} from "./index.ts";
+import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared.ts";
+import { SYNC_MANIFEST, filesToPrune } from "./prune-files.ts";
+import { parseTscOutput } from "./tsc-diagnostics.ts";
+import { dependenciesAlreadySatisfied } from "./deps-satisfied.ts";
 
 const DEV_LOG = "/tmp/lifemark-dev.log";
-/** Content-hash manifest for incremental writeFiles — lives in APP_DIR. */
-const SYNC_MANIFEST = ".lm-sync-manifest.json";
+
+/**
+ * Marker embedded in the dev-server supervisor's command line.
+ *
+ * Reuse has to answer "is a supervisor already running in here?" before it
+ * starts one. Getting that wrong means TWO `while true; do vite; done` loops
+ * racing for the same port: each keeps losing the bind, exiting, and being
+ * restarted a second later, so the preview flaps between working and refused
+ * indefinitely — a worse failure than the cold start it was avoiding.
+ *
+ * A marker in the args is the reliable test: it survives in `ps` output for as
+ * long as the supervising shell lives, and dies with it. A pidfile would have
+ * to be cleaned up by a process that may have been killed.
+ */
+const SUPERVISOR_TAG = "LM_SUPERVISOR";
+
+/** The dev-server supervisor loop — one definition, used by both boot paths. */
+function supervisorCommand(cmd: string): string {
+  return (
+    `while true; do ${cmd} >> ${DEV_LOG} 2>&1; ` +
+    `echo "[supervisor] dev server exited ($(date -u +%H:%M:%S)); restarting" >> ${DEV_LOG}; ` +
+    `sleep 1; done # ${SUPERVISOR_TAG}`
+  );
+}
 
 /**
  * Project directory INSIDE the node user's own home — not /app.
@@ -74,6 +100,30 @@ const SYNC_MANIFEST = ".lm-sync-manifest.json";
  * the root-owned dir). It is passed per-exec instead.
  */
 const APP_DIR = "/home/node/app";
+
+/**
+ * Wall-clock ceiling on `npm install` inside a sandbox.
+ *
+ * Neither `exec` nor `docker()` sets a socket timeout, so an install that
+ * wedges — a registry that accepts the connection and never answers, a
+ * postinstall script waiting on stdin — held the preview request open with no
+ * bound at all. The 120s readiness budget further down does not help: it only
+ * starts once the install returns.
+ *
+ * Four minutes is well past the 40-90s a genuinely cold install takes on this
+ * host, so a healthy slow install is never cut off.
+ */
+const INSTALL_TIMEOUT_SEC = 240;
+
+/**
+ * Written by the image build ONLY after it has verified its own `npm install`
+ * reaches a fixed point — i.e. that a second install adds nothing.
+ *
+ * Its absence is what makes the install-skip fail closed on any image that has
+ * not made that promise, including every image built before the marker
+ * existed. Never create this at runtime.
+ */
+const DEPS_VERIFIED_MARKER = "/home/node/.lm-deps-verified";
 
 /**
  * Accept whatever shape the host was configured as.
@@ -295,8 +345,28 @@ export function buildTar(files: SandboxFile[]): Buffer {
   return Buffer.concat(blocks);
 }
 
-/** Ports handed out this process; avoids racing two boots onto one port. */
-const claimedPorts = new Set<number>();
+/**
+ * Ports RESERVED by a boot that is currently in flight in this process.
+ *
+ * Deliberately not "ports in use" — that question is answered by Docker, per
+ * `portsInUse()` below. This set covers only the window between picking a
+ * number and the container actually publishing it, which is the one thing
+ * Docker cannot tell us. A reservation lives for the duration of one
+ * `runProject` call and is always dropped in its `finally`.
+ *
+ * Tracking usage in-process was the original mistake: the set only ever grew
+ * (nothing released on teardown, and the host's idle GC is a separate process
+ * it cannot see), so port mode drifted into "No free port in <lo>-<hi>" on an
+ * almost idle host. Trying to fix that with release-on-teardown then created
+ * the opposite bug — a warm reuse released its unused reservation and nothing
+ * held the port the reused container was actually on, so the next project
+ * could be handed it and fail to bind. Asking Docker every time removes both
+ * failure modes and all of the bookkeeping.
+ */
+const reservedPorts = new Set<number>();
+
+/** Last successful reading of Docker's port usage; used if a list call fails. */
+let lastKnownPortsInUse = new Set<number>();
 
 /**
  * Per-project provision lock. The client has TWO independent auto-recovery
@@ -311,11 +381,76 @@ const claimedPorts = new Set<number>();
  */
 const inflightRuns = new Map<string, Promise<SandboxRunResult>>();
 
-function claimPort(): number | null {
+function releaseReservation(port: number | null | undefined): void {
+  if (typeof port === "number" && Number.isFinite(port)) reservedPorts.delete(port);
+}
+
+/**
+ * Every host port a lifemark sandbox container currently owns, per Docker.
+ *
+ * Two sources, because neither alone is complete:
+ *
+ *   • `Ports[].PublicPort` — accurate, but EMPTY for a container that is not
+ *     running. Stopped containers are the norm here: the whole point of the
+ *     warm-reuse path is to wake one, and it will re-bind exactly the port it
+ *     was created with. Reading only this set means a stopped container's port
+ *     looks free, gets handed to another project, and then the wake fails with
+ *     "port is already allocated" — silently, since reuse falls back to a cold
+ *     boot, so the user just gets a 90-second install that should have been
+ *     three seconds.
+ *   • `Labels["lifemark.hostport"]` — written at create time, so it survives
+ *     the container being stopped. Containers created before this label
+ *     existed simply fall back to the first source while they are running.
+ */
+async function portsInUse(): Promise<Set<number>> {
+  const filters = encodeURIComponent(JSON.stringify({ label: ["lifemark.sandbox=1"] }));
+  const res = await docker("GET", `/v1.43/containers/json?all=1&filters=${filters}`);
+  if (res.status >= 400) return new Set(lastKnownPortsInUse);
+  let list: Array<{
+    Ports?: Array<{ PublicPort?: number }>;
+    Labels?: Record<string, string>;
+  }> = [];
+  try {
+    list = JSON.parse(res.text) as typeof list;
+  } catch {
+    return new Set(lastKnownPortsInUse);
+  }
+  const inUse = new Set<number>();
+  for (const ctr of list) {
+    for (const p of ctr.Ports ?? []) {
+      if (typeof p.PublicPort === "number") inUse.add(p.PublicPort);
+    }
+    const labelled = Number(ctr.Labels?.["lifemark.hostport"]);
+    if (Number.isFinite(labelled) && labelled > 0) inUse.add(labelled);
+  }
+  lastKnownPortsInUse = inUse;
+  return new Set(inUse);
+}
+
+/**
+ * Reserve a free host port for one boot.
+ *
+ * Truth comes from Docker on every call, unioned with this process's in-flight
+ * reservations. Nothing has to be released on teardown — a removed container
+ * stops appearing in the listing, which IS the release — so the leak cannot
+ * come back through a path someone forgets to update.
+ *
+ * A failed list call falls back to the last good reading rather than an empty
+ * set: guessing "nothing is in use" would hand out a port that is, and the
+ * bind failure is a much worse outcome than a spurious "no free port".
+ */
+async function claimPort(): Promise<number | null> {
   const c = cfg();
+  let taken: Set<number>;
+  try {
+    taken = await portsInUse();
+  } catch {
+    taken = new Set(lastKnownPortsInUse);
+  }
+  for (const p of reservedPorts) taken.add(p);
   for (let p = c.portLo; p <= c.portHi; p++) {
-    if (!claimedPorts.has(p)) {
-      claimedPorts.add(p);
+    if (!taken.has(p)) {
+      reservedPorts.add(p);
       return p;
     }
   }
@@ -379,7 +514,7 @@ export class DockerSandboxProvider implements SandboxProvider {
     const innerPort = opts.port ?? 5173;
     // In proxy mode Traefik reaches the container over the shared network, so
     // there is no host port to claim and no range to exhaust.
-    const hostPort = c.routeViaProxy ? null : claimPort();
+    const hostPort = c.routeViaProxy ? null : await claimPort();
     if (!c.routeViaProxy && hostPort == null) {
       return { ok: false, error: `No free port in ${c.portLo}-${c.portHi}. Raise SANDBOX_PORT_RANGE.` };
     }
@@ -409,6 +544,40 @@ export class DockerSandboxProvider implements SandboxProvider {
       // across two vite servers → the browser assembles the app from two React
       // copies → "more than one copy of React" → blank preview. Tear those down
       // before creating the replacement.
+      // WARM PATH — reuse this project's existing container instead of
+      // destroying it.
+      //
+      // A cold boot's cost is almost entirely `npm install`: ~340 packages into
+      // an empty cache, 40-90s of spinner. And it was paid far more often than
+      // it needed to be, because the container is where node_modules lives and
+      // every boot began by deleting the container. Reopen a project after the
+      // host GC's 3h idle window and you reinstall from scratch — the same
+      // dependencies, over the network, again.
+      //
+      // A container that still exists still has node_modules, so restarting it
+      // and re-syncing the files skips the install entirely. writeFiles already
+      // diffs against a content-hash manifest, so an unchanged project uploads
+      // nothing at all. This is the difference between a 60-second open and a
+      // 3-second one.
+      //
+      // Reuse is strictly safer than the create path for the duplicate-router
+      // hazard too: it is the same single container, so Traefik never sees two
+      // backends for the project's hostname.
+      if (opts.projectId) {
+        const reused = await this.reuseProjectContainer({
+          projectId: opts.projectId,
+          image: c.image,
+          innerPort,
+          startCommand: opts.startCommand,
+          files: opts.files,
+          progress,
+          readyBudgetMs: Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000),
+        });
+        if (reused) return reused;
+      }
+
+      // No reusable container (first ever boot, GC removed it, or the image
+      // changed) — fall through to a full cold provision.
       if (opts.projectId) {
         progress("cleanup", "Removing previous sandbox for project");
         await this.removeProjectContainers(opts.projectId);
@@ -461,6 +630,10 @@ export class DockerSandboxProvider implements SandboxProvider {
           "lifemark.sandbox": "1",
           "lifemark.project": opts.projectId ?? "",
           "lifemark.created": new Date().toISOString(),
+          // Survives the container being STOPPED, which `Ports` does not. A
+          // stopped container still owns this binding and will re-take it when
+          // warm reuse wakes it, so `claimPort` has to count it as in use.
+          ...(hostPort != null ? { "lifemark.hostport": String(hostPort) } : {}),
           // Traefik discovers routes from container labels. The router name must
           // be unique per container or the last one created silently wins the
           // hostname — hence the timestamped previewHost, reused as the id.
@@ -479,7 +652,6 @@ export class DockerSandboxProvider implements SandboxProvider {
         },
       });
       if (create.status >= 400) {
-        claimedPorts.delete(hostPort);
         return { ok: false, error: `docker create failed (${create.status}): ${trunc(create.text, 400)}` };
       }
       const id = (JSON.parse(create.text) as { Id: string }).Id;
@@ -500,12 +672,71 @@ export class DockerSandboxProvider implements SandboxProvider {
         return { ok: false, error: `could not create ${APP_DIR}: ${trunc(mk.stdout + mk.stderr, 300)}` };
       }
 
+      // READ THE IMAGE'S OWN package.json BEFORE THE UPLOAD OVERWRITES IT.
+      //
+      // This is the only moment it exists. It is the manifest the image's
+      // node_modules was installed from, and comparing it against what we are
+      // about to upload is one of the two conditions for skipping the install
+      // below. Doing it in the same exec as the other probes keeps it to one
+      // round trip.
+      //
+      // THE SECOND CONDITION IS A MARKER FILE, AND IT IS NOT OPTIONAL.
+      //
+      // Matching manifests are NOT sufficient on their own, which I learned by
+      // measuring rather than reasoning. Running the exact install command
+      // against a pristine `lifemark-sandbox:base22`, with the image's own
+      // unmodified package.json, reports:
+      //
+      //     added 3 packages in 2s
+      //
+      // and the three are platform-specific optional binaries fetched from the
+      // registry on a cache miss: @swc/core-linux-x64-gnu,
+      // @rollup/rollup-linux-x64-gnu, @napi-rs/lzma-linux-x64-gnu. So the
+      // image's node_modules is incomplete with respect to its OWN manifest —
+      // and the first of those is what @vitejs/plugin-react-swc loads to
+      // transform JSX. Skipping on manifest equality alone would have left it
+      // absent and the dev server would never have started.
+      //
+      // Hence: skip only when the image explicitly asserts its tree is
+      // complete, by carrying this marker. `base22` does not have it, so the
+      // skip is inert until an image is built that verifies its own install
+      // (see docker/sandbox/Dockerfile). Adding the marker is what turns the
+      // optimisation on; nothing here has to change.
+      const baseline = await this.exec(
+        id,
+        `[ -d node_modules ] && echo LM_PREBUILT; ` +
+          `[ -f ${DEPS_VERIFIED_MARKER} ] && echo LM_DEPS_VERIFIED; ` +
+          `echo LM_PKG_START; cat package.json 2>/dev/null`,
+      );
+      const hasPrebuiltModules = baseline.stdout.includes("LM_PREBUILT");
+      const treeVerifiedComplete = baseline.stdout.includes("LM_DEPS_VERIFIED");
+      const baselinePackageJson = baseline.stdout.includes("LM_PKG_START")
+        ? baseline.stdout.slice(baseline.stdout.indexOf("LM_PKG_START") + "LM_PKG_START".length)
+        : null;
+
       progress("writing", `Uploading ${opts.files.length} files`);
+      // Ship the sync manifest with the cold upload too.
+      //
+      // `writeFiles` writes one on every warm sync, but the cold path never
+      // did — so the SECOND boot of a project found no manifest, concluded it
+      // knew nothing about the container's disk, and re-uploaded every file.
+      // That rewrites vite.config.ts's mtime, which vite treats as a config
+      // change and answers with a full server restart: a Bad Gateway on first
+      // paint, on the boot that was supposed to be the fast one.
+      const coldHashes: Record<string, string> = {};
+      for (const f of opts.files) {
+        coldHashes[f.path.replace(/\\/g, "/")] = createHash("sha1")
+          .update(f.content ?? "")
+          .digest("hex");
+      }
       const put = await docker(
         "PUT",
         `/v1.43/containers/${id}/archive?path=${encodeURIComponent(APP_DIR)}`,
         undefined,
-        buildTar(opts.files),
+        buildTar([
+          ...opts.files,
+          { path: SYNC_MANIFEST, content: JSON.stringify(coldHashes) },
+        ]),
       );
       if (put.status >= 400) {
         return { ok: false, error: `file upload failed (${put.status}): ${trunc(put.text, 300)}` };
@@ -525,11 +756,82 @@ export class DockerSandboxProvider implements SandboxProvider {
 
       let logs = "";
       if (opts.files.some((f) => f.path.endsWith("package.json"))) {
-        progress("installing", "Installing dependencies");
-        const res = await this.exec(id, "npm install --no-audit --no-fund");
-        logs += res.stdout + res.stderr;
-        if (res.exitCode && res.exitCode !== 0) {
-          return { ok: false, error: `npm install failed (exit ${res.exitCode}).`, logs: trunc(logs) };
+        // Nothing is copied or linked into place. When the image already ships
+        // node_modules at this path (see docker/sandbox/Dockerfile), it is
+        // simply there, in a shared read-only layer, and npm reconciles it in
+        // place — writing only what actually differs.
+        //
+        // This used to hardlink a staged copy from /opt/lm-base, which was
+        // worse than doing nothing: on overlayfs, linking a file out of a lower
+        // layer forces a copy-up, so every container paid the full 301MB of the
+        // base tree into its own writable layer. Measured: 28,199 files. With
+        // the modules already at the final path, that cost is paid once per
+        // host instead of once per project — which is what makes keeping idle
+        // sandboxes around affordable at all.
+        // SKIP THE INSTALL WHEN IT PROVABLY CANNOT CHANGE ANYTHING.
+        //
+        // The `[ -d node_modules ]` probe has been here for a long time, but
+        // its answer only ever picked between two progress strings — the
+        // install ran either way. For a freshly generated app that is pure
+        // overhead: the scaffold's dependency set IS the set the image was
+        // built from, so npm re-resolves the root and then stats 28,199 files
+        // to conclude there is nothing to do. On one CPU that is the single
+        // largest phase of a first preview.
+        //
+        // `dependenciesAlreadySatisfied` answers a deliberately narrow
+        // question — is this the same dependency set npm already resolved? —
+        // by exact key-and-spec equality, and fails closed on anything else:
+        // one extra package, one changed caret, one REMOVED package (npm
+        // prunes, so a subset is real work), an unreadable manifest, a missing
+        // tree. The comparison runs against the FINAL package.json, after the
+        // toolchain/tailwind/auto-install passes have mutated it, so any pin
+        // those passes add forces the install to happen.
+        const projectPackageJson =
+          opts.files.find((f) => f.path === "package.json")?.content ??
+          opts.files.find((f) => f.path.endsWith("/package.json"))?.content ??
+          null;
+        const depCheck = dependenciesAlreadySatisfied(
+          baselinePackageJson,
+          projectPackageJson,
+          // Both conditions, deliberately ANDed here rather than inside the
+          // pure function: a tree can exist and still be incomplete, which is
+          // exactly what base22 does. See the marker note above.
+          hasPrebuiltModules && treeVerifiedComplete,
+        );
+
+        if (depCheck.satisfied) {
+          logs += `\n[preview] skipped npm install — ${depCheck.reason}\n`;
+          progress("installing", "Dependencies already prepared");
+        } else {
+          progress(
+            "installing",
+            hasPrebuiltModules ? "Reconciling dependencies" : "Installing dependencies",
+          );
+          // --prefer-offline: use anything already in the cache instead of
+          // revalidating it over the network, which is most of the install once
+          // the base modules are present. --progress/--loglevel keep npm from
+          // streaming tens of thousands of lines back through the exec socket.
+          //
+          // `timeout` because neither `exec` nor `docker()` sets one: a wedged
+          // install held the whole request open indefinitely, and the 120s
+          // readiness budget below does not start until this returns. Same
+          // pattern as the typecheck exec.
+          const res = await this.exec(
+            id,
+            `timeout ${INSTALL_TIMEOUT_SEC} npm install --no-audit --no-fund --prefer-offline --progress=false --loglevel=error; echo "LM_NPM_EXIT:$?"`,
+          );
+          logs += res.stdout + res.stderr;
+          const npmExit = Number(/LM_NPM_EXIT:(\d+)/.exec(res.stdout + res.stderr)?.[1] ?? "0");
+          if (npmExit === 124) {
+            return {
+              ok: false,
+              error: `Installing dependencies took longer than ${INSTALL_TIMEOUT_SEC}s and was stopped. ${depCheck.reason}.`,
+              logs: trunc(logs),
+            };
+          }
+          if (npmExit !== 0) {
+            return { ok: false, error: `npm install failed (exit ${npmExit}).`, logs: trunc(logs) };
+          }
         }
       }
 
@@ -558,33 +860,37 @@ export class DockerSandboxProvider implements SandboxProvider {
       //     (config restart, crash, OOM-of-the-process) is back within a second.
       //     Init:true (tini as pid 1) reaps the exited children so they don't
       //     pile up as zombies across restarts.
-      const supervised =
-        `while true; do ${cmd} >> ${DEV_LOG} 2>&1; ` +
-        `echo "[supervisor] dev server exited ($(date -u +%H:%M:%S)); restarting" >> ${DEV_LOG}; ` +
-        `sleep 1; done`;
-      await this.exec(id, supervised, APP_DIR, false, true);
+      await this.exec(id, supervisorCommand(cmd), APP_DIR, false, true);
 
       const previewUrl = c.routeViaProxy
         ? `https://${previewHost}`
         : `${c.scheme}://${c.publicHost}:${hostPort}`;
-      // Wait for a real response — returning before the server listens hands the
-      // iframe a dead URL and paints a blank pane.
+
+      // READINESS IS MEASURED INSIDE THE CONTAINER, not through the tunnel.
       //
-      // When the Lifemark app itself runs in Docker and SANDBOX_PUBLIC_HOST is
-      // localhost/127.0.0.1 (browser-reachable on the Docker Desktop host),
-      // probing that URL from inside the app container hairpins to the app
-      // container — not the published sandbox port. Probe via the host gateway
-      // instead; still return the localhost URL to the browser.
-      const probeHost =
-        !c.routeViaProxy &&
-        (c.publicHost === "localhost" || c.publicHost === "127.0.0.1")
-          ? "host.docker.internal"
-          : null;
-      const probeUrl =
-        probeHost && hostPort != null
-          ? `${c.scheme}://${probeHost}:${hostPort}`
-          : previewUrl;
-      const ready = await waitForServer(probeUrl, Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000));
+      // The old probe fetched `https://<project>.<preview-domain>` from the app
+      // server, which makes boot time depend on things that have nothing to do
+      // with whether the app is up:
+      //
+      //   • Traefik obtains that hostname's certificate through the ACME
+      //     HTTP-01 challenge on FIRST USE. Until it completes, an HTTPS fetch
+      //     throws a TLS error, which the probe cannot distinguish from "vite
+      //     isn't listening" — so a project whose dev server was serving in 15s
+      //     could still burn the entire 120s budget waiting on issuance.
+      //   • Traefik answers 502 for a booting backend, and the probe has to
+      //     special-case that (see backendResponding) to avoid reading the
+      //     proxy's own liveness as the app's.
+      //   • It requires the app server to be able to reach its own public
+      //     hostname, which is a hairpin through the edge on most hosts.
+      //
+      // `wget` against 127.0.0.1 inside the container answers the only question
+      // that matters — is the dev server accepting requests? — in milliseconds,
+      // with no TLS, no DNS and no proxy in the path. Requesting `/` rather
+      // than just opening a socket is deliberate: it makes Vite start its
+      // dependency pre-bundling pass now, during boot, instead of on the user's
+      // first paint.
+      const readyBudget = Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000);
+      const ready = await this.waitForLocalServer(id, innerPort, readyBudget);
 
       if (!ready) {
         // ONE-SHOT DIAGNOSTICS. Six deploys were spent guessing at this failure
@@ -602,6 +908,7 @@ export class DockerSandboxProvider implements SandboxProvider {
         logs +=
           `\n[preview] dev server did not answer in time.` +
           `\n[preview] container OOMKilled=${oom}` +
+          `\n[preview] probe=inner:${innerPort} (127.0.0.1 inside the container)` +
           `\n[preview] --- ${DEV_LOG} (tail) ---\n${devLog.stdout.trim() || "(empty)"}` +
           `\n[preview] --- processes ---\n${procs.stdout.trim() || "(none)"}`;
       }
@@ -610,12 +917,253 @@ export class DockerSandboxProvider implements SandboxProvider {
         ok: true,
         sandboxId: id,
         previewUrl,
+        // Report readiness HONESTLY. Returning ok:true unconditionally is what
+        // put "Bad Gateway" in the preview pane: the caller persisted phase
+        // "ready", the editor framed the URL, and Traefik answered 502 because
+        // vite was still coming up. The container is fine — the supervisor loop
+        // keeps trying — so this is "not yet", not "failed", and the phase
+        // poller flips it to ready as soon as the tunnel actually answers.
+        ready,
         logs: trunc(logs, 4000),
       };
     } catch (err) {
-      claimedPorts.delete(hostPort);
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      // Always. Once we are out of this function the container either exists
+      // — in which case Docker reports the port and `claimPort` will see it —
+      // or it does not, and the port is genuinely free. Holding the
+      // reservation past this point is what leaked.
+      releaseReservation(hostPort);
     }
+  }
+
+  /**
+   * Bring this project's existing container back into service, or return null.
+   *
+   * Returns null (never throws) whenever reuse isn't safe or doesn't work, so
+   * the caller falls through to a normal cold provision. The bar for "safe":
+   *
+   *   • exactly one container, newest wins — extras are removed, because two
+   *     live containers share the project's stable hostname and Traefik would
+   *     round-robin them into the two-copies-of-React blank preview;
+   *   • the image matches the currently configured SANDBOX_IMAGE, so bumping
+   *     the image actually takes effect instead of pinning projects to
+   *     whatever they first booted on;
+   *   • node_modules is present — a container without it saves nothing, and
+   *     the cold path handles it better.
+   */
+  private async reuseProjectContainer(opts: {
+    projectId: string;
+    image: string;
+    innerPort: number;
+    startCommand?: string;
+    files: SandboxFile[];
+    progress: (phase: string, detail?: string) => void;
+    readyBudgetMs: number;
+  }): Promise<SandboxRunResult | null> {
+    const { projectId, image, innerPort, files, progress } = opts;
+    try {
+      const filters = encodeURIComponent(
+        JSON.stringify({ label: [`lifemark.project=${projectId}`] }),
+      );
+      const listed = await docker("GET", `/v1.43/containers/json?all=1&filters=${filters}`);
+      if (listed.status >= 400) return null;
+
+      let containers: Array<{
+        Id: string;
+        Image: string;
+        State: string;
+        Created: number;
+        Ports?: Array<{ PublicPort?: number }>;
+      }> = [];
+      try {
+        containers = JSON.parse(listed.text) as typeof containers;
+      } catch {
+        return null;
+      }
+      if (containers.length === 0) return null;
+
+      containers.sort((a, b) => (b.Created ?? 0) - (a.Created ?? 0));
+      const [keep, ...extras] = containers;
+      // Dedupe before anything else — a leftover duplicate is the blank-preview
+      // bug waiting to happen, whether or not we end up reusing `keep`.
+      // No port bookkeeping here on purpose: `claimPort` reads Docker, so
+      // deleting the container IS the release, and `keep` keeps its port
+      // simply by continuing to exist.
+      await Promise.all(
+        extras.map((ctr) =>
+          docker("DELETE", `/v1.43/containers/${ctr.Id}?force=true&v=true`).catch(() => undefined),
+        ),
+      );
+
+      if (keep.Image && image && keep.Image !== image) return null;
+
+      const id = keep.Id;
+      if (keep.State !== "running") {
+        progress("creating", "Waking the existing sandbox");
+        const started = await docker("POST", `/v1.43/containers/${id}/start`);
+        // 304 = already running, which is a race we are happy to lose.
+        if (started.status >= 400 && started.status !== 304) return null;
+      }
+
+      // Prove the project survived. A container whose APP_DIR or node_modules
+      // is gone (a failed earlier boot, a manual cleanup) has nothing to offer.
+      const probe = await this.exec(
+        id,
+        `[ -d node_modules ] && [ -f package.json ] && echo LM_WARM`,
+      );
+      if (!probe.stdout.includes("LM_WARM")) return null;
+
+      // Remove files the project no longer has.
+      //
+      // The cold path got this for free: a fresh container starts empty, so a
+      // renamed or deleted file simply is not there. Reuse inherits the old
+      // disk, and writeFiles only ever adds or overwrites — so without this, a
+      // file the user renamed yesterday is still sitting in the container,
+      // still being served, and still importable. That is the kind of
+      // difference that makes a warm preview behave unlike a cold one, which
+      // is exactly what nobody can debug.
+      //
+      // Safe here specifically because `files` is the project's COMPLETE file
+      // set read from the database. Never do this from an incremental caller.
+      await this.pruneRemovedFiles(id, files);
+
+      progress("writing", "Syncing changed files");
+      // Incremental by content hash — an unchanged project writes nothing, so
+      // vite is not disturbed at all and HMR keeps whatever state it had.
+      const { written } = await this.writeFiles(id, files);
+
+      let logs = "";
+      // Only reinstall when the dependency manifest itself moved. A source-only
+      // edit needs no install, and running one anyway would hand back the very
+      // cold-start cost this path exists to avoid.
+      if (written.some((p) => p === "package.json" || p.endsWith("/package.json"))) {
+        progress("installing", "Updating dependencies");
+        const res = await this.exec(
+          id,
+          "npm install --no-audit --no-fund --prefer-offline --progress=false --loglevel=error",
+        );
+        logs += res.stdout + res.stderr;
+        if (res.exitCode && res.exitCode !== 0) {
+          // A broken install on a warm container is a real failure, but the
+          // cold path may still succeed from a clean tree — let it try.
+          return null;
+        }
+      }
+
+      // The supervisor loop is an exec, and execs do not survive a container
+      // stop — so a woken container needs one started, while a container that
+      // was merely idle already has one.
+      //
+      // Which it is MUST be decided by looking, not by whether vite answers
+      // right now. A supervisor whose vite is mid-restart answers nothing for a
+      // second or two, and starting a second loop on that evidence gives the
+      // container two of them, each stealing the port from the other on every
+      // cycle. That flaps the preview indefinitely and is far worse than the
+      // cold start being avoided.
+      let up = await this.waitForLocalServer(id, innerPort, 1500);
+      if (!up) {
+        const running = await this.exec(
+          id,
+          `ps 2>/dev/null | grep -q "[${SUPERVISOR_TAG[0]}]${SUPERVISOR_TAG.slice(1)}" && echo LM_SUP_UP`,
+          "/",
+        );
+        if (running.stdout.includes("LM_SUP_UP")) {
+          // Someone is already supervising — give its restart loop the time it
+          // needs rather than adding a competitor.
+          up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
+        } else {
+          const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
+          progress("starting", cmd);
+          await this.exec(id, supervisorCommand(cmd), APP_DIR, false, true);
+          up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
+        }
+      }
+
+      const previewUrl = await this.getPreviewUrl(id);
+      if (!previewUrl) return null;
+
+      // Keep the GC's idle clock honest: this container was just used.
+      void this.exec(id, "touch /tmp/.lm-keepalive", "/", false, true).catch(() => undefined);
+
+      return { ok: true, sandboxId: id, previewUrl, ready: up, logs: trunc(logs, 4000) };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Delete files present in the container's sync manifest but absent from the
+   * project's current file set — renames and deletions, in other words.
+   *
+   * ONLY call this with a complete file set. Given a partial one it would read
+   * every unsent file as deleted and empty the project.
+   *
+   * Deliberately conservative: it can only remove paths the manifest says WE
+   * uploaded, so nothing the container generated (node_modules, .vite caches,
+   * the manifest itself) is reachable, and a missing or unparseable manifest
+   * removes nothing at all.
+   */
+  private async pruneRemovedFiles(sandboxId: string, files: SandboxFile[]): Promise<void> {
+    try {
+      const read = await this.exec(
+        sandboxId,
+        `cat ${APP_DIR}/${SYNC_MANIFEST} 2>/dev/null || true`,
+        "/",
+      );
+      const raw = read.stdout ?? "";
+      const start = raw.indexOf("{");
+      const end = raw.lastIndexOf("}");
+      if (start < 0 || end <= start) return;
+
+      const prev = JSON.parse(raw.slice(start, end + 1)) as Record<string, string>;
+      const gone = filesToPrune(Object.keys(prev), files.map((f) => f.path));
+      if (gone.length === 0) return;
+
+      // Single exec, quoted paths. Directories left behind are harmless; only
+      // files are served.
+      const quoted = gone.map((p) => `'${p.replace(/'/g, `'\\''`)}'`).join(" ");
+      await this.exec(sandboxId, `rm -f -- ${quoted}`, APP_DIR);
+    } catch {
+      /* pruning is an optimisation of correctness, never a reason to fail a boot */
+    }
+  }
+
+  /**
+   * Poll the dev server from INSIDE the container until it answers.
+   *
+   * Each attempt is one `exec` over the Docker socket — a few tens of
+   * milliseconds, no network egress — so this can poll tightly at first and
+   * report readiness within a second of vite binding the port, rather than up
+   * to a full poll interval late.
+   *
+   * `wget -q -O /dev/null -T 3` treats any HTTP response as success, including
+   * a 404: the question is whether the server is accepting requests, and the
+   * dev server answering *anything* proves that. Busybox wget ships in
+   * node:*-alpine; on a Debian-based image `curl` is the fallback and the
+   * `nc -z` third branch covers an image with neither.
+   */
+  private async waitForLocalServer(
+    sandboxId: string,
+    port: number,
+    timeoutMs: number,
+  ): Promise<boolean> {
+    const probe =
+      `wget -q -O /dev/null -T 3 http://127.0.0.1:${port}/ 2>/dev/null || ` +
+      `curl -fsS -m 3 -o /dev/null http://127.0.0.1:${port}/ 2>/dev/null || ` +
+      `nc -z 127.0.0.1 ${port} 2>/dev/null`;
+    const deadline = Date.now() + timeoutMs;
+    // Back off from 250ms to 2s: a warm boot answers almost immediately and
+    // shouldn't pay a fixed poll interval, while a cold npm-install boot
+    // shouldn't hammer the socket for two minutes.
+    let delay = 250;
+    while (Date.now() < deadline) {
+      const res = await this.exec(sandboxId, `${probe} && echo LM_UP`);
+      if (res.stdout.includes("LM_UP")) return true;
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(delay * 1.5, 2000);
+    }
+    return false;
   }
 
   /**
@@ -748,6 +1296,71 @@ export class DockerSandboxProvider implements SandboxProvider {
     return { written: toWrite.map((f) => norm(f.path)) };
   }
 
+  /**
+   * Type-check the project in place, with its own installed dependencies.
+   *
+   * This is the only correctness check in the system that can distinguish a
+   * real import from a plausible-looking one. Everything else — the ~580 lines
+   * of `validateGeneratedFiles`, the export-contract scanner, the JSX balance
+   * tokenizer — is a regex over source text, and no amount of regex can know
+   * whether `@tanstack/react-router` actually exports `Body` at the version
+   * this project installed. The compiler can, because it is reading the very
+   * `.d.ts` files sitting in this container.
+   *
+   * Deliberately NOT on the boot critical path. `tsc` on a generated app takes
+   * seconds, and blocking first paint on it would trade a real regression in
+   * perceived speed for a check whose findings are just as useful ten seconds
+   * later. Callers should fire this after the preview reports ready.
+   */
+  async typecheckProject(
+    sandboxId: string,
+    opts: { timeoutSec?: number } = {},
+  ): Promise<TypecheckResult> {
+    const timeoutSec = Math.max(10, Math.min(opts.timeoutSec ?? 90, 300));
+    const started = Date.now();
+
+    // `npx tsc` would try to DOWNLOAD TypeScript when the project has none,
+    // which on a sandbox with no npm registry access hangs until the timeout
+    // and on one with access silently installs a package the project never
+    // asked for. Probe for the locally installed binary instead, and report
+    // "unavailable" rather than inventing a toolchain.
+    const probe = await this.exec(
+      sandboxId,
+      `[ -x node_modules/.bin/tsc ] && echo LM_TSC_OK`,
+    );
+    if (!probe.stdout.includes("LM_TSC_OK")) {
+      return {
+        available: false,
+        diagnostics: [],
+        durationMs: Date.now() - started,
+        reason: "no local TypeScript in the project",
+      };
+    }
+
+    // --pretty false is required, not cosmetic: the exec allocates a TTY, so
+    // tsc's default pretty output would come back colour-escaped and split
+    // across several lines per diagnostic, which is unparseable.
+    // Exit code 124 is `timeout`'s signal that it killed the process.
+    const res = await this.exec(
+      sandboxId,
+      `timeout ${timeoutSec} node_modules/.bin/tsc --noEmit --pretty false 2>&1; echo "LM_TSC_EXIT:$?"`,
+    );
+
+    const raw = `${res.stdout ?? ""}${res.stderr ?? ""}`;
+    const exitMatch = raw.match(/LM_TSC_EXIT:(\d+)/);
+    const exitCode = exitMatch ? Number(exitMatch[1]) : undefined;
+    const timedOut = exitCode === 124 || exitCode === 137;
+
+    return {
+      available: true,
+      diagnostics: parseTscOutput(raw.replace(/LM_TSC_EXIT:\d+\s*$/, ""), {
+        appDir: APP_DIR,
+      }),
+      durationMs: Date.now() - started,
+      timedOut,
+    };
+  }
+
   async getPreviewUrl(sandboxId: string): Promise<string> {
     const c = cfg();
     const res = await docker("GET", `/v1.43/containers/${sandboxId}/json`);
@@ -784,7 +1397,22 @@ export class DockerSandboxProvider implements SandboxProvider {
     } catch { /* treat as running */ }
     const previewUrl = await this.getPreviewUrl(sandboxId);
     if (!previewUrl) return { ok: false, error: "Could not resolve the container's port." };
-    return { ok: true, sandboxId, previewUrl };
+
+    // "Running" is a statement about the container, not about the app. The
+    // container's pid 1 is `sleep infinity`, so it stays Running through a vite
+    // crash, an OOM of the dev server, and the entire cold-start window — every
+    // one of which serves a 502 through Traefik. Reconnect is the editor's
+    // FIRST call on every open, so answering ok:true here on that evidence
+    // alone is a direct route to Bad Gateway in the pane.
+    //
+    // A short local probe settles it. It costs one exec (~100ms) when the app
+    // is up, which is the common case; when it's down, waiting a beat is
+    // exactly what the caller needs to know about.
+    const innerPort = await this.portFor(sandboxId).catch(() => null);
+    const ready =
+      innerPort == null ? true : await this.waitForLocalServer(sandboxId, innerPort, 2500);
+
+    return { ok: true, sandboxId, previewUrl, ready };
   }
 
   async keepAlive(
@@ -820,7 +1448,55 @@ export class DockerSandboxProvider implements SandboxProvider {
       // outage — `restarted` tells the client to bump its reload nonce.
       return { alive: true, tunnelHealthy: true, restarted: true };
     }
+
+    // The tunnel is not answering US. That is not the same as the app being
+    // down, and the difference matters enormously: `tunnelHealthy: false`
+    // makes the client tear down the container and cold-boot a replacement.
+    // Right after a first boot the hostname's certificate may still be
+    // mid-issuance (ACME HTTP-01), so an HTTPS probe from this server fails
+    // while the user's browser — moments later, once the cert lands — would
+    // have been served fine. Rebooting there is not just wasteful, it restarts
+    // the same race and can loop.
+    //
+    // So before condemning the sandbox, ask the app directly. If it answers on
+    // localhost the problem is the edge, and the right move is to leave the
+    // container alone and let the next heartbeat re-probe.
+    const innerPort = await this.portFor(sandboxId).catch(() => null);
+    if (innerPort != null) {
+      const localUp = await this.waitForLocalServer(sandboxId, innerPort, 4000);
+      // `restarted` is set on purpose. We got here because the tunnel refused
+      // us at least twice, which means the iframe may be sitting on a Bad
+      // Gateway page — and browsers never retry those on their own. The client
+      // reads this as "bump the reload nonce", which is exactly the recovery
+      // needed, whereas tunnelHealthy:false would throw away a container whose
+      // app is demonstrably serving.
+      if (localUp) return { alive: true, tunnelHealthy: true, restarted: true };
+    }
     return { alive: true, tunnelHealthy: false };
+  }
+
+  /** The port the dev server was started on, read back from the container. */
+  private async portFor(sandboxId: string): Promise<number | null> {
+    const res = await docker("GET", `/v1.43/containers/${sandboxId}/json`);
+    if (res.status >= 400) return null;
+    try {
+      const info = JSON.parse(res.text) as {
+        Config?: { ExposedPorts?: Record<string, unknown>; Labels?: Record<string, string> };
+      };
+      // Proxy mode records it on the Traefik service label; port mode exposes
+      // exactly one port. Either way there is only ever one dev server.
+      for (const [k, v] of Object.entries(info.Config?.Labels ?? {})) {
+        if (/^traefik\.http\.services\..+\.loadbalancer\.server\.port$/.test(k)) {
+          const n = Number(v);
+          if (Number.isFinite(n)) return n;
+        }
+      }
+      const exposed = Object.keys(info.Config?.ExposedPorts ?? {})[0];
+      const n = Number((exposed ?? "").split("/")[0]);
+      return Number.isFinite(n) ? n : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -846,10 +1522,14 @@ export class DockerSandboxProvider implements SandboxProvider {
     if (res.status >= 400) return;
     let list: Array<{ Id: string }> = [];
     try {
-      list = JSON.parse(res.text) as Array<{ Id: string }>;
+      list = JSON.parse(res.text) as typeof list;
     } catch {
       return;
     }
+    // No port bookkeeping: `claimPort` reads Docker, so the DELETE below is
+    // the release. Doing it by hand here was actively wrong — this runs AFTER
+    // the current request has already reserved its own port, and the removed
+    // container's port is frequently that same number.
     await Promise.all(
       list.map((ctr) =>
         docker("DELETE", `/v1.43/containers/${ctr.Id}?force=true&v=true`).catch(
@@ -860,12 +1540,8 @@ export class DockerSandboxProvider implements SandboxProvider {
   }
 
   async kill(sandboxId: string): Promise<void> {
-    // Free the port first so a crash mid-teardown doesn't leak the allocation.
-    try {
-      const url = await this.getPreviewUrl(sandboxId);
-      const port = Number(url.split(":").pop());
-      if (Number.isFinite(port)) claimedPorts.delete(port);
-    } catch { /* ignore */ }
+    // Removing the container is the release — `claimPort` derives usage from
+    // Docker, so there is nothing to hand back by hand.
     await docker("DELETE", `/v1.43/containers/${sandboxId}?force=true&v=true`);
   }
 

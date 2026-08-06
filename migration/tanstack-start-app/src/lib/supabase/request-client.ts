@@ -3,7 +3,7 @@
  * Used by lib/ai/http/* under TanStack Start / AI worker (no next/headers).
  */
 import { createServerClient } from "@supabase/ssr";
-import type { Database } from "@/types/database";
+import type { Database } from "../../types/database.ts";
 
 export type PendingSetCookie = {
   name: string;

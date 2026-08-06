@@ -5,7 +5,7 @@
  * admin Supabase client + node crypto, so it runs unchanged in the TanStack
  * server context.
  */
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createAdminClient } from "../supabase/admin.ts";
 import { createHash } from "node:crypto";
 
 export type ApiScope =

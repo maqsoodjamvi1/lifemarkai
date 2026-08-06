@@ -4,7 +4,7 @@ import {
   detectPromptSecret,
   extractPromptSecretAssignments,
   redactPromptSecrets,
-} from "./chat-capabilities";
+} from "./chat-capabilities.ts";
 
 test("redacts named secret assignments into secret mentions", () => {
   const input = "Use this key:\nOPENAI_API_KEY=sk-proj_abcdefghijklmnopqrstuvwxyz123456";

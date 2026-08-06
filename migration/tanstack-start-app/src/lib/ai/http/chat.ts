@@ -1,11 +1,11 @@
-import { createAdminClient } from "@/lib/supabase/server";
-import { createClientFromRequest } from "@/lib/supabase/request-client";
-import { getServerUser } from "@/lib/supabase/server-user";
-import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
-import { generateAI } from "@/lib/ai/generate";
-import { ECONOMY_CODING_MODEL, getDefaultAiModel, ESCALATION_MODEL } from "@/lib/ai/model-defaults";
-import { applyModelAdapter } from "@/lib/ai/model-catalog";
-import { sendLowCreditsEmail } from "@/lib/email/resend";
+import { createAdminClient } from "../../supabase/server.ts";
+import { createClientFromRequest } from "../../supabase/request-client.ts";
+import { getServerUser } from "../../supabase/server-user.ts";
+import { canWriteProjectFiles, getProjectAccess } from "../../project/access.ts";
+import { generateAI } from "../generate.ts";
+import { ECONOMY_CODING_MODEL, getDefaultAiModel, ESCALATION_MODEL } from "../model-defaults.ts";
+import { applyModelAdapter } from "../model-catalog.ts";
+import { sendLowCreditsEmail } from "../../email/resend.ts";
 import {
   CHAT_SYSTEM_PROMPT,
   PLAN_SYSTEM_PROMPT,
@@ -17,12 +17,14 @@ import {
   buildProjectContext,
   buildRepairPrompt,
 } from "@/lib/ai/system-prompts";
-import { buildTemplateRefinementBlock } from "@/lib/ai/template-refine";
-import { pickStarterTemplate } from "@/lib/templates/starter-catalog";
-import { buildDesignDirectionBlock } from "@/lib/ai/design-directions";
-import { applyPatches, collapsePatchResults, parsePatchResponse } from "@/lib/ai/patch-applier";
-import { buildPersistedAssistantContent } from "@/lib/ai/persist-message-mode";
-import { persistChatTurnMessages } from "@/lib/ai/persist-chat-turn";
+import { buildTemplateRefinementBlock } from "../template-refine.ts";
+import { pickStarterTemplate } from "../../templates/starter-catalog.ts";
+import { buildDesignDirectionBlock } from "../design-directions.ts";
+import { countUserAuthoredFiles, isGreenfieldProject } from "../scaffold-files.ts";
+import { assessRequestScope, formatScopeAssessment } from "../scope-guard.ts";
+import { applyPatches, collapsePatchResults, parsePatchResponse } from "../patch-applier.ts";
+import { buildPersistedAssistantContent } from "../persist-message-mode.ts";
+import { persistChatTurnMessages } from "../persist-chat-turn.ts";
 import {
   buildNavEditContext,
   buildDeterministicMenuPatches,
@@ -40,16 +42,18 @@ import {
   parseTextReplacementIntent,
   parseHeadingDescriptor,
 } from "@/lib/ai/text-edit";
-import { parseAIResponse, validateGeneratedFiles, assessGenerationQuality, shouldAutoFix, needsBuildContinuation, detectLanguage, type ParsedFile } from "@/lib/ai/code-parser";
-import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
-import { StreamingFileExtractor } from "@/lib/ai/streaming-file-extractor";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import { validateApiKey } from "@/lib/api/api-key";
-import { logger } from "@/lib/logger";
-import { getProjectSchemaContext } from "@/lib/supabase/schema-reader";
-import { attachSkillsToPrompt } from "@/lib/ai/attach-skills";
-import { decideInitiativeRouting } from "@/lib/ai/initiative-routing";
-import type { SkillMatch } from "@/lib/ai/skill-matcher";
+import { parseAIResponse, validateGeneratedFiles, assessGenerationQuality, shouldAutoFix, needsBuildContinuation, detectLanguage, type ParsedFile } from "../code-parser.ts";
+import { ensureCommonGeneratedSupportFiles } from "../generated-support-files.ts";
+import { ensureWebsiteChrome } from "../website-chrome.ts";
+import { alignGeneratedPackageJson, stripGeneratedRouteTree } from "../../preview/align-package-json.ts";
+import { StreamingFileExtractor } from "../streaming-file-extractor.ts";
+import { rateLimitAsync, RATE_LIMITS } from "../../rate-limit.ts";
+import { validateApiKey } from "../../api/api-key.ts";
+import { logger } from "../../logger.ts";
+import { getProjectSchemaContext } from "../../supabase/schema-reader.ts";
+import { attachSkillsToPrompt } from "../attach-skills.ts";
+import { decideInitiativeRouting } from "../initiative-routing.ts";
+import type { SkillMatch } from "../skill-matcher.ts";
 import {
   shouldUseSubagents,
   runSubagentInvestigation,
@@ -61,26 +65,26 @@ import {
   planSubagents,
   runParallelSubagents,
 } from "@/lib/ai/subagents-parallel";
-import { computeCreditCost, maxCreditCostForMode } from "@/lib/ai/credit-cost";
+import { computeCreditCost, maxCreditCostForMode } from "../credit-cost.ts";
 import {
   cancelCreditReservation,
   claimDailyCredits,
   reserveCredits,
   settleCreditReservation,
 } from "@/lib/credits";
-import type { AutoWireResult, SelfVerifyResult } from "@/lib/ai/http/result-types";
-import { autoWireAi } from "@/lib/ai/auto-wire-ai";
-import { selectRelevantFiles } from "@/lib/ai/file-selector";
-import { buildCompletedBuildActivity } from "@/lib/ai/build-activity";
+import type { AutoWireResult, SelfVerifyResult } from "./result-types.ts";
+import { autoWireAi } from "../auto-wire-ai.ts";
+import { selectRelevantFiles } from "../file-selector.ts";
+import { buildCompletedBuildActivity } from "../build-activity.ts";
 import {
   parseCloudToolPermissions,
   buildCloudPermissionsPromptBlock,
   shouldBlockCloudAction,
 } from "@/lib/cloud/permissions";
-import { ensureDevCredits, getDevProfile } from "@/lib/dev-credits";
-import { detectDeployIntent } from "@/lib/ai/deploy-intent";
-import { detectCloudIntent } from "@/lib/ai/cloud-intent";
-import { ENV_FILE_PATH, parseEnvFile } from "@/lib/project/env-file";
+import { ensureDevCredits, getDevProfile } from "../../dev-credits.ts";
+import { detectDeployIntent } from "../deploy-intent.ts";
+import { detectCloudIntent } from "../cloud-intent.ts";
+import { ENV_FILE_PATH, parseEnvFile } from "../../project/env-file.ts";
 import {
   buildEditorIntelligencePromptBlock,
   recordEditorIntelligenceBuild,
@@ -91,7 +95,8 @@ import {
   maxOutputTokensForRequest,
   resolveBudgetAwareModel,
 } from "@/lib/ai/cost-controls";
-import { resolveSmartModel } from "@/lib/ai/editor-intelligence";
+import { resolveSmartModel } from "../editor-intelligence.ts";
+import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 
 // Generation + backend wiring + self-verification can exceed a minute on
 // complex builds (Lovable budgets 15 min for agent runs).
@@ -208,8 +213,15 @@ export async function handleAiChat(req: Request) {
     // In Build mode, "why is the cart empty?" / "explain how auth works" must
     // NOT regenerate the app. Downgrade informational queries to chat (cheaper
     // + prose answer); action requests ("add", "fix", "change"…) still build.
+    //
+    // Both downgrades are gated on the project containing REAL work, not on it
+    // containing files. A new project holds a 25-file scaffold, which used to
+    // satisfy `files.length > 0` and `files.length > 8` on the very first
+    // message — so a first build could be routed to the surgical patch
+    // pipeline and asked to find-and-replace inside a placeholder.
     let autoRoutedPatch = false;
-    if (mode === "build" && body.forceBuild !== true && Array.isArray(files) && files.length > 0 && typeof message === "string") {
+    const hasRealWork = Array.isArray(files) && !isGreenfieldProject(files);
+    if (mode === "build" && body.forceBuild !== true && hasRealWork && typeof message === "string") {
       try {
         const { isInformationalQuery, isSmallSurgicalEdit } = await import("@/lib/ai/build-intent");
         if (isInformationalQuery(message)) {
@@ -606,7 +618,67 @@ export async function handleAiChat(req: Request) {
       });
     }
 
-    const fileCount = Array.isArray(files) ? files.length : 0;
+    // ── Scope guard: ask before building something we shouldn't build blind ──
+    //
+    // Observed in Lovable: given a spec for a 30-subsystem platform pasted into
+    // a working site builder, it declined and asked what the user actually
+    // wanted. We had no equivalent — every prompt was classified and executed,
+    // so the same paste would have started rewriting a working app.
+    //
+    // This never blocks permanently: `forceBuild` skips it, and the message
+    // tells the user so. Placed after the cloud-action block because it follows
+    // the same shape — stream one message, charge nothing, return.
+    if ((mode === "build" || mode === "agent") && body.forceBuild !== true && Array.isArray(files)) {
+      const assessment = assessRequestScope(costPrompt, {
+        userAuthoredFileCount: countUserAuthoredFiles(files),
+      });
+      if (assessment) {
+        const scopeText = formatScopeAssessment(assessment);
+        const scopeEncoder = new TextEncoder();
+        const scopeStream = new ReadableStream({
+          async start(controller) {
+            const { safeEnqueue: scopeEnqueue, safeClose: scopeClose } = createStreamSink(
+              controller,
+              scopeEncoder,
+              req.signal,
+            );
+            scopeEnqueue(scopeEncoder.encode(`data: ${JSON.stringify({ chunk: scopeText })}\n\n`));
+            scopeEnqueue(
+              scopeEncoder.encode(
+                `data: ${JSON.stringify({
+                  done: true,
+                  tokensUsed: 0,
+                  creditsUsed: 0,
+                  scope_query: true,
+                  scopeConcerns: assessment.concerns.map((c) => c.kind),
+                })}\n\n`,
+              ),
+            );
+            scopeClose();
+          },
+        });
+        await persistChatTurnMessages(
+          supabase,
+          [
+            { project_id: projectId, role: "user", content: persistedUserMessage, mode },
+            { project_id: projectId, role: "assistant", content: scopeText, mode },
+          ],
+          { projectId, label: "scope-guard" },
+        );
+        logger.info?.("ai.chat.scope_query", {
+          projectId,
+          userId,
+          kinds: assessment.concerns.map((c) => c.kind).join(","),
+        });
+        return new Response(scopeStream, {
+          headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" },
+        });
+      }
+    }
+
+    // Model selection asks "how big is this project", which is a question about
+    // the user's work, not about the 25-file scaffold every project ships with.
+    const fileCount = Array.isArray(files) ? countUserAuthoredFiles(files) : 0;
     const serverAutoModel = modelManuallySelected === true
       ? model
       : resolveSmartModel(mode, { fileCount, hasPreviewError: false }, costPrompt);
@@ -691,20 +763,40 @@ export async function handleAiChat(req: Request) {
       //  2. otherwise, on a first build, auto-detect the niche from the prompt
       //     ("ecommerce store like Shopify" → storefront baseline);
       //  3. if no niche matches (or it's a restyle), fall back to a design direction.
+      //
+      // `isGreenfieldProject`, NOT `files.length === 0`. Projects are created
+      // with a 25-file scaffold already in them, so the length test has been
+      // false on every first build since scaffolding was introduced — which
+      // silently skipped both the starter template AND the design baseline for
+      // exactly the request that needed them most.
+      const greenfield = isGreenfieldProject(files);
       const autoTemplateId =
-        templateId ?? (files.length === 0 ? pickStarterTemplate(message) : null);
+        templateId ?? (greenfield ? pickStarterTemplate(message) : null);
       if (autoTemplateId) {
         systemPrompt += buildTemplateRefinementBlock(autoTemplateId);
-      } else if (files.length === 0 || isRestyleRequest) {
+      } else if (greenfield || isRestyleRequest) {
         systemPrompt += buildDesignDirectionBlock(message);
       }
 
       // ── Incremental edit safety (Lovable-style preservation) ────────────────
-      // On a follow-up build (project already has files), this is an EDIT, not a
-      // from-scratch rebuild. Without this, a full regeneration silently drops
-      // prior work — most painfully replacing real image URLs with placeholder
-      // icons. Instruct the model to preserve everything it isn't asked to change.
-      if (files.length > 0) {
+      // On a follow-up build (project already has REAL work in it), this is an
+      // EDIT, not a from-scratch rebuild. Without this, a full regeneration
+      // silently drops prior work — most painfully replacing real image URLs
+      // with placeholder icons. Instruct the model to preserve everything it
+      // isn't asked to change.
+      //
+      // The condition was `files.length > 0`, and that is the bug a customer
+      // reported as "I say hi and it never builds". Every project is born with
+      // a 25-file scaffold, so this branch fired on the FIRST message of every
+      // new project: the model was told, in capitals, "this is an edit to an
+      // EXISTING app, not a rebuild… return ONLY the files you actually change…
+      // keep existing copy, data, routes and component structure". Asked to
+      // edit a placeholder it had never seen a request for, it correctly
+      // concluded there was nothing to change and returned prose. The format
+      // retry then failed too, and the customer got "No files generated".
+      //
+      // Nothing was broken downstream. The model did as it was told.
+      if (!greenfield) {
         systemPrompt +=
           `\n\n---\n# INCREMENTAL EDIT — return ONLY the files you change (unchanged files are auto-preserved)\n` +
           `This is an edit to an EXISTING app, not a rebuild. Files are saved by PATH (merge/upsert), so any file you do NOT return is kept exactly as it is. Strict rules:\n` +
@@ -1329,6 +1421,47 @@ The user has expressed frustration. Do the following:
         // dropped on a client/proxy abort). Only flushed when NOT completed normally,
         // so a successful build's final/verified content is never clobbered.
         const streamedFiles: Array<{ path: string; content: string; language: string }> = [];
+        /**
+         * Every in-flight mid-stream upsert.
+         *
+         * They were fire-and-forget with NO ordering relative to the final
+         * upsert loop, which writes the parsed, sanitized, repaired content.
+         * A mid-stream write issued late — or just slow, same pool, different
+         * round-trip — could land AFTER the final one and leave the row
+         * holding raw streamed text, silently undoing the repair. A write that
+         * goes backwards, with nothing in the logs to say so.
+         *
+         * Draining this before the final loop makes the ordering explicit:
+         * every optimistic write has settled before the authoritative one is
+         * issued, so last-write-wins means what it says.
+         */
+        const midStreamWrites: Array<Promise<unknown>> = [];
+        /**
+         * Wait for every optimistic write issued so far, including any issued
+         * WHILE waiting.
+         *
+         * A single `allSettled(midStreamWrites)` snapshots the array: anything
+         * pushed during that await is neither waited on nor carried forward,
+         * and zeroing the array afterwards discards it outright. Splicing in a
+         * loop is the difference between "we waited" and "we waited for the
+         * ones that had already started".
+         *
+         * `timeoutMs` bounds it because this also runs in the response's
+         * `finally`: an upsert that never settles would otherwise hold the SSE
+         * socket open and delay credit settlement behind it.
+         */
+        const drainMidStreamWrites = async (timeoutMs = 5_000) => {
+          const deadline = Date.now() + timeoutMs;
+          while (midStreamWrites.length > 0 && Date.now() < deadline) {
+            const batch = midStreamWrites.splice(0, midStreamWrites.length);
+            await Promise.race([
+              Promise.allSettled(batch),
+              new Promise((resolve) =>
+                setTimeout(resolve, Math.max(0, deadline - Date.now())),
+              ),
+            ]);
+          }
+        };
         let completedNormally = false;
         let reservationFinalized = false;
         let finalCreditCost: number | null = null;
@@ -1459,19 +1592,61 @@ The user has expressed frustration. Do the following:
           );
         }
 
+        // Loaded ONCE, before the extractor exists. Doing this `await import`
+        // inside the callback put a microtask boundary between a file being
+        // emitted and its write entering `midStreamWrites` — and a drain
+        // landing in that gap would miss the write it was added to order.
+        // The last file of a build is the likeliest to be in that window and
+        // the one the repair pass most often rewrites.
+        const { sanitizeGeneratedFile: sanitizeStreamedFile } = await import(
+          "@/lib/ai/html-sanity"
+        );
+
         // In build mode, stream-upsert each file to DB as soon as it completes
         const fileExtractor = mode === "build"
-          ? new StreamingFileExtractor(async (file) => {
+          ? new StreamingFileExtractor((file) => {
               if (streamedFilePaths.has(file.path)) return; // dedupe
               streamedFilePaths.add(file.path);
-              streamedFiles.push({ path: file.path, content: file.content, language: file.language });
-              // Fire-and-forget upsert so it doesn't block streaming
-              void (supabase as any).from("project_files").upsert({
-                project_id: projectId,
-                path: file.path,
-                content: file.content,
-                language: file.language,
-              }, { onConflict: "project_id,path" });
+              // Sanitize HERE too, not only in the final loop. The extractor
+              // emits a file the moment its closing delimiter arrives, and a
+              // continuation round can append a SECOND full document to an
+              // html file — observed corruption in the wild. Writing the raw
+              // text mid-stream meant the preview picked up the doubled
+              // version and rendered it, seconds before the final pass fixed
+              // the row. Sanitizing both places keeps the DB and the preview
+              // honest at every instant, not just at the end.
+              const safeContent = sanitizeStreamedFile(file.path, file.content);
+              streamedFiles.push({ path: file.path, content: safeContent, language: file.language });
+              // Not awaited — that would stall the stream — but TRACKED, so
+              // the final upsert loop can drain it and win the ordering.
+              // A failure here is recoverable (the final loop rewrites every
+              // file) but must not be invisible.
+              midStreamWrites.push(
+                Promise.resolve(
+                  (supabase as any).from("project_files").upsert({
+                    project_id: projectId,
+                    path: file.path,
+                    content: safeContent,
+                    language: file.language,
+                  }, { onConflict: "project_id,path" }),
+                )
+                  .then((res: { error?: { message?: string } | null }) => {
+                    if (res?.error) {
+                      logger.warn("ai.chat.midstream_upsert_failed", {
+                        projectId,
+                        path: file.path,
+                        error: res.error.message,
+                      });
+                    }
+                  })
+                  .catch((err: unknown) => {
+                    logger.warn("ai.chat.midstream_upsert_threw", {
+                      projectId,
+                      path: file.path,
+                      error: err instanceof Error ? err.message : String(err),
+                    });
+                  }),
+              );
               // Notify client that a file is available early
               safeEnqueue(
                 encoder.encode(`data: ${JSON.stringify({ streamedFile: file.path })}\n\n`)
@@ -1867,6 +2042,10 @@ The user has expressed frustration. Do the following:
                 await (supabase as any).from("project_files").upsert({
                   project_id: projectId, path: pr.path, content: pr.content, language: langMap[lang] ?? lang,
                 }, { onConflict: "project_id,path" });
+                // Reach the RUNNING preview container too — a DB-only save
+                // leaves the sandbox serving the pre-patch file until the
+                // container is recreated (observed stale-preview bug).
+                pushFileToRunningSandbox(supabase, projectId, pr.path, pr.content);
               }
               for (const pr of failed) {
                 logger.warn("ai.chat.patch_failed", { projectId, path: pr.path, error: pr.error });
@@ -2094,6 +2273,38 @@ The user has expressed frustration. Do the following:
               }
             }
 
+            // ── Post-generation guarantees ────────────────────────────────
+            // Everything above is the model's work checked against prompts. The
+            // three passes below are deterministic and run last, so a bad turn
+            // degrades into a plain build rather than a broken one.
+            if (mode === "build" && finalFiles.length > 0) {
+              // 1. `src/routeTree.gen.ts` belongs to the tanstackStart() Vite
+              //    plugin, never to the model.
+              finalFiles = stripGeneratedRouteTree(finalFiles);
+
+              // 2. Header + footer. A landing page without site chrome is not a
+              //    landing page; the prompt asked, this makes sure.
+              finalFiles = ensureWebsiteChrome(finalFiles, existingFiles, {
+                appType: buildIntent?.appType,
+                brand: projectData?.name ?? undefined,
+              });
+
+              // 3. Pin every dependency we own. One React-18-only version next
+              //    to the React 19 base set aborts `npm install` with ERESOLVE,
+              //    which the user experiences as a preview that never boots.
+              const pkgIndex = finalFiles.findIndex((f) => f.path === "package.json");
+              if (pkgIndex >= 0) {
+                const aligned = alignGeneratedPackageJson(finalFiles[pkgIndex].content);
+                if (aligned.changed.length > 0) {
+                  finalFiles[pkgIndex] = { ...finalFiles[pkgIndex], content: aligned.content };
+                  logger.info("ai.chat.package_pins_aligned", {
+                    projectId,
+                    changed: aligned.changed,
+                  });
+                }
+              }
+            }
+
             parsedFiles = finalFiles;
 
             // ── Save files to DB ──────────────────────────────────────────
@@ -2145,16 +2356,29 @@ The user has expressed frustration. Do the following:
               // Always upsert FINAL parsed/repaired content. Mid-stream upserts are
               // for UX only — skipping here left autofix/repair changes on disk out
               // of sync with what the model "finished" (Lovable: preview = latest).
+              //
+              // Drain the optimistic writes FIRST. They are issued without
+              // await, so an in-flight one could otherwise land after this
+              // loop and overwrite repaired content with the raw stream.
+              // `allSettled` because a failed optimistic write must not stop
+              // the authoritative one — this loop is exactly its recovery.
+              await drainMidStreamWrites();
               const { sanitizeGeneratedFile } = await import("@/lib/ai/html-sanity");
               for (const file of parsedFiles) {
+                const sanitized = sanitizeGeneratedFile(file.path, file.content);
                 await (supabase as any).from("project_files").upsert({
                   project_id: projectId,
                   path: file.path,
                   // Guards against continuation rounds appending a second full
                   // document to html files (observed corruption in the wild).
-                  content: sanitizeGeneratedFile(file.path, file.content),
+                  content: sanitized,
                   language: file.language,
                 }, { onConflict: "project_id,path" });
+                // Sync the final (sanitized/repaired) content into the running
+                // sandbox — the container was created from the scaffold before
+                // the build finished, so without this the preview keeps the
+                // scaffold until it is destroyed by hand.
+                pushFileToRunningSandbox(supabase, projectId, file.path, sanitized);
               }
 
                             // empty desktop <nav>. Force About/Services/Contact into the real header.
@@ -2190,6 +2414,7 @@ The user has expressed frustration. Do the following:
                       content: pr.content,
                       language,
                     }, { onConflict: "project_id,path" });
+                    pushFileToRunningSandbox(supabase, projectId, pr.path, pr.content);
                   }
                   logger.info("ai.chat.build_deterministic_menu", {
                     projectId,
@@ -2534,17 +2759,47 @@ The user has expressed frustration. Do the following:
           );
         } finally {
           clearInterval(heartbeat);
+          // Unconditional drain. The success-path drain lives inside
+          // `if (parsedFiles.length > 0)`, so a build that streamed files but
+          // parsed none left writes in flight with `completedNormally` true —
+          // past both drains, and past the backstop below. This catches that
+          // and is a no-op whenever an earlier drain already ran.
+          await drainMidStreamWrites();
           // Durability backstop: if the build did NOT complete normally (client/proxy
           // abort, or an error before the save path), persist whatever streamed so an
           // interrupted build never results in "no change". Idempotent; skipped on
           // success so final/verified content is never overwritten by mid-stream text.
           if (!completedNormally && streamedFiles.length > 0) {
             try {
-              await (supabase as any).from("project_files").upsert(
+              // Same ordering hazard as the success path: an optimistic write
+              // still in flight would land on top of this backstop. Let them
+              // finish first so this batch is genuinely last.
+              await drainMidStreamWrites();
+              const { error: backstopError } = await (supabase as any).from("project_files").upsert(
                 streamedFiles.map((f) => ({ project_id: projectId, path: f.path, content: f.content, language: f.language })),
                 { onConflict: "project_id,path" },
               );
-            } catch { /* best-effort */ }
+              if (backstopError) {
+                // The whole point of this block is that an interrupted build
+                // never silently loses work. A swallowed failure here means
+                // exactly that, so at minimum leave a trace.
+                logger.error(
+                  "ai.chat.interrupted_build_persist_failed",
+                  new Error(backstopError.message ?? String(backstopError)),
+                  { projectId, paths: streamedFiles.map((f) => f.path).slice(0, 10) },
+                );
+              } else {
+                for (const f of streamedFiles) {
+                  pushFileToRunningSandbox(supabase, projectId, f.path, f.content);
+                }
+              }
+            } catch (backstopThrew) {
+              logger.error(
+                "ai.chat.interrupted_build_persist_threw",
+                backstopThrew instanceof Error ? backstopThrew : new Error(String(backstopThrew)),
+                { projectId },
+              );
+            }
           }
           if (!reservationFinalized) {
             try {
