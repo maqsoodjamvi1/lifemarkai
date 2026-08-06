@@ -401,8 +401,17 @@ export function ChatPanel({
   // React Native / Expo framework toggle — hydrated + persisted on project.framework
   const isRnFramework = (f?: string | null) => f === "react-native" || f === "expo";
   const [mobileMode, setMobileMode] = useState(() => isRnFramework(project.framework));
-  const webFrameworkRef = useRef(
-    isRnFramework(project.framework) ? "web" : (project.framework ?? "web"),
+  // "react", not "web". This value is PATCHed straight onto projects.framework,
+  // and projects_framework_check has never accepted "web" — so for any project
+  // that STARTED in mobile mode (or had a null framework) the ref held "web",
+  // and toggling mobile mode back off sent a value Postgres rejects. The update
+  // failed and the project stayed react-native. "react" is the same fallback
+  // createProject uses when a requested framework is not in ALLOWED_FRAMEWORKS.
+  //
+  // Typed as Project["framework"] so the union survives to the onProjectUpdate
+  // call below; inferring `string` there is what hid this for so long.
+  const webFrameworkRef = useRef<Project["framework"]>(
+    isRnFramework(project.framework) ? "react" : (project.framework ?? "react"),
   );
   useEffect(() => {
     setMobileMode(isRnFramework(project.framework));
