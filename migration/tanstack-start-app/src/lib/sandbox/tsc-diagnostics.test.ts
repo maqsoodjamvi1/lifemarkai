@@ -2,11 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  formatDiagnostics,
-  isFatal,
-  parseTscOutput,
-  rankDiagnostics,
-  summariseDiagnostics,
+formatDiagnostics,
+isFatal,
+parseTscOutput,
+rankDiagnostics,
+summariseDiagnostics,
 } from "./tsc-diagnostics.ts";
 
 /** The exact failure that cost hours tonight, in tsc's own words. */

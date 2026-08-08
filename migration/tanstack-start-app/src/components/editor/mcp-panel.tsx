@@ -7,13 +7,13 @@
  *  • Marketplace — pre-built connectors (Jira, Notion, Linear, GitHub, etc.)
  */
 
-import { useState, useEffect } from "react";
+import { useState,useEffect } from "react";
 import {
-  Server, Plus, Trash2, ChevronDown, ChevronUp,
-  CheckCircle2, ExternalLink, Copy,
-  Check, RefreshCw, ShoppingBag, Zap, Search, Settings2,
-  BookOpen, GitBranch, BarChart3, FileText,
-  Globe, Database, Mail, Slack, Trello, Key, RotateCcw, Terminal,
+Server,Plus,Trash2,ChevronDown,ChevronUp,
+CheckCircle2,ExternalLink,Copy,
+Check,RefreshCw,ShoppingBag,Zap,Search,Settings2,
+BookOpen,GitBranch,BarChart3,FileText,
+Globe,Database,Mail,Slack,Trello,Key,RotateCcw,Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

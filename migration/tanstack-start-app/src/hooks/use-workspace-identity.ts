@@ -1,9 +1,9 @@
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback,useEffect,useState } from "react";
 import type {
-  WorkspaceEnforceSettings,
-  WorkspaceScimConfig,
-  WorkspaceSsoConfig,
+WorkspaceEnforceSettings,
+WorkspaceScimConfig,
+WorkspaceSsoConfig,
 } from "@/lib/workspace/identity";
 
 interface WorkspaceIdentityState {

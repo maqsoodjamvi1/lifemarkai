@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
@@ -36,7 +35,7 @@ export const Route = createFileRoute("/api/search")({
           if (!query || query.length < 2) return Response.json({ results: [], query, total: 0 });
           if (query.length > 200) return Response.json({ error: "Query too long" }, { status: 400 });
 
-          const { data: projects } = await (supabase as any)
+          const { data: projects } = await supabase
             .from("projects")
             .select("id, name, framework, created_at")
             .eq("user_id", user.id)
@@ -44,7 +43,7 @@ export const Route = createFileRoute("/api/search")({
             .order("created_at", { ascending: false })
             .limit(5);
 
-          const { data: allProjects } = await (supabase as any)
+          const { data: allProjects } = await supabase
             .from("projects")
             .select("id, name")
             .eq("user_id", user.id)
@@ -57,7 +56,7 @@ export const Route = createFileRoute("/api/search")({
 
           const [filesRes, messagesRes] = await Promise.all([
             projectIds.length
-              ? (supabase as any)
+              ? supabase
                   .from("project_files")
                   .select("id, project_id, path, content, language")
                   .in("project_id", projectIds)
@@ -65,7 +64,7 @@ export const Route = createFileRoute("/api/search")({
                   .limit(10)
               : Promise.resolve({ data: [] }),
             projectIds.length
-              ? (supabase as any)
+              ? supabase
                   .from("messages")
                   .select("id, project_id, role, content, created_at")
                   .in("project_id", projectIds)

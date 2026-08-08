@@ -1,7 +1,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import { Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar,AvatarFallback,AvatarImage } from "@/components/ui/avatar";
 import { GlobalSearch } from "@/components/dashboard/global-search";
 import type { Profile } from "@/types/database";
 import type { User } from "@supabase/supabase-js";

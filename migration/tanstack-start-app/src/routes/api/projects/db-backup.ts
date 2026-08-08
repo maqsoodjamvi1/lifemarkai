@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -20,7 +19,7 @@ export const Route = createFileRoute("/api/projects/db-backup")({
         if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
         const admin = createAdminClient();
-        const { data } = await (admin as any)
+        const { data } = await admin
           .from("db_backups")
           .select("id, label, size_bytes, status, created_at, storage_path")
           .eq("project_id", projectId)
@@ -42,7 +41,7 @@ export const Route = createFileRoute("/api/projects/db-backup")({
 
         const admin = createAdminClient();
 
-        const { data: project } = await (admin as any)
+        const { data: project } = await admin
           .from("projects").select("id, name").eq("id", projectId).eq("user_id", user.id).single();
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
@@ -53,7 +52,7 @@ export const Route = createFileRoute("/api/projects/db-backup")({
             return Response.json({ error: "No files found in backup — invalid or empty dump" }, { status: 400 });
           }
 
-          await (admin as any).from("project_files").delete().eq("project_id", projectId);
+          await admin.from("project_files").delete().eq("project_id", projectId);
 
           const rows = parsed.map((f) => ({
             project_id: projectId,
@@ -62,10 +61,10 @@ export const Route = createFileRoute("/api/projects/db-backup")({
             language: f.language,
           }));
 
-          const { error: insertErr } = await (admin as any).from("project_files").insert(rows);
+          const { error: insertErr } = await admin.from("project_files").insert(rows);
           if (insertErr) return Response.json({ error: insertErr.message }, { status: 500 });
 
-          await (admin as any).from("projects").update({ updated_at: new Date().toISOString() }).eq("id", projectId);
+          await admin.from("projects").update({ updated_at: new Date().toISOString() }).eq("id", projectId);
 
           return Response.json({
             ok: true,
@@ -74,7 +73,7 @@ export const Route = createFileRoute("/api/projects/db-backup")({
           });
         }
 
-        const { data: files } = await (admin as any)
+        const { data: files } = await admin
           .from("project_files")
           .select("path, content, language")
           .eq("project_id", projectId)
@@ -102,7 +101,7 @@ export const Route = createFileRoute("/api/projects/db-backup")({
         const backupLabel = label ?? `Backup ${new Date().toLocaleString()}`;
         const storagePath = `backups/${user.id}/${projectId}/${Date.now()}.sql`;
 
-        const { data: backup, error } = await (admin as any)
+        const { data: backup, error } = await admin
           .from("db_backups")
           .insert({
             project_id: projectId,
@@ -129,7 +128,7 @@ export const Route = createFileRoute("/api/projects/db-backup")({
         if (!id) return Response.json({ error: "id required" }, { status: 400 });
 
         const admin = createAdminClient();
-        await (admin as any).from("db_backups").delete().eq("id", id).eq("user_id", user.id);
+        await admin.from("db_backups").delete().eq("id", id).eq("user_id", user.id);
 
         return Response.json({ ok: true });
       },

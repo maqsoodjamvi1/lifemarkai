@@ -1,11 +1,10 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import {
-  isManagementConfigured,
-  createManagedProject,
-  managedProjectUrl,
-  setManagedComputeTier,
+isManagementConfigured,
+createManagedProject,
+managedProjectUrl,
+setManagedComputeTier,
 } from "@/lib/cloud/management";
 import { persistManagedDbPassword } from "@/lib/cloud/credentials";
 

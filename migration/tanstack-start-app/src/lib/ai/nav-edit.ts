@@ -445,7 +445,7 @@ export function buildDeterministicMenuPatches(
       const newLinks = synthesizeNavLinks(content, toInsert, indent);
       // Ensure the nav is visible at editor widths
       let openTag = desktopNav.openTag;
-      let findOpen = openTag;
+      const findOpen = openTag;
       if (/\bhidden\s+lg:flex\b/i.test(openTag)) {
         openTag = openTag.replace(/\bhidden\s+lg:flex\b/i, "hidden sm:flex");
       } else if (/\bhidden\s+md:flex\b/i.test(openTag)) {

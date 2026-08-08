@@ -1,14 +1,14 @@
 
 import {
-  AlertCircle,
-  FileCode,
-  FileText,
-  Image,
-  ListChecks,
-  Pencil,
-  Search,
-  Sparkles,
-  Trash2,
+AlertCircle,
+FileCode,
+FileText,
+Image,
+ListChecks,
+Pencil,
+Search,
+Sparkles,
+Trash2,
 } from "lucide-react";
 
 export type AgentStepKind =

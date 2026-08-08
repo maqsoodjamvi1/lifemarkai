@@ -3,10 +3,10 @@
  */
 import { createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
-import { canReadProjectFiles, getProjectAccess } from "../project/access.ts";
+import { canReadProjectFiles,getProjectAccess } from "../project/access.ts";
 import {
-  getSandboxProviderId,
-  isSandboxEnabled,
+getSandboxProviderId,
+isSandboxEnabled,
 } from "@/lib/sandbox/flags";
 import { debugLog } from "../debug-log.ts";
 
@@ -35,7 +35,7 @@ export async function keepAliveSandbox(data: any) {
     let previewUrl = data.previewUrl;
 
     if (!sandboxId || !previewUrl) {
-      const { data: project } = await (supabase as any)
+      const { data: project } = await supabase
         .from("projects")
         .select("preview_url, metadata")
         .eq("id", data.projectId)

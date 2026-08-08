@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
@@ -11,14 +10,22 @@ export const Route = createFileRoute("/api/projects/$id/feature-flags/$flagId")(
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
         const body = (await request.json().catch(() => ({}))) as { enabled?: boolean; rollout_pct?: number };
-        await (supabase as any).from("feature_flags").update({ ...body, updated_at: new Date().toISOString() }).eq("id", params.flagId).eq("project_id", params.id);
+        await supabase
+          .from("project_feature_flags")
+          .update({
+            ...(body.enabled === undefined ? {} : { is_enabled: body.enabled }),
+            ...(body.rollout_pct === undefined ? {} : { rollout_pct: body.rollout_pct }),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", params.flagId)
+          .eq("project_id", params.id);
         return Response.json({ ok: true });
       },
       DELETE: async ({ params }) => {
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
-        await (supabase as any).from("feature_flags").delete().eq("id", params.flagId).eq("project_id", params.id);
+        await supabase.from("project_feature_flags").delete().eq("id", params.flagId).eq("project_id", params.id);
         return Response.json({ ok: true });
       },
     },

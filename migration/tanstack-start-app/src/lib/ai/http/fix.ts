@@ -1,24 +1,23 @@
-// @ts-nocheck
 import { createClientFromRequest } from "../../supabase/request-client.ts";
 import { getServerUser } from "../../supabase/server-user.ts";
 import { getDefaultAiModel } from "../model-defaults.ts";
-import { rateLimitAsync, RATE_LIMITS } from "../../rate-limit.ts";
+import { rateLimitAsync,RATE_LIMITS } from "../../rate-limit.ts";
 import { AUTO_FIX_SYSTEM_PROMPT } from "../prompts/auto-fix.ts";
 import {
-  cancelCreditReservation,
-  claimFreeCreditAction,
-  reserveCredits,
-  settleCreditReservation,
+cancelCreditReservation,
+claimFreeCreditAction,
+reserveCredits,
+settleCreditReservation,
 } from "@/lib/credits";
-import type { PreviewRuntimeError, PreviewErrorKind } from "../../preview/preview-error-bridge.ts";
+import type { PreviewRuntimeError,PreviewErrorKind } from "../../preview/preview-error-bridge.ts";
 import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 import { guardFileWrite } from "../guard-file-write.ts";
 import { logger } from "../../logger.ts";
 import {
-  typecheckRunningSandbox,
-  SANDBOX_PUSH_SETTLE_MS,
+typecheckRunningSandbox,
+SANDBOX_PUSH_SETTLE_MS,
 } from "@/lib/preview/typecheck-project";
-import { fingerprintDiagnostic, scoreRepair } from "../failure-fingerprint.ts";
+import { fingerprintDiagnostic,scoreRepair } from "../failure-fingerprint.ts";
 import { recordRepairOutcome } from "../record-outcome.ts";
 import { isFatal } from "../../sandbox/tsc-diagnostics.ts";
 
@@ -146,7 +145,7 @@ export async function handleAiFix(req: Request) {
     return Response.json({ error: "projectId and error are required" }, { status: 400 });
   }
 
-  const { data: projectRow } = await (supabase as any)
+  const { data: projectRow } = await supabase
     .from("projects")
     .select("id, environment")
     .eq("id", projectId)
@@ -283,7 +282,7 @@ Return the fixed files as JSON.`;
     const rejected: string[] = [];
 
     for (const fixedFile of parsed.files) {
-      const { data: existing } = await (supabase as any)
+      const { data: existing } = await supabase
         .from("project_files")
         .select("id, content")
         .eq("project_id", projectId)
@@ -320,12 +319,12 @@ Return the fixed files as JSON.`;
       written.push(fixedFile.path);
 
       if (existing) {
-        await (supabase as any)
+        await supabase
           .from("project_files")
           .update({ content: fixedFile.content, updated_at: new Date().toISOString() })
           .eq("id", existing.id);
       } else {
-        await (supabase as any).from("project_files").insert({
+        await supabase.from("project_files").insert({
           project_id: projectId,
           path: fixedFile.path,
           content: fixedFile.content,
@@ -382,7 +381,7 @@ Return the fixed files as JSON.`;
           for (const [path, point] of restorePoints) {
             if (point.previous == null) continue; // nothing to go back to
             if (point.id) {
-              await (supabase as any)
+              await supabase
                 .from("project_files")
                 .update({ content: point.previous, updated_at: new Date().toISOString() })
                 .eq("id", point.id);

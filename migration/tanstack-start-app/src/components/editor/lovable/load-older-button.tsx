@@ -1,5 +1,5 @@
 
-import { ChevronUp, Loader2 } from "lucide-react";
+import { ChevronUp,Loader2 } from "lucide-react";
 
 interface LovableLoadOlderButtonProps {
   loading?: boolean;

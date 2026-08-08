@@ -20,14 +20,14 @@
 import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "./supabase/server.ts";
 import { getServerUser } from "./supabase/server-user.ts";
-import { ensureDevCredits, getDevProfile } from "./dev-credits.ts";
+import { ensureDevCredits,getDevProfile } from "./dev-credits.ts";
 import {
-  isTransientSupabaseError,
-  describeSupabaseError,
-  withSupabaseRetry,
+isTransientSupabaseError,
+describeSupabaseError,
+withSupabaseRetry,
 } from "@/lib/supabase/transient-error";
-import { canReadProjectFiles, getProjectAccess } from "./project/access.ts";
-import type { Project, ProjectFile, Message, Profile } from "../types/database.ts";
+import { canReadProjectFiles,getProjectAccess } from "./project/access.ts";
+import type { Project,ProjectFile,Message,Profile } from "../types/database.ts";
 
 export const PROJECT_ID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -51,7 +51,7 @@ async function fetchProjectForEditor(
 ): Promise<{ project: Project | null; error: unknown | null }> {
   const result = await withSupabaseRetry(
     () =>
-      (supabase as any)
+      supabase
         .from("projects")
         .select("*")
         .eq("id", projectId)

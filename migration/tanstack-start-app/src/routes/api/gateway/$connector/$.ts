@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 /**
  * Gateway proxy for OAuth-based connectors.
@@ -50,7 +49,7 @@ async function getOrRefreshToken(
   connector: string
 ): Promise<string | null> {
   // Fetch stored token record
-  const { data: tokenRow } = await (supabase as any)
+  const { data: tokenRow } = await supabase
     .from("oauth_tokens")
     .select("access_token, refresh_token, expires_at")
     .eq("user_id", userId)
@@ -88,7 +87,7 @@ async function getOrRefreshToken(
     const json = await res.json() as { access_token?: string; expires_in?: number };
     if (json.access_token) {
       const newExpiry = new Date(Date.now() + (json.expires_in ?? 3600) * 1000).toISOString();
-      await (supabase as any)
+      await supabase
         .from("oauth_tokens")
         .update({ access_token: json.access_token, expires_at: newExpiry, updated_at: new Date().toISOString() })
         .eq("user_id", userId)

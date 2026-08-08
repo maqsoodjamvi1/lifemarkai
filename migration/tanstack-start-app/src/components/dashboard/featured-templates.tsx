@@ -1,13 +1,12 @@
-import { Link, useNavigate } from "@tanstack/react-router";
-import { ChevronRight, LayoutTemplate, Star, Zap } from "lucide-react";
+import { Link,useNavigate } from "@tanstack/react-router";
+import { ChevronRight,LayoutTemplate,Star,Zap } from "lucide-react";
 
 interface Template {
   id: string;
   name: string;
   description: string | null;
-  framework: string;
+  category: string;
   fork_count: number | null;
-  tags: string[] | null;
   preview_url: string | null;
 }
 
@@ -50,7 +49,7 @@ export function FeaturedTemplates({ templates, projectCount }: FeaturedTemplates
               <div className="flex items-start justify-between gap-2">
                 <span className="text-xs font-semibold line-clamp-2">{t.name}</span>
                 <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
-                  {t.framework}
+                  {t.category}
                 </span>
               </div>
               {t.description && (

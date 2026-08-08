@@ -12,7 +12,7 @@ export const Route = createFileRoute("/api/health")({
         let db = "ok";
         try {
           const supabase = await createClient();
-          const { error } = await (supabase as any)
+          const { error } = await supabase
             .from("templates")
             .select("id", { count: "exact", head: true })
             .limit(1);

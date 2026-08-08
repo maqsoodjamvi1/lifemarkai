@@ -1,8 +1,6 @@
-// @ts-nocheck
-
-import { useState, useEffect, useCallback, useRef } from "react";
-import { Bell, Check, CheckCheck, Trash2, X, ExternalLink, Loader2 } from "lucide-react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState,useEffect,useCallback,useRef } from "react";
+import { Bell,Trash2,X,ExternalLink,Loader2 } from "lucide-react";
+import { motion,AnimatePresence } from "framer-motion";
 import { createClient } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
 import type { Notification } from "@/types/database";

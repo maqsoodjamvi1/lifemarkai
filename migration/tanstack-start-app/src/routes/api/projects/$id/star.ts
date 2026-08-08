@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { toggleProjectStar, getProjectStar } from "@/lib/server-fns/project-social";
+import { toggleProjectStar,getProjectStar } from "@/lib/server-fns/project-social";
 
 /** Native /api/projects/:id/star — POST toggles a community star, GET reads state. */
 export const Route = createFileRoute("/api/projects/$id/star")({

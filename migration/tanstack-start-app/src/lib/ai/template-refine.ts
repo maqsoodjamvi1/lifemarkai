@@ -11,9 +11,9 @@
  */
 import { getStarterTemplate } from "../templates/starter-catalog.ts";
 import {
-  ensureWebsiteHeaderSections,
-  WEBSITE_HEADER_CONTRACT,
-  WEBSITE_HEADER_CATEGORIES,
+ensureWebsiteHeaderSections,
+WEBSITE_HEADER_CONTRACT,
+WEBSITE_HEADER_CATEGORIES,
 } from "@/lib/ai/website-header-contract";
 
 /**

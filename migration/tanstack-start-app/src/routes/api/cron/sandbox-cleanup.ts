@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Daily cron — terminate stale Modal/E2B sandboxes (orphaned after editor closes).
  * Lovable keeps warm sandboxes with idle timeout; this cleans DB rows pointing at dead VMs.
@@ -25,7 +24,7 @@ async function handleGET(req: Request) {
   const supabase = await createAdminClient();
   const cutoff = new Date(Date.now() - STALE_HOURS * 60 * 60 * 1000).toISOString();
 
-  const { data: rows, error } = await (supabase as any)
+  const { data: rows, error } = await supabase
     .from("projects")
     .select("id, metadata")
     .not("metadata->>sandbox_id", "is", null)
@@ -46,7 +45,7 @@ async function handleGET(req: Request) {
     try {
       await provider.kill(sandboxId);
       killed += 1;
-      await (supabase as any)
+      await supabase
         .from("projects")
         .update({
           preview_url: null,

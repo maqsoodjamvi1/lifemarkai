@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Rate limiting — Upstash Redis in production, in-memory Map in development.
  *

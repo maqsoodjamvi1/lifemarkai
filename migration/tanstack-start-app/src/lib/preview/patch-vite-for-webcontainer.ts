@@ -228,8 +228,8 @@ export function patchReactPluginBabelConfig(content: string): string {
 
 import { injectGuestCommentsIntoHtml } from "./inject-guest-comments.ts";
 import {
-  injectVebBridgeIntoHtml,
-  injectVebBridgeIntoJsxDocument,
+injectVebBridgeIntoHtml,
+injectVebBridgeIntoJsxDocument,
 } from "./veb-bridge.ts";
 
 const NEXT_LAYOUT_RE = /^(src\/)?app\/layout\.(t|j)sx?$/;

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * LifemarkAI MCP Server — JSON-RPC 2.0 over HTTP (Streamable HTTP transport)
  *
@@ -17,10 +16,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { BUILT_IN_TEMPLATES } from "@/lib/templates/built-in";
-import { enqueueDeployJob, getDeployQueue } from "@/lib/queue/client";
+import { enqueueDeployJob,getDeployQueue } from "@/lib/queue/client";
 import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { OPENROUTER_MODEL_IDS } from "@/lib/ai/openrouter-models";
-import { validateApiKey, hasScope, type ApiScope } from "@/lib/api/api-key";
+import { validateApiKey,hasScope,type ApiScope } from "@/lib/api/api-key";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 
 // Per-tool scope requirements. Legacy mcp_api_token identities carry an empty
 // scope list, which hasScope() treats as full access (no breakage). Scoped
@@ -190,7 +190,7 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
 
   switch (toolName) {
     case "list_projects": {
-      const { data, error } = await (admin as any)
+      const { data, error } = await admin
         .from("projects")
         .select("id, name, description, framework, status, deployed_url, created_at, updated_at")
         .eq("user_id", userId)
@@ -203,11 +203,11 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
     case "get_project_files": {
       const { project_id } = args;
       // Verify ownership
-      const { data: proj } = await (admin as any)
+      const { data: proj } = await admin
         .from("projects").select("id").eq("id", project_id).eq("user_id", userId).single();
       if (!proj) throw new Error("Project not found or access denied");
 
-      const { data: files, error } = await (admin as any)
+      const { data: files, error } = await admin
         .from("project_files")
         .select("path, content, language")
         .eq("project_id", project_id)
@@ -219,7 +219,7 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
     case "update_project_file": {
       const { project_id, path, content, language } = args;
       // Verify ownership
-      const { data: proj } = await (admin as any)
+      const { data: proj } = await admin
         .from("projects").select("id").eq("id", project_id).eq("user_id", userId).single();
       if (!proj) throw new Error("Project not found or access denied");
 
@@ -232,7 +232,7 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
       };
       const detectedLang = language ?? (LANG_MAP[ext] ?? "plaintext");
 
-      const { error } = await (admin as any)
+      const { error } = await admin
         .from("project_files")
         .upsert({ project_id, path, content, language: detectedLang }, { onConflict: "project_id,path" });
       if (error) throw new Error(error.message);
@@ -242,12 +242,12 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
     case "send_chat_message": {
       const { project_id, message, model = DEFAULT_CODING_MODEL } = args;
       // Verify ownership
-      const { data: proj } = await (admin as any)
+      const { data: proj } = await admin
         .from("projects").select("id").eq("id", project_id).eq("user_id", userId).single();
       if (!proj) throw new Error("Project not found or access denied");
 
       // Insert message into the project's chat (the editor will pick it up via realtime)
-      const { error } = await (admin as any)
+      const { error } = await admin
         .from("messages")
         // messages has no user_id column — including it made this insert (and
         // therefore the whole send_chat_message MCP tool) fail on every call.
@@ -270,7 +270,7 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
     case "create_project": {
       const { name, description = "", framework = "nextjs" } = args;
       const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
-      const { data: proj, error } = await (admin as any)
+      const { data: proj, error } = await admin
         .from("projects")
         // status omitted — projects.status has CHECK (status IN ('active','archived','building'));
         // "draft" violates it and made create_project fail. The column default is 'active'.
@@ -283,7 +283,7 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
 
     case "get_project_info": {
       const { project_id } = args;
-      const { data: proj, error } = await (admin as any)
+      const { data: proj, error } = await admin
         .from("projects")
         .select("id, name, description, framework, status, deployed_url, preview_url, cloud_enabled, cloud_status, created_at, updated_at")
         .eq("id", project_id)
@@ -295,7 +295,7 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
 
     case "deploy_project": {
       const { project_id, provider = "netlify" } = args;
-      const { data: project } = await (admin as any)
+      const { data: project } = await admin
         .from("projects")
         .select("id, name, user_id, project_files(path, content, language)")
         .eq("id", project_id)
@@ -304,7 +304,7 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
       if (!project) throw new Error("Project not found or access denied");
 
       const files = (project.project_files ?? []) as Array<{ path: string; content: string; language?: string }>;
-      const { data: deployment, error: depErr } = await (admin as any)
+      const { data: deployment, error: depErr } = await admin
         .from("deployments")
         .insert({
           project_id,
@@ -339,7 +339,7 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
 
     case "get_deploy_status": {
       const { project_id } = args;
-      const { data: proj } = await (admin as any)
+      const { data: proj } = await admin
         .from("projects")
         .select("id, deployed_url, status")
         .eq("id", project_id)
@@ -347,7 +347,7 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
         .single();
       if (!proj) throw new Error("Project not found or access denied");
 
-      const { data: deployment } = await (admin as any)
+      const { data: deployment } = await admin
         .from("deployments")
         .select("id, status, url, provider, error_message, created_at")
         .eq("project_id", project_id)
@@ -397,7 +397,6 @@ async function handlePOST(req: Request) {
   // Enterprise hardening: per-identity rate limit (API keys are automatable —
   // a runaway script must not be able to hammer the platform).
   {
-    const { rateLimitAsync, RATE_LIMITS } = await import("@/lib/rate-limit");
     const rl = await rateLimitAsync(`mcp:${userId}`, RATE_LIMITS.api);
     if (!rl.success) {
       return Response.json(rpcErr(null, -32029, "Rate limit exceeded — retry shortly"), {

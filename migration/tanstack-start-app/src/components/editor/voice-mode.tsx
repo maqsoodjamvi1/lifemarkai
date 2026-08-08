@@ -1,7 +1,7 @@
 
-import { useState, useRef, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Mic, MicOff, Square, Loader2, Volume2 } from "lucide-react";
+import { useState,useRef,useEffect } from "react";
+import { motion,AnimatePresence } from "framer-motion";
+import { Mic,Square,Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 
@@ -29,8 +29,8 @@ export function VoiceMode({ onTranscript, disabled }: VoiceModeProps) {
 
   function stopAll() {
     mediaRef.current?.stop();
-    timerRef.current && clearInterval(timerRef.current);
-    animFrameRef.current && cancelAnimationFrame(animFrameRef.current);
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
   }
 
   async function startRecording() {
@@ -84,7 +84,7 @@ export function VoiceMode({ onTranscript, disabled }: VoiceModeProps) {
     if (mediaRef.current?.state === "recording") {
       mediaRef.current.stop();
     }
-    timerRef.current && clearInterval(timerRef.current);
+    if (timerRef.current) clearInterval(timerRef.current);
     setState("processing");
     setVolume(0);
   }

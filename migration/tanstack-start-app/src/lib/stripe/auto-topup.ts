@@ -22,11 +22,10 @@ export async function triggerAutoTopupIfNeeded(userId: string): Promise<AutoTopu
   const supabase = await createAdminClient();
 
   // Fetch profile fields needed for auto top-up
-  const { data: profile, error } = await (supabase as any)
+  const { data: profile, error } = await supabase
     .from("profiles")
     .select(
-      "credits, auto_topup_enabled, auto_topup_threshold, auto_topup_amount, " +
-      "auto_topup_pm_id, auto_topup_last_triggered_at, stripe_customer_id, email"
+      "credits, auto_topup_enabled, auto_topup_threshold, auto_topup_amount, auto_topup_pm_id, auto_topup_last_triggered_at, stripe_customer_id, email",
     )
     .eq("id", userId)
     .single();
@@ -61,7 +60,7 @@ export async function triggerAutoTopupIfNeeded(userId: string): Promise<AutoTopu
 
   try {
     // Mark triggered first (optimistic) to avoid race conditions if two requests arrive simultaneously
-    await (supabase as any)
+    await supabase
       .from("profiles")
       .update({ auto_topup_last_triggered_at: new Date().toISOString() })
       .eq("id", userId);
@@ -88,7 +87,7 @@ export async function triggerAutoTopupIfNeeded(userId: string): Promise<AutoTopu
 
     // Add credits atomically
     const description = `Auto top-up: ${pack.credits} credits ($${(pack.priceCents / 100).toFixed(2)})`;
-    const { error: creditError } = await (supabase as any).rpc("add_credits", {
+    const { error: creditError } = await supabase.rpc("add_credits", {
       p_user_id: userId,
       p_amount: pack.credits,
       p_action: "auto_topup",

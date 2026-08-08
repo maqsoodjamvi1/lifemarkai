@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * GitLab REST API client — mirrors lib/github/client.ts surface area.
  *

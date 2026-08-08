@@ -1,7 +1,7 @@
 
-import { AnimatePresence, motion } from "framer-motion";
-import { Palette, Sparkles } from "lucide-react";
-import { LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY, LOVABLE_PROMPT_TEMPLATES } from "./prompt-templates";
+import { AnimatePresence,motion } from "framer-motion";
+import { Palette,Sparkles } from "lucide-react";
+import { LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY,LOVABLE_PROMPT_TEMPLATES } from "./prompt-templates";
 
 export interface LovableSkillOption {
   id: string;

@@ -1,11 +1,10 @@
 
-import { useState, useRef, useEffect } from "react";
+import { useState,useRef,useEffect } from "react";
 import {
-  Globe, Lock, Shield, ChevronDown, ChevronUp, CheckCircle2,
-  AlertTriangle, X, Upload, Image, Type, FileText, ExternalLink,
-  Copy, Check, Rocket, RefreshCw, Eye, EyeOff, History,
-  Loader2, Unlink, HelpCircle, Info, Sparkles, ArrowRight,
-  BarChart3, Activity,
+Globe,Lock,Shield,ChevronDown,ChevronUp,CheckCircle2,
+AlertTriangle,Upload,Image,Type,FileText,ExternalLink,
+Copy,Check,Rocket,RefreshCw,Eye,EyeOff,History,
+Loader2,HelpCircle,Info,BarChart3
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import type { Project } from "@/types/database";

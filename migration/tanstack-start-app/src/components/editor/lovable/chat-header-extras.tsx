@@ -1,5 +1,5 @@
 
-import { ListOrdered, Loader2 } from "lucide-react";
+import { ListOrdered,Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface LovableChatHeaderQueuePillProps {

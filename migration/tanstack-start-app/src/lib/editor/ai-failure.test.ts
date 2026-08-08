@@ -1,7 +1,7 @@
-import { describe, it } from "node:test";
+import { describe,it } from "node:test";
 import assert from "node:assert/strict";
 
-import { describeAiFailure, readErrorBody } from "./ai-failure.ts";
+import { describeAiFailure,readErrorBody } from "./ai-failure.ts";
 
 describe("describeAiFailure", () => {
   // The distinction this whole module exists for: two 402s that mean opposite

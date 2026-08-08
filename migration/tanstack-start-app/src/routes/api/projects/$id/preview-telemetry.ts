@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
-  getPreviewTelemetryFn,
-  postPreviewTelemetry,
+getPreviewTelemetryFn,
+postPreviewTelemetry,
 } from "@/lib/server-fns/preview-telemetry";
 
 function denied(result: { httpStatus: number; error: string }) {

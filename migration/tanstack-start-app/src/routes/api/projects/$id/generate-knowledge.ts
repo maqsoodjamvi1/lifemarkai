@@ -1,10 +1,9 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { generateAI } from "@/lib/ai/generate";
 import { ECONOMY_CHAT_MODEL } from "@/lib/ai/model-defaults";
-import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
 
 interface Params { params: Promise<{ id: string }> }
 
@@ -31,7 +30,7 @@ async function handlePOST(_req: Request, params: any) {
     return Response.json({ error: "Project not found" }, { status: 404 });
   }
 
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("id, name, description, framework")
     .eq("id", id)
@@ -39,7 +38,7 @@ async function handlePOST(_req: Request, params: any) {
   if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
   // Pull the current files (cap to 25 most relevant by reasonable heuristic)
-  const { data: filesRaw } = await (supabase as any)
+  const { data: filesRaw } = await supabase
     .from("project_files")
     .select("path, content, language")
     .eq("project_id", id);

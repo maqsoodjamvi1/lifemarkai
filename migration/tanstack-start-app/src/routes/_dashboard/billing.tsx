@@ -1,4 +1,4 @@
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute,redirect } from "@tanstack/react-router";
 
 /** Legacy `/billing` → canonical `/dashboard/billing`. */
 export const Route = createFileRoute("/_dashboard/billing")({

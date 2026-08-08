@@ -1,4 +1,4 @@
-import { createFileRoute, Link, redirect } from "@tanstack/react-router";
+import { createFileRoute,Link,redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
@@ -11,7 +11,7 @@ const acceptInvite = createServerFn({ method: "GET" })
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthenticated" as const };
 
-    const { data: result, error } = await (supabase as any).rpc("accept_project_invite_token", {
+    const { data: result, error } = await supabase.rpc("accept_project_invite_token", {
       p_token: data.token,
     });
     const parsed = result as { ok?: boolean; error?: string; project_id?: string } | null;

@@ -1,16 +1,16 @@
 
 import type { MutableRefObject } from "react";
-import { Check, ChevronDown } from "lucide-react";
+import { Check,ChevronDown } from "lucide-react";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  CHAT_MODEL_OPTIONS,
-  getOpenRouterModelLabel,
-  type OpenRouterModelId,
+CHAT_MODEL_OPTIONS,
+getOpenRouterModelLabel,
+type OpenRouterModelId,
 } from "@/lib/ai/openrouter-models";
 import { DEFAULT_CODING_MODEL } from "@/lib/ai/editor-intelligence";
 import type { EditorMode } from "@/components/editor/editor-layout";

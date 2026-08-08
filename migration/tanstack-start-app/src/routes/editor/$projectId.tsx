@@ -4,19 +4,19 @@
  * Search params are Zod-validated (editorSearchValidator) so URL changes
  * drive typed React updates without a Next.js RSC prefetch cycle.
  */
-import { lazy, Suspense, useEffect } from "react";
+import { lazy,Suspense,useEffect } from "react";
 import {
-  createFileRoute,
-  redirect,
-  notFound,
-  Link,
+createFileRoute,
+redirect,
+notFound,
+Link,
 } from "@tanstack/react-router";
-import { AlertCircle, ArrowLeft, RefreshCw, Loader2 } from "lucide-react";
+import { AlertCircle,ArrowLeft,RefreshCw,Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { fetchEditorData, PROJECT_ID_RE } from "@/lib/editor-server";
+import { fetchEditorData,PROJECT_ID_RE } from "@/lib/editor-server";
 import {
-  editorSearchValidator,
-  normalizeEditorSearchInput,
+editorSearchValidator,
+normalizeEditorSearchInput,
 } from "@/lib/editor-search";
 
 const EditorLayoutBridge = lazy(() =>

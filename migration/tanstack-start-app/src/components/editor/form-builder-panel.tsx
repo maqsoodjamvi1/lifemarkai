@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { FormInput, Sparkles, Copy, Check, Loader2, RefreshCw, FileCode2, ChevronDown, ChevronUp } from "lucide-react";
+import { FormInput,Sparkles,Copy,Check,Loader2,RefreshCw,FileCode2,ChevronDown,ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";

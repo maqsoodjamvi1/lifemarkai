@@ -1,5 +1,5 @@
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence,motion } from "framer-motion";
 
 export type LovableMentionItem =
   | { kind: "file"; path: string }

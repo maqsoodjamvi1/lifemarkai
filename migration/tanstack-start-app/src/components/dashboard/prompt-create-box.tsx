@@ -2,9 +2,9 @@
  * Shell PromptCreateBox — creates a project via proxied POST /api/projects
  * and opens the editor with the starter prompt.
  */
-import { useEffect, useRef, useState } from "react";
-import { useNavigate, useSearch } from "@tanstack/react-router";
-import { ArrowRight, Loader2, Sparkles } from "lucide-react";
+import { useEffect,useRef,useState } from "react";
+import { useNavigate,useSearch } from "@tanstack/react-router";
+import { ArrowRight,Loader2,Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 // Keep this list and the default in sync with dashboard-hero.tsx and with

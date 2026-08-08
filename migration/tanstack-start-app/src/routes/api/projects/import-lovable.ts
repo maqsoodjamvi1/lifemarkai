@@ -1,16 +1,15 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { Octokit } from "@octokit/rest";
 import JSZip from "jszip";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { detectLanguage } from "@/lib/ai/code-parser";
-import { adaptLovableProject, type ImportFile } from "@/lib/import/lovable-adapter";
+import { adaptLovableProject,type ImportFile } from "@/lib/import/lovable-adapter";
 import {
-  cancelCreditReservation,
-  reserveCredits,
-  settleCreditReservation,
-  type CreditReservation,
+cancelCreditReservation,
+reserveCredits,
+settleCreditReservation,
+type CreditReservation,
 } from "@/lib/credits";
 
 
@@ -130,7 +129,7 @@ async function handlePOST(req: Request) {
   const rl = await rateLimitAsync(user.id, RATE_LIMITS.api);
   if (!rl.success) return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
 
-  const { data: profile } = await (supabase as any)
+  const { data: profile } = await supabase
     .from("profiles")
     .select("github_access_token")
     .eq("id", user.id)
@@ -206,7 +205,7 @@ async function handlePOST(req: Request) {
     }
 
     const projectName = `${adapted.packageName ?? githubRepo?.split("/")[1] ?? "Lovable app"} (imported)`;
-    const { data: project, error: projectError } = await (supabase as any)
+    const { data: project, error: projectError } = await supabase
       .from("projects")
       .insert({
         user_id: user.id,
@@ -250,13 +249,13 @@ async function handlePOST(req: Request) {
         content: f.content,
         language: f.language,
       }));
-      const { error: filesError } = await (supabase as any).from("project_files").insert(batch);
+      const { error: filesError } = await supabase.from("project_files").insert(batch);
       if (filesError) throw new Error(`Failed to persist imported files: ${filesError.message}`);
     }
 
     // Welcome message in chat (best-effort — import must not fail on this).
     try {
-      await (supabase as any).from("messages").insert({
+      await supabase.from("messages").insert({
         project_id: project.id,
         role: "assistant",
         mode: "chat",

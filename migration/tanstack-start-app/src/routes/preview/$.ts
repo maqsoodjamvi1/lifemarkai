@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/server";
 import { verifyPreviewToken } from "@/lib/preview/preview-token";
@@ -49,7 +48,7 @@ async function handleGET(req: Request, params: any) {
   // ── asset request: /preview/:projectId/<path> ──
   if (filePath) {
     const supabase = createAdminClient();
-    const { data: file } = await (supabase as any)
+    const { data: file } = await supabase
       .from("project_files")
       .select("content, path")
       .eq("project_id", projectId)

@@ -11,7 +11,7 @@ export async function listNotifications(data: any) {
     if (!user) return { status: "unauthorized" as const };
 
     const limit = data.limit ?? 30;
-    let query = (supabase as any)
+    let query = supabase
       .from("notifications")
       .select("*")
       .eq("user_id", user.id)
@@ -23,7 +23,7 @@ export async function listNotifications(data: any) {
     const { data: rows, error } = await query;
     if (error) return { status: "error" as const, message: error.message };
 
-    const { data: countData } = await (supabase as any).rpc(
+    const { data: countData } = await supabase.rpc(
       "get_unread_notification_count",
       { p_user_id: user.id },
     );
@@ -41,12 +41,12 @@ export async function markNotifications(data: any) {
     if (!user) return { status: "unauthorized" as const };
 
     if (data.action === "mark_all_read") {
-      await (supabase as any).rpc("mark_notifications_read", { p_user_id: user.id });
+      await supabase.rpc("mark_notifications_read", { p_user_id: user.id });
       return { status: "ok" as const, success: true };
     }
 
     if (data.action === "mark_read" && data.ids?.length) {
-      await (supabase as any)
+      await supabase
         .from("notifications")
         .update({ is_read: true })
         .eq("user_id", user.id)
@@ -63,13 +63,13 @@ export async function deleteNotifications(data: any) {
     if (!user) return { status: "unauthorized" as const };
 
     if (data.id) {
-      await (supabase as any)
+      await supabase
         .from("notifications")
         .delete()
         .eq("id", data.id)
         .eq("user_id", user.id);
     } else {
-      await (supabase as any)
+      await supabase
         .from("notifications")
         .delete()
         .eq("user_id", user.id)

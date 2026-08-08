@@ -5,11 +5,11 @@
  * BreadcrumbList, speakable, etc.) and lets users generate structured data via AI.
  */
 
-import { useState, useMemo } from "react";
+import { useState,useMemo } from "react";
 import {
-  Sparkles, CheckCircle2, AlertTriangle, XCircle, Circle,
-  ChevronDown, ChevronRight, Wand2, Copy, Check,
-  FileJson, HelpCircle, BookOpen, List, Mic, Globe,
+Sparkles,CheckCircle2,AlertTriangle,XCircle,Circle,
+ChevronDown,ChevronRight,Wand2,Copy,Check,
+FileJson,HelpCircle,BookOpen,List,Mic,Globe,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

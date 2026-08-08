@@ -7,9 +7,9 @@
  * Next.js coupling removed: the local editor tree has zero next/* imports, so the
  * @lifemark/editor alias and the next/* Vite shims are no longer required by it.
  */
-import { lazy, Suspense, Component, useEffect, useState, type ReactNode, type ErrorInfo } from "react";
-import { Loader2, AlertTriangle, RefreshCw } from "lucide-react";
-import { EditorShell, type EditorShellProps } from "./editor-shell";
+import { lazy,Suspense,Component,useEffect,useState,type ReactNode,type ErrorInfo } from "react";
+import { Loader2,AlertTriangle,RefreshCw } from "lucide-react";
+import { EditorShell,type EditorShellProps } from "./editor-shell";
 import { ConfirmDialogProvider } from "@/components/ui/confirm-dialog";
 import { QueryProvider } from "@/components/providers/query-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";

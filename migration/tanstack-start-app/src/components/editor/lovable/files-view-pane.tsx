@@ -1,5 +1,5 @@
 
-import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
+import { PanelGroup,Panel,PanelResizeHandle } from "react-resizable-panels";
 import { FileTreePanel } from "@/components/editor/file-tree-panel";
 import { CodePanel } from "@/components/editor/code-panel";
 import type { Collaborator as YjsCollaborator } from "@/hooks/use-yjs-editor";

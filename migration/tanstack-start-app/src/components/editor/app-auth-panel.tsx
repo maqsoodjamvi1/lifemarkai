@@ -21,8 +21,8 @@
  *   • Secrets are write-only — the GET endpoint masks them as "•••••••• (set)".
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { Loader2, Check, AlertCircle, Copy, ExternalLink, ShieldCheck } from "lucide-react";
+import { useCallback,useEffect,useState } from "react";
+import { Loader2,Check,AlertCircle,Copy,ExternalLink,ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import type { Project } from "@/types/database";
@@ -152,18 +152,18 @@ export function AppAuthPanel({ project }: AppAuthPanelProps) {
     }
   }
 
-  function CopyBtn({ text, k }: { text: string; k: string }) {
+  function renderCopyButton(text: string, key: string) {
     return (
       <button
         type="button"
         onClick={() => copy(text, () => {
-          setCopiedKey(k);
-          setTimeout(() => setCopiedKey((curr) => curr === k ? null : curr), 1500);
+          setCopiedKey(key);
+          setTimeout(() => setCopiedKey((current) => current === key ? null : current), 1500);
         })}
         className="p-1 rounded hover:bg-muted/40 text-muted-foreground hover:text-foreground"
         title="Copy"
       >
-        {copiedKey === k ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+        {copiedKey === key ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
       </button>
     );
   }
@@ -262,7 +262,7 @@ export function AppAuthPanel({ project }: AppAuthPanelProps) {
                     <label className="text-[11px] font-medium text-muted-foreground">Authorized redirect URI</label>
                     <div className="flex items-center gap-1 mt-1">
                       <code className="flex-1 text-[10px] font-mono bg-background border border-border rounded px-2 py-1 truncate">{acsLike}</code>
-                      <CopyBtn text={acsLike} k="g-acs" />
+                      {renderCopyButton(acsLike, "g-acs")}
                     </div>
                     <p className="text-[10px] text-muted-foreground/70 mt-0.5">Paste this into the &ldquo;Authorized redirect URIs&rdquo; box when you create the OAuth client.</p>
                   </div>
@@ -334,12 +334,12 @@ export function AppAuthPanel({ project }: AppAuthPanelProps) {
                     <div className="flex items-center gap-1">
                       <span className="text-[10px] text-muted-foreground w-20">ACS URL</span>
                       <code className="flex-1 text-[10px] font-mono bg-background border border-border rounded px-2 py-1 truncate">{acsUrl}</code>
-                      <CopyBtn text={acsUrl} k="saml-acs" />
+                      {renderCopyButton(acsUrl, "saml-acs")}
                     </div>
                     <div className="flex items-center gap-1">
                       <span className="text-[10px] text-muted-foreground w-20">Entity ID</span>
                       <code className="flex-1 text-[10px] font-mono bg-background border border-border rounded px-2 py-1 truncate">{entityId}</code>
-                      <CopyBtn text={entityId} k="saml-eid" />
+                      {renderCopyButton(entityId, "saml-eid")}
                     </div>
                   </div>
                   <div className="space-y-1 pt-1">
@@ -418,7 +418,7 @@ export function AppAuthPanel({ project }: AppAuthPanelProps) {
                   <div className="flex items-center gap-1">
                     <span className="text-[10px] text-muted-foreground w-20">Callback URL</span>
                     <code className="flex-1 text-[10px] font-mono bg-background border border-border rounded px-2 py-1 truncate">{cb}</code>
-                    <CopyBtn text={cb} k="oidc-cb" />
+                    {renderCopyButton(cb, "oidc-cb")}
                   </div>
                   <input
                     placeholder="Issuer (e.g. https://accounts.example.com)"

@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { Copy, Check, MessageSquare, Globe } from "lucide-react";
+import { Copy,Check,MessageSquare,Globe } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 
 interface LovableGuestCommentsSetupProps {

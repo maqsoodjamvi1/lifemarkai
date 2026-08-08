@@ -11,7 +11,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { staticScan, countFindings, SECURITY_PATTERNS } from "./static-scan.ts";
+import { staticScan,countFindings,SECURITY_PATTERNS } from "./static-scan.ts";
 
 // Tests use a stripped-down shape compatible with the bits staticScan touches.
 // We deliberately do NOT import the real ProjectFile type — staticScan only

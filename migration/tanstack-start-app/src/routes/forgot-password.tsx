@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute,Link } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { Mail, Loader2, Zap, ArrowLeft, CheckCircle2 } from "lucide-react";
+import { Mail,Loader2,Zap,ArrowLeft,CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";

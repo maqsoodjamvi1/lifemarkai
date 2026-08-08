@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 /**
  * LifemarkCloudPanel — managed-backend hub modeled on Lovable Cloud.
  *
@@ -16,13 +14,12 @@
  *   - Advanced      → instance tier upgrade, region (read-only), danger zone
  */
 
-import { useState, useEffect, useCallback } from "react";
-import { motion } from "framer-motion";
+import { useState,useEffect,useCallback } from "react";
 import {
-  Cloud, Database, Lock, FolderOpen, Zap, Sparkles, KeyRound,
-  Activity, BarChart3, Settings, Loader2, MapPin, Cpu,
-  AlertCircle, Check, ArrowUpRight, RefreshCw, Server,
-  HeartPulse, ShieldCheck, Gauge, CalendarClock,
+Cloud,Database,Lock,FolderOpen,Zap,Sparkles,KeyRound,
+Activity,BarChart3,Settings,Loader2,MapPin,Cpu,
+AlertCircle,ArrowUpRight,RefreshCw,Server,
+HeartPulse,ShieldCheck,Gauge,CalendarClock
 } from "lucide-react";
 import { CloudSlowQueries } from "./cloud-slow-queries";
 import { CloudJobsPanel } from "./cloud-jobs-panel";
@@ -30,10 +27,10 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import type { Project } from "@/types/database";
 import {
-  CLOUD_TOOL_LABELS,
-  DEFAULT_CLOUD_TOOL_PERMISSIONS,
-  type CloudToolId,
-  type CloudToolPermission,
+CLOUD_TOOL_LABELS,
+DEFAULT_CLOUD_TOOL_PERMISSIONS,
+type CloudToolId,
+type CloudToolPermission,
 } from "@/lib/cloud/permissions";
 
 interface LifemarkCloudPanelProps {

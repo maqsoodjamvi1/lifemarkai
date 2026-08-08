@@ -1,12 +1,9 @@
-// @ts-nocheck
-
-import { useState, useEffect, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState,useEffect,useRef } from "react";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  Globe, Loader2, CheckCircle2, Copy, Check,
-  ExternalLink, RefreshCw, Pencil, X, ShoppingCart,
-  Link2, MoreHorizontal, Star, Trash2, AlertCircle, Code2,
-  Twitter, Share2,
+Globe,Loader2,CheckCircle2,Copy,Check,
+ExternalLink,RefreshCw,X,ShoppingCart,MoreHorizontal,Star,Trash2,Code2,
+Twitter,Share2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -512,7 +509,9 @@ export function DomainsPanel({ project, onProjectUpdate }: DomainsPanelProps) {
                     {d.domain}
                   </a>
                   {d.isPrimary && (
-                    <Star className="w-3 h-3 text-yellow-400 fill-yellow-400 shrink-0" title="Primary domain" />
+                    <span title="Primary domain">
+                      <Star className="w-3 h-3 text-yellow-400 fill-yellow-400 shrink-0" />
+                    </span>
                   )}
                   <div className="relative shrink-0">
                     <Button

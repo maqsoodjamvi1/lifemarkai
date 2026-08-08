@@ -1,8 +1,8 @@
-import { createAdminClient, createClient } from "../supabase/server.ts";
+import { createAdminClient,createClient } from "../supabase/server.ts";
 import {
-  describeSupabaseError,
-  isTransientSupabaseError,
-  withSupabaseRetry,
+describeSupabaseError,
+isTransientSupabaseError,
+withSupabaseRetry,
 } from "@/lib/supabase/transient-error";
 
 export type ProjectAccess = "owner" | "editor" | "viewer" | "public";
@@ -25,7 +25,7 @@ export async function getProjectAccess(
   userId: string | undefined,
 ): Promise<ProjectAccess | null> {
   const { data: project, error } = await withSupabaseRetry(() =>
-    (supabase as any)
+    supabase
       .from("projects")
       .select("user_id, is_public")
       .eq("id", projectId)
@@ -48,7 +48,7 @@ export async function getProjectAccess(
 
   if (userId) {
     const { data: collab, error: collabError } = await withSupabaseRetry(() =>
-      (supabase as any)
+      supabase
         .from("collaborators")
         .select("role")
         .eq("project_id", projectId)

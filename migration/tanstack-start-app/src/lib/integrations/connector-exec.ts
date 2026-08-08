@@ -16,10 +16,10 @@
  *   metadata.connector_once       = { [connectorId]: "<ISO expiry>" }  // one-shot, 10 min
  */
 import {
-  CONNECTOR_REGISTRY,
-  resolveConnectorBaseUrl,
+CONNECTOR_REGISTRY,
+resolveConnectorBaseUrl,
 } from "@/lib/integrations/connector-registry";
-import { ENV_FILE_PATH, parseEnvFile } from "../project/env-file.ts";
+import { ENV_FILE_PATH,parseEnvFile } from "../project/env-file.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupabaseLike = any;

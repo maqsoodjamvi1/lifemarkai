@@ -1,5 +1,5 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { createFileRoute,Link,useNavigate } from "@tanstack/react-router";
+import { useEffect,useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
@@ -35,7 +35,7 @@ function AcceptInvitePage() {
         setErrorMsg("Invalid invite link.");
         return;
       }
-      const { data, error } = await (supabase as any).rpc("accept_team_invite", {
+      const { data, error } = await supabase.rpc("accept_team_invite", {
         p_team_id: teamId,
         p_member_id: memberId,
       });

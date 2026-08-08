@@ -1,10 +1,10 @@
 import type { EditorMode } from "@/components/editor/editor-layout";
 import type { AIModel } from "./provider.ts";
 import {
-  DEFAULT_CODING_MODEL,
-  ECONOMY_CHAT_MODEL,
-  ECONOMY_CODING_MODEL,
-  FREE_CODING_MODEL,
+DEFAULT_CODING_MODEL,
+ECONOMY_CHAT_MODEL,
+ECONOMY_CODING_MODEL,
+FREE_CODING_MODEL,
 } from "./model-defaults.ts";
 import { shouldAutoSelectClaude } from "./model-catalog.ts";
 import { OPENROUTER_MODEL_IDS } from "./openrouter-models.ts";

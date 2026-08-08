@@ -14,33 +14,33 @@
  * View subcomponents + the event reducer live in editor-intelligence-console.tsx.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect,useMemo,useRef,useState } from "react";
 import {
-  BriefcaseBusiness,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  GitBranch,
-  History,
-  Hammer,
-  ListTree,
-  Loader2,
-  MessageSquare,
-  MessagesSquare,
-  Send,
-  Users,
+BriefcaseBusiness,
+CheckCircle2,
+ChevronDown,
+ChevronRight,
+GitBranch,
+History,
+Hammer,
+ListTree,
+Loader2,
+MessageSquare,
+MessagesSquare,
+Send,
+Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  applyConsoleEvent,
-  DebateFeed,
-  GateApprovalCard,
-  initialConsoleState,
-  PlanTree,
-  RunFooter,
-  TeamGrid,
-  type ConsoleState,
-  type GateInfo,
+applyConsoleEvent,
+DebateFeed,
+GateApprovalCard,
+initialConsoleState,
+PlanTree,
+RunFooter,
+TeamGrid,
+type ConsoleState,
+type GateInfo,
 } from "./editor-intelligence-console";
 
 interface IntelligenceLens {

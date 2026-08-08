@@ -1,6 +1,6 @@
 
-import { AnimatePresence, motion } from "framer-motion";
-import { BarChart3, Loader2 } from "lucide-react";
+import { AnimatePresence,motion } from "framer-motion";
+import { BarChart3,Loader2 } from "lucide-react";
 
 export interface LovableAnalyzeFileAttachment {
   name: string;

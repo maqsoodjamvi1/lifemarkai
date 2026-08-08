@@ -1,8 +1,7 @@
 
-import { useState, useMemo } from "react";
-import { Map, Bot, User, FileCode, RefreshCw, ChevronDown, ChevronRight, Search, SlidersHorizontal, Loader2 } from "lucide-react";
+import { useState,useMemo } from "react";
+import { Map,Bot,User,FileCode,ChevronDown,ChevronRight,Search,SlidersHorizontal } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 interface CodeOwnershipPanelProps {

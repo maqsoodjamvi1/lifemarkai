@@ -1,14 +1,14 @@
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { MessageSquare, Send, Check, CheckCheck, Trash2, Reply, MoreHorizontal, Loader2, Filter } from "lucide-react";
+import { useState,useEffect,useRef,useCallback } from "react";
+import { MessageSquare,Send,Check,CheckCheck,Trash2,Reply,MoreHorizontal,Loader2,Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { createClient } from "@/lib/supabase/client";
 
@@ -112,7 +112,6 @@ function CommentCard({
           {/* Avatar */}
           <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white shrink-0 ${avatarColor(comment.user_id, isGuest)}`}>
             {comment.author?.avatar_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
               <img src={comment.author.avatar_url} alt="" className="w-full h-full rounded-full object-cover" />
             ) : (
               authorInitials(comment)

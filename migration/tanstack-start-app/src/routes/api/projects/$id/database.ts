@@ -1,9 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import { queryManagedSql, runManagedSql } from "@/lib/cloud/management";
-import { ENV_FILE_PATH, parseEnvFile } from "@/lib/project/env-file";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { queryManagedSql,runManagedSql } from "@/lib/cloud/management";
+import { ENV_FILE_PATH,parseEnvFile } from "@/lib/project/env-file";
 
 
 interface Params { params: Promise<{ id: string }> }
@@ -13,7 +12,7 @@ interface Params { params: Promise<{ id: string }> }
  * platform database. Lovable-Cloud-style table browser / editor / SQL runner.
  *
  * Backend resolution (per project):
- *  1. cloud_enabled + cloud_ref  → managed Lifemark Cloud backend (Management API SQL)
+ *  1. cloud_enabled + cloud_project_ref  → managed Lifemark Cloud backend (Management API SQL)
  *  2. VITE_SUPABASE_URL in the app's .env.local → the app's own Supabase over
  *     PostgREST (service key preferred; anon key works but RLS applies)
  *  3. neither → { backend: "none" } so the panel shows a CTA.
@@ -44,13 +43,22 @@ type Backend =
   | { kind: "supabase"; url: string; key: string; rls: boolean }
   | { kind: "none" };
 
-async function resolveBackend(supabase, project): Promise<Backend> {
-  if (project.cloud_enabled && project.cloud_ref) {
-    return { kind: "cloud", ref: project.cloud_ref };
+type Supabase = Awaited<ReturnType<typeof createClient>>;
+interface OwnedProject {
+  id: string;
+  user_id: string;
+  environment: string;
+  cloud_enabled: boolean;
+  cloud_project_ref: string | null;
+}
+
+async function resolveBackend(supabase: Supabase, project: OwnedProject): Promise<Backend> {
+  if (project.cloud_enabled && project.cloud_project_ref) {
+    return { kind: "cloud", ref: project.cloud_project_ref };
   }
   // The app's own Supabase — creds live in the project's .env.local file
   // (same storage the Env panel uses: project_files at ENV_FILE_PATH).
-  const { data: envRow } = await (supabase as any)
+  const { data: envRow } = await supabase
     .from("project_files")
     .select("content")
     .eq("project_id", project.id)
@@ -76,16 +84,16 @@ function restHeaders(key: string): Record<string, string> {
 }
 
 /** Owner-only project load shared by GET/POST. Returns a Response on failure. */
-async function loadOwnedProject(supabase, projectId: string, userId: string) {
-  const { data: project } = await (supabase as any)
+async function loadOwnedProject(supabase: Supabase, projectId: string, userId: string) {
+  const { data: project } = await supabase
     .from("projects")
-    .select("id, user_id, environment, cloud_enabled, cloud_ref")
+    .select("id, user_id, environment, cloud_enabled, cloud_project_ref")
     .eq("id", projectId)
     .single();
   if (!project || project.user_id !== userId) {
     return { project: null, error: Response.json({ error: "Forbidden" }, { status: 403 }) };
   }
-  return { project, error: null };
+  return { project: project as OwnedProject, error: null };
 }
 
 // ── GET — ?action=tables | ?action=rows&table=X&limit=50&offset=0 ────────────
@@ -331,24 +339,33 @@ async function listCloudTables(ref: string) {
   ]);
   if (!tablesRes.ok) throw new Error(tablesRes.error ?? "Failed to list tables");
 
-  const pkSet = new Set(
-    (pksRes.rows ?? []).map((r) => `${r.table_name}.${r.column_name}`),
+  const pkSet = new Set<string>(
+    (pksRes.rows ?? []).flatMap((row) =>
+      typeof row.table_name === "string" && typeof row.column_name === "string"
+        ? [`${row.table_name}.${row.column_name}`]
+        : [],
+    ),
   );
-  const estimates = new Map(
-    (estRes.rows ?? []).map((r) => [r.table_name, Number(r.estimate) || 0]),
+  const estimates = new Map<string, number>(
+    (estRes.rows ?? []).flatMap((row) =>
+      typeof row.table_name === "string"
+        ? [[row.table_name, Number(row.estimate) || 0] as const]
+        : [],
+    ),
   );
   const colsByTable = new Map<string, Array<{ name: string; type: string; isPk: boolean }>>();
-  for (const r of colsRes.rows ?? []) {
-    const list = colsByTable.get(r.table_name) ?? [];
+  for (const row of colsRes.rows ?? []) {
+    if (typeof row.table_name !== "string" || typeof row.column_name !== "string" || typeof row.data_type !== "string") continue;
+    const list = colsByTable.get(row.table_name) ?? [];
     list.push({
-      name: r.column_name,
-      type: r.data_type,
-      isPk: pkSet.has(`${r.table_name}.${r.column_name}`),
+      name: row.column_name,
+      type: row.data_type,
+      isPk: pkSet.has(`${row.table_name}.${row.column_name}`),
     });
-    colsByTable.set(r.table_name, list);
+    colsByTable.set(row.table_name, list);
   }
   return (tablesRes.rows ?? [])
-    .map((r) => r.table_name)
+    .flatMap((row) => typeof row.table_name === "string" ? [row.table_name] : [])
     .filter((name) => IDENT_RE.test(name))
     .map((name) => ({
       name,

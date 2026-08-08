@@ -7,11 +7,11 @@
  * "Fix with AI" fires a chat prompt for each issue.
  */
 
-import { useState, useMemo } from "react";
+import { useState,useMemo } from "react";
 import {
-  Gauge, Zap, Eye, Search, ShieldCheck, RefreshCw,
-  ChevronDown, ChevronRight, AlertTriangle, CheckCircle2,
-  Info, ArrowRight,
+Gauge,Zap,Eye,Search,ShieldCheck,RefreshCw,
+ChevronDown,ChevronRight,AlertTriangle,CheckCircle2,
+Info,ArrowRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

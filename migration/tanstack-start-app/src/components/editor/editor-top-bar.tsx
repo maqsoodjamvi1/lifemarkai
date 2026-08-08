@@ -1,35 +1,32 @@
 
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { useNavigate, useRouter } from "@tanstack/react-router";
+import { useState,useRef,useCallback,useEffect,useMemo } from "react";
+import { useNavigate,useRouter } from "@tanstack/react-router";
 import {
-  Zap, ChevronDown, Bot, MessageSquare, Eye, Code2,
-  Columns, Rocket, Github, Settings, Sparkles, Loader2,
-  PanelLeft, PanelsTopLeft, Download,
-  Share2, Globe, Lock, Check, Copy, ExternalLink, Shield, Brain, Pencil,
-  ToggleLeft, ToggleRight, Trash2,
-  AlignJustify, Camera, BarChart2,
-  MessageCircle, Users, Link2, MoreHorizontal, History, LayoutDashboard,
-  ChevronRight, UserPlus, CheckCircle2, AlertCircle,
-  Cloud, FolderOpen, CreditCard, Search, Pin,
-  ChevronsDownUp, ChevronsUpDown,
+Zap,ChevronDown,Bot,MessageSquare,Eye,Code2,
+Columns,Rocket,Settings,Sparkles,Loader2,
+PanelLeft,PanelsTopLeft,Download,
+Share2,Globe,Lock,Copy,ExternalLink,Shield,Brain,Pencil,Trash2,
+AlignJustify,BarChart2,
+MessageCircle,Users,Link2,MoreHorizontal,History,LayoutDashboard,
+ChevronRight,UserPlus,CheckCircle2,Cloud,FolderOpen,CreditCard,Search,Pin,
+ChevronsDownUp,ChevronsUpDown
 } from "lucide-react";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+Dialog,DialogContent,DialogHeader,DialogTitle,DialogDescription,DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
-  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+Tooltip,TooltipContent,TooltipProvider,TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
-  DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+DropdownMenu,DropdownMenuContent,DropdownMenuItem,
+DropdownMenuLabel,DropdownMenuSeparator,DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { Project, Profile } from "@/types/database";
-import type { EditorMode, ViewMode, LeftPanel } from "./editor-layout";
+import type { Project,Profile } from "@/types/database";
+import type { EditorMode,ViewMode,LeftPanel } from "./editor-layout";
 import { toast } from "@/hooks/use-toast";
 import { createClient } from "@/lib/supabase/client";
-import { ViewSwitcherPill, type ViewSwitcherTab } from "./view-switcher-pill";
+import { ViewSwitcherPill,type ViewSwitcherTab } from "./view-switcher-pill";
 import { UrlBarPill } from "./url-bar-pill";
 import { NotificationsBell } from "./notifications-bell";
 import { LovableUpgradeDialog } from "./lovable/upgrade-dialog";
@@ -117,23 +114,24 @@ function openSecondaryPanel(
 
 /** Returns a human-readable relative time string that auto-updates every 5 s */
 function useRelativeTime(date: Date | null | undefined): string {
-  const [, tick] = useState(0);
+  const [now, setNow] = useState<number | null>(null);
   // Server and client render at different instants, so the label has to stay
   // empty through hydration to keep the markup identical.
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setMounted(true);
+    setNow(Date.now());
   }, []);
 
   useEffect(() => {
     if (!date) return;
-    const id = setInterval(() => tick((n) => n + 1), 5_000);
+    const id = setInterval(() => setNow(Date.now()), 5_000);
     return () => clearInterval(id);
   }, [date]);
 
-  if (!mounted || !date) return "";
-  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
+  if (!mounted || now === null || !date) return "";
+  const seconds = Math.round((now - date.getTime()) / 1000);
   if (seconds < 5)  return "Saved just now";
   if (seconds < 60) return `Saved ${seconds}s ago`;
   const minutes = Math.floor(seconds / 60);
@@ -356,6 +354,7 @@ export function EditorTopBar({
   // Unpublished-changes dot (Lovable parity): shown when the project was
   // saved after the latest deployment. Cleared by publishing.
   const [lastDeployedAt, setLastDeployedAt] = useState<Date | null>(null);
+  const [liveUrl, setLiveUrl] = useState<string | null>(project.deployed_url ?? null);
   const hasUnpublishedChanges =
     deployStatus === "deployed" &&
     !!lastSaved && !!lastDeployedAt &&
@@ -384,7 +383,6 @@ export function EditorTopBar({
       .catch(() => {});
   }, [project.id]);
 
-  const [liveUrl, setLiveUrl] = useState<string | null>(project.deployed_url ?? null);
   /** Live Modal tunnel from preview-panel — preferred for Open in new tab (Lovable dump). */
   const [modalPreviewUrl, setModalPreviewUrl] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
@@ -528,9 +526,9 @@ export function EditorTopBar({
     setShareCollabLoading(true);
     try {
       const supabase = createClient();
-      const { data } = await (supabase as any)
+      const { data } = await supabase
         .from("collaborators")
-        .select("id, role, profile:profiles(full_name, email, avatar_url)")
+        .select("id, role, profile:profiles!collaborators_user_id_fkey(full_name, email, avatar_url)")
         .eq("project_id", project.id)
         .order("created_at", { ascending: true });
       setShareCollaborators(
@@ -1234,7 +1232,6 @@ export function EditorTopBar({
                     <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white ring-2 ring-background cursor-default select-none"
                       style={{ backgroundColor: u.color }}>
                       {u.avatar
-                        // eslint-disable-next-line @next/next/no-img-element
                         ? <img src={u.avatar} alt={u.name} className="w-full h-full rounded-full object-cover" />
                         : u.name.slice(0, 2).toUpperCase()}
                     </div>
@@ -1320,7 +1317,6 @@ export function EditorTopBar({
                       <div key={c.id} className="flex items-center gap-2.5">
                         <div className="w-7 h-7 rounded-full bg-sky-600/80 flex items-center justify-center text-white text-[11px] font-bold flex-shrink-0 overflow-hidden">
                           {c.profile?.avatar_url ? (
-                            // eslint-disable-next-line @next/next/no-img-element
                             <img src={c.profile.avatar_url} alt="" className="w-full h-full object-cover" />
                           ) : (
                             initial

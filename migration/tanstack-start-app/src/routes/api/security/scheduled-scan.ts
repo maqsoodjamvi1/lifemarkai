@@ -1,7 +1,7 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
+import type { Database } from "@/types/database";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { scanProject, type Severity } from "@/lib/security/scan";
+import { scanProject,type Severity } from "@/lib/security/scan";
 
 /**
  * Scheduled security scan (enterprise Security Center — persistent scans).
@@ -77,7 +77,9 @@ async function run(req: Request) {
     for (const e of existing ?? []) existingSet.set(sig(e.title, e.file_path), e.id);
 
     const seen = new Set<string>();
-    const toInsert: Array<Record<string, unknown>> = [];
+    const toInsert: Array<
+      Database["public"]["Tables"]["health_findings"]["Insert"]
+    > = [];
     for (const f of findings) {
       const s = sig(f.title, f.file);
       if (seen.has(s)) continue;

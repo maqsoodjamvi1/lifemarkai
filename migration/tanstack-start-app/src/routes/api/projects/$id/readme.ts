@@ -1,9 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 
 // POST /api/projects/[id]/readme
 // Reads project files, generates a README.md with AI, upserts it as a project file.
@@ -18,7 +17,7 @@ async function handlePOST(req: Request, params: any) {
   if (!rl.success) return Response.json({ error: "Rate limited" }, { status: 429 });
 
   // Verify ownership
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("id, name, description, user_id, framework")
     .eq("id", id)
@@ -28,7 +27,7 @@ async function handlePOST(req: Request, params: any) {
   if (project.user_id !== user.id) return Response.json({ error: "Forbidden" }, { status: 403 });
 
   // Load project files (limit to relevant ones for context)
-  const { data: files } = await (supabase as any)
+  const { data: files } = await supabase
     .from("project_files")
     .select("path, content, language")
     .eq("project_id", id)
@@ -93,7 +92,7 @@ Generate a complete README.md for this project.`;
   }
 
   // Upsert README.md as a project file
-  const { data: existing } = await (supabase as any)
+  const { data: existing } = await supabase
     .from("project_files")
     .select("id")
     .eq("project_id", id)
@@ -101,12 +100,12 @@ Generate a complete README.md for this project.`;
     .maybeSingle();
 
   if (existing) {
-    await (supabase as any)
+    await supabase
       .from("project_files")
       .update({ content: readme, language: "markdown" })
       .eq("id", existing.id);
   } else {
-    await (supabase as any)
+    await supabase
       .from("project_files")
       .insert({
         project_id: id,

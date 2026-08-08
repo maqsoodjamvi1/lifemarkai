@@ -5,7 +5,7 @@
  * by the WebContainer preview — only app-specific files live here.
  */
 
-import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "../preview/base-app-deps.ts";
+import { BASE_APP_DEPENDENCIES,BASE_APP_DEV_DEPENDENCIES } from "../preview/base-app-deps.ts";
 
 export interface TemplateFile {
   path: string;

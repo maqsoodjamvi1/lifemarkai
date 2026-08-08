@@ -25,31 +25,41 @@
  * guard with `typeof window !== "undefined"` or render the route client-only
  * (the editor route uses `ssr: "data-only"` for exactly this reason).
  */
-import { lazy, Suspense, type ComponentType, type ReactNode } from "react";
+import { createElement,lazy,Suspense,type ComponentType,type ReactNode } from "react";
 
-type Loader = () => Promise<unknown>;
 interface DynamicOptions {
   ssr?: boolean;
   loading?: (props?: { error?: Error | null; isLoading?: boolean; pastDelay?: boolean }) => ReactNode;
 }
 
-function normalize(mod: unknown): { default: ComponentType<any> } {
-  const m = mod as any;
-  const comp = (m && (m.default ?? m)) as ComponentType<any>;
+type LoadedComponent<T> = T extends { default: infer C } ? C : T;
+type ComponentPropsFromModule<T> = (
+  LoadedComponent<T> extends ComponentType<infer P>
+    ? unknown extends P
+      ? Record<never, never>
+      : P
+    : never
+) & object;
+
+function normalize<T>(mod: T): { default: ComponentType<ComponentPropsFromModule<T>> } {
+  const moduleWithDefault = mod as { default?: unknown };
+  const comp = (moduleWithDefault?.default ?? mod) as ComponentType<ComponentPropsFromModule<T>>;
   return { default: comp };
 }
 
-export default function dynamic(
-  loader: Loader,
+export default function dynamic<T>(
+  loader: () => Promise<T>,
   options: DynamicOptions = {},
-): ComponentType<any> {
-  const Lazy = lazy(async () => normalize(await loader()));
+): ComponentType<ComponentPropsFromModule<T>> {
+  const Lazy = lazy(async (): Promise<{ default: ComponentType<ComponentPropsFromModule<T>> }> =>
+    normalize<T>(await loader())
+  );
   const Loading = options.loading;
 
-  return function DynamicComponent(props: any) {
+  return function DynamicComponent(props: ComponentPropsFromModule<T>) {
     return (
       <Suspense fallback={Loading ? <Loading /> : null}>
-        <Lazy {...props} />
+        {createElement(Lazy as unknown as ComponentType<ComponentPropsFromModule<T>>, props)}
       </Suspense>
     );
   };

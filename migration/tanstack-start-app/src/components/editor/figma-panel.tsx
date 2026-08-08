@@ -1,9 +1,9 @@
 
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  Figma, Link, Key, ArrowRight, Loader2,
-  CheckCircle2, AlertCircle, Sparkles, ChevronDown, ChevronUp,
+Figma,Link,Key,ArrowRight,Loader2,
+CheckCircle2,AlertCircle,Sparkles,ChevronDown,ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

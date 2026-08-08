@@ -1,7 +1,6 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { parseCloudToolPermissions, DEFAULT_CLOUD_TOOL_PERMISSIONS, type CloudToolId, type CloudToolPermission } from "@/lib/cloud/permissions";
+import { parseCloudToolPermissions,DEFAULT_CLOUD_TOOL_PERMISSIONS,type CloudToolId,type CloudToolPermission } from "@/lib/cloud/permissions";
 
 const TOOL_IDS = Object.keys(DEFAULT_CLOUD_TOOL_PERMISSIONS) as CloudToolId[];
 const VALID: CloudToolPermission[] = ["allow", "ask", "never"];

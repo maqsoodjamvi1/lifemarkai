@@ -1,9 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import {
-  evaluatePublishAudience,
-  type PublishAudience,
+evaluatePublishAudience,
+type PublishAudience,
 } from "@/lib/project/publish-audience";
 import { logger } from "@/lib/logger";
 

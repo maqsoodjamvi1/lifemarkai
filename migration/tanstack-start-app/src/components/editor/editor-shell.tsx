@@ -2,11 +2,11 @@
  * EditorShell — fallback seam when full EditorLayout fails to mount.
  * Honors Zod-validated search: file / view / panel / prompt / mode.
  */
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, FileCode2, MessageSquare, Zap } from "lucide-react";
+import { useEffect,useState } from "react";
+import { Link,useNavigate } from "@tanstack/react-router";
+import { ArrowLeft,FileCode2,MessageSquare,Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { Project, ProjectFile, Message, Profile } from "@/types/database";
+import type { Project,ProjectFile,Message,Profile } from "@/types/database";
 import type { EditorSearch } from "@/lib/editor-search";
 
 export interface EditorShellProps {

@@ -1,13 +1,11 @@
-// @ts-nocheck
-
 /**
  * CloudSlowQueries — "Performance" section of the Lifemark Cloud panel.
  * Lists the managed backend's slowest statements (pg_stat_statements) with
  * AI index suggestions ("Suggest index") and one-click apply.
  */
 
-import { useState, useEffect, useCallback } from "react";
-import { Gauge, Loader2, RefreshCw, Sparkles, Check, Zap } from "lucide-react";
+import { useState,useEffect,useCallback } from "react";
+import { Gauge,Loader2,RefreshCw,Sparkles,Check,Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 

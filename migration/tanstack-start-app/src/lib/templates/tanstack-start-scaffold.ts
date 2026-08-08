@@ -15,8 +15,8 @@
  * The Start Vite plugin owns the entry — NO index.html and NO src/main.tsx.
  */
 
-import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "../preview/base-app-deps.ts";
-import { deriveBrand, siteChromeFiles } from "./site-chrome.ts";
+import { BASE_APP_DEPENDENCIES,BASE_APP_DEV_DEPENDENCIES } from "../preview/base-app-deps.ts";
+import { deriveBrand,siteChromeFiles } from "./site-chrome.ts";
 
 export interface ScaffoldFile {
   path: string;

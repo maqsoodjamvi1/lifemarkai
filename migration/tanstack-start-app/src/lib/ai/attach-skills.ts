@@ -1,4 +1,4 @@
-import { matchSkills, renderSkillBlock, type SkillCandidate, type SkillMatch } from "./skill-matcher.ts";
+import { matchSkills,renderSkillBlock,type SkillCandidate,type SkillMatch } from "./skill-matcher.ts";
 
 /** Load + match workspace skills for a user prompt (Lovable-style auto-attach). */
 export async function attachSkillsToPrompt(

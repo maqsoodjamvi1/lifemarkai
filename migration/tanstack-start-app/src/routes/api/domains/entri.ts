@@ -15,6 +15,7 @@ export const Route = createFileRoute("/api/domains/entri")({
         // returns an undefined payload with a 200, i.e. a success toast for a
         // domain the host never accepted.
         if (r.status === "hosting_error") return Response.json({ error: r.message }, { status: 502 });
+        if (r.status === "database_error") return Response.json({ error: r.message }, { status: 500 });
         return Response.json(r.payload);
       },
     },

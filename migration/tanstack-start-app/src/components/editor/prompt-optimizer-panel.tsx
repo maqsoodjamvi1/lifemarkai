@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { Wand2, Loader2, Copy, Check, ChevronRight, Sparkles, BarChart3, RefreshCw, Send } from "lucide-react";
+import { Wand2,Loader2,Copy,Check,ChevronRight,Sparkles,BarChart3,RefreshCw,Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";

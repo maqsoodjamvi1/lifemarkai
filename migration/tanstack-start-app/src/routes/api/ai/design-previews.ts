@@ -1,14 +1,14 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { DESIGN_MODEL } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { claimDailyCredits } from "@/lib/credits";
 import {
-  DESIGN_PREVIEW_SYSTEM_PROMPT,
-  buildFallbackDesignPreviews,
-  parseDesignPreviewResponse,
-  shouldOfferDesignPreviews,
+DESIGN_PREVIEW_SYSTEM_PROMPT,
+buildFallbackDesignPreviews,
+parseDesignPreviewResponse,
+shouldOfferDesignPreviews,
 } from "@/lib/ai/design-previews";
 
 
@@ -22,8 +22,8 @@ async function handlePOST(req: Request) {
     return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
   }
 
-  await (await import("@/lib/credits")).claimDailyCredits(supabase, user.id);
-  const { data: profile } = await (supabase as any)
+  await claimDailyCredits(supabase, user.id);
+  const { data: profile } = await supabase
     .from("profiles").select("credits").eq("id", user.id).single();
   if (!profile || profile.credits <= 0) {
     return Response.json({ error: "Insufficient credits" }, { status: 402 });

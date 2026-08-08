@@ -21,7 +21,7 @@
  * police the dependency list (`package-allowlist.ts` does that).
  */
 
-import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "./base-app-deps.ts";
+import { BASE_APP_DEPENDENCIES,BASE_APP_DEV_DEPENDENCIES } from "./base-app-deps.ts";
 
 /** TanStack Start's Vite plugin requires Vite 7+; the SPA scaffold pins 5. */
 const TANSTACK_VITE_PIN = "^7.0.0";

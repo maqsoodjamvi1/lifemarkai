@@ -1,6 +1,6 @@
 
-import { useState, useRef } from "react";
-import { Layers, Play, Loader2, Copy, Check, ChevronRight, Clock, Zap, Send } from "lucide-react";
+import { useState,useRef } from "react";
+import { Layers,Play,Loader2,Copy,Check,Clock,Zap,Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
@@ -138,7 +138,7 @@ export function ModelComparePanel({ projectId, onSendToChat }: ModelComparePanel
     setTimeout(() => setCopied(null), 2000);
   }
 
-  function useResult(content: string) {
+  function sendResultToChat(content: string) {
     onSendToChat(`Use this response as context for the next change:\n\n${content.slice(0, 2000)}`);
     toast({ title: "Sent to chat" });
   }
@@ -226,7 +226,7 @@ export function ModelComparePanel({ projectId, onSendToChat }: ModelComparePanel
                     <button onClick={() => copyResult(result.model, result.content)} className="text-muted-foreground hover:text-foreground p-0.5">
                       {copied === result.model ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                     </button>
-                    <button onClick={() => useResult(result.content)} className="text-muted-foreground hover:text-foreground p-0.5" title="Send to chat">
+                    <button onClick={() => sendResultToChat(result.content)} className="text-muted-foreground hover:text-foreground p-0.5" title="Send to chat">
                       <Send className="w-3.5 h-3.5" />
                     </button>
                   </div>

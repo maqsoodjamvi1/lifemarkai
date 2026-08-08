@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState,useEffect } from "react";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  Building2, Code2, Github, Layers, Sparkles, Check, ChevronRight,
-  ChevronLeft, X, Loader2, Zap, Globe, Server, Palette,
+Building2,Code2,Github,Layers,Sparkles,Check,ChevronRight,
+ChevronLeft,X,Loader2,Zap,Globe,Server,Palette,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -97,7 +97,7 @@ export function WorkspaceSetupWizard({ onComplete, onSkip }: WorkspaceSetupWizar
     const supabase = createClient();
     supabase.auth.getUser().then(async ({ data: { user } }) => {
       if (!user) return;
-      const { data } = await (supabase as any).from("profiles").select("github_token").eq("id", user.id).single();
+      const { data } = await supabase.from("profiles").select("github_token").eq("id", user.id).single();
       if ((data as any)?.github_token) {
         setState((s) => ({ ...s, githubConnected: true }));
       }
@@ -135,7 +135,7 @@ export function WorkspaceSetupWizard({ onComplete, onSkip }: WorkspaceSetupWizar
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        await (supabase as any).from("profiles").update({
+        await supabase.from("profiles").update({
           workspace_name: state.workspaceName,
           preferred_framework: state.framework,
           ai_style: state.aiStyle,

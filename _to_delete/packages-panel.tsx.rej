@@ -1,0 +1,33 @@
+--- migration/tanstack-start-app/src/components/editor/packages-panel.tsx
++++ migration/tanstack-start-app/src/components/editor/packages-panel.tsx
+@@ -57,19 +57,28 @@ export function PackagesPanel({ projectId, files, onFileChange }: PackagesPanelP
+   useEffect(() => {
+     if (debounceRef.current) clearTimeout(debounceRef.current);
+     if (!query.trim()) { setResults([]); return; }
++    // The debounce timer is cleared on every keystroke, but a request already
++    // sent keeps running — a slow early query could land after a fast later
++    // one and show packages for text no longer in the box.
++    let cancelled = false;
+     debounceRef.current = setTimeout(async () => {
+       setSearching(true);
+       try {
+         const res = await fetch(`/api/npm/search?q=${encodeURIComponent(query.trim())}`);
+         const data = await res.json();
++        if (cancelled) return;
+         setResults(data.packages ?? []);
+       } catch {
++        if (cancelled) return;
+         setResults([]);
+       } finally {
+-        setSearching(false);
++        if (!cancelled) setSearching(false);
+       }
+     }, 400);
+-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
++    return () => {
++      cancelled = true;
++      if (debounceRef.current) clearTimeout(debounceRef.current);
++    };
+   }, [query]);
+ 
+   async function mutatePkgJson(

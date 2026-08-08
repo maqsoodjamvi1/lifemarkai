@@ -1,10 +1,9 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { getFastAiModel } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import type { ReviewIssue, ReviewResult } from "@/lib/ai/review-types";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import type { ReviewResult } from "@/lib/ai/review-types";
 
 export type { ReviewIssue, ReviewResult } from "@/lib/ai/review-types";
 

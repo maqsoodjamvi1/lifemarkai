@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
-  deleteProjectFile,
-  listProjectFiles,
-  patchProjectFile,
-  upsertProjectFile,
+deleteProjectFile,
+listProjectFiles,
+patchProjectFile,
+upsertProjectFile,
 } from "@/lib/server-fns/project-files";
 
 const UUID_RE =

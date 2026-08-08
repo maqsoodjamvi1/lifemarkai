@@ -1,5 +1,6 @@
 /** Native account/privacy — reimplemented off the worker (pure Supabase). */
 import { createClient } from "../supabase/server.ts";
+import type { Database } from "../../types/database.ts";
 
 export async function getPrivacy() {
   const supabase = await createClient();
@@ -7,7 +8,7 @@ export async function getPrivacy() {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return { status: "unauthorized" as const };
-  const { data: profile } = await (supabase as any)
+  const { data: profile } = await supabase
     .from("profiles")
     .select("training_opt_out, analytics_opt_out, marketing_emails")
     .eq("id", user.id)
@@ -27,13 +28,13 @@ export async function updatePrivacy(data: any) {
     } = await supabase.auth.getUser();
     if (!user) return { status: "unauthorized" as const };
 
-    const updates: Record<string, boolean> = {};
+    const updates: Database["public"]["Tables"]["profiles"]["Update"] = {};
     if (typeof data.training_opt_out === "boolean") updates.training_opt_out = data.training_opt_out;
     if (typeof data.analytics_opt_out === "boolean") updates.analytics_opt_out = data.analytics_opt_out;
     if (typeof data.marketing_emails === "boolean") updates.marketing_emails = data.marketing_emails;
     if (Object.keys(updates).length === 0) return { status: "noop" as const };
 
-    const { data: row, error } = await (supabase as any)
+    const { data: row, error } = await supabase
       .from("profiles")
       .update(updates)
       .eq("id", user.id)

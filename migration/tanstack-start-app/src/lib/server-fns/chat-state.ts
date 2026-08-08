@@ -5,6 +5,7 @@
 import { createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
 import { assertChatAccess } from "../project/chat-access.ts";
+import type { Database,Json } from "../../types/database.ts";
 
 const EMPTY_STATE = {
   pinned_message_id: null as string | null,
@@ -24,7 +25,7 @@ export async function getChatState(input: { projectId: string }) {
     return { status: "denied" as const, httpStatus: access.status, error: access.error };
   }
 
-  const { data: row, error } = await (supabase as any)
+  const { data: row, error } = await supabase
     .from("project_chat_state")
     .select("pinned_message_id, bookmarked_ids, prompt_queue, preview_annotations, updated_at")
     .eq("project_id", input.projectId)
@@ -63,24 +64,30 @@ export async function patchChatState(input: {
     return { status: "denied" as const, httpStatus: access.status, error: access.error };
   }
 
-  const patch: Record<string, unknown> = { project_id: input.projectId };
+  const patch: Partial<Database["public"]["Tables"]["project_chat_state"]["Insert"]> & {
+    project_id: string;
+  } = { project_id: input.projectId };
   if ("pinned_message_id" in input) patch.pinned_message_id = input.pinned_message_id ?? null;
   if ("bookmarked_ids" in input && input.bookmarked_ids) {
     patch.bookmarked_ids = input.bookmarked_ids.filter((x) => typeof x === "string");
   }
   if ("prompt_queue" in input && input.prompt_queue) {
-    patch.prompt_queue = input.prompt_queue.slice(0, 50);
+    patch.prompt_queue = input.prompt_queue.slice(0, 50) as Json;
   }
   if ("preview_annotations" in input && input.preview_annotations) {
-    patch.preview_annotations = input.preview_annotations.slice(0, 200);
+    patch.preview_annotations = input.preview_annotations.slice(0, 200) as Json;
   }
   if (Object.keys(patch).length <= 1) {
     return { status: "error" as const, message: "No fields to update" };
   }
 
-  const { data: row, error } = await (supabase as any)
+  const { data: row, error } = await supabase
     .from("project_chat_state")
-    .upsert(patch, { onConflict: "project_id" })
+    // The omitted columns have database defaults (migration 091/092), but
+    // PostgREST's OpenAPI marks them required. Preserve partial-upsert behavior.
+    .upsert(patch as Database["public"]["Tables"]["project_chat_state"]["Insert"], {
+      onConflict: "project_id",
+    })
     .select("pinned_message_id, bookmarked_ids, prompt_queue, preview_annotations, updated_at")
     .single();
 

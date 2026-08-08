@@ -1,16 +1,15 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { REASONING_MODEL } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { buildEditorIntelligencePromptBlock } from "@/lib/ai/editor-lenses/persistence";
 import {
-  cancelCreditReservation,
-  reserveCredits,
-  settleCreditReservation,
+cancelCreditReservation,
+reserveCredits,
+settleCreditReservation,
 } from "@/lib/credits";
-import { computeCreditCost, maxCreditCostForMode } from "@/lib/ai/credit-cost";
+import { computeCreditCost,maxCreditCostForMode } from "@/lib/ai/credit-cost";
 
 async function handlePOST(request: Request) {
   try {
@@ -38,7 +37,7 @@ async function handlePOST(request: Request) {
     }
 
     // Verify project ownership
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("*")
       .eq("id", projectId)

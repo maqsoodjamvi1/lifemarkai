@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect,useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { motion } from "framer-motion";
 import {
-  Sparkles, Rocket, GitCommit, FolderPlus, Clock, RefreshCw, Loader2,
+Sparkles,Rocket,GitCommit,FolderPlus,Clock,RefreshCw,Loader2,
 } from "lucide-react";
 import type { ActivityEvent } from "@/types/api";
 

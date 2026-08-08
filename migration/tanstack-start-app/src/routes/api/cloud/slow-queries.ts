@@ -1,15 +1,14 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import {
-  isManagementConfigured,
-  runManagedSql,
-  queryManagedSql,
+isManagementConfigured,
+runManagedSql,
+queryManagedSql,
 } from "@/lib/cloud/management";
 import { generateAI } from "@/lib/ai/generate";
 import { getFastAiModel } from "@/lib/ai/model-defaults";
 import { parseCloudToolPermissions } from "@/lib/cloud/permissions";
-import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimit,RATE_LIMITS } from "@/lib/rate-limit";
 
 /**
  * Slow-query finder — Lovable Cloud parity ("find my slow queries and fix them").
@@ -33,7 +32,9 @@ interface SlowQueryRow {
   rows: number;
 }
 
-async function loadOwnedCloudProject(supabase, userId: string, projectId: string) {
+type Supabase = Awaited<ReturnType<typeof createClient>>;
+
+async function loadOwnedCloudProject(supabase: Supabase, userId: string, projectId: string) {
   const { data: project } = await supabase
     .from("projects")
     .select("id, cloud_enabled, cloud_status, cloud_project_ref")

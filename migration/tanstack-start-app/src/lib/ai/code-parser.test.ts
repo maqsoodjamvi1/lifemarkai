@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assessGenerationQuality, parseAIResponse, validateGeneratedFiles } from "./code-parser.ts";
+import { assessGenerationQuality,parseAIResponse,validateGeneratedFiles } from "./code-parser.ts";
 import { ensureCommonGeneratedSupportFiles } from "./generated-support-files.ts";
 
 test("extracts files from backtick-labeled prose+fence response (Lovable style)", () => {

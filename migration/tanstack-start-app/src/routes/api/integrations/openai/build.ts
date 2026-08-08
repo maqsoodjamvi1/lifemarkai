@@ -1,8 +1,7 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { validateApiKey } from "@/lib/api/api-key";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 
 /**
  * Native /api/integrations/openai/build — ChatGPT Action "createProject".
@@ -86,7 +85,7 @@ export const Route = createFileRoute("/api/integrations/openai/build")({
         const name = (body.name?.trim() || deriveName(prompt)).slice(0, 80);
 
         const supabase = createAdminClient();
-        const { data: project, error } = await (supabase as any)
+        const { data: project, error } = await supabase
           .from("projects")
           .insert({
             user_id: auth.userId,
@@ -103,7 +102,7 @@ export const Route = createFileRoute("/api/integrations/openai/build")({
           return Response.json({ error: `Failed to create project: ${error.message}` }, { status: 500, headers: CORS_HEADERS });
         }
 
-        await (supabase as any).from("messages").insert({
+        await supabase.from("messages").insert({
           project_id: project.id,
           role: "user",
           content: prompt,

@@ -11,7 +11,7 @@
  * `redirect({ to: "/login" })` when there is no user — the TanStack Start
  * equivalent of the old `if (!user) redirect("/login")`.
  */
-import { createFileRoute, redirect, Outlet } from "@tanstack/react-router";
+import { createFileRoute,redirect,Outlet } from "@tanstack/react-router";
 import { fetchDashboardShell } from "@/lib/dashboard-server";
 import { DashboardSidebar } from "@/components/dashboard/dashboard-sidebar";
 import { PwaInstallPrompt } from "@/components/dashboard/pwa-install-prompt";

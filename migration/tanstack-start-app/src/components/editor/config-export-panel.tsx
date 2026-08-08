@@ -1,9 +1,9 @@
 
 import { useState } from "react";
 import {
-  Download, Upload, FileJson, CheckCircle2, AlertCircle,
-  Loader2, RefreshCw, ChevronDown, ChevronUp, Eye, EyeOff,
-  Copy, Check,
+Download,Upload,FileJson,CheckCircle2,AlertCircle,
+Loader2,RefreshCw,Eye,EyeOff,
+Copy,Check
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

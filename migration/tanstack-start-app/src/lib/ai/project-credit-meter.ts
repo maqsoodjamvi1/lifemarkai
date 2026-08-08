@@ -21,7 +21,7 @@ export async function consumeProjectAiCredits(
   }
 
   const admin = await createAdminClient();
-  const { data, error } = await (admin as any).rpc("consume_project_ai_credits", {
+  const { data, error } = await admin.rpc("consume_project_ai_credits", {
     p_project_id: projectId,
     p_amount: amount,
   });

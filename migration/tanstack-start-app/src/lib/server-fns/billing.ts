@@ -14,13 +14,13 @@ export async function getCredits(input: { debugZeroCredits?: boolean } = {}) {
   const { user } = await getServerUser(supabase);
   if (!user) return { status: "unauthorized" as const };
 
-  const { data: profile } = await (supabase as any)
+  const { data: profile } = await supabase
     .from("profiles")
     .select("credits, plan")
     .eq("id", user.id)
     .maybeSingle();
 
-  const { data: memberships } = await (supabase as any)
+  const { data: memberships } = await supabase
     .from("team_members")
     .select("team_id, role, credits_used, credit_allowance, teams(id, name, credits)")
     .eq("user_id", user.id)

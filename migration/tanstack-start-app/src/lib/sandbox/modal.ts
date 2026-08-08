@@ -6,21 +6,21 @@
  * falls back to shell base64 writes on older SDKs.
  */
 import type {
-  ClaudeCodeResult,
-  CommandResult,
-  SandboxFile,
-  SandboxProvider,
-  SandboxRunResult,
+ClaudeCodeResult,
+CommandResult,
+SandboxFile,
+SandboxProvider,
+SandboxRunResult,
 } from "./index.ts";
 import {
-  DEFAULT_IDLE_TIMEOUT_MS,
-  DEFAULT_TIMEOUT_MS,
-  detectSandboxStart,
-  sandboxNameForProject,
-  trunc,
-  waitForServer,
+DEFAULT_IDLE_TIMEOUT_MS,
+DEFAULT_TIMEOUT_MS,
+detectSandboxStart,
+sandboxNameForProject,
+trunc,
+waitForServer,
 } from "./shared.ts";
-import { BASE_APP_DEPENDENCIES, BASE_APP_DEV_DEPENDENCIES } from "../preview/base-app-deps.ts";
+import { BASE_APP_DEPENDENCIES,BASE_APP_DEV_DEPENDENCIES } from "../preview/base-app-deps.ts";
 
 const WORKDIR = "/workspace";
 const WRITE_CONCURRENCY = 8;

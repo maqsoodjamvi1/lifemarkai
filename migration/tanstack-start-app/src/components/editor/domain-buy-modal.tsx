@@ -1,7 +1,7 @@
 
-import { useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
-import { Check, Loader2, Search, ShoppingCart, X } from "lucide-react";
+import { useEffect,useState } from "react";
+import { AnimatePresence,motion } from "framer-motion";
+import { Check,Loader2,Search,ShoppingCart,X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";

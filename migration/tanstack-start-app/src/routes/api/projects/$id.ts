@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
-  deleteProject,
-  getProject,
-  updateProject,
+deleteProject,
+getProject,
+updateProject,
 } from "@/lib/server-fns/projects";
 
 /** Native /api/projects/:id — GET / PATCH / DELETE (Start-owned). */

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Self-Healing scan engine (Editor Intelligence P2 — docs/editor-intelligence/03 §1).
  *
@@ -14,10 +13,14 @@
  */
 
 import {
-  validateGeneratedFiles,
-  assessGenerationQuality,
-  type ParsedFile,
+validateGeneratedFiles,
+assessGenerationQuality,
+type ParsedFile,
 } from "@/lib/ai/code-parser";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/types/database";
+
+type HealthFindingInsert = Database["public"]["Tables"]["health_findings"]["Insert"];
 
 export type HealthCategory =
   | "build"
@@ -395,7 +398,7 @@ export async function runHealthScan({
   projectId,
   userId,
 }: {
-  supabase: any;
+  supabase: SupabaseClient<Database>;
   projectId: string;
   userId: string;
 }): Promise<{ findings: number }> {
@@ -406,8 +409,7 @@ export async function runHealthScan({
   if (filesErr) throw new Error(`health scan: failed to load files — ${filesErr.message}`);
 
   const files: ParsedFile[] = (fileRows ?? [])
-    .filter((f: any) => typeof f.path === "string")
-    .map((f: any) => ({
+    .map((f) => ({
       path: f.path,
       content: f.content ?? "",
       language: f.language ?? languageFor(f.path),
@@ -417,17 +419,18 @@ export async function runHealthScan({
   const detectedKeys = new Set(detected.map(findingKey));
 
   // Existing non-dismissed findings for reconciliation (check-then-insert dedupe).
-  const { data: existingRows } = await supabase
+  const { data: existingRows, error: existingError } = await supabase
     .from("health_findings")
     .select("id, category, title, file_path, status")
     .eq("project_id", projectId)
     .neq("status", "dismissed");
+  if (existingError) throw new Error(`health scan: failed to load findings — ${existingError.message}`);
   const existing = existingRows ?? [];
   const existingByKey = new Map<string, { id: string; status: string }>();
   for (const row of existing) existingByKey.set(findingKey(row), { id: row.id, status: row.status });
 
   // 1) Insert new findings; re-open regressed ('fixed') ones.
-  const toInsert: any[] = [];
+  const toInsert: HealthFindingInsert[] = [];
   const toReopen: string[] = [];
   for (const f of detected) {
     const prior = existingByKey.get(findingKey(f));
@@ -448,21 +451,24 @@ export async function runHealthScan({
     // 'open' / 'fix_proposed' matches: leave untouched.
   }
   if (toInsert.length) {
-    await supabase.from("health_findings").insert(toInsert);
+    const { error } = await supabase.from("health_findings").insert(toInsert);
+    if (error) throw new Error(`health scan: failed to insert findings — ${error.message}`);
   }
   if (toReopen.length) {
-    await supabase
+    const { error } = await supabase
       .from("health_findings")
       .update({ status: "open", proposed_fix: null })
       .in("id", toReopen);
+    if (error) throw new Error(`health scan: failed to reopen findings — ${error.message}`);
   }
 
   // 2) Resolve stale: open findings whose condition no longer matches.
   const staleIds = existing
-    .filter((row: any) => row.status === "open" && !detectedKeys.has(findingKey(row)))
-    .map((row: any) => row.id);
+    .filter((row) => row.status === "open" && !detectedKeys.has(findingKey(row)))
+    .map((row) => row.id);
   if (staleIds.length) {
-    await supabase.from("health_findings").update({ status: "fixed" }).in("id", staleIds);
+    const { error } = await supabase.from("health_findings").update({ status: "fixed" }).in("id", staleIds);
+    if (error) throw new Error(`health scan: failed to resolve findings — ${error.message}`);
   }
 
   return { findings: detected.length };
@@ -498,7 +504,7 @@ export async function recordVerificationFindings({
   userId,
   verification,
 }: {
-  supabase: any;
+  supabase: SupabaseClient<Database>;
   projectId: string;
   userId: string;
   verification: { passed: boolean; engine: string; errors: string[] };
@@ -535,7 +541,7 @@ export async function recordVerificationFindings({
       existingByKey.set(findingKey(row), { id: row.id, status: row.status });
     }
 
-    const toInsert: any[] = [];
+    const toInsert: HealthFindingInsert[] = [];
     const toReopen: string[] = [];
     for (const f of candidates) {
       const prior = existingByKey.get(findingKey(f));

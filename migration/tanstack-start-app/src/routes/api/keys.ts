@@ -1,8 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { randomBytes, createHash } from "node:crypto";
+import { randomBytes,createHash } from "node:crypto";
 import { logAuditFromRequest } from "@/lib/audit/log";
+import type { Database } from "@/types/database";
 
 /**
  * Native /api/keys — public-API key management.
@@ -27,7 +27,7 @@ export const Route = createFileRoute("/api/keys")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { data, error } = await (supabase as any)
+        const { data, error } = await supabase
           .from("api_keys")
           .select("id, name, key_prefix, scopes, last_used_at, expires_at, is_active, created_at")
           .eq("user_id", user.id)
@@ -54,7 +54,7 @@ export const Route = createFileRoute("/api/keys")({
           if (!validScopes.has(s)) return Response.json({ error: `Invalid scope: ${s}` }, { status: 400 });
         }
 
-        const { count } = await (supabase as any)
+        const { count } = await supabase
           .from("api_keys")
           .select("id", { count: "exact", head: true })
           .eq("user_id", user.id)
@@ -65,7 +65,7 @@ export const Route = createFileRoute("/api/keys")({
 
         const { key, prefix, hash } = generateKey();
 
-        const { data: inserted, error } = await (supabase as any)
+        const { data: inserted, error } = await supabase
           .from("api_keys")
           .insert({
             user_id: user.id,
@@ -99,11 +99,11 @@ export const Route = createFileRoute("/api/keys")({
         const { id, name, is_active } = (await request.json()) as { id: string; name?: string; is_active?: boolean };
         if (!id) return Response.json({ error: "id required" }, { status: 400 });
 
-        const updates: Record<string, unknown> = {};
+        const updates: Database["public"]["Tables"]["api_keys"]["Update"] = {};
         if (typeof name === "string") updates.name = name.trim().slice(0, 64);
         if (typeof is_active === "boolean") updates.is_active = is_active;
 
-        const { error } = await (supabase as any)
+        const { error } = await supabase
           .from("api_keys").update(updates).eq("id", id).eq("user_id", user.id);
         if (error) return Response.json({ error: error.message }, { status: 500 });
         return Response.json({ success: true });
@@ -117,7 +117,7 @@ export const Route = createFileRoute("/api/keys")({
         const id = new URL(request.url).searchParams.get("id");
         if (!id) return Response.json({ error: "id required" }, { status: 400 });
 
-        const { error } = await (supabase as any)
+        const { error } = await supabase
           .from("api_keys").delete().eq("id", id).eq("user_id", user.id);
         if (error) return Response.json({ error: error.message }, { status: 500 });
 

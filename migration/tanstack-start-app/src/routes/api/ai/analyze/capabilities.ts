@@ -1,6 +1,5 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
-import { analyzeUnavailableReason, isAnalyzeExecutionEnabled } from "@/lib/ai/analyze-runner";
+import { analyzeUnavailableReason,isAnalyzeExecutionEnabled } from "@/lib/ai/analyze-runner";
 
 /**
  * Native /api/ai/analyze/capabilities — whether analyze / binary file-gen

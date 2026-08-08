@@ -4,21 +4,21 @@
  * are separate (need lib/plans/gating).
  */
 import { createClient } from "../supabase/server.ts";
-import { getRegistrar, isPurchaseEnabled } from "../domains/registrar.ts";
+import { getRegistrar,isPurchaseEnabled } from "../domains/registrar.ts";
 import {
-  buildEntriConnectConfig,
-  connectDnsRecords,
-  domainVerificationToken,
-  isEntriConfigured,
+buildEntriConnectConfig,
+connectDnsRecords,
+domainVerificationToken,
+isEntriConfigured,
 } from "../domains/entri.ts";
 // Hosting lives in one module now. This file used to carry its own Netlify
 // client and its own hand-written DNS record table, which disagreed with the
 // copy in entri.ts — see the note on connectDnsRecords.
 import {
-  dnsRecordsForDomain,
-  getHostingTarget,
-  verifyDomainAgainstTarget,
-  HostingNotConfiguredError,
+dnsRecordsForDomain,
+getHostingTarget,
+verifyDomainAgainstTarget,
+HostingNotConfiguredError,
 } from "../domains/hosting.ts";
 
 async function requireUser() {
@@ -29,11 +29,15 @@ async function requireUser() {
   return { supabase, user };
 }
 
-export async function getProjectDomain(data: any) {
+type ProjectInput = { projectId: string };
+type DomainInput = ProjectInput & { domain: string };
+type DomainSearchInput = { query: string; years?: number };
+
+export async function getProjectDomain(data: ProjectInput) {
     const { supabase, user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.projectId) return { status: "bad_request" as const, message: "projectId required" };
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("id, name, deployed_url, custom_domain")
       .eq("id", data.projectId)
@@ -42,23 +46,23 @@ export async function getProjectDomain(data: any) {
     if (!project) return { status: "not_found" as const };
     return {
       status: "ok" as const,
-      customDomain: (project as any).custom_domain ?? null,
+      customDomain: project.custom_domain ?? null,
       deployedUrl: project.deployed_url ?? null,
     };
 }
 
-export async function setProjectDomain(data: any) {
+export async function setProjectDomain(data: DomainInput) {
     const { supabase, user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.projectId || !data.domain) return { status: "bad_request" as const, message: "projectId and domain required" };
-    const domainRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$/;
-    if (!domainRegex.test(data.domain)) return { status: "bad_request" as const, message: "Invalid domain format" };
+    const domain = data.domain.trim().toLowerCase();
+    const domainRegex = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z]{2,})+$/;
+    if (!domainRegex.test(domain)) return { status: "bad_request" as const, message: "Invalid domain format" };
 
-    const { data: project } = await (supabase as any)
-      .from("projects").select("id, name").eq("id", data.projectId).eq("user_id", user.id).single();
+    const { data: project } = await supabase
+      .from("projects").select("id, name, custom_domain").eq("id", data.projectId).eq("user_id", user.id).single();
     if (!project) return { status: "not_found" as const };
 
-    const domain = data.domain;
     const projectId = data.projectId;
     const verifyToken = domainVerificationToken(domain, projectId);
     const dnsInstructions = dnsRecordsForDomain(projectId, domain, verifyToken);
@@ -84,14 +88,21 @@ export async function setProjectDomain(data: any) {
       return { status: "hosting_error" as const, message };
     }
 
-    await (supabase as any)
+    const { error: updateError } = await supabase
       .from("projects")
       .update({
         custom_domain: domain,
         custom_domain_token: verifyToken,
         custom_domain_verified: false,
-      } as Record<string, unknown>)
+      })
       .eq("id", projectId);
+    if (updateError) {
+      await getHostingTarget().detachHostname(projectId, domain).catch(() => {});
+      return { status: "database_error" as const, message: "Could not save the custom domain" };
+    }
+    if (project.custom_domain && project.custom_domain !== domain) {
+      await getHostingTarget().detachHostname(projectId, project.custom_domain).catch(() => {});
+    }
 
     return {
       status: "ok" as const,
@@ -107,7 +118,7 @@ export async function setProjectDomain(data: any) {
     };
 }
 
-export async function deleteProjectDomain(data: any) {
+export async function deleteProjectDomain(data: ProjectInput) {
     const { supabase, user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.projectId) return { status: "bad_request" as const, message: "projectId required" };
@@ -116,28 +127,31 @@ export async function deleteProjectDomain(data: any) {
     // alone left the hostname aliased on Netlify forever: the project stopped
     // claiming the domain while still answering for it, so the domain could
     // never be moved to another project and the stale alias kept serving.
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects").select("custom_domain").eq("id", data.projectId).eq("user_id", user.id).single();
-    const existing = (project as any)?.custom_domain as string | null | undefined;
+    const existing = project?.custom_domain;
     if (existing) {
       // Best-effort: a host that already lost the alias should not block the
       // user from clearing their own setting.
       await getHostingTarget().detachHostname(data.projectId, existing).catch(() => {});
     }
 
-    await (supabase as any)
+    const { error } = await supabase
       .from("projects")
       .update({
         custom_domain: null,
         custom_domain_token: null,
         custom_domain_verified: false,
-      } as Record<string, unknown>)
+      })
       .eq("id", data.projectId)
       .eq("user_id", user.id);
+    if (error) {
+      return { status: "database_error" as const, message: "Could not clear the custom domain" };
+    }
     return { status: "ok" as const };
 }
 
-export async function searchDomains(data: any) {
+export async function searchDomains(data: DomainSearchInput) {
     const { user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.query || data.query.trim().length < 2) return { status: "bad_request" as const, message: "query required" };
@@ -153,15 +167,16 @@ export async function searchDomains(data: any) {
         },
       };
     }
-    const suggestions = await registrar.search(data.query.trim(), Math.min(Math.max(data.years ?? 1, 1), 10));
+    const requestedYears = Number.isFinite(data.years) ? Math.trunc(data.years ?? 1) : 1;
+    const suggestions = await registrar.search(data.query.trim(), Math.min(Math.max(requestedYears, 1), 10));
     return { status: "ok" as const, payload: { configured: true, registrar: registrar.id, suggestions } };
 }
 
-export async function verifyDomain(data: any) {
+export async function verifyDomain(data: DomainInput) {
     const { supabase, user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.domain || !data.projectId) return { status: "bad_request" as const, message: "domain and projectId required" };
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects").select("id, custom_domain, custom_domain_token").eq("id", data.projectId).eq("user_id", user.id).single();
     if (!project) return { status: "not_found" as const };
 
@@ -176,13 +191,16 @@ export async function verifyDomain(data: any) {
     // mean: the records point at OUR hosting target, and a TXT token only the
     // project owner could have been given is present. Both must hold.
     const verifyToken =
-      (project as any).custom_domain_token ?? domainVerificationToken(data.domain, data.projectId);
+      project.custom_domain_token ?? domainVerificationToken(data.domain, data.projectId);
     const result = await verifyDomainAgainstTarget(data.projectId, data.domain, verifyToken);
 
-    await (supabase as any)
+    const { error: updateError } = await supabase
       .from("projects")
-      .update({ custom_domain_verified: result.live } as Record<string, unknown>)
+      .update({ custom_domain_verified: result.live })
       .eq("id", data.projectId);
+    if (updateError) {
+      return { status: "database_error" as const, message: "Could not save domain verification status" };
+    }
 
     return {
       status: "ok" as const,
@@ -202,18 +220,19 @@ export async function verifyDomain(data: any) {
     };
 }
 
-export async function entriConnect(data: any) {
+export async function entriConnect(data: DomainInput) {
     const { supabase, user } = await requireUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.projectId || !data.domain) return { status: "bad_request" as const, message: "projectId and domain are required" };
-    const domainRegex = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i;
-    if (!domainRegex.test(data.domain)) return { status: "bad_request" as const, message: "Invalid domain format" };
+    const domain = data.domain.trim().toLowerCase();
+    const domainRegex = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
+    if (!domainRegex.test(domain)) return { status: "bad_request" as const, message: "Invalid domain format" };
 
-    const { data: project } = await (supabase as any)
-      .from("projects").select("id").eq("id", data.projectId).eq("user_id", user.id).single();
+    const { data: project } = await supabase
+      .from("projects").select("id, custom_domain").eq("id", data.projectId).eq("user_id", user.id).single();
     if (!project) return { status: "not_found" as const };
 
-    const verifyToken = domainVerificationToken(data.domain, data.projectId);
+    const verifyToken = domainVerificationToken(domain, data.projectId);
 
     // Attach to the host here too. This route was writing custom_domain and a
     // domain_registrations row without ever telling the hosting edge the
@@ -222,31 +241,48 @@ export async function entriConnect(data: any) {
     // Same call as setProjectDomain, from the same module, so the two connect
     // paths cannot diverge.
     try {
-      await getHostingTarget().attachHostname(data.projectId, data.domain);
+      await getHostingTarget().attachHostname(data.projectId, domain);
     } catch (err) {
       const message = err instanceof HostingNotConfiguredError
         ? err.message
-        : `Could not attach ${data.domain} to the hosting target: ${err instanceof Error ? err.message : String(err)}`;
+        : `Could not attach ${domain} to the hosting target: ${err instanceof Error ? err.message : String(err)}`;
       return { status: "hosting_error" as const, message };
     }
 
-    await (supabase as any).from("projects").update({
-      custom_domain: data.domain, custom_domain_token: verifyToken, custom_domain_verified: false,
+    const { error: projectUpdateError } = await supabase.from("projects").update({
+      custom_domain: domain, custom_domain_token: verifyToken, custom_domain_verified: false,
     }).eq("id", data.projectId);
-    await (supabase as any).from("domain_registrations").upsert({
-      project_id: data.projectId, user_id: user.id, domain: data.domain, registrar: "namecom",
+    if (projectUpdateError) {
+      await getHostingTarget().detachHostname(data.projectId, domain).catch(() => {});
+      return { status: "database_error" as const, message: "Could not save the custom domain" };
+    }
+
+    const { error: registrationError } = await supabase.from("domain_registrations").upsert({
+      project_id: data.projectId, user_id: user.id, domain, registrar: "namecom",
       status: "dns_pending", verify_token: verifyToken, metadata: { source: "connect" },
     }, { onConflict: "domain" });
+    if (registrationError) {
+      await supabase.from("projects").update({
+        custom_domain: project.custom_domain,
+        custom_domain_token: null,
+        custom_domain_verified: false,
+      }).eq("id", data.projectId);
+      await getHostingTarget().detachHostname(data.projectId, domain).catch(() => {});
+      return { status: "database_error" as const, message: "Could not save the domain registration" };
+    }
+    if (project.custom_domain && project.custom_domain !== domain) {
+      await getHostingTarget().detachHostname(data.projectId, project.custom_domain).catch(() => {});
+    }
 
-    const entri = await buildEntriConnectConfig(data.domain, data.projectId);
+    const entri = await buildEntriConnectConfig(domain, data.projectId);
     if (entri) return { status: "ok" as const, payload: { mode: "entri", ...entri } };
     return {
       status: "ok" as const,
       payload: {
         mode: "manual",
         entriConfigured: isEntriConfigured(),
-        prefilledDomain: data.domain,
-        dnsRecords: connectDnsRecords(data.domain, data.projectId),
+        prefilledDomain: domain,
+        dnsRecords: connectDnsRecords(domain, data.projectId),
         message: isEntriConfigured()
           ? "Entri token unavailable; use the manual DNS records below."
           : "Add these DNS records at your domain provider, then verify.",

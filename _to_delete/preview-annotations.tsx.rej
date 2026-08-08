@@ -1,0 +1,46 @@
+--- migration/tanstack-start-app/src/components/editor/preview-annotations.tsx
++++ migration/tanstack-start-app/src/components/editor/preview-annotations.tsx
+@@ -64,6 +64,10 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
+   const serverReadyRef = useRef(false);
+   const pastRef = useRef<Annotation[][]>([]);
+   const futureRef = useRef<Annotation[][]>([]);
++  /** Project whose annotations the hydrate effect has already swapped in. */
++  const hydratedProjectRef = useRef(projectId);
++  /** Project the persist effect last ran for; see the skip note below. */
++  const persistProjectRef = useRef(projectId);
+ 
+   const publishMeta = useCallback((list: Annotation[], pastLen: number, futureLen: number) => {
+     window.dispatchEvent(
+@@ -97,6 +101,18 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
+   useEffect(() => {
+     let cancelled = false;
+     serverReadyRef.current = false;
++    // The initial state was seeded once, from whichever project mounted first.
++    // If the editor swaps projects without remounting us, `annotations` still
++    // holds the previous project's pins — swap in the new project's cache
++    // immediately so they can't be rendered over, or saved onto, this project.
++    if (hydratedProjectRef.current !== projectId) {
++      hydratedProjectRef.current = projectId;
++      pastRef.current = [];
++      futureRef.current = [];
++      const cached = loadAnnotations(projectId);
++      setAnnotations(cached);
++      publishMeta(cached, 0, 0);
++    }
+     void (async () => {
+       try {
+         const res = await fetch(`/api/projects/${projectId}/chat-state`);
+@@ -165,6 +181,13 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
+ 
+   // Persist on change — local cache + server
+   useEffect(() => {
++    if (persistProjectRef.current !== projectId) {
++      // First pass after a project switch: `annotations` is still the previous
++      // project's list (the hydrate effect's swap lands next render). Saving
++      // now would stamp those pins onto this project's cache.
++      persistProjectRef.current = projectId;
++      return;
++    }
+     saveAnnotations(projectId, annotations);
+     if (!serverReadyRef.current) return;
+     const timer = window.setTimeout(() => {

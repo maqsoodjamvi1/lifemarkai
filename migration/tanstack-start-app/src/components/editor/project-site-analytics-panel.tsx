@@ -15,11 +15,11 @@
  * Files etc.) is preserved and now lives under the "activity" panel slot.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback,useEffect,useMemo,useRef,useState } from "react";
 import {
-  Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+Area,AreaChart,ResponsiveContainer,Tooltip,XAxis,YAxis,
 } from "recharts";
-import { BarChart2, Loader2, RefreshCw } from "lucide-react";
+import { BarChart2,Loader2,RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { Project } from "@/types/database";
 

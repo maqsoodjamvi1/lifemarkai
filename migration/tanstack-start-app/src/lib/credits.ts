@@ -12,7 +12,7 @@ export interface CreditReservation {
 }
 
 /** Atomically claim one daily free editor action; 0 means quota exhausted. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 export async function claimFreeCreditAction(
   supabase: any,
   params: {
@@ -74,7 +74,7 @@ import { createAdminClient } from "./supabase/server.ts";
  * locks the profile row, grants the daily allowance, and subtracts the maximum
  * charge so concurrent requests cannot spend the same balance twice.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 export async function reserveCredits(
   supabase: any,
   params: {
@@ -103,7 +103,7 @@ export async function reserveCredits(
 }
 
 /** Settle a reservation to its actual cost and return the user's new balance. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 export async function settleCreditReservation(
   _supabase: any,
   reservationId: string,
@@ -114,7 +114,7 @@ export async function settleCreditReservation(
     throw new Error("Settled credit amount cannot be negative");
   }
   const admin = await createAdminClient();
-  const { data, error } = await (admin as any).rpc("settle_credit_reservation", {
+  const { data, error } = await admin.rpc("settle_credit_reservation", {
     p_reservation_id: reservationId,
     p_actual_amount: amount,
   });
@@ -126,13 +126,13 @@ export async function settleCreditReservation(
 }
 
 /** Cancel unused provider work and return the user's new balance. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+
 export async function cancelCreditReservation(
   _supabase: any,
   reservationId: string,
 ): Promise<number> {
   const admin = await createAdminClient();
-  const { data, error } = await (admin as any).rpc("cancel_credit_reservation", {
+  const { data, error } = await admin.rpc("cancel_credit_reservation", {
     p_reservation_id: reservationId,
   });
   if (error) throw new Error(rpcErrorMessage(error));

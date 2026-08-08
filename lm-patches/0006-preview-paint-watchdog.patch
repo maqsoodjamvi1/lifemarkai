@@ -1,0 +1,158 @@
+From f7cce921f7535f118a888d398a336fccf63a38b2 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 4 Aug 2026 17:50:19 +0000
+Subject: [PATCH 2/2] fix(preview): make the blank-preview watchdog measure the
+ app, not the bridge
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Reproduced live on a real project: a cold sandbox painted a white pane, the
+editor sat on it for over a minute reporting everything healthy, and a manual
+iframe reload rendered the whole app correctly on the first try. That is
+precisely the failure the paint watchdog exists to catch, and it walked past it.
+
+The watchdog accepted ANY bridge message as evidence of a paint —
+lifemark-veb-ready, a location update, any lifemark-preview console log. Every
+one of those fires when the document executes, which is before React has
+rendered a single element. So on any preview whose bridge loads — that is, all
+of them — the watchdog was satisfied within milliseconds and could never fire.
+It has been effectively disabled for as long as it has existed.
+
+Even the bridge's own `success` signal is too weak here: it checks that
+`#root.innerHTML` is non-empty, which a mounted-but-empty shell satisfies.
+
+The guest now measures the app rather than itself, posting
+lifemark-preview-painted with the root's element count, text length and
+rendered height; the parent only clears the watchdog for >=3 elements plus
+either visible text or real height. It polls once a second until something
+paints instead of taking fixed samples, because a cold Vite still has
+dependency pre-bundling ahead of it and an app that is fine can be legitimately
+empty for several seconds — a sample that stopped early would tell the parent
+to reload away the very work that was about to finish.
+
+Verified in production while diagnosing this: the sandbox served 200 in 0.9s,
+the injected bridge answered lifemark-preview-ping with a pong (the handshake
+from the OAuth-escape commit, confirmed live), and the error bridge, location
+sync and success signals all arrived — the engine was healthy end to end and
+the app still showed white. The gap was only ever in what counted as proof.
+
+tsc --noEmit: 47 before, 47 after, no new errors. Build passes. The injected
+script is syntax-checked by parsing PREVIEW_RUNTIME_SCRIPT.
+---
+ .../src/lib/preview/use-sandbox-preview.ts    | 38 +++++++++++------
+ .../src/lib/preview/veb-bridge.ts             | 41 +++++++++++++++++++
+ 2 files changed, 67 insertions(+), 12 deletions(-)
+
+diff --git a/migration/tanstack-start-app/src/lib/preview/use-sandbox-preview.ts b/migration/tanstack-start-app/src/lib/preview/use-sandbox-preview.ts
+index 7767145..e9f9a53 100644
+--- a/migration/tanstack-start-app/src/lib/preview/use-sandbox-preview.ts
++++ b/migration/tanstack-start-app/src/lib/preview/use-sandbox-preview.ts
+@@ -380,24 +380,38 @@ export function useSandboxPreview(projectId: string) {
+    *  failed/blank document on their own. Every health signal was green, so no
+    *  recovery path fired and the user had to click reload manually.
+    *
+-   *  The sandbox patcher injects the VEB bridge into every app's index.html,
+-   *  and the bridge posts `lifemark-veb-ready` to the parent as soon as the
+-   *  app's HTML actually executes. That makes "did the iframe REALLY paint the
+-   *  app?" observable: if no bridge ping arrives within 6s of ready, force the
+-   *  iframe to reload via reloadNonce (3 attempts, doubling backoff), which
+-   *  re-fetches from the now-healthy vite. */
++   *  WHAT COUNTS AS A PAINT. This used to accept any bridge message —
++   *  `lifemark-veb-ready`, a location update, any `lifemark-preview` log. All
++   *  of those fire when the document EXECUTES, which is before React has
++   *  rendered a single element, so the watchdog was satisfied by a page that
++   *  was still white and never fired once. Reproduced live: a cold sandbox
++   *  painted blank, the bridge reported ready and then success, the editor sat
++   *  on a white pane for over a minute, and only a manual reload fixed it —
++   *  the exact failure this watchdog was written to catch, walking straight
++   *  past it.
++   *
++   *  So the guest now measures the app instead of itself and posts
++   *  `lifemark-preview-painted` with the root's element count, text length and
++   *  rendered height. Only real content clears the watchdog; anything else is
++   *  proof of life, not proof of paint. When nothing paints, reload via
++   *  reloadNonce (3 attempts, doubling backoff) against the now-warm vite. */
+   const paintAttemptsRef = useRef(0);
+   const lastPaintPingRef = useRef(0);
+   useEffect(() => {
+     if (!state.enabled || !state.previewUrl) return;
+     const onMsg = (e: MessageEvent) => {
+-      const d = e.data as { type?: string; source?: string } | null;
++      const d = e.data as
++        | { type?: string; source?: string; nodes?: number; textLen?: number; height?: number }
++        | null;
+       if (!d || typeof d !== "object") return;
+-      if (
+-        d.type === "lifemark-veb-ready" ||
+-        d.type === "lifemark-preview-location" ||
+-        d.source === "lifemark-preview"
+-      ) {
++      if (d.type !== "lifemark-preview-painted") return;
++      // A mounted-but-empty shell satisfies "root.innerHTML is non-empty", so
++      // that is not enough. Require actual elements AND either visible text or
++      // real height — the difference between a rendered app and a wrapper div.
++      const nodes = typeof d.nodes === "number" ? d.nodes : 0;
++      const textLen = typeof d.textLen === "number" ? d.textLen : 0;
++      const height = typeof d.height === "number" ? d.height : 0;
++      if (nodes >= 3 && (textLen > 0 || height > 40)) {
+         lastPaintPingRef.current = Date.now();
+         paintAttemptsRef.current = 0;
+       }
+diff --git a/migration/tanstack-start-app/src/lib/preview/veb-bridge.ts b/migration/tanstack-start-app/src/lib/preview/veb-bridge.ts
+index 5a54f04..b692fd9 100644
+--- a/migration/tanstack-start-app/src/lib/preview/veb-bridge.ts
++++ b/migration/tanstack-start-app/src/lib/preview/veb-bridge.ts
+@@ -414,8 +414,49 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
+     if (!hadRuntimeError && mounted) post('success', 'ok');
+     loc();
+   }
++  // Report what the app actually PAINTED, not merely that this script is alive.
++  //
++  // The parent's blank-preview watchdog used to accept any bridge message as
++  // proof of a paint — but every one of them (veb-ready, location, pong, a
++  // console log) fires as soon as the document executes, which is before React
++  // has rendered anything. So the watchdog was satisfied by a page that was
++  // still white, and its whole reason for existing never fired. Observed live:
++  // a cold sandbox painted blank, the bridge reported success, the editor
++  // showed white for over a minute, and only a manual reload fixed it.
++  //
++  // Element count and rendered height are the difference between "React
++  // mounted an empty shell" and "there is something on screen". Sampled a few
++  // times because a cold Vite still has dependency pre-bundling to finish, so
++  // the first sample can legitimately be empty on an app that is fine.
++  var paintPollsLeft = 25;
++  function reportPaint() {
++    try {
++      var root = document.getElementById('root') || document.body;
++      if (!root) return false;
++      var rect = root.getBoundingClientRect();
++      var nodes = root.querySelectorAll('*').length;
++      var textLen = (root.innerText || '').trim().length;
++      window.parent.postMessage({
++        type: 'lifemark-preview-painted',
++        nodes: nodes,
++        textLen: textLen,
++        height: Math.round(rect.height)
++      }, '*');
++      return nodes >= 3 && (textLen > 0 || rect.height > 40);
++    } catch (e) { return false; }
++  }
++  // Poll once a second until there is something on screen, rather than taking
++  // a couple of fixed samples. A cold Vite still has dependency pre-bundling
++  // ahead of it, so an app that is perfectly healthy can be legitimately empty
++  // for several seconds — and a sample that stops before it paints would tell
++  // the parent to throw away exactly the work that was about to finish.
++  function pollPaint() {
++    if (reportPaint() || --paintPollsLeft <= 0) return;
++    setTimeout(pollPaint, 1000);
++  }
+   window.addEventListener('load', function(){
+     setTimeout(maybePostSuccess, 1200);
++    setTimeout(pollPaint, 800);
+   });
+   // Keep the parent address bar in sync with client-side routing.
+   var _push = history.pushState, _replace = history.replaceState;
+-- 
+2.43.0
+

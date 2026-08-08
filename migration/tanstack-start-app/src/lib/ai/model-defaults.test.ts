@@ -1,18 +1,18 @@
-import { describe, it } from "node:test";
+import { describe,it } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  DEFAULT_CODING_MODEL,
-  REVIEW_MODEL,
-  ESCALATION_MODEL,
-  DEFAULT_CHAT_MODEL,
-  FAST_CODING_MODEL,
-  ECONOMY_CODING_MODEL,
-  BALANCED_CODING_MODEL,
-  REASONING_MODEL,
-  DESIGN_MODEL,
-  CONTENT_MODEL,
-  AUTOCOMPLETE_MODEL,
+DEFAULT_CODING_MODEL,
+REVIEW_MODEL,
+ESCALATION_MODEL,
+DEFAULT_CHAT_MODEL,
+FAST_CODING_MODEL,
+ECONOMY_CODING_MODEL,
+BALANCED_CODING_MODEL,
+REASONING_MODEL,
+DESIGN_MODEL,
+CONTENT_MODEL,
+AUTOCOMPLETE_MODEL,
 } from "./model-defaults.ts";
 
 const vendorOf = (slug: string) => String(slug).split("/")[0];

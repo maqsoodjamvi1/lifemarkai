@@ -1,17 +1,17 @@
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence,motion } from "framer-motion";
 import {
-  ChevronDown,
-  ChevronUp,
-  Copy,
-  FileText,
-  Image as ImageIcon,
-  Loader2,
-  Pause,
-  Pencil,
-  Play,
-  RefreshCw,
-  XCircle,
+ChevronDown,
+ChevronUp,
+Copy,
+FileText,
+Image as ImageIcon,
+Loader2,
+Pause,
+Pencil,
+Play,
+RefreshCw,
+XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";

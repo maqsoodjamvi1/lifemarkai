@@ -15,16 +15,16 @@
  */
 import { generateAI } from "../generate.ts";
 import type { AIMessage } from "../provider.ts";
-import { getRole, resolveTier, TEAM_ROLE_IDS } from "./roles.ts";
+import { getRole,resolveTier,TEAM_ROLE_IDS } from "./roles.ts";
 import type {
-  AgentRoleId,
-  AutonomyGates,
-  CtoReport,
-  Epic,
-  InitiativeOptions,
-  InitiativeCheckpoint,
-  EditorIntelligenceEvent,
-  EditorTask,
+AgentRoleId,
+AutonomyGates,
+CtoReport,
+Epic,
+InitiativeOptions,
+InitiativeCheckpoint,
+EditorIntelligenceEvent,
+EditorTask,
 } from "./types.ts";
 
 const DEBATE_MAX_ROUNDS = 2;

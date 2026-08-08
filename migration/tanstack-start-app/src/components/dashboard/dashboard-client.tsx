@@ -1,11 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState,useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { OnboardingModal } from "@/components/onboarding/onboarding-modal";
 import { WorkspaceSetupWizard } from "@/components/onboarding/workspace-setup-wizard";
 import { CommandPalette } from "@/components/command-palette";
 import { WhatsNewModal } from "@/components/dashboard/whats-new-modal";
-import { AnimatePresence, motion } from "framer-motion";
-import { Zap, X, ShoppingCart } from "lucide-react";
+import { AnimatePresence,motion } from "framer-motion";
+import { Zap } from "lucide-react";
 
 const LOW_CREDITS_THRESHOLD = 5;
 const SESSION_KEY = "lm-credits-warned";

@@ -1,25 +1,20 @@
 
-import { useState, useEffect, useCallback } from "react";
+import { useState,useEffect,useCallback } from "react";
 import {
-  Mail,
-  Shield,
-  Zap,
-  Globe,
-  AlertTriangle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  Copy,
-  Check,
-  Lock,
-  Clock,
-  RefreshCw,
-  Send,
-  UserCheck,
-  ExternalLink,
-  MailCheck,
-  Info,
-  Loader2,
+Mail,
+Shield,
+Zap,
+Globe,
+AlertTriangle,ChevronDown,
+ChevronUp,
+Copy,
+Check,
+Lock,
+Clock,
+RefreshCw,UserCheck,
+ExternalLink,
+MailCheck,
+Info
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";

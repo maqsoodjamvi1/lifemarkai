@@ -200,12 +200,12 @@ export async function publishProjectFromChat(
     let appSlug: string | null = (project as { app_slug?: string | null }).app_slug ?? null;
     if (!appSlug) {
       try {
-        const { data: gen } = await (supabase as any).rpc("generate_app_slug", {
+        const { data: gen } = await supabase.rpc("generate_app_slug", {
           p_name: (project as { name?: string }).name ?? "app",
         });
         if (typeof gen === "string" && gen) {
           appSlug = gen;
-          await (supabase as any)
+          await supabase
             .from("projects")
             .update({ app_slug: gen })
             .eq("id", projectId)

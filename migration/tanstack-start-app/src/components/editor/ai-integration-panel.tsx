@@ -1,10 +1,10 @@
 
-import { useState, useEffect } from "react";
+import { useState,useEffect } from "react";
 import {
-  Sparkles, Copy, Check, Loader2, ChevronDown, ChevronUp,
-  AlertTriangle, ToggleLeft, ToggleRight, Zap, Shield,
-  RefreshCw, Code2, Info, MessageSquare, ImageIcon, Database, Mic, Volume2,
-  Activity, CheckCircle2, XCircle,
+Sparkles,Copy,Check,Loader2,ChevronDown,ChevronUp,
+AlertTriangle,ToggleLeft,ToggleRight,Zap,Shield,
+RefreshCw,Code2,Info,MessageSquare,ImageIcon,Database,Mic,Volume2,
+Activity,CheckCircle2,XCircle,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { createClient } from "@/lib/supabase/client";
@@ -132,7 +132,7 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
   useEffect(() => {
     // Refresh usage count from Supabase
     void (async () => {
-      const { data } = await (supabase as any)
+      const { data } = await supabase
         .from("projects")
         .select("ai_credits_used, ai_integration_enabled, ai_integration_model, ai_credit_limit")
         .eq("id", project.id)
@@ -149,7 +149,7 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
   useEffect(() => {
     // Recent in-app AI activity (RLS-gated to owner/collaborator)
     void (async () => {
-      const { data } = await (supabase as any)
+      const { data } = await supabase
         .from("ai_request_logs")
         .select("id, capability, model, status, cost, duration_ms, created_at, request_preview, error")
         .eq("project_id", project.id)
@@ -161,7 +161,7 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
 
   async function save() {
     setSaving(true);
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("projects")
       .update({
         ai_integration_enabled: enabled,
@@ -179,7 +179,7 @@ export function AiIntegrationPanel({ project, onProjectUpdate }: AiIntegrationPa
   }
 
   async function resetUsage() {
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("projects")
       .update({ ai_credits_used: 0 })
       .eq("id", project.id);

@@ -12,7 +12,7 @@ export async function listSessions() {
   if (!user) return { status: "unauthorized" as const };
 
   const { data: session } = await supabase.auth.getSession();
-  const { data: auditRows } = await (supabase as any)
+  const { data: auditRows } = await supabase
     .from("audit_logs")
     .select("*")
     .eq("user_id", user.id)

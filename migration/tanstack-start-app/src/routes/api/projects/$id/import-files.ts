@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
@@ -28,13 +27,13 @@ export const Route = createFileRoute("/api/projects/$id/import-files")({
 
         const targetProjectId = id;
 
-        const { data: targetProject } = await (supabase as any)
+        const { data: targetProject } = await supabase
           .from("projects").select("id, user_id").eq("id", targetProjectId).single();
         if (!targetProject) return Response.json({ error: "Target project not found" }, { status: 404 });
 
         const canWriteTarget =
           targetProject.user_id === user.id ||
-          (await (supabase as any)
+          (await supabase
             .from("collaborators")
             .select("role")
             .eq("project_id", targetProjectId)
@@ -44,14 +43,14 @@ export const Route = createFileRoute("/api/projects/$id/import-files")({
           ).data != null;
         if (!canWriteTarget) return Response.json({ error: "No write access to target project" }, { status: 403 });
 
-        const { data: sourceProject } = await (supabase as any)
+        const { data: sourceProject } = await supabase
           .from("projects").select("id, user_id, is_public").eq("id", sourceProjectId).single();
         if (!sourceProject) return Response.json({ error: "Source project not found" }, { status: 404 });
 
         const canReadSource =
           sourceProject.user_id === user.id ||
           sourceProject.is_public === true ||
-          (await (supabase as any)
+          (await supabase
             .from("collaborators")
             .select("id")
             .eq("project_id", sourceProjectId)
@@ -60,7 +59,7 @@ export const Route = createFileRoute("/api/projects/$id/import-files")({
           ).data != null;
         if (!canReadSource) return Response.json({ error: "No read access to source project" }, { status: 403 });
 
-        const { data: sourceFiles, error: fetchErr } = await (supabase as any)
+        const { data: sourceFiles, error: fetchErr } = await supabase
           .from("project_files")
           .select("path, content, language")
           .eq("project_id", sourceProjectId)
@@ -78,7 +77,7 @@ export const Route = createFileRoute("/api/projects/$id/import-files")({
           language: f.language,
         }));
 
-        const { data: imported, error: upsertErr } = await (supabase as any)
+        const { data: imported, error: upsertErr } = await supabase
           .from("project_files")
           .upsert(toInsert, { onConflict: "project_id,path" })
           .select();

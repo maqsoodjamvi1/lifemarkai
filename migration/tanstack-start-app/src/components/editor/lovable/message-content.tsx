@@ -1,11 +1,25 @@
 
-import React, { useEffect, useMemo, useState } from "react";
+import React,{ useEffect,useMemo,useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import type { SyntaxHighlighterProps } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Check, ChevronDown, ChevronUp, Copy, Download, FileCode2, Loader2 } from "lucide-react";
+import { Check,ChevronDown,ChevronUp,Copy,Download,FileCode2,Loader2 } from "lucide-react";
 import { sanitizeSvg } from "@/lib/security/sanitize";
+import dynamic from "@/lib/lazy-component";
+import { importWithRetry } from "@/lib/import-with-retry";
+
+const SyntaxHighlighter = dynamic(
+  importWithRetry(() =>
+    import("react-syntax-highlighter/dist/esm/prism-async-light").then(
+      (module) => module.default as React.ComponentType<SyntaxHighlighterProps>,
+    ),
+  ),
+  {
+    ssr: false,
+    loading: () => <div className="h-20 animate-pulse rounded bg-[#1e1e2e]" />,
+  },
+);
 
 function MermaidBlock({ code }: { code: string }) {
   const ref = React.useRef<HTMLDivElement>(null);
@@ -386,7 +400,6 @@ export const LovableMessageContent = React.memo(function LovableMessageContent({
               className="group/thumb my-1.5 inline-block overflow-hidden rounded-[var(--radius-3,12px)] border border-[color:var(--border-translucent)] bg-[var(--bg-muted)]/40 align-top"
               title={alt || "Open image"}
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={src}
                 alt={alt ?? ""}

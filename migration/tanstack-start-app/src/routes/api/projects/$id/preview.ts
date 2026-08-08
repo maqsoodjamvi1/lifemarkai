@@ -1,8 +1,7 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
-import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { createClient,createAdminClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { canWriteProjectFiles,getProjectAccess } from "@/lib/project/access";
 
 /**
  * Native /api/projects/:id/preview — accept a base64 screenshot from the build
@@ -43,20 +42,20 @@ export const Route = createFileRoute("/api/projects/$id/preview")({
         const storagePath = `projects/${user.id}/${projectId}.${ext}`;
 
         const admin = createAdminClient();
-        const { error: uploadError } = await (admin as any)
+        const { error: uploadError } = await admin
           .storage
           .from("previews")
           .upload(storagePath, buffer, { contentType: mimeType, upsert: true });
 
         if (uploadError) {
           console.warn("Preview storage upload failed, falling back to data URL:", uploadError.message);
-          await (supabase as any).from("projects").update({ preview_url: dataUrl }).eq("id", projectId);
+          await supabase.from("projects").update({ preview_url: dataUrl }).eq("id", projectId);
           return Response.json({ preview_url: dataUrl, storage: false });
         }
 
-        const { data: { publicUrl } } = (admin as any).storage.from("previews").getPublicUrl(storagePath);
+        const { data: { publicUrl } } = admin.storage.from("previews").getPublicUrl(storagePath);
 
-        await (supabase as any).from("projects").update({ preview_url: publicUrl }).eq("id", projectId);
+        await supabase.from("projects").update({ preview_url: publicUrl }).eq("id", projectId);
 
         return Response.json({ preview_url: publicUrl, storage: true });
       },

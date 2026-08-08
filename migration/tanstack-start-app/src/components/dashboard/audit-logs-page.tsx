@@ -1,9 +1,8 @@
 
-import { useState, useEffect, useCallback } from "react";
+import { useState,useEffect,useCallback } from "react";
 import {
-  ClipboardList, ChevronDown, ChevronUp, Clock, User, Globe,
-  Monitor, FileJson, Copy, Check, Filter, Calendar, HelpCircle,
-  AlertTriangle, X, Loader2, Info,
+ClipboardList,ChevronDown,ChevronUp,Clock,Globe,
+Monitor,FileJson,Copy,Check,Filter,Calendar,HelpCircle,X,Loader2,Info
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 

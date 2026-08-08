@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo,useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 import { ProjectsGrid } from "@/components/dashboard/projects-grid";
@@ -11,11 +11,10 @@ type TabId = "mine" | "recent" | "starred" | "shared" | "visitors" | "templates"
 interface TemplateMeta {
   id: string;
   name: string;
-  description?: string | null;
-  framework?: string | null;
-  fork_count?: number | null;
-  tags?: string[] | null;
-  preview_url?: string | null;
+  description: string | null;
+  category: string;
+  fork_count: number | null;
+  preview_url: string | null;
 }
 
 interface ProjectBrowserTabsProps {
@@ -78,7 +77,7 @@ export function ProjectBrowserTabs({ projects, templates, initialTab = "mine" }:
       </div>
 
       {tab === "templates" ? (
-        <FeaturedTemplates templates={templates as any[]} projectCount={projects.length} />
+        <FeaturedTemplates templates={templates} projectCount={projects.length} />
       ) : filtered.length === 0 ? (
         <div className="py-16 text-center text-sm text-muted-foreground">
           {tab === "shared"

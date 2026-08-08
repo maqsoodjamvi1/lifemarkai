@@ -8,6 +8,7 @@
  */
 
 import { createAdminClient } from "../supabase/admin.ts";
+import type { Json } from "../../types/database.ts";
 
 /** Canonical audit action names use a `category.verb` shape. */
 export type AuditCategory = "auth" | "member" | "project" | "billing" | "config" | "security" | "other";
@@ -53,13 +54,13 @@ export async function logAuditEvent(event: AuditEventInput): Promise<boolean> {
     const supabase = await createAdminClient();
     // Direct insert (not the log_audit_event RPC) so we can persist ip/user_agent.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { error } = await (supabase as any).from("audit_logs").insert({
+    const { error } = await supabase.from("audit_logs").insert({
       user_id: event.userId,
       team_id: event.teamId ?? null,
       action: event.action,
       resource_type: event.resourceType ?? null,
       resource_id: event.resourceId ?? null,
-      metadata: event.metadata ?? null,
+      metadata: (event.metadata ?? null) as Json,
       ip_address: event.ip ?? null,
       user_agent: event.userAgent ?? null,
     });

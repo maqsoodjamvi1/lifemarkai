@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { getProjectDomain, setProjectDomain, deleteProjectDomain } from "@/lib/server-fns/domains";
+import { getProjectDomain,setProjectDomain,deleteProjectDomain } from "@/lib/server-fns/domains";
 
 const unauth = () => Response.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -28,6 +28,7 @@ export const Route = createFileRoute("/api/domains")({
         // with a 200 and shown a success toast for a domain that was never
         // attached, which is the exact failure this change exists to end.
         if (r.status === "hosting_error") return Response.json({ error: r.message }, { status: 502 });
+        if (r.status === "database_error") return Response.json({ error: r.message }, { status: 500 });
         return Response.json(r.payload);
       },
       DELETE: async ({ request }) => {
@@ -35,6 +36,7 @@ export const Route = createFileRoute("/api/domains")({
         const r = await deleteProjectDomain({ projectId });
         if (r.status === "unauthorized") return unauth();
         if (r.status === "bad_request") return Response.json({ error: r.message }, { status: 400 });
+        if (r.status === "database_error") return Response.json({ error: r.message }, { status: 500 });
         return Response.json({ ok: true });
       },
     },

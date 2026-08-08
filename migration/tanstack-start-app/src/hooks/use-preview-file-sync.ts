@@ -7,11 +7,11 @@
  * - Optional persistence hook (PATCH /api/projects/…/files)
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback,useRef,useState } from "react";
 import type { ProjectFile } from "@/types/database";
 import {
-  applySearchReplace,
-  type ParsedFileUpdate,
+applySearchReplace,
+type ParsedFileUpdate,
 } from "@/lib/ai/xml-stream-parser";
 import { detectLanguage } from "@/lib/ai/code-parser";
 

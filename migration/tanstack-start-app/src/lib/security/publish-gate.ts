@@ -30,7 +30,7 @@
  * never inferred.
  */
 
-import { scanProject, type SecurityFinding } from "./scan.ts";
+import { scanProject,type SecurityFinding } from "./scan.ts";
 import { auditDependencies } from "./deps.ts";
 
 export interface PublishGateFile {

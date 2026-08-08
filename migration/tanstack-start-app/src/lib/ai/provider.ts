@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
-import { getDefaultAiModel, shouldRouteAllAiViaOpenRouter, resolveOpenRouterModelId } from "./model-defaults.ts";
+import { getDefaultAiModel,shouldRouteAllAiViaOpenRouter,resolveOpenRouterModelId } from "./model-defaults.ts";
 
 // OpenRouter has a large and fast-moving catalog. Keep this as string so users
 // can select any valid provider/model slug without waiting for a type update.

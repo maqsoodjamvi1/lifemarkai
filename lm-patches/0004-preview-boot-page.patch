@@ -1,0 +1,454 @@
+From 2315fd39fd8051029848575f98d242ff161ea3e3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 4 Aug 2026 15:17:14 +0000
+Subject: [PATCH 4/4] fix(preview): answer preview hostnames honestly while
+ their sandbox is down
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Two gaps left over from the previous two commits, both of which show a user the
+wrong thing without erroring.
+
+**The marketing homepage in the preview pane.** Preview hostnames are wildcard
+DNS and only have a backend while that project's container is alive. Traefik
+routes by Host, so from the moment a boot tears the old container down until the
+new one registers, nothing claims the hostname and the request falls through to
+this app — which cheerfully renders the LifemarkAI homepage. Inside a preview
+pane that reads as "your app has been replaced by an ad", and a preview link
+shared with a colleague shows them a signup page instead of the thing they were
+sent to look at.
+
+The app now recognises those hostnames and answers with a plain "this preview is
+starting" page (503, self-refreshing with backoff) rather than pretending to be
+the product. The editor no longer frames a preview URL until a probe confirms
+it, so the normal flow never lands here — this is for the paths that bypass the
+editor's state machine: a shared link, a manual reload mid-boot, a bookmark to a
+project whose sandbox has since been reclaimed.
+
+isSandboxPreviewHost is deliberately narrow and tested, because the failure mode
+if it over-matches is the whole product serving a spinner: one label in front of
+the configured domain, never the bare domain, never the app's own host even when
+that host lives under the preview domain, and no match on a lookalike that
+merely ends with the same characters. The check runs through a server fn so the
+host helpers stay out of the client bundle — verified absent from dist/client.
+
+**The fallback bridge never learned the handshake.** The previous commit taught
+the sandbox bridge to answer lifemark-preview-ping, which is what makes escape
+detection mean something. The srcdoc fallback engine speaks the same message
+contract but was left behind, so a fallback preview that had reported a location
+once would be read as an escaped frame on its next load and reset to "/". It now
+answers pings and sends origin/href, same as the sandbox bridge.
+
+11 new tests pass. tsc --noEmit: 51 errors before, 51 after, identical per file.
+Production build passes.
+---
+ .../src/components/preview-booting.tsx        | 105 ++++++++++++++++++
+ .../src/lib/preview/build-fallback-html.ts    |  20 ++++
+ .../src/lib/preview/preview-host.test.ts      |  78 +++++++++++++
+ .../src/lib/preview/preview-host.ts           |  72 ++++++++++++
+ .../tanstack-start-app/src/routes/__root.tsx  |  65 ++++++++++-
+ 5 files changed, 339 insertions(+), 1 deletion(-)
+ create mode 100644 migration/tanstack-start-app/src/components/preview-booting.tsx
+ create mode 100644 migration/tanstack-start-app/src/lib/preview/preview-host.test.ts
+ create mode 100644 migration/tanstack-start-app/src/lib/preview/preview-host.ts
+
+diff --git a/migration/tanstack-start-app/src/components/preview-booting.tsx b/migration/tanstack-start-app/src/components/preview-booting.tsx
+new file mode 100644
+index 0000000..d2807f5
+--- /dev/null
++++ b/migration/tanstack-start-app/src/components/preview-booting.tsx
+@@ -0,0 +1,105 @@
++/**
++ * Shown for a preview hostname whose sandbox is not currently serving.
++ *
++ * Deliberately plain: no product branding, no navigation, nothing that could be
++ * mistaken for the app the user is actually building. Someone looking at this
++ * inside a preview pane — or following a shared link — should understand in one
++ * glance that the thing they want is starting, not that it has been replaced.
++ *
++ * It reloads itself on an interval because there is nothing to push to: this
++ * page is served by the main app precisely because the preview backend is
++ * absent, so it has no connection to the sandbox to listen on. The interval
++ * backs off, since a preview that has not come up in a minute is more likely to
++ * be a cold npm install (or a project with no sandbox at all) than something a
++ * fast poll will catch.
++ */
++import { useEffect, useRef, useState } from "react";
++
++const FIRST_RETRY_MS = 3_000;
++const MAX_RETRY_MS = 15_000;
++
++export function PreviewBooting() {
++  const [elapsed, setElapsed] = useState(0);
++  const delayRef = useRef(FIRST_RETRY_MS);
++
++  useEffect(() => {
++    const started = Date.now();
++    const tick = window.setInterval(() => {
++      setElapsed(Math.floor((Date.now() - started) / 1000));
++    }, 1000);
++
++    let timer = 0;
++    const schedule = () => {
++      timer = window.setTimeout(() => {
++        window.location.reload();
++      }, delayRef.current);
++      delayRef.current = Math.min(Math.round(delayRef.current * 1.5), MAX_RETRY_MS);
++    };
++    schedule();
++
++    return () => {
++      window.clearInterval(tick);
++      window.clearTimeout(timer);
++    };
++  }, []);
++
++  return (
++    <div
++      style={{
++        minHeight: "100vh",
++        display: "flex",
++        alignItems: "center",
++        justifyContent: "center",
++        padding: "2rem",
++        fontFamily:
++          'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
++        background: "#0b0b0c",
++        color: "#e6e6e7",
++      }}
++    >
++      <div style={{ maxWidth: 420, textAlign: "center" }}>
++        <div
++          aria-hidden
++          style={{
++            width: 28,
++            height: 28,
++            margin: "0 auto 1.25rem",
++            borderRadius: "50%",
++            border: "2px solid rgba(255,255,255,0.15)",
++            borderTopColor: "rgba(255,255,255,0.7)",
++            animation: "lm-spin 0.8s linear infinite",
++          }}
++        />
++        <h1 style={{ fontSize: "1rem", fontWeight: 500, margin: "0 0 0.5rem" }}>
++          This preview is starting
++        </h1>
++        <p
++          style={{
++            fontSize: "0.8125rem",
++            lineHeight: 1.6,
++            margin: 0,
++            color: "rgba(230,230,231,0.6)",
++          }}
++        >
++          The app is being built and started. This page refreshes on its own —
++          the first run takes longer than later ones.
++        </p>
++        {elapsed >= 45 && (
++          <p
++            style={{
++              fontSize: "0.75rem",
++              lineHeight: 1.6,
++              marginTop: "1.25rem",
++              color: "rgba(230,230,231,0.45)",
++            }}
++          >
++            Still waiting after {elapsed}s. If this does not clear, open the
++            project in the editor — it can show what the build is doing and
++            restart the preview.
++          </p>
++        )}
++        <style>{`@keyframes lm-spin { to { transform: rotate(360deg) } }`}</style>
++      </div>
++    </div>
++  );
++}
+diff --git a/migration/tanstack-start-app/src/lib/preview/build-fallback-html.ts b/migration/tanstack-start-app/src/lib/preview/build-fallback-html.ts
+index 82bbf66..bef2fc0 100644
+--- a/migration/tanstack-start-app/src/lib/preview/build-fallback-html.ts
++++ b/migration/tanstack-start-app/src/lib/preview/build-fallback-html.ts
+@@ -1670,10 +1670,30 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
+         window.parent.postMessage({
+           type: 'lifemark-preview-location',
+           pathname: path,
++          origin: window.location.origin,
++          href: window.location.href,
+         }, '*');
+       } catch (e) {}
+     }
+ 
++    // Liveness handshake — the same contract the sandbox bridge speaks (see
++    // veb-bridge.ts). The parent pings after every iframe load and reads
++    // silence as "this frame navigated away from the app". Without an answer
++    // here, a fallback preview that had reported a location once would be
++    // mistaken for an escaped frame on its next load and reset to "/".
++    window.addEventListener('message', function (e) {
++      var d = e && e.data;
++      if (!d || typeof d !== 'object' || d.type !== 'lifemark-preview-ping') return;
++      try {
++        window.parent.postMessage({
++          type: 'lifemark-preview-pong',
++          token: d.token,
++          origin: window.location.origin,
++          href: window.location.href,
++        }, '*');
++      } catch (err) {}
++    });
++
+     // Patch history methods so SPA navigations are observable.
+     var origPush = window.history.pushState;
+     var origReplace = window.history.replaceState;
+diff --git a/migration/tanstack-start-app/src/lib/preview/preview-host.test.ts b/migration/tanstack-start-app/src/lib/preview/preview-host.test.ts
+new file mode 100644
+index 0000000..fa06537
+--- /dev/null
++++ b/migration/tanstack-start-app/src/lib/preview/preview-host.test.ts
+@@ -0,0 +1,78 @@
++import { describe, expect, it } from "vitest";
++import { isSandboxPreviewHost } from "./preview-host";
++
++const opts = {
++  previewDomain: "preview.lifemarkai.com",
++  appHost: "https://lifemarkai.com",
++};
++
++describe("isSandboxPreviewHost", () => {
++  it("claims a project's preview hostname", () => {
++    expect(isSandboxPreviewHost("43a14e3e.preview.lifemarkai.com", opts)).toBe(true);
++  });
++
++  it("ignores the port the proxy may append", () => {
++    expect(isSandboxPreviewHost("43a14e3e.preview.lifemarkai.com:443", opts)).toBe(true);
++  });
++
++  it("is case-insensitive, as hostnames are", () => {
++    expect(isSandboxPreviewHost("43A14E3E.Preview.LifemarkAI.com", opts)).toBe(true);
++  });
++
++  // The whole point is to stop hijacking the app itself. These are the ways
++  // that could go wrong, and each one would take the product down.
++  it("leaves the app's own host alone", () => {
++    expect(isSandboxPreviewHost("lifemarkai.com", opts)).toBe(false);
++    expect(isSandboxPreviewHost("www.lifemarkai.com", opts)).toBe(false);
++  });
++
++  it("leaves the bare preview domain alone — it is not a project", () => {
++    expect(isSandboxPreviewHost("preview.lifemarkai.com", opts)).toBe(false);
++  });
++
++  it("leaves the app alone even when served under the preview domain", () => {
++    expect(
++      isSandboxPreviewHost("app.preview.lifemarkai.com", {
++        ...opts,
++        appHost: "https://app.preview.lifemarkai.com",
++      }),
++    ).toBe(false);
++  });
++
++  it("does not match a lookalike domain that merely ends the same way", () => {
++    expect(isSandboxPreviewHost("x.evil-preview.lifemarkai.com", opts)).toBe(false);
++    expect(isSandboxPreviewHost("preview.lifemarkai.com.evil.test", opts)).toBe(false);
++  });
++
++  it("only matches a single label — we never issue deeper names", () => {
++    expect(isSandboxPreviewHost("a.b.preview.lifemarkai.com", opts)).toBe(false);
++  });
++
++  // Config is written by hand and pasted from DNS; neither shape should
++  // silently turn the whole check off.
++  it("accepts a wildcard-shaped or URL-shaped domain setting", () => {
++    expect(
++      isSandboxPreviewHost("abc.preview.lifemarkai.com", {
++        ...opts,
++        previewDomain: "*.preview.lifemarkai.com",
++      }),
++    ).toBe(true);
++    expect(
++      isSandboxPreviewHost("abc.preview.lifemarkai.com", {
++        ...opts,
++        previewDomain: "https://preview.lifemarkai.com/",
++      }),
++    ).toBe(true);
++  });
++
++  it("does nothing when no preview domain is configured", () => {
++    expect(isSandboxPreviewHost("abc.preview.lifemarkai.com", { previewDomain: "" })).toBe(false);
++    expect(isSandboxPreviewHost("abc.preview.lifemarkai.com", {})).toBe(false);
++  });
++
++  it("tolerates missing or malformed hosts", () => {
++    expect(isSandboxPreviewHost(null, opts)).toBe(false);
++    expect(isSandboxPreviewHost("", opts)).toBe(false);
++    expect(isSandboxPreviewHost("   ", opts)).toBe(false);
++  });
++});
+diff --git a/migration/tanstack-start-app/src/lib/preview/preview-host.ts b/migration/tanstack-start-app/src/lib/preview/preview-host.ts
+new file mode 100644
+index 0000000..1ceb916
+--- /dev/null
++++ b/migration/tanstack-start-app/src/lib/preview/preview-host.ts
+@@ -0,0 +1,72 @@
++/**
++ * Is this request for a sandbox preview hostname that currently has no sandbox?
++ *
++ * Preview hostnames are wildcard DNS (`*.preview.lifemarkai.com`) and only have
++ * a backend while that project's container is alive. Traefik routes by Host, so
++ * between the moment a boot tears the old container down and the moment the new
++ * one registers, nothing claims the hostname — and the request falls through to
++ * this app, which happily renders the LifemarkAI marketing homepage.
++ *
++ * That is worse than an error page. It renders *inside the user's preview pane*,
++ * so the app they are building appears to have been replaced by our marketing
++ * site, and a preview link shared with someone else shows them a signup page
++ * instead of the thing they were sent to look at. An honest "starting up" page
++ * is both more truthful and less alarming.
++ *
++ * The editor no longer frames a preview URL until a probe confirms it (see
++ * SandboxRunResult.ready), so in the normal flow nobody reaches this. It exists
++ * for the paths that bypass the editor's state machine: a shared link, a manual
++ * reload during a boot, a bookmark to a project whose sandbox has since been
++ * reclaimed.
++ */
++export interface PreviewHostOptions {
++  /** SANDBOX_PREVIEW_DOMAIN, e.g. "preview.lifemarkai.com". */
++  previewDomain?: string | null;
++  /** The app's own public host, so we never hijack ourselves. */
++  appHost?: string | null;
++}
++
++function normalizeHost(value: string | null | undefined): string {
++  return String(value ?? "")
++    .trim()
++    .toLowerCase()
++    .replace(/^[a-z][a-z0-9+.-]*:\/\//, "")
++    .replace(/\/.*$/, "")
++    .replace(/:\d+$/, "");
++}
++
++export function isSandboxPreviewHost(
++  host: string | null | undefined,
++  opts: PreviewHostOptions,
++): boolean {
++  // A leading "*." is how the domain is written in DNS and in some configs;
++  // accept it so a copy-pasted value doesn't silently disable this.
++  const domain = normalizeHost(opts.previewDomain).replace(/^\*\./, "");
++  if (!domain) return false;
++
++  const h = normalizeHost(host);
++  if (!h || !h.endsWith(`.${domain}`)) return false;
++
++  // Exactly one label in front: sandbox hosts are `<projectid>.<domain>`. The
++  // bare domain is not a project, and a deeper name is not something we issue.
++  const label = h.slice(0, -(domain.length + 1));
++  if (!label || label.includes(".")) return false;
++
++  // If the app itself is served from under the preview domain, it must keep
++  // serving the app.
++  const appHost = normalizeHost(opts.appHost);
++  if (appHost && h === appHost) return false;
++
++  return true;
++}
++
++/** Read the two values from the environment, for server-side callers. */
++export function previewHostOptionsFromEnv(): PreviewHostOptions {
++  return {
++    previewDomain: process.env.SANDBOX_PREVIEW_DOMAIN ?? null,
++    appHost:
++      process.env.NEXT_PUBLIC_APP_URL ??
++      process.env.VITE_APP_URL ??
++      null,
++  };
++}
+diff --git a/migration/tanstack-start-app/src/routes/__root.tsx b/migration/tanstack-start-app/src/routes/__root.tsx
+index 2cd8523..5331227 100644
+--- a/migration/tanstack-start-app/src/routes/__root.tsx
++++ b/migration/tanstack-start-app/src/routes/__root.tsx
+@@ -5,9 +5,71 @@ import {
+   HeadContent,
+   Scripts,
+ } from "@tanstack/react-router";
++import { createServerFn } from "@tanstack/react-start";
+ import appCss from "../styles.css?url";
++import { PreviewBooting } from "@/components/preview-booting";
++import {
++  isSandboxPreviewHost,
++  previewHostOptionsFromEnv,
++} from "@/lib/preview/preview-host";
++
++/**
++ * Is this request for a preview hostname with no sandbox behind it?
++ *
++ * A server fn rather than a direct import: the host helpers only exist on the
++ * server, and this keeps them out of the client bundle. During SSR it runs
++ * in-process, so it costs a function call, not a round trip.
++ */
++const detectPreviewBootHost = createServerFn({ method: "GET" }).handler(
++  async () => {
++    try {
++      const { getRequestHost, setResponseStatus } = await import(
++        "@tanstack/react-start/server"
++      );
++      const host = getRequestHost({ xForwardedHost: true });
++      if (!isSandboxPreviewHost(host, previewHostOptionsFromEnv())) return false;
++      // 503 + implicit "come back later" keeps a shared preview link honest to
++      // anything that isn't a person: this is a temporary absence, not the page
++      // the URL will eventually serve.
++      try {
++        setResponseStatus(503);
++      } catch {
++        /* the status is a nicety; the page is the point */
++      }
++      return true;
++    } catch {
++      // A hostname check must never be able to break the app.
++      return false;
++    }
++  },
++);
+ 
+ export const Route = createRootRoute({
++  /**
++   * Claim requests for preview hostnames that currently have no sandbox.
++   *
++   * `*.preview.lifemarkai.com` is wildcard DNS, so while a project's container
++   * is down the request falls through to this app — which then renders the
++   * LifemarkAI marketing homepage inside the user's preview pane, or shows a
++   * signup page to whoever they shared a preview link with. Both read as "your
++   * app is gone" rather than "your app is starting".
++   *
++   * The editor no longer frames a preview URL until a probe confirms it, so the
++   * normal flow never lands here. This is for the paths that bypass the
++   * editor's state machine: a shared link, a manual reload mid-boot, a bookmark
++   * to a project whose sandbox has since been reclaimed.
++   */
++  beforeLoad: async () => {
++    // Server-only: the browser has no env to read, and by the time the client
++    // hydrates the server has already decided. Calling it here would turn a
++    // free in-process call into an HTTP request on every navigation.
++    if (typeof window !== "undefined") return { previewBooting: false };
++    try {
++      return { previewBooting: await detectPreviewBootHost() };
++    } catch {
++      return { previewBooting: false };
++    }
++  },
+   head: () => ({
+     meta: [
+       { charSet: "utf-8" },
+@@ -20,9 +82,10 @@ export const Route = createRootRoute({
+ });
+ 
+ function RootComponent() {
++  const ctx = Route.useRouteContext() as { previewBooting?: boolean };
+   return (
+     <RootDocument>
+-      <Outlet />
++      {ctx?.previewBooting ? <PreviewBooting /> : <Outlet />}
+     </RootDocument>
+   );
+ }
+-- 
+2.43.0
+

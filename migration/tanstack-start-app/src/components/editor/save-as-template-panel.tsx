@@ -1,8 +1,8 @@
 
-import { useState, useEffect } from "react";
+import { useState,useEffect } from "react";
 import {
-  LayoutTemplate, Sparkles, Globe, Tag, Image, Check,
-  Loader2, ExternalLink, RefreshCw, Plus, X,
+LayoutTemplate,Sparkles,Globe,Tag,Image,Check,
+Loader2,ExternalLink,RefreshCw,Plus,X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -44,6 +44,7 @@ export function SaveAsTemplatePanel({ projectId, projectName = "" }: SaveAsTempl
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished] = useState(false);
   const [existingTemplate, setExistingTemplate] = useState<PublishedTemplate | null>(null);
+  const [templateAgeDays, setTemplateAgeDays] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -51,22 +52,38 @@ export function SaveAsTemplatePanel({ projectId, projectName = "" }: SaveAsTempl
   }, [projectName]);
 
   useEffect(() => {
-    checkExisting();
-  }, [projectId]);
+    let active = true;
 
-  async function checkExisting() {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/publish-template`);
-      const data = await res.json() as { published: boolean; template: PublishedTemplate | null };
-      if (data.published && data.template) {
-        setExistingTemplate(data.template);
-        setPublished(true);
-        setName(data.template.name);
+    async function loadExistingTemplate() {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/projects/${projectId}/publish-template`);
+        const data = await res.json() as { published: boolean; template: PublishedTemplate | null };
+        if (!active) return;
+        if (data.published && data.template) {
+          setExistingTemplate(data.template);
+          setPublished(true);
+          setName(data.template.name);
+          setTemplateAgeDays(Math.max(
+            0,
+            Math.floor((Date.now() - new Date(data.template.created_at).getTime()) / 86_400_000),
+          ));
+        } else {
+          setExistingTemplate(null);
+          setPublished(false);
+          setTemplateAgeDays(0);
+        }
+      } catch {
+        // Loading an existing publication is best-effort; the publish form
+        // remains available when the request fails.
+      } finally {
+        if (active) setLoading(false);
       }
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
-  }
+    }
+
+    void loadExistingTemplate();
+    return () => { active = false; };
+  }, [projectId]);
 
   function addTag() {
     const t = tagInput.trim().toLowerCase().replace(/\s+/g, "-");
@@ -101,7 +118,10 @@ export function SaveAsTemplatePanel({ projectId, projectName = "" }: SaveAsTempl
       const data = await res.json() as { id?: string; error?: string };
       if (!res.ok) throw new Error(data.error ?? "Failed to publish");
       setPublished(true);
-      if (data.id) setExistingTemplate({ id: data.id, name: name.trim(), fork_count: 0, created_at: new Date().toISOString() });
+      if (data.id) {
+        setExistingTemplate({ id: data.id, name: name.trim(), fork_count: 0, created_at: new Date().toISOString() });
+        setTemplateAgeDays(0);
+      }
       toast({ title: "Template published!", description: "It's now live in the community gallery." });
     } catch (err) {
       toast({ title: "Publish failed", description: String(err), variant: "destructive" });
@@ -173,7 +193,7 @@ export function SaveAsTemplatePanel({ projectId, projectName = "" }: SaveAsTempl
                 </div>
                 <div className="text-center">
                   <p className="text-lg font-bold text-blue-400">
-                    {Math.floor((Date.now() - new Date(existingTemplate.created_at).getTime()) / 86400000)}d
+                    {templateAgeDays}d
                   </p>
                   <p className="text-[10px] text-muted-foreground">Age</p>
                 </div>

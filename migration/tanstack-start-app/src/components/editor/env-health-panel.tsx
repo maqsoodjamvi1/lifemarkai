@@ -1,6 +1,6 @@
 
-import { useState, useEffect } from "react";
-import { Activity, CheckCircle2, XCircle, AlertTriangle, RefreshCw, Loader2, Eye, EyeOff, ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
+import { useState,useEffect } from "react";
+import { Activity,CheckCircle2,XCircle,AlertTriangle,RefreshCw,Loader2,Eye,EyeOff,ChevronDown,ChevronUp,ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
@@ -88,7 +88,8 @@ export function EnvHealthPanel({ projectId }: EnvHealthPanelProps) {
   function toggleReveal(key: string) {
     setRevealKeys((s) => {
       const next = new Set(s);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }

@@ -6,6 +6,7 @@ import { createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
 import { assertChatAccess } from "../project/chat-access.ts";
 import { persistChatTurnMessages } from "../ai/persist-chat-turn.ts";
+import type { Database,Json } from "../../types/database.ts";
 
 function toPersistedMessageMode(mode: string | null | undefined): "chat" | "agent" | "plan" | "build" {
   if (mode === "agent" || mode === "plan" || mode === "build" || mode === "chat") return mode;
@@ -34,7 +35,7 @@ export async function listMessages(data: {
     }
 
     const limit = data.limit ?? 100;
-    let query = (supabase as any)
+    let query = supabase
       .from("messages")
       .select("*")
       .eq("project_id", data.projectId)
@@ -67,7 +68,7 @@ export async function postMessages(data: any) {
       const includePivot = data.includePivot !== false;
 
       if (!fromCreatedAt && data.afterMessageId) {
-        const { data: pivot, error: pivotErr } = await (supabase as any)
+        const { data: pivot, error: pivotErr } = await supabase
           .from("messages")
           .select("id, created_at")
           .eq("id", data.afterMessageId)
@@ -84,7 +85,7 @@ export async function postMessages(data: any) {
         };
       }
 
-      let del = (supabase as any)
+      let del = supabase
         .from("messages")
         .delete({ count: "exact" })
         .eq("project_id", data.projectId);
@@ -119,7 +120,7 @@ export async function postMessages(data: any) {
       if (payload.length === 0) {
         return { status: "error" as const, message: "messages required" };
       }
-      const { data: restored, error } = await (supabase as any)
+      const { data: restored, error } = await supabase
         .from("messages")
         .upsert(payload, { onConflict: "id" })
         .select("id");
@@ -160,7 +161,7 @@ export async function clearMessages(data: any) {
       return { status: "denied" as const, httpStatus: access.status, error: access.error };
     }
 
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("messages")
       .delete()
       .eq("project_id", data.projectId);
@@ -178,7 +179,7 @@ export async function patchMessage(data: any) {
       return { status: "denied" as const, httpStatus: access.status, error: access.error };
     }
 
-    const { data: row, error: fetchError } = await (supabase as any)
+    const { data: row, error: fetchError } = await supabase
       .from("messages")
       .select("id, metadata, rating")
       .eq("id", data.messageId)
@@ -187,7 +188,7 @@ export async function patchMessage(data: any) {
     if (fetchError) return { status: "error" as const, message: fetchError.message };
     if (!row) return { status: "not_found" as const };
 
-    const update: Record<string, unknown> = {};
+    const update: Database["public"]["Tables"]["messages"]["Update"] = {};
     if ("rating" in data) update.rating = data.rating ?? null;
     if ("metadata" in data) {
       if (data.mergeMetadata !== false && data.metadata && typeof data.metadata === "object") {
@@ -195,16 +196,16 @@ export async function patchMessage(data: any) {
           row.metadata && typeof row.metadata === "object"
             ? (row.metadata as Record<string, unknown>)
             : {};
-        update.metadata = { ...prev, ...data.metadata };
+        update.metadata = { ...prev, ...data.metadata } as Json;
       } else {
-        update.metadata = data.metadata ?? null;
+        update.metadata = (data.metadata ?? null) as Json;
       }
     }
     if (Object.keys(update).length === 0) {
       return { status: "error" as const, message: "No fields to update" };
     }
 
-    const { data: message, error } = await (supabase as any)
+    const { data: message, error } = await supabase
       .from("messages")
       .update(update)
       .eq("id", data.messageId)
@@ -225,7 +226,7 @@ export async function deleteMessage(data: any) {
       return { status: "denied" as const, httpStatus: access.status, error: access.error };
     }
 
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("messages")
       .delete()
       .eq("id", data.messageId)

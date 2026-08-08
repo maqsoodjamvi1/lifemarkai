@@ -1,5 +1,5 @@
 
-import { Pin, X } from "lucide-react";
+import { Pin,X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface LovablePinnedMessageBannerProps {

@@ -6,10 +6,10 @@
  * "Generate migration" button fires an AI chat prompt.
  */
 
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState,useMemo,useRef,useEffect,useCallback } from "react";
 import {
-  Database, RefreshCw, Zap, ChevronDown, ChevronRight,
-  Table2, Link2, Search, GitBranch,
+Database,RefreshCw,Zap,ChevronDown,ChevronRight,
+Table2,Link2,Search,GitBranch,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

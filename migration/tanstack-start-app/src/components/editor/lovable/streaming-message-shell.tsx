@@ -1,12 +1,12 @@
 
-import { motion, AnimatePresence } from "framer-motion";
+import { motion,AnimatePresence } from "framer-motion";
 import { Loader2 } from "lucide-react";
-import { LovableStreamingBuildCard, type StreamingBuildStep } from "./streaming-build-card";
+import { LovableStreamingBuildCard,type StreamingBuildStep } from "./streaming-build-card";
 import { LovableStreamingFilesCard } from "./streaming-files-card";
 import { LovableStreamingThoughtPanel } from "./streaming-thought-panel";
 import {
-  LovableStreamingPreviewVerifyCard,
-  type PreviewVerifyResult,
+LovableStreamingPreviewVerifyCard,
+type PreviewVerifyResult,
 } from "./streaming-preview-verify-card";
 
 export type { PreviewVerifyResult };

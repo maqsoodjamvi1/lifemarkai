@@ -1,7 +1,7 @@
 
 import { useState } from "react";
-import { Globe, X, ZoomIn } from "lucide-react";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Globe,X,ZoomIn } from "lucide-react";
+import { Dialog,DialogContent } from "@/components/ui/dialog";
 
 interface LovablePreviewSnapshotCardProps {
   messageId: string;

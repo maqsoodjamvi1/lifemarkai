@@ -1,10 +1,9 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import {
-  reconstructFromChain,
-  type SnapshotChainEntry,
-  type SnapshotFile,
+reconstructFromChain,
+type SnapshotChainEntry,
+type SnapshotFile,
 } from "@/lib/diff/snapshot-diff";
 import { generateAI } from "@/lib/ai/generate";
 import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
@@ -58,8 +57,12 @@ async function handlePOST(req: Request) {
     supabase.rpc("get_snapshot_chain", { p_snapshot_id: oldSnapshotId }),
     supabase.rpc("get_snapshot_chain", { p_snapshot_id: newSnapshotId }),
   ]);
-  const oldFiles: SnapshotFile[] = reconstructFromChain((oldChain ?? []) as SnapshotChainEntry[]);
-  const newFiles: SnapshotFile[] = reconstructFromChain((newChain ?? []) as SnapshotChainEntry[]);
+  const oldFiles: SnapshotFile[] = reconstructFromChain(
+    (oldChain ?? []) as unknown as SnapshotChainEntry[],
+  );
+  const newFiles: SnapshotFile[] = reconstructFromChain(
+    (newChain ?? []) as unknown as SnapshotChainEntry[],
+  );
 
   // Build diffs
   const oldMap = new Map(oldFiles.map((f) => [f.path, f]));

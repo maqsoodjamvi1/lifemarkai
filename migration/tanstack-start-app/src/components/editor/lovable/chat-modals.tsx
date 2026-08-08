@@ -1,7 +1,25 @@
 
-import { PreviewAnnotateModal } from "@/components/editor/preview-annotate-modal";
-import { DesignPreviewPicker } from "@/components/editor/design-preview-picker";
 import type { DesignPreviewDirection } from "@/lib/ai/design-previews";
+import dynamic from "@/lib/lazy-component";
+import { importWithRetry } from "@/lib/import-with-retry";
+
+const PreviewAnnotateModal = dynamic(
+  importWithRetry(() =>
+    import("@/components/editor/preview-annotate-modal").then(
+      (module) => module.PreviewAnnotateModal,
+    ),
+  ),
+  { ssr: false },
+);
+
+const DesignPreviewPicker = dynamic(
+  importWithRetry(() =>
+    import("@/components/editor/design-preview-picker").then(
+      (module) => module.DesignPreviewPicker,
+    ),
+  ),
+  { ssr: false },
+);
 
 interface LovableChatModalsProps {
   annotateOpen: boolean;

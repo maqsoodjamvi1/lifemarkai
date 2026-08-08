@@ -1,14 +1,14 @@
 
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState,useRef,useEffect,useCallback,useMemo } from "react";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  ChevronRight, ChevronDown, FolderOpen, Folder,
-  FilePlus, FolderPlus, Trash2, Pencil, Check, X, Search,
-  BookOpen, Loader2, Upload, ChevronsUpDown,
+ChevronRight,ChevronDown,FolderOpen,Folder,
+FilePlus,FolderPlus,Trash2,Pencil,Check,X,Search,
+BookOpen,Loader2,Upload,ChevronsUpDown,
 } from "lucide-react";
 import {
-  ContextMenu, ContextMenuContent, ContextMenuItem,
-  ContextMenuSeparator, ContextMenuTrigger,
+ContextMenu,ContextMenuContent,ContextMenuItem,
+ContextMenuSeparator,ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useToast } from "@/hooks/use-toast";
 import { detectLanguage } from "@/lib/ai/code-parser";

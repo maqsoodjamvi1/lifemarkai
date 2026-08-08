@@ -1,5 +1,6 @@
 /** Native member-groups — reimplemented off the worker (pure Supabase). */
 import { createClient } from "../supabase/server.ts";
+import type { Database } from "../../types/database.ts";
 
 export async function listGroupsOrMembers(data: any) {
     const supabase = await createClient();
@@ -9,7 +10,7 @@ export async function listGroupsOrMembers(data: any) {
     if (!user) return { status: "unauthorized" as const };
 
     if (data.groupId) {
-      const { data: members } = await (supabase as any)
+      const { data: members } = await supabase
         .from("member_group_members")
         .select(
           `id, member_id, added_at, member:profiles!member_group_members_member_id_fkey ( id, full_name, avatar_url, email )`,
@@ -18,7 +19,7 @@ export async function listGroupsOrMembers(data: any) {
       return { status: "members" as const, members: members ?? [] };
     }
 
-    const { data: groups } = await (supabase as any)
+    const { data: groups } = await supabase
       .from("member_groups")
       .select(`id, name, description, color, created_at, members:member_group_members ( count )`)
       .eq("user_id", user.id)
@@ -34,7 +35,7 @@ export async function createGroup(data: any) {
     if (!user) return { status: "unauthorized" as const };
     if (!data.name?.trim()) return { status: "bad_request" as const, message: "name required" };
 
-    const { data: row, error } = await (supabase as any)
+    const { data: row, error } = await supabase
       .from("member_groups")
       .insert({
         user_id: user.id,
@@ -56,12 +57,12 @@ export async function updateGroup(data: any) {
     if (!user) return { status: "unauthorized" as const };
     if (!data.groupId) return { status: "bad_request" as const, message: "groupId required" };
 
-    const updates: Record<string, unknown> = {};
+    const updates: Database["public"]["Tables"]["member_groups"]["Update"] = {};
     if (data.name !== undefined) updates.name = data.name;
     if (data.description !== undefined) updates.description = data.description;
     if (data.color !== undefined) updates.color = data.color;
 
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("member_groups")
       .update(updates)
       .eq("id", data.groupId)
@@ -79,7 +80,7 @@ export async function setGroupMembership(data: any) {
     if (!data.groupId || !data.memberId)
       return { status: "bad_request" as const, message: "groupId and memberId required" };
 
-    const { data: group } = await (supabase as any)
+    const { data: group } = await supabase
       .from("member_groups")
       .select("id")
       .eq("id", data.groupId)
@@ -88,7 +89,7 @@ export async function setGroupMembership(data: any) {
     if (!group) return { status: "not_found" as const };
 
     if (data.action === "remove") {
-      await (supabase as any)
+      await supabase
         .from("member_group_members")
         .delete()
         .eq("group_id", data.groupId)
@@ -96,7 +97,7 @@ export async function setGroupMembership(data: any) {
       return { status: "ok" as const };
     }
 
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("member_group_members")
       .insert({ group_id: data.groupId, member_id: data.memberId });
     if (error && error.code !== "23505") return { status: "error" as const, message: error.message };
@@ -110,7 +111,7 @@ export async function deleteGroup(data: any) {
     } = await supabase.auth.getUser();
     if (!user) return { status: "unauthorized" as const };
     if (!data.groupId) return { status: "bad_request" as const, message: "groupId required" };
-    await (supabase as any)
+    await supabase
       .from("member_groups")
       .delete()
       .eq("id", data.groupId)

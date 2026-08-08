@@ -1,13 +1,12 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { CONTENT_MODEL } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import {
-  cancelCreditReservation,
-  reserveCredits,
-  settleCreditReservation,
+cancelCreditReservation,
+reserveCredits,
+settleCreditReservation,
 } from "@/lib/credits";
 
 
@@ -109,7 +108,7 @@ Return only the JSON object with the generated files.`;
     // Upsert files into the project
     const upserted = [];
     for (const file of parsed.files) {
-      const { data, error } = await (supabase as any)
+      const { data, error } = await supabase
         .from("project_files")
         .upsert(
           { project_id: projectId, path: file.path, content: file.content, language: file.language ?? "typescript" },

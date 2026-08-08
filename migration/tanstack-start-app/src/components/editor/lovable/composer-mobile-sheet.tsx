@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { ChevronDown, ChevronUp, MessageSquare } from "lucide-react";
+import { ChevronDown,ChevronUp,MessageSquare } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface LovableComposerMobileSheetProps {

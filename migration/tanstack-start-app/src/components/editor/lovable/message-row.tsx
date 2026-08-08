@@ -1,21 +1,21 @@
 
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
+import { motion,AnimatePresence } from "framer-motion";
+import { ChevronDown,ChevronUp,RefreshCw } from "lucide-react";
 import type { Message } from "@/types/database";
 import type { EditorMode } from "@/components/editor/editor-layout";
 import type { GeneratedFile } from "@/components/editor/file-attachment-card";
 import type { FileState } from "@/components/editor/diff-viewer";
-import { DiffViewer, computeFileDiff } from "@/components/editor/diff-viewer";
-import { AnalyzeMessageCard, parseAnalyzeMetadata } from "@/components/editor/analyze-message-card";
+import { DiffViewer,computeFileDiff } from "@/components/editor/diff-viewer";
+import { AnalyzeMessageCard,parseAnalyzeMetadata } from "@/components/editor/analyze-message-card";
 import { BuildActivityCard } from "@/components/editor/build-activity-card";
 import type { BuildActivityStep } from "@/lib/ai/build-activity";
 import { LovableAgentTrace } from "./agent-trace";
 import { LovableChangeCard } from "./change-card";
 import { LovableMessageActions } from "./message-actions";
 import { LovableMessageBubble } from "./message-bubble";
-import { LovableMessageContent, LovableHighlightedText } from "./message-content";
-import { LovablePlanReadyCard, LovableStepPlanCard, parseLovableStepPlan } from "./plan-cards";
+import { LovableMessageContent,LovableHighlightedText } from "./message-content";
+import { LovablePlanReadyCard,LovableStepPlanCard,parseLovableStepPlan } from "./plan-cards";
 import { LovableSuggestionChips } from "./suggestion-chips";
 import { LovableChangedFilesCard } from "./changed-files-card";
 import { LovablePreviewSnapshotCard } from "./preview-snapshot-card";
@@ -24,11 +24,11 @@ import { LovableMessageMetaBadges } from "./message-meta-badges";
 import { LovableMessageReactions } from "./message-reactions";
 import { LovableMessageEditInline } from "./message-edit-inline";
 import { formatLovableStampTime } from "./message-timestamp";
-import { LovableFixErrorMessage, parseLovableFixMessage } from "./fix-error-message";
+import { LovableFixErrorMessage,parseLovableFixMessage } from "./fix-error-message";
 import { LovableRoleTestBanner } from "./role-test-banner";
 import { LovableCollapsibleText } from "./collapsible-text";
 import { LovableBranchChip } from "./branch-chip";
-import { computeLovableChangeCardMeta, type LovableFileDiffEntry } from "./types";
+import { computeLovableChangeCardMeta,type LovableFileDiffEntry } from "./types";
 
 function buildAssistantSummary(
   content: string,

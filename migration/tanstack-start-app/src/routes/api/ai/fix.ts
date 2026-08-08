@@ -8,14 +8,19 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import {
-  cancelCreditReservation,
-  claimFreeCreditAction,
-  reserveCredits,
-  settleCreditReservation,
+cancelCreditReservation,
+claimFreeCreditAction,
+reserveCredits,
+settleCreditReservation,
 } from "@/lib/credits";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { AUTO_FIX_SYSTEM_PROMPT } from "@/lib/ai/prompts/auto-fix";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { appendPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
+import { generateAI } from "@/lib/ai/generate";
+import { ensureCommonGeneratedSupportFiles } from "@/lib/ai/generated-support-files";
+import { buildFixExplanation,detectLanguage,parseAIResponse } from "@/lib/ai/code-parser";
+import { applyPatches,collapsePatchResults } from "@/lib/ai/patch-applier";
 
 const FREE_FIXES_PER_DAY = 20;
 
@@ -124,20 +129,6 @@ export const Route = createFileRoute("/api/ai/fix")({
             .map((f: { path: string; content: string }) => `=== ${f.path} ===\n${f.content}`)
             .join("\n\n");
 
-          const [
-            { appendPreviewDiagnosis },
-            { generateAI },
-            { ensureCommonGeneratedSupportFiles },
-            { parseAIResponse, detectLanguage, buildFixExplanation },
-            { applyPatches, collapsePatchResults },
-          ] = await Promise.all([
-            import("@/lib/preview/diagnose-preview"),
-            import("@/lib/ai/generate"),
-            import("@/lib/ai/generated-support-files"),
-            import("@/lib/ai/code-parser"),
-            import("@/lib/ai/patch-applier"),
-          ]);
-
           const enrichedError = appendPreviewDiagnosis(
             buildErrorText,
             fileList,
@@ -243,7 +234,7 @@ Return the fixed files as JSON.`;
                   : "AI response missing files array",
               );
             }
-            let outFiles = ensureCommonGeneratedSupportFiles(parsed.files, fileList);
+            const outFiles = ensureCommonGeneratedSupportFiles(parsed.files, fileList);
 
             for (const fixedFile of outFiles) {
               const { data: existing } = await supabase

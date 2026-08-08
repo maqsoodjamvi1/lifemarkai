@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createAdminClient } from "@/lib/supabase/server";
 import { createFileRoute } from "@tanstack/react-router";
 
@@ -198,7 +197,7 @@ async function findExistingDemoProject(
   supabase: Awaited<ReturnType<typeof createAdminClient>>,
   userId: string,
 ) {
-  const { data: projects } = await (supabase as any)
+  const { data: projects } = await supabase
     .from("projects")
     .select("id, created_at")
     .eq("user_id", userId)
@@ -210,7 +209,7 @@ async function findExistingDemoProject(
   const project = projects?.[0];
   if (!project) return null;
 
-  const { count } = await (supabase as any)
+  const { count } = await supabase
     .from("project_files")
     .select("id", { count: "exact", head: true })
     .eq("project_id", project.id);
@@ -239,7 +238,7 @@ async function demoHandler() {
       });
     }
 
-    const { data: project, error: projectError } = await (supabase as any)
+    const { data: project, error: projectError } = await supabase
       .from("projects")
       .insert({
         user_id: userId,
@@ -267,7 +266,7 @@ async function demoHandler() {
       language: getLanguage(path),
     }));
 
-    const { error: filesError } = await (supabase as any)
+    const { error: filesError } = await supabase
       .from("project_files")
       .insert(files);
 

@@ -1,15 +1,14 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import OpenAI from "openai";
-import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { createClient,createAdminClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
-import { generateImage, isImageGenConfigured, type ImageSize } from "@/lib/ai/image-generate";
+import { generateImage,isImageGenConfigured,type ImageSize } from "@/lib/ai/image-generate";
 import { rateLimit } from "@/lib/rate-limit";
 import { isApprovedModel } from "@/lib/ai/cost-controls";
 import {
-  consumeProjectAiCredits,
-  ProjectAiCreditLimitError,
+consumeProjectAiCredits,
+ProjectAiCreditLimitError,
 } from "@/lib/ai/project-credit-meter";
 import { buildAiRequestPreview } from "@/lib/ai/redact-ai-request";
 
@@ -162,7 +161,7 @@ async function logAiRequest(
   try {
     const admin = await createAdminClient();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (admin as any).from("ai_request_logs").insert({
+    await admin.from("ai_request_logs").insert({
       project_id: projectId,
       capability: entry.capability,
       model: entry.model ?? null,
@@ -188,9 +187,9 @@ function withPreview(meta: LogMeta, requestPreview: string | null): LogMeta {
 
 export async function POST(
   req: Request,
-  { params }: { params: Promise<{ id: string }> },
+  { params }: { params: Promise<{ id: string }> | { id: string } },
 ) {
-  const { id: projectId } = params;
+  const { id: projectId } = await params;
   const origin = req.headers.get("origin") ?? "*";
   const startedAt = Date.now();
 
@@ -198,7 +197,7 @@ export async function POST(
   const { data: { user } } = await supabase.auth.getUser();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("id, user_id, ai_integration_enabled, ai_integration_model, ai_credits_used, ai_credit_limit, is_public")
     .eq("id", projectId)
@@ -214,7 +213,7 @@ export async function POST(
   // Auth: project owner, collaborator, or any request if the generated app is public.
   if (!project.is_public && user?.id !== project.user_id) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: collab } = await (supabase as any)
+    const { data: collab } = await supabase
       .from("collaborators")
       .select("role")
       .eq("project_id", projectId)
@@ -488,7 +487,7 @@ async function handleOPTIONS(req: Request) {
 export const Route = createFileRoute("/api/projects/$id/ai-proxy")({
   server: {
     handlers: {
-      OPTIONS: async ({ request, params }) => handleOPTIONS(request, params),
+      OPTIONS: async ({ request }) => handleOPTIONS(request),
     },
   },
 });

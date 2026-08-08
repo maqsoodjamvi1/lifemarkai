@@ -1,8 +1,8 @@
-import { describe, it } from "node:test";
+import { describe,it } from "node:test";
 import assert from "node:assert/strict";
 
-import { dnsRecordsForDomain, getHostingTarget } from "./hosting.ts";
-import { connectDnsRecords, domainVerificationToken } from "./entri.ts";
+import { dnsRecordsForDomain,getHostingTarget } from "./hosting.ts";
+import { connectDnsRecords,domainVerificationToken } from "./entri.ts";
 
 const PROJECT = "867e168b-1456-4f45-aaff-ca6b6c713ee2";
 const SITE = "lifemark-867e168b-145"; // `lifemark-` + first 12 chars of the id

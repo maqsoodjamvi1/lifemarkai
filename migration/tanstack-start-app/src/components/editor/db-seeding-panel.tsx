@@ -1,9 +1,9 @@
 
-import { useState, useEffect } from "react";
-import { Database, Play, RefreshCw, Copy, Check, ChevronDown, Loader2, Sparkles, Table2, Trash2 } from "lucide-react";
+import { useState,useEffect } from "react";
+import { Database,Play,RefreshCw,Copy,Check,Loader2,Table2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { toast } from "@/hooks/use-toast";
 import type { ProjectFile } from "@/types/database";

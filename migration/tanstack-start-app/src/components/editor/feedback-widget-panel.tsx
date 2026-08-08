@@ -1,7 +1,6 @@
 
-import { useState, useEffect } from "react";
-import { MessageSquarePlus, Copy, Check, Star, Loader2, Trash2, SmilePlus, Frown, Meh, Smile, SmileIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useState,useEffect } from "react";
+import { MessageSquarePlus,Copy,Check,Star,Loader2,SmilePlus,Frown,Meh,Smile,SmileIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
 

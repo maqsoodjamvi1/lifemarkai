@@ -5,6 +5,7 @@
 import { createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
 import { assertChatAccess } from "../project/chat-access.ts";
+import type { Database } from "../../types/database.ts";
 
 type ProfileAuthor = {
   id: string;
@@ -77,7 +78,7 @@ async function withAuthors(
   if (ids.length === 0) {
     return rows.map((r) => ({ ...r, author: null }));
   }
-  const { data: profiles } = await (supabase as any)
+  const { data: profiles } = await supabase
     .from("profiles")
     .select("id, full_name, avatar_url, email")
     .in("id", ids);
@@ -94,7 +95,7 @@ async function selectComments(
   supabase: Awaited<ReturnType<typeof createClient>>,
   projectId: string,
 ) {
-  const full = await (supabase as any)
+  const full = await supabase
     .from("project_comments")
     .select(`${BASE_COLUMNS},${ELEMENT_COLUMNS}`)
     .eq("project_id", projectId)
@@ -106,7 +107,7 @@ async function selectComments(
     return { data: [] as CommentRow[], error: full.error };
   }
 
-  const basic = await (supabase as any)
+  const basic = await supabase
     .from("project_comments")
     .select(BASE_COLUMNS)
     .eq("project_id", projectId)
@@ -183,14 +184,14 @@ export async function createComment(input: {
       : null,
   };
 
-  let result = await (supabase as any)
+  let result = await supabase
     .from("project_comments")
     .insert(withElement)
     .select(`${BASE_COLUMNS},${ELEMENT_COLUMNS}`)
     .single();
 
   if (result.error && missingOptionalColumn(result.error.message)) {
-    result = await (supabase as any)
+    result = await supabase
       .from("project_comments")
       .insert(baseInsert)
       .select(BASE_COLUMNS)
@@ -229,7 +230,7 @@ export async function patchComment(input: {
     return { status: "denied" as const, httpStatus: access.status, error: access.error };
   }
 
-  const updates: Record<string, unknown> = {};
+  const updates: Database["public"]["Tables"]["project_comments"]["Update"] = {};
   if (typeof input.content === "string") {
     const trimmed = input.content.trim();
     if (!trimmed) {
@@ -246,7 +247,7 @@ export async function patchComment(input: {
     return { status: "bad_request" as const, error: "Nothing to update" };
   }
 
-  const { data: row, error } = await (supabase as any)
+  const { data: row, error } = await supabase
     .from("project_comments")
     .update(updates)
     .eq("id", input.commentId)
@@ -270,7 +271,7 @@ export async function deleteComment(input: { projectId: string; commentId: strin
     return { status: "denied" as const, httpStatus: access.status, error: access.error };
   }
 
-  const { error } = await (supabase as any)
+  const { error } = await supabase
     .from("project_comments")
     .delete()
     .eq("id", input.commentId)

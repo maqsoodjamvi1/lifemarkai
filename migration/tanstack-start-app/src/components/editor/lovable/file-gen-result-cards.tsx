@@ -1,6 +1,6 @@
 
 import { motion } from "framer-motion";
-import { Download, FileDown, X } from "lucide-react";
+import { Download,FileDown,X } from "lucide-react";
 
 export interface LovableFileGenResult {
   id: string;

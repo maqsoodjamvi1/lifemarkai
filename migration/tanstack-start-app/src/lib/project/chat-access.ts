@@ -3,9 +3,9 @@
  * but returns status codes instead of NextResponse.
  */
 import {
-  canWriteProjectFiles,
-  getProjectAccess,
-  type ProjectAccess,
+canWriteProjectFiles,
+getProjectAccess,
+type ProjectAccess,
 } from "@/lib/project/access";
 import type { createClient } from "../supabase/server.ts";
 
@@ -37,7 +37,7 @@ export async function assertChatAccess(
   }
 
   if (!access || access === "public") {
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("id")
       .eq("id", projectId)

@@ -1,5 +1,5 @@
 
-import { Code2, X } from "lucide-react";
+import { Code2,X } from "lucide-react";
 import type { ParsedLineRef } from "@/lib/editor/parse-line-refs";
 import { formatLineRefLabel } from "@/lib/editor/parse-line-refs";
 

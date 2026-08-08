@@ -9,7 +9,7 @@
  * in the same shape as lib/security/scan.ts so the scan route can merge them.
  */
 
-import type { SecurityFinding, Severity } from "./scan.ts";
+import type { SecurityFinding,Severity } from "./scan.ts";
 
 interface ScanFile { path: string; content: string }
 

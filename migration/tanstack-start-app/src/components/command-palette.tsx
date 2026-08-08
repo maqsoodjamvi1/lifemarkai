@@ -1,19 +1,19 @@
-import { useEffect, useState, useCallback, useMemo, type ReactNode } from "react";
+import { useEffect,useState,useCallback,type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
-  CommandDialog,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-  CommandSeparator,
+CommandDialog,
+CommandEmpty,
+CommandGroup,
+CommandInput,
+CommandItem,
+CommandList,
+CommandSeparator,
 } from "cmdk";
 import {
-  LayoutDashboard, FolderOpen, Settings, CreditCard,
-  Users, Moon, Sun, LogOut, Plus, BarChart3,
-  BookTemplate, Bot, Github, Rocket, Search, FileCode2,
-  Code2, Eye, Columns, History, Zap, Download, BarChart2,
+LayoutDashboard,FolderOpen,Settings,CreditCard,
+Users,Moon,Sun,LogOut,Plus,BarChart3,
+BookTemplate,Bot,Github,Rocket,Search,FileCode2,
+Code2,Eye,Columns,History,BarChart2
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { createClient } from "@/lib/supabase/client";

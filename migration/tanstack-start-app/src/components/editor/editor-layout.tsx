@@ -1,46 +1,33 @@
 
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState,useCallback,useEffect,useRef,useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { countFindings, staticScan } from "@/lib/security/static-scan";
+import { countFindings,staticScan } from "@/lib/security/static-scan";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useFaviconStatus } from "@/hooks/use-favicon-status";
 import dynamic from "@/lib/lazy-component";
 import { importWithRetry } from "@/lib/import-with-retry";
-import { PanelGroup, Panel, PanelResizeHandle, type ImperativePanelHandle } from "react-resizable-panels";
-import {
-  ChevronDown, MessageSquare, Sparkles, Bot, FolderOpen, GitBranch,
-  Brain, Database, FlaskConical, Rocket, BarChart2,
-  Search, Settings, MoreHorizontal, Globe, Image, Plug,
-  Shield, Palette, Users, Zap,
-} from "lucide-react";
-import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { PanelGroup,Panel,PanelResizeHandle,type ImperativePanelHandle } from "react-resizable-panels";
 import { EditorTopBar } from "./editor-top-bar";
 import { LovableFilesViewPane } from "./lovable/files-view-pane";
 import { LovableLiveTasksDock } from "./lovable/live-tasks-dock";
 import { EditorPaymentBanner } from "./editor-payment-banner";
 import {
-  LovableToolsOverlay,
-  LovableOverlayHeader,
-  isLovableToolPanel,
+LovableToolsOverlay,
+LovableOverlayHeader,
+isLovableToolPanel,
 } from "./lovable-tools-overlay";
 import { FileToAppDropZone } from "./file-to-app-drop-zone";
 import { useShortcutsModal } from "@/hooks/use-shortcuts-modal";
 import type { CommandPaletteActions } from "@/components/command-palette";
 import { useRecordProjectVisit } from "@/hooks/use-recent-projects";
-import type { Project, ProjectFile, Message, Profile } from "@/types/database";
-import type { PreviewErrorReport, PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
+import type { Project,ProjectFile,Message,Profile } from "@/types/database";
+import type { PreviewErrorReport,PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import { saveApprovedPlan } from "@/lib/editor/save-approved-plan";
 import { useToast } from "@/hooks/use-toast";
 import {
-  pickActiveFileAfterUpdate,
-  resolvePromptMode,
-  shouldFocusPreviewAfterGeneration,
-  inferProjectStage,
+pickActiveFileAfterUpdate,
+resolvePromptMode,
+shouldFocusPreviewAfterGeneration
 } from "@/lib/ai/editor-intelligence";
 
 const EMPTY_PREVIEW_ERRORS: PreviewRuntimeError[] = [];

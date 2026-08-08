@@ -1,8 +1,8 @@
 
-import { useState, useEffect } from "react";
+import { useState,useEffect } from "react";
 import {
-  Mail, Key, Sparkles, Send, Check, Loader2,
-  ChevronRight, RefreshCw, ExternalLink, AlertCircle,
+Mail,Key,Sparkles,Send,Check,Loader2,
+ChevronRight,RefreshCw,ExternalLink,AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

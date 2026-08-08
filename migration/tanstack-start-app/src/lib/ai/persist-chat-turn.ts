@@ -8,12 +8,14 @@
  */
 import { createAdminClient } from "../supabase/server.ts";
 import { logger } from "../logger.ts";
+import { upsertMessageEmbedding } from "../editor/message-embeddings.ts";
 import {
-  sanitizeMessageContent,
-  toPersistedMessageMode,
-  type PersistedMessageMode,
-  type RuntimeEditorMode,
+sanitizeMessageContent,
+toPersistedMessageMode,
+type PersistedMessageMode,
+type RuntimeEditorMode,
 } from "@/lib/ai/persist-message-mode";
+import type { Json } from "@/types/database";
 
 export type ChatTurnInsertRow = {
   project_id: string;
@@ -37,14 +39,14 @@ export async function persistChatTurnMessages(
     mode: toPersistedMessageMode(row.mode),
     ...(row.tokens_used != null ? { tokens_used: row.tokens_used } : {}),
     ...(row.model != null ? { model: row.model } : {}),
-    ...(row.metadata != null ? { metadata: row.metadata } : {}),
+    ...(row.metadata != null ? { metadata: row.metadata as Json } : {}),
   }));
 
   let data: Array<{ id: string; role: string }> | null = null;
   let error: unknown = null;
 
   try {
-    const result = await (supabase as any)
+    const result = await supabase
       .from("messages")
       .insert(payload)
       .select("id, role");
@@ -62,7 +64,7 @@ export async function persistChatTurnMessages(
     });
     try {
       const admin = await createAdminClient();
-      const retry = await (admin as any)
+      const retry = await admin
         .from("messages")
         .insert(payload)
         .select("id, role");
@@ -91,7 +93,6 @@ export async function persistChatTurnMessages(
   // Semantic-search cache — fire-and-forget; never block the chat turn.
   void (async () => {
     try {
-      const { upsertMessageEmbedding } = await import("@/lib/editor/message-embeddings");
       const admin = await createAdminClient();
       await Promise.all(
         (data ?? []).map((row, i) =>

@@ -1,16 +1,15 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect } from "react";
-import { useLocation, useNavigate } from "@tanstack/react-router";
-import { motion } from "framer-motion";
+import { useLocation,useNavigate } from "@tanstack/react-router";
 import {
-  Zap, LayoutDashboard, FolderOpen, Settings,
-  CreditCard, Users, BookTemplate, LogOut,
-  ChevronRight, Plus, Sparkles, BarChart3,
-  ClipboardList, Shield, KeyRound, Server, Brain, Palette,
-  MessageCircle, BookOpen, Inbox, Star, History,
+Zap,LayoutDashboard,FolderOpen,Settings,
+CreditCard,Users,BookTemplate,LogOut,
+ChevronRight,Plus,Sparkles,BarChart3,
+ClipboardList,Shield,KeyRound,Server,Brain,Palette,
+MessageCircle,BookOpen,Inbox,Star,History,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar,AvatarFallback,AvatarImage } from "@/components/ui/avatar";
 import { createClient } from "@/lib/supabase/client";
 import { NotificationBell } from "@/components/dashboard/notification-bell";
 import type { Profile } from "@/types/database";

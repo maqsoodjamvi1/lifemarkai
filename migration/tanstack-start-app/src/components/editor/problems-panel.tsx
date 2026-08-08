@@ -1,7 +1,7 @@
 
-import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { AlertTriangle, Info, XCircle, Sparkles, Loader2, ChevronDown, ExternalLink } from "lucide-react";
+import { useState,useEffect } from "react";
+import { motion,AnimatePresence } from "framer-motion";
+import { AlertTriangle,Info,XCircle,Sparkles,Loader2,ChevronDown,ExternalLink } from "lucide-react";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

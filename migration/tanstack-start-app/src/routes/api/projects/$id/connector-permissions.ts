@@ -1,9 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { getProjectAccess, canWriteProjectFiles } from "@/lib/project/access";
-import { saveConnectorDecision, type ConnectorDecision } from "@/lib/integrations/connector-exec";
+import { getProjectAccess,canWriteProjectFiles } from "@/lib/project/access";
+import { saveConnectorDecision,type ConnectorDecision } from "@/lib/integrations/connector-exec";
 import { CONNECTOR_REGISTRY } from "@/lib/integrations/connector-registry";
 import { logAuditFromRequest } from "@/lib/audit/log";
 
@@ -22,7 +21,7 @@ async function handleGET(_: Request, params: any) {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects").select("metadata").eq("id", projectId).single();
   const meta = (project?.metadata ?? {}) as { connector_permissions?: Record<string, string> };
   return Response.json({ permissions: meta.connector_permissions ?? {} });

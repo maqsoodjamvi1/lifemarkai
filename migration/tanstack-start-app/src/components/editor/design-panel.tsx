@@ -1,10 +1,10 @@
 
 import { useState } from "react";
 import {
-  Palette, CheckCircle2, ChevronDown, ChevronUp, Check, Sparkles,
-  RefreshCw, Type, Layout, Eye, BookOpen, HelpCircle, Lightbulb,
-  Zap, TrendingUp, Layers, ArrowRight, XCircle, Info, Ban,
-  AlignLeft, AlignCenter, AlignRight, AlertTriangle, Loader2,
+Palette,CheckCircle2,ChevronDown,ChevronUp,Check,Sparkles,
+RefreshCw,Type,Layout,Eye,BookOpen,HelpCircle,Lightbulb,
+Zap,Layers,ArrowRight,XCircle,Info,Ban,
+AlignLeft,AlignCenter,AlignRight,AlertTriangle,Loader2
 } from "lucide-react";
 import type { DesignPreviewDirection } from "@/lib/ai/design-previews";
 import { buildDesignBrief } from "@/lib/ai/design-previews";

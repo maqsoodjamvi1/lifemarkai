@@ -15,18 +15,18 @@
  * extra wrapper.
  */
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
-  Download,
-  FileText,
-  FileSpreadsheet,
-  Presentation,
-  Image as ImageIcon,
-  FileCode2,
-  FilePlus2,
-  Save,
-  Check,
-  Loader2,
+Download,
+FileText,
+FileSpreadsheet,
+Presentation,
+Image as ImageIcon,
+FileCode2,
+FilePlus2,
+Save,
+Check,
+Loader2,
 } from "lucide-react";
 
 export interface GeneratedFile {
@@ -43,14 +43,17 @@ interface FileAttachmentCardProps {
   onSaveToProject?: (file: GeneratedFile) => Promise<void> | void;
 }
 
-function iconFor(mime: string) {
-  if (mime.startsWith("image/")) return ImageIcon;
-  if (mime.includes("pdf")) return FileText;
-  if (mime.includes("spreadsheet") || mime.includes("csv") || mime.endsWith("/xlsx")) return FileSpreadsheet;
-  if (mime.includes("presentation")) return Presentation;
-  if (mime.includes("wordprocessing") || mime.includes("msword")) return FileText;
-  if (mime.startsWith("text/") || mime.includes("json")) return FileCode2;
-  return FilePlus2;
+function MimeIcon({ mimeType }: { mimeType: string }) {
+  const className = "w-5 h-5 text-muted-foreground";
+  if (mimeType.startsWith("image/")) return <ImageIcon className={className} />;
+  if (mimeType.includes("pdf")) return <FileText className={className} />;
+  if (mimeType.includes("spreadsheet") || mimeType.includes("csv") || mimeType.endsWith("/xlsx")) {
+    return <FileSpreadsheet className={className} />;
+  }
+  if (mimeType.includes("presentation")) return <Presentation className={className} />;
+  if (mimeType.includes("wordprocessing") || mimeType.includes("msword")) return <FileText className={className} />;
+  if (mimeType.startsWith("text/") || mimeType.includes("json")) return <FileCode2 className={className} />;
+  return <FilePlus2 className={className} />;
 }
 
 function humanSize(bytes: number): string {
@@ -61,7 +64,6 @@ function humanSize(bytes: number): string {
 }
 
 export function FileAttachmentCard({ file, onSaveToProject }: FileAttachmentCardProps) {
-  const Icon = useMemo(() => iconFor(file.mimeType), [file.mimeType]);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -95,14 +97,13 @@ export function FileAttachmentCard({ file, onSaveToProject }: FileAttachmentCard
       {/* Thumbnail / icon */}
       <div className="w-12 h-12 rounded-lg bg-background border border-border/60 flex items-center justify-center flex-shrink-0 overflow-hidden">
         {isImage ? (
-          // eslint-disable-next-line @next/next/no-img-element
           <img
             src={`data:${file.mimeType};base64,${file.base64}`}
             alt={file.name}
             className="w-full h-full object-cover"
           />
         ) : (
-          <Icon className="w-5 h-5 text-muted-foreground" />
+          <MimeIcon mimeType={file.mimeType} />
         )}
       </div>
 

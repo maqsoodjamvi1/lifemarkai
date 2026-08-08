@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 /**
  * DatabaseManagerPanel — Lovable-Cloud-style manager for the DATABASE OF THE
  * APP BEING BUILT (per-project backend), not the platform DB.
@@ -10,10 +8,10 @@
  *  none        — CTA pointing at the Cloud / DB tabs.
  */
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState,useEffect,useCallback,useMemo } from "react";
 import {
-  Database, Loader2, RefreshCw, Trash2, Plus, Play, Lock,
-  Table2, KeyRound, ChevronLeft, ChevronRight, X, Check,
+Database,Loader2,RefreshCw,Trash2,Plus,Play,Lock,
+Table2,KeyRound,ChevronLeft,ChevronRight,X,Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
@@ -174,7 +172,7 @@ export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPan
     setEditing(null);
   }, [selected]);
 
-  async function post(body: Record<string, unknown>): Promise<{ ok: boolean; data }> {
+  async function post(body: Record<string, unknown>): Promise<{ ok: boolean; data: unknown }> {
     const res = await fetch(api, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
