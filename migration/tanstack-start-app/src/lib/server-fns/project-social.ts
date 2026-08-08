@@ -11,7 +11,7 @@ import { createClient } from "../supabase/server.ts";
 // ── Public view tracking ───────────────────────────────────────────────────
 export async function recordProjectView(data: any) {
     const supabase = await createClient();
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("id, is_public")
       .eq("id", data.projectId)
@@ -25,7 +25,7 @@ export async function recordProjectView(data: any) {
     const salt = process.env.IP_HASH_SALT ?? "lifemarkai-views-salt";
     const ipHash = createHash("sha256").update(data.ip + salt).digest("hex");
 
-    await (supabase as any).from("project_views").insert({
+    await supabase.from("project_views").insert({
       project_id: data.projectId,
       viewer_id: user?.id ?? null,
       ip_hash: ipHash,
@@ -43,7 +43,7 @@ export async function toggleProjectStar(data: any) {
     } = await supabase.auth.getUser();
     if (!user) return { status: "unauthorized" as const };
 
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("id, is_public, star_count")
       .eq("id", data.projectId)
@@ -51,7 +51,7 @@ export async function toggleProjectStar(data: any) {
     if (!project) return { status: "not_found" as const };
     if (!project.is_public) return { status: "forbidden" as const };
 
-    const { data: existing } = await (supabase as any)
+    const { data: existing } = await supabase
       .from("community_stars")
       .select("id")
       .eq("project_id", data.projectId)
@@ -62,7 +62,7 @@ export async function toggleProjectStar(data: any) {
     let newCount: number = project.star_count ?? 0;
 
     if (existing) {
-      await (supabase as any)
+      await supabase
         .from("community_stars")
         .delete()
         .eq("project_id", data.projectId)
@@ -70,16 +70,16 @@ export async function toggleProjectStar(data: any) {
       newCount = Math.max(0, newCount - 1);
       starred = false;
     } else {
-      await (supabase as any)
+      await supabase
         .from("community_stars")
         .insert({ project_id: data.projectId, user_id: user.id });
       newCount = newCount + 1;
       starred = true;
     }
 
-    await (supabase as any)
+    await supabase
       .from("projects")
-      .update({ star_count: newCount } as Record<string, unknown>)
+      .update({ star_count: newCount })
       .eq("id", data.projectId);
 
     return { status: "ok" as const, starred, count: newCount };
@@ -92,7 +92,7 @@ export async function getProjectStar(data: any) {
       data: { user },
     } = await supabase.auth.getUser();
 
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("star_count")
       .eq("id", data.projectId)
@@ -101,7 +101,7 @@ export async function getProjectStar(data: any) {
 
     if (!user) return { status: "ok" as const, starred: false, count };
 
-    const { data: existing } = await (supabase as any)
+    const { data: existing } = await supabase
       .from("community_stars")
       .select("id")
       .eq("project_id", data.projectId)

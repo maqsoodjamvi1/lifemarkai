@@ -19,7 +19,7 @@
  * keeps SSR safe (window-touching logic lives behind a single guard).
  */
 
-import { useEffect, useState } from "react";
+import { useEffect,useState } from "react";
 
 export interface ViewportInfo {
   isMobile: boolean;

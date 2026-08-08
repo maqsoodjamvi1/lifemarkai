@@ -1,12 +1,11 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
-import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { ENV_FILE_PATH, parseEnvFile } from "@/lib/project/env-file";
+import { createClient,createAdminClient } from "@/lib/supabase/server";
+import { ENV_FILE_PATH,parseEnvFile } from "@/lib/project/env-file";
 import {
-  CONNECTOR_REGISTRY,
-  resolveConnectorBaseUrl,
+CONNECTOR_REGISTRY,
+resolveConnectorBaseUrl,
 } from "@/lib/integrations/connector-registry";
-import { getAppUserConnection, ensureFreshToken } from "@/lib/integrations/app-user-connections";
+import { getAppUserConnection,ensureFreshToken } from "@/lib/integrations/app-user-connections";
 import { rateLimit } from "@/lib/rate-limit";
 
 // ─── POST /api/projects/[id]/connector-proxy ─────────────────────────────────
@@ -70,14 +69,14 @@ function cors(origin: string | null, origins: Set<string>): Record<string, strin
 }
 
 async function handlePOST(req: Request, params: any) {
-  const { id: projectId } = params;
+  const { id: projectId } = await params;
   const origin = req.headers.get("origin");
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("id, user_id, is_public, deployed_url")
     .eq("id", projectId)
@@ -102,7 +101,7 @@ async function handlePOST(req: Request, params: any) {
   // Auth mirrors ai-proxy: owner, collaborator, or any caller for public apps.
   if (!typedProject.is_public && user?.id !== typedProject.user_id) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: collab } = await (supabase as any)
+    const { data: collab } = await supabase
       .from("collaborators")
       .select("role")
       .eq("project_id", projectId)
@@ -162,7 +161,7 @@ async function handlePOST(req: Request, params: any) {
 
   // Read connector credentials from the project's .env file
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: envRow } = await (supabase as any)
+  const { data: envRow } = await supabase
     .from("project_files")
     .select("content")
     .eq("project_id", projectId)
@@ -225,10 +224,10 @@ export async function OPTIONS(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const { id: projectId } = params;
+  const { id: projectId } = await params;
   const origin = req.headers.get("origin");
   const supabase = await createClient();
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("id, user_id, is_public, deployed_url")
     .eq("id", projectId)

@@ -1,5 +1,5 @@
 
-import { Paperclip, X } from "lucide-react";
+import { Paperclip,X } from "lucide-react";
 
 interface ContextChipFile {
   id: string;

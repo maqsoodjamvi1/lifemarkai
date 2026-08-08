@@ -1,9 +1,9 @@
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { ExternalLink, Github, Rocket, Eye } from "lucide-react";
+import { createFileRoute,Link,notFound } from "@tanstack/react-router";
+import { ExternalLink,Github,Rocket,Eye } from "lucide-react";
 import { fetchPublicProject } from "@/lib/public-server";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar,AvatarFallback,AvatarImage } from "@/components/ui/avatar";
 import { formatDate } from "@/lib/utils";
 import { RemixButton } from "@/components/marketing/remix-button";
 import { ProjectViewTracker } from "@/components/marketing/project-view-tracker";

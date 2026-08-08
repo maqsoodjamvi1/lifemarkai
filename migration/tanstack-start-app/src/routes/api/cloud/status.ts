@@ -1,18 +1,29 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
-import { createAdminClient, createClient } from "@/lib/supabase/server";
+import { createAdminClient,createClient } from "@/lib/supabase/server";
 import {
-  getManagedProjectStatus,
-  getManagedProjectKeys,
-  isManagementConfigured,
-  configureManagedAuthRedirects,
+getManagedProjectStatus,
+getManagedProjectKeys,
+isManagementConfigured,
+configureManagedAuthRedirects,
 } from "@/lib/cloud/management";
-import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "@/lib/project/env-file";
+import { ENV_FILE_PATH,parseEnvFile,serializeEnvFile } from "@/lib/project/env-file";
 
 const CLOUD_STATUS_PROJECT_COLUMNS = [
   "id", "cloud_enabled", "cloud_region", "cloud_instance", "cloud_status",
   "cloud_provisioned_at", "cloud_project_ref", "cloud_supabase_url", "deployed_url",
 ].join(", ");
+
+interface CloudStatusProject {
+  id: string;
+  cloud_enabled: boolean;
+  cloud_region: string | null;
+  cloud_instance: string | null;
+  cloud_status: string | null;
+  cloud_provisioned_at: string | null;
+  cloud_project_ref: string | null;
+  cloud_supabase_url: string | null;
+  deployed_url: string | null;
+}
 
 /** Native /api/cloud/status — Cloud config + tiers; finalizes managed provisioning when healthy. */
 export const Route = createFileRoute("/api/cloud/status")({
@@ -26,17 +37,19 @@ export const Route = createFileRoute("/api/cloud/status")({
         const projectId = new URL(request.url).searchParams.get("projectId");
         if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
-        let { data: project } = await supabase.from("projects")
+        const { data: loadedProject } = await supabase.from("projects")
           .select(CLOUD_STATUS_PROJECT_COLUMNS).eq("id", projectId).eq("user_id", user.id).single();
+        let project = loadedProject as CloudStatusProject | null;
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
         if (project.cloud_status === "provisioning" && project.cloud_project_ref && isManagementConfigured()) {
+          const projectRef = project.cloud_project_ref;
           try {
-            const { status } = await getManagedProjectStatus(project.cloud_project_ref);
+            const { status } = await getManagedProjectStatus(projectRef);
             if (status === "active") {
-              const keys = await getManagedProjectKeys(project.cloud_project_ref);
+              const keys = await getManagedProjectKeys(projectRef);
               const admin = createAdminClient();
-              const { error: credentialError } = await (admin as any).from("project_cloud_credentials").upsert(
+              const { error: credentialError } = await admin.from("project_cloud_credentials").upsert(
                 { project_id: projectId, service_key: keys.serviceKey, updated_at: new Date().toISOString() },
                 { onConflict: "project_id" },
               );
@@ -45,7 +58,7 @@ export const Route = createFileRoute("/api/cloud/status")({
               const { data: updated } = await supabase.from("projects")
                 .update({ cloud_status: "active", cloud_anon_key: keys.anonKey })
                 .eq("id", projectId).select(CLOUD_STATUS_PROJECT_COLUMNS).single();
-              if (updated) project = updated;
+              if (updated) project = updated as unknown as CloudStatusProject;
 
               if (keys.anonKey && project.cloud_supabase_url) {
                 try {
@@ -64,7 +77,7 @@ export const Route = createFileRoute("/api/cloud/status")({
 
                 try {
                   const siteUrl = (project as { deployed_url?: string | null }).deployed_url ?? process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-                  await configureManagedAuthRedirects(project.cloud_project_ref, siteUrl, ["http://localhost:3000", "http://localhost:5173"]);
+                  await configureManagedAuthRedirects(projectRef, siteUrl, ["http://localhost:3000", "http://localhost:5173"]);
                 } catch { /* best-effort */ }
               }
             } else if (status === "failed") {

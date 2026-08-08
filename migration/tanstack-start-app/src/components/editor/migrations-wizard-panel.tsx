@@ -1,6 +1,6 @@
 
-import { useState, useMemo, useRef } from "react";
-import { GitBranch, Plus, Check, Copy, ChevronDown, ChevronUp, Loader2, Sparkles, FileText, Clock, AlertCircle, HardDrive, Download, Upload } from "lucide-react";
+import { useState,useMemo,useRef } from "react";
+import { GitBranch,Plus,Check,Copy,ChevronDown,ChevronUp,Loader2,Sparkles,FileText,AlertCircle,HardDrive,Download,Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -149,7 +149,7 @@ Migration index: ${nextIdx}`;
     );
   }
 
-  function useTemplate(sql: string, label: string) {
+  function selectTemplate(sql: string, label: string) {
     const nextIdx = nextMigrationIndex(migrations);
     const slug = label.toLowerCase().replace(/\s+/g, "_");
     setGeneratedSQL(sql);
@@ -289,7 +289,7 @@ Migration index: ${nextIdx}`;
                   <p className="text-xs font-semibold text-foreground">{tpl.label}</p>
                   <p className="text-[10px] text-muted-foreground">{tpl.description}</p>
                 </div>
-                <Button size="sm" variant="outline" className="text-[10px] h-6 px-2 shrink-0" onClick={() => useTemplate(tpl.sql, tpl.label)}>
+                <Button size="sm" variant="outline" className="text-[10px] h-6 px-2 shrink-0" onClick={() => selectTemplate(tpl.sql, tpl.label)}>
                   Use
                 </Button>
               </div>

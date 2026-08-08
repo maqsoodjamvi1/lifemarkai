@@ -1,12 +1,11 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
-import { createAdminClient, createClient } from "@/lib/supabase/server";
+import { createAdminClient,createClient } from "@/lib/supabase/server";
 import { servePreviewHtml } from "@/lib/preview/serve-preview";
 import { appSlugFromHost } from "@/lib/deploy/apps-host";
 import {
-  readLiveBuildFile,
-  buildFileResponse,
-  rewriteAssetPaths,
+readLiveBuildFile,
+buildFileResponse,
+rewriteAssetPaths,
 } from "@/lib/deploy/build-store";
 
 /**
@@ -52,7 +51,7 @@ async function handleGET(req: Request, params: any): Promise<Response> {
   const { slug, assetPath } = resolved;
 
   const admin = createAdminClient();
-  const { data: project } = await (admin as any)
+  const { data: project } = await admin
     .from("projects")
     .select("id, user_id, is_public, visibility, live_build_id")
     .eq("app_slug", slug)
@@ -61,7 +60,13 @@ async function handleGET(req: Request, params: any): Promise<Response> {
   if (!project) return notFoundHtml();
 
   const visibility: "public" | "workspace" | "private" =
-    project.visibility ?? (project.is_public ? "public" : "workspace");
+    project.visibility === "public" ||
+    project.visibility === "workspace" ||
+    project.visibility === "private"
+      ? project.visibility
+      : project.is_public
+        ? "public"
+        : "workspace";
 
   if (visibility !== "public") {
     const supabase = await createClient();
@@ -69,7 +74,7 @@ async function handleGET(req: Request, params: any): Promise<Response> {
     if (!user) return notFoundHtml();
     if (user.id !== project.user_id) {
       if (visibility === "private") return notFoundHtml();
-      const { data: collab } = await (admin as any)
+      const { data: collab } = await admin
         .from("collaborators")
         .select("id")
         .eq("project_id", project.id)

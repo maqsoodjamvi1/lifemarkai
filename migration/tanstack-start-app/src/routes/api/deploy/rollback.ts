@@ -1,8 +1,7 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { reconstructFromChain, type SnapshotChainEntry } from "@/lib/diff/snapshot-diff";
+import { parseSnapshotChain,reconstructFromChain } from "@/lib/diff/snapshot-diff";
 import { logger } from "@/lib/logger";
 
 /**
@@ -22,7 +21,7 @@ export const Route = createFileRoute("/api/deploy/rollback")({
           return Response.json({ error: "projectId and deploymentId required" }, { status: 400 });
         }
 
-        const { data: deployment } = await (supabase as any)
+        const { data: deployment } = await supabase
           .from("deployments")
           .select("id, snapshot_id, url, user_id, project_id")
           .eq("id", deploymentId)
@@ -39,17 +38,17 @@ export const Route = createFileRoute("/api/deploy/rollback")({
           );
         }
 
-        const { data: chain, error: chainError } = await (supabase as any)
+        const { data: chain, error: chainError } = await supabase
           .rpc("get_snapshot_chain", { p_snapshot_id: deployment.snapshot_id });
         if (chainError) return Response.json({ error: chainError.message }, { status: 500 });
 
-        const entries = (chain ?? []) as SnapshotChainEntry[];
+        const entries = parseSnapshotChain(chain ?? []);
         const restoredFiles = reconstructFromChain(entries);
         if (restoredFiles.length === 0) {
           return Response.json({ error: "Snapshot is empty — nothing to restore." }, { status: 400 });
         }
 
-        const { data: currentFiles } = await (supabase as any)
+        const { data: currentFiles } = await supabase
           .from("project_files")
           .select("path, content, language")
           .eq("project_id", projectId);
@@ -73,7 +72,7 @@ export const Route = createFileRoute("/api/deploy/rollback")({
         //    back. Proceeding when it fails is how a recovery message ends up
         //    pointing at a version that does not exist.
         if (currentFiles && currentFiles.length > 0) {
-          const { error: safetyError } = await (supabase as any)
+          const { error: safetyError } = await supabase
             .from("project_snapshots")
             .insert({
               project_id: projectId,
@@ -105,7 +104,7 @@ export const Route = createFileRoute("/api/deploy/rollback")({
         //    files is recoverable; a half-restored project with the rest
         //    deleted is not.
         for (const file of restoredFiles) {
-          const { error: upsertError } = await (supabase as any)
+          const { error: upsertError } = await supabase
             .from("project_files")
             .upsert({
               project_id: projectId,
@@ -131,12 +130,13 @@ export const Route = createFileRoute("/api/deploy/rollback")({
         // 3. Only now remove what the snapshot does not have. A failure here
         //    leaves extra files behind, which is untidy rather than
         //    destructive — so report it without failing the rollback.
-        const restoredPaths = new Set(restoredFiles.map((f) => f.path));
+        const restoredPaths = new Set(restoredFiles.map((file) => file.path));
         const notRemoved: string[] = [];
         if (currentFiles) {
-          const toDelete = currentFiles.filter((f) => !restoredPaths.has(f.path));
+          const typedCurrentFiles = currentFiles as Array<{ path: string }>;
+          const toDelete = typedCurrentFiles.filter((file) => !restoredPaths.has(file.path));
           for (const f of toDelete) {
-            const { error: deleteError } = await (supabase as any).from("project_files")
+            const { error: deleteError } = await supabase.from("project_files")
               .delete()
               .eq("project_id", projectId)
               .eq("path", f.path);

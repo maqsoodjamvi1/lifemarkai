@@ -1,15 +1,15 @@
 
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  Shield, ShieldAlert, ShieldCheck, Loader2,
-  AlertTriangle, XCircle, Info, ChevronDown, ChevronRight,
-  Wand2, Eye, EyeOff,
+Shield,ShieldAlert,ShieldCheck,Loader2,
+AlertTriangle,XCircle,Info,ChevronDown,ChevronRight,
+Wand2,Eye,EyeOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import type { Project, ProjectFile } from "@/types/database";
-import { staticScan, type SecurityFinding } from "@/lib/security/static-scan";
+import type { Project,ProjectFile } from "@/types/database";
+import { staticScan,type SecurityFinding } from "@/lib/security/static-scan";
 
 interface SecurityPanelProps {
   project: Project;

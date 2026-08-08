@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { ImageIcon, Loader2, RefreshCw, Download, Check, Sparkles, FileImage, Zap } from "lucide-react";
+import { ImageIcon,Loader2,RefreshCw,Download,Sparkles,FileImage,Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -223,7 +223,6 @@ export function IconGenPanel({ projectId, files }: IconGenPanelProps) {
         {asset && !generating && (
           <div className="space-y-3">
             <div className={`rounded-xl border border-border overflow-hidden ${asset.mode === "icon" ? "max-w-[160px] mx-auto" : "w-full"}`}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={asset.url}
                 alt={asset.mode === "icon" ? "App icon" : "OG social card"}

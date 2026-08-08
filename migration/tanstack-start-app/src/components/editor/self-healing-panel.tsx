@@ -1,14 +1,14 @@
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState,useEffect,useCallback,useMemo } from "react";
 import {
-  HeartPulse, Loader2, RefreshCw, Wrench, Check, X,
-  ShieldAlert, AlertTriangle, AlertCircle, Info, Sparkles, Lock,
-  ChevronDown, ChevronRight,
+HeartPulse,Loader2,RefreshCw,Wrench,Check,X,
+ShieldAlert,AlertTriangle,AlertCircle,Info,Sparkles,Lock,
+ChevronDown,ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";
-import { DiffViewer, computeFileDiff, type FileState } from "@/components/editor/diff-viewer";
+import { DiffViewer,computeFileDiff,type FileState } from "@/components/editor/diff-viewer";
 import type { ProjectFile } from "@/types/database";
 
 interface SelfHealingPanelProps {

@@ -1,5 +1,5 @@
 
-import { Palette, Sparkles } from "lucide-react";
+import { Palette,Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface LovableChatEmptyStateProps {

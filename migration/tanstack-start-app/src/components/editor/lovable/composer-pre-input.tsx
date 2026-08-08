@@ -8,14 +8,14 @@ import { LovableComposerFollowUpChips } from "./composer-follow-up-chips";
 import { LovableAttachedMockupCard } from "./attached-mockup-card";
 import { LovableComposerAttachedTextChip } from "./composer-attached-text-chip";
 import {
-  LovableComposerUrlScrapeBanner,
-  type LovableUrlScrapeMeta,
+LovableComposerUrlScrapeBanner,
+type LovableUrlScrapeMeta,
 } from "./composer-url-scrape-banner";
 import { LovableComposerContextChips } from "./composer-context-chips";
 import { LovableComposerLineRefChips } from "./composer-line-ref-chips";
 import {
-  LovableComposerSecretBanner,
-  type LovableSecretBannerState,
+LovableComposerSecretBanner,
+type LovableSecretBannerState,
 } from "./composer-secret-banner";
 import type { ParsedLineRef } from "@/lib/editor/parse-line-refs";
 

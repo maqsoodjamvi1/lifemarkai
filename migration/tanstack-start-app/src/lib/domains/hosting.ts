@@ -7,7 +7,7 @@
  * at OUR hosting target, plus a TXT ownership token. Drivers keep the existing
  * Netlify behavior while allowing a future platform-owned edge.
  */
-import { resolve4, resolveCname, resolveTxt } from "dns/promises";
+import { resolve4,resolveCname,resolveTxt } from "dns/promises";
 
 export interface HostingTarget {
   readonly id: "netlify" | "platform";

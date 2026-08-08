@@ -1,13 +1,12 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import {
-  getKeywordMetrics,
-  getRelatedKeywords,
-  getDomainOverview,
-  isSemrushConfigured,
-  SemrushNotConfiguredError,
-  type SemrushDatabase,
+getKeywordMetrics,
+getRelatedKeywords,
+getDomainOverview,
+isSemrushConfigured,
+SemrushNotConfiguredError,
+type SemrushDatabase,
 } from "@/lib/integrations/semrush";
 
 /** Native /api/integrations/semrush — keyword/related/domain SEO metrics. */

@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * PATCH /api/projects/:id/sandbox-preview/sync
  *
@@ -12,9 +11,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
-import { getSandboxProvider, isSandboxEnabled, type SandboxFile } from "@/lib/sandbox";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
+import { getSandboxProvider,isSandboxEnabled,type SandboxFile } from "@/lib/sandbox";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { patchSandboxPreviewFiles } from "@/lib/preview/patch-sandbox-preview-files";
 
 
@@ -66,7 +65,7 @@ async function handlePATCH(req: Request, params: any) {
 
   let syncSourceFiles = clientFiles;
   if (!syncSourceFiles?.length) {
-    const { data: rows, error } = await (supabase as any)
+    const { data: rows, error } = await supabase
       .from("project_files")
       .select("path, content")
       .eq("project_id", projectId);
@@ -83,7 +82,7 @@ async function handlePATCH(req: Request, params: any) {
     return Response.json({ ok: false, error: "No files to sync" });
   }
 
-  const { data: projectRow } = await (supabase as any)
+  const { data: projectRow } = await supabase
     .from("projects")
     .select("is_public")
     .eq("id", projectId)
@@ -108,7 +107,7 @@ async function handlePATCH(req: Request, params: any) {
   let reconciledPackages: string[] = [];
   let rejectedPackages: string[] = [];
   try {
-    const { data: allRows } = await (supabase as any)
+    const { data: allRows } = await supabase
       .from("project_files")
       .select("path, content")
       .eq("project_id", projectId);
@@ -129,7 +128,7 @@ async function handlePATCH(req: Request, params: any) {
         reconciledPackageJson = sync.updated;
         reconciledPackages = sync.addedPackages;
         // Persist so the fix survives reloads + future syncs.
-        await (supabase as any)
+        await supabase
           .from("project_files")
           .update({ content: sync.updated, updated_at: new Date().toISOString() })
           .eq("project_id", projectId)

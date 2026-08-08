@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Zap, Github, Twitter } from "lucide-react";
+import { Zap,Github,Twitter } from "lucide-react";
 
 const links = {
   Product: ["Features", "Pricing", "Templates", "Changelog", "Roadmap"],

@@ -11,16 +11,16 @@ export const fetchPublicProfile = createServerFn({ method: "GET" })
   .validator(zodValidator(z.object({ username: z.string().min(1) })))
   .handler(async ({ data }) => {
     const supabase = await createClient();
-    const { data: profile } = await (supabase as any)
+    const { data: profile } = await supabase
       .from("profiles")
       .select("id, username, full_name, avatar_url, bio, github_username, created_at")
       .eq("username", data.username)
       .eq("is_public", true)
       .maybeSingle();
 
-    if (!profile) return { status: "not_found" as const };
+    if (!profile?.username) return { status: "not_found" as const };
 
-    const { data: projects } = await (supabase as any)
+    const { data: projects } = await supabase
       .from("projects")
       .select("id, name, description, preview_url, deployed_url, framework, created_at, slug")
       .eq("user_id", profile.id)
@@ -30,7 +30,7 @@ export const fetchPublicProfile = createServerFn({ method: "GET" })
 
     return {
       status: "ok" as const,
-      profile,
+      profile: { ...profile, username: profile.username },
       projects: projects ?? [],
     };
   });
@@ -46,7 +46,7 @@ export const fetchPublicProject = createServerFn({ method: "GET" })
   )
   .handler(async ({ data }) => {
     const supabase = await createClient();
-    const { data: profile } = await (supabase as any)
+    const { data: profile } = await supabase
       .from("profiles")
       .select("id, full_name, avatar_url, username")
       .eq("username", data.username)
@@ -54,7 +54,7 @@ export const fetchPublicProject = createServerFn({ method: "GET" })
 
     if (!profile) return { status: "not_found" as const };
 
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("*")
       .eq("user_id", profile.id)
@@ -64,7 +64,7 @@ export const fetchPublicProject = createServerFn({ method: "GET" })
 
     if (!project) return { status: "not_found" as const };
 
-    const { data: files } = await (supabase as any)
+    const { data: files } = await supabase
       .from("project_files")
       .select("path, language")
       .eq("project_id", project.id)
@@ -87,7 +87,7 @@ export const resolveAppSlug = createServerFn({ method: "GET" })
   .validator(zodValidator(z.object({ slug: z.string().min(1) })))
   .handler(async ({ data }) => {
     const supabase = await createClient();
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select(
         // `deployed_url`, NOT `deploy_url`. The wrong name made PostgREST error on
@@ -102,7 +102,13 @@ export const resolveAppSlug = createServerFn({ method: "GET" })
     if (!project) return { status: "not_found" as const };
 
     const visibility: "public" | "workspace" | "private" =
-      project.visibility ?? (project.is_public ? "public" : "workspace");
+      project.visibility === "public" ||
+      project.visibility === "workspace" ||
+      project.visibility === "private"
+        ? project.visibility
+        : project.is_public
+          ? "public"
+          : "workspace";
 
     if (visibility !== "public") {
       const { user } = await getServerUser(supabase);
@@ -113,7 +119,7 @@ export const resolveAppSlug = createServerFn({ method: "GET" })
       }
 
       if (visibility === "workspace") {
-        const { data: collab } = await (supabase as any)
+        const { data: collab } = await supabase
           .from("collaborators")
           .select("id")
           .eq("project_id", project.id)

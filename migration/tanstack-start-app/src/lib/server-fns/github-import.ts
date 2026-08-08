@@ -6,13 +6,13 @@
  */
 import { Octokit } from "@octokit/rest";
 import { createClient } from "../supabase/server.ts";
-import { rateLimitAsync, RATE_LIMITS } from "../rate-limit.ts";
+import { rateLimitAsync,RATE_LIMITS } from "../rate-limit.ts";
 import { detectLanguage } from "../ai/code-parser.ts";
 import {
-  cancelCreditReservation,
-  reserveCredits,
-  settleCreditReservation,
-  type CreditReservation,
+cancelCreditReservation,
+reserveCredits,
+settleCreditReservation,
+type CreditReservation,
 } from "@/lib/credits";
 
 const MAX_FILE_BYTES = 100 * 1024;
@@ -84,7 +84,7 @@ export async function importGithubRepo(data: { repoUrl: string; branch?: string 
     const parsed = parseGitHubUrl(data.repoUrl);
     if (!parsed) return { status: "error", code: 400, message: "Invalid GitHub URL" };
 
-    const { data: profile } = await (supabase as any)
+    const { data: profile } = await supabase
       .from("profiles")
       .select("github_access_token")
       .eq("id", user.id)
@@ -147,7 +147,7 @@ export async function importGithubRepo(data: { repoUrl: string; branch?: string 
       }
 
       const projectName = `${parsed.repo} (imported)`;
-      const { data: project, error: projectError } = await (supabase as any)
+      const { data: project, error: projectError } = await supabase
         .from("projects")
         .insert({
           user_id: user.id,
@@ -170,7 +170,7 @@ export async function importGithubRepo(data: { repoUrl: string; branch?: string 
           content: f.content,
           language: f.language,
         }));
-        const { error: filesError } = await (supabase as any).from("project_files").insert(batch);
+        const { error: filesError } = await supabase.from("project_files").insert(batch);
         if (filesError) throw new Error(`Failed to persist imported files: ${filesError.message}`);
       }
 

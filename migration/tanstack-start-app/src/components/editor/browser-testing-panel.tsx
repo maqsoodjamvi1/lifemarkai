@@ -1,17 +1,17 @@
 
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState,useMemo,useRef,useEffect,useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs,TabsList,TabsTrigger,TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Collapsible,CollapsibleContent,CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
-  ChevronRight, Loader2, Play, CheckCircle2, XCircle, Clock,
-  Globe, FileCode, RefreshCw, AlertTriangle, Copy, Check,
-  Camera, ExternalLink, Wifi,
+ChevronRight,Loader2,Play,CheckCircle2,XCircle,Clock,
+Globe,FileCode,RefreshCw,AlertTriangle,Copy,Check,
+Camera,ExternalLink,Wifi,
 } from "lucide-react";
-import type { ProjectFile, Project } from "@/types/database";
+import type { ProjectFile,Project } from "@/types/database";
 
 interface BrowserTestingPanelProps {
   project: Project;
@@ -969,7 +969,6 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
                 {liveScreenshots.map((ss, i) => (
                   <div key={i} className="space-y-1">
                     <p className="text-[10px] text-muted-foreground font-medium">{ss.label}</p>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={ss.dataUrl} alt={ss.label} className="w-full rounded-lg border border-border object-cover" style={{ maxHeight: 220 }} />
                   </div>
                 ))}

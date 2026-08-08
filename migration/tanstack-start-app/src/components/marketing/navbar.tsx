@@ -1,7 +1,7 @@
-import { useState, useEffect } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
-import { motion, AnimatePresence } from "framer-motion";
-import { Zap, Menu, X, ChevronDown } from "lucide-react";
+import { useState,useEffect } from "react";
+import { Link,useNavigate } from "@tanstack/react-router";
+import { motion,AnimatePresence } from "framer-motion";
+import { Zap,Menu,X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/client";
 

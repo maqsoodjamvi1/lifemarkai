@@ -1,34 +1,33 @@
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState,useEffect,useCallback,useRef } from "react";
 import dynamic from "@/lib/lazy-component";
 import { importWithRetry } from "@/lib/import-with-retry";
 import {
-  X, Save, Loader2, FileCode, FilePlus, Copy, Check, Download,
-  Maximize2, Minimize2, MessageSquare, Wand2, Sparkles,
-  ChevronDown, ChevronUp, Palette, Settings2, Columns2, Clock, Search,
-  BookOpen,
+X,Save,Loader2,FileCode,FilePlus,Copy,Check,Download,
+Maximize2,Minimize2,MessageSquare,Wand2,Sparkles,Palette,Settings2,Columns2,Clock,Search,
+BookOpen
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { EDITOR_THEMES, DEFAULT_THEME_ID, THEME_STORAGE_KEY } from "@/lib/editor/themes";
-import { loadEditorSettings, saveEditorSettings, DEFAULT_EDITOR_SETTINGS, type EditorSettings } from "@/lib/editor/settings";
+import { EDITOR_THEMES,DEFAULT_THEME_ID,THEME_STORAGE_KEY } from "@/lib/editor/themes";
+import { loadEditorSettings,saveEditorSettings,DEFAULT_EDITOR_SETTINGS,type EditorSettings } from "@/lib/editor/settings";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 import type { ProjectFile } from "@/types/database";
-import { CollabCursors } from "./collab-cursors";
-import { useYjsEditor, type Collaborator as YjsCollaborator } from "@/hooks/use-yjs-editor";
+import { useYjsEditor,type Collaborator as YjsCollaborator } from "@/hooks/use-yjs-editor";
 import { createClient } from "@/lib/supabase/client";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import type * as Monaco from "monaco-editor";
-import { loader } from "@monaco-editor/react";
 
-loader.config({
-  paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0/min/vs" },
-});
-
-const MonacoEditor = dynamic(importWithRetry(() => import("@monaco-editor/react")), {
+const MonacoEditor = dynamic(importWithRetry(async () => {
+  const monacoReact = await import("@monaco-editor/react");
+  monacoReact.loader.config({
+    paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0/min/vs" },
+  });
+  return monacoReact;
+}), {
   ssr: false,
   loading: () => (
     <div className="flex items-center justify-center h-full bg-[#1e1e2e]">
@@ -161,11 +160,11 @@ export function CodePanel({
   const [showGotoLine, setShowGotoLine] = useState(false);
   const [gotoLineValue, setGotoLineValue] = useState("");
   // Session timer
-  const sessionStartRef = useRef<number>(Date.now());
   const [sessionMinutes, setSessionMinutes] = useState(0);
   useEffect(() => {
+    const startedAt = Date.now();
     const id = setInterval(() => {
-      setSessionMinutes(Math.floor((Date.now() - sessionStartRef.current) / 60_000));
+      setSessionMinutes(Math.floor((Date.now() - startedAt) / 60_000));
     }, 60_000);
     return () => clearInterval(id);
   }, []);
@@ -181,13 +180,16 @@ export function CodePanel({
   const editorInstancesRef = useRef<Map<string, Monaco.editor.IStandaloneCodeEditor>>(new Map());
   const viewStateRef = useRef<Map<string, Monaco.editor.ICodeEditorViewState | null>>(new Map());
   const prevActiveTabIdRef = useRef<string | null>(null);
-  const supabaseRef = useRef(createClient());
+  const [supabase] = useState(createClient);
   const confirm = useConfirm();
 
   const activeTab = openTabs.find((t) => t.id === activeTabId) ?? null;
-  // Keep refs in sync so provider callbacks can read current values
-  activeTabRef.current = activeTab;
-  aiCompletionsRef.current = aiCompletions;
+  // Keep refs in sync so asynchronous provider callbacks can read current
+  // values without mutating refs during render.
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+    aiCompletionsRef.current = aiCompletions;
+  }, [activeTab, aiCompletions]);
 
   const { bind: yjsBind, collaborators: yjsCollaborators } = useYjsEditor({
     projectId: projectId ?? "local",
@@ -196,8 +198,7 @@ export function CodePanel({
       ? (contentRef.current.get(activeTab.id) ?? activeTab.content ?? "")
       : "",
     user: collabUser ?? { id: "anon", name: "Anonymous" },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    supabase: supabaseRef.current as any,
+    supabase,
     enabled: !!collabUser && !!projectId,
   });
 

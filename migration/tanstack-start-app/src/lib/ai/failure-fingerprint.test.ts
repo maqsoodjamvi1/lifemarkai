@@ -2,11 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  distinctFingerprints,
-  fingerprintDiagnostic,
-  fingerprintError,
-  fingerprintValidation,
-  scoreRepair,
+distinctFingerprints,
+fingerprintDiagnostic,
+fingerprintError,
+fingerprintValidation,
+scoreRepair,
 } from "./failure-fingerprint.ts";
 
 test("the same diagnostic in two files is one failure", () => {

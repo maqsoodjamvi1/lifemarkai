@@ -1,13 +1,13 @@
 
 import type { RefObject } from "react";
 import type { LeftPanel } from "@/components/editor/editor-layout";
-import { ChatTiptapInput, type ChatInputHandle } from "@/components/editor/chat-tiptap-input";
+import { ChatTiptapInput,type ChatInputHandle } from "@/components/editor/chat-tiptap-input";
 import {
-  LovableComposerCharacterCounter,
-  lovableComposerInputRingClass,
+LovableComposerCharacterCounter,
+lovableComposerInputRingClass,
 } from "./composer-character-counter";
-import { LovableComposerOverlays, type LovableComposerOverlaysProps } from "./composer-overlays";
-import { LovableComposerBottomRow, type LovableComposerBottomRowProps } from "./composer-bottom-row";
+import { LovableComposerOverlays,type LovableComposerOverlaysProps } from "./composer-overlays";
+import { LovableComposerBottomRow,type LovableComposerBottomRowProps } from "./composer-bottom-row";
 import { LovableComposerEstimatedCredits } from "./composer-estimated-credits";
 
 export interface LovableComposerInputAreaProps

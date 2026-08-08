@@ -1,5 +1,5 @@
 
-import { Check, Loader2 } from "lucide-react";
+import { Check,Loader2 } from "lucide-react";
 import type { BuildActivityStep } from "@/lib/ai/build-activity";
 
 interface BuildActivityCardProps {

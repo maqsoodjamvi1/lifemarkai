@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * POST /api/projects/:id/sandbox-preview/stop
  *
@@ -11,8 +10,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
-import { getSandboxProvider, isSandboxEnabled } from "@/lib/sandbox";
+import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
+import { getSandboxProvider,isSandboxEnabled } from "@/lib/sandbox";
 
 
 interface Params {
@@ -54,7 +53,7 @@ async function handlePOST(req: Request, params: any) {
   }
 
   // Clear the stale ephemeral preview URL so nothing points at the dead sandbox.
-  const { error: clearErr } = await (supabase as any)
+  const { error: clearErr } = await supabase
     .from("projects")
     .update({ preview_url: null })
     .eq("id", projectId);

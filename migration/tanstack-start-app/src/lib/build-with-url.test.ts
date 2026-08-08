@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  buildPromptFromUrlPayload,
-  parseBuildWithUrlPayload,
+buildPromptFromUrlPayload,
+parseBuildWithUrlPayload,
 } from "./build-with-url.ts";
 
 // `pages` was added to this payload after the tests below were written, and

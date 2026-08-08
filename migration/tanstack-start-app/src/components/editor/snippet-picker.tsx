@@ -1,14 +1,13 @@
 
-import { useState, useEffect, useRef, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState,useEffect,useRef,useCallback } from "react";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  BookMarked, Search, Plus, Trash2, Edit2, Check, X,
-  Globe, Lock, TrendingUp, Clock, Tag, Loader2, Star,
+BookMarked,Search,Plus,Trash2,Edit2,Check,X,
+Globe,TrendingUp,Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/hooks/use-toast";
 

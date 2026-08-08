@@ -1,6 +1,6 @@
 
-import { AnimatePresence, motion } from "framer-motion";
-import { Search, Sparkles, X } from "lucide-react";
+import { AnimatePresence,motion } from "framer-motion";
+import { Search,Sparkles,X } from "lucide-react";
 import type { LovableSkillOption } from "./composer-template-picker";
 
 interface LovableComposerSkillPickerProps {

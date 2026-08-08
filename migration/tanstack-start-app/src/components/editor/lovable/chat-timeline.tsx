@@ -1,11 +1,11 @@
 
 import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
+forwardRef,
+useEffect,
+useImperativeHandle,
+useRef,
 } from "react";
-import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer,type Virtualizer } from "@tanstack/react-virtual";
 import { cn } from "@/lib/utils";
 
 export interface LovableChatTimelineHandle {

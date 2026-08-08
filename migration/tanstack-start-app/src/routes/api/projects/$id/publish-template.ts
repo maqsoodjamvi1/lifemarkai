@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
@@ -20,7 +19,7 @@ export const Route = createFileRoute("/api/projects/$id/publish-template")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { data: project } = await (supabase as any)
+        const { data: project } = await supabase
           .from("projects")
           .select("id, user_id, name, description, framework, preview_url, is_public")
           .eq("id", id)
@@ -29,7 +28,7 @@ export const Route = createFileRoute("/api/projects/$id/publish-template")({
         if (!project) return Response.json({ error: "Not found" }, { status: 404 });
         if (project.user_id !== user.id) return Response.json({ error: "Forbidden" }, { status: 403 });
 
-        const { data: files } = await (supabase as any)
+        const { data: files } = await supabase
           .from("project_files")
           .select("path, content, language")
           .eq("project_id", id)
@@ -54,7 +53,7 @@ export const Route = createFileRoute("/api/projects/$id/publish-template")({
           language: f.language ?? "plaintext",
         }));
 
-        const { data: existing } = await (supabase as any)
+        const { data: existing } = await supabase
           .from("templates")
           .select("id")
           .eq("created_by", user.id)
@@ -64,13 +63,13 @@ export const Route = createFileRoute("/api/projects/$id/publish-template")({
         const payload = { name, description, category, preview_url, files: templateFiles, is_public: true };
 
         const { data: template, error } = existing
-          ? await (supabase as any)
+          ? await supabase
               .from("templates")
               .update(payload)
               .eq("id", existing.id)
               .select("id, name, category, is_public, fork_count, created_at")
               .single()
-          : await (supabase as any)
+          : await supabase
               .from("templates")
               .insert({ ...payload, is_featured: false, created_by: user.id, source_project_id: id })
               .select("id, name, category, is_public, fork_count, created_at")
@@ -87,11 +86,11 @@ export const Route = createFileRoute("/api/projects/$id/publish-template")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { data: project } = await (supabase as any)
+        const { data: project } = await supabase
           .from("projects").select("user_id").eq("id", id).single();
         if (!project || project.user_id !== user.id) return Response.json({ published: false });
 
-        const { data: existing } = await (supabase as any)
+        const { data: existing } = await supabase
           .from("templates")
           .select("id, name, fork_count, created_at")
           .eq("created_by", user.id)

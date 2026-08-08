@@ -4,10 +4,10 @@
  */
 import { createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
-import { canReadProjectFiles, getProjectAccess } from "../project/access.ts";
+import { canReadProjectFiles,getProjectAccess } from "../project/access.ts";
 import {
-  getSandboxProviderId,
-  isSandboxEnabled,
+getSandboxProviderId,
+isSandboxEnabled,
 } from "@/lib/sandbox/flags";
 import { debugLog } from "../debug-log.ts";
 
@@ -27,7 +27,7 @@ export async function getSandboxPreview(data: any) {
     const access = await getProjectAccess(supabase, data.projectId, user.id);
     if (!canReadProjectFiles(access)) return { status: "not_found" as const };
 
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("preview_url, metadata")
       .eq("id", data.projectId)
@@ -108,7 +108,7 @@ export async function getSandboxPreview(data: any) {
           storedPort ?? port,
         );
         if (byProject.ok && byProject.previewUrl) {
-          await (supabase as any)
+          await supabase
             .from("projects")
             .update({
               preview_url: byProject.previewUrl,
@@ -169,7 +169,7 @@ export async function getSandboxPreview(data: any) {
     });
     // #endregion
     if (result.ok && result.previewUrl) {
-      await (supabase as any)
+      await supabase
         .from("projects")
         .update({
           preview_url: result.previewUrl,
@@ -200,7 +200,7 @@ export async function getSandboxPreview(data: any) {
     if (provider.reconnectByProject) {
       const byProject = await provider.reconnectByProject(data.projectId, port);
       if (byProject.ok && byProject.previewUrl) {
-        await (supabase as any)
+        await supabase
           .from("projects")
           .update({
             preview_url: byProject.previewUrl,
@@ -241,7 +241,7 @@ export async function getSandboxPreview(data: any) {
     // Clear stale URL + sandbox id so the client cold-boots instead of framing
     // a dead tunnel / retrying reconnect against a terminated Modal sandbox.
     const expireDetail = result.error ?? "Sandbox expired";
-    await (supabase as any)
+    await supabase
       .from("projects")
       .update({
         preview_url: null,
@@ -311,7 +311,7 @@ export async function createSandboxPreview(data: any) {
     });
     // #endregion
 
-    const { data: rows, error } = await (supabase as any)
+    const { data: rows, error } = await supabase
       .from("project_files")
       .select("path, content")
       .eq("project_id", data.projectId);
@@ -328,7 +328,7 @@ export async function createSandboxPreview(data: any) {
       };
     }
 
-    const { data: projectRow } = await (supabase as any)
+    const { data: projectRow } = await supabase
       .from("projects")
       .select("is_public, metadata")
       .eq("id", data.projectId)
@@ -356,7 +356,7 @@ export async function createSandboxPreview(data: any) {
         const sync = syncPackageJsonDeps(rawFiles, pkgRow.content);
         if (sync && sync.addedPackages.length > 0) {
           pkgRow.content = sync.updated;
-          await (supabase as any)
+          await supabase
             .from("project_files")
             .update({ content: sync.updated, updated_at: new Date().toISOString() })
             .eq("project_id", data.projectId)
@@ -384,7 +384,7 @@ export async function createSandboxPreview(data: any) {
     const { port, startCommand } = detectSandboxStart(files);
 
     const persistPhase = (phase: string, detail?: string) => {
-      void (supabase as any)
+      void Promise.resolve(supabase
         .from("projects")
         .update({
           metadata: {
@@ -395,7 +395,7 @@ export async function createSandboxPreview(data: any) {
             sandbox_updated_at: new Date().toISOString(),
           },
         })
-        .eq("id", data.projectId)
+        .eq("id", data.projectId))
         .then(() => {})
         .catch(() => {});
     };
@@ -435,7 +435,7 @@ export async function createSandboxPreview(data: any) {
       };
     }
 
-    await (supabase as any)
+    await supabase
       .from("projects")
       .update({
         preview_url: result.previewUrl,
@@ -490,7 +490,7 @@ export async function getSandboxLogs(data: any) {
     const access = await getProjectAccess(supabase, data.projectId, user.id);
     if (!canReadProjectFiles(access)) return { status: "not_found" as const };
 
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("metadata")
       .eq("id", data.projectId)
@@ -560,7 +560,7 @@ export async function stopSandbox(data: any) {
       );
     }
 
-    await (supabase as any)
+    await supabase
       .from("projects")
       .update({ preview_url: null })
       .eq("id", data.projectId);

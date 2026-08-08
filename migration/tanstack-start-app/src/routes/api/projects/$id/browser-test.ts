@@ -1,11 +1,10 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { lookup } from "node:dns/promises";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { generateAI } from "@/lib/ai/generate";
 import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
-import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { canWriteProjectFiles,getProjectAccess } from "@/lib/project/access";
 
 
 /**
@@ -372,8 +371,8 @@ function evaluateStep(step: TestStep, snap: PageSnapshot): { status: "pass" | "f
   return { status: "info", evidence: "(no assertion specified)" };
 }
 
-async function handlePOST(req: Request, params: any) {
-  const { id: projectId } = await ctx.params;
+async function handlePOST(req: Request, params: { id: string }) {
+  const { id: projectId } = params;
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);
   if (!user) {

@@ -7,13 +7,13 @@
  */
 
 import * as React from "react";
-import { Monitor, Smartphone, Tablet, RotateCw, ExternalLink, ChevronLeft, ChevronRight, ChevronDown, Loader2, Check } from "lucide-react";
+import { Monitor,Smartphone,Tablet,RotateCw,ExternalLink,ChevronLeft,ChevronRight,ChevronDown,Loader2,Check } from "lucide-react";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuSeparator,
+DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 

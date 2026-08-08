@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
@@ -32,7 +31,8 @@ const REGIONS = [
   { id: "ap-south-1", label: "Asia Pacific (Mumbai)", area: "Asia Pacific" },
 ] as const;
 
-const VALID = new Set(REGIONS.map((r) => r.id));
+type RegionId = (typeof REGIONS)[number]["id"];
+const VALID = new Set<RegionId>(REGIONS.map((r) => r.id));
 
 export const Route = createFileRoute("/api/cloud/region")({
   server: {
@@ -65,22 +65,23 @@ export const Route = createFileRoute("/api/cloud/region")({
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const { region } = await request.json().catch(() => ({}));
-        if (typeof region !== "string" || !VALID.has(region)) {
+        if (typeof region !== "string" || !VALID.has(region as RegionId)) {
           return Response.json(
             { error: "Unknown region.", validRegions: REGIONS.map((r) => r.id) },
             { status: 400 },
           );
         }
+        const validRegion = region as RegionId;
 
         const { error } = await supabase
           .from("profiles")
-          .update({ cloud_default_region: region })
+          .update({ cloud_default_region: validRegion })
           .eq("id", user.id);
         if (error) return Response.json({ error: error.message }, { status: 500 });
 
         return Response.json({
           ok: true,
-          region,
+          region: validRegion,
           // Existing projects are not migrated. Saying so prevents the reasonable
           // assumption that changing this moves live databases.
           note: "Applies to Cloud projects created from now on. Existing projects stay where they are.",

@@ -1,0 +1,353 @@
+From 53db1110e717412d4a8cfd6dce70ca332932e468 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 4 Aug 2026 18:16:35 +0000
+Subject: [PATCH 4/4] fix(preview): close two ways container reuse could break
+ a preview
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Review of the warm path found two real failure modes. Both are cases where
+reusing a container behaves unlike creating one, which is the worst kind of
+bug to debug because it only appears on the second open.
+
+DOUBLE SUPERVISOR. Reuse probed vite for 1.5s and started a supervisor loop if
+nothing answered. But a container that was merely idle — never stopped — still
+has its original supervisor, and a supervisor whose vite is mid-restart answers
+nothing for a second or two. So a perfectly healthy container could be given a
+SECOND `while true; do vite; done` loop, after which the two race for the port:
+each loses the bind, exits, and is restarted a second later, flapping the
+preview indefinitely. Far worse than the cold start being avoided.
+
+The supervisor now carries a marker in its command line and reuse looks for it
+rather than inferring from silence. When one is already running, its own
+restart loop gets the time it needs instead of a competitor.
+
+DELETED FILES SURVIVING. The cold path gets this free — a fresh container starts
+empty, so a renamed or deleted file simply is not there. Reuse inherits the old
+disk and writeFiles only adds or overwrites, so a file renamed yesterday stayed
+in the container, still served and still importable. Reuse now prunes paths in
+the container's manifest that are absent from the project.
+
+The pruning decision lives in its own module because it is the only part of
+this path that DELETES, and a mistake is not a slow preview but a project
+losing files. It also could not be tested inside docker.ts: `node --test`
+cannot load that file, since its relative imports carry no extension. Eight
+tests cover renames, path-separator and leading-slash normalisation, refusing
+to escape the project directory, and never touching node_modules or the
+manifest.
+
+Writing those tests caught a third thing: normalisation strips the leading
+slash, so "/etc/passwd" in a manifest became the innocuous-looking
+"etc/passwd" and passed every guard. Harmless in practice — the rm runs inside
+the project directory — but an absolute path is not something we ever wrote, so
+it is now rejected on the raw string before normalisation can disguise it.
+
+33 tests pass. tsc --noEmit: 47 before, 47 after. Build passes.
+---
+ .../src/lib/sandbox/docker.ts                 | 118 +++++++++++++++---
+ .../src/lib/sandbox/prune-files.test.ts       |  68 ++++++++++
+ .../src/lib/sandbox/prune-files.ts            |  48 +++++++
+ 3 files changed, 217 insertions(+), 17 deletions(-)
+ create mode 100644 migration/tanstack-start-app/src/lib/sandbox/prune-files.test.ts
+ create mode 100644 migration/tanstack-start-app/src/lib/sandbox/prune-files.ts
+
+diff --git a/migration/tanstack-start-app/src/lib/sandbox/docker.ts b/migration/tanstack-start-app/src/lib/sandbox/docker.ts
+index fb5a305..8ee0329 100644
+--- a/migration/tanstack-start-app/src/lib/sandbox/docker.ts
++++ b/migration/tanstack-start-app/src/lib/sandbox/docker.ts
+@@ -48,10 +48,9 @@ import type {
+   SandboxRunResult,
+ } from "./index";
+ import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared";
++import { SYNC_MANIFEST, filesToPrune } from "./prune-files";
+ 
+ const DEV_LOG = "/tmp/lifemark-dev.log";
+-/** Content-hash manifest for incremental writeFiles — lives in APP_DIR. */
+-const SYNC_MANIFEST = ".lm-sync-manifest.json";
+ 
+ /**
+  * Optional pre-installed node_modules baked into the sandbox image.
+@@ -69,6 +68,30 @@ const SYNC_MANIFEST = ".lm-sync-manifest.json";
+  */
+ const BASE_MODULES = "/opt/lm-base/node_modules";
+ 
++/**
++ * Marker embedded in the dev-server supervisor's command line.
++ *
++ * Reuse has to answer "is a supervisor already running in here?" before it
++ * starts one. Getting that wrong means TWO `while true; do vite; done` loops
++ * racing for the same port: each keeps losing the bind, exiting, and being
++ * restarted a second later, so the preview flaps between working and refused
++ * indefinitely — a worse failure than the cold start it was avoiding.
++ *
++ * A marker in the args is the reliable test: it survives in `ps` output for as
++ * long as the supervising shell lives, and dies with it. A pidfile would have
++ * to be cleaned up by a process that may have been killed.
++ */
++const SUPERVISOR_TAG = "LM_SUPERVISOR";
++
++/** The dev-server supervisor loop — one definition, used by both boot paths. */
++function supervisorCommand(cmd: string): string {
++  return (
++    `while true; do ${cmd} >> ${DEV_LOG} 2>&1; ` +
++    `echo "[supervisor] dev server exited ($(date -u +%H:%M:%S)); restarting" >> ${DEV_LOG}; ` +
++    `sleep 1; done # ${SUPERVISOR_TAG}`
++  );
++}
++
+ /**
+  * Project directory INSIDE the node user's own home — not /app.
+  *
+@@ -632,11 +655,7 @@ export class DockerSandboxProvider implements SandboxProvider {
+       //     (config restart, crash, OOM-of-the-process) is back within a second.
+       //     Init:true (tini as pid 1) reaps the exited children so they don't
+       //     pile up as zombies across restarts.
+-      const supervised =
+-        `while true; do ${cmd} >> ${DEV_LOG} 2>&1; ` +
+-        `echo "[supervisor] dev server exited ($(date -u +%H:%M:%S)); restarting" >> ${DEV_LOG}; ` +
+-        `sleep 1; done`;
+-      await this.exec(id, supervised, APP_DIR, false, true);
++      await this.exec(id, supervisorCommand(cmd), APP_DIR, false, true);
+ 
+       const previewUrl = c.routeViaProxy
+         ? `https://${previewHost}`
+@@ -776,6 +795,20 @@ export class DockerSandboxProvider implements SandboxProvider {
+       );
+       if (!probe.stdout.includes("LM_WARM")) return null;
+ 
++      // Remove files the project no longer has.
++      //
++      // The cold path got this for free: a fresh container starts empty, so a
++      // renamed or deleted file simply is not there. Reuse inherits the old
++      // disk, and writeFiles only ever adds or overwrites — so without this, a
++      // file the user renamed yesterday is still sitting in the container,
++      // still being served, and still importable. That is the kind of
++      // difference that makes a warm preview behave unlike a cold one, which
++      // is exactly what nobody can debug.
++      //
++      // Safe here specifically because `files` is the project's COMPLETE file
++      // set read from the database. Never do this from an incremental caller.
++      await this.pruneRemovedFiles(id, files);
++
+       progress("writing", "Syncing changed files");
+       // Incremental by content hash — an unchanged project writes nothing, so
+       // vite is not disturbed at all and HMR keeps whatever state it had.
+@@ -800,18 +833,32 @@ export class DockerSandboxProvider implements SandboxProvider {
+       }
+ 
+       // The supervisor loop is an exec, and execs do not survive a container
+-      // stop. Probe first: if vite is already answering, this was a live
+-      // container and there is nothing to start.
++      // stop — so a woken container needs one started, while a container that
++      // was merely idle already has one.
++      //
++      // Which it is MUST be decided by looking, not by whether vite answers
++      // right now. A supervisor whose vite is mid-restart answers nothing for a
++      // second or two, and starting a second loop on that evidence gives the
++      // container two of them, each stealing the port from the other on every
++      // cycle. That flaps the preview indefinitely and is far worse than the
++      // cold start being avoided.
+       let up = await this.waitForLocalServer(id, innerPort, 1500);
+       if (!up) {
+-        const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
+-        progress("starting", cmd);
+-        const supervised =
+-          `while true; do ${cmd} >> ${DEV_LOG} 2>&1; ` +
+-          `echo "[supervisor] dev server exited ($(date -u +%H:%M:%S)); restarting" >> ${DEV_LOG}; ` +
+-          `sleep 1; done`;
+-        await this.exec(id, supervised, APP_DIR, false, true);
+-        up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
++        const running = await this.exec(
++          id,
++          `ps 2>/dev/null | grep -q "[${SUPERVISOR_TAG[0]}]${SUPERVISOR_TAG.slice(1)}" && echo LM_SUP_UP`,
++          "/",
++        );
++        if (running.stdout.includes("LM_SUP_UP")) {
++          // Someone is already supervising — give its restart loop the time it
++          // needs rather than adding a competitor.
++          up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
++        } else {
++          const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
++          progress("starting", cmd);
++          await this.exec(id, supervisorCommand(cmd), APP_DIR, false, true);
++          up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
++        }
+       }
+ 
+       const previewUrl = await this.getPreviewUrl(id);
+@@ -826,6 +873,43 @@ export class DockerSandboxProvider implements SandboxProvider {
+     }
+   }
+ 
++  /**
++   * Delete files present in the container's sync manifest but absent from the
++   * project's current file set — renames and deletions, in other words.
++   *
++   * ONLY call this with a complete file set. Given a partial one it would read
++   * every unsent file as deleted and empty the project.
++   *
++   * Deliberately conservative: it can only remove paths the manifest says WE
++   * uploaded, so nothing the container generated (node_modules, .vite caches,
++   * the manifest itself) is reachable, and a missing or unparseable manifest
++   * removes nothing at all.
++   */
++  private async pruneRemovedFiles(sandboxId: string, files: SandboxFile[]): Promise<void> {
++    try {
++      const read = await this.exec(
++        sandboxId,
++        `cat ${APP_DIR}/${SYNC_MANIFEST} 2>/dev/null || true`,
++        "/",
++      );
++      const raw = read.stdout ?? "";
++      const start = raw.indexOf("{");
++      const end = raw.lastIndexOf("}");
++      if (start < 0 || end <= start) return;
++
++      const prev = JSON.parse(raw.slice(start, end + 1)) as Record<string, string>;
++      const gone = filesToPrune(Object.keys(prev), files.map((f) => f.path));
++      if (gone.length === 0) return;
++
++      // Single exec, quoted paths. Directories left behind are harmless; only
++      // files are served.
++      const quoted = gone.map((p) => `'${p.replace(/'/g, `'\\''`)}'`).join(" ");
++      await this.exec(sandboxId, `rm -f -- ${quoted}`, APP_DIR);
++    } catch {
++      /* pruning is an optimisation of correctness, never a reason to fail a boot */
++    }
++  }
++
+   /**
+    * Poll the dev server from INSIDE the container until it answers.
+    *
+diff --git a/migration/tanstack-start-app/src/lib/sandbox/prune-files.test.ts b/migration/tanstack-start-app/src/lib/sandbox/prune-files.test.ts
+new file mode 100644
+index 0000000..f33e650
+--- /dev/null
++++ b/migration/tanstack-start-app/src/lib/sandbox/prune-files.test.ts
+@@ -0,0 +1,68 @@
++import { describe, it } from "node:test";
++import assert from "node:assert/strict";
++
++import { filesToPrune } from "./prune-files.ts";
++
++/**
++ * This is the only part of the warm-container path that deletes, so it gets
++ * tested directly. A mistake here does not make a preview slow — it removes
++ * files from someone's project.
++ */
++describe("filesToPrune", () => {
++  it("removes a file the project no longer has", () => {
++    assert.deepEqual(
++      filesToPrune(["src/App.tsx", "src/pages/Old.tsx"], ["src/App.tsx"]),
++      ["src/pages/Old.tsx"],
++    );
++  });
++
++  it("handles a rename as delete-plus-add", () => {
++    assert.deepEqual(
++      filesToPrune(["src/Old.tsx"], ["src/New.tsx"]),
++      ["src/Old.tsx"],
++    );
++  });
++
++  it("removes nothing when the project is unchanged", () => {
++    const files = ["package.json", "src/App.tsx", "index.html"];
++    assert.deepEqual(filesToPrune(files, files), []);
++  });
++
++  it("treats separators and leading slashes as the same path", () => {
++    assert.deepEqual(filesToPrune(["src\\App.tsx"], ["src/App.tsx"]), []);
++    assert.deepEqual(filesToPrune(["/src/App.tsx"], ["src/App.tsx"]), []);
++  });
++
++  // The container is untrusted and its manifest is a file inside it, so the
++  // manifest is treated as hostile input even though we wrote it.
++  it("refuses to escape the project directory", () => {
++    assert.deepEqual(
++      filesToPrune(
++        ["../../etc/passwd", "/etc/passwd", "src/../../secrets.env", "ok/gone.ts"],
++        [],
++      ),
++      ["ok/gone.ts"],
++    );
++  });
++
++  it("never touches node_modules or the manifest itself", () => {
++    assert.deepEqual(
++      filesToPrune(
++        ["node_modules/react/index.js", ".lm-sync-manifest.json", "src/gone.ts"],
++        [],
++      ),
++      ["src/gone.ts"],
++    );
++  });
++
++  it("prunes nothing from an empty manifest", () => {
++    assert.deepEqual(filesToPrune([], ["src/App.tsx"]), []);
++  });
++
++  // The guard that matters most: given a partial file set this would read every
++  // unsent file as deleted. Callers must pass the complete set — this test
++  // documents what the function does when they do, so the contract is explicit.
++  it("would delete everything absent from `current` — hence complete-set-only", () => {
++    assert.deepEqual(filesToPrune(["a.ts", "b.ts"], []), ["a.ts", "b.ts"]);
++  });
++});
+diff --git a/migration/tanstack-start-app/src/lib/sandbox/prune-files.ts b/migration/tanstack-start-app/src/lib/sandbox/prune-files.ts
+new file mode 100644
+index 0000000..f925c15
+--- /dev/null
++++ b/migration/tanstack-start-app/src/lib/sandbox/prune-files.ts
+@@ -0,0 +1,48 @@
++/**
++ * Deciding which files to delete from a reused sandbox.
++ *
++ * Its own module, with no imports, for two reasons. It is the only part of the
++ * warm-container path that DELETES, so a mistake here is not a slow preview —
++ * it is a project losing files, and that decision deserves direct tests. And
++ * the repo's tests run under `node --test`, which cannot load docker.ts at all
++ * (its relative imports carry no file extension), so anything living there is
++ * effectively untestable.
++ */
++
++/** Content-hash manifest for incremental writeFiles — lives in the app dir. */
++export const SYNC_MANIFEST = ".lm-sync-manifest.json";
++
++/**
++ * Which previously-uploaded paths are no longer part of the project?
++ *
++ * `previous` comes from the container's own sync manifest, so it lists only
++ * paths we put there. `current` MUST be the project's COMPLETE file set —
++ * given a partial one this reads every unsent file as deleted.
++ */
++export function filesToPrune(previous: string[], current: string[]): string[] {
++  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\/+/, "");
++  const keep = new Set(current.map(norm));
++  return previous
++    .filter((raw) => {
++      // Tested on the RAW path, before normalisation. Normalising strips the
++      // leading slash, which would quietly turn "/etc/passwd" into the
++      // perfectly prunable-looking "etc/passwd". Harmless in practice, since
++      // the rm runs inside the project directory — but an absolute path is not
++      // something we ever wrote, so it has no business reaching the rm at all.
++      const s = String(raw ?? "").replace(/\\/g, "/");
++      return !s.startsWith("/") && !/^[a-zA-Z]:/.test(s);
++    })
++    .map(norm)
++    .filter(
++      (p) =>
++        Boolean(p) &&
++        !keep.has(p) &&
++        p !== SYNC_MANIFEST &&
++        // Even though these paths are ours, refuse anything that could climb
++        // out of the project directory or reach an installed tree. The manifest
++        // is a file inside an untrusted container and this feeds an `rm`.
++        !p.startsWith("../") &&
++        !p.includes("/../") &&
++        !p.startsWith("node_modules/"),
++    );
++}
+-- 
+2.43.0
+

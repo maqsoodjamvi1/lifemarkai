@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { requireFeature } from "@/lib/plans/gating";
@@ -25,13 +24,13 @@ export const Route = createFileRoute("/api/security/findings")({
         const gate = await requireFeature(user.id, "security_center");
         if (!gate.ok) return Response.json({ error: gate.error, requiredPlan: gate.requiredPlan }, { status: gate.status });
 
-        const { data: projects } = await (supabase as any)
+        const { data: projects } = await supabase
           .from("projects").select("id").eq("user_id", user.id).limit(200);
 
         const ids = (projects ?? []).map((p: { id: string }) => p.id);
         if (ids.length === 0) return Response.json({ results: {} });
 
-        const { data: findings } = await (supabase as any)
+        const { data: findings } = await supabase
           .from("health_findings")
           .select("project_id, severity, title, detail, file_path, status, created_at")
           .eq("category", "security")

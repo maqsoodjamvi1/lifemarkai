@@ -1,7 +1,6 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { isManagementConfigured, queryManagedSql } from "@/lib/cloud/management";
+import { isManagementConfigured,queryManagedSql } from "@/lib/cloud/management";
 
 /**
  * GET /api/cloud/health — MEASURED database health for a Cloud project.

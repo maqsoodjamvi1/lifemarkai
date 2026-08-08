@@ -10,8 +10,8 @@
 
 import { useState } from "react";
 import {
-  Plug, ArrowLeft, Copy, Check, ExternalLink,
-  Zap, Search, ChevronRight,
+Plug,ArrowLeft,Copy,Check,ExternalLink,
+Zap,Search,ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

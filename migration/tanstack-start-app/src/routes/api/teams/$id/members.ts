@@ -1,7 +1,7 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
-import { createAdminClient, createClient } from "@/lib/supabase/server";
+import { createAdminClient,createClient } from "@/lib/supabase/server";
 import { sendTeamInviteEmail } from "@/lib/email/resend";
+import type { Database } from "@/types/database";
 
 /** Native /api/teams/:id/members — POST invite, PATCH update, DELETE remove. */
 export const Route = createFileRoute("/api/teams/$id/members")({
@@ -14,7 +14,7 @@ export const Route = createFileRoute("/api/teams/$id/members")({
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
         const admin = createAdminClient();
 
-        const { data: myMembership } = await (admin as any).from("team_members").select("role, accepted_at").eq("team_id", id).eq("user_id", user.id).single();
+        const { data: myMembership } = await admin.from("team_members").select("role, accepted_at").eq("team_id", id).eq("user_id", user.id).single();
         if (!myMembership || !myMembership.accepted_at || !["owner", "admin"].includes(myMembership.role)) {
           return Response.json({ error: "Insufficient permissions" }, { status: 403 });
         }
@@ -27,27 +27,27 @@ export const Route = createFileRoute("/api/teams/$id/members")({
           return Response.json({ error: "credit_allowance must be a non-negative integer" }, { status: 400 });
         }
 
-        const { data: team } = await (admin as any).from("teams").select("name, max_members").eq("id", id).single();
-        const { count } = await (admin as any).from("team_members").select("id", { count: "exact" }).eq("team_id", id).not("accepted_at", "is", null);
+        const { data: team } = await admin.from("teams").select("name, max_members").eq("id", id).single();
+        const { count } = await admin.from("team_members").select("id", { count: "exact" }).eq("team_id", id).not("accepted_at", "is", null);
         if ((count ?? 0) >= (team?.max_members ?? 10)) return Response.json({ error: "Team member limit reached" }, { status: 400 });
 
-        const { data: invitedProfile } = await (admin as any).from("profiles").select("id, full_name, email").eq("email", email).maybeSingle();
+        const { data: invitedProfile } = await admin.from("profiles").select("id, full_name, email").eq("email", email).maybeSingle();
         let memberId: string | null = null;
         if (invitedProfile) {
-          const { data: member, error } = await (admin as any).from("team_members").upsert({
+          const { data: member, error } = await admin.from("team_members").upsert({
             team_id: id, user_id: invitedProfile.id, role, credit_allowance: credit_allowance ?? null, invited_by: user.id, invited_email: email, accepted_at: null,
           }).select().single();
           if (error) return Response.json({ error: error.message }, { status: 400 });
           memberId = member.id;
         } else {
-          const { data: member, error } = await (admin as any).from("team_members").insert({
+          const { data: member, error } = await admin.from("team_members").insert({
             team_id: id, user_id: null, role, credit_allowance: credit_allowance ?? null, invited_by: user.id, invited_email: email, accepted_at: null,
           }).select().single();
           if (error) return Response.json({ error: error.message }, { status: 400 });
           memberId = member?.id ?? null;
         }
 
-        const { data: inviterProfile } = await (admin as any).from("profiles").select("full_name, email").eq("id", user.id).single();
+        const { data: inviterProfile } = await admin.from("profiles").select("full_name, email").eq("id", user.id).single();
         const acceptUrl = `${process.env.NEXT_PUBLIC_APP_URL}/accept-invite?teamId=${id}&memberId=${memberId}`;
         const inviterName = inviterProfile?.full_name ?? inviterProfile?.email ?? "Someone";
         try { await sendTeamInviteEmail(email, inviterName, team?.name ?? "the team", role, acceptUrl); } catch { /* non-blocking */ }
@@ -58,10 +58,10 @@ export const Route = createFileRoute("/api/teams/$id/members")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
         const { memberId, role, credit_allowance } = await request.json().catch(() => ({}));
-        const updates: Record<string, unknown> = {};
+        const updates: Database["public"]["Tables"]["team_members"]["Update"] = {};
         if (role !== undefined) updates.role = role;
         if (credit_allowance !== undefined) updates.credit_allowance = credit_allowance;
-        const { data, error } = await (supabase as any).from("team_members").update(updates).eq("id", memberId).eq("team_id", params.id).select().single();
+        const { data, error } = await supabase.from("team_members").update(updates).eq("id", memberId).eq("team_id", params.id).select().single();
         if (error) return Response.json({ error: error.message }, { status: 400 });
         return Response.json({ member: data });
       },
@@ -71,7 +71,7 @@ export const Route = createFileRoute("/api/teams/$id/members")({
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
         const memberId = new URL(request.url).searchParams.get("memberId");
         if (!memberId) return Response.json({ error: "memberId required" }, { status: 400 });
-        const { error } = await (supabase as any).from("team_members").delete().eq("id", memberId).eq("team_id", params.id);
+        const { error } = await supabase.from("team_members").delete().eq("id", memberId).eq("team_id", params.id);
         if (error) return Response.json({ error: error.message }, { status: 400 });
         return Response.json({ ok: true });
       },

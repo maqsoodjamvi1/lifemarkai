@@ -1,6 +1,6 @@
 
-import { useState, useEffect, useRef } from "react";
-import { Zap, Play, Plus, Trash2, Copy, Check, Loader2, ChevronDown, ChevronUp, ExternalLink, RefreshCw, Terminal } from "lucide-react";
+import { useState,useEffect,useRef } from "react";
+import { Zap,Play,Plus,Copy,Check,Loader2,ChevronDown,ChevronUp,ExternalLink,Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";

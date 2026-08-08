@@ -1,8 +1,8 @@
 
-import { useState, useRef } from "react";
+import { useState,useRef } from "react";
 import {
-  Palette, Check, Sparkles, ArrowRight, Loader2,
-  RefreshCw, Wand2, AlertTriangle,
+Palette,Check,Sparkles,ArrowRight,Loader2,
+RefreshCw,Wand2,AlertTriangle,
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 

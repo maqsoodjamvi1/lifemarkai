@@ -1,0 +1,39 @@
+--- migration/tanstack-start-app/src/components/editor/design-preview-picker.tsx
++++ migration/tanstack-start-app/src/components/editor/design-preview-picker.tsx
+@@ -35,6 +35,10 @@ export function DesignPreviewPicker({
+     setDirections([]);
+     setSelectedId(null);
+ 
++    // Without this guard a request from a previous open (or an earlier prompt)
++    // can resolve after the modal has been closed or reopened — worst case it
++    // fires onSkip() and silently dismisses a picker the user is looking at.
++    let cancelled = false;
+     void fetch("/api/ai/design-previews", {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+@@ -42,6 +46,7 @@ export function DesignPreviewPicker({
+     })
+       .then(async (res) => {
+         const data = await res.json();
++        if (cancelled) return;
+         if (!res.ok) throw new Error(data.error ?? "Failed to load previews");
+         if (data.skip) {
+           onSkip();
+@@ -49,8 +54,15 @@ export function DesignPreviewPicker({
+         }
+         setDirections(data.directions ?? []);
+       })
+-      .catch((e: Error) => setError(e.message))
+-      .finally(() => setLoading(false));
++      .catch((e: Error) => {
++        if (!cancelled) setError(e.message);
++      })
++      .finally(() => {
++        if (!cancelled) setLoading(false);
++      });
++    return () => {
++      cancelled = true;
++    };
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, [open, prompt, projectId, fileCount]);
+ 

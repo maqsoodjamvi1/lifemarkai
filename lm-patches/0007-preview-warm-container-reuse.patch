@@ -1,0 +1,279 @@
+From 13e19e2b85c125c2d7dfd5f0dd4f836a459a1707 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 4 Aug 2026 18:01:57 +0000
+Subject: [PATCH 3/4] perf(preview): reuse the project's container instead of
+ reinstalling its dependencies
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Answers "why does it npm install every time I open the preview". It does not
+install every time — it installs every time the container is gone, and the
+container was being thrown away far more often than it needed to be.
+
+Two things conspired. The host GC reaps a sandbox after 3h idle with
+`docker rm -f`, and node_modules lives inside that container, so the reap
+discards ~340 installed packages. Then every cold boot began with
+removeProjectContainers() — destroying whatever was still there before creating
+its replacement. Reopen a project after lunch and the app reinstalls the same
+dependency tree over the network: 40-90 seconds of spinner for packages that
+were on the disk an hour ago.
+
+Now a boot looks for the project's existing container first and, when it finds
+one, starts it if stopped, re-syncs the files and skips the install. writeFiles
+already diffs against a content-hash manifest, so an unchanged project uploads
+nothing and vite is not disturbed at all; npm install runs only when
+package.json itself is among the written paths. A source-only edit needs no
+install, and running one anyway would hand back exactly the cost this path
+exists to avoid.
+
+Reuse refuses in the cases where it would be wrong rather than papering over
+them: the image must match the configured SANDBOX_IMAGE (so bumping the image
+takes effect instead of pinning projects to whatever they first booted on),
+node_modules must actually be present, and a failed install falls through to a
+clean cold provision. It never throws — any problem returns null and the
+original path runs. Duplicate containers are removed before anything else,
+since two live containers share the project's stable hostname and Traefik would
+round-robin them into the two-copies-of-React blank preview. Reuse is in fact
+safer there than creating: same single container throughout.
+
+The supervisor loop is an exec and execs do not survive a container stop, so
+the dev server is probed and re-launched when needed.
+
+The host GC changes to match: idle sandboxes are STOPPED, not removed, and
+removal is reserved for the 48h hard cap. A stopped container costs only disk
+and starts again in about a second. Requires re-running setup-sandbox-host.sh
+on the sandbox host to take effect.
+
+tsc --noEmit: 47 before, 47 after, no new errors. Build passes. Both the
+installer and the generated GC script are syntax-checked with bash -n.
+---
+ .../scripts/setup-sandbox-host.sh             |  26 ++-
+ .../src/lib/sandbox/docker.ts                 | 152 ++++++++++++++++++
+ 2 files changed, 173 insertions(+), 5 deletions(-)
+
+diff --git a/migration/tanstack-start-app/scripts/setup-sandbox-host.sh b/migration/tanstack-start-app/scripts/setup-sandbox-host.sh
+index 3b1faf4..82302eb 100644
+--- a/migration/tanstack-start-app/scripts/setup-sandbox-host.sh
++++ b/migration/tanstack-start-app/scripts/setup-sandbox-host.sh
+@@ -154,8 +154,16 @@ say "Stale sandbox cleanup"
+ cat >/usr/local/bin/lifemark-sandbox-gc <<'GC'
+ #!/usr/bin/env bash
+ # lifemark-sandbox-gc [IDLE_HOURS] [MAX_HOURS]
+-#   Reap sandboxes idle (no keep-alive touch) > IDLE_HOURS (default 3), or
+-#   older than the MAX_HOURS hard cap (default 48). Always dedupe per project.
++#   Idle sandboxes are STOPPED. Removal is reserved for the MAX_HOURS hard cap.
++#   Always dedupe per project.
++#
++# Why stop rather than remove: node_modules lives inside the container. Removing
++# an idle sandbox throws away ~340 installed packages, so the next time that
++# project is opened the app reinstalls all of them over the network — 40-90
++# seconds of spinner for dependencies that were already sitting on this disk.
++# A stopped container costs only disk and starts again in about a second, and
++# the app's warm path starts it, re-syncs whatever changed, and skips the
++# install entirely.
+ IDLE_HOURS="${1:-3}"
+ MAX_HOURS="${2:-48}"
+ now=$(date -u +%s)
+@@ -172,17 +180,25 @@ docker ps --filter "label=lifemark.sandbox=1" --format '{{.ID}} {{.Label "lifema
+     docker rm -f "$dup" >/dev/null 2>&1 && echo "removed duplicate $dup"
+   done
+ 
+-# 2) Idle reap (stopped containers can't answer exec -> fall back to age).
++# 2) Idle -> stop (keeps node_modules); past the hard cap -> remove.
++#    A stopped container can't answer exec, so its keep-alive marker can't be
++#    read; it is already idle by definition, and only the age cap applies.
+ docker ps -aq --filter "label=lifemark.sandbox=1" | while read -r id; do
+   created=$(docker inspect -f '{{.Created}}' "$id" 2>/dev/null) || continue
+   cts=$(date -u -d "$created" +%s 2>/dev/null) || continue
+   age=$(( now - cts ))
++  if [ "$age" -gt $(( MAX_HOURS * 3600 )) ]; then
++    docker rm -f "$id" >/dev/null 2>&1 && echo "removed $id (age ${age}s > cap)"
++    continue
++  fi
++  running=$(docker inspect -f '{{.State.Running}}' "$id" 2>/dev/null || echo false)
++  [ "$running" = "true" ] || continue
+   last=$(docker exec "$id" stat -c %Y /tmp/.lm-keepalive 2>/dev/null || echo "$cts")
+   case "$last" in (*[!0-9]*) last="$cts";; esac
+   [ "$last" -lt "$cts" ] && last="$cts"
+   idle=$(( now - last ))
+-  if [ "$idle" -gt $(( IDLE_HOURS * 3600 )) ] || [ "$age" -gt $(( MAX_HOURS * 3600 )) ]; then
+-    docker rm -f "$id" >/dev/null 2>&1 && echo "removed $id (idle ${idle}s, age ${age}s)"
++  if [ "$idle" -gt $(( IDLE_HOURS * 3600 )) ]; then
++    docker stop -t 5 "$id" >/dev/null 2>&1 && echo "stopped $id (idle ${idle}s) — node_modules kept"
+   fi
+ done
+ GC
+diff --git a/migration/tanstack-start-app/src/lib/sandbox/docker.ts b/migration/tanstack-start-app/src/lib/sandbox/docker.ts
+index f914cc8..fb5a305 100644
+--- a/migration/tanstack-start-app/src/lib/sandbox/docker.ts
++++ b/migration/tanstack-start-app/src/lib/sandbox/docker.ts
+@@ -425,6 +425,40 @@ export class DockerSandboxProvider implements SandboxProvider {
+       // across two vite servers → the browser assembles the app from two React
+       // copies → "more than one copy of React" → blank preview. Tear those down
+       // before creating the replacement.
++      // WARM PATH — reuse this project's existing container instead of
++      // destroying it.
++      //
++      // A cold boot's cost is almost entirely `npm install`: ~340 packages into
++      // an empty cache, 40-90s of spinner. And it was paid far more often than
++      // it needed to be, because the container is where node_modules lives and
++      // every boot began by deleting the container. Reopen a project after the
++      // host GC's 3h idle window and you reinstall from scratch — the same
++      // dependencies, over the network, again.
++      //
++      // A container that still exists still has node_modules, so restarting it
++      // and re-syncing the files skips the install entirely. writeFiles already
++      // diffs against a content-hash manifest, so an unchanged project uploads
++      // nothing at all. This is the difference between a 60-second open and a
++      // 3-second one.
++      //
++      // Reuse is strictly safer than the create path for the duplicate-router
++      // hazard too: it is the same single container, so Traefik never sees two
++      // backends for the project's hostname.
++      if (opts.projectId) {
++        const reused = await this.reuseProjectContainer({
++          projectId: opts.projectId,
++          image: c.image,
++          innerPort,
++          startCommand: opts.startCommand,
++          files: opts.files,
++          progress,
++          readyBudgetMs: Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000),
++        });
++        if (reused) return reused;
++      }
++
++      // No reusable container (first ever boot, GC removed it, or the image
++      // changed) — fall through to a full cold provision.
+       if (opts.projectId) {
+         progress("cleanup", "Removing previous sandbox for project");
+         await this.removeProjectContainers(opts.projectId);
+@@ -674,6 +708,124 @@ export class DockerSandboxProvider implements SandboxProvider {
+     }
+   }
+ 
++  /**
++   * Bring this project's existing container back into service, or return null.
++   *
++   * Returns null (never throws) whenever reuse isn't safe or doesn't work, so
++   * the caller falls through to a normal cold provision. The bar for "safe":
++   *
++   *   • exactly one container, newest wins — extras are removed, because two
++   *     live containers share the project's stable hostname and Traefik would
++   *     round-robin them into the two-copies-of-React blank preview;
++   *   • the image matches the currently configured SANDBOX_IMAGE, so bumping
++   *     the image actually takes effect instead of pinning projects to
++   *     whatever they first booted on;
++   *   • node_modules is present — a container without it saves nothing, and
++   *     the cold path handles it better.
++   */
++  private async reuseProjectContainer(opts: {
++    projectId: string;
++    image: string;
++    innerPort: number;
++    startCommand?: string;
++    files: SandboxFile[];
++    progress: (phase: string, detail?: string) => void;
++    readyBudgetMs: number;
++  }): Promise<SandboxRunResult | null> {
++    const { projectId, image, innerPort, files, progress } = opts;
++    try {
++      const filters = encodeURIComponent(
++        JSON.stringify({ label: [`lifemark.project=${projectId}`] }),
++      );
++      const listed = await docker("GET", `/v1.43/containers/json?all=1&filters=${filters}`);
++      if (listed.status >= 400) return null;
++
++      let containers: Array<{ Id: string; Image: string; State: string; Created: number }> = [];
++      try {
++        containers = JSON.parse(listed.text) as typeof containers;
++      } catch {
++        return null;
++      }
++      if (containers.length === 0) return null;
++
++      containers.sort((a, b) => (b.Created ?? 0) - (a.Created ?? 0));
++      const [keep, ...extras] = containers;
++      // Dedupe before anything else — a leftover duplicate is the blank-preview
++      // bug waiting to happen, whether or not we end up reusing `keep`.
++      await Promise.all(
++        extras.map((ctr) =>
++          docker("DELETE", `/v1.43/containers/${ctr.Id}?force=true&v=true`).catch(() => undefined),
++        ),
++      );
++
++      if (keep.Image && image && keep.Image !== image) return null;
++
++      const id = keep.Id;
++      if (keep.State !== "running") {
++        progress("creating", "Waking the existing sandbox");
++        const started = await docker("POST", `/v1.43/containers/${id}/start`);
++        // 304 = already running, which is a race we are happy to lose.
++        if (started.status >= 400 && started.status !== 304) return null;
++      }
++
++      // Prove the project survived. A container whose APP_DIR or node_modules
++      // is gone (a failed earlier boot, a manual cleanup) has nothing to offer.
++      const probe = await this.exec(
++        id,
++        `[ -d node_modules ] && [ -f package.json ] && echo LM_WARM`,
++      );
++      if (!probe.stdout.includes("LM_WARM")) return null;
++
++      progress("writing", "Syncing changed files");
++      // Incremental by content hash — an unchanged project writes nothing, so
++      // vite is not disturbed at all and HMR keeps whatever state it had.
++      const { written } = await this.writeFiles(id, files);
++
++      let logs = "";
++      // Only reinstall when the dependency manifest itself moved. A source-only
++      // edit needs no install, and running one anyway would hand back the very
++      // cold-start cost this path exists to avoid.
++      if (written.some((p) => p === "package.json" || p.endsWith("/package.json"))) {
++        progress("installing", "Updating dependencies");
++        const res = await this.exec(
++          id,
++          "npm install --no-audit --no-fund --prefer-offline --progress=false --loglevel=error",
++        );
++        logs += res.stdout + res.stderr;
++        if (res.exitCode && res.exitCode !== 0) {
++          // A broken install on a warm container is a real failure, but the
++          // cold path may still succeed from a clean tree — let it try.
++          return null;
++        }
++      }
++
++      // The supervisor loop is an exec, and execs do not survive a container
++      // stop. Probe first: if vite is already answering, this was a live
++      // container and there is nothing to start.
++      let up = await this.waitForLocalServer(id, innerPort, 1500);
++      if (!up) {
++        const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
++        progress("starting", cmd);
++        const supervised =
++          `while true; do ${cmd} >> ${DEV_LOG} 2>&1; ` +
++          `echo "[supervisor] dev server exited ($(date -u +%H:%M:%S)); restarting" >> ${DEV_LOG}; ` +
++          `sleep 1; done`;
++        await this.exec(id, supervised, APP_DIR, false, true);
++        up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
++      }
++
++      const previewUrl = await this.getPreviewUrl(id);
++      if (!previewUrl) return null;
++
++      // Keep the GC's idle clock honest: this container was just used.
++      void this.exec(id, "touch /tmp/.lm-keepalive", "/", false, true).catch(() => undefined);
++
++      return { ok: true, sandboxId: id, previewUrl, ready: up, logs: trunc(logs, 4000) };
++    } catch {
++      return null;
++    }
++  }
++
+   /**
+    * Poll the dev server from INSIDE the container until it answers.
+    *
+-- 
+2.43.0
+

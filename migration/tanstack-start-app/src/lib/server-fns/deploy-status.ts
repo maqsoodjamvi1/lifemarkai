@@ -10,7 +10,7 @@ export async function getDeployStatus(input: { projectId: string }) {
   const { user } = await getServerUser(supabase);
   if (!user) return { status: "unauthorized" as const };
 
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("id, deployed_url, status")
     .eq("id", input.projectId)
@@ -19,7 +19,7 @@ export async function getDeployStatus(input: { projectId: string }) {
 
   if (!project) return { status: "not_found" as const };
 
-  const { data: deployment } = await (supabase as any)
+  const { data: deployment } = await supabase
     .from("deployments")
     // `error_message` is not a column on deployments (it has build_log). Including
     // it errored the whole select, so `deployment` was null and deploy status
@@ -55,7 +55,7 @@ export async function getDeployStatus(input: { projectId: string }) {
               : "building";
 
         if (dbStatus !== deployment.status) {
-          await (supabase as any)
+          await supabase
             .from("deployments")
             .update({
               status: dbStatus,
@@ -64,7 +64,7 @@ export async function getDeployStatus(input: { projectId: string }) {
             .eq("id", deployment.id);
 
           if (dbStatus === "live") {
-            await (supabase as any)
+            await supabase
               .from("projects")
               .update({
                 deployed_url: netlify.ssl_url ?? netlify.url,
@@ -103,6 +103,6 @@ export async function getDeployStatus(input: { projectId: string }) {
     deployStatus,
     url,
     deployedAt: deployment?.created_at ?? null,
-    error: deployment?.error_message ?? null,
+    error: deployment?.status === "failed" ? deployment.build_log : null,
   };
 }

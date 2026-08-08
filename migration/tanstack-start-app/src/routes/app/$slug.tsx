@@ -1,4 +1,4 @@
-import { createFileRoute, redirect, notFound } from "@tanstack/react-router";
+import { createFileRoute,redirect,notFound } from "@tanstack/react-router";
 import { resolveAppSlug } from "@/lib/public-server";
 
 /**

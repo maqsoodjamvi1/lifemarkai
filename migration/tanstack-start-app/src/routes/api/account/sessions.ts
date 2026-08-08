@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { listSessions, signOutOtherSessions } from "@/lib/server-fns/account";
+import { listSessions,signOutOtherSessions } from "@/lib/server-fns/account";
 
 /** Native /api/account/sessions — GET current session + audit log, DELETE = sign out others. */
 export const Route = createFileRoute("/api/account/sessions")({

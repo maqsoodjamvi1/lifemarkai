@@ -1,10 +1,9 @@
 
-import { useState, useEffect, useCallback } from "react";
+import { useState,useEffect,useCallback } from "react";
 import {
-  Shield, ShieldCheck, ShieldAlert, ShieldX, FileCode, Package,
-  Lock, Settings, Search, Play, Loader2, CheckCircle2, AlertTriangle,
-  XCircle, Info, Globe, Mail, Smartphone, Fingerprint, KeyRound,
-  Eye, EyeOff, Download, RefreshCw, HelpCircle, ChevronDown, ChevronUp,
+Shield,ShieldCheck,ShieldAlert,ShieldX,FileCode,Package,
+Lock,Settings,Search,Play,Loader2,CheckCircle2,AlertTriangle,
+XCircle,Info,Globe,Mail,Smartphone,Fingerprint,KeyRound,HelpCircle,ChevronDown,ChevronUp
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/hooks/use-toast";
@@ -88,7 +87,7 @@ export function SecurityCenterPage({ userId }: { userId: string }) {
   const fetchProjects = useCallback(async () => {
     setLoading(true);
     const supabase = createClient();
-    const { data } = await (supabase as any)
+    const { data } = await supabase
       .from("projects")
       .select("id, name, deployed_url, updated_at")
       .eq("user_id", userId)

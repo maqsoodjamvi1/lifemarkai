@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  detectPromptSecret,
-  extractPromptSecretAssignments,
-  redactPromptSecrets,
+detectPromptSecret,
+extractPromptSecretAssignments,
+redactPromptSecrets,
 } from "./chat-capabilities.ts";
 
 test("redacts named secret assignments into secret mentions", () => {

@@ -3,10 +3,10 @@ import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { EditorMode } from "@/components/editor/editor-layout";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
 interface LovableComposerModeRowProps {

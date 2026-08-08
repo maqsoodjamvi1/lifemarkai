@@ -4,14 +4,14 @@
  */
 import { createClient } from "../supabase/server.ts";
 import {
-  getCommitHistory,
-  pushFiles,
-  pullFiles,
-  createRepo,
-  ensureBranch,
-  pushChangedFiles,
-  getBranchStatus,
-  createOrGetPR,
+getCommitHistory,
+pushFiles,
+pullFiles,
+createRepo,
+ensureBranch,
+pushChangedFiles,
+getBranchStatus,
+createOrGetPR,
 } from "@/lib/github/client";
 import { logger } from "../logger.ts";
 
@@ -43,7 +43,7 @@ export async function completeGithubConnect(data: any) {
     } = await supabase.auth.getUser();
     if (!user) return { status: "unauthorized" as const, redirectPath: "/login" };
 
-    await (supabase as any)
+    await supabase
       .from("profiles")
       .update({ github_username: githubUser.login, github_access_token: accessToken })
       .eq("id", user.id);
@@ -65,7 +65,7 @@ export async function getRepoCommits(data: any) {
     if (!user) return { status: "unauthorized" as const };
     if (!data.owner || !data.repo) return { status: "bad_request" as const };
 
-    const { data: profile } = await (supabase as any)
+    const { data: profile } = await supabase
       .from("profiles")
       .select("github_access_token, github_username")
       .eq("id", user.id)
@@ -104,14 +104,14 @@ export async function githubSync(data: any) {
     } = await supabase.auth.getUser();
     if (!user) return { status: "unauthorized" as const };
 
-    const { data: profile } = await (supabase as any)
+    const { data: profile } = await supabase
       .from("profiles")
       .select("github_access_token, github_username")
       .eq("id", user.id)
       .single();
     if (!profile?.github_access_token) return { status: "not_connected" as const };
 
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("*, project_files(*)")
       .eq("id", data.projectId)
@@ -130,7 +130,7 @@ export async function githubSync(data: any) {
       await pushFiles(token, repo.full_name, files, "Initial commit from LifemarkAI 🚀");
       const branch = projectBranchName(project.name, projectId);
       await ensureBranch(token, repo.full_name, branch, "main");
-      await (supabase as any)
+      await supabase
         .from("projects")
         .update({ github_repo: repo.full_name, github_branch: branch })
         .eq("id", projectId);
@@ -154,7 +154,7 @@ export async function githubSync(data: any) {
         token, repo, branch, files,
         `Update from LifemarkAI · ${new Date().toISOString()}`,
       );
-      await (supabase as any).from("projects").update({ github_branch: branch }).eq("id", projectId);
+      await supabase.from("projects").update({ github_branch: branch }).eq("id", projectId);
       logger.info("github.sync.push", { projectId, branch, changed, commitSha });
       return { status: "ok" as const, payload: { success: true, branch, changed, commitSha } };
     }
@@ -167,7 +167,7 @@ export async function githubSync(data: any) {
       const failedPaths: string[] = [];
       for (const file of files) {
         const ext = file.path.split(".").pop()?.toLowerCase() ?? "";
-        const { error } = await (supabase as any).from("project_files").upsert(
+        const { error } = await supabase.from("project_files").upsert(
           { project_id: projectId, path: file.path, content: file.content, language: LANG_MAP[ext] ?? "plaintext" },
           { onConflict: "project_id,path" },
         );

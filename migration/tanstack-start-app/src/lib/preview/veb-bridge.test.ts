@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  assertNoScriptTerminator,
-  getPreviewBridgeScripts,
-  injectVebBridgeIntoHtml,
-  injectVebBridgeIntoNextLayout,
+assertNoScriptTerminator,
+getPreviewBridgeScripts,
+injectVebBridgeIntoHtml,
+injectVebBridgeIntoNextLayout,
 } from "./veb-bridge.ts";
 
 /**

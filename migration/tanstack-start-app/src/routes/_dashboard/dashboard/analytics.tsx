@@ -1,4 +1,4 @@
-import { createFileRoute, getRouteApi } from "@tanstack/react-router";
+import { createFileRoute,getRouteApi } from "@tanstack/react-router";
 import { fetchAnalyticsPage } from "@/lib/dashboard-server";
 import { AnalyticsShellPage } from "@/components/dashboard/shell-pages";
 

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { diagnoseBrokenImports } from "./diagnose-imports.ts";
-import { appendPreviewDiagnosis, buildPreviewDiagnosis } from "./diagnose-preview.ts";
+import { appendPreviewDiagnosis,buildPreviewDiagnosis } from "./diagnose-preview.ts";
 import { diagnoseRuntimeErrors } from "./diagnose-runtime.ts";
 
 test("diagnoseBrokenImports catches project alias imports", () => {

@@ -1,7 +1,7 @@
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Search, FileCode2, X, ChevronDown, ChevronRight, Loader2, Replace, ReplaceAll } from "lucide-react";
+import { useState,useEffect,useCallback,useRef } from "react";
+import { motion,AnimatePresence } from "framer-motion";
+import { Search,FileCode2,X,ChevronDown,ChevronRight,Loader2,Replace,ReplaceAll } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";

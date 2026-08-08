@@ -1,6 +1,5 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
-import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { createClient,createAdminClient } from "@/lib/supabase/server";
 import { sendCollaborationInviteEmail } from "@/lib/email/resend";
 import { logAuditFromRequest } from "@/lib/audit/log";
 
@@ -30,7 +29,7 @@ export const Route = createFileRoute("/api/projects/invite")({
           if (!INVITE_ROLES.has(role)) return Response.json({ error: "Role must be viewer or editor" }, { status: 400 });
 
           const admin = createAdminClient();
-          const { data: project, error: projectError } = await (admin as any)
+          const { data: project, error: projectError } = await admin
             .from("projects").select("id, user_id, name").eq("id", projectId).maybeSingle();
           if (projectError) throw new Error(projectError.message);
           if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
@@ -38,13 +37,13 @@ export const Route = createFileRoute("/api/projects/invite")({
             return Response.json({ error: "Only the project owner can invite collaborators" }, { status: 403 });
           }
 
-          const { data: ownerProfile } = await (admin as any)
+          const { data: ownerProfile } = await admin
             .from("profiles").select("email, full_name").eq("id", user.id).maybeSingle();
           if (ownerProfile?.email?.toLowerCase() === email) {
             return Response.json({ error: "Cannot invite the project owner" }, { status: 400 });
           }
 
-          const { data: invite, error: inviteError } = await (admin as any)
+          const { data: invite, error: inviteError } = await admin
             .from("project_invite_tokens")
             .insert({
               project_id: projectId,
@@ -103,11 +102,11 @@ export const Route = createFileRoute("/api/projects/invite")({
           }
 
           const admin = createAdminClient();
-          const { data: project } = await (admin as any)
+          const { data: project } = await admin
             .from("projects").select("user_id").eq("id", projectId).maybeSingle();
           if (!project || project.user_id !== user.id) return Response.json({ error: "Forbidden" }, { status: 403 });
 
-          const { error } = await (admin as any)
+          const { error } = await admin
             .from("collaborators").delete().eq("id", collaboratorId).eq("project_id", projectId);
           if (error) return Response.json({ error: error.message }, { status: 500 });
 

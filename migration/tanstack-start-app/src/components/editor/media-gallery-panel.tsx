@@ -12,8 +12,8 @@
  *      webp/gif/avif/svg + images.unsplash.com)
  */
 
-import { useMemo, useState } from "react";
-import { Image as ImageIcon, Trash2, Download, Copy, Check, MessageSquare, Link2 } from "lucide-react";
+import { useMemo,useState } from "react";
+import { Image as ImageIcon,Trash2,Download,Copy,Check,MessageSquare,Link2 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { sanitizeSvg } from "@/lib/security/sanitize";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -130,7 +130,7 @@ export function MediaGalleryPanel({ files, onSendToChat, onFilesUpdate }: MediaG
       const { createClient } = await import("@/lib/supabase/client");
       const supabase = createClient();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { error } = await (supabase as any).from("project_files").delete().eq("id", item.fileId);
+      const { error } = await supabase.from("project_files").delete().eq("id", item.fileId);
       if (error) throw error;
       onFilesUpdate?.(files.filter((f) => f.id !== item.fileId));
       toast({ title: "Image deleted", description: item.filePath });
@@ -169,7 +169,6 @@ export function MediaGalleryPanel({ files, onSendToChat, onFilesUpdate }: MediaG
                 dangerouslySetInnerHTML={{ __html: sanitizeSvg(item.svgMarkup) }}
               />
             ) : item.src && !brokenKeys.has(item.key) ? (
-              // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={item.src}
                 alt={item.label}

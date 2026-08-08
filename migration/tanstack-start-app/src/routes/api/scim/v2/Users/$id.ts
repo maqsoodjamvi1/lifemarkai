@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createHash } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/server";
@@ -9,7 +8,7 @@ async function authenticateScim(request: Request): Promise<string | null> {
   if (!auth?.startsWith("Bearer ")) return null;
   const hash = createHash("sha256").update(auth.slice(7).trim()).digest("hex");
   const supabase = createAdminClient();
-  const { data } = await (supabase as any).from("workspace_identity_settings").select("owner_id, scim_config").eq("scim_api_key_hash", hash).maybeSingle();
+  const { data } = await supabase.from("workspace_identity_settings").select("owner_id, scim_config").eq("scim_api_key_hash", hash).maybeSingle();
   if (!data?.owner_id) return null;
   const scim = data.scim_config as WorkspaceScimConfig | null;
   if (!scim?.enabled) return null;
@@ -39,7 +38,7 @@ export const Route = createFileRoute("/api/scim/v2/Users/$id")({
           }
         }
         const supabase = createAdminClient();
-        const { data: row, error } = await (supabase as any).from("workspace_scim_users").update({
+        const { data: row, error } = await supabase.from("workspace_scim_users").update({
           ...(active !== undefined ? { active } : {}), updated_at: new Date().toISOString(),
         }).eq("owner_id", ownerId).eq("id", params.id).select("*").maybeSingle();
         if (error || !row) return Response.json({ detail: "User not found" }, { status: 404 });
@@ -49,7 +48,7 @@ export const Route = createFileRoute("/api/scim/v2/Users/$id")({
         const ownerId = await authenticateScim(request);
         if (!ownerId) return Response.json({ detail: "Unauthorized" }, { status: 401 });
         const supabase = createAdminClient();
-        const { data: row } = await (supabase as any).from("workspace_scim_users").select("*").eq("owner_id", ownerId).eq("id", params.id).maybeSingle();
+        const { data: row } = await supabase.from("workspace_scim_users").select("*").eq("owner_id", ownerId).eq("id", params.id).maybeSingle();
         if (!row) return Response.json({ detail: "Not found" }, { status: 404 });
         return Response.json(scimUserResource(row));
       },

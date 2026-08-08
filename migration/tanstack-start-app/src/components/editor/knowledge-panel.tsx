@@ -1,15 +1,15 @@
 
-import { useState, useEffect } from "react";
+import { useState,useEffect } from "react";
 import { motion } from "framer-motion";
 import {
-  Brain, Save, Loader2, Info, Globe, FileText,
-  ChevronDown, ChevronUp, Sparkles, Wand2,
+Brain,Save,Loader2,Info,Globe,FileText,
+ChevronDown,ChevronUp,Sparkles,Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { createClient } from "@/lib/supabase/client";
-import type { Project, Profile } from "@/types/database";
+import type { Project,Profile } from "@/types/database";
 
 interface KnowledgePanelProps {
   project: Project;
@@ -100,7 +100,7 @@ export function KnowledgePanel({ project, profile, onProjectUpdate }: KnowledgeP
   async function saveWorkspaceKnowledge() {
     setSavingWorkspace(true);
     try {
-      const { error } = await (supabase as any)
+      const { error } = await supabase
         .from("profiles")
         .update({ workspace_knowledge: workspaceKnowledge })
         .eq("id", profile?.id ?? "");

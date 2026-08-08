@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
-  createSnapshot,
-  deleteSnapshot,
-  listOrGetSnapshot,
-  pinSnapshot,
+createSnapshot,
+deleteSnapshot,
+listOrGetSnapshot,
+pinSnapshot,
 } from "@/lib/server-fns/snapshots";
 
 /** Native /api/projects/snapshots */

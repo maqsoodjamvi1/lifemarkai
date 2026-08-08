@@ -1,7 +1,7 @@
 
-import { useEffect, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { X, Keyboard } from "lucide-react";
+import { useEffect } from "react";
+import { motion,AnimatePresence } from "framer-motion";
+import { X,Keyboard } from "lucide-react";
 
 interface ShortcutGroup {
   title: string;

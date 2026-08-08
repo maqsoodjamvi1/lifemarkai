@@ -5,10 +5,10 @@
  * shows them in a list, and generates translation JSON files via AI.
  */
 
-import { useState, useMemo } from "react";
+import { useState,useMemo } from "react";
 import {
-  Globe, Search, Wand2, Copy, Check, ChevronDown, ChevronRight,
-  Languages, FileJson, AlertCircle, RefreshCw, Download,
+Globe,Search,Wand2,Copy,Check,ChevronDown,ChevronRight,
+Languages,FileJson,AlertCircle,Download
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

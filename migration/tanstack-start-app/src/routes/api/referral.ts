@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -15,13 +14,13 @@ export const Route = createFileRoute("/api/referral")({
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const admin = createAdminClient();
-        const { data: profile } = await (admin as any)
+        const { data: profile } = await admin
           .from("profiles")
           .select("referral_code, referral_credits_earned")
           .eq("id", user.id)
           .single();
 
-        const { data: referrals } = await (admin as any)
+        const { data: referrals } = await admin
           .from("referrals")
           .select("id, status, credits_given, created_at, credited_at, referee_id")
           .eq("referrer_id", user.id)

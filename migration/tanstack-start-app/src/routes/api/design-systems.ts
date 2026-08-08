@@ -1,6 +1,6 @@
-// @ts-nocheck
 import { createClient } from "@/lib/supabase/server";
 import { createFileRoute } from "@tanstack/react-router";
+import type { Database,Json } from "@/types/database";
 
 /**
  * Design Systems API
@@ -72,8 +72,10 @@ async function handlePOST(req: Request) {
     await supabase.from("project_design_systems").delete().eq("source_project_id", projectId);
   }
 
-  const updatePayload: Record<string, unknown> = { is_design_system: !!mark };
-  if (meta !== undefined) updatePayload.design_system_meta = meta;
+  const updatePayload: Database["public"]["Tables"]["projects"]["Update"] = {
+    is_design_system: !!mark,
+  };
+  if (meta !== undefined) updatePayload.design_system_meta = meta as unknown as Json;
 
   const { error } = await supabase
     .from("projects")
@@ -195,7 +197,7 @@ async function handlePATCH(req: Request) {
   };
   if (!connectionId) return Response.json({ error: "connectionId required" }, { status: 400 });
 
-  const updates: Record<string, unknown> = {};
+  const updates: Database["public"]["Tables"]["project_design_systems"]["Update"] = {};
   if (priority !== undefined) updates.priority = priority;
   if (enabled !== undefined) updates.enabled = enabled;
 

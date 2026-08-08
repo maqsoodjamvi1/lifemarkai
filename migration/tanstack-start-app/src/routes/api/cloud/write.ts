@@ -1,7 +1,6 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
-import { createAdminClient, createClient } from "@/lib/supabase/server";
-import { runManagedSql, queryManagedSql } from "@/lib/cloud/management";
+import { createAdminClient,createClient } from "@/lib/supabase/server";
+import { runManagedSql,queryManagedSql } from "@/lib/cloud/management";
 import { planSqlWrite } from "@/lib/cloud/sql-write-preview";
 
 /**

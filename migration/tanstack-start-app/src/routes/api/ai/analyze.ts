@@ -1,17 +1,16 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { getFastAiModel } from "@/lib/ai/model-defaults";
 import {
-  cancelCreditReservation,
-  reserveCredits,
-  settleCreditReservation,
+cancelCreditReservation,
+reserveCredits,
+settleCreditReservation,
 } from "@/lib/credits";
 import {
-  analyzeUnavailableReason,
-  isAnalyzeExecutionEnabled,
-  runAnalyzeScript,
+analyzeUnavailableReason,
+isAnalyzeExecutionEnabled,
+runAnalyzeScript,
 } from "@/lib/ai/analyze-runner";
 
 
@@ -199,7 +198,7 @@ async function handlePOST(req: Request) {
     const summary =
       result.stdout?.trim().slice(0, 500) ||
       `Generated ${files.length} file${files.length === 1 ? "" : "s"} from your data analysis request.`;
-    const { data: inserted, error: msgErr } = await (supabase as any)
+    const { data: inserted, error: msgErr } = await supabase
       .from("messages")
       .insert([
         {

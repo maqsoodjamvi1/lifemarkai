@@ -1,7 +1,7 @@
 
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Image, Download, Copy, Loader2, Sparkles, X, RefreshCw } from "lucide-react";
+import { motion,AnimatePresence } from "framer-motion";
+import { Image,Download,Copy,Loader2,Sparkles,X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
@@ -100,7 +100,6 @@ export function ImageGenPanel({ projectId, onInsertImage }: ImageGenPanelProps =
             exit={{ opacity: 0, height: 0 }}
             className="relative border-b border-border shrink-0"
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={selected.url} alt={selected.prompt} className="w-full h-48 object-cover" />
             <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex items-end p-3 gap-2">
               <p className="text-xs text-white/80 flex-1 line-clamp-2">{selected.prompt}</p>
@@ -141,7 +140,6 @@ export function ImageGenPanel({ projectId, onInsertImage }: ImageGenPanelProps =
                   selected?.id === img.id ? "border-violet-500" : "border-border hover:border-muted-foreground"
                 }`}
               >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={img.url} alt={img.prompt} className="w-full h-full object-cover" />
               </button>
             ))}

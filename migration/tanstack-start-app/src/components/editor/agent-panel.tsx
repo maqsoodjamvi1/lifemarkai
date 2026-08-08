@@ -1,12 +1,11 @@
 
-import { useState, useRef, useEffect, useMemo } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState,useRef,useEffect,useMemo } from "react";
+import { motion } from "framer-motion";
 import {
-  Bot, Zap, ChevronDown, ChevronRight, Square,
-  CheckCircle, AlertCircle, Eye, Code2, Loader2, Send,
-  FileText, FilePlus2, Pencil, Trash2, List, Search, FolderSearch,
-  Crosshair, Image as ImageIcon, Wrench, ShieldCheck, Lightbulb,
-  Clock, Files, Terminal,
+Bot,Zap,ChevronDown,ChevronRight,Square,
+CheckCircle,AlertCircle,Eye,Code2,Loader2,FileText,FilePlus2,Pencil,Trash2,List,Search,FolderSearch,
+Crosshair,Image as ImageIcon,Wrench,ShieldCheck,Lightbulb,
+Clock,Files,Terminal
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -293,7 +292,7 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
               // Refresh files
               const { createClient } = await import("@/lib/supabase/client");
               const supabase = createClient();
-              const { data: updatedFiles } = await (supabase as any)
+              const { data: updatedFiles } = await supabase
                 .from("project_files").select("*").eq("project_id", projectId);
               if (updatedFiles) onFilesUpdated(updatedFiles);
             }
@@ -327,7 +326,8 @@ export function AgentPanel({ projectId, files, onFilesUpdated, onCreditsChange, 
   function toggleStep(i: number) {
     setExpandedSteps((prev) => {
       const next = new Set(prev);
-      next.has(i) ? next.delete(i) : next.add(i);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
       return next;
     });
   }

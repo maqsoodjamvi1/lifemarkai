@@ -1,26 +1,26 @@
 import { createClientFromRequest } from "../../supabase/request-client.ts";
 import { getServerUser } from "../../supabase/server-user.ts";
-import { runAgent, type AgentStep } from "../agent.ts";
-import { mcpInitialize, mcpListTools, mcpCallTool } from "../mcp-client.ts";
+import { runAgent,type AgentStep } from "../agent.ts";
+import { mcpInitialize,mcpListTools,mcpCallTool } from "../mcp-client.ts";
 import { detectLanguage } from "../code-parser.ts";
-import { rateLimitAsync, RATE_LIMITS } from "../../rate-limit.ts";
-import { canWriteProjectFiles, getProjectAccess } from "../../project/access.ts";
+import { rateLimitAsync,RATE_LIMITS } from "../../rate-limit.ts";
+import { canWriteProjectFiles,getProjectAccess } from "../../project/access.ts";
 import { ensureDevCredits } from "../../dev-credits.ts";
 import {
-  cancelCreditReservation,
-  claimDailyCredits,
-  reserveCredits,
-  settleCreditReservation,
+cancelCreditReservation,
+claimDailyCredits,
+reserveCredits,
+settleCreditReservation,
 } from "@/lib/credits";
-import { computeCreditCost, maxCreditCostForMode, AGENT_MIN_CREDITS } from "../credit-cost.ts";
+import { computeCreditCost,maxCreditCostForMode,AGENT_MIN_CREDITS } from "../credit-cost.ts";
 import { ensureCommonGeneratedSupportFiles } from "../generated-support-files.ts";
 import { ensureWebsiteChrome } from "../website-chrome.ts";
 import { alignGeneratedPackageJson } from "../../preview/align-package-json.ts";
 import { autoWireAi } from "../auto-wire-ai.ts";
 import {
-  parseCloudToolPermissions,
-  buildCloudPermissionsPromptBlock,
-  shouldBlockCloudAction,
+parseCloudToolPermissions,
+buildCloudPermissionsPromptBlock,
+shouldBlockCloudAction,
 } from "@/lib/cloud/permissions";
 import { getDefaultAiModel } from "../model-defaults.ts";
 import { attachSkillsToPrompt } from "../attach-skills.ts";
@@ -28,10 +28,10 @@ import { attachSkillsToPrompt } from "../attach-skills.ts";
 // at the runAgent call site.
 import { buildProjectContext } from "../system-prompts.ts";
 import {
-  buildEditorIntelligencePromptBlock,
-  recordEditorIntelligenceBuild,
+buildEditorIntelligencePromptBlock,
+recordEditorIntelligenceBuild,
 } from "@/lib/ai/editor-lenses/persistence";
-import { isSimpleEditorRequest, maxOutputTokensForRequest, resolveBudgetAwareModel } from "../cost-controls.ts";
+import { isSimpleEditorRequest,maxOutputTokensForRequest,resolveBudgetAwareModel } from "../cost-controls.ts";
 import { resolveSmartModel } from "../editor-intelligence.ts";
 import { persistChatTurnMessages } from "../persist-chat-turn.ts";
 import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
@@ -92,13 +92,13 @@ export async function handleAiAgent(req: Request) {
 
   // Check credits (agents cost more). Dev accounts auto-grant via ensureDevCredits.
   await claimDailyCredits(supabase, user.id); // grants today's free credits before the gate
-  const { data: profile } = await (supabase as any).from("profiles")
+  const { data: profile } = await supabase.from("profiles")
     .select("credits, workspace_knowledge, cloud_tool_permissions").eq("id", user.id).single();
   await ensureDevCredits(user.id);
 
   const cloudPermissions = parseCloudToolPermissions(profile?.cloud_tool_permissions);
 
-  const { data: projectRow } = await (supabase as any)
+  const { data: projectRow } = await supabase
     .from("projects")
     .select("name, knowledge, cloud_enabled, cloud_project_ref, environment, disabled_skill_ids, metadata, deployed_url, preview_url")
     .eq("id", projectId)
@@ -134,11 +134,13 @@ export async function handleAiAgent(req: Request) {
     supabase,
     user.id,
     task,
-    Array.isArray(projectRow?.disabled_skill_ids) ? projectRow.disabled_skill_ids : [],
+    Array.isArray(projectRow?.disabled_skill_ids)
+      ? projectRow.disabled_skill_ids.filter((id): id is string => typeof id === "string")
+      : [],
   );
   if (skillBlock) knowledgeParts.push(skillBlock);
 
-  const { data: files } = await (supabase as any)
+  const { data: files } = await supabase
     .from("project_files").select("path, content").eq("project_id", projectId);
   const fileCount = Array.isArray(files) ? files.length : 0;
 
@@ -155,7 +157,7 @@ export async function handleAiAgent(req: Request) {
     } catch { /* non-fatal */ }
     try {
       const { buildLearnedRulesBlock } = await import("@/lib/ai/learned-rules");
-      const { data: findings } = await (supabase as any)
+      const { data: findings } = await supabase
         .from("health_findings")
         .select("title, detail")
         .eq("project_id", projectId)
@@ -198,7 +200,7 @@ export async function handleAiAgent(req: Request) {
   const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "server";
   const extraTools: ExtraTool[] = [];
   try {
-    const { data: mcpServers } = await (supabase as any)
+    const { data: mcpServers } = await supabase
       .from("user_mcp_servers")
       .select("id, name, url, auth_header, enabled")
       .eq("user_id", user.id)
@@ -248,7 +250,7 @@ export async function handleAiAgent(req: Request) {
   try {
     const { executeConnectorCall, configuredConnectorIds } = await import("@/lib/integrations/connector-exec");
     const { ENV_FILE_PATH: envPath, parseEnvFile: parseEnv } = await import("@/lib/project/env-file");
-    const { data: envRow } = await (supabase as any)
+    const { data: envRow } = await supabase
       .from("project_files")
       .select("content")
       .eq("project_id", projectId)
@@ -529,7 +531,7 @@ export async function handleAiAgent(req: Request) {
           const current = Array.from(projectFileMap.values());
           if (current.length > 0) {
             try {
-              const { data: preSnap } = await (supabase as any)
+              const { data: preSnap } = await supabase
                 .from("project_snapshots")
                 .insert({
                   project_id: projectId,
@@ -599,7 +601,7 @@ export async function handleAiAgent(req: Request) {
             send({ fileUpdated: { path: cleanPath, content: content.slice(0, 100) + "..." } });
 
             // Persist to DB
-            await (supabase as any).from("project_files").upsert(
+            await supabase.from("project_files").upsert(
               { project_id: projectId, path: cleanPath, content, language: detectLanguage(cleanPath) },
               { onConflict: "project_id,path" }
             );
@@ -615,7 +617,7 @@ export async function handleAiAgent(req: Request) {
           onFileDelete: async (path: string) => {
             producedBillableWork = true;
             const cleanPath = path.replace(/\\/g, "/").replace(/^\/+/, "");
-            const { error: deleteError } = await (supabase as any)
+            const { error: deleteError } = await supabase
               .from("project_files")
               .delete()
               .eq("project_id", projectId)
@@ -640,7 +642,7 @@ export async function handleAiAgent(req: Request) {
           (file) => !projectFileMap.has(file.path.replace(/\\/g, "/").replace(/^\/+/, "")),
         );
         if (supportFiles.length > 0) {
-          await (supabase as any).from("project_files").upsert(
+          await supabase.from("project_files").upsert(
             supportFiles.map((file) => ({
               project_id: projectId,
               path: file.path,
@@ -681,7 +683,7 @@ export async function handleAiAgent(req: Request) {
             if (!prev || (prev.content ?? "") !== file.content) guaranteed.push(file);
           }
           if (guaranteed.length > 0) {
-            await (supabase as any).from("project_files").upsert(
+            await supabase.from("project_files").upsert(
               guaranteed.map((file) => ({
                 project_id: projectId,
                 path: file.path,
@@ -762,9 +764,9 @@ export async function handleAiAgent(req: Request) {
               files: filesChanged.length,
               paths: filesChanged.slice(0, 3),
             });
-            await (supabase as any)
+            await supabase
               .from("projects")
-              .update({ metadata: { ...prevMeta, decision_log: nextLog } })
+              .update({ metadata: { ...prevMeta, decision_log: nextLog } as unknown as import("@/types/database").Json })
               .eq("id", projectId);
           } catch { /* best-effort */ }
         }
@@ -774,7 +776,7 @@ export async function handleAiAgent(req: Request) {
         let verification = null;
         if (filesChanged.length > 0) {
           try {
-            const { data: changedRows } = await (supabase as any)
+            const { data: changedRows } = await supabase
               .from("project_files")
               .select("path, content, language")
               .eq("project_id", projectId)

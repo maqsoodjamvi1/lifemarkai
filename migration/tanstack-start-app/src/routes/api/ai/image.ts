@@ -1,12 +1,12 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { rateLimit, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimit } from "@/lib/rate-limit";
 import {
-  cancelCreditReservation,
-  reserveCredits,
-  settleCreditReservation,
+cancelCreditReservation,
+reserveCredits,
+settleCreditReservation,
 } from "@/lib/credits";
+import { generateImage,isImageGenConfigured } from "@/lib/ai/image-generate";
 
 const VALID_SIZES = new Set(["1024x1024", "1792x1024", "1024x1792"]);
 const VALID_STYLES = new Set(["vivid", "natural"]);
@@ -54,7 +54,6 @@ async function handlePOST(req: Request) {
   //      modalities (openai/dall-e-3 is DELISTED from OpenRouter — the old
   //      images.generate path always failed there)
   //   3. Native DALL-E 3 (OPENAI_API_KEY)
-  const { generateImage, isImageGenConfigured } = await import("@/lib/ai/image-generate");
   if (!isImageGenConfigured()) {
     return Response.json(
       { error: "No image provider configured (set GOOGLE_GENERATIVE_AI_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY)" },

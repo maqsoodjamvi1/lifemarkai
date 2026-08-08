@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { assessRequestScope, formatScopeAssessment } from "./scope-guard.ts";
+import { assessRequestScope,formatScopeAssessment } from "./scope-guard.ts";
 
 const FRESH = { userAuthoredFileCount: 0 };
 const WORKING_APP = { userAuthoredFileCount: 34 };

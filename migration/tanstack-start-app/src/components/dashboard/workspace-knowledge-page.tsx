@@ -1,6 +1,6 @@
 
-import { useState, useEffect } from "react";
-import { Brain, Save, Loader2, Sparkles, RotateCcw, Info, Wand2 } from "lucide-react";
+import { useState,useEffect } from "react";
+import { Brain,Save,Loader2,Sparkles,RotateCcw,Info,Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
@@ -67,7 +67,7 @@ export function WorkspaceKnowledgePage({ user }: WorkspaceKnowledgePageProps) {
 
   useEffect(() => {
     async function load() {
-      const { data } = await (supabase as any)
+      const { data } = await supabase
         .from("profiles")
         .select("workspace_knowledge")
         .eq("id", user.id)
@@ -82,7 +82,7 @@ export function WorkspaceKnowledgePage({ user }: WorkspaceKnowledgePageProps) {
 
   async function handleSave() {
     setSaving(true);
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("profiles")
       .update({ workspace_knowledge: knowledge.trim() || null })
       .eq("id", user.id);
@@ -227,7 +227,7 @@ export function WorkspaceKnowledgePage({ user }: WorkspaceKnowledgePageProps) {
             onClick={async () => {
               setKnowledge("");
               setSaving(true);
-              await (supabase as any).from("profiles").update({ workspace_knowledge: null }).eq("id", user.id);
+              await supabase.from("profiles").update({ workspace_knowledge: null }).eq("id", user.id);
               setSaving(false);
               setSaved("");
               toast({ title: "Workspace knowledge cleared" });

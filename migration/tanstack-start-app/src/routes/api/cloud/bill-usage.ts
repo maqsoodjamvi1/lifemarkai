@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { CENTS_PER_CREDIT } from "@/lib/credits";
@@ -80,7 +79,8 @@ export const Route = createFileRoute("/api/cloud/bill-usage")({
               .or("metadata->>cloud_paused_manually.is.null,metadata->>cloud_paused_manually.eq.false")
               .or("metadata->>cloud_paused_idle.is.null,metadata->>cloud_paused_idle.eq.false")
               .select("id");
-            walletResults.push({ user: userId, balance, action: (resumed?.length ?? 0) > 0 ? `resumed ${resumed.length}` : "ok" });
+            const resumedCount = resumed?.length ?? 0;
+            walletResults.push({ user: userId, balance, action: resumedCount > 0 ? `resumed ${resumedCount}` : "ok" });
           } else {
             walletResults.push({ user: userId, balance, action: "ok" });
           }

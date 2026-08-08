@@ -1,53 +1,53 @@
 import { createAdminClient } from "../../supabase/server.ts";
 import { createClientFromRequest } from "../../supabase/request-client.ts";
 import { getServerUser } from "../../supabase/server-user.ts";
-import { canWriteProjectFiles, getProjectAccess } from "../../project/access.ts";
+import { canWriteProjectFiles,getProjectAccess } from "../../project/access.ts";
 import { generateAI } from "../generate.ts";
-import { ECONOMY_CODING_MODEL, getDefaultAiModel, ESCALATION_MODEL } from "../model-defaults.ts";
+import { ECONOMY_CODING_MODEL,ESCALATION_MODEL } from "../model-defaults.ts";
 import { applyModelAdapter } from "../model-catalog.ts";
 import { sendLowCreditsEmail } from "../../email/resend.ts";
 import {
-  CHAT_SYSTEM_PROMPT,
-  PLAN_SYSTEM_PROMPT,
-  AUTO_FIX_SYSTEM_PROMPT,
-  PATCH_SYSTEM_PROMPT,
-  buildGenerationPrompt,
-  buildReactNativePrompt,
-  buildNextJSPrompt,
-  buildProjectContext,
-  buildRepairPrompt,
+CHAT_SYSTEM_PROMPT,
+PLAN_SYSTEM_PROMPT,
+AUTO_FIX_SYSTEM_PROMPT,
+PATCH_SYSTEM_PROMPT,
+buildGenerationPrompt,
+buildReactNativePrompt,
+buildNextJSPrompt,
+buildProjectContext,
+buildRepairPrompt,
 } from "@/lib/ai/system-prompts";
 import { buildTemplateRefinementBlock } from "../template-refine.ts";
 import { pickStarterTemplate } from "../../templates/starter-catalog.ts";
 import { buildDesignDirectionBlock } from "../design-directions.ts";
-import { countUserAuthoredFiles, isGreenfieldProject } from "../scaffold-files.ts";
-import { assessRequestScope, formatScopeAssessment } from "../scope-guard.ts";
-import { applyPatches, collapsePatchResults, parsePatchResponse } from "../patch-applier.ts";
+import { countUserAuthoredFiles,isGreenfieldProject } from "../scaffold-files.ts";
+import { assessRequestScope,formatScopeAssessment } from "../scope-guard.ts";
+import { applyPatches,collapsePatchResults,parsePatchResponse } from "../patch-applier.ts";
 import { buildPersistedAssistantContent } from "../persist-message-mode.ts";
 import { persistChatTurnMessages } from "../persist-chat-turn.ts";
 import {
-  buildNavEditContext,
-  buildDeterministicMenuPatches,
-  extractMenuLabelsFromPrompt,
-  extractNavHaystack,
-  extractDesktopNavHaystack,
-  filterUnsafeHeaderPatches,
-  findNavSourceFiles,
-  isMenuNavEditIntent,
-  navContainsLabel,
-  remapInventedNavPatchPaths,
+buildNavEditContext,
+buildDeterministicMenuPatches,
+extractMenuLabelsFromPrompt,
+extractNavHaystack,
+extractDesktopNavHaystack,
+filterUnsafeHeaderPatches,
+findNavSourceFiles,
+isMenuNavEditIntent,
+navContainsLabel,
+remapInventedNavPatchPaths,
 } from "@/lib/ai/nav-edit";
 import {
-  buildDeterministicTextPatches,
-  parseTextReplacementIntent,
-  parseHeadingDescriptor,
+buildDeterministicTextPatches,
+parseTextReplacementIntent,
+parseHeadingDescriptor,
 } from "@/lib/ai/text-edit";
-import { parseAIResponse, validateGeneratedFiles, assessGenerationQuality, shouldAutoFix, needsBuildContinuation, detectLanguage, type ParsedFile } from "../code-parser.ts";
+import { parseAIResponse,validateGeneratedFiles,assessGenerationQuality,shouldAutoFix,needsBuildContinuation,detectLanguage,type ParsedFile } from "../code-parser.ts";
 import { ensureCommonGeneratedSupportFiles } from "../generated-support-files.ts";
 import { ensureWebsiteChrome } from "../website-chrome.ts";
-import { alignGeneratedPackageJson, stripGeneratedRouteTree } from "../../preview/align-package-json.ts";
+import { alignGeneratedPackageJson,stripGeneratedRouteTree } from "../../preview/align-package-json.ts";
 import { StreamingFileExtractor } from "../streaming-file-extractor.ts";
-import { rateLimitAsync, RATE_LIMITS } from "../../rate-limit.ts";
+import { rateLimitAsync,RATE_LIMITS } from "../../rate-limit.ts";
 import { validateApiKey } from "../../api/api-key.ts";
 import { logger } from "../../logger.ts";
 import { getProjectSchemaContext } from "../../supabase/schema-reader.ts";
@@ -55,45 +55,45 @@ import { attachSkillsToPrompt } from "../attach-skills.ts";
 import { decideInitiativeRouting } from "../initiative-routing.ts";
 import type { SkillMatch } from "../skill-matcher.ts";
 import {
-  shouldUseSubagents,
-  runSubagentInvestigation,
-  rankFilesByKeywords,
-  type SubagentStep,
+shouldUseSubagents,
+runSubagentInvestigation,
+rankFilesByKeywords,
+type SubagentStep,
 } from "@/lib/ai/subagents";
 import {
-  parallelSubagentsEnabled,
-  planSubagents,
-  runParallelSubagents,
+parallelSubagentsEnabled,
+planSubagents,
+runParallelSubagents,
 } from "@/lib/ai/subagents-parallel";
-import { computeCreditCost, maxCreditCostForMode } from "../credit-cost.ts";
+import { computeCreditCost,maxCreditCostForMode } from "../credit-cost.ts";
 import {
-  cancelCreditReservation,
-  claimDailyCredits,
-  reserveCredits,
-  settleCreditReservation,
+cancelCreditReservation,
+claimDailyCredits,
+reserveCredits,
+settleCreditReservation,
 } from "@/lib/credits";
-import type { AutoWireResult, SelfVerifyResult } from "./result-types.ts";
+import type { AutoWireResult,SelfVerifyResult } from "./result-types.ts";
 import { autoWireAi } from "../auto-wire-ai.ts";
 import { selectRelevantFiles } from "../file-selector.ts";
 import { buildCompletedBuildActivity } from "../build-activity.ts";
 import {
-  parseCloudToolPermissions,
-  buildCloudPermissionsPromptBlock,
-  shouldBlockCloudAction,
+parseCloudToolPermissions,
+buildCloudPermissionsPromptBlock,
+shouldBlockCloudAction,
 } from "@/lib/cloud/permissions";
-import { ensureDevCredits, getDevProfile } from "../../dev-credits.ts";
+import { ensureDevCredits,getDevProfile } from "../../dev-credits.ts";
 import { detectDeployIntent } from "../deploy-intent.ts";
 import { detectCloudIntent } from "../cloud-intent.ts";
-import { ENV_FILE_PATH, parseEnvFile } from "../../project/env-file.ts";
+import { ENV_FILE_PATH,parseEnvFile } from "../../project/env-file.ts";
 import {
-  buildEditorIntelligencePromptBlock,
-  recordEditorIntelligenceBuild,
+buildEditorIntelligencePromptBlock,
+recordEditorIntelligenceBuild,
 } from "@/lib/ai/editor-lenses/persistence";
 import {
-  contextBudgetForRequest,
-  isSimpleEditorRequest,
-  maxOutputTokensForRequest,
-  resolveBudgetAwareModel,
+contextBudgetForRequest,
+isSimpleEditorRequest,
+maxOutputTokensForRequest,
+resolveBudgetAwareModel,
 } from "@/lib/ai/cost-controls";
 import { resolveSmartModel } from "../editor-intelligence.ts";
 import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
@@ -363,7 +363,7 @@ export async function handleAiChat(req: Request) {
     if (mode === "chat" || mode === "build") {
       const cloudIntent = detectCloudIntent(persistedUserMessage);
       if (cloudIntent) {
-        const { data: cloudProject } = await (supabase as any)
+        const { data: cloudProject } = await supabase
           .from("projects")
           .select("cloud_enabled, cloud_status, cloud_instance")
           .eq("id", projectId)
@@ -440,7 +440,7 @@ export async function handleAiChat(req: Request) {
     await claimDailyCredits(supabase, userId);
 
     let profile = (
-      await (supabase as any)
+      await supabase
         .from("profiles")
         .select("credits, plan, email, workspace_knowledge")
         .eq("id", userId)
@@ -457,7 +457,7 @@ export async function handleAiChat(req: Request) {
     }
 
     const cloudPermissionsRaw = (
-      await (supabase as any)
+      await supabase
         .from("profiles")
         .select("cloud_tool_permissions")
         .eq("id", userId)
@@ -476,10 +476,10 @@ export async function handleAiChat(req: Request) {
       // select("*") — NOT an explicit column list: cloud_* columns arrive with
       // migration 064 and an explicit list would make this query fail (and
       // degrade chat) on databases that haven't run it yet.
-      (supabase as any).from("projects").select("*").eq("id", projectId).single(),
-      (supabase as any).from("messages").select("role, content, mode, metadata").eq("project_id", projectId)
+      supabase.from("projects").select("*").eq("id", projectId).single(),
+      supabase.from("messages").select("role, content, mode, metadata").eq("project_id", projectId)
         .order("created_at", { ascending: false }).limit(40),
-      (supabase as any)
+      supabase
         .from("project_private_context")
         .select("context_summary, context_summary_at, context_summary_covers")
         .eq("project_id", projectId)
@@ -497,7 +497,7 @@ export async function handleAiChat(req: Request) {
     if (!cloudSchemaContext && cloudProject?.cloud_supabase_url) {
       try {
         const admin = await createAdminClient();
-        const { data: managedCredentials } = await (admin as any)
+        const { data: managedCredentials } = await admin
           .from("project_cloud_credentials")
           .select("service_key")
           .eq("project_id", projectId)
@@ -925,7 +925,7 @@ export async function handleAiChat(req: Request) {
         (f) => f.path === ENV_FILE_PATH || f.path.endsWith(`/${ENV_FILE_PATH}`),
       )?.content ?? "";
     if (!envFileContent) {
-      const { data: envRow } = await (supabase as any)
+      const { data: envRow } = await supabase
         .from("project_files")
         .select("content")
         .eq("project_id", projectId)
@@ -976,7 +976,7 @@ export async function handleAiChat(req: Request) {
 
     // ── Design Systems: inject .lovable/system.md + rules from connected DS ───
     try {
-      const { data: dsLinks } = await (supabase as any)
+      const { data: dsLinks } = await supabase
         .from("project_design_systems")
         .select("source_project_id, priority, enabled")
         .eq("consumer_project_id", projectId)
@@ -984,7 +984,7 @@ export async function handleAiChat(req: Request) {
         .order("priority", { ascending: true });
       const sourceIds = (dsLinks ?? []).map((l: any) => l.source_project_id);
       if (sourceIds.length > 0) {
-        const { data: dsFiles } = await (supabase as any)
+        const { data: dsFiles } = await supabase
           .from("project_files")
           .select("project_id, path, content")
           .in("project_id", sourceIds)
@@ -1055,7 +1055,7 @@ export async function handleAiChat(req: Request) {
       // project's health findings become prevention rules in the prompt.
       try {
         const { buildLearnedRulesBlock } = await import("@/lib/ai/learned-rules");
-        const { data: findings } = await (supabase as any)
+        const { data: findings } = await supabase
           .from("health_findings")
           .select("title, detail")
           .eq("project_id", projectId)
@@ -1628,7 +1628,7 @@ The user has expressed frustration. Do the following:
               // file) but must not be invisible.
               midStreamWrites.push(
                 Promise.resolve(
-                  (supabase as any).from("project_files").upsert({
+                  supabase.from("project_files").upsert({
                     project_id: projectId,
                     path: file.path,
                     content: safeContent,
@@ -2044,7 +2044,7 @@ The user has expressed frustration. Do the following:
                 const lang = pr.path.split(".").pop()?.toLowerCase() ?? "text";
                 const langMap: Record<string, string> = { ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", css: "css", html: "html", json: "json", md: "markdown" };
                 parsedFiles.push({ path: pr.path, content: pr.content, language: langMap[lang] ?? lang });
-                await (supabase as any).from("project_files").upsert({
+                await supabase.from("project_files").upsert({
                   project_id: projectId, path: pr.path, content: pr.content, language: langMap[lang] ?? lang,
                 }, { onConflict: "project_id,path" });
                 // Reach the RUNNING preview container too — a DB-only save
@@ -2315,14 +2315,14 @@ The user has expressed frustration. Do the following:
             // ── Save files to DB ──────────────────────────────────────────
             if (parsedFiles.length > 0) {
               // Auto-snapshot current state before overwriting
-              const { data: currentFiles } = await (supabase as any)
+              const { data: currentFiles } = await supabase
                 .from("project_files")
                 .select("path, content, language")
                 .eq("project_id", projectId);
 
               if (currentFiles && currentFiles.length > 0) {
                 try {
-                  const { data: preSnap } = await (supabase as any)
+                  const { data: preSnap } = await supabase
                     .from("project_snapshots")
                     .insert({
                       project_id:  projectId,
@@ -2352,9 +2352,9 @@ The user has expressed frustration. Do the following:
                   files: parsedFiles.length,
                   paths: parsedFiles.slice(0, 3).map((f) => f.path),
                 });
-                await (supabase as any)
+                await supabase
                   .from("projects")
-                  .update({ metadata: { ...prevMeta, decision_log: nextLog } })
+                  .update({ metadata: { ...prevMeta, decision_log: nextLog } as unknown as import("@/types/database").Json })
                   .eq("id", projectId);
               } catch { /* best-effort — never fail the build */ }
 
@@ -2371,7 +2371,7 @@ The user has expressed frustration. Do the following:
               const { sanitizeGeneratedFile } = await import("@/lib/ai/html-sanity");
               for (const file of parsedFiles) {
                 const sanitized = sanitizeGeneratedFile(file.path, file.content);
-                await (supabase as any).from("project_files").upsert({
+                await supabase.from("project_files").upsert({
                   project_id: projectId,
                   path: file.path,
                   // Guards against continuation rounds appending a second full
@@ -2413,7 +2413,7 @@ The user has expressed frustration. Do the following:
                     if (!parsedFiles.some((f) => f.path === pr.path)) {
                       parsedFiles.push({ path: pr.path, content: pr.content, language });
                     }
-                    await (supabase as any).from("project_files").upsert({
+                    await supabase.from("project_files").upsert({
                       project_id: projectId,
                       path: pr.path,
                       content: pr.content,
@@ -2632,7 +2632,7 @@ The user has expressed frustration. Do the following:
           // Fire-and-forget: don't await so it doesn't block the response
           ;(async () => {
             try {
-              const { count } = await (supabase as any)
+              const { count } = await supabase
                 .from("messages")
                 .select("id", { count: "exact", head: true })
                 .eq("project_id", projectId);
@@ -2661,7 +2661,7 @@ The user has expressed frustration. Do the following:
             void (async () => {
               try {
                 const admin = await createAdminClient();
-                await (admin as any).from("notifications").insert({
+                await admin.from("notifications").insert({
                   user_id: userId,
                   type: "ai_done",
                   title: "Build complete ✓",
@@ -2686,7 +2686,7 @@ The user has expressed frustration. Do the following:
             parsedFiles.length === 0 &&
             streamedFilePaths.size > 0
           ) {
-            const { data: dbFiles } = await (supabase as any)
+            const { data: dbFiles } = await supabase
               .from("project_files")
               .select("path, content, language")
               .eq("project_id", projectId)
@@ -2780,7 +2780,7 @@ The user has expressed frustration. Do the following:
               // still in flight would land on top of this backstop. Let them
               // finish first so this batch is genuinely last.
               await drainMidStreamWrites();
-              const { error: backstopError } = await (supabase as any).from("project_files").upsert(
+              const { error: backstopError } = await supabase.from("project_files").upsert(
                 streamedFiles.map((f) => ({ project_id: projectId, path: f.path, content: f.content, language: f.language })),
                 { onConflict: "project_id,path" },
               );

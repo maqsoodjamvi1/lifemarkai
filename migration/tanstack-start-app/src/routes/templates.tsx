@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute,Link } from "@tanstack/react-router";
 import { fetchTemplatesPage } from "@/lib/dashboard-server";
 import { templatesSearchValidator } from "@/lib/route-search";
 import { Navbar } from "@/components/marketing/navbar";
@@ -42,12 +42,12 @@ function TemplatesPage() {
           ))}
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {templates.map((t: any) => (
-            <div key={t.id} className="rounded-xl border border-border p-4 flex flex-col gap-2">
-              <div className="font-semibold">{t.name}</div>
-              <p className="text-sm text-muted-foreground line-clamp-2">{t.description}</p>
+          {templates.map((template) => (
+            <div key={template.id} className="rounded-xl border border-border p-4 flex flex-col gap-2">
+              <div className="font-semibold">{template.name}</div>
+              <p className="text-sm text-muted-foreground line-clamp-2">{template.description}</p>
               <div className="text-xs text-muted-foreground mt-auto">
-                {t.framework} · {t.fork_count ?? 0} forks
+                {template.category} · {template.fork_count ?? 0} forks
               </div>
               <Link to={signedIn ? "/dashboard" : "/signup"}>
                 <Button className="w-full" size="sm">

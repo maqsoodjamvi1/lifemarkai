@@ -1,6 +1,5 @@
 
-import { motion } from "framer-motion";
-import { FileCode, XCircle } from "lucide-react";
+import { FileCode,XCircle } from "lucide-react";
 
 interface LovableComposerAttachedTextChipProps {
   name: string;

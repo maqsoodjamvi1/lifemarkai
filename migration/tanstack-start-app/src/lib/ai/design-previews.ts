@@ -1,4 +1,4 @@
-import { classifyBuildIntent, shouldAutoBuildMode } from "./build-intent.ts";
+import { classifyBuildIntent,shouldAutoBuildMode } from "./build-intent.ts";
 
 export interface DesignPreviewDirection {
   id: string;

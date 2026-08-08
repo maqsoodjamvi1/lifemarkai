@@ -3,8 +3,8 @@
  * Ports of app/api/domains/{checkout,purchase} (need lib/plans/gating + stripe).
  */
 import { createClient } from "../supabase/server.ts";
-import { stripe, getOrCreateCustomer } from "../stripe/client.ts";
-import { getRegistrar, isPurchaseEnabled, type RegistrantContact } from "../domains/registrar.ts";
+import { stripe,getOrCreateCustomer } from "../stripe/client.ts";
+import { getRegistrar,isPurchaseEnabled } from "../domains/registrar.ts";
 import { completeDomainPurchase } from "../domains/complete-domain-purchase.ts";
 import { requireFeature } from "../plans/gating.ts";
 
@@ -24,22 +24,22 @@ export async function createDomainCheckout(data: any) {
       return { status: "bad_request" as const, message: "projectId, domain, contact, and priceCents are required" };
     }
 
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects").select("id").eq("id", data.projectId).eq("user_id", user.id).single();
     if (!project) return { status: "not_found" as const };
 
     const yr = Math.min(Math.max(data.years ?? 1, 1), 10);
     const registrar = getRegistrar();
-    const { data: profile } = await (supabase as any)
+    const { data: profile } = await supabase
       .from("profiles").select("stripe_customer_id, email, full_name").eq("id", user.id).single();
 
     let customerId = profile?.stripe_customer_id ?? "";
     if (!customerId) {
       customerId = await getOrCreateCustomer(user.id, profile?.email ?? user.email ?? "", profile?.full_name ?? undefined);
-      await (supabase as any).from("profiles").update({ stripe_customer_id: customerId }).eq("id", user.id);
+      await supabase.from("profiles").update({ stripe_customer_id: customerId }).eq("id", user.id);
     }
 
-    const { data: pending } = await (supabase as any)
+    const { data: pending } = await supabase
       .from("domain_registrations")
       .upsert(
         {
@@ -85,7 +85,7 @@ export async function createDomainCheckout(data: any) {
       },
     });
 
-    await (supabase as any).from("domain_registrations").update({ stripe_ref: session.id }).eq("domain", data.domain.toLowerCase());
+    await supabase.from("domain_registrations").update({ stripe_ref: session.id }).eq("domain", data.domain.toLowerCase());
     return { status: "ok" as const, url: session.url, sessionId: session.id };
 }
 
@@ -103,7 +103,7 @@ export async function purchaseDomainDirect(data: any) {
       return { status: "bad_request" as const, message: "projectId, domain and contact are required" };
     }
 
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects").select("id").eq("id", data.projectId).eq("user_id", user.id).single();
     if (!project) return { status: "not_found" as const };
 

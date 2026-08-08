@@ -1,6 +1,6 @@
 
 import { motion } from "framer-motion";
-import { Wand2, X } from "lucide-react";
+import { Wand2,X } from "lucide-react";
 
 interface LovableAttachedMockupCardProps {
   imageSrc: string;

@@ -1,15 +1,15 @@
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback,useEffect,useRef,useState } from "react";
 import {
-  MousePointer, MessageSquarePlus, Terminal, RefreshCw,
-  Maximize2, Minimize2, Frame, Monitor, Smartphone, Tablet, Pencil,
-  Type, ChevronRight, Undo2, Redo2, MoreHorizontal,
+MousePointer,MessageSquarePlus,Terminal,RefreshCw,
+Maximize2,Minimize2,Frame,Monitor,Smartphone,Tablet,Pencil,
+Type,ChevronRight,Undo2,Redo2,MoreHorizontal,
 } from "lucide-react";
 import {
-  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+Tooltip,TooltipContent,TooltipProvider,TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+DropdownMenu,DropdownMenuContent,DropdownMenuItem,DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
@@ -217,9 +217,13 @@ export function LovablePreviewInteractionToolbar({
             "relative overflow-hidden bg-white/[0.48] dark:bg-black/40 text-[#1B1B1B] dark:text-[var(--fg-primary)]",
             "shadow-[0_4px_4px_-2px_rgba(0,0,0,0.04),0_2px_2px_-1px_rgba(0,0,0,0.04),0_0_0_0.5px_rgba(0,0,0,0.12),inset_0_0.5px_0_rgba(255,255,255,0.24)]",
             "backdrop-blur-md backdrop-saturate-[1.4]",
-            "rounded-full transition-[width,height] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]",
+            "rounded-full transition-[width,height] duration-200",
           )}
-          style={{ height: 40, width: pillWidth ?? undefined }}
+          style={{
+            height: 40,
+            width: pillWidth ?? undefined,
+            transitionTimingFunction: "cubic-bezier(0.32, 0.72, 0, 1)",
+          }}
         >
           <div
             role="toolbar"

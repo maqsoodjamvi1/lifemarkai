@@ -6,11 +6,11 @@
  * Endpoints are persisted as project env vars (WEBHOOK_<ID>_URL etc.).
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState,useEffect,useCallback } from "react";
 import {
-  Webhook, Plus, Trash2, Send, CheckCircle2, XCircle,
-  Loader2, Copy, Check, ChevronDown, ChevronRight,
-  AlertCircle, ShieldCheck, Zap,
+Webhook,Plus,Trash2,Send,CheckCircle2,XCircle,
+Loader2,Copy,Check,ChevronDown,ChevronRight,
+AlertCircle,ShieldCheck,Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

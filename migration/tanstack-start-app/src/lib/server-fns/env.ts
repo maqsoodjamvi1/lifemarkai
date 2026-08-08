@@ -5,17 +5,17 @@
 import { createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
 import {
-  canReadProjectFiles,
-  canWriteProjectFiles,
-  getProjectAccess,
+canReadProjectFiles,
+canWriteProjectFiles,
+getProjectAccess,
 } from "@/lib/project/access";
-import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "../project/env-file.ts";
+import { ENV_FILE_PATH,parseEnvFile,serializeEnvFile } from "../project/env-file.ts";
 
 async function loadEnvRecord(
   supabase: Awaited<ReturnType<typeof createClient>>,
   projectId: string,
 ) {
-  const { data } = await (supabase as any)
+  const { data } = await supabase
     .from("project_files")
     .select("id, content")
     .eq("project_id", projectId)
@@ -97,11 +97,11 @@ export async function upsertEnvVar(input: {
     // The result was discarded, so the route above answered `{ ok: true }` for
     // a write that never landed — on the panel where the values are API keys.
     const { error } = row
-      ? await (supabase as any)
+      ? await supabase
           .from("project_files")
           .update({ content, updated_at: new Date().toISOString() })
           .eq("id", row.id)
-      : await (supabase as any).from("project_files").insert({
+      : await supabase.from("project_files").insert({
           project_id: input.projectId,
           path: ENV_FILE_PATH,
           content,
@@ -137,7 +137,7 @@ export async function deleteEnvVar(input: { projectId: string; key: string }) {
     if (!(key in vars)) return { status: "ok" as const, key, deleted: false };
     delete vars[key];
     const content = serializeEnvFile(vars);
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("project_files")
       .update({ content, updated_at: new Date().toISOString() })
       .eq("id", row.id);

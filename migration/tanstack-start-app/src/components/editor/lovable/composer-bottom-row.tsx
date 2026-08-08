@@ -1,12 +1,12 @@
 
-import type { MutableRefObject, RefObject } from "react";
-import type { EditorMode, LeftPanel } from "@/components/editor/editor-layout";
+import type { MutableRefObject,Ref } from "react";
+import type { EditorMode,LeftPanel } from "@/components/editor/editor-layout";
 import type { OpenRouterModelId } from "@/lib/ai/openrouter-models";
 import { VoiceMode } from "@/components/editor/voice-mode";
 import {
-  LovableComposerContextMenu,
-  LovableVisualEditsButton,
-  type ComposerContextMenuActions,
+LovableComposerContextMenu,
+LovableVisualEditsButton,
+type ComposerContextMenuActions,
 } from "./composer-toolbar";
 import { LovableComposerModeRow } from "./composer-mode-row";
 import { LovableComposerModelMenu } from "./composer-model-menu";
@@ -23,7 +23,7 @@ export interface LovableComposerBottomRowProps {
   onDesignDirections?: () => void;
   onAttach: () => void;
   /** Hidden file input — Lovable dump places it in the bottom row before Chat actions. */
-  fileInputRef?: RefObject<HTMLInputElement | null>;
+  fileInputRef?: Ref<HTMLInputElement>;
   onImageAttach?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   isVisualEditActive?: boolean;
   onVisualEditToggle?: () => void;

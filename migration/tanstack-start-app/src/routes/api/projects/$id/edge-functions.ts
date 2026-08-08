@@ -1,12 +1,11 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles, canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { canReadProjectFiles,canWriteProjectFiles,getProjectAccess } from "@/lib/project/access";
 import {
-  deployManagedEdgeFunction,
-  isManagementTokenConfigured,
-  listManagedEdgeFunctions,
+deployManagedEdgeFunction,
+isManagementTokenConfigured,
+listManagedEdgeFunctions,
 } from "@/lib/cloud/management";
 
 /**
@@ -79,7 +78,7 @@ export const Route = createFileRoute("/api/projects/$id/edge-functions")({
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
         const path = `supabase/functions/${slug}/index.ts`;
-        const { error: saveError } = await (supabase as any).from("project_files").upsert({
+        const { error: saveError } = await supabase.from("project_files").upsert({
           project_id: projectId,
           path,
           content: code,

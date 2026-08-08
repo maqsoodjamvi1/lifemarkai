@@ -1,5 +1,7 @@
 import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 import nextTypescript from "eslint-config-next/typescript";
+import reactPlugin from "eslint-plugin-react";
+import reactHooksPlugin from "eslint-plugin-react-hooks";
 
 /**
  * ESLint 9 flat config — migrated from .eslintrc.json.
@@ -27,12 +29,20 @@ const eslintConfig = [
   ...nextCoreWebVitals,
   ...nextTypescript,
   {
+    // eslint-config-next registers its Next and TypeScript plugins, but its flat
+    // presets do not expose the React plugins to this separate override object.
+    plugins: {
+      react: reactPlugin,
+      "react-hooks": reactHooksPlugin,
+    },
     rules: {
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_" }],
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/ban-ts-comment": "warn",
       "@typescript-eslint/no-require-imports": "warn",
-      "@next/next/no-html-link-for-pages": "warn",
+      // The active application is TanStack Start, so Next.js page/image rules
+      // produce false positives and filesystem warnings for valid Vite code.
+      "@next/next/no-html-link-for-pages": "off",
       "react/no-unescaped-entities": "warn",
       "react-hooks/exhaustive-deps": "warn",
       "react-hooks/error-boundaries": "warn",
@@ -44,7 +54,7 @@ const eslintConfig = [
       "react-hooks/set-state-in-effect": "warn",
       "react-hooks/static-components": "warn",
       "no-console": ["warn", { allow: ["warn", "error"] }],
-      "@next/next/no-img-element": "warn",
+      "@next/next/no-img-element": "off",
     },
   },
 ];

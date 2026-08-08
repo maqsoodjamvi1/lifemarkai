@@ -1,11 +1,10 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { buildFallbackHtml } from "@/lib/preview/build-fallback-html";
 import { verifyPreviewHtml } from "@/lib/ai/preview-verify";
 import { runSelfVerification } from "@/lib/ai/self-verify";
-import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
 
 
 /** POST — quick preview sanity check after AI builds (prefers live Modal URL). */
@@ -30,7 +29,7 @@ async function handlePOST(req: Request, params: any) {
     /* empty body is fine */
   }
 
-  const { data: projectRow } = await (supabase as any)
+  const { data: projectRow } = await supabase
     .from("projects")
     .select("preview_url, deployed_url")
     .eq("id", id)
@@ -44,7 +43,7 @@ async function handlePOST(req: Request, params: any) {
         ? projectRow.deployed_url
         : null);
 
-  const { data: files, error } = await (supabase as any)
+  const { data: files, error } = await supabase
     .from("project_files")
     .select("path, content, language, project_id, id, created_at, updated_at")
     .eq("project_id", id);

@@ -1,10 +1,21 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
 interface Params { params: Promise<{ id: string }> }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+interface AnalyticsMessage {
+  mode: string | null;
+  created_at: string;
+  tokens_used: number | null;
+}
+
+interface AnalyticsDeployment {
+  status: string;
+  created_at: string;
+  deployed_at: string | null;
+}
 
 /** Bucket a raw user-agent string into a coarse device class. */
 function deviceFromUA(ua: string | null | undefined): "Desktop" | "Mobile" | "Tablet" | "Bot" | "Unknown" {
@@ -45,7 +56,7 @@ async function handleGET(req: Request, params: any) {
   const rangeStartIso = new Date(rangeStartMs).toISOString();
 
   // Verify access (owner or collaborator)
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("id, user_id, name, created_at, deployed_url")
     .eq("id", projectId)
@@ -53,7 +64,7 @@ async function handleGET(req: Request, params: any) {
 
   if (!project) return Response.json({ error: "Not found" }, { status: 404 });
   if (project.user_id !== user.id) {
-    const { data: collab } = await (supabase as any)
+    const { data: collab } = await supabase
       .from("collaborators")
       .select("id")
       .eq("project_id", projectId)
@@ -74,43 +85,43 @@ async function handleGET(req: Request, params: any) {
     totalViewsLifetimeRes,
     activeVisitorsRes,
   ] = await Promise.all([
-    (supabase as any)
+    supabase
       .from("messages")
       .select("id, mode, created_at, tokens_used")
       .eq("project_id", projectId)
       .order("created_at", { ascending: true }),
-    (supabase as any)
+    supabase
       .from("deployments")
       .select("id, status, created_at, deployed_at")
       .eq("project_id", projectId)
       .order("created_at", { ascending: true }),
-    (supabase as any)
+    supabase
       .from("project_files")
       .select("id, path, language, updated_at")
       .eq("project_id", projectId),
-    (supabase as any)
+    supabase
       .from("project_snapshots")
       .select("id, created_at, is_baseline")
       .eq("project_id", projectId)
       .order("created_at", { ascending: true }),
-    (supabase as any)
+    supabase
       .from("project_views")
       .select("id, created_at, ip_hash, country_code, referrer, path, user_agent")
       .eq("project_id", projectId)
       .gte("created_at", rangeStartIso),
-    (supabase as any)
+    supabase
       .from("project_views")
       .select("id", { count: "exact", head: true })
       .eq("project_id", projectId),
-    (supabase as any)
+    supabase
       .from("app_visitors")
       .select("id", { count: "exact", head: true })
       .eq("project_id", projectId)
       .gte("last_seen", new Date(Date.now() - 90_000).toISOString()),
   ]);
 
-  const messages = messagesRes.data ?? [];
-  const deployments = deploymentsRes.data ?? [];
+  const messages = (messagesRes.data ?? []) as AnalyticsMessage[];
+  const deployments = (deploymentsRes.data ?? []) as AnalyticsDeployment[];
   const files = filesRes.data ?? [];
   const snapshots = snapshotsRes.data ?? [];
   const recentViews: Array<{

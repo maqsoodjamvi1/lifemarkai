@@ -1,6 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState,useMemo } from "react";
 import { Link } from "@tanstack/react-router";
-import { Search, X, ChevronRight, Zap, CheckCircle2, ArrowRight } from "lucide-react";
+import { Search,X,ChevronRight,Zap,CheckCircle2,ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";

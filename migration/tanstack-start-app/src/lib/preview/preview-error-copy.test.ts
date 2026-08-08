@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  describePreviewError,
-  shouldShowRawPreviewDiagnostics,
+describePreviewError,
+shouldShowRawPreviewDiagnostics,
 } from "./preview-error-copy.ts";
 
 /**

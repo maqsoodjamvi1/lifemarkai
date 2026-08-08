@@ -1,8 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState,useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { History, Code2, Zap, Box, Wind } from "lucide-react";
-import { getRecentProjects, type RecentProject } from "@/hooks/use-recent-projects";
+import { History,Code2,Zap,Box,Wind } from "lucide-react";
+import { getRecentProjects,type RecentProject } from "@/hooks/use-recent-projects";
 import type { Project } from "@/types/database";
 
 const FW_CONFIG: Record<string, { color: string; icon: React.ElementType }> = {

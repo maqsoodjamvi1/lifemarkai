@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * GET /api/projects/:id/sandbox-preview/logs?sandboxId=
  * Tail Modal Vite/Next log for the preview Console tab (Lovable parity).
@@ -6,8 +5,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
-import { getSandboxProvider, isSandboxEnabled } from "@/lib/sandbox";
+import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
+import { getSandboxProvider,isSandboxEnabled } from "@/lib/sandbox";
 
 
 interface Params {
@@ -31,7 +30,7 @@ async function handleGET(req: Request, params: any) {
   }
 
   const queryId = new URL(req.url).searchParams.get("sandboxId");
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("metadata")
     .eq("id", projectId)

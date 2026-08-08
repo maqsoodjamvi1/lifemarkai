@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 // Not Response.redirect(): auth.getUser() can refresh the session and write
@@ -80,7 +79,7 @@ export const Route = createFileRoute("/api/oauth/callback/$connector")({
           ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
           : null;
 
-        await (supabase as any).from("oauth_tokens").upsert({
+        await supabase.from("oauth_tokens").upsert({
           user_id: user.id,
           connector,
           access_token: tokenData.access_token,

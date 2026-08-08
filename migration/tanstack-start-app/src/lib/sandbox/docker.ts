@@ -41,20 +41,20 @@
 import http from "node:http";
 import { createHash } from "node:crypto";
 import type {
-  ClaudeCodeResult,
-  CommandResult,
-  SandboxFile,
-  SandboxProvider,
-  SandboxRunResult,
-  TypecheckResult,
+ClaudeCodeResult,
+CommandResult,
+SandboxFile,
+SandboxProvider,
+SandboxRunResult,
+TypecheckResult,
 } from "./index.ts";
-import { DEFAULT_TIMEOUT_MS, trunc, waitForServer } from "./shared.ts";
+import { DEFAULT_TIMEOUT_MS,trunc,waitForServer } from "./shared.ts";
+import { SYNC_MANIFEST,filesToPrune } from "./prune-files.ts";
+import { parseTscOutput } from "./tsc-diagnostics.ts";
+import { dependenciesAlreadySatisfied } from "./deps-satisfied.ts";
 
 /** Vite's port inside the sandbox. The heartbeat has no opts.port to read. */
 const DEFAULT_INNER_PORT = 5173;
-import { SYNC_MANIFEST, filesToPrune } from "./prune-files.ts";
-import { parseTscOutput } from "./tsc-diagnostics.ts";
-import { dependenciesAlreadySatisfied } from "./deps-satisfied.ts";
 
 const DEV_LOG = "/tmp/lifemark-dev.log";
 

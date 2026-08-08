@@ -1,8 +1,7 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
 import { canDownloadProjectCode } from "@/lib/project/download-policy";
 
 async function exportHandler({ request, params }: { request: Request; params: { id: string } }) {
@@ -19,7 +18,7 @@ async function exportHandler({ request, params }: { request: Request; params: { 
       return Response.json({ error: "Project not found" }, { status: 404 });
     }
 
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("*")
       .eq("id", id)
@@ -44,7 +43,7 @@ async function exportHandler({ request, params }: { request: Request; params: { 
       );
     }
 
-    const { data: files } = await (supabase as any)
+    const { data: files } = await supabase
       .from("project_files")
       .select("path, content, language")
       .eq("project_id", id);
@@ -56,7 +55,8 @@ async function exportHandler({ request, params }: { request: Request; params: { 
     // Build a simple ZIP using pure JS (no native deps)
     const zipEntries = buildZipEntries(files as Array<{ path: string; content: string }>);
 
-    return new Response(zipEntries, {
+    const zipBody = Uint8Array.from(zipEntries).buffer;
+    return new Response(zipBody, {
       status: 200,
       headers: {
         "Content-Type": "application/zip",

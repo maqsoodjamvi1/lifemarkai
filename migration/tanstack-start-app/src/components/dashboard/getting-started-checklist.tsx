@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { CheckCircle2, Circle, Rocket, MessageSquare, Share2, Sparkles, X } from "lucide-react";
+import { useState,useEffect } from "react";
+import { motion,AnimatePresence } from "framer-motion";
+import { CheckCircle2,Circle,Rocket,MessageSquare,Share2,Sparkles,X } from "lucide-react";
 
 interface GettingStartedChecklistProps {
   hasProjects: boolean;

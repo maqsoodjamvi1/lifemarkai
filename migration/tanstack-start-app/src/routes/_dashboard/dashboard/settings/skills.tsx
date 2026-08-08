@@ -1,4 +1,4 @@
-import { createFileRoute, getRouteApi } from "@tanstack/react-router";
+import { createFileRoute,getRouteApi } from "@tanstack/react-router";
 import { WorkspaceSkillsPage } from "@/components/dashboard/workspace-skills-page";
 
 const layoutApi = getRouteApi("/_dashboard");

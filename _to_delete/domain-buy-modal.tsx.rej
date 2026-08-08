@@ -1,0 +1,41 @@
+--- migration/tanstack-start-app/src/components/editor/domain-buy-modal.tsx
++++ migration/tanstack-start-app/src/components/editor/domain-buy-modal.tsx
+@@ -76,6 +76,10 @@ export function DomainBuyModal({
+       return;
+     }
+     setSearching(true);
++    // Guard the in-flight request, not just the debounce timer: an older
++    // availability lookup resolving late would overwrite the results for the
++    // domain the user is actually typing — or repopulate a closed modal.
++    let cancelled = false;
+     const timer = window.setTimeout(async () => {
+       try {
+         const res = await fetch("/api/domains/search", {
+@@ -89,6 +93,7 @@ export function DomainBuyModal({
+           suggestions?: DomainSuggestion[];
+           message?: string;
+         };
++        if (cancelled) return;
+         setConfigured(data.configured ?? false);
+         setRegistrar(data.registrar ?? null);
+         setSuggestions(data.suggestions ?? []);
+@@ -96,13 +101,17 @@ export function DomainBuyModal({
+           setSuggestions([]);
+         }
+       } catch {
++        if (cancelled) return;
+         setConfigured(false);
+         setSuggestions([]);
+       } finally {
+-        setSearching(false);
++        if (!cancelled) setSearching(false);
+       }
+     }, 400);
+-    return () => window.clearTimeout(timer);
++    return () => {
++      cancelled = true;
++      window.clearTimeout(timer);
++    };
+   }, [query, open]);
+ 
+   function updateContact(field: keyof RegistrantContact, value: string) {

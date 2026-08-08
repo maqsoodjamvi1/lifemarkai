@@ -1,8 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { mcpInitialize, mcpListTools } from "@/lib/ai/mcp-client";
+import { mcpInitialize,mcpListTools } from "@/lib/ai/mcp-client";
+import type { Database } from "@/types/database";
 
 /**
  * Native /api/mcp/servers — user-configured external MCP servers.
@@ -51,7 +51,7 @@ export const Route = createFileRoute("/api/mcp/servers")({
         const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { data, error } = await (supabase as any)
+        const { data, error } = await supabase
           .from("user_mcp_servers")
           .select("*")
           .eq("user_id", user.id)
@@ -72,7 +72,7 @@ export const Route = createFileRoute("/api/mcp/servers")({
           const id = typeof body.id === "string" ? body.id : null;
           if (!id) return Response.json({ error: "id is required" }, { status: 400 });
 
-          const { data: row } = await (supabase as any)
+          const { data: row } = await supabase
             .from("user_mcp_servers").select("*").eq("id", id).eq("user_id", user.id).single();
           if (!row) return Response.json({ error: "Server not found" }, { status: 404 });
 
@@ -87,7 +87,7 @@ export const Route = createFileRoute("/api/mcp/servers")({
             lastStatus = `error: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500);
           }
 
-          await (supabase as any)
+          await supabase
             .from("user_mcp_servers")
             .update({ last_status: lastStatus, last_tools: tools })
             .eq("id", id)
@@ -105,13 +105,13 @@ export const Route = createFileRoute("/api/mcp/servers")({
             ? body.authHeader.trim().slice(0, 500)
             : null;
 
-        const { count } = await (supabase as any)
+        const { count } = await supabase
           .from("user_mcp_servers").select("id", { count: "exact", head: true }).eq("user_id", user.id);
         if ((count ?? 0) >= MAX_SERVERS_PER_USER) {
           return Response.json({ error: `Limit reached: max ${MAX_SERVERS_PER_USER} MCP servers per account.` }, { status: 400 });
         }
 
-        const { data, error } = await (supabase as any)
+        const { data, error } = await supabase
           .from("user_mcp_servers")
           .insert({ user_id: user.id, name, url, auth_header: authHeader })
           .select("*")
@@ -130,7 +130,7 @@ export const Route = createFileRoute("/api/mcp/servers")({
         const id = typeof body?.id === "string" ? body.id : null;
         if (!id) return Response.json({ error: "id is required" }, { status: 400 });
 
-        const updates: Record<string, unknown> = {};
+        const updates: Database["public"]["Tables"]["user_mcp_servers"]["Update"] = {};
         if (typeof body.name === "string" && body.name.trim()) updates.name = body.name.trim().slice(0, 60);
         if (body.url !== undefined) {
           const url = validateUrl(body.url);
@@ -148,7 +148,7 @@ export const Route = createFileRoute("/api/mcp/servers")({
           return Response.json({ error: "No valid fields to update" }, { status: 400 });
         }
 
-        const { data, error } = await (supabase as any)
+        const { data, error } = await supabase
           .from("user_mcp_servers")
           .update(updates)
           .eq("id", id)
@@ -169,7 +169,7 @@ export const Route = createFileRoute("/api/mcp/servers")({
         const id = new URL(request.url).searchParams.get("id");
         if (!id) return Response.json({ error: "id is required" }, { status: 400 });
 
-        const { error } = await (supabase as any)
+        const { error } = await supabase
           .from("user_mcp_servers").delete().eq("id", id).eq("user_id", user.id);
         if (error) return Response.json({ error: error.message }, { status: 500 });
 

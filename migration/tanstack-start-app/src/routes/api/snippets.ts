@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
@@ -14,7 +13,7 @@ export const Route = createFileRoute("/api/snippets")({
         const q = sp.get("q") ?? "";
         const tag = sp.get("tag") ?? "";
         const scope = sp.get("scope") ?? "all";
-        let query = (supabase as any).from("prompt_snippets")
+        let query = supabase.from("prompt_snippets")
           .select("id, user_id, title, content, tags, is_public, use_count, created_at, updated_at")
           .order("use_count", { ascending: false }).limit(100);
         if (scope === "mine") query = query.eq("user_id", user.id);
@@ -36,7 +35,7 @@ export const Route = createFileRoute("/api/snippets")({
         const is_public = !!body.is_public;
         if (!title || title.length > 100) return Response.json({ error: "Title must be 1–100 characters." }, { status: 400 });
         if (!content || content.length > 4000) return Response.json({ error: "Content must be 1–4000 characters." }, { status: 400 });
-        const { data, error } = await (supabase as any).from("prompt_snippets").insert({ user_id: user.id, title, content, tags, is_public }).select("*").single();
+        const { data, error } = await supabase.from("prompt_snippets").insert({ user_id: user.id, title, content, tags, is_public }).select("*").single();
         if (error) return Response.json({ error: error.message }, { status: 500 });
         return Response.json(data, { status: 201 });
       },

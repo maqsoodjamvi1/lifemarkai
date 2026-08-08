@@ -1,13 +1,13 @@
 
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  ShieldAlert, Zap, Star, Code2, AlertCircle, AlertTriangle, Info,
-  Loader2, RefreshCw, CheckCircle2, FileCode2, Wrench,
+ShieldAlert,Zap,Star,Code2,AlertCircle,AlertTriangle,Info,
+Loader2,RefreshCw,CheckCircle2,FileCode2,Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ProjectFile } from "@/types/database";
-import type { ReviewIssue, ReviewResult } from "@/lib/ai/review-types";
+import type { ReviewIssue,ReviewResult } from "@/lib/ai/review-types";
 
 interface CodeReviewPanelProps {
   activeFile: ProjectFile | null;
@@ -71,7 +71,8 @@ export function CodeReviewPanel({ activeFile, onJumpToLine, onFixWithAI }: CodeR
   function toggleCategory(cat: Category) {
     setCollapsed((prev) => {
       const next = new Set(prev);
-      next.has(cat) ? next.delete(cat) : next.add(cat);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
       return next;
     });
   }

@@ -7,9 +7,9 @@
  * arrows/boxes/text, then emits the annotated dataUrl for sending to AI.
  */
 
-import { useRef, useState, useEffect, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { X, Pencil, Square, ArrowRight, Eraser, Send, RotateCcw, Minus } from "lucide-react";
+import { useRef,useState,useEffect,useCallback } from "react";
+import { motion,AnimatePresence } from "framer-motion";
+import { X,Pencil,Square,ArrowRight,Eraser,Send,RotateCcw,Minus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface PreviewAnnotateModalProps {

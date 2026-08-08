@@ -1,9 +1,9 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect,useState,useCallback,useRef } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  Search, FolderOpen, FileCode2, MessageSquare,
-  Loader2, X, ArrowRight, CornerDownLeft,
+Search,FolderOpen,FileCode2,MessageSquare,
+Loader2,X,CornerDownLeft
 } from "lucide-react";
 import type { SearchResult } from "@/types/api";
 

@@ -1,5 +1,5 @@
 import type { EditorMode } from "@/components/editor/editor-layout";
-import { computeCreditCost, formatCredits } from "./credit-cost.ts";
+import { computeCreditCost,formatCredits } from "./credit-cost.ts";
 
 /** Pre-send credit estimate label for the composer (Lovable parity). */
 export function estimateMessageCredits(

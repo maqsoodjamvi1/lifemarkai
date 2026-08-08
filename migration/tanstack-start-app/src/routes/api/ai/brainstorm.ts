@@ -1,9 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { getFastAiModel } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 
 
 const BRAINSTORM_SYSTEM = `You are a creative app concept generator for an AI-powered app builder.

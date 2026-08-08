@@ -1,11 +1,10 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import {
-  sendWelcomeEmail,
-  sendDeploymentEmail,
-  sendLowCreditsEmail,
+sendWelcomeEmail,
+sendDeploymentEmail,
+sendLowCreditsEmail,
 } from "@/lib/email/resend";
 
 // ── GET — fetch notifications + unread count ──────────────────────────────────
@@ -18,7 +17,7 @@ async function handleGET(req: Request) {
   const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "30"), 100);
   const unreadOnly = url.searchParams.get("unread") === "true";
 
-  let query = (supabase as any)
+  let query = supabase
     .from("notifications")
     .select("*")
     .eq("user_id", user.id)
@@ -30,7 +29,7 @@ async function handleGET(req: Request) {
   const { data, error } = await query;
   if (error) return Response.json({ error: error.message }, { status: 500 });
 
-  const { data: countData } = await (supabase as any)
+  const { data: countData } = await supabase
     .rpc("get_unread_notification_count", { p_user_id: user.id });
 
   return Response.json({ notifications: data ?? [], unreadCount: countData ?? 0 });
@@ -45,7 +44,7 @@ async function handlePOST(request: Request) {
 
     const { type, payload } = await request.json();
 
-    const { data: profile } = await (supabase as any)
+    const { data: profile } = await supabase
       .from("profiles")
       .select("*")
       .eq("id", user.id)
@@ -84,12 +83,12 @@ async function handlePATCH(req: Request) {
   const { action, ids } = await req.json();
 
   if (action === "mark_all_read") {
-    await (supabase as any).rpc("mark_notifications_read", { p_user_id: user.id });
+    await supabase.rpc("mark_notifications_read", { p_user_id: user.id });
     return Response.json({ success: true });
   }
 
   if (action === "mark_read" && Array.isArray(ids)) {
-    await (supabase as any).from("notifications")
+    await supabase.from("notifications")
       .update({ is_read: true })
       .eq("user_id", user.id)
       .in("id", ids as string[]);
@@ -109,9 +108,9 @@ async function handleDELETE(req: Request) {
   const id = url.searchParams.get("id");
 
   if (id) {
-    await (supabase as any).from("notifications").delete().eq("id", id).eq("user_id", user.id);
+    await supabase.from("notifications").delete().eq("id", id).eq("user_id", user.id);
   } else {
-    await (supabase as any).from("notifications").delete()
+    await supabase.from("notifications").delete()
       .eq("user_id", user.id).eq("is_read", true);
   }
 

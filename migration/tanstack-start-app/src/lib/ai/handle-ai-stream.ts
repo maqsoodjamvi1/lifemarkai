@@ -3,7 +3,7 @@
  * No Vercel AI SDK — works with SSE (`data: …`) or raw text streams.
  */
 
-import { XmlStreamParser, type ParsedFileUpdate } from "./xml-stream-parser.ts";
+import { XmlStreamParser,type ParsedFileUpdate } from "./xml-stream-parser.ts";
 
 export type StreamFormat = "auto" | "sse" | "text";
 

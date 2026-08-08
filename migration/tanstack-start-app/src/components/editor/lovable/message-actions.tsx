@@ -1,10 +1,10 @@
 
 import {
-  Copy, Check, Pencil, Pin, PinOff, ThumbsUp, ThumbsDown, BookMarked, Link2, Download, Reply, Trash2,
-  Volume2, Square, Undo2, MoreHorizontal,
+Copy,Check,Pencil,Pin,PinOff,ThumbsUp,ThumbsDown,BookMarked,Link2,Download,Reply,Trash2,
+Volume2,Square,Undo2,MoreHorizontal,
 } from "lucide-react";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+DropdownMenu,DropdownMenuContent,DropdownMenuItem,DropdownMenuSeparator,DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { LovableMessageTimestamp } from "./message-timestamp";

@@ -2,19 +2,20 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  ADMIN_PATH_PREFIXES,
-  SITE_CHROME_PATH,
-  isAdminPath,
-  siteChromeFiles,
-  siteChromeShellSource,
+ADMIN_PATH_PREFIXES,
+SITE_CHROME_PATH,
+isAdminPath,
+siteChromeFiles,
+siteChromeShellSource,
 } from "./site-chrome.ts";
 import { lovableViteScaffold } from "./lovable-vite-scaffold.ts";
 import {
-  type ChromeFile,
-  ensureWebsiteChrome,
-  hasSiteFooter,
-  hasSiteHeader,
+type ChromeFile,
+ensureWebsiteChrome,
+hasSiteFooter,
+hasSiteHeader,
 } from "../ai/website-chrome.ts";
+import { tanstackStartScaffold } from "./tanstack-start-scaffold.ts";
 
 /**
  * The two scaffolds disagree about their own file type: the Vite one declares
@@ -30,7 +31,6 @@ const asChromeFiles = (
     content: f.content,
     language: f.language ?? "typescriptreact",
   }));
-import { tanstackStartScaffold } from "./tanstack-start-scaffold.ts";
 
 const fileAt = (files: Array<{ path: string; content: string }>, path: string) => {
   const hit = files.find((f) => f.path === path);

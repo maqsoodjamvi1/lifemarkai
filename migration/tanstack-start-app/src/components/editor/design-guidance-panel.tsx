@@ -1,10 +1,10 @@
 
-import { useState, useRef, useCallback } from "react";
+import { useState,useRef,useCallback } from "react";
 import {
-  Wand2, Sparkles, Loader2, Upload, X, ChevronDown,
-  ChevronRight, CheckCircle2, AlertTriangle, XCircle,
-  LayoutDashboard, Type, Palette, Accessibility,
-  MousePointer, Zap, RefreshCw, ArrowRight,
+Wand2,Sparkles,Loader2,Upload,X,ChevronDown,
+ChevronRight,CheckCircle2,AlertTriangle,XCircle,
+LayoutDashboard,Type,Palette,Accessibility,
+MousePointer,Zap,RefreshCw,ArrowRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -288,7 +288,6 @@ export function DesignGuidancePanel({ projectId, files, onApplyFix }: DesignGuid
               </p>
               {screenshot ? (
                 <div className="relative rounded-lg overflow-hidden border border-border">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={screenshot} alt="Preview screenshot" className="w-full object-cover max-h-40" />
                   <button
                     onClick={() => setScreenshot(null)}

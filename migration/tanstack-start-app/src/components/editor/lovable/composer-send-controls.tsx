@@ -1,5 +1,5 @@
 
-import { ListChecks, Square } from "lucide-react";
+import { ListChecks,Square } from "lucide-react";
 
 interface LovableComposerSendControlsProps {
   streaming: boolean;

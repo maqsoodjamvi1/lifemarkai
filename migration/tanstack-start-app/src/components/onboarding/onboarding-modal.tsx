@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  Zap, Bot, Code2, Rocket, Github, Database,
-  ChevronRight, ChevronLeft, Check, X,
+Zap,Bot,Code2,Rocket,Github,Database,
+ChevronRight,ChevronLeft,Check,X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/client";
@@ -130,7 +130,7 @@ export function OnboardingModal({ onComplete }: OnboardingModalProps) {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        await (supabase as any)
+        await supabase
           .from("profiles")
           .update({ onboarding_complete: true } as any)
           .eq("id", user.id);

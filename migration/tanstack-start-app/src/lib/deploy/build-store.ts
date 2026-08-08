@@ -34,7 +34,7 @@ export {
   normaliseBuildPath,
 } from "@/lib/deploy/asset-kind";
 
-import { isTextAsset, contentTypeFor, normaliseBuildPath } from "./asset-kind.ts";
+import { isTextAsset,contentTypeFor,normaliseBuildPath } from "./asset-kind.ts";
 
 /**
  * Store a completed build and make it live.
@@ -52,16 +52,15 @@ export async function storeBuild(
   if (!files.length) return { ok: false, error: "build produced no files" };
 
   const admin = createAdminClient();
-  const rows = files
-    .map((f) => {
+  const rows = files.flatMap((f) => {
       const path = normaliseBuildPath(f.path);
-      if (!path) return null;
+      if (!path) return [];
       const encoding = f.encoding ?? (isTextAsset(path) ? "utf8" : "base64");
       const byteSize =
         encoding === "base64"
           ? Math.floor((f.content.length * 3) / 4)
           : Buffer.byteLength(f.content, "utf8");
-      return {
+      return [{
         project_id: projectId,
         build_id: buildId,
         path,
@@ -69,9 +68,8 @@ export async function storeBuild(
         encoding,
         content_type: contentTypeFor(path),
         byte_size: byteSize,
-      };
-    })
-    .filter(Boolean) as Array<Record<string, unknown>>;
+      }];
+    });
 
   if (!rows.length) return { ok: false, error: "no storable files after normalisation" };
   if (!rows.some((r) => r.path === "index.html")) {
@@ -82,13 +80,13 @@ export async function storeBuild(
 
   // Chunked so one oversized request cannot fail the whole publish.
   for (let i = 0; i < rows.length; i += 50) {
-    const { error } = await (admin as any)
+    const { error } = await admin
       .from("project_builds")
       .insert(rows.slice(i, i + 50));
     if (error) return { ok: false, error: error.message };
   }
 
-  const { error: flipError } = await (admin as any)
+  const { error: flipError } = await admin
     .from("projects")
     .update({ live_build_id: buildId, live_build_at: new Date().toISOString() })
     .eq("id", projectId);
@@ -96,7 +94,7 @@ export async function storeBuild(
 
   // Old builds are kept for rollback, but not forever — keep the 3 most recent.
   try {
-    const { data: olderBuilds } = await (admin as any)
+    const { data: olderBuilds } = await admin
       .from("project_builds")
       .select("build_id, created_at")
       .eq("project_id", projectId)
@@ -107,7 +105,7 @@ export async function storeBuild(
     }
     const doomed = seen.slice(3);
     if (doomed.length) {
-      await (admin as any)
+      await admin
         .from("project_builds")
         .delete()
         .eq("project_id", projectId)
@@ -132,7 +130,7 @@ export async function readLiveBuildFile(
 ): Promise<StoredBuildFile | null> {
   const admin = createAdminClient();
 
-  const { data: project } = await (admin as any)
+  const { data: project } = await admin
     .from("projects")
     .select("live_build_id")
     .eq("id", projectId)
@@ -154,7 +152,7 @@ export async function readLiveBuildFile(
   if (!looksLikeAsset) candidates.push("index.html");
 
   for (const path of candidates) {
-    const { data } = await (admin as any)
+    const { data } = await admin
       .from("project_builds")
       .select("path, content, encoding, content_type, byte_size")
       .eq("project_id", projectId)
@@ -165,7 +163,7 @@ export async function readLiveBuildFile(
       return {
         path: data.path,
         content: data.content,
-        encoding: data.encoding,
+        encoding: data.encoding === "base64" ? "base64" : "utf8",
         contentType: data.content_type,
         byteSize: data.byte_size,
       };

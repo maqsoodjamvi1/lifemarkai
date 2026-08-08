@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
-  clearMessages,
-  listMessages,
-  postMessages,
+clearMessages,
+listMessages,
+postMessages,
 } from "@/lib/server-fns/messages";
 
 function denied(result: { httpStatus: number; error: string }) {

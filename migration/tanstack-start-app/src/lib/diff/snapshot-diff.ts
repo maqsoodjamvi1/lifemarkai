@@ -111,6 +111,67 @@ export interface SnapshotChainEntry {
   patches:     FilePatch[]    | null;    // non-null for deltas
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function parseSnapshotFiles(value: unknown): SnapshotFile[] {
+  if (!Array.isArray(value)) throw new Error("Snapshot files payload is not an array");
+  return value.map((file) => {
+    if (
+      !isRecord(file) ||
+      typeof file.path !== "string" ||
+      typeof file.content !== "string" ||
+      typeof file.language !== "string"
+    ) {
+      throw new Error("Snapshot contains an invalid file entry");
+    }
+    return { path: file.path, content: file.content, language: file.language };
+  });
+}
+
+function parseFilePatches(value: unknown): FilePatch[] {
+  if (!Array.isArray(value)) throw new Error("Snapshot patches payload is not an array");
+  return value.map((patch) => {
+    if (
+      !isRecord(patch) ||
+      (patch.op !== "add" && patch.op !== "replace" && patch.op !== "remove") ||
+      typeof patch.path !== "string"
+    ) {
+      throw new Error("Snapshot contains an invalid patch entry");
+    }
+    if (
+      patch.op !== "remove" &&
+      (typeof patch.content !== "string" || typeof patch.language !== "string")
+    ) {
+      throw new Error("Snapshot add/replace patch is missing file content");
+    }
+    return {
+      op: patch.op,
+      path: patch.path,
+      ...(patch.op === "remove"
+        ? {}
+        : { content: patch.content as string, language: patch.language as string }),
+    };
+  });
+}
+
+/** Validate the JSON returned by get_snapshot_chain before reconstruction. */
+export function parseSnapshotChain(value: unknown): SnapshotChainEntry[] {
+  if (!Array.isArray(value)) throw new Error("Snapshot chain payload is not an array");
+  return value.map((entry) => {
+    if (!isRecord(entry) || typeof entry.id !== "string" || typeof entry.is_baseline !== "boolean") {
+      throw new Error("Snapshot chain contains an invalid entry");
+    }
+    return {
+      id: entry.id,
+      is_baseline: entry.is_baseline,
+      files: entry.files == null ? null : parseSnapshotFiles(entry.files),
+      patches: entry.patches == null ? null : parseFilePatches(entry.patches),
+    };
+  });
+}
+
 /**
  * Reconstruct the full file list for a snapshot from its ancestor chain.
  *

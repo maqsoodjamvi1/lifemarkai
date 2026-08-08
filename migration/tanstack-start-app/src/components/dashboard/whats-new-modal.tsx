@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { X, Sparkles, Zap, Layout, MessageSquare, Code2, Share2, GitBranch, Shield } from "lucide-react";
+import { useEffect,useState } from "react";
+import { motion,AnimatePresence } from "framer-motion";
+import { X,Sparkles,Zap,Layout,MessageSquare,Code2,Share2,GitBranch,Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const APP_VERSION = "2.5.0";

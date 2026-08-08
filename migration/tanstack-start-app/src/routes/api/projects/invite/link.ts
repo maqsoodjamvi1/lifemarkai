@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -34,7 +33,7 @@ export const Route = createFileRoute("/api/projects/invite/link")({
         }
 
         const admin = createAdminClient();
-        const { data: project } = await (admin as any)
+        const { data: project } = await admin
           .from("projects").select("id, user_id").eq("id", projectId).single();
 
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
@@ -44,7 +43,7 @@ export const Route = createFileRoute("/api/projects/invite/link")({
 
         const expiresAt = new Date(Date.now() + expiresInDays * 86_400_000).toISOString();
 
-        const { data: tokenRow, error } = await (admin as any)
+        const { data: tokenRow, error } = await admin
           .from("project_invite_tokens")
           .insert({
             project_id: projectId,
@@ -70,7 +69,7 @@ export const Route = createFileRoute("/api/projects/invite/link")({
         const projectId = new URL(request.url).searchParams.get("projectId");
         if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
-        const { data } = await (supabase as any)
+        const { data } = await supabase
           .from("project_invite_tokens")
           .select("id, token, role, expires_at, used_count, max_uses, created_at")
           .eq("project_id", projectId)
@@ -93,7 +92,7 @@ export const Route = createFileRoute("/api/projects/invite/link")({
         const id = new URL(request.url).searchParams.get("id");
         if (!id) return Response.json({ error: "id required" }, { status: 400 });
 
-        await (supabase as any)
+        await supabase
           .from("project_invite_tokens")
           .delete()
           .eq("id", id)

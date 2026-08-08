@@ -28,11 +28,11 @@
  */
 
 import {
-  SITE_FOOTER_PATH,
-  SITE_HEADER_PATH,
-  deriveBrand,
-  siteFooterSource as footerSource,
-  siteHeaderSource as headerSource,
+SITE_FOOTER_PATH,
+SITE_HEADER_PATH,
+deriveBrand,
+siteFooterSource as footerSource,
+siteHeaderSource as headerSource,
 } from "../templates/site-chrome.ts";
 
 export interface ChromeFile {

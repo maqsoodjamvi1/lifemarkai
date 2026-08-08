@@ -12,7 +12,7 @@
  *
  * Best-effort: wiring failures never fail the build. Mirrors lib/cloud/auto-wire.ts.
  */
-import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "../project/env-file.ts";
+import { ENV_FILE_PATH,parseEnvFile,serializeEnvFile } from "../project/env-file.ts";
 
 export interface AiWireResult {
   intentDetected: boolean;

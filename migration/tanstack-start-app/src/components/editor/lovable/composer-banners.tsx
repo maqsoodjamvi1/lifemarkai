@@ -1,5 +1,5 @@
 
-import { AlertCircle, Wand2 } from "lucide-react";
+import { AlertCircle,Wand2 } from "lucide-react";
 
 interface LovableNoCreditsBannerProps {
   className?: string;

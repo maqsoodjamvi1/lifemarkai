@@ -1,11 +1,10 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { embedTexts } from "@/lib/ai/embed-text";
 import {
-  rankMessagesByEmbedding,
-  rankMessagesByKeyword,
-  type ChatSearchMode,
+rankMessagesByEmbedding,
+rankMessagesByKeyword,
+type ChatSearchMode,
 } from "@/lib/editor/search-chat-messages";
 import { getOrCreateMessageEmbeddings } from "@/lib/editor/message-embeddings";
 import { assertChatAccess } from "@/lib/project/chat-access";
@@ -19,14 +18,14 @@ async function handleGET(req: Request, params: any) {
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const access = await assertChatAccess(supabase, id, user.id, "read");
-  if ("error" in access) return access.error;
+  if (!access.ok) return Response.json({ error: access.error }, { status: access.status });
 
   const url = new URL(req.url);
   const q = (url.searchParams.get("q") ?? "").trim();
   const mode = (url.searchParams.get("mode") ?? "keyword") as ChatSearchMode;
   if (!q) return Response.json({ hits: [], mode: "keyword" as const });
 
-  const { data: rows, error } = await (supabase as any)
+  const { data: rows, error } = await supabase
     .from("messages")
     .select("id, role, content, created_at")
     .eq("project_id", id)

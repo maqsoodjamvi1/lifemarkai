@@ -1,11 +1,10 @@
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import {
-  Settings, Save, Loader2, Globe, Lock, Share2,
-  Copy, Check, ExternalLink, RefreshCw, Shield,
-  Eye, EyeOff, Link2, Trash2, AlertTriangle,
-  LayoutTemplate, CheckCircle2, X,
+Settings,Save,Loader2,Globe,Lock,Share2,
+Copy,Check,ExternalLink,RefreshCw,Link2,Trash2,AlertTriangle,
+LayoutTemplate,CheckCircle2,X
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import type { Project, Profile } from "@/types/database";
+import type { Project,Profile } from "@/types/database";
 import { ProjectSkillVisibilityPanel } from "./project-skill-visibility-panel";
 
 interface ProjectSettingsPanelProps {

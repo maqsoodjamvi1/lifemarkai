@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * POST /api/projects/:id/sandbox-preview/keep-alive
  *
@@ -10,8 +9,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
-import { getSandboxProvider, isSandboxEnabled } from "@/lib/sandbox";
+import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
+import { getSandboxProvider,isSandboxEnabled } from "@/lib/sandbox";
 
 
 interface Params {
@@ -51,7 +50,7 @@ async function handlePOST(req: Request, params: any) {
   // url lets keepAlive probe the actual tunnel (zombie detection), not just the
   // container's compute liveness.
   if (!sandboxId || !previewUrl) {
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("metadata")
       .eq("id", projectId)

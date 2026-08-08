@@ -3,6 +3,7 @@
  */
 import { createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
+import type { Database } from "../../types/database.ts";
 
 export async function listSkills() {
   const supabase = await createClient();
@@ -10,13 +11,13 @@ export async function listSkills() {
   if (!user) return { status: "unauthorized" as const };
 
   const [userSkills, builtinSkills] = await Promise.all([
-    (supabase as any)
+    supabase
       .from("workspace_skills")
       .select("*")
       .eq("user_id", user.id)
       .order("use_count", { ascending: false })
       .order("created_at", { ascending: false }),
-    (supabase as any)
+    supabase
       .from("builtin_skills")
       .select("*")
       .order("sort_order", { ascending: true }),
@@ -40,7 +41,7 @@ export async function createSkill(data: any) {
       return { status: "bad_request" as const, error: "name and prompt are required" };
     }
 
-    const { data: row, error } = await (supabase as any)
+    const { data: row, error } = await supabase
       .from("workspace_skills")
       .insert({
         user_id: user.id,
@@ -63,7 +64,7 @@ export async function patchSkill(data: any) {
     if (!user) return { status: "unauthorized" as const };
 
     if (data.incrementUse) {
-      const { error: rpcError } = await (supabase as any).rpc("increment_skill_use", {
+      const { error: rpcError } = await supabase.rpc("increment_skill_use", {
         skill_id: data.id,
       });
       if (rpcError) {
@@ -72,7 +73,7 @@ export async function patchSkill(data: any) {
       return { status: "ok" as const, kind: "increment" as const };
     }
 
-    const updates: Record<string, unknown> = {};
+    const updates: Database["public"]["Tables"]["workspace_skills"]["Update"] = {};
     if (data.name !== undefined) updates.name = data.name.trim();
     if (data.description !== undefined) {
       updates.description = data.description?.trim() ?? null;
@@ -85,7 +86,7 @@ export async function patchSkill(data: any) {
       return { status: "bad_request" as const, error: "Nothing to update" };
     }
 
-    const { data: row, error } = await (supabase as any)
+    const { data: row, error } = await supabase
       .from("workspace_skills")
       .update(updates)
       .eq("id", data.id)
@@ -102,7 +103,7 @@ export async function deleteSkill(data: any) {
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
 
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("workspace_skills")
       .delete()
       .eq("id", data.id)

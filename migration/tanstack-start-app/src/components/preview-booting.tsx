@@ -13,7 +13,7 @@
  * be a cold npm install (or a project with no sandbox at all) than something a
  * fast poll will catch.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect,useRef,useState } from "react";
 
 const FIRST_RETRY_MS = 3_000;
 const MAX_RETRY_MS = 15_000;

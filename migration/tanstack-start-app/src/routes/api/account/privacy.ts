@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { getPrivacy, updatePrivacy } from "@/lib/server-fns/account-privacy";
+import { getPrivacy,updatePrivacy } from "@/lib/server-fns/account-privacy";
 
 /** Native /api/account/privacy — GET prefs, PATCH updates. */
 export const Route = createFileRoute("/api/account/privacy")({

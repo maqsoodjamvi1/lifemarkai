@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { Check, Copy, Link2 } from "lucide-react";
+import { Check,Copy,Link2 } from "lucide-react";
 import { usePreviewToken } from "@/hooks/use-preview-token";
 
 interface LovableComposerSharePreviewProps {

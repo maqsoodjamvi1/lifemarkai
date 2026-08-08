@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 /**
  * SupabaseYjsProvider
  *
@@ -16,7 +14,7 @@
  */
 
 import * as Y from "yjs";
-import type { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
+import type { SupabaseClient,RealtimeChannel } from "@supabase/supabase-js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -43,6 +41,7 @@ export interface AwarenessState {
 }
 
 export type AwarenessChangeCallback = (states: Map<string, AwarenessState>) => void;
+type ProviderListener = AwarenessChangeCallback | (() => void);
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -65,7 +64,7 @@ export class SupabaseYjsProvider {
   private presenceKey: string;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private destroyFns: Array<() => void> = [];
-  private listeners: Map<string, Set<(...args: unknown[]) => void>> = new Map();
+  private listeners: Map<string, Set<ProviderListener>> = new Map();
   private _synced = false;
 
   constructor(
@@ -138,10 +137,8 @@ export class SupabaseYjsProvider {
       this.emit("awareness-change", this.awareness);
     });
 
-    this.channel.on("presence", { event: "leave" }, ({ leftPresences }) => {
-      for (const p of leftPresences as Array<{ key: string }>) {
-        this.awareness.delete(p.key);
-      }
+    this.channel.on("presence", { event: "leave" }, ({ key }) => {
+      this.awareness.delete(key);
       this.emit("awareness-change", this.awareness);
     });
 
@@ -211,17 +208,23 @@ export class SupabaseYjsProvider {
 
   on(event: "awareness-change", cb: AwarenessChangeCallback): void;
   on(event: "synced", cb: () => void): void;
-  on(event: string, cb: (...args: unknown[]) => void): void {
+  on(event: string, cb: ProviderListener): void {
     if (!this.listeners.has(event)) this.listeners.set(event, new Set());
     this.listeners.get(event)!.add(cb);
   }
 
-  off(event: string, cb: (...args: unknown[]) => void) {
+  off(event: string, cb: ProviderListener) {
     this.listeners.get(event)?.delete(cb);
   }
 
   private emit(event: string, ...args: unknown[]) {
-    this.listeners.get(event)?.forEach((cb) => cb(...args));
+    this.listeners.get(event)?.forEach((cb) => {
+      if (event === "awareness-change") {
+        (cb as AwarenessChangeCallback)(args[0] as Map<string, AwarenessState>);
+      } else {
+        (cb as () => void)();
+      }
+    });
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
 
-import { BarChart2, Cloud, CreditCard, Search, Shield, X } from "lucide-react";
+import { BarChart2,Cloud,CreditCard,Search,Shield,X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { LeftPanel } from "./editor-layout";
 

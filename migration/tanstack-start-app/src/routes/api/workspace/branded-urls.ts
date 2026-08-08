@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { lookup } from "node:dns/promises";
@@ -96,6 +95,10 @@ export const Route = createFileRoute("/api/workspace/branded-urls")({
           .eq("user_id", user.id)
           .eq("domain", cleanDomain)
           .single()).data;
+
+        if (!final) {
+          return Response.json({ error: "Domain could not be created" }, { status: 500 });
+        }
 
         return Response.json({
           ok: true,

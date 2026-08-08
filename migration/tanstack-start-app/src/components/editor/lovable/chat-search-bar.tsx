@@ -1,7 +1,7 @@
 
 import { forwardRef } from "react";
 import { motion } from "framer-motion";
-import { ChevronsDown, ChevronsUp, Loader2, Search, Sparkles, XCircle } from "lucide-react";
+import { ChevronsDown,ChevronsUp,Loader2,Search,Sparkles,XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ChatSearchMode } from "@/lib/editor/search-chat-messages";
 

@@ -1,11 +1,10 @@
 
-import { useState, useMemo } from "react";
-import { Play, Plus, Trash2, Copy, Check, Loader2, ChevronDown, Search, X, Code2 } from "lucide-react";
+import { useState,useMemo } from "react";
+import { Play,Plus,Copy,Check,Loader2,Search,X,Code2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { toast } from "@/hooks/use-toast";
+import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from "@/components/ui/select";
 import type { ProjectFile } from "@/types/database";
 
 interface ApiPlaygroundPanelProps {

@@ -2,9 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  guardFileWrite,
-  repeatedCopies,
-  undefinedComponents,
+guardFileWrite,
+repeatedCopies,
+undefinedComponents,
 } from "./guard-file-write.ts";
 
 /**

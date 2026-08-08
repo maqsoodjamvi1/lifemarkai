@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { dedupeHtmlDocument, sanitizeGeneratedFile } from "./html-sanity.ts";
+import { dedupeHtmlDocument,sanitizeGeneratedFile } from "./html-sanity.ts";
 
 const DOC_A = `<!DOCTYPE html>
 <html>

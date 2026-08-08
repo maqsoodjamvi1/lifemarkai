@@ -5,7 +5,7 @@
  * brief green dot when it finishes, so background tabs communicate state.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect,useRef } from "react";
 
 function findIconLink(): HTMLLinkElement | null {
   return (

@@ -1,6 +1,6 @@
 
-import { AnimatePresence, motion } from "framer-motion";
-import { KeyRound, X } from "lucide-react";
+import { AnimatePresence,motion } from "framer-motion";
+import { KeyRound,X } from "lucide-react";
 
 export interface LovableSecretBannerState {
   key: string;

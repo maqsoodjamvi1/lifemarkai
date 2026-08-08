@@ -1,9 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { AUTOCOMPLETE_MODEL } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 
 // POST /api/ai/complete
 // Body: { projectId, prefix, suffix, language, filename }
@@ -24,7 +23,7 @@ async function handlePOST(req: Request) {
   if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
   // Verify ownership
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("id, user_id, name, framework")
     .eq("id", projectId)

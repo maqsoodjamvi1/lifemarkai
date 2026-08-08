@@ -15,8 +15,8 @@
  * the supplied projectId.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { Loader2, Sparkles, Eye, EyeOff } from "lucide-react";
+import { useCallback,useEffect,useState } from "react";
+import { Loader2,Sparkles,Eye,EyeOff } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface WorkspaceSkill {

@@ -10,10 +10,11 @@
 import { createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
 import {
-  canReadProjectFiles,
-  canWriteProjectFiles,
-  getProjectAccess,
+canReadProjectFiles,
+canWriteProjectFiles,
+getProjectAccess,
 } from "@/lib/project/access";
+import type { Database } from "../../types/database.ts";
 import { sanitizeGeneratedFile } from "../ai/html-sanity.ts";
 import { pushFileToRunningSandbox } from "../preview/push-to-sandbox.ts";
 
@@ -30,7 +31,7 @@ export async function listProjectFiles(projectId: string) {
   const access = await getProjectAccess(supabase, projectId, user.id);
   if (!canReadProjectFiles(access)) return { status: "not_found" as const };
 
-  const { data: files, error } = await (supabase as any)
+  const { data: files, error } = await supabase
     .from("project_files")
     .select("*")
     .eq("project_id", projectId)
@@ -53,7 +54,7 @@ export async function upsertProjectFile(input: {
   if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
 
   const content = sanitizeGeneratedFile(input.path, String(input.content ?? ""));
-  const { data: file, error } = await (supabase as any)
+  const { data: file, error } = await supabase
     .from("project_files")
     .upsert(
       {
@@ -88,14 +89,14 @@ export async function patchProjectFile(input: {
   const access = await getProjectAccess(supabase, input.projectId, user.id);
   if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
 
-  const updatePayload: Record<string, string> = {
+  const updatePayload: Database["public"]["Tables"]["project_files"]["Update"] = {
     updated_at: new Date().toISOString(),
   };
 
   if (input.content !== undefined) {
     let effectivePath = input.path ?? "";
     if (!effectivePath) {
-      const { data: row } = await (supabase as any)
+      const { data: row } = await supabase
         .from("project_files")
         .select("path")
         .eq("id", input.fileId)
@@ -107,7 +108,7 @@ export async function patchProjectFile(input: {
   }
   if (input.path !== undefined) updatePayload.path = input.path;
 
-  const { data: file, error } = await (supabase as any)
+  const { data: file, error } = await supabase
     .from("project_files")
     .update(updatePayload)
     .eq("id", input.fileId)
@@ -137,7 +138,7 @@ export async function deleteProjectFile(input: { projectId: string; fileId: stri
   const access = await getProjectAccess(supabase, input.projectId, user.id);
   if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
 
-  const { error } = await (supabase as any)
+  const { error } = await supabase
     .from("project_files")
     .delete()
     .eq("id", input.fileId)

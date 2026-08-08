@@ -8,7 +8,7 @@ export async function listFeedback(data: any) {
     } = await supabase.auth.getUser();
     if (!user) return { status: "unauthorized" as const };
 
-    const { data: rows, error } = await (supabase as any)
+    const { data: rows, error } = await supabase
       .from("app_feedback")
       .select("*")
       .eq("project_id", data.projectId)
@@ -21,7 +21,7 @@ export async function listFeedback(data: any) {
 /** Public — submitted by the embedded widget (no auth). */
 export async function submitFeedback(data: any) {
     const supabase = await createClient();
-    const { error } = await (supabase as any).from("app_feedback").insert({
+    const { error } = await supabase.from("app_feedback").insert({
       project_id: data.projectId,
       rating: data.rating ?? null,
       message: data.message ?? null,

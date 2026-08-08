@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
@@ -51,7 +50,7 @@ export const Route = createFileRoute("/api/projects/$id/env-health")({
         const supabase = await createClient();
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
-        const { data: project } = await (supabase as any).from("projects").select("id, user_id").eq("id", params.id).single();
+        const { data: project } = await supabase.from("projects").select("id, user_id").eq("id", params.id).single();
         if (!project || project.user_id !== user.id) return Response.json({ error: "Forbidden" }, { status: 403 });
 
         const checks: EnvCheck[] = ENV_SCHEMA.map((schema) => {

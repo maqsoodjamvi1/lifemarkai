@@ -1,22 +1,19 @@
-// @ts-nocheck
-
-import { useState, useEffect, useCallback } from "react";
+import { useState,useEffect,useCallback } from "react";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  User, Bell, Shield, Key, Palette, Loader2, Save,
-  Eye, EyeOff, Trash2, LogOut, Plus, Copy, Check,
-  Terminal, ChevronDown, ChevronUp, AlertTriangle,
-  Globe, Lock, ExternalLink, Plug,
+User,Bell,Shield,Key,Palette,Loader2,Save,Trash2,LogOut,Plus,Copy,Check,
+Terminal,AlertTriangle,
+Globe,Plug
 } from "lucide-react";
 import { TelegramSettingsPanel } from "@/components/dashboard/telegram-settings-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar,AvatarFallback,AvatarImage } from "@/components/ui/avatar";
 import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { useNavigate, useRouter } from "@tanstack/react-router";
+import { useNavigate,useRouter } from "@tanstack/react-router";
 import { formatDate } from "@/lib/utils";
 import { usePlatformLocale } from "@/hooks/use-platform-locale";
 import { PLATFORM_LOCALES } from "@/lib/platform-locale";
@@ -83,7 +80,7 @@ function NotificationsPanel({ userId }: { userId: string }) {
 
   useEffect(() => {
     void (async () => {
-      const { data } = await (supabase as any)
+      const { data } = await supabase
         .from("profiles")
         .select("notification_prefs")
         .eq("id", userId)
@@ -100,7 +97,7 @@ function NotificationsPanel({ userId }: { userId: string }) {
     const next = { ...prefs, [key]: !prefs[key] };
     setPrefs(next);
     setSaving(true);
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("profiles")
       .update({ notification_prefs: next })
       .eq("id", userId);
@@ -165,6 +162,7 @@ function ApiKeysPanel({ userId }: { userId: string }) {
   const [revealed, setRevealed]     = useState<string | null>(null); // plaintext shown once
   const [copied, setCopied]         = useState(false);
   const { toast } = useToast();
+  const confirm = useConfirm();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -474,7 +472,7 @@ export function SettingsPage({ user, profile }: SettingsPageProps) {
 
   async function saveProfile() {
     setSaving(true);
-    const { error } = await (supabase as any).from("profiles").update({ full_name: name }).eq("id", user.id);
+    const { error } = await supabase.from("profiles").update({ full_name: name }).eq("id", user.id);
     setSaving(false);
     if (error) {
       toast({ title: "Save failed", description: error.message, variant: "destructive" });
@@ -487,7 +485,7 @@ export function SettingsPage({ user, profile }: SettingsPageProps) {
   async function savePrivacy(nextPublic: boolean) {
     setIsPublic(nextPublic);
     setPrivacySaving(true);
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("profiles")
       .update({ is_public: nextPublic })
       .eq("id", user.id);

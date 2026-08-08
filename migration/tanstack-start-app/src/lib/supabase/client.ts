@@ -1,4 +1,5 @@
 import { createBrowserClient } from "@supabase/ssr";
+import type { Database } from "@/types/database";
 
 // serve-tanstack.mjs injects the container's runtime env into every HTML
 // response as globalThis.__LM_ENV__. Prefer it over the build-time value:
@@ -9,10 +10,12 @@ function runtimeEnv(key: string): string | undefined {
 }
 
 // Minimal singleton browser client (TanStack Start / Vite env).
-let _client: ReturnType<typeof createBrowserClient> | null = null;
+let _client: ReturnType<
+  typeof createBrowserClient<Database, "public">
+> | null = null;
 export function createClient() {
   if (_client) return _client;
-  _client = createBrowserClient(
+  _client = createBrowserClient<Database, "public">(
     (runtimeEnv("VITE_SUPABASE_URL") ||
       runtimeEnv("NEXT_PUBLIC_SUPABASE_URL") ||
       import.meta.env.VITE_SUPABASE_URL) as string,

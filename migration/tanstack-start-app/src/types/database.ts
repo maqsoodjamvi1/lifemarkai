@@ -1,6 +1,8 @@
+import type { GeneratedDatabase } from "./database.generated";
+
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
-export type Database = {
+type DatabaseOverrides = {
   public: {
     Tables: {
       profiles: {
@@ -20,6 +22,8 @@ export type Database = {
           stripe_subscription_id: string | null;
           username: string | null;
           bio: string | null;
+          is_public: boolean;
+          cloud_default_region: string | null;
           onboarding_complete: boolean;
           workspace_knowledge: string | null;
           current_team_id: string | null;
@@ -31,8 +35,8 @@ export type Database = {
           created_at: string;
           updated_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["profiles"]["Row"], "created_at" | "updated_at">;
-        Update: Partial<Database["public"]["Tables"]["profiles"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["profiles"]["Row"], "created_at" | "updated_at">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["profiles"]["Insert"]>;
       };
       projects: {
         Row: {
@@ -81,8 +85,8 @@ export type Database = {
           created_at: string;
           updated_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["projects"]["Row"], "id" | "created_at" | "updated_at">;
-        Update: Partial<Database["public"]["Tables"]["projects"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["projects"]["Row"], "id" | "created_at" | "updated_at">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["projects"]["Insert"]>;
       };
       project_private_context: {
         Row: {
@@ -93,8 +97,8 @@ export type Database = {
           created_at: string;
           updated_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["project_private_context"]["Row"], "created_at" | "updated_at">;
-        Update: Partial<Database["public"]["Tables"]["project_private_context"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["project_private_context"]["Row"], "created_at" | "updated_at">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["project_private_context"]["Insert"]>;
       };
       project_files: {
         Row: {
@@ -106,8 +110,8 @@ export type Database = {
           created_at: string;
           updated_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["project_files"]["Row"], "id" | "created_at" | "updated_at">;
-        Update: Partial<Database["public"]["Tables"]["project_files"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["project_files"]["Row"], "id" | "created_at" | "updated_at">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["project_files"]["Insert"]>;
       };
       messages: {
         Row: {
@@ -122,8 +126,8 @@ export type Database = {
           rating: 1 | -1 | null;
           created_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["messages"]["Row"], "id" | "created_at">;
-        Update: Partial<Database["public"]["Tables"]["messages"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["messages"]["Row"], "id" | "created_at">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["messages"]["Insert"]>;
       };
       deployments: {
         Row: {
@@ -138,8 +142,8 @@ export type Database = {
           deployed_at: string | null;
           created_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["deployments"]["Row"], "id" | "created_at">;
-        Update: Partial<Database["public"]["Tables"]["deployments"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["deployments"]["Row"], "id" | "created_at">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["deployments"]["Insert"]>;
       };
       collaborators: {
         Row: {
@@ -151,8 +155,8 @@ export type Database = {
           invited_at: string;
           accepted_at: string | null;
         };
-        Insert: Omit<Database["public"]["Tables"]["collaborators"]["Row"], "id" | "invited_at">;
-        Update: Partial<Database["public"]["Tables"]["collaborators"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["collaborators"]["Row"], "id" | "invited_at">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["collaborators"]["Insert"]>;
       };
       templates: {
         Row: {
@@ -168,8 +172,8 @@ export type Database = {
           fork_count: number;
           created_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["templates"]["Row"], "id" | "created_at" | "fork_count">;
-        Update: Partial<Database["public"]["Tables"]["templates"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["templates"]["Row"], "id" | "created_at" | "fork_count">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["templates"]["Insert"]>;
       };
       credit_logs: {
         Row: {
@@ -181,7 +185,7 @@ export type Database = {
           description: string | null;
           created_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["credit_logs"]["Row"], "id" | "created_at">;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["credit_logs"]["Row"], "id" | "created_at">;
         Update: never;
       };
       notifications: {
@@ -196,8 +200,8 @@ export type Database = {
           metadata: Json | null;
           created_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["notifications"]["Row"], "id" | "created_at" | "is_read"> & { is_read?: boolean };
-        Update: Partial<Database["public"]["Tables"]["notifications"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["notifications"]["Row"], "id" | "created_at" | "is_read"> & { is_read?: boolean };
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["notifications"]["Insert"]>;
       };
       api_keys: {
         Row: {
@@ -209,10 +213,11 @@ export type Database = {
           last_used_at: string | null;
           expires_at: string | null;
           is_active: boolean;
+          scopes: string[];
           created_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["api_keys"]["Row"], "id" | "created_at">;
-        Update: Partial<Database["public"]["Tables"]["api_keys"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["api_keys"]["Row"], "id" | "created_at">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["api_keys"]["Insert"]>;
       };
       audit_logs: {
         Row: {
@@ -227,7 +232,7 @@ export type Database = {
           user_agent: string | null;
           created_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["audit_logs"]["Row"], "id" | "created_at">;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["audit_logs"]["Row"], "id" | "created_at">;
         Update: never;
       };
       job_queue: {
@@ -248,8 +253,8 @@ export type Database = {
           project_id: string | null;
           created_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["job_queue"]["Row"], "id" | "created_at" | "attempts">;
-        Update: Partial<Database["public"]["Tables"]["job_queue"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["job_queue"]["Row"], "id" | "created_at" | "attempts">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["job_queue"]["Insert"]>;
       };
       feature_flags: {
         Row: {
@@ -265,8 +270,44 @@ export type Database = {
           created_at: string;
           updated_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["feature_flags"]["Row"], "id" | "created_at" | "updated_at">;
-        Update: Partial<Database["public"]["Tables"]["feature_flags"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["feature_flags"]["Row"], "id" | "created_at" | "updated_at">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["feature_flags"]["Insert"]>;
+      };
+      project_feature_flags: {
+        Row: {
+          id: string;
+          project_id: string;
+          key: string;
+          description: string | null;
+          is_enabled: boolean;
+          rollout_pct: number;
+          created_by: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: Omit<
+          DatabaseOverrides["public"]["Tables"]["project_feature_flags"]["Row"],
+          "id" | "created_at" | "updated_at"
+        > & {
+          id?: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<
+          Omit<
+            DatabaseOverrides["public"]["Tables"]["project_feature_flags"]["Row"],
+            "id" | "created_at"
+          >
+        >;
+        Relationships: [
+          {
+            foreignKeyName: "project_feature_flags_project_id_fkey";
+            columns: ["project_id"];
+            isOneToOne: false;
+            referencedRelation: "projects";
+            referencedColumns: ["id"];
+          },
+        ];
       };
       project_invite_tokens: {
         Row: {
@@ -288,7 +329,7 @@ export type Database = {
           expires_at?: string;
           max_uses?: number | null;
         };
-        Update: Partial<Database["public"]["Tables"]["project_invite_tokens"]["Insert"]>;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["project_invite_tokens"]["Insert"]>;
       };
             project_snapshots: {
         Row: {
@@ -311,7 +352,7 @@ export type Database = {
           parent_id: string | null;
           screenshot_url?: string | null;
         };
-        Update: Partial<Database["public"]["Tables"]["project_snapshots"]["Insert"]>;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["project_snapshots"]["Insert"]>;
       };
       // Editor Intelligence lens/run tables (migration 068)
       project_ai_agents: {
@@ -338,7 +379,7 @@ export type Database = {
           status?: "idle" | "thinking" | "blocked" | "reviewing" | "done";
           last_active_at?: string | null;
         };
-        Update: Partial<Database["public"]["Tables"]["project_ai_agents"]["Insert"]>;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["project_ai_agents"]["Insert"]>;
       };
       project_ai_agent_messages: {
         Row: {
@@ -357,7 +398,7 @@ export type Database = {
           content: string;
           metadata?: Json;
         };
-        Update: Partial<Database["public"]["Tables"]["project_ai_agent_messages"]["Insert"]>;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["project_ai_agent_messages"]["Insert"]>;
       };
       project_ai_agent_decisions: {
         Row: {
@@ -378,7 +419,7 @@ export type Database = {
           status?: "proposed" | "accepted" | "rejected" | "superseded";
           metadata?: Json;
         };
-        Update: Partial<Database["public"]["Tables"]["project_ai_agent_decisions"]["Insert"]>;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["project_ai_agent_decisions"]["Insert"]>;
       };
       project_ai_initiatives: {
         Row: {
@@ -408,7 +449,7 @@ export type Database = {
           error?: string | null;
           last_event_at?: string | null;
         };
-        Update: Partial<Database["public"]["Tables"]["project_ai_initiatives"]["Insert"]>;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["project_ai_initiatives"]["Insert"]>;
       };
       project_ai_initiative_events: {
         Row: {
@@ -425,7 +466,7 @@ export type Database = {
           type: string;
           payload?: Json;
         };
-        Update: Partial<Database["public"]["Tables"]["project_ai_initiative_events"]["Insert"]>;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["project_ai_initiative_events"]["Insert"]>;
       };
       credit_reservations: {
         Row: {
@@ -442,8 +483,8 @@ export type Database = {
           balance_after: number | null;
           created_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["credit_reservations"]["Row"], "id" | "created_at">;
-        Update: Partial<Database["public"]["Tables"]["credit_reservations"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["credit_reservations"]["Row"], "id" | "created_at">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["credit_reservations"]["Insert"]>;
       };
       stripe_events: {
         Row: {
@@ -464,7 +505,7 @@ export type Database = {
           completed_at?: string | null;
           last_error?: string | null;
         };
-        Update: Partial<Database["public"]["Tables"]["stripe_events"]["Insert"]>;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["stripe_events"]["Insert"]>;
       };
       project_cloud_credentials: {
         Row: {
@@ -474,8 +515,8 @@ export type Database = {
           created_at: string;
           updated_at: string;
         };
-        Insert: Omit<Database["public"]["Tables"]["project_cloud_credentials"]["Row"], "created_at" | "updated_at">;
-        Update: Partial<Database["public"]["Tables"]["project_cloud_credentials"]["Insert"]>;
+        Insert: Omit<DatabaseOverrides["public"]["Tables"]["project_cloud_credentials"]["Row"], "created_at" | "updated_at">;
+        Update: Partial<DatabaseOverrides["public"]["Tables"]["project_cloud_credentials"]["Insert"]>;
       };
     },
     Views: Record<string, never>;
@@ -533,7 +574,11 @@ export type Database = {
       };
       fund_workspace_credit_pool: {
         Args: { p_team_id: string; p_user_id: string; p_amount: number };
-        Returns: Json;
+        Returns: { ok: boolean; error?: string; remaining?: number };
+      };
+      create_team: {
+        Args: { p_name: string; p_slug: string; p_owner_id: string };
+        Returns: string;
       };
       can_access_project_private_context: {
         Args: { p_project_id: string; p_write?: boolean };
@@ -584,7 +629,7 @@ export type Database = {
       };
       claim_next_job: {
         Args: { p_type?: string };
-        Returns: Database["public"]["Tables"]["job_queue"]["Row"][];
+        Returns: DatabaseOverrides["public"]["Tables"]["job_queue"]["Row"][];
       };
       is_feature_enabled: {
         Args: { p_flag_key: string; p_user_id: string; p_plan: string };
@@ -599,17 +644,38 @@ export type Database = {
   };
 };
 
+type GeneratedPublicSchema = GeneratedDatabase["public"];
+type FunctionOverrides = DatabaseOverrides["public"]["Functions"];
+
+/**
+ * Keep the generated table/view metadata intact so supabase-js can parse joins,
+ * while retaining the hand-written RPC contracts that the PostgREST OpenAPI
+ * document cannot describe precisely.
+ */
+export type Database = Omit<GeneratedDatabase, "public"> & {
+  public: Omit<GeneratedPublicSchema, "Functions"> & {
+    Functions: Omit<GeneratedPublicSchema["Functions"], keyof FunctionOverrides> & FunctionOverrides;
+  };
+};
+
+type DomainRow<TableName extends keyof GeneratedDatabase["public"]["Tables"]> =
+  GeneratedDatabase["public"]["Tables"][TableName]["Row"] &
+  (TableName extends keyof DatabaseOverrides["public"]["Tables"]
+    ? DatabaseOverrides["public"]["Tables"][TableName]["Row"]
+    : unknown);
+
 // Convenience types
-export type Profile = Database["public"]["Tables"]["profiles"]["Row"];
-export type Project = Database["public"]["Tables"]["projects"]["Row"];
-export type ProjectFile = Database["public"]["Tables"]["project_files"]["Row"];
-export type Message = Database["public"]["Tables"]["messages"]["Row"];
-export type Deployment = Database["public"]["Tables"]["deployments"]["Row"];
-export type Collaborator = Database["public"]["Tables"]["collaborators"]["Row"];
-export type Template = Database["public"]["Tables"]["templates"]["Row"];
-export type CreditLog = Database["public"]["Tables"]["credit_logs"]["Row"];
-export type ProjectAiAgent = Database["public"]["Tables"]["project_ai_agents"]["Row"];
-export type ProjectAiAgentMessage = Database["public"]["Tables"]["project_ai_agent_messages"]["Row"];
-export type ProjectAiAgentDecision = Database["public"]["Tables"]["project_ai_agent_decisions"]["Row"];
-export type ProjectAiInitiative = Database["public"]["Tables"]["project_ai_initiatives"]["Row"];
-export type ProjectAiInitiativeEvent = Database["public"]["Tables"]["project_ai_initiative_events"]["Row"];
+export type Profile = DomainRow<"profiles">;
+export type Project = DomainRow<"projects">;
+export type ProjectFile = DomainRow<"project_files">;
+export type Message = DomainRow<"messages">;
+export type Deployment = DomainRow<"deployments">;
+export type Collaborator = DomainRow<"collaborators">;
+export type Template = DomainRow<"templates">;
+export type CreditLog = DomainRow<"credit_logs">;
+export type Notification = DomainRow<"notifications">;
+export type ProjectAiAgent = DomainRow<"project_ai_agents">;
+export type ProjectAiAgentMessage = DomainRow<"project_ai_agent_messages">;
+export type ProjectAiAgentDecision = DomainRow<"project_ai_agent_decisions">;
+export type ProjectAiInitiative = DomainRow<"project_ai_initiatives">;
+export type ProjectAiInitiativeEvent = DomainRow<"project_ai_initiative_events">;

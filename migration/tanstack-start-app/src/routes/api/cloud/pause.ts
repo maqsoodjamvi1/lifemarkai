@@ -1,7 +1,7 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { isManagementConfigured, pauseManagedProject, restoreManagedProject } from "@/lib/cloud/management";
+import { isManagementConfigured,pauseManagedProject,restoreManagedProject } from "@/lib/cloud/management";
+import type { Json } from "@/types/database";
 
 /** Native /api/cloud/pause — manually pause/wake a project's Cloud backend. */
 export const Route = createFileRoute("/api/cloud/pause")({
@@ -31,10 +31,18 @@ export const Route = createFileRoute("/api/cloud/pause")({
           if (!res.ok) infraNote = res.error;
         }
 
-        const meta = (project.metadata ?? {}) as Record<string, unknown>;
+        const meta: { [key: string]: Json | undefined } =
+          project.metadata && typeof project.metadata === "object" && !Array.isArray(project.metadata)
+            ? project.metadata
+            : {};
         await supabase.from("projects").update({
           cloud_status: action === "pause" ? "paused" : "active",
-          metadata: { ...meta, cloud_paused_manually: action === "pause", cloud_paused_idle: action === "pause" ? (meta.cloud_paused_idle ?? false) : false, cloud_paused_at: action === "pause" ? new Date().toISOString() : null },
+          metadata: {
+            ...meta,
+            cloud_paused_manually: action === "pause",
+            cloud_paused_idle: action === "pause" ? Boolean(meta.cloud_paused_idle) : false,
+            cloud_paused_at: action === "pause" ? new Date().toISOString() : null,
+          },
         }).eq("id", projectId);
 
         return Response.json({ ok: true, status: action === "pause" ? "paused" : "active", ...(infraNote ? { note: `Infrastructure call: ${infraNote}` } : {}) });

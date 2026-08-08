@@ -1,5 +1,5 @@
 
-import { Info, X } from "lucide-react";
+import { Info,X } from "lucide-react";
 
 interface LovableContextSummaryBannerProps {
   coversLabel?: string | number | null;

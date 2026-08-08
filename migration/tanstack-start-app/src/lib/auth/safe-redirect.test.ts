@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveSafeRedirect, withAuthRedirect } from "./safe-redirect.ts";
+import { resolveSafeRedirect,withAuthRedirect } from "./safe-redirect.ts";
 
 test("resolveSafeRedirect preserves deep local paths", () => {
   assert.equal(

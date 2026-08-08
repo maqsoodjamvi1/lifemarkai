@@ -1,14 +1,14 @@
 import { useState } from "react";
-import { createFileRoute, Link, useSearch } from "@tanstack/react-router";
+import { createFileRoute,Link,useSearch } from "@tanstack/react-router";
 import { motion } from "framer-motion";
-import { Github, Mail, Loader2, Zap, CheckCircle } from "lucide-react";
+import { Github,Mail,Loader2,Zap,CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { resolveSafeRedirect, withAuthRedirect } from "@/lib/auth/safe-redirect";
+import { resolveSafeRedirect,withAuthRedirect } from "@/lib/auth/safe-redirect";
 
 const perks = [
   "5 free AI credits daily",

@@ -1,8 +1,7 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createHash } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/server";
-import { resolveScimRole, type WorkspaceScimConfig } from "@/lib/workspace/identity";
+import { resolveScimRole,type WorkspaceScimConfig } from "@/lib/workspace/identity";
 
 async function authenticateScim(request: Request): Promise<string | null> {
   const auth = request.headers.get("authorization");
@@ -11,7 +10,7 @@ async function authenticateScim(request: Request): Promise<string | null> {
   if (!token) return null;
   const hash = createHash("sha256").update(token).digest("hex");
   const supabase = createAdminClient();
-  const { data } = await (supabase as any).from("workspace_identity_settings").select("owner_id, scim_config").eq("scim_api_key_hash", hash).maybeSingle();
+  const { data } = await supabase.from("workspace_identity_settings").select("owner_id, scim_config").eq("scim_api_key_hash", hash).maybeSingle();
   if (!data?.owner_id) return null;
   const scim = data.scim_config as WorkspaceScimConfig | null;
   if (!scim?.enabled) return null;
@@ -39,7 +38,7 @@ export const Route = createFileRoute("/api/scim/v2/Users")({
         if (!ownerId) return Response.json({ detail: "Unauthorized" }, { status: 401 });
         const supabase = createAdminClient();
         const filter = new URL(request.url).searchParams.get("filter");
-        let query = (supabase as any).from("workspace_scim_users").select("*").eq("owner_id", ownerId);
+        let query = supabase.from("workspace_scim_users").select("*").eq("owner_id", ownerId);
         if (filter?.includes("userName eq")) {
           const m = filter.match(/userName eq "([^"]+)"/i);
           if (m?.[1]) query = query.eq("email", m[1].toLowerCase());
@@ -59,18 +58,18 @@ export const Route = createFileRoute("/api/scim/v2/Users")({
         if (!email) return Response.json({ detail: "userName or email required" }, { status: 400 });
 
         const supabase = createAdminClient();
-        const { data: settings } = await (supabase as any).from("workspace_identity_settings").select("scim_config, verified_domains").eq("owner_id", ownerId).maybeSingle();
+        const { data: settings } = await supabase.from("workspace_identity_settings").select("scim_config, verified_domains").eq("owner_id", ownerId).maybeSingle();
         const verified: string[] = settings?.verified_domains ?? [];
         const emailDomain = email.split("@")[1] ?? "";
         if (verified.length > 0 && !verified.some((d: string) => d.toLowerCase() === emailDomain.toLowerCase())) {
           return Response.json({ detail: "Email domain not verified for SCIM provisioning" }, { status: 403 });
         }
         const groups = (body.groups ?? []).map((g: { value: string }) => g.value).filter(Boolean);
-        const scimCfg = (settings?.scim_config ?? { groupMappings: [] }) as WorkspaceScimConfig;
+        const scimCfg = (settings?.scim_config ?? { groupMappings: [] }) as unknown as WorkspaceScimConfig;
         const role = resolveScimRole(groups, scimCfg.groupMappings ?? []);
         const displayName = (body.name?.formatted ?? [body.name?.givenName, body.name?.familyName].filter(Boolean).join(" ")) || email;
         const externalId = body.externalId ?? email;
-        const { data: row, error } = await (supabase as any).from("workspace_scim_users").upsert({
+        const { data: row, error } = await supabase.from("workspace_scim_users").upsert({
           owner_id: ownerId, external_id: externalId, email, display_name: displayName,
           active: body.active !== false, groups, role, updated_at: new Date().toISOString(),
         }, { onConflict: "owner_id,external_id" }).select("*").single();

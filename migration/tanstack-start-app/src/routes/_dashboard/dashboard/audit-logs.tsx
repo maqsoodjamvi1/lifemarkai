@@ -1,4 +1,4 @@
-import { createFileRoute, getRouteApi } from "@tanstack/react-router";
+import { createFileRoute,getRouteApi } from "@tanstack/react-router";
 import { AuditLogsPage } from "@/components/dashboard/audit-logs-page";
 
 const layoutApi = getRouteApi("/_dashboard");

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -24,7 +23,7 @@ export const Route = createFileRoute("/api/analytics/beacon")({
 
         const supabase = createAdminClient();
 
-        const { count: activeVisitors } = await (supabase as any)
+        const { count: activeVisitors } = await supabase
           .from("app_visitors")
           .select("id", { count: "exact", head: true })
           .eq("project_id", projectId)
@@ -32,7 +31,7 @@ export const Route = createFileRoute("/api/analytics/beacon")({
 
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
-        const { count: todayViews } = await (supabase as any)
+        const { count: todayViews } = await supabase
           .from("project_views")
           .select("id", { count: "exact", head: true })
           .eq("project_id", projectId)
@@ -57,14 +56,14 @@ export const Route = createFileRoute("/api/analytics/beacon")({
         const supabase = createAdminClient();
 
         if (event === "leave") {
-          await (supabase as any)
+          await supabase
             .from("app_visitors").delete().eq("project_id", projectId).eq("visitor_key", visitorKey);
           return Response.json({ ok: true }, { headers: CORS });
         }
 
         const userAgent = request.headers.get("user-agent");
 
-        await (supabase as any)
+        await supabase
           .from("app_visitors")
           .upsert({
             project_id: projectId,
@@ -82,7 +81,7 @@ export const Route = createFileRoute("/api/analytics/beacon")({
             ? Buffer.from(ip + (process.env.NEXT_PUBLIC_APP_URL ?? "salt")).toString("base64").slice(0, 16)
             : null;
 
-          await (supabase as any).from("project_views").insert({
+          await supabase.from("project_views").insert({
             project_id: projectId,
             ip_hash: ipHash,
             referrer: referrer ?? null,
@@ -93,7 +92,11 @@ export const Route = createFileRoute("/api/analytics/beacon")({
         }
 
         if (Math.random() < 0.1) {
-          await (supabase as any).rpc("cleanup_stale_visitors").catch(() => {});
+          try {
+            await supabase.rpc("cleanup_stale_visitors");
+          } catch {
+            // Opportunistic cleanup must not fail analytics ingestion.
+          }
         }
 
         return Response.json({ ok: true }, { headers: CORS });

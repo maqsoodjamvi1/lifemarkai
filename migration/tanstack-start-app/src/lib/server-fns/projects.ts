@@ -3,37 +3,20 @@
  * Template scaffolding for built-ins pulls from the main repo via relative import.
  */
 import { z } from "zod";
-import { createAdminClient, createClient } from "../supabase/server.ts";
+import { createAdminClient,createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
 import {
-  canReadProjectFiles,
-  canWriteProjectFiles,
-  getProjectAccess,
+canReadProjectFiles,
+canWriteProjectFiles,
+getProjectAccess,
 } from "@/lib/project/access";
 import { tanstackStartScaffold } from "../templates/tanstack-start-scaffold.ts";
 import { lovableViteScaffold } from "../templates/lovable-vite-scaffold.ts";
-import { getTemplateById } from "../templates/built-in.ts";
+import { getTemplateById,type TemplateFile } from "../templates/built-in.ts";
+import type { Database,Json } from "../../types/database.ts";
 
-const PROJECT_SAFE_SELECT = [
-  "id",
-  "user_id",
-  "name",
-  "description",
-  "framework",
-  "status",
-  "is_public",
-  "preview_url",
-  "deployed_url",
-  "slug",
-  "template_id",
-  "created_at",
-  "updated_at",
-  "remix_enabled",
-  "remix_count",
-  "star_count",
-  "app_slug",
-  "visibility",
-].join(", ");
+const PROJECT_SAFE_SELECT =
+  "id, user_id, name, description, framework, status, is_public, preview_url, deployed_url, slug, template_id, created_at, updated_at, remix_enabled, remix_count, star_count, app_slug, visibility" as const;
 
 const projectCreateSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -69,6 +52,19 @@ const ALLOWED_FRAMEWORKS = new Set([
   "tanstack-start",
   "tanstack",
 ]);
+
+type ProjectFileInsert = Database["public"]["Tables"]["project_files"]["Insert"];
+
+function isTemplateFile(value: Json): value is TemplateFile & Json {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof value.path === "string" &&
+    typeof value.content === "string" &&
+    typeof value.language === "string"
+  );
+}
 
 function getStarterFiles(name: string, framework: string) {
   const safeName = name.replace(/[^a-zA-Z0-9]/g, "") || "app";
@@ -147,7 +143,7 @@ export async function listProjects() {
   const { user } = await getServerUser(supabase);
   if (!user) return { status: "unauthorized" as const };
 
-  const { data, error } = await (supabase as any)
+  const { data, error } = await supabase
     .from("projects")
     .select(PROJECT_SAFE_SELECT)
     .eq("user_id", user.id)
@@ -168,7 +164,7 @@ export async function createProject(data: any) {
     let preferred: string | undefined;
     if (!data.framework) {
       try {
-        const { data: profile } = await (supabase as any)
+        const { data: profile } = await supabase
           .from("profiles")
           .select("preferred_framework")
           .eq("id", user.id)
@@ -199,7 +195,7 @@ export async function createProject(data: any) {
     // a constraint violation surfaces as an opaque 500 on the create path.
     const framework = ALLOWED_FRAMEWORKS.has(requested) ? requested : "react";
 
-    const { data: project, error } = await (supabase as any)
+    const { data: project, error } = await supabase
       .from("projects")
       .insert({
         user_id: user.id,
@@ -218,11 +214,11 @@ export async function createProject(data: any) {
     }
 
     try {
-      const { data: gen } = await (supabase as any).rpc("generate_app_slug", {
+      const { data: gen } = await supabase.rpc("generate_app_slug", {
         p_name: project.name,
       });
       if (typeof gen === "string" && gen) {
-        await (supabase as any)
+        await supabase
           .from("projects")
           .update({ app_slug: gen })
           .eq("id", project.id)
@@ -246,13 +242,13 @@ export async function createProject(data: any) {
      * something they could recover.
      */
     const seedFiles = async (
-      rows: Array<Record<string, unknown>>,
+      rows: ProjectFileInsert[],
       what: string,
     ): Promise<{ status: "error"; message: string } | null> => {
       if (rows.length === 0) return null;
-      const { error } = await (supabase as any).from("project_files").insert(rows);
+      const { error } = await supabase.from("project_files").insert(rows);
       if (!error) return null;
-      await (supabase as any).from("projects").delete().eq("id", project.id);
+      await supabase.from("projects").delete().eq("id", project.id);
       return {
         status: "error" as const,
         message: `Could not create the project's ${what}: ${error.message}`,
@@ -277,13 +273,13 @@ export async function createProject(data: any) {
       const builtin = getTemplateById(data.templateId);
       let templateFiles = builtin?.files ?? null;
       if (!templateFiles) {
-        const { data: dbTemplate } = await (supabase as any)
+        const { data: dbTemplate } = await supabase
           .from("templates")
           .select("files")
           .eq("id", data.templateId)
           .maybeSingle();
         if (dbTemplate?.files && Array.isArray(dbTemplate.files)) {
-          templateFiles = dbTemplate.files;
+          templateFiles = dbTemplate.files.filter(isTemplateFile);
         }
       }
       if (templateFiles && templateFiles.length > 0) {
@@ -310,31 +306,8 @@ export async function createProject(data: any) {
     return { status: "ok" as const, project };
 }
 
-const PUBLIC_PROJECT_SELECT = [
-  "id",
-  "user_id",
-  "name",
-  "description",
-  "framework",
-  "status",
-  "is_public",
-  "preview_url",
-  "deployed_url",
-  "template_id",
-  "slug",
-  "app_slug",
-  "seo_title",
-  "seo_description",
-  "og_image_url",
-  "favicon_url",
-  "remix_enabled",
-  "remix_count",
-  "remix_of",
-  "badge_hidden",
-  "total_views",
-  "created_at",
-  "updated_at",
-].join(", ");
+const PUBLIC_PROJECT_SELECT =
+  "id, user_id, name, description, framework, status, is_public, preview_url, deployed_url, template_id, slug, app_slug, seo_title, seo_description, og_image_url, favicon_url, remix_enabled, remix_count, remix_of, badge_hidden, total_views, created_at, updated_at" as const;
 
 const PROJECT_UPDATE_FIELDS = new Set([
   "name",
@@ -379,11 +352,10 @@ export async function getProject(data: any) {
     const access = await getProjectAccess(supabase, data.id, user?.id);
     if (!canReadProjectFiles(access)) return { status: "not_found" as const };
 
-    const { data: project, error } = await (supabase as any)
-      .from("projects")
-      .select(access === "public" ? PUBLIC_PROJECT_SELECT : PROJECT_SAFE_SELECT)
-      .eq("id", data.id)
-      .maybeSingle();
+    const { data: project, error } =
+      access === "public"
+        ? await supabase.from("projects").select(PUBLIC_PROJECT_SELECT).eq("id", data.id).maybeSingle()
+        : await supabase.from("projects").select(PROJECT_SAFE_SELECT).eq("id", data.id).maybeSingle();
 
     if (error || !project) return { status: "not_found" as const };
     return {
@@ -473,13 +445,13 @@ export async function updateProject(data: any) {
     if (generate_slug) {
       let slugName =
         typeof updateFields.name === "string" ? (updateFields.name as string) : undefined;
-      const { data: existing } = await (supabase as any)
+      const { data: existing } = await supabase
         .from("projects")
         .select("name, user_id")
         .eq("id", data.id)
         .maybeSingle();
       if (!slugName) slugName = existing?.name;
-      const { data: slugData } = await (supabase as any).rpc("generate_project_slug", {
+      const { data: slugData } = await supabase.rpc("generate_project_slug", {
         p_name: slugName ?? "project",
         p_user_id: existing?.user_id ?? user.id,
       });
@@ -511,7 +483,7 @@ export async function deleteProject(data: any) {
     const access = await getProjectAccess(supabase, data.id, user.id);
     if (access !== "owner") return { status: "not_found" as const };
 
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("projects")
       .delete()
       .eq("id", data.id)

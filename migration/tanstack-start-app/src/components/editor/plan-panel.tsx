@@ -1,18 +1,16 @@
 
-import { useState, useRef, useEffect, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState,useRef,useEffect,useCallback } from "react";
+import { motion,AnimatePresence } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  Send, Loader2, Sparkles, CheckCheck, Pencil, RotateCcw,
-  ChevronDown, XCircle, FileText,
+Send,Sparkles,CheckCheck,Pencil,RotateCcw,XCircle,FileText
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { saveApprovedPlan } from "@/lib/editor/save-approved-plan";
-import { createClient } from "@/lib/supabase/client";
-import type { Project, ProjectFile } from "@/types/database";
+import type { Project,ProjectFile } from "@/types/database";
 
 interface PlanMessage {
   id: string;

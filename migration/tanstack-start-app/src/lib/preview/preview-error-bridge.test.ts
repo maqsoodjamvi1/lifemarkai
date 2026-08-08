@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  isBrowserExtensionError,
-  isDocumentHydrationMismatch,
-  isMinifiedReactHydrationError,
-  isNoisePreviewError,
+isBrowserExtensionError,
+isDocumentHydrationMismatch,
+isMinifiedReactHydrationError,
+isNoisePreviewError,
 } from "./preview-error-bridge.ts";
 
 /**

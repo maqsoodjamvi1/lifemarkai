@@ -6,8 +6,8 @@
 import { createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
 import { ensureDevCredits } from "../dev-credits.ts";
-import { stripe, getOrCreateCustomer, createBillingPortalSession } from "../stripe/client.ts";
-import { PLANS, CREDIT_PACKS } from "../stripe/plans.ts";
+import { stripe,getOrCreateCustomer,createBillingPortalSession } from "../stripe/client.ts";
+import { PLANS,CREDIT_PACKS } from "../stripe/plans.ts";
 
 export async function createSubscriptionCheckout(data: any) {
     const supabase = await createClient();
@@ -21,7 +21,7 @@ export async function createSubscriptionCheckout(data: any) {
     const priceId = data.billing === "yearly" ? plan.stripePriceIdYearly : plan.stripePriceIdMonthly;
     if (!priceId) return { status: "bad_request" as const, message: "Plan not available" };
 
-    const { data: profile } = await (supabase as any)
+    const { data: profile } = await supabase
       .from("profiles")
       .select("stripe_customer_id, full_name, email")
       .eq("id", user.id)
@@ -31,7 +31,7 @@ export async function createSubscriptionCheckout(data: any) {
     let customerId = profile?.stripe_customer_id ?? "";
     if (!customerId) {
       customerId = await getOrCreateCustomer(user.id, email, profile?.full_name ?? undefined);
-      await (supabase as any)
+      await supabase
         .from("profiles")
         .update({ stripe_customer_id: customerId })
         .eq("id", user.id);
@@ -60,7 +60,7 @@ export async function createPortalSession(data: any) {
     } = await supabase.auth.getUser();
     if (!user) return { status: "unauthorized" as const };
 
-    const { data: profile } = await (supabase as any)
+    const { data: profile } = await supabase
       .from("profiles")
       .select("stripe_customer_id")
       .eq("id", user.id)
@@ -85,7 +85,7 @@ export async function createCreditPackCheckout(data: any) {
     const pack = CREDIT_PACKS.find((p) => p.key === data.packKey);
     if (!pack) return { status: "bad_request" as const, message: "Invalid pack" };
 
-    const { data: profile } = await (supabase as any)
+    const { data: profile } = await supabase
       .from("profiles")
       .select("email, stripe_customer_id")
       .eq("id", user.id)
@@ -118,7 +118,7 @@ export async function createCreditPackCheckout(data: any) {
       cancel_url: `${data.appUrl}/dashboard/billing?credit_cancel=1`,
     });
 
-    await (supabase as any).from("credit_packs").insert({
+    await supabase.from("credit_packs").insert({
       user_id: user.id,
       team_id: data.teamId ?? null,
       amount: pack.credits,
@@ -140,7 +140,7 @@ export async function redeemPromoCode(data: any) {
     if (!user) return { status: "unauthorized" as const };
     if (!data.code?.trim()) return { status: "error" as const, code: 400, message: "No promo code provided." };
 
-    const { data: profile } = await (supabase as any)
+    const { data: profile } = await supabase
       .from("profiles")
       .select("stripe_customer_id")
       .eq("id", user.id)
@@ -195,7 +195,7 @@ export async function grantStudentDiscount(data: any) {
       return { status: "error" as const, code: 400, message: "Only .edu email addresses qualify for the student discount." };
     }
 
-    const { data: profile } = await (supabase as any)
+    const { data: profile } = await supabase
       .from("profiles")
       .select("stripe_customer_id, student_discount_used, full_name")
       .eq("id", user.id)
@@ -208,7 +208,7 @@ export async function grantStudentDiscount(data: any) {
     let customerId = profile?.stripe_customer_id ?? "";
     if (!customerId) {
       customerId = await getOrCreateCustomer(user.id, email, profile?.full_name ?? undefined);
-      await (supabase as any).from("profiles").update({ stripe_customer_id: customerId }).eq("id", user.id);
+      await supabase.from("profiles").update({ stripe_customer_id: customerId }).eq("id", user.id);
     }
 
     let coupon;
@@ -232,7 +232,7 @@ export async function grantStudentDiscount(data: any) {
       return { status: "error" as const, code: 500, message: err instanceof Error ? err.message : "Failed to apply coupon." };
     }
 
-    await (supabase as any).from("profiles").update({ student_discount_used: true }).eq("id", user.id);
+    await supabase.from("profiles").update({ student_discount_used: true }).eq("id", user.id);
     return { status: "ok" as const, message: "Student discount applied! 50% off for your next 3 months." };
 }
 

@@ -1,5 +1,5 @@
 
-import { AlertTriangle, Wand2, X } from "lucide-react";
+import { AlertTriangle,Wand2,X } from "lucide-react";
 import type { PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 
 interface LovableComposerRuntimeErrorsBannerProps {

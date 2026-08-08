@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * POST /api/editor-intelligence/initiative
  *
@@ -16,28 +15,28 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { canWriteProjectFiles,getProjectAccess } from "@/lib/project/access";
 import {
-  cancelCreditReservation,
-  reserveCredits,
-  settleCreditReservation,
+cancelCreditReservation,
+reserveCredits,
+settleCreditReservation,
 } from "@/lib/credits";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { runInitiative } from "@/lib/ai/editor-lenses/orchestrator";
 import { getRole } from "@/lib/ai/editor-lenses/roles";
 import { runAgent } from "@/lib/ai/agent";
-import { runSelfVerification, type SelfVerifyResult } from "@/lib/ai/self-verify";
+import { runSelfVerification,type SelfVerifyResult } from "@/lib/ai/self-verify";
 import { recordVerificationFindings } from "@/lib/ai/self-healing";
-import type { AgentRoleId, AutonomyGates, EditorIntelligenceEvent } from "@/lib/ai/editor-lenses/types";
+import type { AgentRoleId,AutonomyGates,EditorIntelligenceEvent } from "@/lib/ai/editor-lenses/types";
 import {
-  appendEditorInitiativeEvent,
-  createEditorInitiativeRun,
-  ensureEditorLensRoster,
-  failEditorInitiativeRun,
-  loadEditorInitiativeRun,
-  PERSISTED_ROLE_BY_LENS,
-  recordEditorIntelligenceBuild,
-  updateEditorInitiativeCheckpoint,
+appendEditorInitiativeEvent,
+createEditorInitiativeRun,
+ensureEditorLensRoster,
+failEditorInitiativeRun,
+loadEditorInitiativeRun,
+PERSISTED_ROLE_BY_LENS,
+recordEditorIntelligenceBuild,
+updateEditorInitiativeCheckpoint,
 } from "@/lib/ai/editor-lenses/persistence";
 
 

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getCommitHistory } from "@/lib/gitlab/client";
@@ -14,13 +13,13 @@ export const Route = createFileRoute("/api/gitlab/commits")({
 
         const { projectId } = await request.json();
 
-        const { data: profile } = await (supabase as any)
+        const { data: profile } = await supabase
           .from("profiles").select("gitlab_access_token").eq("id", user.id).single();
         if (!profile?.gitlab_access_token) {
           return Response.json({ error: "GitLab not connected" }, { status: 400 });
         }
 
-        const { data: project } = await (supabase as any)
+        const { data: project } = await supabase
           .from("projects").select("github_repo, github_branch").eq("id", projectId).single();
         if (!project?.github_repo?.startsWith("gitlab:")) {
           return Response.json({ error: "No GitLab repo connected" }, { status: 400 });

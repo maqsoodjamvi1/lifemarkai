@@ -1,7 +1,12 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { BUILT_IN_TEMPLATES, getTemplateById } from "@/lib/templates/built-in";
+import { BUILT_IN_TEMPLATES,getTemplateById } from "@/lib/templates/built-in";
+import type { Template } from "@/types/database";
+
+type TemplateSummary = Pick<
+  Template,
+  "id" | "name" | "description" | "category" | "is_featured" | "preview_url" | "is_public" | "created_at"
+> & { fork_count: number };
 
 /**
  * Native /api/templates — list templates (built-in merged with DB) or fetch one.
@@ -19,7 +24,7 @@ export const Route = createFileRoute("/api/templates")({
           if (builtin) return Response.json(builtin);
 
           const supabase = await createClient();
-          const { data, error } = await (supabase as any)
+          const { data, error } = await supabase
             .from("templates")
             .select("*")
             .eq("id", id)
@@ -31,7 +36,7 @@ export const Route = createFileRoute("/api/templates")({
         }
 
         const supabase = await createClient();
-        const { data: dbTemplates } = await (supabase as any)
+        const { data: dbTemplates } = await supabase
           .from("templates")
           .select("id, name, description, category, is_featured, fork_count, preview_url, is_public, created_at")
           .eq("is_public", true)
@@ -46,10 +51,10 @@ export const Route = createFileRoute("/api/templates")({
           source: "builtin" as const,
         }));
 
-        const dbMeta = (dbTemplates ?? []).map((t) => ({ ...t, source: "db" as const }));
+        const dbMeta = ((dbTemplates ?? []) as TemplateSummary[]).map((template) => ({ ...template, source: "db" as const }));
 
         const builtinIds = new Set(builtinMeta.map((t) => t.id));
-        const merged = [...builtinMeta, ...dbMeta.filter((t) => !builtinIds.has(t.id))];
+        const merged = [...builtinMeta, ...dbMeta.filter((template) => !builtinIds.has(template.id))];
 
         return Response.json(merged);
       },

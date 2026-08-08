@@ -1,15 +1,15 @@
 
 import {
-  Download, Copy, Check, Trash2, Search, Bookmark, Minimize2, MoreHorizontal,
-  ChevronsDownUp, ChevronsUpDown, Rows3, Printer, CalendarDays,
+Download,Copy,Check,Trash2,Search,Bookmark,Minimize2,MoreHorizontal,
+ChevronsDownUp,ChevronsUpDown,Rows3,Printer,CalendarDays,
 } from "lucide-react";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+DropdownMenu,DropdownMenuContent,DropdownMenuItem,DropdownMenuSeparator,DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import type { EditorMode } from "@/components/editor/editor-layout";
 import { LovableChatHeaderQueuePill } from "./chat-header-extras";
-import { chatBookmarksShortcutLabel, chatClearShortcutLabel, chatSearchShortcutLabel } from "./shortcut-labels";
+import { chatBookmarksShortcutLabel,chatClearShortcutLabel,chatSearchShortcutLabel } from "./shortcut-labels";
 import type { LovableChatDayJumpItem } from "./chat-day-utils";
 
 interface LovableChatHeaderProps {

@@ -1,8 +1,8 @@
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState,useEffect,useRef,useCallback } from "react";
 import {
-  Rewind, Play, Pause, FastForward, SkipBack, SkipForward,
-  Clock, Loader2, ChevronDown, Film, FileCode,
+Rewind,Play,Pause,FastForward,SkipBack,SkipForward,
+Clock,Loader2,ChevronDown,Film,FileCode,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

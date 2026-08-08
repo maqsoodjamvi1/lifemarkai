@@ -1,14 +1,14 @@
 
-import { useState, useEffect, useCallback } from "react";
+import { useState,useEffect,useCallback } from "react";
 import {
-  Zap, Plus, Pencil, Trash2, Save, X, Loader2,
-  Search, Tag, ChevronDown, ChevronUp, BookOpen, Sparkles,
+Zap,Plus,Pencil,Trash2,Save,X,Loader2,
+Search,Tag,ChevronDown,ChevronUp,BookOpen,Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion,AnimatePresence } from "framer-motion";
 import type { User } from "@supabase/supabase-js";
 
 interface Skill {

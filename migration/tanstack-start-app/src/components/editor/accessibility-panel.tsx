@@ -13,11 +13,11 @@
  * Uses local pattern matching + AI explanation for each issue.
  */
 
-import { useState, useCallback } from "react";
+import { useState,useCallback } from "react";
 import {
-  Eye, AlertTriangle, AlertCircle, Info, CheckCircle2,
-  Loader2, RefreshCw, Zap, ChevronDown, ChevronUp,
-  ExternalLink, Sparkles,
+Eye,AlertTriangle,AlertCircle,Info,CheckCircle2,
+Loader2,RefreshCw,Zap,ChevronDown,ChevronUp,
+ExternalLink,Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

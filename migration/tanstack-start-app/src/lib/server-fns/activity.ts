@@ -15,7 +15,7 @@ export async function listActivity() {
   const { user } = await getServerUser(supabase);
   if (!user) return { status: "unauthorized" as const };
 
-  const { data: projects } = await (supabase as any)
+  const { data: projects } = await supabase
     .from("projects")
     .select("id, name, created_at")
     .eq("user_id", user.id)
@@ -30,14 +30,14 @@ export async function listActivity() {
   );
 
   const [messagesRes, deploymentsRes] = await Promise.all([
-    (supabase as any)
+    supabase
       .from("messages")
       .select("id, project_id, content, created_at")
       .in("project_id", projectIds)
       .eq("role", "user")
       .order("created_at", { ascending: false })
       .limit(20),
-    (supabase as any)
+    supabase
       .from("deployments")
       .select("id, project_id, status, url, created_at")
       .in("project_id", projectIds)

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
@@ -12,10 +11,10 @@ export const Route = createFileRoute("/api/account/export")({
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const [profileRes, projectsRes, , deploymentsRes] = await Promise.all([
-          (supabase as any).from("profiles").select("*").eq("id", user.id).single(),
-          (supabase as any).from("projects").select("id, name, framework, status, created_at, updated_at").eq("user_id", user.id),
+          supabase.from("profiles").select("*").eq("id", user.id).single(),
+          supabase.from("projects").select("id, name, framework, status, created_at, updated_at").eq("user_id", user.id),
           Promise.resolve(null),
-          (supabase as any)
+          supabase
             .from("deployments")
             // `url`, not `deploy_url` - the wrong name errored the select, so the
             // account export silently omitted every deployment. A GDPR export that
@@ -24,7 +23,7 @@ export const Route = createFileRoute("/api/account/export")({
             .eq("projects.user_id", user.id),
         ]);
 
-        const { data: messages } = await (supabase as any)
+        const { data: messages } = await supabase
           .from("messages")
           .select("id, project_id, role, content, created_at, projects!inner(user_id)")
           .eq("projects.user_id", user.id);

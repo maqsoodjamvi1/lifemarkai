@@ -21,15 +21,15 @@
  *   4. Returns `collaborators` (remote peers' awareness states)
  */
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect,useRef,useState,useCallback } from "react";
 import * as Y from "yjs";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type * as Monaco from "monaco-editor";
 import {
-  SupabaseYjsProvider,
-  colorForUserId,
-  type AwarenessState,
-  type CollabUser,
+SupabaseYjsProvider,
+colorForUserId,
+type AwarenessState,
+type CollabUser,
 } from "@/lib/collaboration/supabase-yjs-provider";
 
 // ── Types ─────────────────────────────────────────────────────────────────────

@@ -10,9 +10,9 @@
  * this is "my AI usage" — aggregation happens client-side over the window.
  */
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback,useEffect,useMemo,useState,type ReactNode } from "react";
 import {
-  Activity, Gauge, CheckCircle2, AlertTriangle, Cpu, Loader2, RefreshCw,
+Activity,Gauge,CheckCircle2,AlertTriangle,Cpu,Loader2,RefreshCw,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
@@ -90,7 +90,7 @@ export function AiEvalsPage({ userId: _userId }: { userId: string }) {
       // ai_eval_log isn't in the generated Database types yet — query via a
       // loosened client. RLS still scopes rows to the signed-in user.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let q: any = (supabase as any).from("ai_eval_log").select("*");
+      let q: any = supabase.from("ai_eval_log").select("*");
       if (sinceIso) q = q.gte("created_at", sinceIso);
       q = q.order("created_at", { ascending: false }).limit(2000);
       const { data } = (await q) as { data: EvalRow[] | null };
