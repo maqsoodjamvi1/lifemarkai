@@ -167,6 +167,20 @@ function isVagueGreenfieldProjectPrompt(prompt: string): boolean {
   return true;
 }
 
+const CASUAL_SOCIAL =
+  /^(?:thanks?|thank you|ok(?:ay)?|cool|nice|great|perfect|awesome|got it|sounds good|yep|nope|yes|no|hm+|hmm+)\b/i;
+
+/** Greetings, thanks, and other non-build chit-chat — never auto-run a full build. */
+function isCasualConversation(prompt: string): boolean {
+  const trimmed = prompt.trim();
+  if (!trimmed) return false;
+  if (isGreetingPrompt(trimmed)) return true;
+  if (isInformationalQuery(trimmed)) return true;
+  if (shouldAutoBuildMode(trimmed) || isCodeChangeIntent(trimmed)) return false;
+  if (trimmed.length <= 48 && CASUAL_SOCIAL.test(trimmed)) return true;
+  return false;
+}
+
 const PATCH_KEYWORDS =
   /\b(change|update|rename|tweak|adjust|fix typo|make the|set the|turn the|swap|replace the text|change color|change font|increase|decrease|move the|align)\b/i;
 
@@ -431,7 +445,11 @@ export function resolvePromptMode(
   if (/^\/build\b/i.test(trimmed)) return "build";
   if (/^\/agent\b/i.test(trimmed)) return "agent";
 
-  if (ctx.fileCount === 0 && (isGreetingPrompt(trimmed) || isVagueGreenfieldProjectPrompt(trimmed))) {
+  if (isCasualConversation(trimmed)) {
+    return "chat";
+  }
+
+  if (ctx.fileCount === 0 && isVagueGreenfieldProjectPrompt(trimmed)) {
     return "chat";
   }
 
@@ -489,6 +507,17 @@ export function resolvePromptMode(
     }
     if (ctx.fileCount > 0 && isCodeChangeIntent(trimmed)) {
       return shouldUseAgentForEdit(trimmed, ctx) ? "agent" : "patch";
+    }
+    if (isCasualConversation(trimmed)) {
+      return "chat";
+    }
+    if (
+      ctx.fileCount === 0 &&
+      !shouldAutoBuildMode(trimmed) &&
+      !isCodeChangeIntent(trimmed) &&
+      !/^\/build\b/i.test(trimmed)
+    ) {
+      return "chat";
     }
     return "build";
   }

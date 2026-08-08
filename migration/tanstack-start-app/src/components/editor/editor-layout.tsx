@@ -29,6 +29,7 @@ pickActiveFileAfterUpdate,
 resolvePromptMode,
 shouldFocusPreviewAfterGeneration
 } from "@/lib/ai/editor-intelligence";
+import { countUserAuthoredFiles } from "@/lib/ai/scaffold-files";
 
 const EMPTY_PREVIEW_ERRORS: PreviewRuntimeError[] = [];
 
@@ -298,7 +299,7 @@ export function EditorLayout({
     if (starterMode) return starterMode;
     if (starterPrompt) {
       return resolvePromptMode(starterPrompt, {
-        fileCount: initialFiles.length,
+        fileCount: countUserAuthoredFiles(initialFiles),
         hasPreviewError: false,
         framework: project.framework,
         currentMode: "build",

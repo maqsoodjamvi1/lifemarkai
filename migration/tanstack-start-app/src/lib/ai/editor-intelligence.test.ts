@@ -45,3 +45,36 @@ test("resolvePromptMode allows explicit build slash command even on empty projec
 
   assert.equal(mode, "build");
 });
+
+test("resolvePromptMode keeps thanks in chat on build tab after real work exists", () => {
+  const mode = resolvePromptMode("thanks!", {
+    fileCount: 3,
+    hasPreviewError: false,
+    hasCredits: true,
+    currentMode: "build",
+  });
+
+  assert.equal(mode, "chat");
+});
+
+test("resolvePromptMode keeps hello in chat on build tab after real work exists", () => {
+  const mode = resolvePromptMode("hello", {
+    fileCount: 5,
+    hasPreviewError: false,
+    hasCredits: true,
+    currentMode: "build",
+  });
+
+  assert.equal(mode, "chat");
+});
+
+test("resolvePromptMode builds ERP when explicitly requested on greenfield", () => {
+  const mode = resolvePromptMode("create an erp for my warehouse", {
+    fileCount: 0,
+    hasPreviewError: false,
+    hasCredits: true,
+    currentMode: "build",
+  });
+
+  assert.equal(mode, "build");
+});

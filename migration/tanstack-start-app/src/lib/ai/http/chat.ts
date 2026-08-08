@@ -21,6 +21,7 @@ import { buildTemplateRefinementBlock } from "../template-refine.ts";
 import { pickStarterTemplate } from "../../templates/starter-catalog.ts";
 import { buildDesignDirectionBlock } from "../design-directions.ts";
 import { countUserAuthoredFiles,isGreenfieldProject } from "../scaffold-files.ts";
+import { resolvePromptMode } from "../editor-intelligence.ts";
 import { assessRequestScope,formatScopeAssessment } from "../scope-guard.ts";
 import { applyPatches,collapsePatchResults,parsePatchResponse } from "../patch-applier.ts";
 import { buildPersistedAssistantContent } from "../persist-message-mode.ts";
@@ -258,6 +259,25 @@ export async function handleAiChat(req: Request) {
       return Response.json({ error: "Image too large (max 5MB)" }, { status: 413 });
     }
     const persistedUserMessage = typeof costPrompt === "string" && costPrompt.trim() ? costPrompt : message;
+
+    // Mirror the client smart router so Build-tab chit-chat ("hello", "thanks")
+    // cannot trigger a full regeneration when the UI still says Build.
+    if (body.forceBuild !== true && typeof persistedUserMessage === "string") {
+      const authoredCount = Array.isArray(files) ? countUserAuthoredFiles(files) : 0;
+      const resolved = resolvePromptMode(persistedUserMessage, {
+        fileCount: authoredCount,
+        hasPreviewError: false,
+        currentMode:
+          mode === "agent" ? "agent" : mode === "plan" ? "plan" : mode === "chat" ? "chat" : "build",
+        files: Array.isArray(files) ? files.map((f: { path: string }) => ({ path: f.path })) : undefined,
+      });
+      if (resolved === "chat" || resolved === "plan") {
+        if (mode === "build" || mode === "agent" || mode === "patch") {
+          mode = resolved;
+          autoRoutedPatch = false;
+        }
+      }
+    }
 
     // ── Publish from chat — "ship it" (Lovable parity) ──────────────────────
     // When the message is PRIMARILY a publish request ("ship it", "publish",
@@ -1518,7 +1538,7 @@ The user has expressed frustration. Do the following:
         if (mode === "build") {
           try {
             const routing = decideInitiativeRouting(message, {
-              fileCount: Array.isArray(files) ? files.length : 0,
+              fileCount: Array.isArray(files) ? countUserAuthoredFiles(files) : 0,
               mode,
               credits: typeof profile?.credits === "number" ? Number(profile.credits) : undefined,
               clientCanRoute: body.canRouteInitiative === true,

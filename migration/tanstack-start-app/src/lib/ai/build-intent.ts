@@ -1087,13 +1087,19 @@ const APP_SHELL_CONTRACT = `
 
 /** Short directive appended to the user message so models always see the build goal. */
 export function buildUserDirective(intent: BuildIntent): string {
-  return [
+  const lines = [
     "---",
     `Autonomous build: ${intent.statusLabel}`,
     `App type: ${intent.appType}${intent.niche ? ` | Niche: ${intent.niche}` : ""}`,
     "Use LifemarkAI's internal editor intelligence lenses (product, architecture, UX, frontend, backend, database, QA, security, deployability) to improve the build, but do not expose them as a separate module or workflow.",
     "Infer brand, pages, modules, and realistic mock data yourself. Do not ask clarifying questions — ship a complete working app.",
-  ].join("\n");
+  ];
+  if (APP_SHELL_APP_TYPES.has(intent.appType)) {
+    lines.push(
+      `CRITICAL: App type "${intent.appType}" is an operations/admin product — build the sidebar app under /admin (or the routes in the blueprint), NOT a marketing landing site. A small public homepage is fine; the deliverable is the management UI and data modules.`,
+    );
+  }
+  return lines.join("\n");
 }
 
 /**
