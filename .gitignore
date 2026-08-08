@@ -123,3 +123,5 @@ remove-result.txt
 __sim.js
 __sync_marker__.txt
 __tsc-scope.json
+
+.tmp-docker-run.env
