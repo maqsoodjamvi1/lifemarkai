@@ -1,9 +1,9 @@
-import type { ProjectFile } from "../../types/database.ts";
+export type ProjectFileLike = { path: string; content: string };
 
-export function getRefreshEffectiveFiles(
+export function getRefreshEffectiveFiles<T extends ProjectFileLike>(
   versionPreviewLabel: string | null | undefined,
-  filesProp: ProjectFile[],
-  nextFiles?: ProjectFile[],
-): ProjectFile[] | undefined {
+  filesProp: T[],
+  nextFiles?: T[],
+): T[] | undefined {
   return versionPreviewLabel ? filesProp : nextFiles;
 }

@@ -1,13 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { ProjectFile } from "../../types/database.ts";
+import type { ProjectFileLike } from "./preview-panel-utils.ts";
 import { getRefreshEffectiveFiles } from "./preview-panel-utils.ts";
 
 test("getRefreshEffectiveFiles returns latest files when version preview is active", () => {
-  const propFiles: ProjectFile[] = [
+  const propFiles: ProjectFileLike[] = [
     { path: "src/App.tsx", content: "prop" },
   ];
-  const nextFiles: ProjectFile[] = [
+  const nextFiles: ProjectFileLike[] = [
     { path: "src/App.tsx", content: "next" },
   ];
 
@@ -17,10 +17,10 @@ test("getRefreshEffectiveFiles returns latest files when version preview is acti
 });
 
 test("getRefreshEffectiveFiles returns next files when version preview is not active", () => {
-  const propFiles: ProjectFile[] = [
+  const propFiles: ProjectFileLike[] = [
     { path: "src/App.tsx", content: "prop" },
   ];
-  const nextFiles: ProjectFile[] = [
+  const nextFiles: ProjectFileLike[] = [
     { path: "src/App.tsx", content: "next" },
   ];
 
@@ -30,7 +30,7 @@ test("getRefreshEffectiveFiles returns next files when version preview is not ac
 });
 
 test("getRefreshEffectiveFiles returns undefined when no next files provided and version preview is inactive", () => {
-  const propFiles: ProjectFile[] = [
+  const propFiles: ProjectFileLike[] = [
     { path: "src/App.tsx", content: "prop" },
   ];
 
