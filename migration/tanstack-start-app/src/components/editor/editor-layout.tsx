@@ -306,9 +306,8 @@ export function EditorLayout({
         files: initialFiles,
       });
     }
-    // Default to Build mode everywhere (incremental edits + restyle live here).
-    // Agent stays available as an explicit choice for autonomous multi-step runs.
-    return "build";
+    // Default to Chat (Lovable-style): talk first; explicit builds promote via the router.
+    return "chat";
   });
   const [viewMode, setViewMode] = useState<ViewMode>(initialView ?? "preview");
   // Lovable-parity "Preview this version": when set, the preview panel renders

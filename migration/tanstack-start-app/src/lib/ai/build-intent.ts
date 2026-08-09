@@ -1044,7 +1044,11 @@ function industryProfileFor(prompt: string, niche: string | null): string {
  * fitness, blog and portfolio all have a public face, so they keep normal site
  * chrome and are deliberately NOT listed here.
  */
-const APP_SHELL_APP_TYPES = new Set([
+export function isAppShellAppType(appType: BuildAppType): boolean {
+  return APP_SHELL_APP_TYPES.has(appType);
+}
+
+const APP_SHELL_APP_TYPES = new Set<BuildAppType>([
   "pos",
   "erp",
   "crm",
@@ -1099,7 +1103,47 @@ export function buildUserDirective(intent: BuildIntent): string {
       `CRITICAL: App type "${intent.appType}" is an operations/admin product — build the sidebar app under /admin (or the routes in the blueprint), NOT a marketing landing site. A small public homepage is fine; the deliverable is the management UI and data modules.`,
     );
   }
+  lines.push(
+    `Completeness gate: ship at least ${intent.minFiles} real project files in this build (all routes/modules/data files from the blueprint). A thin scaffold or placeholder pages will be rejected and regenerated.`,
+  );
   return lines.join("\n");
+}
+
+/**
+ * First real build on an empty project that expects a large multi-file app (ERP,
+ * store, full website). Used to pick stronger models, higher output caps, and
+ * extra enrichment/continuation rounds.
+ */
+export function isMajorGreenfieldBuild(prompt: string, userAuthoredFileCount: number): boolean {
+  if (userAuthoredFileCount > 0) return false;
+  const trimmed = prompt.trim();
+  if (!trimmed) return false;
+  if (!shouldAutoBuildMode(trimmed) && !/\b(create|build|make|generate|scaffold|develop)\b/i.test(trimmed)) {
+    return false;
+  }
+  const intent = classifyBuildIntent(trimmed);
+  return intent.minFiles >= 12;
+}
+
+/**
+ * Lovable-style pre-build questionnaire: ask design/scope questions on a brand-new
+ * project before subagents or file generation run.
+ */
+export function shouldClarifyBeforeBuild(
+  prompt: string,
+  userAuthoredFileCount: number,
+  opts?: { userOptOut?: boolean; forceBuild?: boolean },
+): boolean {
+  if (opts?.forceBuild || opts?.userOptOut) return false;
+  if (userAuthoredFileCount > 0) return false;
+  const trimmed = prompt.trim();
+  if (!trimmed || trimmed.length > 4000) return false;
+  if (isInformationalQuery(trimmed)) return false;
+  if (/^(?:hi|hello|hey|thanks|thank you|ok(?:ay)?)\b/i.test(trimmed)) return false;
+  if (shouldAutoBuildMode(trimmed) || isMajorGreenfieldBuild(trimmed, 0)) {
+    return true;
+  }
+  return /\b(create|build|make|design|generate|develop|scaffold)\b/i.test(trimmed);
 }
 
 /**

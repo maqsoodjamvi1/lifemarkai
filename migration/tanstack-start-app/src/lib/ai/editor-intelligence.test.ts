@@ -78,3 +78,49 @@ test("resolvePromptMode builds ERP when explicitly requested on greenfield", () 
 
   assert.equal(mode, "build");
 });
+
+test("resolvePromptMode promotes explicit ERP from chat tab to build", () => {
+  const mode = resolvePromptMode("create an erp for inventory", {
+    fileCount: 0,
+    hasPreviewError: false,
+    hasCredits: true,
+    currentMode: "chat",
+  });
+
+  assert.equal(mode, "build");
+});
+
+test("resolvePromptMode keeps vague website request in chat tab on greenfield", () => {
+  const mode = resolvePromptMode("build a website", {
+    fileCount: 0,
+    hasPreviewError: false,
+    hasCredits: true,
+    currentMode: "chat",
+  });
+
+  assert.equal(mode, "chat");
+});
+
+test("resolvePromptMode keeps informational questions on build tab in chat", () => {
+  const mode = resolvePromptMode("why is the cart empty?", {
+    fileCount: 4,
+    hasPreviewError: false,
+    hasCredits: true,
+    currentMode: "build",
+  });
+
+  assert.equal(mode, "chat");
+});
+
+test("shouldClarifyBeforeBuild triggers for new ERP request", async () => {
+  const { shouldClarifyBeforeBuild } = await import("./build-intent.ts");
+  assert.equal(
+    shouldClarifyBeforeBuild("create an erp for inventory", 0),
+    true,
+  );
+  assert.equal(
+    shouldClarifyBeforeBuild("create an erp for inventory", 0, { userOptOut: true }),
+    false,
+  );
+  assert.equal(shouldClarifyBeforeBuild("hello", 0), false);
+});
