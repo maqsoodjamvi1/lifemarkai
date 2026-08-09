@@ -16,7 +16,7 @@ import { getTemplateById,type TemplateFile } from "../templates/built-in.ts";
 import type { Database,Json } from "../../types/database.ts";
 
 const PROJECT_SAFE_SELECT =
-  "id, user_id, name, description, framework, status, is_public, preview_url, deployed_url, slug, template_id, created_at, updated_at, remix_enabled, remix_count, star_count, app_slug, visibility" as const;
+  "id, user_id, name, description, framework, runtime, status, is_public, preview_url, deployed_url, slug, template_id, created_at, updated_at, remix_enabled, remix_count, star_count, app_slug, visibility" as const;
 
 const projectCreateSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -43,6 +43,7 @@ const projectCreateSchema = z.object({
  * framework, or createProject would fail the check constraint for those users.
  */
 const ALLOWED_FRAMEWORKS = new Set([
+  "static",
   "react",
   "next",
   "nextjs",
@@ -68,6 +69,17 @@ function isTemplateFile(value: Json): value is TemplateFile & Json {
 
 function getStarterFiles(name: string, framework: string) {
   const safeName = name.replace(/[^a-zA-Z0-9]/g, "") || "app";
+  if (framework === "static") {
+    return [
+      {
+        path: "index.html",
+        language: "html",
+        content: `<!doctype html>\n<html lang="en">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1.0" />\n  <title>${name}</title>\n  <link rel="stylesheet" href="styles.css" />\n</head>\n<body>\n  <main><h1>${name}</h1><p>Start chatting with AI to build it.</p></main>\n  <script type="module" src="app.js"></script>\n</body>\n</html>\n`,
+      },
+      { path: "styles.css", language: "css", content: `* { box-sizing: border-box; }\nbody { margin: 0; font-family: system-ui, sans-serif; }\nmain { min-height: 100vh; display: grid; place-content: center; text-align: center; padding: 2rem; }\n` },
+      { path: "app.js", language: "javascript", content: `console.log(${JSON.stringify(safeName)});\n` },
+    ];
+  }
   if (framework === "tanstack-start" || framework === "tanstack") {
     return tanstackStartScaffold({}, name);
   }
@@ -202,6 +214,7 @@ export async function createProject(data: any) {
         name: data.name,
         description: data.description ?? null,
         framework,
+        runtime: framework === "static" ? "static" : "framework",
         status: "active",
         is_public: false,
         template_id: data.templateId ?? null,

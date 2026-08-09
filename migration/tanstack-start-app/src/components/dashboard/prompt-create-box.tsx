@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 // a browser with a multi-chain wallet extension installed: 29 errors from the
 // extension, zero hydration errors. Server rendering trades that robustness
 // for SEO and first paint, and stays one click away.
-type Framework = "react" | "tanstack-start" | "next" | "vue" | "svelte";
+type Framework = "static" | "react" | "tanstack-start" | "next" | "vue" | "svelte";
 
 interface PromptCreateBoxProps {
   variant?: "default" | "hero";
@@ -34,7 +34,7 @@ const SUGGESTIONS = [
 
 export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
   const [prompt, setPrompt] = useState("");
-  const [framework, setFramework] = useState<Framework>("react");
+  const [framework, setFramework] = useState<Framework>("static");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -111,7 +111,7 @@ export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
 
       <div className="flex flex-wrap items-center gap-2 px-3 pb-3">
         <div className="flex gap-1">
-          {(["react", "tanstack-start", "next", "vue", "svelte"] as const).map((fw) => (
+          {(["static", "react", "tanstack-start", "next", "vue", "svelte"] as const).map((fw) => (
             <button
               key={fw}
               type="button"
@@ -122,7 +122,7 @@ export function PromptCreateBox({ variant = "default" }: PromptCreateBoxProps) {
                   : "border-transparent text-muted-foreground hover:bg-muted/60"
               }`}
             >
-              {fw === "next" ? "Next.js" : fw === "tanstack-start" ? "Start" : fw}
+              {fw === "static" ? "Simple" : fw === "next" ? "Next.js" : fw === "tanstack-start" ? "Start" : fw}
             </button>
           ))}
         </div>

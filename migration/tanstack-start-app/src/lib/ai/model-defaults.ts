@@ -11,20 +11,10 @@ import type { AIModel } from "./provider.ts";
 // Since we route through OpenRouter, these MUST be the dot form — verified
 // against openrouter.ai (2026): opus-4.8, sonnet-4.6, haiku-4.5 all resolve.
 
-// Default to economy-safe approved models. Keep OpenRouter routers out of the
-// default path; Auto mode should choose from the product-approved model set.
-const ROUTER_FRONTIER = "deepseek/deepseek-v4-pro";
-// qwen3-coder-next, not qwen3-coder. Verified live against
-// openrouter.ai/api/v1/models/qwen/qwen3-coder-next/endpoints (2026-08-06):
-// $0.12/M in, $0.80/M out, 262k context — against qwen3-coder's $0.30/$1.00.
-// So 2.5x cheaper on input and 20% cheaper on output for the SAME context.
-//
-// The reason to move is not only price. qwen3-coder caps max_completion_tokens
-// at 65k; this one goes to 262k. That ceiling is what decides whether a
-// whole-file rewrite finishes or truncates mid-file, which is the single most
-// visible failure a user can hit — so this is cheaper and more capable at once,
-// not a quality trade.
-const ROUTER_CODING = "qwen/qwen3-coder-next";
+// Quality-first defaults for user-visible generation and reasoning. Operators
+// can still override every tier through the OPENROUTER_* environment variables.
+const ROUTER_FRONTIER = "openai/gpt-5.6-terra";
+const ROUTER_CODING = "openai/gpt-5.6-terra";
 const ROUTER_FAST = "deepseek/deepseek-v4-flash";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -117,11 +107,11 @@ export const ECONOMY_CHAT_MODEL: AIModel =
  * This pointed at ROUTER_CODING, which made the claim above false — the
  * reviewer was not merely the same family as the builder, it was the SAME
  * MODEL, reviewing its own output. Every "cross-vendor review" in the product
- * was a model agreeing with itself. Pointing it at the frontier router restores
- * the property the comment always described (DeepSeek reviewing Qwen).
+ * was a model agreeing with itself. Keep DeepSeek explicit here so it remains
+ * independent when the user-facing generation default changes vendors.
  */
 export const REVIEW_MODEL: AIModel =
-  (process.env.OPENROUTER_REVIEW_MODEL || ROUTER_FRONTIER) as AIModel;
+  (process.env.OPENROUTER_REVIEW_MODEL || "deepseek/deepseek-v4-pro") as AIModel;
 
 /**
  * ESCALATION model — used only on retry after a task failed with the normal

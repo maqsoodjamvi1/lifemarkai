@@ -163,7 +163,7 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
   // run with fresh state without re-subscribing on every render.
   const runBuildRef = useRef<
     (resumeRunId?: string, autonomy?: Record<string, string>, goalOverride?: string) => Promise<void>
-  >();
+  >(undefined);
 
   const runKey = `lifemark:editor-intelligence:${projectId}:run`;
 

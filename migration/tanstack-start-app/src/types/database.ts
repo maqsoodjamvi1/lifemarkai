@@ -52,6 +52,7 @@ type DatabaseOverrides = {
            * database has accepted since 155.
            */
           framework:
+            | "static"
             | "react"
             | "next"
             | "nextjs"
@@ -60,6 +61,7 @@ type DatabaseOverrides = {
             | "react-native"
             | "tanstack-start"
             | "tanstack";
+          runtime: "static" | "framework";
           status: "active" | "archived" | "building";
           is_public: boolean;
           preview_url: string | null;

@@ -29,7 +29,7 @@ export const Route = createFileRoute("/api/v1/projects")({
         const supabase = createAdminClient();
         const { data, error } = await supabase
           .from("projects")
-          .select("id, name, description, framework, status, deployed_url, created_at, updated_at")
+          .select("id, name, description, framework, runtime, status, deployed_url, created_at, updated_at")
           .eq("user_id", auth.userId)
           .order("updated_at", { ascending: false })
           .limit(limit);
@@ -53,12 +53,12 @@ export const Route = createFileRoute("/api/v1/projects")({
         if (!name || name.length > 100) {
           return Response.json({ error: "name is required (max 100 chars)" }, { status: 400, headers: CORS });
         }
-        const allowedFrameworks = ["nextjs", "react", "vue", "svelte"] as const;
+        const allowedFrameworks = ["static", "nextjs", "react", "vue", "svelte"] as const;
         type AllowedFramework = (typeof allowedFrameworks)[number];
         const requestedFramework = body.framework as AllowedFramework | undefined;
         const framework = requestedFramework && allowedFrameworks.includes(requestedFramework)
           ? requestedFramework
-          : "nextjs";
+          : "static";
         const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
         const supabase = createAdminClient();
@@ -69,9 +69,10 @@ export const Route = createFileRoute("/api/v1/projects")({
             name,
             description: body.description ?? "",
             framework,
+            runtime: framework === "static" ? "static" : "framework",
             slug: `${slug || "app"}-${Date.now()}`,
           })
-          .select("id, name, description, framework, status, created_at")
+          .select("id, name, description, framework, runtime, status, created_at")
           .single();
 
         if (error) return Response.json({ error: error.message }, { status: 500, headers: CORS });

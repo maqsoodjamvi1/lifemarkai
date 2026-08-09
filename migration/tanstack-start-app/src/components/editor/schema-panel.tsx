@@ -275,14 +275,14 @@ function TableCard({ table, position, onDrag, isHighlighted, cardRef }: TableCar
 interface FkLinesProps {
   fks: ForeignKey[];
   cardRects: Record<string, DOMRect | null>;
-  canvasRef: React.RefObject<HTMLDivElement>;
+  canvasRef: React.RefObject<HTMLDivElement | null>;
 }
 
 function FkLines({ fks, cardRects, canvasRef }: FkLinesProps) {
   if (!canvasRef.current) return null;
   const canvasRect = canvasRef.current.getBoundingClientRect();
 
-  const lines: JSX.Element[] = [];
+  const lines: React.JSX.Element[] = [];
 
   for (const fk of fks) {
     const fromRect = cardRects[fk.fromTable];

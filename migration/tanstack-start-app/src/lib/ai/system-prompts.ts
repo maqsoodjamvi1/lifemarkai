@@ -1461,6 +1461,16 @@ export function buildProjectContext(
   const totalContentChars = files.reduce((s, f) => s + f.content.length, 0);
   const useBM25 = !!query && totalContentChars > contentBudget;
 
+  // Small and medium projects are more reliable when the model sees the exact
+  // codebase. Per-file truncation used to apply even when every file fit inside
+  // the request budget, hiding the bottom half of otherwise relevant files.
+  if (totalContentChars + files.length * 32 <= contentBudget) {
+    const completeSections = files.map(
+      (f) => `### ${f.path}\n\`\`\`\n${f.content}\n\`\`\``,
+    );
+    return `## Codebase Overview (${files.length} files)\n${fileTree}\n\n## File Contents (complete project)\n${completeSections.join("\n\n")}`.trim();
+  }
+
   let prioritised: Array<{ path: string; content: string; priority: number }>;
 
   if (useBM25) {

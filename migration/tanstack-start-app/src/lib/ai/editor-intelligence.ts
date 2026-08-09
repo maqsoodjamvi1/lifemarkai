@@ -477,7 +477,7 @@ export function resolvePromptMode(
       return stageFromCtx(ctx) === "app" ? "agent" : "build";
     }
     if (ctx.fileCount > 0 && isSurgicalEditFromChat(trimmed)) {
-      return shouldUseAgentForEdit(trimmed, ctx) ? "agent" : "patch";
+      return shouldUseAgentForEdit(trimmed, ctx) ? "agent" : "build";
     }
     return "chat";
   }
@@ -490,13 +490,14 @@ export function resolvePromptMode(
     return "chat";
   }
 
-  // Preview/runtime errors → surgical fix modes (before generic agent routing on build tab).
+  // Preview/runtime errors use the full-file build contract. Exact-string
+  // patches are too brittle when the model saw truncated or ranked context.
   if (ctx.hasPreviewError && FIX_KEYWORDS.test(trimmed)) {
-    return trimmed.length < 120 && PATCH_KEYWORDS.test(trimmed) ? "patch" : "build";
+    return "build";
   }
 
-  // Honor Build tab — short UI chrome edits use patch (fast, writes files);
-  // larger code changes on existing apps go through agent (Lovable default).
+  // Honor Build tab. Automatic edits use complete changed-file output; patch
+  // mode remains available only when the user explicitly selected it.
   if (ctx.currentMode === "build") {
     if (isInformationalQuery(trimmed) && !shouldAutoBuildMode(trimmed)) {
       return "chat";
@@ -518,10 +519,10 @@ export function resolvePromptMode(
       isCodeChangeIntent(trimmed) &&
       (isQuickUiChromeEdit(trimmed) || isSmallExistingEdit(trimmed, ctx.fileCount))
     ) {
-      return "patch";
+      return "build";
     }
     if (ctx.fileCount > 0 && isCodeChangeIntent(trimmed)) {
-      return shouldUseAgentForEdit(trimmed, ctx) ? "agent" : "patch";
+      return shouldUseAgentForEdit(trimmed, ctx) ? "agent" : "build";
     }
     if (isCasualConversation(trimmed)) {
       return "chat";
@@ -554,7 +555,7 @@ export function resolvePromptMode(
     ctx.fileCount > 0 &&
     !shouldAutoBuildMode(trimmed)
   ) {
-    return "patch";
+    return "build";
   }
 
   if (shouldAutoBuildMode(trimmed)) {

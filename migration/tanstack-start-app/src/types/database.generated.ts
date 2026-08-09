@@ -3229,6 +3229,7 @@ export type GeneratedDatabase = {
             "environment": string;
             "favicon_url": string | null;
             "framework": string;
+            "runtime": string;
             "git_provider": string;
             "github_branch": string | null;
             "github_repo": string | null;
@@ -3288,6 +3289,7 @@ export type GeneratedDatabase = {
             "environment"?: string;
             "favicon_url"?: string | null;
             "framework"?: string;
+            "runtime"?: string;
             "git_provider"?: string;
             "github_branch"?: string | null;
             "github_repo"?: string | null;
@@ -3347,6 +3349,7 @@ export type GeneratedDatabase = {
             "environment"?: string;
             "favicon_url"?: string | null;
             "framework"?: string;
+            "runtime"?: string;
             "git_provider"?: string;
             "github_branch"?: string | null;
             "github_repo"?: string | null;

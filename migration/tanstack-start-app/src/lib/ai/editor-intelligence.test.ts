@@ -112,6 +112,28 @@ test("resolvePromptMode keeps informational questions on build tab in chat", () 
   assert.equal(mode, "chat");
 });
 
+test("resolvePromptMode uses full-file build output for an automatic chat edit", () => {
+  const mode = resolvePromptMode("change the hero title to Welcome", {
+    fileCount: 8,
+    hasPreviewError: false,
+    hasCredits: true,
+    currentMode: "chat",
+  });
+
+  assert.equal(mode, "build");
+});
+
+test("resolvePromptMode preserves explicitly selected patch mode", () => {
+  const mode = resolvePromptMode("change the hero title to Welcome", {
+    fileCount: 8,
+    hasPreviewError: false,
+    hasCredits: true,
+    currentMode: "patch",
+  });
+
+  assert.equal(mode, "patch");
+});
+
 test("shouldClarifyBeforeBuild triggers for new ERP request", async () => {
   const { shouldClarifyBeforeBuild } = await import("./build-intent.ts");
   assert.equal(

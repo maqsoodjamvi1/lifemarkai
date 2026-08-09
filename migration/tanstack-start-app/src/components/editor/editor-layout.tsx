@@ -1553,6 +1553,8 @@ export function EditorLayout({
             <div className={`absolute inset-0 ${mobilePaneActive === "preview" ? "" : "hidden"}`}>
               <PreviewPanel
                 files={previewVersion?.files ?? files}
+                framework={project.framework}
+                runtime={project.runtime}
                 versionPreviewLabel={previewVersion?.label ?? null}
                 hideTopChrome
                 activeFile={activeFile}
@@ -1881,6 +1883,8 @@ export function EditorLayout({
                 >
                   <PreviewPanel
                     files={previewVersion?.files ?? files}
+                    framework={project.framework}
+                    runtime={project.runtime}
                     versionPreviewLabel={previewVersion?.label ?? null}
                     hideTopChrome
                     projectId={pid}

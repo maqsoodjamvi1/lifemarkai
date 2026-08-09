@@ -15,7 +15,7 @@ interface WorkspaceSetupWizardProps {
   onSkip?: () => void;
 }
 
-type Framework = "tanstack-start" | "nextjs" | "react" | "vue" | "svelte" | "astro" | "remix";
+type Framework = "static" | "tanstack-start" | "nextjs" | "react" | "vue" | "svelte" | "astro" | "remix";
 type AIStyle = "concise" | "detailed" | "creative";
 
 // "react" first, matching the state default below and the server, which
@@ -37,6 +37,7 @@ type AIStyle = "concise" | "detailed" | "creative";
 // SSR stays fully supported, one click away, for anyone who wants the SEO and
 // first-paint win and accepts that trade.
 const FRAMEWORKS: { id: Framework; label: string; desc: string; icon: string }[] = [
+  { id: "static", label: "Simple Web", desc: "Fast HTML, CSS and JavaScript", icon: "🌐" },
   { id: "react",   label: "React",    desc: "Client-side SPA — most robust", icon: "⚛" },
   { id: "tanstack-start", label: "TanStack Start", desc: "Full-stack React, SSR", icon: "🏁" },
   { id: "nextjs",  label: "Next.js",  desc: "Full-stack React, App Router", icon: "▲" },
@@ -74,7 +75,7 @@ export function WorkspaceSetupWizard({ onComplete, onSkip }: WorkspaceSetupWizar
   const [checkingGithub, setCheckingGithub] = useState(false);
   const [state, setState] = useState<WizardState>({
     workspaceName: "",
-    framework: "react",
+    framework: "static",
     aiStyle: "concise",
     githubConnected: false,
     skipGithub: false,

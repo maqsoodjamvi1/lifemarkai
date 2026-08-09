@@ -38,7 +38,7 @@ type TeamProjectSummary = Pick<ProjectRow, "id" | "name" | "status" | "framework
 type TeamDetail = { team: TeamRow; members: TeamMemberSummary[]; projects: TeamProjectSummary[] };
 const PROFILE_PLANS = new Set<Profile["plan"]>(["free", "pro", "business", "enterprise"]);
 const PROJECT_FRAMEWORKS = new Set<Project["framework"]>([
-  "react", "next", "nextjs", "vue", "svelte", "react-native", "tanstack-start", "tanstack",
+  "static", "react", "next", "nextjs", "vue", "svelte", "react-native", "tanstack-start", "tanstack",
 ]);
 const PROJECT_STATUSES = new Set<Project["status"]>(["active", "archived", "building"]);
 const GIT_PROVIDERS = new Set<Project["git_provider"]>(["github", "gitlab", "none"]);
@@ -57,6 +57,7 @@ function normalizeProject(row: ProjectRow): Project {
     framework: PROJECT_FRAMEWORKS.has(row.framework as Project["framework"])
       ? row.framework as Project["framework"]
       : "react",
+    runtime: row.runtime === "static" ? "static" : "framework",
     status: PROJECT_STATUSES.has(row.status as Project["status"])
       ? row.status as Project["status"]
       : "active",

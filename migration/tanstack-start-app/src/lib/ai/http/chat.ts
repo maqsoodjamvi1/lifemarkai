@@ -1,22 +1,21 @@
 import { createAdminClient } from "../../supabase/server.ts";
-import { createClientFromRequest } from "../../supabase/request-client.ts";
-import { getServerUser } from "../../supabase/server-user.ts";
 import { canWriteProjectFiles,getProjectAccess } from "../../project/access.ts";
 import { generateAI } from "../generate.ts";
 import { DEFAULT_CHAT_MODEL,ECONOMY_CODING_MODEL,ESCALATION_MODEL } from "../model-defaults.ts";
 import { applyModelAdapter } from "../model-catalog.ts";
 import { sendLowCreditsEmail } from "../../email/resend.ts";
 import {
-CHAT_SYSTEM_PROMPT,
-PLAN_SYSTEM_PROMPT,
 AUTO_FIX_SYSTEM_PROMPT,
-PATCH_SYSTEM_PROMPT,
-buildGenerationPrompt,
 buildReactNativePrompt,
-buildNextJSPrompt,
 buildProjectContext,
 buildRepairPrompt,
 } from "@/lib/ai/system-prompts";
+import { CHAT_SYSTEM_PROMPT } from "../prompts/chat.ts";
+import { PLAN_SYSTEM_PROMPT } from "../prompts/plan.ts";
+import { EDIT_SYSTEM_PROMPT } from "../prompts/edit.ts";
+import { buildReactGenerationPrompt } from "../prompts/react-build.ts";
+import { buildTanStackGenerationPrompt } from "../prompts/tanstack-build.ts";
+import { buildNextGenerationPrompt } from "../prompts/next-build.ts";
 import { buildTemplateRefinementBlock } from "../template-refine.ts";
 import { pickStarterTemplate } from "../../templates/starter-catalog.ts";
 import { buildDesignDirectionBlock } from "../design-directions.ts";
@@ -49,8 +48,6 @@ import { ensureCommonGeneratedSupportFiles } from "../generated-support-files.ts
 import { ensureWebsiteChrome } from "../website-chrome.ts";
 import { alignGeneratedPackageJson,stripGeneratedRouteTree } from "../../preview/align-package-json.ts";
 import { StreamingFileExtractor } from "../streaming-file-extractor.ts";
-import { rateLimitAsync,RATE_LIMITS } from "../../rate-limit.ts";
-import { validateApiKey } from "../../api/api-key.ts";
 import { logger } from "../../logger.ts";
 import { getProjectSchemaContext } from "../../supabase/schema-reader.ts";
 import { attachSkillsToPrompt } from "../attach-skills.ts";
@@ -99,6 +96,11 @@ resolveBudgetAwareModel,
 } from "@/lib/ai/cost-controls";
 import { resolveSmartModel } from "../editor-intelligence.ts";
 import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
+import { buildStaticGenerationPrompt } from "../prompts/static-build.ts";
+import { commitGeneratedFiles } from "../chat/commit-generated-files.ts";
+import { resolveChatRequestContext } from "../chat/request-context.ts";
+import { createStreamSink } from "../chat/sse-stream.ts";
+import { createDeployActionResponse } from "../chat/deploy-action.ts";
 
 // Generation + backend wiring + self-verification can exceed a minute on
 // complex builds (Lovable budgets 15 min for agent runs).
@@ -117,76 +119,12 @@ const CHAT_MAX_TOKENS = Number(process.env.CHAT_MAX_TOKENS) || 4096;
 const BUILD_CONTINUATION_ROUNDS = Number(process.env.BUILD_CONTINUATION_ROUNDS) || 3;
 
 /** Safe SSE enqueue/close — avoids "Controller is already closed" when the client disconnects mid-build. */
-function createStreamSink(
-  controller: ReadableStreamDefaultController<Uint8Array>,
-  encoder: TextEncoder,
-  signal: AbortSignal,
-  onDisconnect?: () => void,
-) {
-  let clientDisconnected = signal.aborted;
-  const onAbort = () => {
-    clientDisconnected = true;
-    onDisconnect?.();
-  };
-  signal.addEventListener("abort", onAbort);
-
-  const safeEnqueue = (chunk: Uint8Array): boolean => {
-    if (clientDisconnected) return false;
-    try {
-      controller.enqueue(chunk);
-      return true;
-    } catch {
-      clientDisconnected = true;
-      return false;
-    }
-  };
-
-  const safeClose = () => {
-    signal.removeEventListener("abort", onAbort);
-    if (clientDisconnected) return;
-    try {
-      controller.close();
-    } catch {
-      /* already closed */
-    }
-    clientDisconnected = true;
-  };
-
-  return { safeEnqueue, safeClose, isClientGone: () => clientDisconnected };
-}
-
 export async function handleAiChat(req: Request) {
   try {
     // ── Auth: cookie session OR API key ─────────────────────────────────────
-    let userId: string;
-    const apiKeyHeader = req.headers.get("x-lifemark-api-key");
-
-    if (apiKeyHeader) {
-      const result = await validateApiKey(apiKeyHeader);
-      if (!result) return Response.json({ error: "Invalid or expired API key" }, { status: 401 });
-      if (!result.scopes.includes("ai:chat")) {
-        return Response.json({ error: "API key missing ai:chat scope" }, { status: 403 });
-      }
-      userId = result.userId;
-    } else {
-      const supabase = createClientFromRequest(req);
-      const { user } = await getServerUser(supabase);
-      if (!user) {
-        return Response.json({ error: "Unauthorized" }, { status: 401 });
-      }
-      userId = user.id;
-    }
-
-    const supabase = apiKeyHeader ? await createAdminClient() : createClientFromRequest(req);
-
-    // Rate limiting
-    const rl = await rateLimitAsync(userId, RATE_LIMITS.ai);
-    if (!rl.success) {
-      return Response.json(
-        { error: "Rate limit exceeded. Please wait before sending another message." },
-        { status: 429, headers: { "X-RateLimit-Reset": String(rl.resetAt) } }
-      );
-    }
+    const requestContext = await resolveChatRequestContext(req);
+    if (!requestContext.ok) return requestContext.response;
+    const { userId, supabase } = requestContext;
 
     const body = await req.json();
     const {
@@ -293,87 +231,13 @@ export async function handleAiChat(req: Request) {
       files.length > 0 &&
       detectDeployIntent(persistedUserMessage)
     ) {
-      const { publishProjectFromChat } = await import("@/lib/deploy/publish-from-chat");
-      const deployEncoder = new TextEncoder();
-      const deployStream = new ReadableStream({
-        async start(controller) {
-          const { safeEnqueue: deployEnqueue, safeClose: deployClose } = createStreamSink(
-            controller,
-            deployEncoder,
-            req.signal,
-          );
-          const send = (payload: Record<string, unknown>) =>
-            deployEnqueue(deployEncoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
-          // Progress events: `status: "deploy_status"` for consumers that read
-          // generic status events, plus `wiring_status` (same string) so the
-          // existing chat panel renders it on its post-build status line —
-          // exactly how backend wiring / self-verification stream progress.
-          const emitDeployStatus = (status: string) =>
-            send({ status: "deploy_status", message: status, wiring_status: status });
-
-          let assistantContent: string;
-          let deployOk = false;
-          let deployUrl: string | undefined;
-          try {
-            emitDeployStatus("Publishing your app…");
-            const result = await publishProjectFromChat({
-              supabase,
-              projectId,
-              userId,
-              emit: emitDeployStatus,
-            });
-            deployOk = result.ok;
-            deployUrl = result.url;
-            assistantContent = result.ok
-              ? `Your app is live! 🚀\n\n**${result.url}**\n\nPublished ${result.fileCount} file${result.fileCount === 1 ? "" : "s"} via ${result.provider === "netlify" ? "Netlify" : "LifemarkAI hosting"}. Publishing is free — no credits were used. Say "publish" any time to ship your latest changes.`
-              : `Publish failed: ${result.error ?? "Unknown error"}. Your app wasn't changed — you can try again, or publish from the Deploy panel.`;
-          } catch (err) {
-            assistantContent = `Publish failed: ${err instanceof Error ? err.message : String(err)}. Your app wasn't changed — you can try again, or publish from the Deploy panel.`;
-          }
-
-          // Persist the turn exactly like the normal flow (user + assistant rows).
-          let assistantMessageId: string | undefined;
-          try {
-            const persisted = await persistChatTurnMessages(
-              supabase,
-              [
-                { project_id: projectId, role: "user", content: persistedUserMessage, mode },
-                {
-                  project_id: projectId,
-                  role: "assistant",
-                  content: assistantContent,
-                  tokens_used: 0,
-                  mode,
-                  metadata: {
-                    credits_used: 0,
-                    deploy_requested: true,
-                    ...(deployUrl ? { deploy_url: deployUrl } : {}),
-                  },
-                },
-              ],
-              { projectId, label: "deploy-turn" },
-            );
-            assistantMessageId = persisted.assistantMessageId;
-          } catch {
-            /* message persistence is best-effort — the deploy already happened */
-          }
-
-          send({ chunk: assistantContent });
-          send({
-            done: true,
-            tokensUsed: 0,
-            creditsUsed: 0,
-            fileCount: 0,
-            assistantMessageId,
-            deployed: deployOk,
-            deploy_url: deployUrl,
-            displayMessage: assistantContent,
-          });
-          deployClose();
-        },
-      });
-      return new Response(deployStream, {
-        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" },
+      return createDeployActionResponse({
+        req,
+        supabase,
+        projectId,
+        userId,
+        persistedUserMessage,
+        mode,
       });
     }
 
@@ -921,18 +785,21 @@ export async function handleAiChat(req: Request) {
         defaultBudget: 80000,
         hasImage: !!imageBase64,
       });
-      if (framework === "react-native") {
+      if (framework === "static") {
+        systemPrompt = buildStaticGenerationPrompt(message, contextFiles, buildContextBudget) + suffix;
+      } else if (framework === "react-native") {
         systemPrompt = buildReactNativePrompt(message, contextFiles, buildContextBudget) + suffix;
       } else if (framework === "nextjs" || framework === "next") {
         // SSR-first Next.js App Router — proper generateMetadata, Server Components.
         // Projects store "next" (FRAMEWORKS picker) while GitHub import detection
         // returns "nextjs" — accept both.
-        systemPrompt = buildNextJSPrompt(message, contextFiles, buildContextBudget) + suffix;
+        systemPrompt = buildNextGenerationPrompt(message, contextFiles, buildContextBudget) + suffix;
       } else {
         // Pass the framework so the prompt ships ONE contract — the TanStack
         // blueprint for tanstack-start, the Vite rules for react/vue/svelte.
-        systemPrompt =
-          buildGenerationPrompt(message, contextFiles, buildContextBudget, framework) + suffix;
+        systemPrompt = (framework === "tanstack-start" || framework === "tanstack"
+          ? buildTanStackGenerationPrompt(message, contextFiles, buildContextBudget)
+          : buildReactGenerationPrompt(message, contextFiles, buildContextBudget, framework)) + suffix;
       }
       if (simpleEconomyRequest) {
         systemPrompt += `\n\n---\n# Economy Small Edit Mode\nThis is a small edit/debug turn on an existing project. Keep the response minimal:\n- Return ONLY files that must change.\n- Prefer surgical changes over rewriting whole files.\n- Do not regenerate the whole app, create new pages, restyle unrelated UI, or expand product scope.\n- Keep existing imports, data, assets, and routes unless the user explicitly asked to change them.\n---`;
@@ -1033,7 +900,7 @@ export async function handleAiChat(req: Request) {
       }
     } else if (mode === "patch") {
       // Patch mode: inject full codebase (40k budget) so AI can write precise find strings
-      systemPrompt = PATCH_SYSTEM_PROMPT + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
+      systemPrompt = EDIT_SYSTEM_PROMPT + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
       const patchContext = buildProjectContext(
         files,
         contextBudgetForRequest({
@@ -1454,54 +1321,11 @@ The user has expressed frustration. Do the following:
         let tokensUsed = 0;
         let usedAutoFix = false;
         const streamedFilePaths = new Set<string>();
-        // Durability backstop: record every file the extractor streams so we can
-        // await-persist them if the request is interrupted before the normal save
-        // path runs (the mid-stream upserts below are fire-and-forget and can be
-        // dropped on a client/proxy abort). Only flushed when NOT completed normally,
-        // so a successful build's final/verified content is never clobbered.
+        // Keep streamed files in memory for progress and billing only. Canonical
+        // project_files are written only after the complete response parses and
+        // passes deterministic validation; an interrupted generation changes no
+        // source files.
         const streamedFiles: Array<{ path: string; content: string; language: string }> = [];
-        /**
-         * Every in-flight mid-stream upsert.
-         *
-         * They were fire-and-forget with NO ordering relative to the final
-         * upsert loop, which writes the parsed, sanitized, repaired content.
-         * A mid-stream write issued late — or just slow, same pool, different
-         * round-trip — could land AFTER the final one and leave the row
-         * holding raw streamed text, silently undoing the repair. A write that
-         * goes backwards, with nothing in the logs to say so.
-         *
-         * Draining this before the final loop makes the ordering explicit:
-         * every optimistic write has settled before the authoritative one is
-         * issued, so last-write-wins means what it says.
-         */
-        const midStreamWrites: Array<Promise<unknown>> = [];
-        /**
-         * Wait for every optimistic write issued so far, including any issued
-         * WHILE waiting.
-         *
-         * A single `allSettled(midStreamWrites)` snapshots the array: anything
-         * pushed during that await is neither waited on nor carried forward,
-         * and zeroing the array afterwards discards it outright. Splicing in a
-         * loop is the difference between "we waited" and "we waited for the
-         * ones that had already started".
-         *
-         * `timeoutMs` bounds it because this also runs in the response's
-         * `finally`: an upsert that never settles would otherwise hold the SSE
-         * socket open and delay credit settlement behind it.
-         */
-        const drainMidStreamWrites = async (timeoutMs = 5_000) => {
-          const deadline = Date.now() + timeoutMs;
-          while (midStreamWrites.length > 0 && Date.now() < deadline) {
-            const batch = midStreamWrites.splice(0, midStreamWrites.length);
-            await Promise.race([
-              Promise.allSettled(batch),
-              new Promise((resolve) =>
-                setTimeout(resolve, Math.max(0, deadline - Date.now())),
-              ),
-            ]);
-          }
-        };
-        let completedNormally = false;
         let reservationFinalized = false;
         let finalCreditCost: number | null = null;
         // Pre-build snapshot id — links the persisted assistant message to the
@@ -1631,17 +1455,13 @@ The user has expressed frustration. Do the following:
           );
         }
 
-        // Loaded ONCE, before the extractor exists. Doing this `await import`
-        // inside the callback put a microtask boundary between a file being
-        // emitted and its write entering `midStreamWrites` — and a drain
-        // landing in that gap would miss the write it was added to order.
-        // The last file of a build is the likeliest to be in that window and
-        // the one the repair pass most often rewrites.
+        // Loaded once before streaming so every preview notification uses the
+        // same deterministic sanitizer as the final authoritative save.
         const { sanitizeGeneratedFile: sanitizeStreamedFile } = await import(
           "@/lib/ai/html-sanity"
         );
 
-        // In build mode, stream-upsert each file to DB as soon as it completes
+        // In build mode, stream file-complete notifications without mutating DB.
         const fileExtractor = mode === "build"
           ? new StreamingFileExtractor((file) => {
               if (streamedFilePaths.has(file.path)) return; // dedupe
@@ -1656,36 +1476,6 @@ The user has expressed frustration. Do the following:
               // honest at every instant, not just at the end.
               const safeContent = sanitizeStreamedFile(file.path, file.content);
               streamedFiles.push({ path: file.path, content: safeContent, language: file.language });
-              // Not awaited — that would stall the stream — but TRACKED, so
-              // the final upsert loop can drain it and win the ordering.
-              // A failure here is recoverable (the final loop rewrites every
-              // file) but must not be invisible.
-              midStreamWrites.push(
-                Promise.resolve(
-                  supabase.from("project_files").upsert({
-                    project_id: projectId,
-                    path: file.path,
-                    content: safeContent,
-                    language: file.language,
-                  }, { onConflict: "project_id,path" }),
-                )
-                  .then((res: { error?: { message?: string } | null }) => {
-                    if (res?.error) {
-                      logger.warn("ai.chat.midstream_upsert_failed", {
-                        projectId,
-                        path: file.path,
-                        error: res.error.message,
-                      });
-                    }
-                  })
-                  .catch((err: unknown) => {
-                    logger.warn("ai.chat.midstream_upsert_threw", {
-                      projectId,
-                      path: file.path,
-                      error: err instanceof Error ? err.message : String(err),
-                    });
-                  }),
-              );
               // Notify client that a file is available early
               safeEnqueue(
                 encoder.encode(`data: ${JSON.stringify({ streamedFile: file.path })}\n\n`)
@@ -2389,32 +2179,17 @@ The user has expressed frustration. Do the following:
                   .eq("id", projectId);
               } catch { /* best-effort — never fail the build */ }
 
-              // Always upsert FINAL parsed/repaired content. Mid-stream upserts are
-              // for UX only — skipping here left autofix/repair changes on disk out
-              // of sync with what the model "finished" (Lovable: preview = latest).
-              //
-              // Drain the optimistic writes FIRST. They are issued without
-              // await, so an in-flight one could otherwise land after this
-              // loop and overwrite repaired content with the raw stream.
-              // `allSettled` because a failed optimistic write must not stop
-              // the authoritative one — this loop is exactly its recovery.
-              await drainMidStreamWrites();
-              const { sanitizeGeneratedFile } = await import("@/lib/ai/html-sanity");
+              // Persist the complete validated generation in one batch. No
+              // streamed fragment reaches canonical project_files, so parse,
+              // continuation, or disconnect failures leave the prior project
+              // intact instead of producing a half-updated application.
+              parsedFiles = await commitGeneratedFiles(supabase, projectId, parsedFiles);
               for (const file of parsedFiles) {
-                const sanitized = sanitizeGeneratedFile(file.path, file.content);
-                await supabase.from("project_files").upsert({
-                  project_id: projectId,
-                  path: file.path,
-                  // Guards against continuation rounds appending a second full
-                  // document to html files (observed corruption in the wild).
-                  content: sanitized,
-                  language: file.language,
-                }, { onConflict: "project_id,path" });
                 // Sync the final (sanitized/repaired) content into the running
                 // sandbox — the container was created from the scaffold before
                 // the build finished, so without this the preview keeps the
                 // scaffold until it is destroyed by hand.
-                pushFileToRunningSandbox(supabase, projectId, file.path, sanitized);
+                pushFileToRunningSandbox(supabase, projectId, file.path, file.content);
               }
 
                             // empty desktop <nav>. Force About/Services/Contact into the real header.
@@ -2783,7 +2558,6 @@ The user has expressed frustration. Do the following:
               )
             );
           }
-          completedNormally = true;
         } catch (error) {
           logger.error("ai.chat.stream_error", error instanceof Error ? error : new Error(String(error)), {
             projectId,
@@ -2795,48 +2569,6 @@ The user has expressed frustration. Do the following:
           );
         } finally {
           clearInterval(heartbeat);
-          // Unconditional drain. The success-path drain lives inside
-          // `if (parsedFiles.length > 0)`, so a build that streamed files but
-          // parsed none left writes in flight with `completedNormally` true —
-          // past both drains, and past the backstop below. This catches that
-          // and is a no-op whenever an earlier drain already ran.
-          await drainMidStreamWrites();
-          // Durability backstop: if the build did NOT complete normally (client/proxy
-          // abort, or an error before the save path), persist whatever streamed so an
-          // interrupted build never results in "no change". Idempotent; skipped on
-          // success so final/verified content is never overwritten by mid-stream text.
-          if (!completedNormally && streamedFiles.length > 0) {
-            try {
-              // Same ordering hazard as the success path: an optimistic write
-              // still in flight would land on top of this backstop. Let them
-              // finish first so this batch is genuinely last.
-              await drainMidStreamWrites();
-              const { error: backstopError } = await supabase.from("project_files").upsert(
-                streamedFiles.map((f) => ({ project_id: projectId, path: f.path, content: f.content, language: f.language })),
-                { onConflict: "project_id,path" },
-              );
-              if (backstopError) {
-                // The whole point of this block is that an interrupted build
-                // never silently loses work. A swallowed failure here means
-                // exactly that, so at minimum leave a trace.
-                logger.error(
-                  "ai.chat.interrupted_build_persist_failed",
-                  new Error(backstopError.message ?? String(backstopError)),
-                  { projectId, paths: streamedFiles.map((f) => f.path).slice(0, 10) },
-                );
-              } else {
-                for (const f of streamedFiles) {
-                  pushFileToRunningSandbox(supabase, projectId, f.path, f.content);
-                }
-              }
-            } catch (backstopThrew) {
-              logger.error(
-                "ai.chat.interrupted_build_persist_threw",
-                backstopThrew instanceof Error ? backstopThrew : new Error(String(backstopThrew)),
-                { projectId },
-              );
-            }
-          }
           if (!reservationFinalized) {
             try {
               const producedBillableWork =

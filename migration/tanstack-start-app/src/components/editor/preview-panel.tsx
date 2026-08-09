@@ -28,6 +28,8 @@ import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
 import { EMPTY_PREVIEW_HTML } from "@/lib/preview/build-fallback-html";
+import { buildStaticPreview } from "@/lib/preview/build-static-preview";
+import { resolveProjectRuntime, type ProjectRuntime } from "@/lib/project/runtime";
 import { filesContentSignature } from "@/lib/preview/files-signature";
 import { getRefreshEffectiveFiles } from "./preview-panel-utils";
 import {
@@ -143,6 +145,8 @@ interface VebElement {
 
 interface PreviewPanelProps {
   files: ProjectFile[];
+  framework?: string | null;
+  runtime?: ProjectRuntime | null;
   projectId?: string;
   activeFile?: ProjectFile | null;
   isVisualEditActive?: boolean;
@@ -430,6 +434,8 @@ function TabletFrame({ children }: { children: React.ReactNode }) {
 
 export function PreviewPanel({
   files,
+  framework,
+  runtime,
   projectId,
   activeFile,
   isVisualEditActive,
@@ -1084,7 +1090,8 @@ export function PreviewPanel({
   // Was hardcoded `false` while the product was Modal-only. Now driven by the
   // real flag so NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1 actually takes effect —
   // leaving this pinned would have made the env var look broken.
-  const webContainerAllowed = isWebContainerPreviewEnabled();
+  const staticRuntime = resolveProjectRuntime(runtime, framework, files) === "static";
+  const webContainerAllowed = !staticRuntime && isWebContainerPreviewEnabled();
   const forceFallbackPreview = false;
   const sandboxAvailable = sandboxEnabled;
   useEffect(() => {
@@ -1092,10 +1099,10 @@ export function PreviewPanel({
     // as the no-files empty state, which renders a neutral message — never an
     // in-browser engine.
     setPreviewEngine((prev) => {
-      const next = files.length === 0 ? "fallback" : "sandbox";
+      const next = files.length === 0 || staticRuntime ? "fallback" : "sandbox";
       return prev === next ? prev : next;
     });
-  }, [files.length]);
+  }, [files.length, staticRuntime]);
 
   // Boot the in-browser runtime when this engine is selected.
   //
@@ -1891,11 +1898,14 @@ export function PreviewPanel({
     return visualEditEnabled ? addVebBridge(base) : base;
   }, [files, visualEditEnabled]);
 
-  // Modal-only: the in-browser esbuild/srcdoc engines are retired. These stay as
-  // stable empty references for the comment-pin / URL-sync / refresh effects that
-  // still read them (each no-ops on an empty string / the placeholder html).
-  const fallbackHtml = "";
-  const effectivePreviewHtml = EMPTY_PREVIEW_HTML;
+  // Static projects deliberately bypass package installation and render their
+  // browser-native files directly. Framework projects continue to use the one
+  // high-fidelity sandbox/WebContainer path.
+  const fallbackHtml = useMemo(
+    () => staticRuntime ? buildStaticPreview(previewFiles) : "",
+    [previewFiles, staticRuntime],
+  );
+  const effectivePreviewHtml = fallbackHtml || EMPTY_PREVIEW_HTML;
   const filesSignature = useMemo(() => filesContentSignature(previewFiles), [previewFiles]);
 
   // Foreground reliability guard: WebContainer can occasionally stall while its
@@ -2648,6 +2658,25 @@ export function PreviewPanel({
               <Loader2 className="w-5 h-5 animate-spin text-muted-foreground/50 mx-auto mb-2" />
               <p className="text-xs text-muted-foreground/40">Loading preview…</p>
             </div>
+          </div>
+        ) : useFallback && staticRuntime ? (
+          <div className="flex flex-col flex-1 min-h-0 overflow-hidden relative">
+            {withDeviceFrame(
+              <iframe
+                id="static-preview-panel"
+                key={`static-${filesSignature}-${refreshKey}`}
+                ref={iframeRef}
+                srcDoc={effectivePreviewHtml}
+                className="w-full h-full min-h-0 border-0 bg-white"
+                title="Static app preview"
+                sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+                allow="clipboard-read; clipboard-write; fullscreen"
+                onLoad={() => {
+                  transitionPreviewMachine("ready", "static srcdoc loaded");
+                  window.dispatchEvent(new CustomEvent("lifemark-preview-settled", { detail: { ok: true } }));
+                }}
+              />,
+            )}
           </div>
         ) : previewEngine === "sandbox" &&
           !sandboxUrl &&
