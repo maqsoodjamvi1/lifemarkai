@@ -1,6 +1,6 @@
 
-import { useMemo, useState } from "react";
-import { ChevronRight, ChevronDown, Box, FunctionSquare, Type, Hash, Component } from "lucide-react";
+import { useMemo,useState } from "react";
+import { ChevronRight,ChevronDown,Box,FunctionSquare,Type,Hash,Component } from "lucide-react";
 import type { ProjectFile } from "@/types/database";
 
 // ── Symbol types ──────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Check, X, Zap, Users, Building2, Sparkles, Star } from "lucide-react";
+import { motion } from "framer-motion";
+import { Check,X,Zap,Users,Building2,Sparkles,Star } from "lucide-react";
 
 // Mirrors lib/stripe/plans.ts PLANS array
 const PLANS = [

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
@@ -18,15 +17,15 @@ export const Route = createFileRoute("/api/projects/$id/revenue")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { data: project } = await (supabase as any)
+        const { data: project } = await supabase
           .from("projects").select("user_id").eq("id", id).single();
         if (!project || project.user_id !== user.id) {
           return Response.json({ error: "Forbidden" }, { status: 403 });
         }
 
         const [{ data: config }, { data: subs }] = await Promise.all([
-          (supabase as any).from("app_monetization").select("price_cents, currency").eq("project_id", id).maybeSingle(),
-          (supabase as any).from("app_subscriptions").select("status, created_at, updated_at").eq("project_id", id),
+          supabase.from("app_monetization").select("price_cents, currency").eq("project_id", id).maybeSingle(),
+          supabase.from("app_subscriptions").select("status, created_at, updated_at").eq("project_id", id),
         ]);
 
         const priceCents: number = config?.price_cents ?? 0;

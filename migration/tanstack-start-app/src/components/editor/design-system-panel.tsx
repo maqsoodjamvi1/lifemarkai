@@ -1,8 +1,8 @@
 
-import { useState, useEffect, useCallback } from "react";
-import { Palette, Type, Sliders, Download, Sparkles, Check, Loader2, RefreshCw } from "lucide-react";
+import { useState,useCallback } from "react";
+import { Palette,Type,Sliders,Download,Sparkles,Check,Loader2,RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs,TabsList,TabsTrigger,TabsContent } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectFile } from "@/types/database";
 

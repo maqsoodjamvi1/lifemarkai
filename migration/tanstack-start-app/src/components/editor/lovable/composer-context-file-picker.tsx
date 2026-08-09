@@ -1,6 +1,6 @@
 
-import { AnimatePresence, motion } from "framer-motion";
-import { FileCode2, XCircle, Zap } from "lucide-react";
+import { AnimatePresence,motion } from "framer-motion";
+import { FileCode2,XCircle,Zap } from "lucide-react";
 import type { ProjectFile } from "@/types/database";
 
 interface LovableComposerContextFilePickerProps {

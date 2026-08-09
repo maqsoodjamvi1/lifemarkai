@@ -1,6 +1,6 @@
 
-import { useState, useEffect } from "react";
-import { Flag, Plus, Trash2, Copy, Check, Loader2, Code2, RefreshCw, Users } from "lucide-react";
+import { useState,useEffect } from "react";
+import { Flag,Plus,Trash2,Copy,Check,Loader2,Code2,Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -29,8 +29,8 @@ export function useFeatureFlag(key: string): boolean {
   const [enabled, setEnabled] = useState(false);
   useEffect(() => {
     const supabase = createClient();
-    supabase.from("feature_flags")
-      .select("enabled, rollout_pct")
+    supabase.from("project_feature_flags")
+      .select("is_enabled, rollout_pct")
       .eq("project_id", process.env.NEXT_PUBLIC_PROJECT_ID ?? "")
       .eq("key", key)
       .maybeSingle()
@@ -38,7 +38,7 @@ export function useFeatureFlag(key: string): boolean {
         if (!data) return;
         // Simple rollout: use a stable random per-session number
         const roll = Math.random() * 100;
-        setEnabled(data.enabled && roll <= (data.rollout_pct ?? 100));
+        setEnabled(data.is_enabled && roll <= (data.rollout_pct ?? 100));
       });
   }, [key]);
   return enabled;

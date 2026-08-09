@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from "react";
+import { useEffect,useState } from "react";
 import type { EditorMode } from "@/components/editor/editor-layout";
 import { estimateMessageCredits } from "@/lib/ai/estimate-message-credits";
 import { LovableChatHeaderPreviewChip } from "./chat-header-extras";

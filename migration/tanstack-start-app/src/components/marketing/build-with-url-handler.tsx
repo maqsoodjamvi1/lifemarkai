@@ -15,12 +15,12 @@
  *    the prompt is preserved through auth.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect,useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Loader2 } from "lucide-react";
 import {
-  BUILD_WITH_URL_STORAGE_KEY,
-  type BuildWithUrlPayload,
+BUILD_WITH_URL_STORAGE_KEY,
+type BuildWithUrlPayload,
 } from "@/lib/build-with-url";
 
 function parseHash(): { prompt?: string; images: string[]; pages: string[] } | null {

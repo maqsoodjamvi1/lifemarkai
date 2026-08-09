@@ -1,12 +1,12 @@
 
 import { Check } from "lucide-react";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { EditorMode, LeftPanel } from "@/components/editor/editor-layout";
+import type { EditorMode,LeftPanel } from "@/components/editor/editor-layout";
 import { dispatchChatSettings } from "./chat-settings-events";
 
 export interface ComposerContextMenuActions {

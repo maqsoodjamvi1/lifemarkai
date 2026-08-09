@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
@@ -34,7 +33,7 @@ export const Route = createFileRoute("/api/projects/$id/remix")({
         let body: { dryRun?: boolean; disconnectSupabase?: boolean } = {};
         try { body = await request.json(); } catch { /* empty body ok */ }
 
-        const { data: source, error: srcErr } = await (supabase as any)
+        const { data: source, error: srcErr } = await supabase
           .from("projects")
           .select("*, project_files(*)")
           .eq("id", id)
@@ -60,7 +59,7 @@ export const Route = createFileRoute("/api/projects/$id/remix")({
           });
         }
 
-        const { data: newProject, error: createErr } = await (supabase as any)
+        const { data: newProject, error: createErr } = await supabase
           .from("projects")
           .insert({
             user_id: user.id,
@@ -98,7 +97,7 @@ export const Route = createFileRoute("/api/projects/$id/remix")({
         }
 
         if (files.length > 0) {
-          const { error: filesErr } = await (supabase as any).from("project_files").insert(
+          const { error: filesErr } = await supabase.from("project_files").insert(
             files.map((f) => ({
               project_id: newProject.id,
               path: f.path,
@@ -109,7 +108,7 @@ export const Route = createFileRoute("/api/projects/$id/remix")({
           if (filesErr) console.error("Failed to copy files:", filesErr.message);
         }
 
-        (supabase as any).rpc("increment_remix_count", { project_id: source.id }).then(() => {});
+        supabase.rpc("increment_remix_count", { project_id: source.id }).then(() => {});
 
         return Response.json({
           id: newProject.id,

@@ -1,6 +1,6 @@
 import { createAdminClient } from "../supabase/server.ts";
-import { getRegistrar, type RegistrantContact, type DnsRecord } from "./registrar.ts";
-import { connectDnsRecords, domainVerificationToken } from "./entri.ts";
+import { getRegistrar,type RegistrantContact,type DnsRecord } from "./registrar.ts";
+import { connectDnsRecords,domainVerificationToken } from "./entri.ts";
 import { getHostingTarget } from "./hosting.ts";
 
 export interface CompleteDomainPurchaseInput {
@@ -33,7 +33,7 @@ export async function completeDomainPurchase(input: CompleteDomainPurchaseInput)
 
   const result = await registrar.register(domain, contact, yr);
   if (!result.ok) {
-    await (supabase as any).from("domain_registrations").upsert({
+    await supabase.from("domain_registrations").upsert({
       project_id: projectId,
       user_id: userId,
       domain,
@@ -80,7 +80,7 @@ export async function completeDomainPurchase(input: CompleteDomainPurchaseInput)
     wiringErrors.push(`hosting attach: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  await (supabase as any).from("domain_registrations").upsert({
+  await supabase.from("domain_registrations").upsert({
     project_id: projectId,
     user_id: userId,
     domain,
@@ -98,7 +98,7 @@ export async function completeDomainPurchase(input: CompleteDomainPurchaseInput)
     metadata: wiringErrors.length ? { wiringErrors } : {},
   }, { onConflict: "domain" });
 
-  await (supabase as any).from("projects").update({
+  await supabase.from("projects").update({
     custom_domain: domain,
     custom_domain_token: verifyToken,
     custom_domain_verified: false,

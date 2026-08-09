@@ -1,15 +1,15 @@
 
-import { useState, useEffect, useCallback } from "react";
+import { useState,useEffect,useCallback } from "react";
 import { motion } from "framer-motion";
 import {
-  Github, GitBranch, GitMerge, Upload, Download,
-  Plus, ExternalLink, CheckCircle, Loader2, Clock,
-  ArrowUp, ArrowDown, AlertTriangle, RefreshCw, Wand2,
+Github,GitBranch,GitMerge,Upload,Download,
+Plus,ExternalLink,CheckCircle,Loader2,Clock,
+ArrowUp,ArrowDown,AlertTriangle,RefreshCw,Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import type { Project, ProjectFile } from "@/types/database";
+import type { Project,ProjectFile } from "@/types/database";
 
 // ── GitLab icon (simple inline SVG) ──────────────────────────────────────────
 function GitLabIcon({ className }: { className?: string }) {

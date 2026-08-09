@@ -1,6 +1,6 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import type { Database } from "@/types/database";
 import { getServerUser } from "@/lib/supabase/server-user";
 
 /** Native /api/projects/groups/:groupId — rename/recolor/reparent or delete a folder. */
@@ -29,7 +29,7 @@ export const Route = createFileRoute("/api/projects/groups/$groupId")({
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const body = await request.json();
-        const updates: Record<string, unknown> = {};
+        const updates: Database["public"]["Tables"]["project_groups"]["Update"] = {};
         if (typeof body.name === "string") updates.name = body.name.trim();
         if (typeof body.color === "string") updates.color = body.color;
         if (typeof body.position === "number") updates.position = body.position;
@@ -38,7 +38,7 @@ export const Route = createFileRoute("/api/projects/groups/$groupId")({
           if (body.parent_id === groupId) {
             return Response.json({ error: "A folder cannot be its own parent" }, { status: 400 });
           }
-          const { data: parent } = await (supabase as any)
+          const { data: parent } = await supabase
             .from("project_groups").select("id").eq("id", body.parent_id).eq("user_id", user.id).single();
           if (!parent) return Response.json({ error: "Parent folder not found" }, { status: 404 });
           const parentDepth = await folderDepth(supabase, body.parent_id);
@@ -52,7 +52,7 @@ export const Route = createFileRoute("/api/projects/groups/$groupId")({
           return Response.json({ error: "Nothing to update" }, { status: 400 });
         }
 
-        const { data, error } = await (supabase as any)
+        const { data, error } = await supabase
           .from("project_groups")
           .update(updates)
           .eq("id", groupId)
@@ -70,7 +70,7 @@ export const Route = createFileRoute("/api/projects/groups/$groupId")({
         const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { error } = await (supabase as any)
+        const { error } = await supabase
           .from("project_groups")
           .delete()
           .eq("id", groupId)

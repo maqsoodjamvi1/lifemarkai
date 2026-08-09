@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
@@ -18,7 +17,7 @@ export const Route = createFileRoute("/api/analytics/usage")({
 
         const { data: creditLogs } = await supabase
           .from("credit_logs")
-          .select("credits_used, created_at")
+          .select("amount, created_at")
           .eq("user_id", user.id)
           .gte("created_at", iso)
           .order("created_at", { ascending: true });
@@ -44,9 +43,9 @@ export const Route = createFileRoute("/api/analytics/usage")({
           d.setDate(d.getDate() - i);
           burnByDay[d.toISOString().slice(0, 10)] = 0;
         }
-        (creditLogs ?? []).forEach((log: { created_at: string; credits_used: number | null }) => {
+        (creditLogs ?? []).forEach((log) => {
           const key = log.created_at.slice(0, 10);
-          if (key in burnByDay) burnByDay[key] += log.credits_used ?? 1;
+          if (key in burnByDay && log.amount < 0) burnByDay[key] += Math.abs(log.amount);
         });
 
         const byModel: Record<string, { count: number; tokens: number }> = {};
@@ -67,7 +66,10 @@ export const Route = createFileRoute("/api/analytics/usage")({
           burnByDay: Object.entries(burnByDay).map(([date, credits]) => ({ date, credits })),
           byModel: Object.entries(byModel).map(([model, v]) => ({ model, ...v })),
           byMode: Object.entries(byMode).map(([mode, count]) => ({ mode, count })),
-          totalCredits: (creditLogs ?? []).reduce((s, l: { credits_used: number | null }) => s + (l.credits_used ?? 1), 0),
+          totalCredits: (creditLogs ?? []).reduce(
+            (sum, log) => sum + (log.amount < 0 ? Math.abs(log.amount) : 0),
+            0,
+          ),
           totalGenerations: messages.length,
         });
       },

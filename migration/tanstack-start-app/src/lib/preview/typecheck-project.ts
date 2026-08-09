@@ -12,7 +12,7 @@
  * second as the first would let a repair loop conclude it had fixed everything
  * because it never checked.
  */
-import { getSandboxProvider, isSandboxEnabled } from "@/lib/sandbox";
+import { getSandboxProvider,isSandboxEnabled } from "@/lib/sandbox";
 import type { TypecheckResult } from "@/lib/sandbox";
 
 /** How long to let a debounced sandbox push land before checking what it wrote. */

@@ -6,8 +6,8 @@
  * Dismissed state persists in localStorage so we don't nag.
  */
 
-import { useEffect, useState } from "react";
-import { Download, X, Smartphone } from "lucide-react";
+import { useEffect,useState } from "react";
+import { Download,X,Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const DISMISS_KEY = "lifemark.pwa.dismissed";

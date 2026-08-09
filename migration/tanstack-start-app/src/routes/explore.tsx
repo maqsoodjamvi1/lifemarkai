@@ -1,4 +1,4 @@
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute,Link,useNavigate } from "@tanstack/react-router";
 import { fetchExplorePage } from "@/lib/dashboard-server";
 import { exploreSearchValidator } from "@/lib/route-search";
 import { Navbar } from "@/components/marketing/navbar";

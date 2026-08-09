@@ -1,7 +1,6 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/server";
-import { createHash, createVerify, timingSafeEqual } from "node:crypto";
+import { createHash,createVerify,timingSafeEqual } from "node:crypto";
 import { sendEmail } from "@/lib/email/resend";
 import { logger } from "@/lib/logger";
 

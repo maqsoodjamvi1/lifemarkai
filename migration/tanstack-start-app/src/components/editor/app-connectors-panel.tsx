@@ -6,11 +6,10 @@
  * Groups: Communication, Data, AI, Commerce, Productivity
  */
 
-import { useState, useEffect, useMemo } from "react";
+import { useState,useEffect,useMemo } from "react";
 import {
-  Plug, Search, CheckCircle2, Circle, ChevronRight, ChevronDown,
-  ExternalLink, Key, RefreshCw, Loader2, X, Eye, EyeOff,
-  AlertCircle, Zap,
+Plug,Search,CheckCircle2,ChevronRight,ExternalLink,Key,Loader2,X,Eye,EyeOff,
+AlertCircle,Zap
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

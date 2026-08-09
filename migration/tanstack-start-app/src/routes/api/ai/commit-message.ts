@@ -1,9 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { getFastAiModel } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 
 /**
  * Native /api/ai/commit-message — Conventional-Commits message from changed
@@ -29,7 +28,7 @@ export const Route = createFileRoute("/api/ai/commit-message")({
         if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
         if (changedFiles.length === 0) return Response.json({ error: "No changed files" }, { status: 400 });
 
-        const { data: project } = await (supabase as any)
+        const { data: project } = await supabase
           .from("projects").select("id, user_id, name, framework").eq("id", projectId).single();
 
         if (!project || project.user_id !== user.id) {

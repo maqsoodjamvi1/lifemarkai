@@ -1,10 +1,9 @@
 
-import { useState, useEffect } from "react";
-import { Map, Plus, Trash2, ChevronRight, FileText, Loader2, Copy, Check, ArrowRight, Home, Globe, Lock, Sparkles, Edit3 } from "lucide-react";
+import { useState,useEffect } from "react";
+import { Map,Plus,Trash2,ChevronRight,FileText,Loader2,Copy,Check,ArrowRight,Home,Globe,Lock,Sparkles,Edit3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { toast } from "@/hooks/use-toast";
 
 interface RouterWizardPanelProps {
   projectId: string;

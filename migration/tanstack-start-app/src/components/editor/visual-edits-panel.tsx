@@ -1,11 +1,10 @@
 
 import { useState } from "react";
 import {
-  PenTool, CheckCircle2, ChevronDown, ChevronUp, Copy, Zap,
-  MousePointer, Type, Palette, Image, Layout, Move, Maximize2,
-  Command, Grid3x3, Sparkles, Clock, Infinity,
-  MousePointer2, AlignLeft, AlignCenter, AlignRight, Plus,
-  Code2, Info, Lightbulb, X, Users,
+PenTool,CheckCircle2,ChevronDown,ChevronUp,Copy,Zap,
+MousePointer,Type,Palette,Image,Layout,Move,Grid3x3,Sparkles,Clock,Infinity,
+MousePointer2,Plus,
+Code2,Info,Lightbulb,X,Users
 } from "lucide-react";
 
 /* ─── Data ─────────────────────────────────────────────── */

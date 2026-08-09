@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { Check, CheckCheck, FileText, ListChecks, Pencil, Zap } from "lucide-react";
+import { Check,CheckCheck,FileText,ListChecks,Pencil,Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { LovableMessageContent } from "./message-content";

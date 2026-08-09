@@ -4,10 +4,9 @@
  * a natural-language summary of the most active week, plus sparkline stats.
  */
 
-import { useState, useEffect } from "react";
+import { useState,useEffect } from "react";
 import {
-  Sparkles, TrendingUp, Zap, GitBranch, Code2,
-  Loader2, RefreshCw, ChevronRight,
+Sparkles,TrendingUp,Zap,GitBranch,Code2,RefreshCw,ChevronRight
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

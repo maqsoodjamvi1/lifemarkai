@@ -1,11 +1,11 @@
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback,useMemo,useState } from "react";
 import type { ChatInputHandle } from "@/components/editor/chat-tiptap-input";
 import type { RefObject } from "react";
 import type { EditorMode } from "@/components/editor/editor-layout";
 import type { PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
-import { REPEAT_STEPS, type LovableQueueItem } from "./prompt-queue";
-import type { ClarifyQuestion, ClarifySession } from "./clarify-session-card";
+import { REPEAT_STEPS,type LovableQueueItem } from "./prompt-queue";
+import type { ClarifyQuestion,ClarifySession } from "./clarify-session-card";
 import type { LovableFileGenResult } from "./file-gen-result-cards";
 
 export interface UseComposerDockControllerArgs {

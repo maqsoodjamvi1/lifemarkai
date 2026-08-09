@@ -1,6 +1,6 @@
 import { salvageFilesFromStreamJson } from "./streaming-file-extractor.ts";
 import { ensureCommonGeneratedSupportFiles } from "./generated-support-files.ts";
-import { checkJsxTagBalance, findUnterminatedStrings } from "./jsx-balance.ts";
+import { checkJsxTagBalance,findUnterminatedStrings } from "./jsx-balance.ts";
 import { assessWebsiteChrome } from "./website-chrome.ts";
 import { parseFileUpdateBlocks } from "./xml-stream-parser.ts";
 

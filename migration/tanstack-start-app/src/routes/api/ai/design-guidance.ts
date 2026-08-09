@@ -1,13 +1,12 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { DESIGN_MODEL } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import {
-  cancelCreditReservation,
-  reserveCredits,
-  settleCreditReservation,
+cancelCreditReservation,
+reserveCredits,
+settleCreditReservation,
 } from "@/lib/credits";
 
 

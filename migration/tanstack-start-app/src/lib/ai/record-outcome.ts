@@ -15,9 +15,9 @@
  */
 import { createAdminClient } from "../supabase/server.ts";
 import {
-  distinctFingerprints,
-  scoreRepair,
-  type FailureIdentity,
+distinctFingerprints,
+scoreRepair,
+type FailureIdentity,
 } from "@/lib/ai/failure-fingerprint";
 
 export interface RepairAttempt {

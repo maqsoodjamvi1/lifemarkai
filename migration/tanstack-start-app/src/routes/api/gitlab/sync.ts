@@ -1,14 +1,13 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import {
-  createRepo,
-  ensureBranch,
-  pushFiles,
-  pushChangedFiles,
-  pullFiles,
-  getBranchStatus,
-  createOrGetMR,
+createRepo,
+ensureBranch,
+pushFiles,
+pushChangedFiles,
+pullFiles,
+getBranchStatus,
+createOrGetMR,
 } from "@/lib/gitlab/client";
 import { logger } from "@/lib/logger";
 
@@ -35,14 +34,14 @@ export const Route = createFileRoute("/api/gitlab/sync")({
 
         const { projectId, action } = await request.json();
 
-        const { data: profile } = await (supabase as any)
+        const { data: profile } = await supabase
           .from("profiles").select("gitlab_access_token, gitlab_username").eq("id", user.id).single();
         if (!profile?.gitlab_access_token) {
           return Response.json({ error: "GitLab not connected" }, { status: 400 });
         }
         const token: string = profile.gitlab_access_token;
 
-        const { data: project } = await (supabase as any)
+        const { data: project } = await supabase
           .from("projects").select("*, project_files(*)").eq("id", projectId).single();
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
@@ -57,7 +56,7 @@ export const Route = createFileRoute("/api/gitlab/sync")({
           await ensureBranch(token, repo.id, branch, repo.default_branch);
 
           const repoRef = `gitlab:${repo.id}`;
-          await (supabase as any)
+          await supabase
             .from("projects")
             .update({ github_repo: repoRef, github_branch: branch, git_provider: "gitlab" })
             .eq("id", projectId);
@@ -83,7 +82,7 @@ export const Route = createFileRoute("/api/gitlab/sync")({
           const { changed } = await pushChangedFiles(
             token, glProjectId, branch, files, `Update from LifemarkAI · ${new Date().toISOString()}`,
           );
-          await (supabase as any).from("projects").update({ github_branch: branch }).eq("id", projectId);
+          await supabase.from("projects").update({ github_branch: branch }).eq("id", projectId);
           logger.info("gitlab.sync.push", { projectId, branch, changed });
           return Response.json({ success: true, branch, changed });
         }
@@ -93,7 +92,7 @@ export const Route = createFileRoute("/api/gitlab/sync")({
           const files = await pullFiles(token, glProjectId, branch);
           for (const file of files) {
             const ext = file.path.split(".").pop()?.toLowerCase() ?? "";
-            await (supabase as any).from("project_files").upsert({
+            await supabase.from("project_files").upsert({
               project_id: projectId,
               path: file.path,
               content: file.content,

@@ -3,9 +3,9 @@
  * Full Next grid (GitHub import modal, dropdown menus, thumbnails) stays on :3000;
  * this keeps the dashboard project browser working via proxied /api/projects.
  */
-import { useMemo, useState } from "react";
-import { Link, useNavigate, useRouter } from "@tanstack/react-router";
-import { Clock, FolderOpen, Globe, Search, Star, X } from "lucide-react";
+import { useMemo,useState } from "react";
+import { Link,useNavigate,useRouter } from "@tanstack/react-router";
+import { Clock,FolderOpen,Globe,Search,Star,X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

@@ -6,7 +6,7 @@
  * works whether or not a next-themes provider is mounted.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect,useState } from "react";
 import { Toaster as Sonner } from "sonner";
 
 export function Toaster() {

@@ -1,4 +1,4 @@
-import { createFileRoute, getRouteApi } from "@tanstack/react-router";
+import { createFileRoute,getRouteApi } from "@tanstack/react-router";
 import { SettingsPage } from "@/components/dashboard/settings-page";
 
 const layoutApi = getRouteApi("/_dashboard");

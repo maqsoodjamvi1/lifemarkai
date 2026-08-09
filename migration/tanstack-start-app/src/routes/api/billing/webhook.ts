@@ -1,7 +1,6 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { stripe } from "@/lib/stripe/client";
-import { PLANS, CREDIT_PACKS, getPlanByPriceId } from "@/lib/stripe/plans";
+import { PLANS,CREDIT_PACKS,getPlanByPriceId } from "@/lib/stripe/plans";
 import { createAdminClient } from "@/lib/supabase/server";
 import { sendCreditsPurchasedEmail } from "@/lib/email/resend";
 import { completeDomainPurchase } from "@/lib/domains/complete-domain-purchase";
@@ -34,7 +33,7 @@ export const Route = createFileRoute("/api/billing/webhook")({
         const supabase = createAdminClient();
 
         // Idempotency guard — claim the event id (stripe_events PK insert).
-        const { error: claimError } = await (supabase as any).from("stripe_events").insert({
+        const { error: claimError } = await supabase.from("stripe_events").insert({
           id: event.id,
           type: event.type,
           status: "processing",
@@ -49,7 +48,7 @@ export const Route = createFileRoute("/api/billing/webhook")({
         }
 
         async function profileByCustomer(customerId: string) {
-          const { data } = await (supabase as any)
+          const { data } = await supabase
             .from("profiles")
             .select("id, email, full_name, credits, plan")
             .eq("stripe_customer_id", customerId)
@@ -57,13 +56,13 @@ export const Route = createFileRoute("/api/billing/webhook")({
           return data;
         }
         async function creditUser(userId: string, amount: number, action: string, description: string) {
-          const { error } = await (supabase as any).rpc("add_credits" as never, {
+          const { error } = await supabase.rpc("add_credits" as never, {
             p_user_id: userId, p_amount: amount, p_action: action, p_description: description,
           } as never);
           if (error) throw new Error(`Unable to credit user: ${error.message}`);
         }
         async function creditTeam(teamId: string, amount: number, description: string) {
-          const { error } = await (supabase as any).rpc("add_team_credits" as never, {
+          const { error } = await supabase.rpc("add_team_credits" as never, {
             p_team_id: teamId, p_amount: amount, p_description: description,
           } as never);
           if (error) throw new Error(`Unable to credit team: ${error.message}`);
@@ -86,7 +85,7 @@ export const Route = createFileRoute("/api/billing/webhook")({
                     : sub.status === "past_due" ? "past_due"
                     : ["canceled", "unpaid", "incomplete_expired"].includes(sub.status) ? "canceled"
                     : "active";
-                  await (supabase as any).from("app_subscriptions").upsert({
+                  await supabase.from("app_subscriptions").upsert({
                     project_id: appProjectId,
                     subscriber_email: subscriberEmail,
                     stripe_customer_id: customerId,
@@ -110,7 +109,7 @@ export const Route = createFileRoute("/api/billing/webhook")({
               const planChanged = profile.plan !== plan.id;
 
               if (!isNewSub && !planChanged) {
-                await (supabase as any).from("profiles").update({
+                await supabase.from("profiles").update({
                   stripe_subscription_id: sub.id, updated_at: new Date().toISOString(),
                 }).eq("id", profile.id);
                 break;
@@ -134,14 +133,14 @@ export const Route = createFileRoute("/api/billing/webhook")({
                 }
               }
 
-              await (supabase as any).from("profiles").update({
+              await supabase.from("profiles").update({
                 plan: plan.id,
                 ...(newCredits !== null ? { credits: newCredits } : {}),
                 stripe_subscription_id: sub.id,
                 updated_at: new Date().toISOString(),
               }).eq("id", profile.id);
 
-              await (supabase as any).from("credit_logs").insert({
+              await supabase.from("credit_logs").insert({
                 user_id: profile.id, amount: logAmount, action: "subscription", description: logDesc,
               });
 
@@ -161,11 +160,11 @@ export const Route = createFileRoute("/api/billing/webhook")({
               const plan = PLANS.find((p) => p.id === profile.plan);
               if (!plan || plan.credits <= 0) break;
 
-              const { error } = await (supabase as any).rpc("apply_plan_renewal" as never, {
+              const { error } = await supabase.rpc("apply_plan_renewal" as never, {
                 p_user_id: profile.id, p_plan_credits: plan.credits,
               } as never);
               if (error) {
-                await (supabase as any).from("profiles").update({
+                await supabase.from("profiles").update({
                   credits: plan.credits, updated_at: new Date().toISOString(),
                 }).eq("id", profile.id);
               }
@@ -175,7 +174,7 @@ export const Route = createFileRoute("/api/billing/webhook")({
             case "customer.subscription.deleted": {
               const sub = event.data.object as Stripe.Subscription;
               if (sub.metadata?.kind === "app_subscription") {
-                await (supabase as any).from("app_subscriptions")
+                await supabase.from("app_subscriptions")
                   .update({ status: "canceled", updated_at: new Date().toISOString() })
                   .eq("stripe_sub_id", sub.id);
                 break;
@@ -183,17 +182,17 @@ export const Route = createFileRoute("/api/billing/webhook")({
               const profile = await profileByCustomer(sub.customer as string);
               if (!profile) break;
               const freePlan = PLANS.find((p) => p.id === "free")!;
-              await (supabase as any).from("profiles").update({
+              await supabase.from("profiles").update({
                 plan: "free", credits: freePlan.credits, stripe_subscription_id: null, updated_at: new Date().toISOString(),
               }).eq("id", profile.id);
-              await (supabase as any).from("credit_logs").insert({
+              await supabase.from("credit_logs").insert({
                 user_id: profile.id, amount: freePlan.credits, action: "subscription", description: "Downgraded to Free plan",
               });
               break;
             }
 
             case "checkout.session.completed": {
-              const session = event.data.object as Stripe.Session;
+              const session = event.data.object as Stripe.Checkout.Session;
               if (session.mode !== "payment") break;
               if (session.payment_status !== "paid") break;
               const meta = session.metadata ?? {};
@@ -222,19 +221,19 @@ export const Route = createFileRoute("/api/billing/webhook")({
               const credits = parseInt(meta.credits ?? "0");
               if (!userId || !packKey || !credits) break;
 
-              await (supabase as any).from("credit_packs")
+              await supabase.from("credit_packs")
                 .update({ status: "paid", stripe_session_id: session.id })
                 .eq("stripe_session_id", session.id);
 
               if (teamId) {
                 await creditTeam(teamId, credits, `Credit pack: ${packKey}`);
-                await (supabase as any).from("credit_logs").insert({
+                await supabase.from("credit_logs").insert({
                   user_id: userId, amount: credits, action: "credit_purchase",
                   description: `Bought ${credits} credits for team pool (pack: ${packKey})`,
                 });
               } else {
                 await creditUser(userId, credits, "credit_purchase", `Bought ${credits} credits (pack: ${packKey})`);
-                const { data: p } = await (supabase as any).from("profiles").select("email").eq("id", userId).single();
+                const { data: p } = await supabase.from("profiles").select("email").eq("id", userId).single();
                 const pack = CREDIT_PACKS.find((pk) => pk.key === packKey);
                 if (p?.email && pack) {
                   const price = `$${(pack.priceCents / 100).toFixed(0)} one-time`;
@@ -257,7 +256,7 @@ export const Route = createFileRoute("/api/billing/webhook")({
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          await (supabase as any).from("stripe_events")
+          await supabase.from("stripe_events")
             .update({ status: "failed", last_error: message.slice(0, 2000) })
             .eq("id", event.id);
           console.error("Stripe webhook handling failed", event.id, error);
@@ -265,7 +264,7 @@ export const Route = createFileRoute("/api/billing/webhook")({
         }
 
         const completedAt = new Date().toISOString();
-        const { error: completionError } = await (supabase as any).from("stripe_events").update({
+        const { error: completionError } = await supabase.from("stripe_events").update({
           status: "completed", processed_at: completedAt, completed_at: completedAt, last_error: null,
         }).eq("id", event.id);
         if (completionError) {

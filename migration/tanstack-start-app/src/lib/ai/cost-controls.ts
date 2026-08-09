@@ -1,10 +1,11 @@
 import type { EditorMode } from "@/components/editor/editor-layout";
 import type { AIModel } from "./provider.ts";
+import { isMajorGreenfieldBuild } from "./build-intent.ts";
 import {
-  DEFAULT_CODING_MODEL,
-  ECONOMY_CHAT_MODEL,
-  ECONOMY_CODING_MODEL,
-  FREE_CODING_MODEL,
+DEFAULT_CODING_MODEL,
+ECONOMY_CHAT_MODEL,
+ECONOMY_CODING_MODEL,
+FREE_CODING_MODEL,
 } from "./model-defaults.ts";
 import { shouldAutoSelectClaude } from "./model-catalog.ts";
 import { OPENROUTER_MODEL_IDS } from "./openrouter-models.ts";
@@ -130,6 +131,12 @@ export function maxOutputTokensForRequest(params: {
   if (params.mode === "plan") return Math.min(params.defaultChatMax, 2000);
   if (params.mode === "chat") return Math.min(params.defaultChatMax, 1800);
   if (params.mode === "patch") return Math.min(params.defaultChatMax, 3500);
+  if (
+    params.mode === "build" &&
+    isMajorGreenfieldBuild(params.prompt, params.fileCount)
+  ) {
+    return Math.max(params.defaultBuildMax, 56_000);
+  }
   return params.defaultBuildMax;
 }
 

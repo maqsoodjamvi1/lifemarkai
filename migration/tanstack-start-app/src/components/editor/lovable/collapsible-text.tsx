@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown,ChevronUp } from "lucide-react";
 
 interface LovableCollapsibleTextProps {
   text: string;

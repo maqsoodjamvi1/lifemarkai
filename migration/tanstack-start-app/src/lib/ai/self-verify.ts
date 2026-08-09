@@ -19,8 +19,8 @@ import { verifyPreviewHtml } from "./preview-verify.ts";
 import { findContractErrors } from "../preview/export-contract.ts";
 import { pushFileToRunningSandbox } from "../preview/push-to-sandbox.ts";
 import { generateAI } from "./generate.ts";
-import { ECONOMY_CODING_MODEL, getDefaultAiModel } from "./model-defaults.ts";
-import { selectModelChain, applyModelAdapter } from "./model-catalog.ts";
+import { ECONOMY_CODING_MODEL,getDefaultAiModel } from "./model-defaults.ts";
+import { selectModelChain,applyModelAdapter } from "./model-catalog.ts";
 import { AUTO_FIX_SYSTEM_PROMPT } from "./system-prompts.ts";
 import { buildPreviewDiagnosis } from "../preview/diagnose-preview.ts";
 import { guardFileWrite } from "./guard-file-write.ts";
@@ -70,7 +70,6 @@ async function tryLoadPlaywright(): Promise<{ chromium: any } | null> {
  * model via VISION_REVIEW_MODEL (default: a cheap vision-capable slug).
  */
 async function visionDesignReview(screenshotBase64: string): Promise<string[]> {
-  const { generateAI } = await import("@/lib/ai/generate");
   const model = process.env.VISION_REVIEW_MODEL || "openai/gpt-4o-mini";
   const res = await generateAI({
     model,

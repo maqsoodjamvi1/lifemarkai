@@ -1,16 +1,16 @@
 import type { ReactNode } from "react";
 import {
-  Outlet,
-  createRootRoute,
-  HeadContent,
-  Scripts,
+Outlet,
+createRootRoute,
+HeadContent,
+Scripts,
 } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import appCss from "../styles.css?url";
 import { PreviewBooting } from "@/components/preview-booting";
 import {
-  isSandboxPreviewHost,
-  previewHostOptionsFromEnv,
+isSandboxPreviewHost,
+previewHostOptionsFromEnv,
 } from "@/lib/preview/preview-host";
 
 /**
@@ -94,6 +94,7 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
   return (
     <html lang="en">
       <head>
+        <RuntimeEnvScript />
         <HeadContent />
       </head>
       <body>
@@ -101,5 +102,48 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
         <Scripts />
       </body>
     </html>
+  );
+}
+
+const PUBLIC_ENV_KEYS = [
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "NEXT_PUBLIC_APP_URL",
+  "VITE_SUPABASE_URL",
+  "VITE_SUPABASE_ANON_KEY",
+  "VITE_APP_URL",
+] as const;
+
+/**
+ * Keep runtime public configuration inside React's document tree.
+ *
+ * The production host used to splice this script into the completed HTML
+ * response. That made the server DOM differ from the client tree and caused
+ * React to abandon hydration on every production page. During hydration the
+ * script has already populated `globalThis.__LM_ENV__`, so both sides render
+ * the exact same script text without exposing any private environment values.
+ */
+function RuntimeEnvScript() {
+  const existing = (globalThis as { __LM_ENV__?: Record<string, string> })
+    .__LM_ENV__;
+  const env: Record<string, string> = existing ? { ...existing } : {};
+
+  if (!existing) {
+    for (const key of PUBLIC_ENV_KEYS) {
+      const alias = key.startsWith("VITE_")
+        ? `NEXT_PUBLIC_${key.slice(5)}`
+        : `VITE_${key.replace(/^NEXT_PUBLIC_/, "")}`;
+      const value = process.env[key] || process.env[alias];
+      if (value) env[key] = value;
+    }
+  }
+
+  const json = JSON.stringify(env).replace(/</g, "\\u003c");
+  return (
+    <script
+      dangerouslySetInnerHTML={{
+        __html: `globalThis.__LM_ENV__=${json};`,
+      }}
+    />
   );
 }

@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback,useEffect,useState } from "react";
 import {
-  getStoredPlatformLocale,
-  PLATFORM_LOCALE_STORAGE_KEY,
-  PLATFORM_LOCALES,
-  translatePlatform,
-  type PlatformLocale,
-  type PlatformStringKey,
+getStoredPlatformLocale,
+PLATFORM_LOCALE_STORAGE_KEY,
+PLATFORM_LOCALES,
+translatePlatform,
+type PlatformLocale,
+type PlatformStringKey,
 } from "@/lib/platform-locale";
 
 /** Platform UI locale — persisted in localStorage, synced to `<html lang>`. */

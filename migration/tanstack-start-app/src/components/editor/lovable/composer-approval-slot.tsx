@@ -2,10 +2,10 @@
 import { useState } from "react";
 import { toast } from "@/hooks/use-toast";
 import {
-  LovableConnectorApprovalCard,
-  type ConnectorApprovalRequest,
+LovableConnectorApprovalCard,
+type ConnectorApprovalRequest,
 } from "./connector-approval-card";
-import { LovableCloudOpsCard, type CloudActionRequest } from "./cloud-ops-card";
+import { LovableCloudOpsCard,type CloudActionRequest } from "./cloud-ops-card";
 
 interface LovableComposerApprovalSlotProps {
   projectId: string;

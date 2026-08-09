@@ -1,16 +1,16 @@
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState,useEffect,useCallback,useRef } from "react";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  AlignLeft, AlignCenter, AlignRight, X, Check, Wand2, Sparkles, Image as ImageIcon,
+AlignLeft,AlignCenter,AlignRight,X,Check,Wand2,Sparkles,Image as ImageIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  applySpacingToken,
-  applyVisualEdit,
-  buildVisualEditPrompt,
-  type VisualEditChange,
+applySpacingToken,
+applyVisualEdit,
+buildVisualEditPrompt,
+type VisualEditChange,
 } from "@/lib/editor/apply-visual-edit";
 import type { ProjectFile } from "@/types/database";
 import { toast } from "@/hooks/use-toast";

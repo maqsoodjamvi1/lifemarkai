@@ -1,0 +1,286 @@
+From e882daf953d5961d83a90457e459011069371906 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 4 Aug 2026 15:03:01 +0000
+Subject: [PATCH 3/3] fix(preview): recover the frame when an OAuth redirect
+ navigates it off the app
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+This lands the OAuth-escape work that had been sitting uncommitted in the
+working tree, and completes the half of it that was missing.
+
+The problem it solves: a "Sign in with Google" button inside a previewed app is
+a full-page navigation to a third-party origin. The iframe dutifully follows,
+the provider's login page renders inside the preview pane, and there is no way
+back — the address bar belongs to the app, not the frame, and the provider will
+never redirect somewhere our sandbox serves.
+
+Detection is a liveness handshake. The parent pings the frame on every load;
+our injected bridge answers. On a third-party origin the bridge does not exist,
+so the silence IS the signal, and the parent restores the preview to "/". A
+2.5s debounce keeps a genuine escape from looping, and the check only arms
+after the bridge has answered at least once, so a cold first load is never
+mistaken for an escape.
+
+The uncommitted version had only the parent half. Nothing answered
+lifemark-preview-ping and nothing sent origin/href with location messages, so
+the origin check was inert and — worse — every subsequent full-page load in a
+frame whose bridge had once been alive got no pong and bounced the user back to
+"/". So veb-bridge.ts now implements the guest side, which is what makes the
+feature real rather than a false-positive generator. Existing sandboxes pick it
+up on their next file sync, since the injected script's content changes.
+
+Also from that work: normalizeSandboxPathname now hardens the address-bar sync
+against absolute URLs (a pasted or redirected https://… must never become an
+iframe src path segment), and isSamePreviewOrigin covers the inverse case of a
+bridge still alive on a document that is no longer ours.
+
+docker.ts keeps only the failure diagnostic from the uncommitted version — its
+waitForInnerHttp is superseded by waitForLocalServer from the previous commit,
+which probes inside the container on every path rather than only when the app
+runs on Docker Desktop, and reads the container's real port instead of assuming
+5173.
+
+tsc --noEmit: 51 errors before, 51 after, identical per file. Build passes.
+---
+ .../src/components/editor/preview-panel.tsx   | 74 +++++++++++++++++--
+ .../src/lib/preview/sandbox-url.ts            | 41 +++++++++-
+ .../src/lib/preview/veb-bridge.ts             | 23 +++++-
+ .../src/lib/sandbox/docker.ts                 |  1 +
+ 4 files changed, 130 insertions(+), 9 deletions(-)
+
+diff --git a/migration/tanstack-start-app/src/components/editor/preview-panel.tsx b/migration/tanstack-start-app/src/components/editor/preview-panel.tsx
+index e669b79..cfd0e24 100644
+--- a/migration/tanstack-start-app/src/components/editor/preview-panel.tsx
++++ b/migration/tanstack-start-app/src/components/editor/preview-panel.tsx
+@@ -37,7 +37,11 @@ import {
+   WC_UNAVAILABLE_KEY,
+   type PreviewEngine,
+ } from "@/lib/preview/resolve-preview-engine";
+-import { sandboxUrlWithPath } from "@/lib/preview/sandbox-url";
++import {
++  isSamePreviewOrigin,
++  normalizeSandboxPathname,
++  sandboxUrlWithPath,
++} from "@/lib/preview/sandbox-url";
+ import { getPreviewBarLabel } from "@/lib/preview/preview-url";
+ import { useSandboxPreview } from "@/lib/preview/use-sandbox-preview";
+ import { usePreviewErrorGuard } from "@/hooks/use-preview-error-guard";
+@@ -632,11 +636,24 @@ export function PreviewPanel({
+   /** Hard iframe path — soft-nav updates previewPath only (VEB postMessage). */
+   const [sandboxIframePath, setSandboxIframePath] = useState("/");
+   const [sandboxSyncInstalling, setSandboxSyncInstalling] = useState(false);
++  // Bridge liveness — used to remount when the iframe escapes to an OAuth host
++  // (Supabase/Google) where our injected bridge no longer runs.
++  const sandboxBridgeAliveRef = useRef(false);
++  const sandboxPingTokenRef = useRef(0);
++  const sandboxPongTokenRef = useRef(0);
++  const sandboxEscapeRemountAtRef = useRef(0);
++  const sandboxUrlLiveRef = useRef(sandboxUrl);
++  sandboxUrlLiveRef.current = sandboxUrl;
+ 
+   // Reset hard path when a new Modal tunnel comes up.
+   useEffect(() => {
+     if (sandboxUrl) setSandboxIframePath("/");
+   }, [sandboxUrl, sandboxId]);
++
++  // Fresh iframe mount → require a new bridge handshake before escape detection.
++  useEffect(() => {
++    sandboxBridgeAliveRef.current = false;
++  }, [sandboxUrl, refreshKey, sandboxReloadNonce]);
+   const previewBarLabel = useMemo(
+     () =>
+       getPreviewBarLabel({
+@@ -1386,21 +1403,49 @@ export function PreviewPanel({
+       // URL sync — the iframe boot script reports its current path on initial
+       // mount and on every history change so the address bar stays in sync
+       // with react-router navigations inside the running app.
++      if (d.type === "lifemark-preview-pong") {
++        const token = d.token;
++        if (typeof token === "number") {
++          sandboxPongTokenRef.current = token;
++          sandboxBridgeAliveRef.current = true;
++        }
++      }
+       if (d.type === "lifemark-preview-location") {
+         const pathname = d.pathname;
++        const origin = typeof d.origin === "string" ? d.origin : null;
++        const href = typeof d.href === "string" ? d.href : null;
++        const expectedBase = sandboxUrlLiveRef.current;
++        // Bridge still running but document origin left the sandbox tunnel
++        // (rare — usually the bridge is gone and ping/pong catches it).
++        if (
++          expectedBase &&
++          ((origin && !isSamePreviewOrigin(expectedBase, origin)) ||
++            (href && !isSamePreviewOrigin(expectedBase, href)))
++        ) {
++          const now = Date.now();
++          if (now - sandboxEscapeRemountAtRef.current > 2500) {
++            sandboxEscapeRemountAtRef.current = now;
++            sandboxBridgeAliveRef.current = false;
++            setSandboxIframePath("/");
++            setRefreshKey((k) => k + 1);
++          }
++          return;
++        }
+         if (typeof pathname === "string" && pathname.length > 0) {
+-          setPreviewPath(pathname);
++          const normalized = normalizeSandboxPathname(pathname);
++          sandboxBridgeAliveRef.current = true;
++          setPreviewPath(normalized);
+           // Don't clobber whatever the user is typing into the address bar.
+-          if (!urlEditing) setUrlInput(pathname);
++          if (!urlEditing) setUrlInput(normalized);
+           // Record in the back/forward history — unless this location change
+           // was caused by a back/forward click itself.
+           if (navSuppressRef.current) {
+             navSuppressRef.current = false;
+           } else {
+             setRouteNav((prev) =>
+-              prev.stack[prev.idx] === pathname
++              prev.stack[prev.idx] === normalized
+                 ? prev
+-                : { stack: [...prev.stack.slice(0, prev.idx + 1), pathname], idx: prev.idx + 1 },
++                : { stack: [...prev.stack.slice(0, prev.idx + 1), normalized], idx: prev.idx + 1 },
+             );
+           }
+         }
+@@ -2724,6 +2769,25 @@ export function PreviewPanel({
+                 onLoad={() => {
+                   transitionPreviewMachine("ready", "sandbox iframe loaded");
+                   window.dispatchEvent(new CustomEvent("lifemark-preview-settled", { detail: { ok: true } }));
++                  // Detect OAuth / external full-page navigations: after the
++                  // bridge has been alive once, a subsequent load with no pong
++                  // means the iframe left our app (e.g. supabase.co).
++                  const expectAlive = sandboxBridgeAliveRef.current;
++                  const token = ++sandboxPingTokenRef.current;
++                  sandboxIframeRef.current?.contentWindow?.postMessage(
++                    { type: "lifemark-preview-ping", token },
++                    "*",
++                  );
++                  window.setTimeout(() => {
++                    if (sandboxPongTokenRef.current === token) return;
++                    if (!expectAlive) return;
++                    const now = Date.now();
++                    if (now - sandboxEscapeRemountAtRef.current < 2500) return;
++                    sandboxEscapeRemountAtRef.current = now;
++                    sandboxBridgeAliveRef.current = false;
++                    setSandboxIframePath("/");
++                    setRefreshKey((k) => k + 1);
++                  }, 900);
+                 }}
+                 onError={() => {
+                   // Dead tunnel (sandbox expired between renders) — reconnect to
+diff --git a/migration/tanstack-start-app/src/lib/preview/sandbox-url.ts b/migration/tanstack-start-app/src/lib/preview/sandbox-url.ts
+index 1dea972..8e7a50d 100644
+--- a/migration/tanstack-start-app/src/lib/preview/sandbox-url.ts
++++ b/migration/tanstack-start-app/src/lib/preview/sandbox-url.ts
+@@ -1,11 +1,48 @@
++/** Normalize an in-app route for the preview address bar / iframe path. */
++export function normalizeSandboxPathname(pathname: string): string {
++  const raw = String(pathname || "").trim();
++  if (!raw || raw === "/") return "/";
++  // Absolute URLs must never become iframe `src` path segments (OAuth redirects,
++  // pasted Supabase URLs, etc. would otherwise paint the provider in-frame).
++  if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith("//")) {
++    try {
++      const u = new URL(raw.startsWith("//") ? `https:${raw}` : raw);
++      const path = `${u.pathname || "/"}${u.search || ""}${u.hash || ""}`;
++      return path.startsWith("/") ? path : `/${path}`;
++    } catch {
++      return "/";
++    }
++  }
++  return raw.startsWith("/") ? raw : `/${raw}`;
++}
++
+ /** Join a sandbox preview base URL with an in-app route (Lovable URL bar parity). */
+ export function sandboxUrlWithPath(baseUrl: string, pathname: string): string {
+   try {
+     const u = new URL(baseUrl);
+-    const path = pathname.startsWith("/") ? pathname : `/${pathname}`;
+-    u.pathname = path;
++    const combined = normalizeSandboxPathname(pathname);
++    const hashIdx = combined.indexOf("#");
++    const withoutHash = hashIdx >= 0 ? combined.slice(0, hashIdx) : combined;
++    const hash = hashIdx >= 0 ? combined.slice(hashIdx + 1) : "";
++    const qIdx = withoutHash.indexOf("?");
++    const pathOnly = qIdx >= 0 ? withoutHash.slice(0, qIdx) : withoutHash;
++    const search = qIdx >= 0 ? withoutHash.slice(qIdx + 1) : "";
++    u.pathname = pathOnly || "/";
++    u.search = search;
++    u.hash = hash;
+     return u.toString();
+   } catch {
+     return baseUrl;
+   }
+ }
++
++/** True when `candidate` is still on the same origin as the sandbox tunnel. */
++export function isSamePreviewOrigin(sandboxBaseUrl: string, candidateOriginOrHref: string): boolean {
++  try {
++    const expected = new URL(sandboxBaseUrl).origin;
++    const got = new URL(candidateOriginOrHref, sandboxBaseUrl).origin;
++    return expected === got;
++  } catch {
++    return false;
++  }
++}
+diff --git a/migration/tanstack-start-app/src/lib/preview/veb-bridge.ts b/migration/tanstack-start-app/src/lib/preview/veb-bridge.ts
+index fd9d4f8..5a54f04 100644
+--- a/migration/tanstack-start-app/src/lib/preview/veb-bridge.ts
++++ b/migration/tanstack-start-app/src/lib/preview/veb-bridge.ts
+@@ -323,7 +323,18 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
+ // sync work identically on both engines.
+ //
+ //   iframe -> parent: { source:'lifemark-preview', type:'error'|'success'|'log', text }
+-//   iframe -> parent: { type:'lifemark-preview-location', pathname }
++//   iframe -> parent: { type:'lifemark-preview-location', pathname, origin, href }
++//   parent -> iframe: { type:'lifemark-preview-ping', token }
++//   iframe -> parent: { type:'lifemark-preview-pong', token }
++//
++// The ping/pong is a liveness handshake, and it answers a question the parent
++// cannot otherwise ask: has the iframe navigated AWAY from the previewed app?
++// An OAuth flow (Supabase, Google) is a full-page navigation to a third-party
++// origin where this script does not run — so the absence of a pong is the
++// signal, and the parent can restore the preview instead of leaving a login
++// page from another site rendered in the pane with no way back. `origin`/`href`
++// on the location message cover the rarer inverse: a bridge still alive on a
++// document that is no longer ours.
+ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
+   if (window.parent === window) return;
+   var hadRuntimeError = false;
+@@ -343,8 +354,16 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
+     try { window.parent.postMessage({ source:'lifemark-preview', type:type, text:String(text) }, '*'); } catch(e){}
+   }
+   function loc(){
+-    try { window.parent.postMessage({ type:'lifemark-preview-location', pathname: location.pathname + location.search + location.hash }, '*'); } catch(e){}
++    try { window.parent.postMessage({ type:'lifemark-preview-location', pathname: location.pathname + location.search + location.hash, origin: location.origin, href: location.href }, '*'); } catch(e){}
+   }
++  // Liveness handshake. Answering proves this document is still the previewed
++  // app; silence after a navigation means the frame left for another origin,
++  // where this script does not exist to answer.
++  window.addEventListener('message', function(e){
++    var d = e && e.data;
++    if (!d || typeof d !== 'object' || d.type !== 'lifemark-preview-ping') return;
++    try { window.parent.postMessage({ type:'lifemark-preview-pong', token: d.token, origin: location.origin, href: location.href }, '*'); } catch(err){}
++  });
+   window.addEventListener('error', function(e){
+     var where = e.filename ? (' (' + String(e.filename).split('/').pop() + ':' + e.lineno + ':' + e.colno + ')') : '';
+     post('error', (e.message || 'Runtime error') + where);
+diff --git a/migration/tanstack-start-app/src/lib/sandbox/docker.ts b/migration/tanstack-start-app/src/lib/sandbox/docker.ts
+index 0bec1f8..f914cc8 100644
+--- a/migration/tanstack-start-app/src/lib/sandbox/docker.ts
++++ b/migration/tanstack-start-app/src/lib/sandbox/docker.ts
+@@ -650,6 +650,7 @@ export class DockerSandboxProvider implements SandboxProvider {
+         logs +=
+           `\n[preview] dev server did not answer in time.` +
+           `\n[preview] container OOMKilled=${oom}` +
++          `\n[preview] probe=inner:${innerPort} (127.0.0.1 inside the container)` +
+           `\n[preview] --- ${DEV_LOG} (tail) ---\n${devLog.stdout.trim() || "(empty)"}` +
+           `\n[preview] --- processes ---\n${procs.stdout.trim() || "(none)"}`;
+       }
+-- 
+2.43.0
+

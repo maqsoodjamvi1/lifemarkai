@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
@@ -44,7 +43,7 @@ async function handlePOST(request: Request) {
     if (action === "save") {
       // Save Supabase config as project metadata / env vars
       // In a real app, these would be stored encrypted
-      const { error } = await (supabase as any)
+      const { error } = await supabase
         .from("projects")
         .update({
           metadata: {
@@ -64,14 +63,14 @@ async function handlePOST(request: Request) {
 
     if (action === "generate_schema") {
       // Generate a Supabase schema based on the project's files
-      const { data: files } = await (supabase as any)
+      const { data: files } = await supabase
         .from("project_files")
         .select("path, content")
         .eq("project_id", projectId)
         .limit(20);
 
-      const fileContext = (files || [])
-        .map((f) => `// ${f.path}\n${f.content?.slice(0, 500)}`)
+      const fileContext = ((files || []) as Array<{ path: string; content: string | null }>)
+        .map((file) => `// ${file.path}\n${file.content?.slice(0, 500)}`)
         .join("\n\n");
 
       // Generate a simple SQL schema based on detected entities

@@ -2,7 +2,7 @@
  * Proxy AI requests to the isolated ai-http-worker process.
  * Never imports lib/ai/http or app/api into the Vite SSR graph.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn,type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 

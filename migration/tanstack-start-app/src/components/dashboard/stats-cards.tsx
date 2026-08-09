@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect,useRef,useState } from "react";
 import { motion } from "framer-motion";
-import { FolderOpen, Globe, Zap, FileCode2 } from "lucide-react";
+import { FolderOpen,Globe,Zap,FileCode2 } from "lucide-react";
 import type { Project } from "@/types/database";
 
 interface StatsCardsProps {

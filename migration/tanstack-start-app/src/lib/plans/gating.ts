@@ -68,7 +68,7 @@ export async function getUserPlan(userId: string): Promise<PlanId> {
   try {
     const supabase = await createAdminClient();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabase as any).from("profiles").select("plan").eq("id", userId).single();
+    const { data } = await supabase.from("profiles").select("plan").eq("id", userId).single();
     return (data?.plan as PlanId) ?? "free";
   } catch {
     return "free";

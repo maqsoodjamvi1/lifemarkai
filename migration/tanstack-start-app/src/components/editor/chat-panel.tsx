@@ -1,136 +1,126 @@
 
-import React, { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import React,{ useState,useRef,useEffect,useMemo,useCallback } from "react";
+import { AnimatePresence } from "framer-motion";
 import {
-  Loader2, Sparkles,
-  Copy, Check, AlertCircle,
-  Wand2, ThumbsUp, ThumbsDown,
-  Play, Pause,
-  Brain, Download,
-  X, Pin, PinOff, Minimize2, Square,
+X
 } from "lucide-react";
 import { suggestFollowUps } from "@/lib/ai/follow-up-suggestions";
-import { detectPastedSecret, redactSecret } from "@/lib/security/detect-secret";
+import { detectPastedSecret,redactSecret } from "@/lib/security/detect-secret";
 import { CONNECTORS } from "./app-connectors-panel";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import type { ChatInputHandle } from "./chat-tiptap-input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { normalizeArrayResponse } from "@/lib/api/array-response";
 import { createClient } from "@/lib/supabase/client";
 import { createStreamedFilePathTracker } from "@/lib/ai/stream-file-paths";
 import type { FileState } from "@/components/editor/diff-viewer";
-import type { Project, ProjectFile, Message, Json } from "@/types/database";
+import type { Project,ProjectFile,Message,Json } from "@/types/database";
 import type { EditorMode } from "./editor-layout";
 import type { GeneratedFile } from "./file-attachment-card";
 import {
-  LovableChatPanelShell,
-  LovableChatComposerShell,
-  LovableComposerMobileSheet,
-  LovableChatInputCard,
-  LovableSecurityIssuesBar,
-  LovableLiveLockBanner,
-  LovableChatTimeline,
-  type LovableChatTimelineHandle,
-  LovableChatHeader,
-  LovableChatHeaderStatus,
-  LovableScrollToBottom,
-  LovableContinueBanner,
-  LovableDraftRestoreBanner,
-  type ChatSearchMsgModeFilter,
-  LovableStreamingFilesCard,
-  LovableChatSearchBar,
-  type ChatSearchRoleFilter,
-  LovableThreadItem,
-  LovableContextSummaryBanner,
-  type LovableFileDiffEntry,
-  type LovableFileGenResult,
-  LOVABLE_PROMPT_TEMPLATES,
-  LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY,
-  type LovableMentionItem,
-  mergeAgentStep,
-  type AgentTaskStep,
-  groupIntoThreads,
-  getDisplayMessageContent,
-  LovableChatStreamingFooter,
-  LovableChatTimelineHeader,
-  LovableComposerDock,
-  LovableComposerPreInput,
-  LovableComposerInputArea,
-  LovableChatModals,
-  useComposerDockController,
-  useChatKeyboardShortcuts,
-  useThreadMessageProps,
-  extractStreamingReasoning,
-  type ClarifySession,
-  type ClarifyQuestion,
-  type LovableQueueItem,
-  type LovableSecretBannerState,
+LovableChatPanelShell,
+LovableChatComposerShell,
+LovableComposerMobileSheet,
+LovableChatInputCard,
+LovableSecurityIssuesBar,
+LovableLiveLockBanner,
+LovableChatTimeline,
+type LovableChatTimelineHandle,
+LovableChatHeader,
+LovableChatHeaderStatus,
+LovableScrollToBottom,
+LovableContinueBanner,
+LovableDraftRestoreBanner,
+type ChatSearchMsgModeFilter,LovableChatSearchBar,
+type ChatSearchRoleFilter,
+LovableThreadItem,
+LovableContextSummaryBanner,
+type LovableFileDiffEntry,
+type LovableFileGenResult,
+LOVABLE_PROMPT_TEMPLATES,
+LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY,
+type LovableMentionItem,
+mergeAgentStep,
+type AgentTaskStep,
+groupIntoThreads,
+getDisplayMessageContent,
+LovableChatStreamingFooter,
+LovableChatTimelineHeader,
+LovableComposerDock,
+LovableComposerPreInput,
+LovableComposerInputArea,
+LovableChatModals,
+useComposerDockController,
+useChatKeyboardShortcuts,
+useThreadMessageProps,
+extractStreamingReasoning,
+type ClarifySession,
+type ClarifyQuestion,
+type LovableQueueItem,
+type LovableSecretBannerState
 } from "./lovable";
-import { parseLineRefs, removeLineRefFromInput } from "@/lib/editor/parse-line-refs";
-import { describeAiFailure, readErrorBody } from "@/lib/editor/ai-failure";
+import { parseLineRefs,removeLineRefFromInput } from "@/lib/editor/parse-line-refs";
+import { describeAiFailure,readErrorBody } from "@/lib/editor/ai-failure";
 import { formatGuestCommentsForAi } from "@/lib/editor/format-guest-comments";
 import { formatErrorsForHealing } from "@/lib/preview/preview-error-bridge";
 import type { ChatSearchMode } from "@/lib/editor/search-chat-messages";
 import { printChatConversation } from "@/lib/editor/print-chat";
-import { buildLovableChatDayJumps, lovableChatDayKey } from "@/components/editor/lovable/chat-day-utils";
+import { buildLovableChatDayJumps,lovableChatDayKey } from "@/components/editor/lovable/chat-day-utils";
 import {
-  LIFEMARK_CHAT_SETTINGS_EVENT,
-  type LifemarkChatSettingsAction,
+LIFEMARK_CHAT_SETTINGS_EVENT,
+type LifemarkChatSettingsAction,
 } from "@/components/editor/lovable/chat-settings-events";
 import type { LovableFileGenFormat } from "./lovable/composer-file-gen-picker";
 import { useGuestCommentCount } from "@/hooks/use-guest-comment-count";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
-import { findMissingPackages, buildInstallCommand, syncPackageJsonDeps, describeRejectedPackages } from "@/lib/ai/npm-auto-install";
-import { classifyBuildIntent, isInformationalQuery, isSmallSurgicalEdit, type BuildIntent } from "@/lib/ai/build-intent";
-import { buildDesignBrief, shouldOfferDesignPreviews, type DesignPreviewDirection } from "@/lib/ai/design-previews";
+import { findMissingPackages,syncPackageJsonDeps,describeRejectedPackages } from "@/lib/ai/npm-auto-install";
+import { classifyBuildIntent,isInformationalQuery,isSmallSurgicalEdit,type BuildIntent } from "@/lib/ai/build-intent";
+import { buildDesignBrief,shouldOfferDesignPreviews,type DesignPreviewDirection } from "@/lib/ai/design-previews";
 import type { AgentStep } from "@/lib/ai/agent";
 import {
-  buildProjectContextBlock,
-  enrichFollowUpSuggestions,
-  getEmptyProjectPrompts,
-  getNoCreditsPrompts,
-  getPreviewErrorPrompts,
-  inferProjectStage,
-  resolvePromptMode,
-  resolveSmartModel,
-  looksLikeEditRequest,
-  DEFAULT_CODING_MODEL,
+buildProjectContextBlock,
+enrichFollowUpSuggestions,
+getEmptyProjectPrompts,
+getNoCreditsPrompts,
+getPreviewErrorPrompts,
+inferProjectStage,
+resolvePromptMode,
+resolveSmartModel,
+looksLikeEditRequest,
+DEFAULT_CODING_MODEL,
 } from "@/lib/ai/editor-intelligence";
-import { countUserAuthoredFiles, isGreenfieldProject } from "@/lib/ai/scaffold-files";
-
-/** Label AND identity for the scope-guard override chip — compared by value. */
-const SCOPE_OVERRIDE_CHIP = "Build it anyway";
-import { isNoisePreviewError, type PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
+import { countUserAuthoredFiles,isGreenfieldProject } from "@/lib/ai/scaffold-files";
+import { shouldClarifyBeforeBuild } from "@/lib/ai/build-intent";
+import { isNoisePreviewError,type PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import {
-  getAutoFixAttempts,
-  recordAutoFixAttempt,
-  clearAutoFixLedger,
+getAutoFixAttempts,
+recordAutoFixAttempt,
+clearAutoFixLedger,
 } from "@/lib/preview/autofix-ledger";
 import { appendPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
 import {
-  getOpenRouterModelLabel,
-  type OpenRouterModelId,
+getOpenRouterModelLabel,
+type OpenRouterModelId,
 } from "@/lib/ai/openrouter-models";
 import {
-  CHAT_INPUT_CAPABILITIES,
-  createLongPasteAttachment,
-  detectPromptSecret,
-  redactPromptSecrets,
-  shouldAttachLongPaste,
-  type SecretAssignment,
+CHAT_INPUT_CAPABILITIES,
+createLongPasteAttachment,
+detectPromptSecret,
+redactPromptSecrets,
+shouldAttachLongPaste,
+type SecretAssignment,
 } from "@/lib/ai/chat-capabilities";
 import type { SubagentStep } from "@/lib/ai/subagents";
 import {
-  initialBuildActivitySteps,
-  applyBuildIntentLabel,
-  onBuildFileProgress,
-  finalizeBuildActivity,
-  type BuildActivityStep,
+initialBuildActivitySteps,
+applyBuildIntentLabel,
+onBuildFileProgress,
+finalizeBuildActivity,
+type BuildActivityStep,
 } from "@/lib/ai/build-activity";
 import { useAIStreamChat } from "@/hooks/use-ai-stream-chat";
+
+/** Label AND identity for the scope-guard override chip — compared by value. */
+const SCOPE_OVERRIDE_CHIP = "Build it anyway";
 
 // UI discovery list only. The provider accepts any valid OpenRouter slug.
 type AIModel = OpenRouterModelId;
@@ -189,10 +179,10 @@ interface ProjectPrivateContext {
   context_summary_covers: number | null;
 }
 
-interface FileDiffEntry extends LovableFileDiffEntry {}
+type FileDiffEntry = LovableFileDiffEntry;
 
 /** An item sitting in the prompt queue while AI is busy */
-interface QueueItem extends LovableQueueItem {}
+type QueueItem = LovableQueueItem;
 
 const MAX_AUTO_FIX_ATTEMPTS = 3;
 
@@ -347,7 +337,7 @@ export function ChatPanel({
       setInput(next);
       autoSendRef.current = next;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [streaming, queuedMessages, isLocked]);
 
   // Auto-send the popped message once the composer holds it and we're idle.
@@ -481,11 +471,11 @@ export function ChatPanel({
     let cancelled = false;
     const supabase = createClient();
 
-    void (supabase as any)
+    void Promise.resolve(supabase
       .from("project_private_context")
       .select("context_summary, context_summary_covers")
       .eq("project_id", project.id)
-      .maybeSingle()
+      .maybeSingle())
       .then(({ data }: { data: ProjectPrivateContext | null }) => {
         if (!cancelled) setPrivateContext(data ?? null);
       })
@@ -500,11 +490,11 @@ export function ChatPanel({
 
   useEffect(() => {
     const supabase = createClient();
-    void (supabase as any)
+    void Promise.resolve(supabase
       .from("collaborators")
-      .select("user_id, role, profiles(id, full_name, email)")
-      .eq("project_id", project.id)
-      .then(({ data }: { data: Array<{ user_id: string; role: string; profiles: { id: string; full_name: string | null; email: string } | null }> | null }) => {
+      .select("user_id, role, profiles!collaborators_user_id_fkey(id, full_name, email)")
+      .eq("project_id", project.id))
+      .then(({ data }) => {
         if (!data) return;
         setCollaborators(
           data
@@ -593,7 +583,7 @@ export function ChatPanel({
     });
   }, [messages]);
   // Clarify-first mode
-  const [clarifyFirst, setClarifyFirst] = useState(false);
+  const [clarifyFirst, setClarifyFirst] = useState(true);
   const [showSkillPicker, setShowSkillPicker] = useState(false);
   const [skills, setSkills] = useState<{ custom: Array<{id:string;name:string;description:string|null;prompt:string;icon:string;tags:string[];use_count:number}>; builtin: Array<{id:string;name:string;description:string|null;prompt:string;icon:string;tags:string[];}> }>({ custom: [], builtin: [] });
   const [skillsLoaded, setSkillsLoaded] = useState(false);
@@ -1211,7 +1201,7 @@ export function ChatPanel({
       messagesEndRef.current?.scrollIntoView({ block: "end" });
     }, 80);
     return () => window.clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only on project change / first mount
+
   }, [project.id, collapsedThreadsKey]);
 
   const deepLinkedRef = useRef(false);
@@ -1445,7 +1435,7 @@ export function ChatPanel({
       // Refresh files from DB (same pattern as triggerAutoFix)
       const supabase = createClient();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: updatedFiles, error: refreshError } = await (supabase as any)
+      const { data: updatedFiles, error: refreshError } = await supabase
         .from("project_files")
         .select("*")
         .eq("project_id", project.id);
@@ -2195,7 +2185,7 @@ export function ChatPanel({
 
       // Refresh files from DB
       const supabase = createClient();
-      const { data: updatedFiles } = await (supabase as any)
+      const { data: updatedFiles } = await supabase
         .from("project_files")
         .select("*")
         .eq("project_id", project.id);
@@ -2978,7 +2968,7 @@ ${(f.content ?? "").slice(0, 8000)}
                 setTimeout(() => setAgentSteps([]), 5000);
 
                 const supabase = createClient();
-                const { data: updatedFiles } = await (supabase as any)
+                const { data: updatedFiles } = await supabase
                   .from("project_files")
                   .select("*")
                   .eq("project_id", project.id);
@@ -3042,13 +3032,13 @@ ${(f.content ?? "").slice(0, 8000)}
                       if (sync && sync.addedPackages.length > 0) {
                         try {
                           const supabase = createClient();
-                          await (supabase as any).from("project_files").upsert({
+                          await supabase.from("project_files").upsert({
                             project_id: project.id,
                             path: "package.json",
                             content: sync.updated,
                             language: "json",
                           }, { onConflict: "project_id,path" });
-                          const { data: refreshed } = await (supabase as any)
+                          const { data: refreshed } = await supabase
                             .from("project_files")
                             .select("*")
                             .eq("project_id", project.id);
@@ -3067,13 +3057,28 @@ ${(f.content ?? "").slice(0, 8000)}
                   }
                 } catch {}
 
-                const { data: syncedMessages } = await (supabase as any)
+                const { data: syncedMessages } = await supabase
                   .from("messages")
                   .select("*")
                   .eq("project_id", project.id)
                   .order("created_at", { ascending: true });
                 if (syncedMessages) {
-                  onMessagesUpdate(syncedMessages);
+                  onMessagesUpdate(
+                    syncedMessages.map((message) => ({
+                      ...message,
+                      role: (["user", "assistant", "system"] as const).includes(
+                        message.role as "user" | "assistant" | "system",
+                      )
+                        ? (message.role as "user" | "assistant" | "system")
+                        : "assistant",
+                      mode: (["chat", "agent", "plan", "build", "patch"] as const).includes(
+                        message.mode as "chat" | "agent" | "plan" | "build" | "patch",
+                      )
+                        ? (message.mode as "chat" | "agent" | "plan" | "build" | "patch")
+                        : "chat",
+                      rating: message.rating === 1 || message.rating === -1 ? message.rating : null,
+                    })),
+                  );
                 }
 
                 runQuickPreviewVerify();
@@ -3137,13 +3142,14 @@ ${(f.content ?? "").slice(0, 8000)}
           ...(modelManuallySelectedRef.current ? { model: effectiveModel } : {}),
           modelManuallySelected: modelManuallySelectedRef.current,
           framework: mobileMode ? "react-native" : (project.framework ?? "web"),
-          // Ask pre-build questions when: user enabled the toggle on a fresh
-          // project, OR the request is a DATABASE/BACKEND design task (Lovable
-          // asks schema/auth/roles questions before wiring a backend).
+          // Lovable-style: ask 2–4 tap-to-answer questions before research/build on
+          // greenfield apps. Toggle off with "Clarify" chip. Backend-only edits too.
           clarifyFirst:
             effectiveMode === "build" &&
             !opts?.forceBuild &&
-            ((clarifyFirst && isGreenfieldProject(files)) || dbClarifyIntent),
+            (dbClarifyIntent ||
+              (clarifyFirst &&
+                shouldClarifyBeforeBuild(userMessage, countUserAuthoredFiles(files)))),
           ...(effectiveMode === "build" && designTemplateId ? { templateId: designTemplateId } : {}),
           // If @mentions present, only send those files for context (saves tokens + focuses AI)
           files: mentionedFilesForAI
@@ -3563,13 +3569,13 @@ ${(f.content ?? "").slice(0, 8000)}
                       if (sync && sync.addedPackages.length > 0) {
                         try {
                           const supabase = createClient();
-                          await (supabase as any).from("project_files").upsert({
+                          await supabase.from("project_files").upsert({
                             project_id: project.id,
                             path: "package.json",
                             content: sync.updated,
                             language: "json",
                           }, { onConflict: "project_id,path" });
-                          const { data: refreshed } = await (supabase as any)
+                          const { data: refreshed } = await supabase
                             .from("project_files")
                             .select("*")
                             .eq("project_id", project.id);
@@ -3618,7 +3624,7 @@ ${(f.content ?? "").slice(0, 8000)}
                   void (async () => {
                     try {
                       const supabase = createClient();
-                      const { data: latestUser } = await (supabase as any)
+                      const { data: latestUser } = await supabase
                         .from("messages")
                         .select("id")
                         .eq("project_id", project.id)

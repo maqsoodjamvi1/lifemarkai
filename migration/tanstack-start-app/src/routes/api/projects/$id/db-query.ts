@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
@@ -14,7 +13,7 @@ export const Route = createFileRoute("/api/projects/$id/db-query")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { data: project } = await (supabase as any)
+        const { data: project } = await supabase
           .from("projects").select("id, user_id").eq("id", id).single();
         if (!project || (project as any).user_id !== user.id) {
           return Response.json({ error: "Forbidden" }, { status: 403 });
@@ -28,7 +27,7 @@ export const Route = createFileRoute("/api/projects/$id/db-query")({
         }
 
         try {
-          const { data, error } = await (supabase as any).rpc("exec_sql", { query: sql });
+          const { data, error } = await supabase.rpc("exec_sql", { query: sql });
           if (error) return Response.json({ error: error.message }, { status: 400 });
           const rows = Array.isArray(data) ? data : (data ? [data] : []);
           return Response.json({ rows });

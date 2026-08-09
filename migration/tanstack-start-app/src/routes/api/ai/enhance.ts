@@ -1,10 +1,9 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { generateAI } from "@/lib/ai/generate";
 import { ECONOMY_CHAT_MODEL } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 
 /**
  * Native /api/ai/enhance — prompt enhancer (TRUE NATIVE, no worker).

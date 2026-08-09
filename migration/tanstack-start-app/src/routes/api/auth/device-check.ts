@@ -1,7 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import crypto from "node:crypto";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { sendEmail } from "@/lib/email/resend";
 
 /**
  * Native /api/auth/device-check — sign-in alerts. Fingerprints the device
@@ -17,7 +18,6 @@ export const Route = createFileRoute("/api/auth/device-check")({
           const { data: { user } } = await supabase.auth.getUser();
           if (!user) return Response.json({ ok: false }, { status: 401 });
 
-          const { rateLimitAsync, RATE_LIMITS } = await import("@/lib/rate-limit");
           const rl = await rateLimitAsync(`device:${user.id}`, RATE_LIMITS.auth);
           if (!rl.success) return Response.json({ ok: false }, { status: 429 });
 
@@ -25,7 +25,7 @@ export const Route = createFileRoute("/api/auth/device-check")({
           const lang = (request.headers.get("accept-language") ?? "").split(",")[0] ?? "";
           const deviceHash = crypto.createHash("sha256").update(`${user.id}:${ua}:${lang}`).digest("hex").slice(0, 40);
 
-          const { data: existing } = await (supabase as any)
+          const { data: existing } = await supabase
             .from("user_devices")
             .select("id")
             .eq("user_id", user.id)
@@ -33,19 +33,19 @@ export const Route = createFileRoute("/api/auth/device-check")({
             .maybeSingle();
 
           if (existing) {
-            await (supabase as any)
+            await supabase
               .from("user_devices")
               .update({ last_seen_at: new Date().toISOString() })
               .eq("id", (existing as { id: string }).id);
             return Response.json({ ok: true, newDevice: false });
           }
 
-          const { count } = await (supabase as any)
+          const { count } = await supabase
             .from("user_devices")
             .select("id", { count: "exact", head: true })
             .eq("user_id", user.id);
 
-          await (supabase as any).from("user_devices").insert({
+          await supabase.from("user_devices").insert({
             user_id: user.id,
             device_hash: deviceHash,
             user_agent: ua,
@@ -54,7 +54,6 @@ export const Route = createFileRoute("/api/auth/device-check")({
           const isFirstDevice = (count ?? 0) === 0;
           if (!isFirstDevice && user.email) {
             try {
-              const { sendEmail } = await import("@/lib/email/resend");
               const when = new Date().toUTCString();
               await sendEmail({
                 to: user.email,

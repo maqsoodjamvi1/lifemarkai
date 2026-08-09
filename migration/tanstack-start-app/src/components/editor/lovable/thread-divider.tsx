@@ -1,5 +1,5 @@
 
-import { Check, ChevronDown, ChevronUp, Copy } from "lucide-react";
+import { Check,ChevronDown,ChevronUp,Copy } from "lucide-react";
 import { useState } from "react";
 
 interface LovableThreadDividerProps {

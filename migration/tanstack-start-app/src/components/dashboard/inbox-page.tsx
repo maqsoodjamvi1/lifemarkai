@@ -1,11 +1,8 @@
-// @ts-nocheck
-
-import { useState, useEffect, useCallback } from "react";
+import { useState,useEffect,useCallback } from "react";
 import { Link } from "@tanstack/react-router";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  Inbox, Check, CheckCheck, Trash2, Loader2, Filter,
-  ExternalLink, Sparkles,
+Inbox,Check,CheckCheck,Trash2,Loader2,ExternalLink,Sparkles
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";

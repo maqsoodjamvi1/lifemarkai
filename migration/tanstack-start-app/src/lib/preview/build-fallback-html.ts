@@ -3,14 +3,14 @@ import { ensureCommonGeneratedSupportFiles } from "../ai/generated-support-files
 import { generateFallbackUtilityCss } from "./generate-fallback-utilities.ts";
 import { healPreviewContractGaps } from "./heal-preview-contract.ts";
 import {
-  isNextAppProject,
-  nextAppDirName,
-  buildNextRouteTable,
-  findNextNotFound,
-  buildNextVirtualEntrySource,
-  transformNextSourceForPreview,
-  NEXT_RUNTIME_SHIMS,
-  NEXT_VIRTUAL_ENTRY_PATH,
+isNextAppProject,
+nextAppDirName,
+buildNextRouteTable,
+findNextNotFound,
+buildNextVirtualEntrySource,
+transformNextSourceForPreview,
+NEXT_RUNTIME_SHIMS,
+NEXT_VIRTUAL_ENTRY_PATH,
 } from "@/lib/preview/next-app-preview";
 import { PREVIEW_PERF_SCRIPT } from "./preview-perf-bridge.ts";
 

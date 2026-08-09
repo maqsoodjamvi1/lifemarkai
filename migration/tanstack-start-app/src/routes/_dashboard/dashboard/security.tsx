@@ -1,4 +1,4 @@
-import { createFileRoute, getRouteApi } from "@tanstack/react-router";
+import { createFileRoute,getRouteApi } from "@tanstack/react-router";
 import { SecurityCenterPage } from "@/components/dashboard/security-center-page";
 
 const layoutApi = getRouteApi("/_dashboard");

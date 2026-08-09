@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/admin";
 import crypto from "node:crypto";
@@ -35,14 +34,19 @@ export const Route = createFileRoute("/api/security/scan/webhook")({
 
         const supabase = createAdminClient();
         for (const finding of (body.findings ?? [])) {
-          await supabase.from("notifications").insert({
-            user_id: body.user_id ?? null,
-            type: "system",
-            title: `${vendor === "aikido" ? "Aikido" : "Wiz"} found: ${finding.title}`,
-            body: finding.description ?? finding.remediation ?? null,
-            link: body.report_url ?? null,
-            metadata: { vendor, scan_id: body.scan_id, finding },
-          }).catch(() => {});
+          try {
+            await supabase.from("notifications").insert({
+              user_id: body.user_id ?? null,
+              type: "system",
+              title: `${vendor === "aikido" ? "Aikido" : "Wiz"} found: ${finding.title}`,
+              body: finding.description ?? finding.remediation ?? null,
+              link: body.report_url ?? null,
+              metadata: { vendor, scan_id: body.scan_id, finding },
+            });
+          } catch {
+            // Notification fan-out is best-effort; acknowledge the webhook so
+            // vendors do not retry an otherwise processed scan indefinitely.
+          }
         }
         return Response.json({ ok: true, processed: (body.findings ?? []).length });
       },

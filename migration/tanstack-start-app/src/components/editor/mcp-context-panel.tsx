@@ -9,11 +9,10 @@
  * This panel focuses on WHAT context is being contributed and lets users preview it.
  */
 
-import { useState, useEffect } from "react";
+import { useState,useEffect } from "react";
 import {
-  MessageSquare, CheckCircle2, Circle, ChevronDown, ChevronRight,
-  ExternalLink, RefreshCw, Loader2, Eye, EyeOff, Zap, AlertCircle,
-  Database, FileText, BarChart2, GitBranch, Layout,
+MessageSquare,CheckCircle2,Circle,RefreshCw,Loader2,Eye,EyeOff,Zap,AlertCircle,
+Database,FileText,BarChart2,GitBranch,Layout
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

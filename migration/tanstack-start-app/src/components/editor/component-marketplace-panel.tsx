@@ -1,6 +1,6 @@
 
-import { useState, useMemo } from "react";
-import { Package, Search, X, Download, Check, Star, ExternalLink, Loader2, Code2, ChevronDown, ChevronUp } from "lucide-react";
+import { useState,useMemo } from "react";
+import { Package,Search,X,Download,Loader2,Code2,ChevronDown,ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";

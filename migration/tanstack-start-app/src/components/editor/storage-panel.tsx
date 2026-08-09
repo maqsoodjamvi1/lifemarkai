@@ -11,12 +11,11 @@
  *   - Create new folders (zero-byte placeholder)
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState,useEffect,useRef,useCallback } from "react";
 import {
-  HardDrive, FolderOpen, Folder, File, Upload, Trash2,
-  Copy, Check, ChevronRight, RefreshCw, Loader2, Plus,
-  ExternalLink, Image, FileText, Music, Video, Archive,
-  AlertCircle, Lock, Globe,
+HardDrive,FolderOpen,Folder,File,Upload,Trash2,
+Copy,Check,ChevronRight,RefreshCw,Loader2,Plus,
+ExternalLink,Image,FileText,Music,Video,Archive,Lock,Globe
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

@@ -129,52 +129,8 @@ function tryServeStatic(req, res) {
   return true;
 }
 
-/**
- * RUNTIME ENV → BROWSER. The Vite `define:` map bakes public env values into
- * the client bundle at BUILD time — but on Coolify the Docker build received
- * no build-args (even with "Build Variable" checked), so the baked values were
- * empty strings and the browser had no Supabase config at all (Jul 27 outage).
- *
- * The client-side expressions now read `globalThis.__LM_ENV__.<KEY>` first
- * (see vite.config.ts `define`), and this script provides it: every HTML
- * response gets a <script> carrying the PUBLIC env values from the container's
- * runtime environment — which Coolify does reliably supply.
- *
- * Only NEXT_PUBLIC_* / VITE_* keys are exposed. Never widen this list:
- * anything here is world-readable in page source.
- */
-const PUBLIC_ENV_KEYS = [
-  "NEXT_PUBLIC_SUPABASE_URL",
-  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
-  "NEXT_PUBLIC_APP_URL",
-  "VITE_SUPABASE_URL",
-  "VITE_SUPABASE_ANON_KEY",
-  "VITE_APP_URL",
-];
-function buildEnvScript() {
-  const env = {};
-  for (const key of PUBLIC_ENV_KEYS) {
-    // NEXT_PUBLIC_* and VITE_* are aliases of the same three values; take
-    // whichever spelling the deployment actually set.
-    const alias = key.startsWith("VITE_")
-      ? `NEXT_PUBLIC_${key.slice(5)}`
-      : `VITE_${key.replace(/^NEXT_PUBLIC_/, "")}`;
-    const value = process.env[key] || process.env[alias];
-    if (value) env[key] = value;
-  }
-  // </script> inside a value would terminate the tag early — escape it.
-  const json = JSON.stringify(env).replace(/</g, "\\u003c");
-  return `<script>globalThis.__LM_ENV__=${json};</script>`;
-}
-const ENV_SCRIPT = buildEnvScript();
-
-/** Inject the env script into an HTML string, right after <head> if present. */
-function injectEnv(html) {
-  const at = html.search(/<head[^>]*>/i);
-  if (at === -1) return ENV_SCRIPT + html;
-  const end = html.indexOf(">", at) + 1;
-  return html.slice(0, end) + ENV_SCRIPT + html.slice(end);
-}
+// Runtime public configuration is rendered by RuntimeEnvScript in the root
+// React document. Keeping it there preserves hydration and HTML streaming.
 
 /**
  * Node lowercases header names but may hand back arrays for repeated headers
@@ -219,18 +175,6 @@ const server = createServer(async (req, res) => {
     delete outHeaders["set-cookie"];
     const cookies = response.headers.getSetCookie?.() ?? [];
     if (cookies.length) outHeaders["set-cookie"] = cookies;
-
-    const contentType = response.headers.get("content-type") || "";
-    if (contentType.includes("text/html") && response.body) {
-      // Buffer HTML to inject __LM_ENV__. Trades streaming for correctness on
-      // HTML only — assets/JSON/SSE below still stream untouched.
-      const html = injectEnv(await response.text());
-      // Body changed; a stale length would truncate the response mid-tag.
-      outHeaders["content-length"] = String(Buffer.byteLength(html));
-      res.writeHead(response.status, outHeaders);
-      res.end(html);
-      return;
-    }
 
     res.writeHead(response.status, outHeaders);
     if (response.body) Readable.fromWeb(response.body).pipe(res);

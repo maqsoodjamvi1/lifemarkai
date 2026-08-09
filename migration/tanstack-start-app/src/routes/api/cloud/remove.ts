@@ -1,9 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import {
-  deleteManagedProject,
-  isManagementConfigured,
+deleteManagedProject,
+isManagementConfigured,
 } from "@/lib/cloud/management";
 import { logger } from "@/lib/logger";
 
@@ -141,7 +140,6 @@ export const Route = createFileRoute("/api/cloud/remove")({
             cloud_project_ref: null,
             cloud_supabase_url: null,
             cloud_anon_key: null,
-            cloud_service_role_key: null,
             cloud_provisioned_at: null,
           })
           .eq("id", projectId)

@@ -1,6 +1,6 @@
 
-import { useState, useRef, useEffect } from "react";
-import { Database, Play, Loader2, Copy, Check, Trash2, ChevronDown, ChevronUp, Clock, AlertCircle, History, BookOpen, Sparkles, ArrowRight } from "lucide-react";
+import { useState,useRef } from "react";
+import { Database,Play,Loader2,Copy,Check,Trash2,Clock,AlertCircle,History,Sparkles,ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/hooks/use-toast";

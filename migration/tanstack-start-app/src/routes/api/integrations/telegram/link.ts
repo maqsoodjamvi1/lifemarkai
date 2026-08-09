@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { randomBytes } from "node:crypto";
@@ -19,7 +18,7 @@ export const Route = createFileRoute("/api/integrations/telegram/link")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { data } = await (supabase as any)
+        const { data } = await supabase
           .from("profiles")
           .select("telegram_chat_id, telegram_linked_at")
           .eq("id", user.id)
@@ -39,7 +38,7 @@ export const Route = createFileRoute("/api/integrations/telegram/link")({
 
         const token = randomBytes(16).toString("hex");
 
-        const { error } = await (supabase as any)
+        const { error } = await supabase
           .from("profiles").update({ telegram_link_token: token }).eq("id", user.id);
         if (error) return Response.json({ error: error.message }, { status: 500 });
 
@@ -58,7 +57,7 @@ export const Route = createFileRoute("/api/integrations/telegram/link")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { error } = await (supabase as any)
+        const { error } = await supabase
           .from("profiles")
           .update({ telegram_chat_id: null, telegram_link_token: null, telegram_linked_at: null })
           .eq("id", user.id);

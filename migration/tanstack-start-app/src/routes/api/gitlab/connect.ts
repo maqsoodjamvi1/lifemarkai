@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getAuthenticatedUser } from "@/lib/gitlab/client";
@@ -59,7 +58,7 @@ export const Route = createFileRoute("/api/gitlab/connect")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return redirect302("/login");
 
-        await (supabase as any)
+        await supabase
           .from("profiles")
           .update({ gitlab_username: glUser.username, gitlab_access_token: accessToken })
           .eq("id", user.id);

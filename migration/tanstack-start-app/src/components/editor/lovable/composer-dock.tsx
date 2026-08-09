@@ -3,17 +3,17 @@ import { AnimatePresence } from "framer-motion";
 import { LovableAutofixBanner } from "./composer-banners";
 import { LovableLoopRecoveryBanner } from "./loop-recovery-banner";
 import { LovableNoCreditsBanner } from "./composer-banners";
-import { LovableFileGenResultCards, type LovableFileGenResult } from "./file-gen-result-cards";
-import { downloadLovableGeneratedFile, formatLovableFileSize } from "./file-size-utils";
+import { LovableFileGenResultCards,type LovableFileGenResult } from "./file-gen-result-cards";
+import { downloadLovableGeneratedFile,formatLovableFileSize } from "./file-size-utils";
 import {
-  LovableClarifySessionCard,
-  type ClarifySession,
-  type ClarifyQuestion,
+LovableClarifySessionCard,
+type ClarifySession,
+type ClarifyQuestion,
 } from "./clarify-session-card";
 import { LovableQuestionsAnsweredCard } from "./questions-answered-card";
-import { LovablePromptQueue, REPEAT_STEPS, type LovableQueueItem } from "./prompt-queue";
+import { LovablePromptQueue,type LovableQueueItem } from "./prompt-queue";
 import { LovableSuggestionChips } from "./suggestion-chips";
-import { LovableRecoveryChips, LOVABLE_RECOVERY_CHIPS } from "./recovery-chips";
+import { LovableRecoveryChips,LOVABLE_RECOVERY_CHIPS } from "./recovery-chips";
 import { LovablePostBuildPublishBanner } from "./post-build-publish-banner";
 import { LovableComposerGuestCommentsBanner } from "./composer-guest-comments-banner";
 import { LovableComposerRuntimeErrorsBanner } from "./composer-runtime-errors-banner";

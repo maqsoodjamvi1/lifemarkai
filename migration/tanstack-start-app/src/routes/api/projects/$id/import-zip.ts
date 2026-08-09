@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { detectLanguage } from "@/lib/ai/code-parser";
@@ -28,7 +27,7 @@ async function handlePOST(req: Request, params: any) {
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   // Verify ownership
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("id, user_id")
     .eq("id", id)
@@ -81,7 +80,7 @@ async function handlePOST(req: Request, params: any) {
   }
 
   // Load existing files for this project (to upsert by path)
-  const { data: existing } = await (supabase as any)
+  const { data: existing } = await supabase
     .from("project_files")
     .select("id, path")
     .eq("project_id", id);
@@ -108,7 +107,7 @@ async function handlePOST(req: Request, params: any) {
   const errors: string[] = [];
 
   for (const u of toUpdate) {
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("project_files")
       .update({ content: u.content, language: u.language })
       .eq("id", u.id);
@@ -119,7 +118,7 @@ async function handlePOST(req: Request, params: any) {
     // Insert in batches of 50
     for (let i = 0; i < toInsert.length; i += 50) {
       const batch = toInsert.slice(i, i + 50);
-      const { error } = await (supabase as any)
+      const { error } = await supabase
         .from("project_files")
         .insert(batch);
       if (error) errors.push(`batch-${i}`);

@@ -1,5 +1,5 @@
 
-import { History, Sparkles, Undo2 } from "lucide-react";
+import { History,Sparkles,Undo2 } from "lucide-react";
 import { getOpenRouterModelLabel } from "@/lib/ai/openrouter-models";
 import { LOVABLE_QUICK_EMOJI } from "./types";
 

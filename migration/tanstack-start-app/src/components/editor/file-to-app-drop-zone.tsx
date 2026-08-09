@@ -7,9 +7,9 @@
  * tailored "build me an app from this" prompt, and calls `onPromptReady`.
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Upload, FileText, FileSpreadsheet, Image, Code2, Database, FileJson, FileType } from "lucide-react";
+import { useState,useEffect,useCallback,useRef } from "react";
+import { motion,AnimatePresence } from "framer-motion";
+import { Upload,FileText,FileSpreadsheet,Image,Code2,FileJson,FileType } from "lucide-react";
 
 interface FileToAppDropZoneProps {
   /** Called with the assembled prompt (and optional base64 image) */

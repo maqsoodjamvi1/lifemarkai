@@ -1,23 +1,23 @@
 import type { EditorMode } from "@/components/editor/editor-layout";
 import type { ProjectFile } from "../../types/database.ts";
-import { classifyBuildIntent, shouldAutoBuildMode } from "./build-intent.ts";
+import { classifyBuildIntent, isInformationalQuery, isMajorGreenfieldBuild, shouldAutoBuildMode } from "./build-intent.ts";
 import type { AIModel } from "./provider.ts";
 import {
-  BALANCED_CODING_MODEL,
-  DEFAULT_CODING_MODEL,
-  DEFAULT_CHAT_MODEL,
-  FAST_CODING_MODEL,
-  REASONING_MODEL,
-  DESIGN_MODEL,
-  CONTENT_MODEL,
-  IMAGE_MODEL,
-  REVIEW_MODEL,
-  ESCALATION_MODEL,
-  FREE_CODING_MODEL,
-  ECONOMY_CODING_MODEL,
-  ECONOMY_CHAT_MODEL,
+BALANCED_CODING_MODEL,
+DEFAULT_CODING_MODEL,
+DEFAULT_CHAT_MODEL,
+FAST_CODING_MODEL,
+REASONING_MODEL,
+DESIGN_MODEL,
+CONTENT_MODEL,
+IMAGE_MODEL,
+REVIEW_MODEL,
+ESCALATION_MODEL,
+FREE_CODING_MODEL,
+ECONOMY_CODING_MODEL,
+ECONOMY_CHAT_MODEL,
 } from "./model-defaults.ts";
-import { selectModelChain, type ModelStrength } from "./model-catalog.ts";
+import { selectModelChain,type ModelStrength } from "./model-catalog.ts";
 
 export { DEFAULT_CODING_MODEL, BALANCED_CODING_MODEL, FAST_CODING_MODEL, DEFAULT_CHAT_MODEL, REASONING_MODEL };
 
@@ -139,6 +139,47 @@ export interface EditorIntelContext {
 
 const PLAN_KEYWORDS =
   /\b(plan|architect|design|investigate|analyze|analyse|strategy|roadmap|how should|why does|why is|explain why|before we build|think through|break down)\b/i;
+
+const GREETING_PROMPT =
+  /^(?:hi|hello|hey|hiya|greetings|good morning|good afternoon|good evening|yo|what's up|sup|howdy)\b/i;
+
+const GENERIC_BUILD_REQUEST =
+  /\b(?:build|create|make|design|generate|develop|start|launch|set up|setup)\b[\s\S]{0,80}?\b(?:app|website|site|landing page|store|shop|platform|portal)\b/i;
+
+const SPECIFIC_BUILD_DETAILS =
+  /\b(checkout|cart|dashboard|login|signup|booking|appointment|menu|blog|portfolio|crm|erp|payment|subscription|membership|orders?|product|inventory|profile|database|api|backend|admin|course|lesson|ticket|reservation|service|pricing|testimonials|gallery|contact form|features|about|pricing|team|faq|support)\b/i;
+
+function isGreetingPrompt(prompt: string): boolean {
+  const trimmed = prompt.trim();
+  if (!trimmed) return false;
+  if (trimmed.length > 80) return false;
+  if (!GREETING_PROMPT.test(trimmed)) return false;
+  if (isInformationalQuery(trimmed)) return false;
+  if (shouldAutoBuildMode(trimmed)) return false;
+  return true;
+}
+
+function isVagueGreenfieldProjectPrompt(prompt: string): boolean {
+  const trimmed = prompt.trim();
+  if (!trimmed || trimmed.length > 100) return false;
+  if (!GENERIC_BUILD_REQUEST.test(trimmed)) return false;
+  if (SPECIFIC_BUILD_DETAILS.test(trimmed)) return false;
+  return true;
+}
+
+const CASUAL_SOCIAL =
+  /^(?:thanks?|thank you|ok(?:ay)?|cool|nice|great|perfect|awesome|got it|sounds good|yep|nope|yes|no|hm+|hmm+)\b/i;
+
+/** Greetings, thanks, and other non-build chit-chat — never auto-run a full build. */
+function isCasualConversation(prompt: string): boolean {
+  const trimmed = prompt.trim();
+  if (!trimmed) return false;
+  if (isGreetingPrompt(trimmed)) return true;
+  if (isInformationalQuery(trimmed)) return true;
+  if (shouldAutoBuildMode(trimmed) || isCodeChangeIntent(trimmed)) return false;
+  if (trimmed.length <= 48 && CASUAL_SOCIAL.test(trimmed)) return true;
+  return false;
+}
 
 const PATCH_KEYWORDS =
   /\b(change|update|rename|tweak|adjust|fix typo|make the|set the|turn the|swap|replace the text|change color|change font|increase|decrease|move the|align)\b/i;
@@ -274,14 +315,20 @@ export function resolveModelChain(
     anchor = smallExistingEdit ? ECONOMY_CODING_MODEL : MODEL_TIERS.coding;
   } else if (mode === "agent" || mode === "build") {
     require.push("code");
+    const majorGreenfield = isMajorGreenfieldBuild(trimmed, ctx.fileCount);
     // Cost-aware routing: simple content sites + tiny edits go FREE first
     // (paid fallback on congestion; error fixes above never come here).
-    anchor = isFreeEligibleBuild(trimmed, ctx.fileCount)
-      ? FREE_CODING_MODEL
-      : smallExistingEdit
-        ? ECONOMY_CODING_MODEL
-        : MODEL_TIERS.coding;
-    preferCheap = isFreeEligibleBuild(trimmed, ctx.fileCount) || smallExistingEdit;
+    // Major greenfield apps (ERP, e-commerce, full sites) always start on the
+    // primary coding tier — free/economy models routinely ship 3-file scaffolds.
+    anchor = majorGreenfield
+      ? MODEL_TIERS.coding
+      : isFreeEligibleBuild(trimmed, ctx.fileCount)
+        ? FREE_CODING_MODEL
+        : smallExistingEdit
+          ? ECONOMY_CODING_MODEL
+          : MODEL_TIERS.coding;
+    preferCheap =
+      !majorGreenfield && (isFreeEligibleBuild(trimmed, ctx.fileCount) || smallExistingEdit);
   } else if (mode === "plan") {
     require.push("reasoning");
     anchor = trimmed.length > 200 ? MODEL_TIERS.coding : MODEL_TIERS.reasoning;
@@ -404,17 +451,31 @@ export function resolvePromptMode(
   if (/^\/build\b/i.test(trimmed)) return "build";
   if (/^\/agent\b/i.test(trimmed)) return "agent";
 
+  if (isCasualConversation(trimmed)) {
+    return "chat";
+  }
+
+  if (ctx.fileCount === 0 && isVagueGreenfieldProjectPrompt(trimmed)) {
+    return "chat";
+  }
+
   // Honor explicitly selected Agent tab — don't downgrade to build/chat via keywords
   if (ctx.currentMode === "agent") return "agent";
 
   // Chat tab: Q&A by default. Explicit slash commands escape to other modes.
   // Surgical edit intents auto-promote so "add a menu item" actually writes
-  // files — Chat mode itself never persists project_files. Greenfield
-  // "build a … app" stays in Chat unless the user uses /build (parity).
+  // files — Chat mode itself never persists project_files. Vague greenfield
+  // "build a website" stays in Chat (parity); specific product asks promote.
   if (ctx.currentMode === "chat") {
     if (/^\/build\b/i.test(trimmed)) return "build";
     if (/^\/agent\b/i.test(trimmed)) return "agent";
     if (/^\/plan\b/i.test(trimmed)) return "plan";
+    if (
+      shouldAutoBuildMode(trimmed) &&
+      !isVagueGreenfieldProjectPrompt(trimmed)
+    ) {
+      return stageFromCtx(ctx) === "app" ? "agent" : "build";
+    }
     if (ctx.fileCount > 0 && isSurgicalEditFromChat(trimmed)) {
       return shouldUseAgentForEdit(trimmed, ctx) ? "agent" : "patch";
     }
@@ -437,6 +498,9 @@ export function resolvePromptMode(
   // Honor Build tab — short UI chrome edits use patch (fast, writes files);
   // larger code changes on existing apps go through agent (Lovable default).
   if (ctx.currentMode === "build") {
+    if (isInformationalQuery(trimmed) && !shouldAutoBuildMode(trimmed)) {
+      return "chat";
+    }
     if (CHAT_KEYWORDS.test(trimmed) && !shouldAutoBuildMode(trimmed)) {
       return "chat";
     }
@@ -458,6 +522,17 @@ export function resolvePromptMode(
     }
     if (ctx.fileCount > 0 && isCodeChangeIntent(trimmed)) {
       return shouldUseAgentForEdit(trimmed, ctx) ? "agent" : "patch";
+    }
+    if (isCasualConversation(trimmed)) {
+      return "chat";
+    }
+    if (
+      ctx.fileCount === 0 &&
+      !shouldAutoBuildMode(trimmed) &&
+      !isCodeChangeIntent(trimmed) &&
+      !/^\/build\b/i.test(trimmed)
+    ) {
+      return "chat";
     }
     return "build";
   }

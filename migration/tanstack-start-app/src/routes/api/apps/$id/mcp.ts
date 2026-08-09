@@ -109,7 +109,9 @@ async function handlePOST(req: Request, params: { id: string }) {
     return rpcError(null, -32700, "Parse error", origin, 400);
   }
 
-  const actions: McpAction[] = Array.isArray(cfg.actions) ? (cfg.actions as McpAction[]) : [];
+  const actions: McpAction[] = Array.isArray(cfg.actions)
+    ? (cfg.actions as unknown as McpAction[])
+    : [];
 
   switch (rpc.method) {
     case "initialize":

@@ -1,7 +1,6 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { isManagementConfigured, runManagedSql, queryManagedSql } from "@/lib/cloud/management";
+import { isManagementConfigured,runManagedSql,queryManagedSql } from "@/lib/cloud/management";
 import { parseCloudToolPermissions } from "@/lib/cloud/permissions";
 
 /** Native /api/cloud/jobs — pg_cron scheduled jobs on the managed backend. */

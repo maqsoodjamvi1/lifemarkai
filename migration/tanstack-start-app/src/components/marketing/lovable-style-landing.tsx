@@ -19,9 +19,9 @@
  * back by re-importing them from the page file if needed.
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState,useRef,useEffect } from "react";
 import { Link } from "@tanstack/react-router";
-import { ArrowRight, Sparkles, Zap, Globe, Play, Loader2 } from "lucide-react";
+import { ArrowRight,Sparkles,Zap,Globe,Play,Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 // ── Hero prompt input ─────────────────────────────────────────────────────────

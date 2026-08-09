@@ -1,6 +1,6 @@
 
 import { motion } from "framer-motion";
-import { Globe, Loader2, X } from "lucide-react";
+import { Globe,Loader2,X } from "lucide-react";
 
 export interface LovableUrlScrapeMeta {
   title: string;

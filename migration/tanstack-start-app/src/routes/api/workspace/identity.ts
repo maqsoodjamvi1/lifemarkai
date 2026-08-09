@@ -1,16 +1,16 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { logAuditFromRequest } from "@/lib/audit/log";
 import { requireFeature } from "@/lib/plans/gating";
 import {
-  generateScimApiKey,
-  hashScimApiKey,
-  redactSsoForClient,
-  type WorkspaceEnforceSettings,
-  type WorkspaceScimConfig,
-  type WorkspaceSsoConfig,
+generateScimApiKey,
+hashScimApiKey,
+redactSsoForClient,
+type WorkspaceEnforceSettings,
+type WorkspaceScimConfig,
+type WorkspaceSsoConfig,
 } from "@/lib/workspace/identity";
+import type { Database,Json } from "@/types/database";
 
 /** Native /api/workspace/identity — SSO + SCIM workspace settings (GET/PATCH). */
 export const Route = createFileRoute("/api/workspace/identity")({
@@ -21,7 +21,7 @@ export const Route = createFileRoute("/api/workspace/identity")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { data } = await (supabase as any)
+        const { data } = await supabase
           .from("workspace_identity_settings")
           .select("*")
           .eq("owner_id", user.id)
@@ -70,7 +70,7 @@ export const Route = createFileRoute("/api/workspace/identity")({
           if (!gate.ok) return Response.json({ error: gate.error, requiredPlan: gate.requiredPlan }, { status: gate.status });
         }
 
-        const { data: existing } = await (supabase as any)
+        const { data: existing } = await supabase
           .from("workspace_identity_settings")
           .select("*")
           .eq("owner_id", user.id)
@@ -121,10 +121,10 @@ export const Route = createFileRoute("/api/workspace/identity")({
             };
 
         const enforce = body.enforceSettings ?? {};
-        const row = {
+        const row: Database["public"]["Tables"]["workspace_identity_settings"]["Insert"] = {
           owner_id: user.id,
-          sso_config: nextSso,
-          scim_config: nextScim,
+          sso_config: nextSso as unknown as Json,
+          scim_config: nextScim as unknown as Json,
           scim_api_key_hash: scimKeyHash,
           scim_api_key_prefix: scimKeyPrefix,
           enforce_sso: enforce.enforceSso ?? existing?.enforce_sso ?? false,
@@ -135,7 +135,7 @@ export const Route = createFileRoute("/api/workspace/identity")({
           updated_at: new Date().toISOString(),
         };
 
-        await (supabase as any).from("workspace_identity_settings").upsert(row);
+        await supabase.from("workspace_identity_settings").upsert(row);
 
         await logAuditFromRequest(request, {
           userId: user.id,

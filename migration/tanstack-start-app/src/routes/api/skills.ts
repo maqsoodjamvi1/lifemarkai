@@ -1,9 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import {
-  createSkill,
-  deleteSkill,
-  listSkills,
-  patchSkill,
+createSkill,
+deleteSkill,
+listSkills,
+patchSkill,
 } from "@/lib/server-fns/skills";
 
 /** Native /api/skills */

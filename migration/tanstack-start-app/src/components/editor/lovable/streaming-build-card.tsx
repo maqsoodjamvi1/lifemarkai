@@ -1,6 +1,6 @@
 
-import { motion, AnimatePresence } from "framer-motion";
-import { Check, Loader2, Sparkles } from "lucide-react";
+import { motion,AnimatePresence } from "framer-motion";
+import { Check,Loader2,Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface StreamingBuildStep {

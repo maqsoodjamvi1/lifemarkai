@@ -1,7 +1,8 @@
 /** Native billing/auto-topup — reimplemented off the worker (ported lib/stripe). */
-import { createAdminClient, createClient } from "../supabase/server.ts";
+import { createAdminClient,createClient } from "../supabase/server.ts";
 import { stripe } from "../stripe/client.ts";
 import { CREDIT_PACKS } from "../stripe/plans.ts";
+import type { Database } from "../../types/database.ts";
 
 export async function getAutoTopup() {
   const supabase = await createClient();
@@ -11,7 +12,7 @@ export async function getAutoTopup() {
   if (!user) return { status: "unauthorized" as const };
   const admin = createAdminClient();
 
-  const { data: profile } = await (supabase as any)
+  const { data: profile } = await supabase
     .from("profiles")
     .select("auto_topup_enabled, auto_topup_threshold, auto_topup_amount, auto_topup_pm_id, stripe_customer_id")
     .eq("id", user.id)
@@ -25,7 +26,7 @@ export async function getAutoTopup() {
         card = { brand: pm.card.brand, last4: pm.card.last4, expMonth: pm.card.exp_month, expYear: pm.card.exp_year };
       }
     } catch {
-      await (admin as any).from("profiles").update({ auto_topup_pm_id: null }).eq("id", user.id);
+      await admin.from("profiles").update({ auto_topup_pm_id: null }).eq("id", user.id);
     }
   }
 
@@ -57,20 +58,21 @@ export async function updateAutoTopup(data: any) {
 
     // setup-card → SetupIntent client secret
     if (data.action === "setup-card") {
-      const { data: profile } = await (supabase as any)
+      const { data: profile } = await supabase
         .from("profiles")
         .select("stripe_customer_id, email")
         .eq("id", user.id)
         .single();
-      let customerId: string = profile?.stripe_customer_id;
+      let customerId = profile?.stripe_customer_id ?? null;
       if (!customerId) {
         const customer = await stripe.customers.create({
           email: profile?.email ?? user.email,
           metadata: { supabase_user_id: user.id },
         });
         customerId = customer.id;
-        await (admin as any).from("profiles").update({ stripe_customer_id: customerId }).eq("id", user.id);
+        await admin.from("profiles").update({ stripe_customer_id: customerId }).eq("id", user.id);
       }
+      if (!customerId) return { status: "error" as const, message: "Could not create Stripe customer" };
       const setupIntent = await stripe.setupIntents.create({
         customer: customerId,
         payment_method_types: ["card"],
@@ -83,8 +85,8 @@ export async function updateAutoTopup(data: any) {
     // save-card → store PM id + attach to customer
     if (data.action === "save-card") {
       if (!data.paymentMethodId) return { status: "bad_request" as const, message: "paymentMethodId required" };
-      await (admin as any).from("profiles").update({ auto_topup_pm_id: data.paymentMethodId }).eq("id", user.id);
-      const { data: profile } = await (supabase as any)
+      await admin.from("profiles").update({ auto_topup_pm_id: data.paymentMethodId }).eq("id", user.id);
+      const { data: profile } = await supabase
         .from("profiles")
         .select("stripe_customer_id")
         .eq("id", user.id)
@@ -104,7 +106,7 @@ export async function updateAutoTopup(data: any) {
 
     // remove-card
     if (data.action === "remove-card") {
-      await (admin as any)
+      await admin
         .from("profiles")
         .update({ auto_topup_pm_id: null, auto_topup_enabled: false })
         .eq("id", user.id);
@@ -119,10 +121,10 @@ export async function updateAutoTopup(data: any) {
     if (data.threshold !== undefined && (data.threshold < 10 || data.threshold > 500)) {
       return { status: "bad_request" as const, message: "Threshold must be between 10 and 500" };
     }
-    const updates: Record<string, unknown> = {};
+    const updates: Database["public"]["Tables"]["profiles"]["Update"] = {};
     if (data.enabled !== undefined) updates.auto_topup_enabled = data.enabled;
     if (data.threshold !== undefined) updates.auto_topup_threshold = data.threshold;
     if (data.amount !== undefined) updates.auto_topup_amount = data.amount;
-    await (admin as any).from("profiles").update(updates).eq("id", user.id);
+    await admin.from("profiles").update(updates).eq("id", user.id);
     return { status: "ok" as const };
 }

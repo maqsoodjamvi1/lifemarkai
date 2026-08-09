@@ -6,8 +6,24 @@
 import { Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { DashboardHeader } from "@/components/dashboard/dashboard-header";
-import type { Profile } from "@/types/database";
+import type { Database,Profile } from "@/types/database";
 import type { User } from "@supabase/supabase-js";
+
+type ProjectRow = Database["public"]["Tables"]["projects"]["Row"];
+type CreditLogRow = Database["public"]["Tables"]["credit_logs"]["Row"];
+type DeploymentRow = Database["public"]["Tables"]["deployments"]["Row"];
+type TeamRow = Database["public"]["Tables"]["teams"]["Row"];
+type TeamMemberRow = Database["public"]["Tables"]["team_members"]["Row"];
+type ProjectSummary = Pick<ProjectRow, "id" | "name" | "framework" | "status">;
+type AnalyticsProject = Pick<ProjectRow, "id" | "name" | "framework">;
+type TeamMemberSummary = Pick<TeamMemberRow, "id" | "role" | "invited_email"> & {
+  profiles: Pick<Profile, "id" | "full_name" | "email" | "avatar_url"> | null;
+};
+type TeamDetail = {
+  team: TeamRow;
+  members: TeamMemberSummary[];
+  projects: ProjectSummary[];
+};
 
 export function ProjectsShellPage({
   user,
@@ -16,7 +32,7 @@ export function ProjectsShellPage({
 }: {
   user: User;
   profile: Profile | null;
-  projects: any[];
+  projects: ProjectSummary[];
 }) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -64,11 +80,11 @@ export function BillingShellPage({
 }: {
   user: User;
   profile: Profile | null;
-  creditLogs: any[];
+  creditLogs: CreditLogRow[];
   teams: { id: string; name: string; credits: number; role: string }[];
 }) {
-  const credits = (profile as any)?.credits ?? 0;
-  const plan = (profile as any)?.plan ?? "free";
+  const credits = profile?.credits ?? 0;
+  const plan = profile?.plan ?? "free";
 
   async function openPortal() {
     const res = await fetch("/api/billing/portal", { method: "POST" });
@@ -126,10 +142,10 @@ export function BillingShellPage({
           <ul className="space-y-1 text-sm max-h-80 overflow-y-auto">
             {creditLogs.slice(0, 40).map((log) => (
               <li
-                key={log.id ?? `${log.created_at}-${log.reason}`}
+                key={log.id}
                 className="flex justify-between border-b border-border/40 py-1.5"
               >
-                <span className="text-muted-foreground">{log.reason ?? "usage"}</span>
+                <span className="text-muted-foreground">{log.description ?? log.action}</span>
                 <span>{log.amount}</span>
               </li>
             ))}
@@ -152,9 +168,9 @@ export function AnalyticsShellPage({
 }: {
   user: User;
   profile: Profile | null;
-  projects: any[];
-  creditLogs: any[];
-  deployments: any[];
+  projects: AnalyticsProject[];
+  creditLogs: CreditLogRow[];
+  deployments: DeploymentRow[];
 }) {
   const spent = creditLogs
     .filter((l) => Number(l.amount) < 0)
@@ -170,7 +186,7 @@ export function AnalyticsShellPage({
             { label: "Projects", value: projects.length },
             { label: "Credits spent", value: spent.toFixed(1) },
             { label: "Deployments", value: deployments.length },
-            { label: "Plan", value: (profile as any)?.plan ?? "free" },
+            { label: "Plan", value: profile?.plan ?? "free" },
           ].map((s) => (
             <div key={s.label} className="rounded-xl border border-border p-4">
               <div className="text-xs text-muted-foreground">{s.label}</div>
@@ -204,8 +220,8 @@ export function TeamShellPage({
 }: {
   user: User;
   profile: Profile | null;
-  personalProjects: any[];
-  teams: Array<{ team: any; members: any[]; projects: any[] }>;
+  personalProjects: Pick<ProjectRow, "id" | "name" | "status">[];
+  teams: TeamDetail[];
 }) {
   return (
     <div className="flex-1 overflow-auto">
@@ -241,9 +257,9 @@ export function TeamShellPage({
                 {members.slice(0, 12).map((m) => (
                   <li key={m.id} className="flex justify-between">
                     <span>
-                      {(m.profiles as any)?.full_name ||
+                      {m.profiles?.full_name ||
                         m.invited_email ||
-                        (m.profiles as any)?.email ||
+                        m.profiles?.email ||
                         "Member"}
                     </span>
                     <span className="text-muted-foreground">{m.role}</span>

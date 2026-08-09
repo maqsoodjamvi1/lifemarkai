@@ -1,6 +1,6 @@
 
-import { AnimatePresence, motion } from "framer-motion";
-import { FileDown, Loader2 } from "lucide-react";
+import { AnimatePresence,motion } from "framer-motion";
+import { FileDown,Loader2 } from "lucide-react";
 
 export type LovableFileGenFormat = "md" | "csv" | "json" | "txt" | "html" | "pdf" | "xlsx" | "pptx";
 

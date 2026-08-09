@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  normalizeProjectImports,
-  relativeSpecifier,
-  repairImportsInFile,
+normalizeProjectImports,
+relativeSpecifier,
+repairImportsInFile,
 } from "./normalize-imports.ts";
 
 const UTILS = { path: "src/lib/utils.ts", content: "export function cn() {}\n" };

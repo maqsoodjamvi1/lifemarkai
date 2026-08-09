@@ -15,10 +15,10 @@
  */
 
 import * as React from "react";
-import { useEditor, EditorContent, type Editor } from "@tiptap/react";
+import { useEditor,EditorContent,type Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Placeholder from "@tiptap/extension-placeholder";
-import { Node, mergeAttributes } from "@tiptap/core";
+import { Node,mergeAttributes } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import type { EditorView } from "@tiptap/pm/view";
 

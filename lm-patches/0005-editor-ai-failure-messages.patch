@@ -1,0 +1,766 @@
+From bfdd8ca85638c6945f1dd9ed264e6603b9e843dc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 4 Aug 2026 17:36:02 +0000
+Subject: [PATCH 1/2] fix(editor): stop deleting the user's prompt when an AI
+ request fails
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Every failure path in the chat panel called onMessagesUpdate(baseMessages) —
+the message list from BEFORE the optimistic user message. So the prompt the
+user had just written was erased from the thread along with any chance of
+resending it, and a five-second toast was the only evidence anything had
+happened. That is the "I hit send and nothing happens" report: not a missing
+error, a disappearing message.
+
+The paths had also drifted apart. A failure arriving MID-STREAM was written
+into the thread with its cause (added after a drained OpenRouter balance 402'd
+every build invisibly for days). A failure arriving BEFORE the stream opened —
+any non-2xx — got a toast and, in most cases, fell through to a bare
+`throw new Error("API error: 500")`. Same failure, opposite treatment,
+depending only on whether the response headers had been sent.
+
+And the pre-stream paths never read the server's error body, which is the only
+thing distinguishing two very different 402s: "this user is out of app credits"
+and "the platform's OpenRouter balance is empty". Both rendered as "add credits
+or upgrade your plan". A user acting on that tops up their own account and
+watches nothing change, because the problem was never theirs — the same
+invisibility, one layer down.
+
+describeAiFailure() is now the single source for all of it, covering the
+provider-balance case (recognised by text, since it arrives as 402, as 500, and
+mid-stream with no status at all), user credits, the Live lock, rate limits,
+auth, payload size and 5xx. Every branch says the message survived, because now
+it does. Wired into all four paths: chat, agent, the mid-stream handlers, and
+Try-to-fix — which previously always blamed the daily free-fix quota, leaving a
+user waiting for a reset that would not help.
+
+Also enables allowImportingTsExtensions. The repo's tests run under
+`node --test`, which requires the .ts extension on relative imports, so every
+test file reported TS5097 for doing the only thing that works — noise a real
+error could hide in. It only requires noEmit, which was already set.
+
+25 tests pass under `node --test`. tsc --noEmit: 51 errors before, 47 after
+(the 4 removed are those TS5097s); no new errors. Production build passes.
+---
+ .../src/components/editor/chat-panel.tsx      | 197 ++++++++----------
+ .../src/lib/editor/ai-failure.test.ts         | 119 +++++++++++
+ .../src/lib/editor/ai-failure.ts              | 191 +++++++++++++++++
+ .../src/lib/preview/preview-host.test.ts      |  49 +++--
+ migration/tanstack-start-app/tsconfig.json    |   6 +
+ 5 files changed, 435 insertions(+), 127 deletions(-)
+ create mode 100644 migration/tanstack-start-app/src/lib/editor/ai-failure.test.ts
+ create mode 100644 migration/tanstack-start-app/src/lib/editor/ai-failure.ts
+
+diff --git a/migration/tanstack-start-app/src/components/editor/chat-panel.tsx b/migration/tanstack-start-app/src/components/editor/chat-panel.tsx
+index 9b20da2..28691c7 100644
+--- a/migration/tanstack-start-app/src/components/editor/chat-panel.tsx
++++ b/migration/tanstack-start-app/src/components/editor/chat-panel.tsx
+@@ -67,6 +67,7 @@ import {
+   type LovableSecretBannerState,
+ } from "./lovable";
+ import { parseLineRefs, removeLineRefFromInput } from "@/lib/editor/parse-line-refs";
++import { describeAiFailure, readErrorBody } from "@/lib/editor/ai-failure";
+ import { formatGuestCommentsForAi } from "@/lib/editor/format-guest-comments";
+ import { formatErrorsForHealing } from "@/lib/preview/preview-error-bridge";
+ import type { ChatSearchMode } from "@/lib/editor/search-chat-messages";
+@@ -2038,26 +2039,33 @@ export function ChatPanel({
+       });
+ 
+       if (!res.ok) {
+-        if (res.status === 423) {
+-          toast({
+-            title: "Project is Live — auto-fix blocked",
+-            description: "Switch to Test environment to apply fixes.",
+-            variant: "destructive",
+-          });
+-          onMessagesUpdate(messages);
+-          return;
+-        }
+-        if (res.status === 402) {
+-          toast({
+-            title: "No free fixes left",
+-            description: "Daily free Try-to-fix quota used. Add credits to keep auto-fixing.",
+-            variant: "destructive",
+-          });
+-          setFreeFixesRemaining(0);
+-          onMessagesUpdate(messages);
+-          return;
+-        }
+-        throw new Error(`Fix API ${res.status}`);
++        // "Try to fix" is a button, not a typed prompt, so there is no user
++        // message to preserve — but the failure still has to be legible.
++        // Previously a 402 always read "daily free quota used", which is wrong
++        // whenever the real cause is the platform's provider balance: the user
++        // waits for a quota that resets tomorrow while nothing ever works.
++        const rawError = await readErrorBody(res);
++        const described = describeAiFailure({ status: res.status, rawError });
++        const fixErrMsg: Message = {
++          id: `fix-error-${Date.now()}`,
++          project_id: project.id,
++          role: "assistant",
++          content: described.chatMarkdown,
++          tokens_used: null,
++          model: null,
++          mode: "build",
++          metadata: null,
++          rating: null,
++          created_at: new Date().toISOString(),
++        };
++        onMessagesUpdate([...messages, fixErrMsg]);
++        toast({
++          title: described.title,
++          description: described.summary,
++          variant: "destructive",
++        });
++        if (res.status === 402 && !described.isPlatformFault) setFreeFixesRemaining(0);
++        return;
+       }
+ 
+       const data = (await res.json()) as {
+@@ -2565,6 +2573,40 @@ export function ChatPanel({
+     const baseMessages = historyOverride ?? messages;
+     onMessagesUpdate([...baseMessages, tempUserMsg]);
+ 
++    /**
++     * Report a failure without erasing what the user typed.
++     *
++     * Every failure path used to call `onMessagesUpdate(baseMessages)`, which
++     * is the message list from BEFORE the optimistic user message — so the
++     * prompt the user had just written vanished from the thread along with any
++     * chance of resending it, leaving a five-second toast as the only evidence
++     * anything had happened at all. That is the "nothing happens when I hit
++     * send" report. Keep `tempUserMsg`, and put the explanation under it.
++     */
++    const failInChat = (input: { status?: number; rawError?: string | null }) => {
++      const described = describeAiFailure(input);
++      const errMsg: Message = {
++        id: `ai-error-${Date.now()}`,
++        project_id: project.id,
++        role: "assistant",
++        content: described.chatMarkdown,
++        tokens_used: null,
++        model: null,
++        mode: (effectiveMode === "patch" ? "build" : effectiveMode) as
++          | "chat" | "plan" | "build" | "agent",
++        metadata: null,
++        rating: null,
++        created_at: new Date().toISOString(),
++      };
++      onMessagesUpdate([...baseMessages, tempUserMsg, errMsg]);
++      toast({
++        title: described.title,
++        description: described.summary,
++        variant: "destructive",
++      });
++      return described;
++    };
++
+     try {
+       // If user sent an image without a custom message (or only the auto-suggested mockup prompt),
+       // prepend a strong mockup-to-code system instruction so the AI knows to reproduce the UI.
+@@ -2733,12 +2775,14 @@ ${(f.content ?? "").slice(0, 8000)}
+               return;
+             }
+           }
+-          if (res.status === 402) {
+-            toast({
+-              title: "Insufficient credits",
+-              description: "Agent mode needs at least 5 credits.",
+-              variant: "destructive",
+-            });
++          const described = failInChat({
++            status: res.status,
++            rawError: await readErrorBody(res),
++          });
++          if (res.status === 402 && !described.isPlatformFault) {
++            // Only re-read the balance for a USER-level 402. On a platform
++            // 402 the user's credits are untouched, and refetching them would
++            // repaint a number that had nothing to do with the failure.
+             try {
+               const cr = await fetch("/api/billing/credits");
+               if (cr.ok) {
+@@ -2746,10 +2790,8 @@ ${(f.content ?? "").slice(0, 8000)}
+                 if (typeof newCredits === "number") onCreditsUpdate(newCredits);
+               }
+             } catch {}
+-            onMessagesUpdate(baseMessages);
+-            return;
+           }
+-          throw new Error(`Agent API error: ${res.status}`);
++          return;
+         }
+ 
+         const reader = res.body.getReader();
+@@ -2948,25 +2990,11 @@ ${(f.content ?? "").slice(0, 8000)}
+               }
+ 
+               if (data.error) {
+-                // Persist the failure in-chat (a toast alone vanishes in 5s and
+-                // the thread looks silently ignored — see the chat-flow handler).
+-                const rawErr = String(data.error);
+-                const agentErrMsg: Message = {
+-                  id: `agent-error-${Date.now()}`,
+-                  project_id: project.id,
+-                  role: "assistant",
+-                  content: /402|insufficient credits/i.test(rawErr)
+-                    ? "⚠️ **The AI provider account is out of credits** — the agent run failed before making changes. Top up at https://openrouter.ai/settings/credits and retry."
+-                    : `⚠️ **Agent run failed** — no changes were made:\n\n\`\`\`\n${rawErr.slice(0, 400)}\n\`\`\``,
+-                  tokens_used: null,
+-                  model: null,
+-                  mode: effectiveMode,
+-                  metadata: null,
+-                  rating: null,
+-                  created_at: new Date().toISOString(),
+-                };
+-                onMessagesUpdate([...baseMessages, agentErrMsg]);
+-                toast({ title: "Agent Error", description: rawErr.slice(0, 200), variant: "destructive" });
++                // Same treatment as every other failure: keep the user's
++                // message, explain the cause under it. Shares describeAiFailure
++                // with the pre-stream paths so a 402 cannot mean one thing here
++                // and something else two hundred lines away.
++                failInChat({ rawError: String(data.error) });
+               }
+             } catch {}
+           }
+@@ -3034,44 +3062,21 @@ ${(f.content ?? "").slice(0, 8000)}
+       });
+ 
+       if (!res.ok || !res.body) {
+-        if (res.status === 402) {
+-          toast({
+-            title: "Insufficient credits",
+-            description: "Add credits or upgrade your plan to continue building.",
+-            variant: "destructive",
+-          });
++        // Every non-2xx lands here, including the ones that used to fall
++        // through to a bare `throw new Error("API error: 500")` and surface as
++        // a toast the user could easily miss. The server's error body is read
++        // rather than discarded — it is the only thing that distinguishes a
++        // user out of credits from the platform's provider account being empty,
++        // and telling the first story to the second user sends them to buy
++        // credits that cannot possibly help.
++        const described = failInChat({
++          status: res.status,
++          rawError: await readErrorBody(res),
++        });
++        if (res.status === 402 && !described.isPlatformFault) {
+           onCreditsUpdate(0);
+-          onMessagesUpdate(baseMessages);
+         }
+-        // Live-environment lock (migration 046): the route refuses code writes
+-        // on Live. Without THIS branch the user only saw a cryptic
+-        // "API error: 423" toast and kept re-asking ("nothing is changed").
+-        // Surface it as a persistent in-chat message with the fix.
+-        if (res.status === 423) {
+-          const lockedMsg: Message = {
+-            id: `env-locked-${Date.now()}`,
+-            project_id: project.id,
+-            role: "assistant",
+-            content:
+-              "🔒 **This project is in Live mode — edits are locked.**\n\n" +
+-              "Live protects your published app from accidental changes, so Build/Agent requests are rejected (nothing was changed and no credits were spent).\n\n" +
+-              "**To make changes:** switch the environment to **Test** (the Test / Live toggle in the top bar), build and preview there, then promote back to Live when you're happy.",
+-            tokens_used: null,
+-            model: null,
+-            mode: effectiveMode,
+-            metadata: null,
+-            rating: null,
+-            created_at: new Date().toISOString(),
+-          };
+-          onMessagesUpdate([...baseMessages, lockedMsg]);
+-          toast({
+-            title: "Project is Live — changes locked",
+-            description: "Switch to the Test environment (top bar) to edit.",
+-            variant: "destructive",
+-          });
+-          return;
+-        }
+-        throw new Error(`API error: ${res.status}`);
++        return;
+       }
+ 
+       let accumulated = "";
+@@ -3636,27 +3641,9 @@ ${(f.content ?? "").slice(0, 8000)}
+               // A 5s toast alone is easy to miss — the thread then looks like
+               // the AI silently ignored the request (this hid a drained
+               // OpenRouter balance for days: every build 402'd invisibly).
+-              // Persist a readable in-chat error with the actual cause.
+-              const raw = String(data.error);
+-              const friendly = /402|insufficient credits/i.test(raw)
+-                ? "**The AI provider account is out of credits.** Every model call is failing, so no changes can be generated.\n\nFix: top up the OpenRouter balance at https://openrouter.ai/settings/credits — then resend your request."
+-                : /429|rate limit/i.test(raw)
+-                  ? "**The AI provider is rate-limiting requests.** Wait a minute and resend."
+-                  : `**The AI provider returned an error**, so no changes were made:\n\n\`\`\`\n${raw.slice(0, 400)}\n\`\`\``;
+-              const errMsg: Message = {
+-                id: `ai-error-${Date.now()}`,
+-                project_id: project.id,
+-                role: "assistant",
+-                content: `⚠️ ${friendly}`,
+-                tokens_used: null,
+-                model: null,
+-                mode: effectiveMode,
+-                metadata: null,
+-                rating: null,
+-                created_at: new Date().toISOString(),
+-              };
+-              onMessagesUpdate([...baseMessages, errMsg]);
+-              toast({ title: "AI Error", description: raw.slice(0, 200), variant: "destructive" });
++              // Persist a readable in-chat error with the actual cause, and
++              // keep the user's message so it can be resent.
++              failInChat({ rawError: String(data.error) });
+             }
+           } catch {}
+         };
+diff --git a/migration/tanstack-start-app/src/lib/editor/ai-failure.test.ts b/migration/tanstack-start-app/src/lib/editor/ai-failure.test.ts
+new file mode 100644
+index 0000000..63a398b
+--- /dev/null
++++ b/migration/tanstack-start-app/src/lib/editor/ai-failure.test.ts
+@@ -0,0 +1,119 @@
++import { describe, it } from "node:test";
++import assert from "node:assert/strict";
++
++import { describeAiFailure, readErrorBody } from "./ai-failure.ts";
++
++describe("describeAiFailure", () => {
++  // The distinction this whole module exists for: two 402s that mean opposite
++  // things. Getting it wrong sends a user to buy credits that cannot help.
++  describe("402", () => {
++    it("blames the platform when the text names the provider balance", () => {
++      const d = describeAiFailure({
++        status: 402,
++        rawError:
++          "Insufficient credits (guard): OpenRouter balance is NEGATIVE ($-0.47) — even free models are blocked.",
++      });
++      assert.equal(d.isPlatformFault, true);
++      assert.match(d.chatMarkdown, /not your account/i);
++      assert.match(d.chatMarkdown, /openrouter\.ai\/settings\/credits/);
++    });
++
++    it("blames the user's balance when nothing points at the provider", () => {
++      const d = describeAiFailure({ status: 402, rawError: "Insufficient credits" });
++      assert.equal(d.isPlatformFault, false);
++      assert.match(d.chatMarkdown, /you are out of credits/i);
++      assert.doesNotMatch(d.chatMarkdown, /openrouter/i);
++    });
++  });
++
++  // A provider-balance failure arrives as 402, as 500, and mid-stream with no
++  // status at all. The answer has to be the same in all three.
++  it("recognises the provider balance regardless of how it arrives", () => {
++    for (const input of [
++      { rawError: "OpenRouter balance too low ($0.10 remaining)" },
++      { status: 500, rawError: "Error: OpenRouter balance is NEGATIVE ($-2.00)" },
++      { rawError: "Insufficient credits (guard): balance too low" },
++    ]) {
++      assert.equal(describeAiFailure(input).isPlatformFault, true);
++    }
++  });
++
++  it("explains the Live lock and how to get out of it", () => {
++    const d = describeAiFailure({ status: 423 });
++    assert.match(d.chatMarkdown, /Live mode/);
++    assert.match(d.chatMarkdown, /Test/);
++    assert.match(d.chatMarkdown, /no credits were spent/i);
++  });
++
++  it("covers rate limiting, auth and payload size", () => {
++    assert.match(describeAiFailure({ status: 429 }).chatMarkdown, /rate limited/i);
++    assert.match(describeAiFailure({ status: 401 }).chatMarkdown, /sign in again/i);
++    assert.match(describeAiFailure({ status: 403 }).chatMarkdown, /sign in again/i);
++    assert.match(describeAiFailure({ status: 413 }).chatMarkdown, /too large/i);
++  });
++
++  it("treats any 5xx as transient and worth resending", () => {
++    const d = describeAiFailure({ status: 503, rawError: "upstream gone" });
++    assert.equal(d.isPlatformFault, true);
++    assert.match(d.chatMarkdown, /resend to retry/i);
++    assert.ok((d.chatMarkdown).includes("upstream gone"));
++  });
++
++  // Every branch must promise the message survived, because every branch is
++  // paired with a caller that now keeps it.
++  it("always tells the user their message is still there", () => {
++    for (const input of [
++      { status: 402, rawError: "Insufficient credits" },
++      { status: 429 },
++      { status: 500 },
++      { status: 418, rawError: "teapot" },
++      { rawError: "OpenRouter balance too low" },
++    ]) {
++      assert.match(describeAiFailure(input).chatMarkdown, /still (in the thread|here)/i);
++    }
++  });
++
++  it("falls back to something usable with no status and no text", () => {
++    const d = describeAiFailure({});
++    assert.ok(d.title);
++    assert.ok(d.summary);
++    assert.match(d.chatMarkdown, /no changes were made/i);
++  });
++
++  it("truncates a huge provider dump instead of pasting it into the thread", () => {
++    const d = describeAiFailure({ status: 500, rawError: "x".repeat(5000) });
++    assert.ok((d.chatMarkdown.length) < (1200));
++    assert.ok((d.chatMarkdown).includes("…"));
++  });
++});
++
++describe("readErrorBody", () => {
++  it("pulls the message out of a JSON error body", async () => {
++    const res = new Response(JSON.stringify({ error: "Insufficient credits" }), { status: 402 });
++    assert.equal(await readErrorBody(res), "Insufficient credits");
++  });
++
++  it("falls back to `message` when that is what the server used", async () => {
++    const res = new Response(JSON.stringify({ message: "nope" }), { status: 400 });
++    assert.equal(await readErrorBody(res), "nope");
++  });
++
++  it("returns plain text bodies as-is", async () => {
++    const res = new Response("no available server", { status: 503 });
++    assert.equal(await readErrorBody(res), "no available server");
++  });
++
++  // It is called on the failure path; it must never become the failure.
++  it("never throws on an empty or unreadable body", async () => {
++    assert.equal(await readErrorBody(new Response(null, { status: 500 })), "");
++    const consumed = new Response("gone", { status: 500 });
++    await consumed.text();
++    assert.equal(typeof (await readErrorBody(consumed)), "string");
++  });
++
++  it("leaves the caller's body readable (clones, does not consume)", async () => {
++    const res = new Response(JSON.stringify({ error: "x" }), { status: 402 });
++    await readErrorBody(res);
++    assert.deepEqual(await res.json(), { error: "x" });
++  });
++});
+diff --git a/migration/tanstack-start-app/src/lib/editor/ai-failure.ts b/migration/tanstack-start-app/src/lib/editor/ai-failure.ts
+new file mode 100644
+index 0000000..c77b474
+--- /dev/null
++++ b/migration/tanstack-start-app/src/lib/editor/ai-failure.ts
+@@ -0,0 +1,191 @@
++/**
++ * Turn an AI request failure into something the user can act on.
++ *
++ * WHY THIS EXISTS
++ * ---------------
++ * The chat panel had two ways to fail and they behaved completely differently.
++ * A failure that arrived MID-STREAM (as an SSE `{error}` payload) was written
++ * into the thread as a persistent message explaining the cause — that fix was
++ * made after a drained OpenRouter balance 402'd every build invisibly for days.
++ * A failure that arrived BEFORE the stream opened (a non-2xx response) got a
++ * five-second toast and nothing else, which is the same invisibility the
++ * in-chat message was introduced to end.
++ *
++ * Worse, the pre-stream paths never read the server's error body, so two very
++ * different 402s — "this user is out of app credits" and "the platform's
++ * OpenRouter balance is empty" — produced the identical message, "add credits
++ * or upgrade your plan". A user acting on that tops up their own account and
++ * watches nothing change, because the problem was never theirs.
++ *
++ * One function, used by every failure path, so the two can't drift again.
++ */
++
++export interface AiFailureInput {
++  /** HTTP status, when the failure came from a response rather than a stream. */
++  status?: number;
++  /** The server's error text — from a JSON body, or an SSE `{error}` payload. */
++  rawError?: string | null;
++}
++
++export interface AiFailureDescription {
++  /** Short toast title. */
++  title: string;
++  /** Toast body — one line, no markdown. */
++  summary: string;
++  /** Markdown for the persistent in-thread message. */
++  chatMarkdown: string;
++  /**
++   * True when the cause is the platform's own provider account, not anything
++   * the user can fix by buying credits. Callers use this to avoid pointing the
++   * user at a billing page that will not help them.
++   */
++  isPlatformFault: boolean;
++}
++
++/** Does this text describe the PLATFORM's provider balance, not the user's? */
++function isProviderBalance(raw: string): boolean {
++  return (
++    /openrouter/i.test(raw) ||
++    /insufficient credits \(guard\)/i.test(raw) ||
++    /balance is negative/i.test(raw) ||
++    /balance too low/i.test(raw)
++  );
++}
++
++export function describeAiFailure(input: AiFailureInput): AiFailureDescription {
++  const raw = (input.rawError ?? "").trim();
++  const status = input.status;
++  const excerpt = raw.length > 400 ? `${raw.slice(0, 400)}…` : raw;
++
++  // Checked before the status switch: a provider-balance failure can arrive as
++  // a 402, as a 500, or mid-stream with no status at all, and it needs the same
++  // answer every time. Status is the weaker signal here; the text is the truth.
++  if (isProviderBalance(raw) || (status === 402 && /openrouter/i.test(raw))) {
++    return {
++      title: "AI provider is out of credits",
++      summary: "The platform's AI provider account needs topping up — your credits are untouched.",
++      isPlatformFault: true,
++      chatMarkdown:
++        "⚠️ **The AI provider account is out of credits.**\n\n" +
++        "Every model call is failing, so nothing could be generated. " +
++        "**This is not your account** — your credits have not been spent and buying more will not help.\n\n" +
++        "Whoever runs this instance needs to top up the OpenRouter balance at " +
++        "https://openrouter.ai/settings/credits. Your message is still in the thread; " +
++        "resend it once that is done." +
++        (excerpt ? `\n\n\`\`\`\n${excerpt}\n\`\`\`` : ""),
++    };
++  }
++
++  switch (status) {
++    case 402:
++      return {
++        title: "Out of credits",
++        summary: "This project is out of credits. Add credits or upgrade to keep building.",
++        isPlatformFault: false,
++        chatMarkdown:
++          "⚠️ **You are out of credits.**\n\n" +
++          "Nothing was generated and nothing was charged. Add credits or upgrade your plan, " +
++          "then resend — your message is still here.",
++      };
++
++    case 423:
++      return {
++        title: "Project is Live — changes locked",
++        summary: "Switch to the Test environment (top bar) to edit.",
++        isPlatformFault: false,
++        chatMarkdown:
++          "🔒 **This project is in Live mode — edits are locked.**\n\n" +
++          "Live protects your published app from accidental changes, so Build and Agent requests are " +
++          "rejected. Nothing was changed and no credits were spent.\n\n" +
++          "**To make changes:** switch to **Test** using the Test / Live toggle in the top bar, build and " +
++          "preview there, then promote back to Live when you are happy. Your message is still here.",
++      };
++
++    case 429:
++      return {
++        title: "Rate limited",
++        summary: "Too many requests in a short window. Wait a moment and resend.",
++        isPlatformFault: false,
++        chatMarkdown:
++          "⏳ **Rate limited.**\n\n" +
++          "Too many requests went out in a short window, so this one was refused before it reached the " +
++          "model. Nothing was generated and nothing was charged. Wait a minute and resend — your message " +
++          "is still here.",
++      };
++
++    case 401:
++    case 403:
++      return {
++        title: "Session expired",
++        summary: "Your session is no longer valid — reload the page and sign in again.",
++        isPlatformFault: false,
++        chatMarkdown:
++          "🔑 **Your session is no longer valid.**\n\n" +
++          "Reload the page and sign in again, then resend. Nothing was changed and your message is " +
++          "still here.",
++      };
++
++    case 413:
++      return {
++        title: "Request too large",
++        summary: "The prompt or attachment exceeded the size limit.",
++        isPlatformFault: false,
++        chatMarkdown:
++          "📦 **That request was too large to send.**\n\n" +
++          "Shorten the prompt, or attach the extra context as a file instead of pasting it inline. " +
++          "Your message is still here.",
++      };
++
++    default:
++      break;
++  }
++
++  if (typeof status === "number" && status >= 500) {
++    return {
++      title: "AI request failed",
++      summary: `The server returned ${status}. Nothing was changed — resend to retry.`,
++      isPlatformFault: true,
++      chatMarkdown:
++        `⚠️ **The server failed while handling this request** (HTTP ${status}), so no changes were made.\n\n` +
++        "This is usually transient — resend to retry. Your message is still in the thread." +
++        (excerpt ? `\n\n\`\`\`\n${excerpt}\n\`\`\`` : ""),
++    };
++  }
++
++  const statusPart = typeof status === "number" ? ` (HTTP ${status})` : "";
++  return {
++    title: "AI request failed",
++    summary: raw ? raw.slice(0, 200) : `The request failed${statusPart}.`,
++    isPlatformFault: false,
++    chatMarkdown:
++      `⚠️ **The request failed${statusPart}**, so no changes were made.\n\n` +
++      "Your message is still in the thread — resend to retry." +
++      (excerpt ? `\n\n\`\`\`\n${excerpt}\n\`\`\`` : ""),
++  };
++}
++
++/**
++ * Read a failed Response's error text without ever throwing.
++ *
++ * The pre-stream paths used to discard the body entirely, which is how a
++ * platform-level 402 came to wear a "top up your account" message meant for a
++ * user-level one. A body may be JSON, plain text, or already consumed; none of
++ * those may take down the error path that is trying to explain the failure.
++ */
++export async function readErrorBody(res: Response): Promise<string> {
++  try {
++    const text = await res.clone().text();
++    if (!text) return "";
++    try {
++      const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
++      const value = parsed.error ?? parsed.message;
++      if (typeof value === "string") return value;
++      if (value != null) return JSON.stringify(value);
++    } catch {
++      /* not JSON — the raw text is still useful */
++    }
++    return text.slice(0, 600);
++  } catch {
++    return "";
++  }
++}
+diff --git a/migration/tanstack-start-app/src/lib/preview/preview-host.test.ts b/migration/tanstack-start-app/src/lib/preview/preview-host.test.ts
+index fa06537..454680d 100644
+--- a/migration/tanstack-start-app/src/lib/preview/preview-host.test.ts
++++ b/migration/tanstack-start-app/src/lib/preview/preview-host.test.ts
+@@ -1,5 +1,7 @@
+-import { describe, expect, it } from "vitest";
+-import { isSandboxPreviewHost } from "./preview-host";
++import { describe, it } from "node:test";
++import assert from "node:assert/strict";
++
++import { isSandboxPreviewHost } from "./preview-host.ts";
+ 
+ const opts = {
+   previewDomain: "preview.lifemarkai.com",
+@@ -8,71 +10,74 @@ const opts = {
+ 
+ describe("isSandboxPreviewHost", () => {
+   it("claims a project's preview hostname", () => {
+-    expect(isSandboxPreviewHost("43a14e3e.preview.lifemarkai.com", opts)).toBe(true);
++    assert.equal(isSandboxPreviewHost("43a14e3e.preview.lifemarkai.com", opts), true);
+   });
+ 
+   it("ignores the port the proxy may append", () => {
+-    expect(isSandboxPreviewHost("43a14e3e.preview.lifemarkai.com:443", opts)).toBe(true);
++    assert.equal(isSandboxPreviewHost("43a14e3e.preview.lifemarkai.com:443", opts), true);
+   });
+ 
+   it("is case-insensitive, as hostnames are", () => {
+-    expect(isSandboxPreviewHost("43A14E3E.Preview.LifemarkAI.com", opts)).toBe(true);
++    assert.equal(isSandboxPreviewHost("43A14E3E.Preview.LifemarkAI.com", opts), true);
+   });
+ 
+   // The whole point is to stop hijacking the app itself. These are the ways
+   // that could go wrong, and each one would take the product down.
+   it("leaves the app's own host alone", () => {
+-    expect(isSandboxPreviewHost("lifemarkai.com", opts)).toBe(false);
+-    expect(isSandboxPreviewHost("www.lifemarkai.com", opts)).toBe(false);
++    assert.equal(isSandboxPreviewHost("lifemarkai.com", opts), false);
++    assert.equal(isSandboxPreviewHost("www.lifemarkai.com", opts), false);
+   });
+ 
+   it("leaves the bare preview domain alone — it is not a project", () => {
+-    expect(isSandboxPreviewHost("preview.lifemarkai.com", opts)).toBe(false);
++    assert.equal(isSandboxPreviewHost("preview.lifemarkai.com", opts), false);
+   });
+ 
+   it("leaves the app alone even when served under the preview domain", () => {
+-    expect(
++    assert.equal(
+       isSandboxPreviewHost("app.preview.lifemarkai.com", {
+         ...opts,
+         appHost: "https://app.preview.lifemarkai.com",
+       }),
+-    ).toBe(false);
++      false,
++    );
+   });
+ 
+   it("does not match a lookalike domain that merely ends the same way", () => {
+-    expect(isSandboxPreviewHost("x.evil-preview.lifemarkai.com", opts)).toBe(false);
+-    expect(isSandboxPreviewHost("preview.lifemarkai.com.evil.test", opts)).toBe(false);
++    assert.equal(isSandboxPreviewHost("x.evil-preview.lifemarkai.com", opts), false);
++    assert.equal(isSandboxPreviewHost("preview.lifemarkai.com.evil.test", opts), false);
+   });
+ 
+   it("only matches a single label — we never issue deeper names", () => {
+-    expect(isSandboxPreviewHost("a.b.preview.lifemarkai.com", opts)).toBe(false);
++    assert.equal(isSandboxPreviewHost("a.b.preview.lifemarkai.com", opts), false);
+   });
+ 
+   // Config is written by hand and pasted from DNS; neither shape should
+   // silently turn the whole check off.
+   it("accepts a wildcard-shaped or URL-shaped domain setting", () => {
+-    expect(
++    assert.equal(
+       isSandboxPreviewHost("abc.preview.lifemarkai.com", {
+         ...opts,
+         previewDomain: "*.preview.lifemarkai.com",
+       }),
+-    ).toBe(true);
+-    expect(
++      true,
++    );
++    assert.equal(
+       isSandboxPreviewHost("abc.preview.lifemarkai.com", {
+         ...opts,
+         previewDomain: "https://preview.lifemarkai.com/",
+       }),
+-    ).toBe(true);
++      true,
++    );
+   });
+ 
+   it("does nothing when no preview domain is configured", () => {
+-    expect(isSandboxPreviewHost("abc.preview.lifemarkai.com", { previewDomain: "" })).toBe(false);
+-    expect(isSandboxPreviewHost("abc.preview.lifemarkai.com", {})).toBe(false);
++    assert.equal(isSandboxPreviewHost("abc.preview.lifemarkai.com", { previewDomain: "" }), false);
++    assert.equal(isSandboxPreviewHost("abc.preview.lifemarkai.com", {}), false);
+   });
+ 
+   it("tolerates missing or malformed hosts", () => {
+-    expect(isSandboxPreviewHost(null, opts)).toBe(false);
+-    expect(isSandboxPreviewHost("", opts)).toBe(false);
+-    expect(isSandboxPreviewHost("   ", opts)).toBe(false);
++    assert.equal(isSandboxPreviewHost(null, opts), false);
++    assert.equal(isSandboxPreviewHost("", opts), false);
++    assert.equal(isSandboxPreviewHost("   ", opts), false);
+   });
+ });
+diff --git a/migration/tanstack-start-app/tsconfig.json b/migration/tanstack-start-app/tsconfig.json
+index 9cff1c1..0ae0c7d 100644
+--- a/migration/tanstack-start-app/tsconfig.json
++++ b/migration/tanstack-start-app/tsconfig.json
+@@ -11,6 +11,12 @@
+     ],
+     "skipLibCheck": true,
+     "resolveJsonModule": true,
++    // The repo's unit tests run under `node --test`, which needs the explicit
++    // .ts extension on relative imports. Without this flag every test file
++    // reports TS5097 for doing the only thing that works — six errors that say
++    // nothing, in the noise where a real one could hide. Safe here: the flag
++    // only requires noEmit, which is already set (tsc type-checks; vite builds).
++    "allowImportingTsExtensions": true,
+     "strictNullChecks": true,
+     "strict": true,
+     "noEmit": true,
+-- 
+2.43.0
+

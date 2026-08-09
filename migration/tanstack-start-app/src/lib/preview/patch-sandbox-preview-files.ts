@@ -1,6 +1,6 @@
 import {
-  patchFilesForWebContainer,
-  type WebContainerPatchOpts,
+patchFilesForWebContainer,
+type WebContainerPatchOpts,
 } from "./patch-vite-for-webcontainer.ts";
 import { isTanStackStartProject } from "../templates/tanstack-start-scaffold.ts";
 import { ensureTypecheckToolchain } from "./ensure-toolchain.ts";

@@ -9,7 +9,7 @@
  * null on any failure so callers can fall back to a stock image URL.
  */
 import { createAdminClient } from "../supabase/server.ts";
-import { generateImage, type ImageSize } from "./image-generate.ts";
+import { generateImage,type ImageSize } from "./image-generate.ts";
 
 // Reuse the existing public "previews" bucket (already used for screenshots).
 const ASSET_BUCKET = "previews";
@@ -49,12 +49,12 @@ export async function generateAndStoreImage(
     const path = `app-images/${projectId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
     const admin = await createAdminClient();
-    const { error } = await (admin as any).storage
+    const { error } = await admin.storage
       .from(ASSET_BUCKET)
       .upload(path, bytes, { contentType, upsert: true });
     if (error) return null;
 
-    const { data } = (admin as any).storage.from(ASSET_BUCKET).getPublicUrl(path);
+    const { data } = admin.storage.from(ASSET_BUCKET).getPublicUrl(path);
     return data?.publicUrl ?? null;
   } catch {
     return null;

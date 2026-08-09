@@ -4,7 +4,7 @@
  */
 import { createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
-import { canReadProjectFiles, canWriteProjectFiles, getProjectAccess } from "../project/access.ts";
+import { canReadProjectFiles,canWriteProjectFiles,getProjectAccess } from "../project/access.ts";
 
 interface ActivityItem {
   id: string;
@@ -32,7 +32,7 @@ export async function getProjectActivity(input: {
   const offset = input.offset ?? 0;
   const events: ActivityItem[] = [];
 
-  const { data: messages } = await (supabase as any)
+  const { data: messages } = await supabase
     .from("messages")
     .select("id, role, content, created_at, model")
     .eq("project_id", input.projectId)
@@ -51,7 +51,7 @@ export async function getProjectActivity(input: {
     });
   }
 
-  const { data: deploys } = await (supabase as any)
+  const { data: deploys } = await supabase
     .from("deployments")
     // The deployments table's column is `url`. `deploy_url` does not exist, so this
     // select errored and the activity feed silently showed no deployments at all.
@@ -70,7 +70,7 @@ export async function getProjectActivity(input: {
     });
   }
 
-  const { data: snapshots } = await (supabase as any)
+  const { data: snapshots } = await supabase
     .from("project_snapshots")
     .select("id, label, created_at")
     .eq("project_id", input.projectId)
@@ -81,11 +81,11 @@ export async function getProjectActivity(input: {
       id: `snap_${s.id}`,
       type: "snapshot",
       title: `Snapshot saved${s.label ? `: ${s.label}` : ""}`,
-      created_at: s.created_at,
+      created_at: s.created_at ?? "1970-01-01T00:00:00.000Z",
     });
   }
 
-  const { data: files } = await (supabase as any)
+  const { data: files } = await supabase
     .from("project_files")
     .select("id, path, created_at, updated_at")
     .eq("project_id", input.projectId)
@@ -122,11 +122,10 @@ export async function ingestProjectActivity(input: {
   if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
   if (!input.type || !input.title) return { status: "bad_request" as const };
 
-  await (supabase as any)
+  await supabase
     .from("audit_logs")
     .insert({
       user_id: user.id,
-      project_id: input.projectId,
       action: input.type,
       resource_type: "project",
       resource_id: input.projectId,

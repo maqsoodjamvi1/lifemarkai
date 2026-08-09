@@ -1,5 +1,5 @@
 
-import { FilePenLine, X } from "lucide-react";
+import { FilePenLine,X } from "lucide-react";
 
 interface LovableDraftRestoreBannerProps {
   preview: string;

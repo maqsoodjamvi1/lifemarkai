@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Server-side production build for deploys (Phase 4 — preview == deploy).
  *

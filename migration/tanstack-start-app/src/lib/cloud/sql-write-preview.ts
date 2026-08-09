@@ -31,7 +31,7 @@
  * one statement. Under those constraints, finding the predicate is not really
  * parsing SQL — it is finding the one unmasked `WHERE`.
  */
-import { classifySqlWrite, type SqlWriteVerdict } from "./sql-write-guard.ts";
+import { classifySqlWrite,type SqlWriteVerdict } from "./sql-write-guard.ts";
 
 export interface SqlWritePlan {
   ok: true;

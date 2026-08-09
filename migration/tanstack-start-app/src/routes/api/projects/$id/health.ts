@@ -1,15 +1,14 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { runHealthScan } from "@/lib/ai/self-healing";
 import {
-  cancelCreditReservation,
-  reserveCredits,
-  settleCreditReservation,
-  type CreditReservation,
+cancelCreditReservation,
+reserveCredits,
+settleCreditReservation,
+type CreditReservation,
 } from "@/lib/credits";
 
 
@@ -51,7 +50,7 @@ async function handleGET(_: Request, params: any) {
   const project = await getOwnedProject(supabase, id, user.id);
   if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
-  const { data: findings, error } = await (supabase as any)
+  const { data: findings, error } = await supabase
     .from("health_findings")
     .select("*")
     .eq("project_id", id)
@@ -118,7 +117,7 @@ async function handlePOST(req: Request, params: any) {
     return Response.json({ error: "findingId required" }, { status: 400 });
   }
 
-  const { data: finding } = await (supabase as any)
+  const { data: finding } = await supabase
     .from("health_findings")
     .select("*")
     .eq("id", findingId)
@@ -128,7 +127,7 @@ async function handlePOST(req: Request, params: any) {
 
   // ── Dismiss ────────────────────────────────────────────────────────────────
   if (action === "dismiss") {
-    const { data: updated, error } = await (supabase as any)
+    const { data: updated, error } = await supabase
       .from("health_findings")
       .update({ status: "dismissed" })
       .eq("id", findingId)
@@ -150,8 +149,10 @@ async function handlePOST(req: Request, params: any) {
     }
 
     // Context: the flagged file plus package.json (dependency fixes need it).
-    const wantedPaths = [finding.file_path, "package.json"].filter(Boolean);
-    const { data: contextRows } = await (supabase as any)
+    const wantedPaths = [finding.file_path, "package.json"].filter(
+      (path): path is string => typeof path === "string" && path.length > 0,
+    );
+    const { data: contextRows } = await supabase
       .from("project_files")
       .select("path, content")
       .eq("project_id", id)
@@ -231,7 +232,7 @@ ${contextFiles.length > 0
         summary: fix.summary ?? finding.title,
         proposed_at: new Date().toISOString(),
       };
-      const { data: updated, error: updateErr } = await (supabase as any)
+      const { data: updated, error: updateErr } = await supabase
         .from("health_findings")
         .update({ proposed_fix: proposedFix, status: "fix_proposed" })
         .eq("id", findingId)
@@ -269,7 +270,11 @@ ${contextFiles.length > 0
       );
     }
 
-    const allFixFiles = finding.proposed_fix?.files;
+    const proposedFix = finding.proposed_fix;
+    const allFixFiles =
+      typeof proposedFix === "object" && proposedFix !== null && !Array.isArray(proposedFix)
+        ? proposedFix.files
+        : null;
     if (finding.status !== "fix_proposed" || !Array.isArray(allFixFiles) || allFixFiles.length === 0) {
       return Response.json({ error: "No proposed fix to apply — run propose_fix first" }, { status: 400 });
     }
@@ -281,20 +286,28 @@ ${contextFiles.length > 0
             .filter((p): p is string => typeof p === "string" && p.length > 0),
         )
       : null;
+    const validFixFiles = allFixFiles.filter(
+      (file): file is { path: string; content: string } =>
+        typeof file === "object" &&
+        file !== null &&
+        !Array.isArray(file) &&
+        typeof file.path === "string" &&
+        typeof file.content === "string",
+    );
     const fixFiles = pathFilter
-      ? allFixFiles.filter((f: { path?: string }) => f?.path && pathFilter.has(f.path))
-      : allFixFiles;
+      ? validFixFiles.filter((file) => pathFilter.has(file.path))
+      : validFixFiles;
     if (fixFiles.length === 0) {
       return Response.json({ error: "No accepted files to apply" }, { status: 400 });
     }
 
-    const { error: upsertErr } = await (supabase as any).from("project_files").upsert(
-      fixFiles.map((f: any) => ({ project_id: id, path: f.path, content: f.content })),
+    const { error: upsertErr } = await supabase.from("project_files").upsert(
+      fixFiles.map((file) => ({ project_id: id, path: file.path, content: file.content })),
       { onConflict: "project_id,path" }
     );
     if (upsertErr) return Response.json({ error: upsertErr.message }, { status: 500 });
 
-    const { data: updated, error: statusErr } = await (supabase as any)
+    const { data: updated, error: statusErr } = await supabase
       .from("health_findings")
       .update({ status: "fixed" })
       .eq("id", findingId)

@@ -1,6 +1,6 @@
 
-import { AnimatePresence, motion } from "framer-motion";
-import { MessageSquare, X } from "lucide-react";
+import { AnimatePresence,motion } from "framer-motion";
+import { MessageSquare,X } from "lucide-react";
 
 interface LovableComposerGuestCommentsBannerProps {
   visible: boolean;

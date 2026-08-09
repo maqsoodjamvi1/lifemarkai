@@ -1,9 +1,8 @@
 
 import { useState } from "react";
 import {
-  CreditCard, CheckCircle2, Zap, Building2, Shield, Check,
-  ChevronDown, ChevronUp, ArrowRight, Star, Users, ExternalLink,
-  Sparkles, Loader2,
+CreditCard,CheckCircle2,Zap,Check,ArrowRight,ExternalLink,
+Sparkles,Loader2
 } from "lucide-react";
 import { PLANS } from "@/lib/stripe/plans";
 import type { Profile } from "@/types/database";

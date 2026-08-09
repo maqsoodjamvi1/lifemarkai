@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * POST /api/projects/:id/sandbox-preview
  *
@@ -10,21 +9,20 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
 import {
-  detectSandboxStart,
-  getSandboxProvider,
-  getSandboxProviderId,
-  getPreviewProbeState,
-  forgetPreviewProbe,
-  isPreviewReachable,
-  peekPreviewReachable,
-  isSandboxEnabled,
-  sandboxNameForProject,
-  type SandboxFile,
+detectSandboxStart,
+getSandboxProvider,
+getSandboxProviderId,
+getPreviewProbeState,
+forgetPreviewProbe,peekPreviewReachable,
+isSandboxEnabled,
+sandboxNameForProject,
+type SandboxFile
 } from "@/lib/sandbox";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { patchSandboxPreviewFiles } from "@/lib/preview/patch-sandbox-preview-files";
+import type { Database,Json } from "@/types/database";
 
 
 interface Params {
@@ -130,7 +128,7 @@ async function handlePOSTUnlocked(req: Request, params: any) {
     return Response.json({ error: "Rate limited" }, { status: 429 });
   }
 
-  const { data: rows, error } = await (supabase as any)
+  const { data: rows, error } = await supabase
     .from("project_files")
     .select("path, content")
     .eq("project_id", projectId);
@@ -140,7 +138,7 @@ async function handlePOSTUnlocked(req: Request, params: any) {
     return Response.json({ enabled: true, ok: false, error: "Project has no files." });
   }
 
-  const { data: projectRow } = await (supabase as any)
+  const { data: projectRow } = await supabase
     .from("projects")
     .select("is_public")
     .eq("id", projectId)
@@ -170,7 +168,7 @@ async function handlePOSTUnlocked(req: Request, params: any) {
       const sync = syncPackageJsonDeps(rawFiles, pkgRow.content);
       if (sync && sync.addedPackages.length > 0) {
         pkgRow.content = sync.updated;
-        await (supabase as any)
+        await supabase
           .from("project_files")
           .update({ content: sync.updated, updated_at: new Date().toISOString() })
           .eq("project_id", projectId)
@@ -183,7 +181,7 @@ async function handlePOSTUnlocked(req: Request, params: any) {
 
   const { port, startCommand } = detectSandboxStart(files);
 
-  const { data: existing } = await (supabase as any)
+  const { data: existing } = await supabase
     .from("projects")
     .select("metadata")
     .eq("id", projectId)
@@ -217,14 +215,14 @@ async function handlePOSTUnlocked(req: Request, params: any) {
 
   const writeMeta = (
     patch: Record<string, unknown>,
-    extraColumns: Record<string, unknown> = {},
+    extraColumns: Database["public"]["Tables"]["projects"]["Update"] = {},
   ): Promise<{ error?: { message?: string } | null }> => {
     liveMeta = { ...liveMeta, ...patch };
     const snapshot = { ...liveMeta };
     const next = metaWriteChain.then(() =>
-      (supabase as any)
+      supabase
         .from("projects")
-        .update({ ...extraColumns, metadata: snapshot })
+        .update({ ...extraColumns, metadata: snapshot as unknown as Json })
         .eq("id", projectId),
     );
     // The chain must never reject, or one failed write would strand all the
@@ -425,7 +423,7 @@ async function handleGET(req: Request, params: any) {
 
   const queryId = new URL(req.url).searchParams.get("sandboxId");
   const phaseOnly = new URL(req.url).searchParams.get("phaseOnly") === "1";
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("preview_url, metadata")
     .eq("id", projectId)
@@ -465,7 +463,7 @@ async function handleGET(req: Request, params: any) {
     if (!claimsReady && storedTunnelUrl && phase !== "error") {
       peekPreviewReachable(storedTunnelUrl); // warms the cache in the background
       if (getPreviewProbeState(storedTunnelUrl).state === "verified") {
-        void (supabase as any)
+        void Promise.resolve(supabase
           .from("projects")
           .update({
             metadata: {
@@ -475,7 +473,7 @@ async function handleGET(req: Request, params: any) {
               sandbox_updated_at: new Date().toISOString(),
             },
           })
-          .eq("id", projectId)
+          .eq("id", projectId))
           .then(() => {})
           .catch(() => {});
         return Response.json({
@@ -546,7 +544,7 @@ async function handleGET(req: Request, params: any) {
       const { port } = detectSandboxStart([]);
       const byProject = await provider.reconnectByProject(projectId, storedPort ?? port);
       if (byProject.ok && byProject.previewUrl) {
-        await (supabase as any)
+        await supabase
           .from("projects")
           .update({
             preview_url: byProject.previewUrl,
@@ -597,7 +595,7 @@ async function handleGET(req: Request, params: any) {
     // Persist the EFFECTIVE sandbox id too — updating only preview_url leaves
     // metadata.sandbox_id stale, and phaseOnly polls hand that stale id back to
     // the client, whose later syncs then hit a dead sandbox forever.
-    await (supabase as any)
+    await supabase
       .from("projects")
       .update({
         preview_url: result.previewUrl,
@@ -650,7 +648,7 @@ async function handleGET(req: Request, params: any) {
   if (provider.reconnectByProject) {
     const byProject = await provider.reconnectByProject(projectId, port);
     if (byProject.ok && byProject.previewUrl) {
-      await (supabase as any)
+      await supabase
         .from("projects")
         .update({
           preview_url: byProject.previewUrl,
@@ -679,7 +677,7 @@ async function handleGET(req: Request, params: any) {
 
   // Clear stale URL + sandbox id so the client cold-boots instead of framing a
   // dead tunnel / retrying reconnect against a terminated Modal sandbox.
-  await (supabase as any)
+  await supabase
     .from("projects")
     .update({
       preview_url: null,

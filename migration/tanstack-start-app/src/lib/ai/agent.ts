@@ -1,10 +1,12 @@
 import { generateAI } from "./generate.ts";
-import type { AIMessage, ToolDefinition, ToolCall } from "./provider.ts";
+import type { AIMessage,ToolDefinition,ToolCall } from "./provider.ts";
 import { DEFAULT_CODING_MODEL } from "./model-defaults.ts";
-import { selectModelChain, applyModelAdapter } from "./model-catalog.ts";
+import { selectModelChain,applyModelAdapter } from "./model-catalog.ts";
 import { AGENT_SYSTEM_PROMPT } from "./system-prompts.ts";
-import { summarizeFile, findDefinition } from "./code-analyzer.ts";
+import { summarizeFile,findDefinition } from "./code-analyzer.ts";
 import { generateAndStoreImage } from "./image-asset.ts";
+import { formatPreviewConsole,formatPreviewNetwork,loadPreviewTelemetryFromDb } from "../preview/preview-telemetry.ts";
+import { createAdminClient } from "../supabase/server.ts";
 
 export interface AgentTool {
   name: string;
@@ -286,9 +288,7 @@ function buildTools(
         "Read recent console.log/warn/error lines from the live preview (captured while the user has Preview open). Use when debugging runtime errors or empty UI.",
       execute: async ({ limit }: Record<string, unknown>) => {
         if (!projectId) return "Error: preview console unavailable without projectId.";
-        const { formatPreviewConsole, loadPreviewTelemetryFromDb } = await import("@/lib/preview/preview-telemetry");
         try {
-          const { createAdminClient } = await import("@/lib/supabase/server");
           const admin = await createAdminClient();
           await loadPreviewTelemetryFromDb(admin, projectId);
         } catch { /* memory-only fallback */ }
@@ -302,9 +302,7 @@ function buildTools(
         "Read recent fetch/XHR requests from the live preview (method, status, duration, URL). Use when debugging API failures or missing data.",
       execute: async ({ limit }: Record<string, unknown>) => {
         if (!projectId) return "Error: preview network unavailable without projectId.";
-        const { formatPreviewNetwork, loadPreviewTelemetryFromDb } = await import("@/lib/preview/preview-telemetry");
         try {
-          const { createAdminClient } = await import("@/lib/supabase/server");
           const admin = await createAdminClient();
           await loadPreviewTelemetryFromDb(admin, projectId);
         } catch { /* memory-only fallback */ }
@@ -319,10 +317,9 @@ function buildTools(
       execute: async ({ limit, status }: Record<string, unknown>) => {
         if (!projectId) return "Error: AI activity unavailable without projectId.";
         try {
-          const { createAdminClient } = await import("@/lib/supabase/server");
           const admin = await createAdminClient();
           const n = Math.min(40, Math.max(1, Number(limit) || 15));
-          let q = (admin as any)
+          let q = admin
             .from("ai_request_logs")
             .select("capability, model, status, cost, duration_ms, error, request_preview, created_at")
             .eq("project_id", projectId)

@@ -1,11 +1,10 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
 import {
-  loadEditorInitiativeEvents,
-  loadEditorInitiativeRun,
+loadEditorInitiativeEvents,
+loadEditorInitiativeRun,
 } from "@/lib/ai/editor-lenses/persistence";
 
 interface Params {

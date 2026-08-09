@@ -2,15 +2,35 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  ADMIN_PATH_PREFIXES,
-  SITE_CHROME_PATH,
-  isAdminPath,
-  siteChromeFiles,
-  siteChromeShellSource,
+ADMIN_PATH_PREFIXES,
+SITE_CHROME_PATH,
+isAdminPath,
+siteChromeFiles,
+siteChromeShellSource,
 } from "./site-chrome.ts";
 import { lovableViteScaffold } from "./lovable-vite-scaffold.ts";
-import { ensureWebsiteChrome, hasSiteFooter, hasSiteHeader } from "../ai/website-chrome.ts";
+import {
+type ChromeFile,
+ensureWebsiteChrome,
+hasSiteFooter,
+hasSiteHeader,
+} from "../ai/website-chrome.ts";
 import { tanstackStartScaffold } from "./tanstack-start-scaffold.ts";
+
+/**
+ * The two scaffolds disagree about their own file type: the Vite one declares
+ * `language?: string`, the TanStack one `language: string`. ChromeFile requires
+ * it, so neither array is assignable as-is. Normalise here rather than loosening
+ * ChromeFile, which the chrome writer relies on.
+ */
+const asChromeFiles = (
+  files: Array<{ path: string; content: string; language?: string }>,
+): ChromeFile[] =>
+  files.map((f) => ({
+    path: f.path,
+    content: f.content,
+    language: f.language ?? "typescriptreact",
+  }));
 
 const fileAt = (files: Array<{ path: string; content: string }>, path: string) => {
   const hit = files.find((f) => f.path === path);
@@ -128,9 +148,8 @@ test("both scaffolds still ship the header and footer themselves", () => {
  * on public pages and making it global again, back onto /admin.
  */
 test("the chrome guarantee leaves a fresh scaffold untouched", () => {
-  // Pass the scaffold files straight through: ChromeFile requires `language`,
-  // which they already carry, and mapping to { path, content } only threw it away.
-  for (const files of [lovableViteScaffold("Acme"), tanstackStartScaffold({}, "Acme")]) {
+  for (const scaffold of [lovableViteScaffold("Acme"), tanstackStartScaffold({}, "Acme")]) {
+    const files = asChromeFiles(scaffold);
     assert.equal(hasSiteHeader(files), true, "header should read as present");
     assert.equal(hasSiteFooter(files), true, "footer should read as present");
     // NOT needsWebsiteChrome: that answers "is this a public website that OWES
@@ -142,7 +161,7 @@ test("the chrome guarantee leaves a fresh scaffold untouched", () => {
 });
 
 test("a shell that drops SiteChrome is still reported as missing chrome", () => {
-  const files = lovableViteScaffold("Acme");
+  const files = asChromeFiles(lovableViteScaffold("Acme"));
   const app = files.find((f) => f.path === "src/App.tsx");
   assert.ok(app);
   // The failure the guarantee exists for: the model rewrites the shell and drops

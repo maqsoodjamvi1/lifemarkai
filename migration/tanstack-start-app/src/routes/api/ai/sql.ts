@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
@@ -23,7 +22,7 @@ async function handlePOST(req: Request) {
   let schemaContext = body.schema ?? "";
   if (!schemaContext && body.projectId) {
     // Load .env.local to try to extract DB url hint (just metadata)
-    const { data: envFile } = await (supabase as any)
+    const { data: envFile } = await supabase
       .from("project_files")
       .select("content")
       .eq("project_id", body.projectId)

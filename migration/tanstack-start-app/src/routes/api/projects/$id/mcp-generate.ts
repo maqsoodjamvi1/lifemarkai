@@ -1,10 +1,9 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import {
-  generateAppMcpFiles,
-  MCP_GENERATED_BANNER,
-  type McpServerSpec,
+generateAppMcpFiles,
+MCP_GENERATED_BANNER,
+type McpServerSpec,
 } from "@/lib/ai/app-mcp-codegen";
 
 /**
@@ -39,7 +38,7 @@ export const Route = createFileRoute("/api/projects/$id/mcp-generate")({
         } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { data: project } = await (supabase as any)
+        const { data: project } = await supabase
           .from("projects")
           .select("id, user_id, name, cloud_project_ref")
           .eq("id", id)
@@ -48,7 +47,7 @@ export const Route = createFileRoute("/api/projects/$id/mcp-generate")({
 
         const canWrite =
           project.user_id === user.id ||
-          (await (supabase as any)
+          (await supabase
             .from("collaborators")
             .select("role")
             .eq("project_id", id)
@@ -110,7 +109,7 @@ export const Route = createFileRoute("/api/projects/$id/mcp-generate")({
         };
 
         // Existing content decides what is regenerated vs left alone.
-        const { data: existing } = await (supabase as any)
+        const { data: existing } = await supabase
           .from("project_files")
           .select("path, content")
           .eq("project_id", id)
@@ -127,7 +126,7 @@ export const Route = createFileRoute("/api/projects/$id/mcp-generate")({
           .map((f: any) => f.path);
 
         for (const file of generated) {
-          await (supabase as any).from("project_files").upsert(
+          await supabase.from("project_files").upsert(
             {
               project_id: id,
               path: file.path,

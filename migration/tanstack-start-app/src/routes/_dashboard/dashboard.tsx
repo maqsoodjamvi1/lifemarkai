@@ -8,7 +8,7 @@
  * The JSX body is unchanged — it renders the same client components with the
  * data the loader produced.
  */
-import { createFileRoute, getRouteApi } from "@tanstack/react-router";
+import { createFileRoute,getRouteApi } from "@tanstack/react-router";
 import { z } from "zod";
 import { zodValidator } from "@tanstack/zod-adapter";
 import { fetchDashboardHome } from "@/lib/dashboard-server";
@@ -51,7 +51,7 @@ function DashboardPage() {
 
   const isNewUser = !projects || projects.length === 0;
   const firstName =
-    (profile as any)?.full_name?.split(" ")[0] ??
+    profile?.full_name?.split(" ")[0] ??
     user?.email?.split("@")[0] ??
     "Builder";
 
@@ -70,7 +70,7 @@ function DashboardPage() {
   return (
     <div className="flex-1 overflow-auto">
       <DashboardHeader user={user!} profile={profile} compact />
-      <BillingAlertBanner credits={(profile as any)?.credits ?? 0} plan={(profile as any)?.plan ?? "free"} />
+      <BillingAlertBanner credits={profile?.credits ?? 0} plan={profile?.plan ?? "free"} />
 
       <div className="max-w-5xl mx-auto px-6 py-6 space-y-8">
         <DashboardHero firstName={firstName} />
@@ -86,8 +86,8 @@ function DashboardPage() {
         {isNewUser && (
           <GettingStartedChecklist
             hasProjects={!isNewUser}
-            hasDeployment={projects?.some((p: any) => !!p.deployed_url) ?? false}
-            hasShared={projects?.some((p: any) => p.is_public) ?? false}
+            hasDeployment={projects?.some((project) => !!project.deployed_url) ?? false}
+            hasShared={projects?.some((project) => project.is_public) ?? false}
           />
         )}
 
@@ -100,7 +100,7 @@ function DashboardPage() {
         </div>
 
         {!isNewUser && (
-          <StatsCards projects={projects ?? []} credits={(profile as any)?.credits ?? 0} />
+          <StatsCards projects={projects ?? []} credits={profile?.credits ?? 0} />
         )}
 
         {!isNewUser && <ProjectInsightsCard />}
@@ -110,9 +110,9 @@ function DashboardPage() {
 
       <DashboardClient
         showOnboarding={isNewUser && !isPromptHandoff}
-        showSetupWizard={!(profile as any)?.setup_complete && isNewUser && !isPromptHandoff}
-        projects={(projects ?? []).map((p: any) => ({ id: p.id, name: p.name, framework: p.framework as string }))}
-        credits={(profile as any)?.credits ?? 0}
+        showSetupWizard={!profile?.setup_complete && isNewUser && !isPromptHandoff}
+        projects={(projects ?? []).map((project) => ({ id: project.id, name: project.name, framework: project.framework }))}
+        credits={profile?.credits ?? 0}
       />
     </div>
   );

@@ -6,11 +6,11 @@ import { createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
 import { assertChatAccess } from "../project/chat-access.ts";
 import {
-  appendPreviewConsole,
-  appendPreviewNetwork,
-  getPreviewTelemetry,
-  loadPreviewTelemetryFromDb,
-  persistPreviewTelemetry,
+appendPreviewConsole,
+appendPreviewNetwork,
+getPreviewTelemetry,
+loadPreviewTelemetryFromDb,
+persistPreviewTelemetry,
 } from "@/lib/preview/preview-telemetry";
 
 export async function getPreviewTelemetryFn(input: { projectId: string }) {

@@ -1,11 +1,10 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { generateImage, isImageGenConfigured, type ImageSize } from "@/lib/ai/image-generate";
+import { generateImage,isImageGenConfigured,type ImageSize } from "@/lib/ai/image-generate";
 import { rateLimit } from "@/lib/rate-limit";
 import {
-  consumeProjectAiCredits,
-  ProjectAiCreditLimitError,
+consumeProjectAiCredits,
+ProjectAiCreditLimitError,
 } from "@/lib/ai/project-credit-meter";
 
 // ─── POST /api/projects/[id]/image-proxy ─────────────────────────────────────
@@ -43,7 +42,7 @@ async function handlePOST(req: Request, params: any) {
   const { data: { user } } = await supabase.auth.getUser();
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("id, user_id, ai_integration_enabled, ai_credits_used, ai_credit_limit, is_public")
     .eq("id", projectId)
@@ -62,7 +61,7 @@ async function handlePOST(req: Request, params: any) {
   // Auth: owner, collaborator, OR any caller when the project is public.
   if (!project.is_public && user?.id !== project.user_id) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data: collab } = await (supabase as any)
+    const { data: collab } = await supabase
       .from("collaborators")
       .select("role")
       .eq("project_id", projectId)
@@ -152,7 +151,7 @@ export const Route = createFileRoute("/api/projects/$id/image-proxy")({
   server: {
     handlers: {
       POST: async ({ request, params }) => handlePOST(request, params),
-      OPTIONS: async ({ request, params }) => handleOPTIONS(request, params),
+      OPTIONS: async ({ request }) => handleOPTIONS(request),
     },
   },
 });

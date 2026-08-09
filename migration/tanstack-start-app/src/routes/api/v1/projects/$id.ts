@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { authenticateApiRequest } from "@/lib/api/api-key";

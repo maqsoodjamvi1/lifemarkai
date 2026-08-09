@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * BullMQ queue client — shared between API routes and workers.
  *
@@ -6,7 +5,7 @@
  * Set REDIS_URL in .env.local to enable (e.g. redis://localhost:6379
  * or an Upstash Redis URL: rediss://...@....upstash.io:6379).
  */
-import { Queue, Worker, QueueEvents, type Job } from "bullmq";
+import { Queue,Worker,type Job } from "bullmq";
 import IORedis from "ioredis";
 
 const REDIS_URL = process.env.REDIS_URL;

@@ -16,18 +16,18 @@
  * Every step is best-effort — wiring failures never fail the build.
  */
 
-import { ENV_FILE_PATH, parseEnvFile, serializeEnvFile } from "../project/env-file.ts";
+import { ENV_FILE_PATH,parseEnvFile,serializeEnvFile } from "../project/env-file.ts";
 import {
-  isManagementConfigured,
-  createManagedProject,
-  managedProjectUrl,
-  runManagedSql,
+isManagementConfigured,
+createManagedProject,
+managedProjectUrl,
+runManagedSql,
 } from "@/lib/cloud/management";
 import { persistManagedDbPassword } from "./credentials.ts";
 import {
-  parseCloudToolPermissions,
-  type CloudToolId,
-  type CloudToolPermission,
+parseCloudToolPermissions,
+type CloudToolId,
+type CloudToolPermission,
 } from "@/lib/cloud/permissions";
 
 export interface AutoWireResult {

@@ -41,9 +41,18 @@ const SERVER_ENTRY_CANDIDATES = [
   "dist/server/index.js",
   "dist/server/index.mjs",
 ];
-const serverEntry = SERVER_ENTRY_CANDIDATES.map((p) => path.join(startAppRoot, p)).find((p) =>
-  fs.existsSync(p),
-);
+// Local and upgraded deployments can contain both layouts. Pick the newest
+// artifact instead of trusting list order, otherwise a stale `.output` tree can
+// silently win after a current Vite build has written `dist` (or vice versa).
+const serverEntry = SERVER_ENTRY_CANDIDATES
+  .map((relativePath) => {
+    const absolutePath = path.join(startAppRoot, relativePath);
+    return fs.existsSync(absolutePath)
+      ? { absolutePath, modifiedAt: fs.statSync(absolutePath).mtimeMs }
+      : null;
+  })
+  .filter(Boolean)
+  .sort((a, b) => b.modifiedAt - a.modifiedAt)[0]?.absolutePath;
 if (!serverEntry) {
   console.error(
     `[start-production] no server entry found under ${startAppRoot}.\n` +

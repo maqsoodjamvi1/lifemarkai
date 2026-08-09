@@ -1,6 +1,6 @@
 
-import { AnimatePresence, motion } from "framer-motion";
-import { Loader2, Sparkles } from "lucide-react";
+import { AnimatePresence,motion } from "framer-motion";
+import { Loader2,Sparkles } from "lucide-react";
 
 export interface LovableSaveSkillDraft {
   sourceMessageId: string;

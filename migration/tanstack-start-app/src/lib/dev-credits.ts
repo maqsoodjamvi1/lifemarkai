@@ -7,7 +7,7 @@ export async function ensureDevCredits(userId: string): Promise<number | null> {
   if (process.env.NODE_ENV !== "development") return null;
 
   const admin = await createAdminClient();
-  const { data: profile } = await (admin as any)
+  const { data: profile } = await admin
     .from("profiles")
     .select("credits, plan, email")
     .eq("id", userId)
@@ -19,17 +19,19 @@ export async function ensureDevCredits(userId: string): Promise<number | null> {
   }
 
   if (profile) {
-    await (admin as any)
+    await admin
       .from("profiles")
       .update({ credits: DEV_CREDIT_GRANT, updated_at: new Date().toISOString() })
       .eq("id", userId);
   } else {
     const email = `dev-${userId.slice(0, 8)}@local.dev`;
-    await (admin as any).from("profiles").insert({
+    await admin.from("profiles").insert({
       id: userId,
       email,
       credits: DEV_CREDIT_GRANT,
       plan: "free",
+      cloud_tool_permissions: {},
+      notification_prefs: {},
     });
   }
 
@@ -40,7 +42,7 @@ export async function ensureDevCredits(userId: string): Promise<number | null> {
 export async function getDevProfile(userId: string) {
   if (process.env.NODE_ENV !== "development") return null;
   const admin = await createAdminClient();
-  const { data } = await (admin as any)
+  const { data } = await admin
     .from("profiles")
     .select("credits, plan, email, workspace_knowledge")
     .eq("id", userId)

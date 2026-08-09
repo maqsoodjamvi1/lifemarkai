@@ -12,7 +12,7 @@
  *                  are hidden)
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect,useRef } from "react";
 import type * as Monaco from "monaco-editor";
 import type { Collaborator } from "@/hooks/use-yjs-editor";
 

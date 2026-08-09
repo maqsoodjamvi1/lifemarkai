@@ -1,13 +1,13 @@
 
-import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState,useEffect } from "react";
+import { motion } from "framer-motion";
 import {
-  Users, UserPlus, Crown, Edit3, Eye, X,
-  Copy, Check, Loader2, Mail, Wifi, Link2,
+Users,UserPlus,Crown,Edit3,Eye,X,
+Copy,Check,Loader2,Wifi,Link2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar,AvatarFallback,AvatarImage } from "@/components/ui/avatar";
 import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { Project } from "@/types/database";
@@ -76,7 +76,7 @@ export function CollaborationPanel({ project, currentUserId, yjsCollaborators = 
 
   async function loadCollaborators() {
     setLoading(true);
-    const { data } = await (supabase as any)
+    const { data } = await supabase
       .from("collaborators")
       .select("*, profile:profiles(full_name, email, avatar_url)")
       .eq("project_id", project.id);
@@ -136,7 +136,7 @@ export function CollaborationPanel({ project, currentUserId, yjsCollaborators = 
   }
 
   async function removeCollaborator(collaboratorId: string) {
-    const { error } = await (supabase as any).from("collaborators").delete().eq("id", collaboratorId);
+    const { error } = await supabase.from("collaborators").delete().eq("id", collaboratorId);
     if (!error) {
       setCollaborators((prev) => prev.filter((c) => c.id !== collaboratorId));
       toast({ title: "Collaborator removed" });

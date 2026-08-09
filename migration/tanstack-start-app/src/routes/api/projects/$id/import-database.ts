@@ -1,8 +1,9 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import { extractSchemaFromFiles, dumpSourceDatabase, buildSeedSql } from "@/lib/import/lovable-db";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { extractSchemaFromFiles,dumpSourceDatabase,buildSeedSql } from "@/lib/import/lovable-db";
+import { parseCloudToolPermissions } from "@/lib/cloud/permissions";
+import { runManagedSql } from "@/lib/cloud/management";
 
 /**
  * Native /api/projects/:id/import-database — bring a Lovable/Supabase project's
@@ -21,9 +22,9 @@ export const Route = createFileRoute("/api/projects/$id/import-database")({
         const rl = await rateLimitAsync(`db-import:${user.id}`, RATE_LIMITS.api);
         if (!rl.success) return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
 
-        const { data: project } = await (supabase as any)
+        const { data: project } = await supabase
           .from("projects")
-          .select("id, user_id, environment, cloud_enabled, cloud_ref")
+          .select("id, user_id, environment, cloud_enabled, cloud_project_ref")
           .eq("id", projectId)
           .single();
         if (!project || project.user_id !== user.id) {
@@ -51,7 +52,7 @@ export const Route = createFileRoute("/api/projects/$id/import-database")({
         }
 
         try {
-          const { data: fileRows } = await (supabase as any)
+          const { data: fileRows } = await supabase
             .from("project_files")
             .select("path, content")
             .eq("project_id", projectId)
@@ -65,20 +66,18 @@ export const Route = createFileRoute("/api/projects/$id/import-database")({
           let applied = false;
           let applyError: string | null = null;
 
-          if (project.cloud_enabled && project.cloud_ref) {
-            const { parseCloudToolPermissions } = await import("@/lib/cloud/permissions");
-            const { data: profile } = await (supabase as any)
+          if (project.cloud_enabled && project.cloud_project_ref) {
+            const { data: profile } = await supabase
               .from("profiles").select("cloud_tool_permissions").eq("id", user.id).single();
             const perms = parseCloudToolPermissions(profile?.cloud_tool_permissions);
 
             if (perms.database === "allow") {
-              const { runManagedSql } = await import("@/lib/cloud/management");
               if (schemaSql) {
-                const schemaRes = await runManagedSql(project.cloud_ref, schemaSql);
+                const schemaRes = await runManagedSql(project.cloud_project_ref, schemaSql);
                 if (!schemaRes.ok) applyError = `schema: ${schemaRes.error}`;
               }
               if (!applyError && tablesWithData.length > 0) {
-                const seedRes = await runManagedSql(project.cloud_ref, seedSql);
+                const seedRes = await runManagedSql(project.cloud_project_ref, seedSql);
                 if (!seedRes.ok) applyError = `data: ${seedRes.error}`;
               }
               applied = !applyError;
@@ -91,7 +90,7 @@ export const Route = createFileRoute("/api/projects/$id/import-database")({
           if (schemaSql) staged.push({ path: "supabase/import/schema.sql", content: schemaSql, language: "sql" });
           if (tablesWithData.length > 0) staged.push({ path: "supabase/import/seed.sql", content: seedSql, language: "sql" });
           for (const f of staged) {
-            await (supabase as any).from("project_files").upsert(
+            await supabase.from("project_files").upsert(
               { project_id: projectId, path: f.path, content: f.content, language: f.language },
               { onConflict: "project_id,path" },
             );
@@ -106,7 +105,7 @@ export const Route = createFileRoute("/api/projects/$id/import-database")({
               dump.skippedTables.length ? `Skipped tables: ${dump.skippedTables.join(", ")}.` : "",
               dump.tables.some((t) => t.truncated) ? "Some tables were capped at 5,000 rows." : "",
             ].filter(Boolean).join("\n\n");
-            await (supabase as any).from("messages").insert({
+            await supabase.from("messages").insert({
               project_id: projectId,
               role: "assistant",
               mode: "chat",

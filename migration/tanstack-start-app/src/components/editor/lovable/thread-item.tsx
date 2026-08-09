@@ -1,9 +1,9 @@
 
 import { AnimatePresence } from "framer-motion";
 import type { Message } from "@/types/database";
-import { LovableDateSeparator, formatLovableDateSeparator, sameLovableCalendarDay } from "./date-separator";
+import { LovableDateSeparator,formatLovableDateSeparator,sameLovableCalendarDay } from "./date-separator";
 import { LovableThreadDivider } from "./thread-divider";
-import { LovableMessageRow, type LovableMessageRowProps } from "./message-row";
+import { LovableMessageRow,type LovableMessageRowProps } from "./message-row";
 
 export interface LovableThreadItemProps {
   thread: Message[];

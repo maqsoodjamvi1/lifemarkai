@@ -2,8 +2,8 @@ import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { motion } from "framer-motion";
 import {
-  Pin, Star, Rocket, Code2, Box, Wind, Zap,
-  Globe, Clock, ExternalLink,
+Pin,Star,Code2,Box,Wind,Zap,
+Globe,Clock,ExternalLink
 } from "lucide-react";
 import type { Project } from "@/types/database";
 

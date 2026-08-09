@@ -1,9 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import { reserveCredits, settleCreditReservation, cancelCreditReservation } from "@/lib/credits";
-import { runDeepScan, estimateDeepScanBatches } from "@/lib/security/deep-scan";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { reserveCredits,settleCreditReservation,cancelCreditReservation } from "@/lib/credits";
+import { runDeepScan,estimateDeepScanBatches } from "@/lib/security/deep-scan";
 import { logger } from "@/lib/logger";
 
 /**

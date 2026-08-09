@@ -1,6 +1,6 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import type { Database,Json } from "@/types/database";
 
 /**
  * Native /api/projects/:id/app-auth — auth providers for a built app's end-users.
@@ -95,7 +95,7 @@ export const Route = createFileRoute("/api/projects/$id/app-auth")({
             provider,
             mode: safeMode,
             enabled: true,
-            config: validatedConfig,
+            config: validatedConfig as unknown as Json,
             updated_at: new Date().toISOString(),
           }, { onConflict: "project_id,provider" })
           .select()
@@ -123,7 +123,9 @@ export const Route = createFileRoute("/api/projects/$id/app-auth")({
         const { provider, enabled, configPatch } = await request.json();
         if (!provider) return Response.json({ error: "provider required" }, { status: 400 });
 
-        const updates: any = { updated_at: new Date().toISOString() };
+        const updates: Database["public"]["Tables"]["app_auth_providers"]["Update"] = {
+          updated_at: new Date().toISOString(),
+        };
         if (typeof enabled === "boolean") updates.enabled = enabled;
 
         if (configPatch) {
@@ -134,7 +136,15 @@ export const Route = createFileRoute("/api/projects/$id/app-auth")({
             .eq("user_id", user.id)
             .eq("provider", provider)
             .maybeSingle();
-          updates.config = { ...(existing?.config ?? {}), ...configPatch };
+          const existingConfig =
+            existing?.config && typeof existing.config === "object" && !Array.isArray(existing.config)
+              ? existing.config
+              : {};
+          const safePatch =
+            configPatch && typeof configPatch === "object" && !Array.isArray(configPatch)
+              ? configPatch
+              : {};
+          updates.config = { ...existingConfig, ...safePatch } as Json;
         }
 
         const { error } = await supabase

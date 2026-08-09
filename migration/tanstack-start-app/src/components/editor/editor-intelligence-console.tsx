@@ -18,19 +18,19 @@
  */
 
 import {
-  AlertTriangle,
-  CheckCircle2,
-  FileDiff,
-  Gavel,
-  Loader2,
-  ShieldQuestion,
-  XCircle,
+AlertTriangle,
+CheckCircle2,
+FileDiff,
+Gavel,
+Loader2,
+ShieldQuestion,
+XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type {
-  AgentRoleId,
-  Epic,
-  TaskStatus,
+AgentRoleId,
+Epic,
+TaskStatus,
 } from "@/lib/ai/editor-lenses/types";
 
 /* ── Role metadata (mirrors lib/ai/editor-lenses/roles.ts titles) ─────────── */

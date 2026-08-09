@@ -3,18 +3,17 @@
  * Usage: node scripts/verify-production-smoke.mjs [baseUrl]
  * Default baseUrl: http://localhost:3000
  */
-import { appendFileSync, existsSync } from "fs";
+import { existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const LOG = join(ROOT, "debug-799475.log");
+const APP_ROOT = join(ROOT, "migration", "tanstack-start-app");
 const SESSION = "799475";
 const BASE = process.argv[2] ?? process.env.SMOKE_BASE_URL ?? "http://localhost:3000";
 
 function log(payload) {
   const line = JSON.stringify({ sessionId: SESSION, timestamp: Date.now(), runId: "smoke", ...payload });
-  appendFileSync(LOG, `${line}\n`);
   console.log(line);
 }
 
@@ -48,12 +47,13 @@ async function check(id, name, path, expectStatus = 200, bodyIncludes) {
   }
 }
 
-const hasBuild = existsSync(join(ROOT, ".next", "BUILD_ID"));
+const buildArtifact = join(APP_ROOT, "dist", "server", "server.js");
+const hasBuild = existsSync(buildArtifact);
 log({
   hypothesisId: "S0",
   location: "verify-production-smoke.mjs",
   message: "build artifact",
-  data: { ok: hasBuild, path: ".next/BUILD_ID" },
+  data: { ok: hasBuild, path: buildArtifact },
 });
 if (!hasBuild) {
   log({ location: "verify-production-smoke.mjs", message: "summary", data: { passed, failed, skipped: true, reason: "no .next build" } });

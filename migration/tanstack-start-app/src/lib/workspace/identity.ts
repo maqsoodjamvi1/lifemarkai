@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "crypto";
+import { createHash,randomBytes } from "crypto";
 
 export interface WorkspaceSsoConfig {
   id: string;

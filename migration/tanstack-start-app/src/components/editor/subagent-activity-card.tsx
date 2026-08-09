@@ -1,5 +1,5 @@
 
-import { Loader2, Check, Search, ChevronDown, ChevronUp, AlertTriangle } from "lucide-react";
+import { Loader2,Check,Search,ChevronDown,ChevronUp,AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import type { SubagentStep } from "@/lib/ai/subagents";
 

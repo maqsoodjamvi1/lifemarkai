@@ -1,8 +1,8 @@
 
-import { useState, useEffect, useCallback } from "react";
+import { useState,useEffect,useCallback } from "react";
 import {
-  Users, Plus, Search, Shield, Crown, CheckCircle2,
-  XCircle, Pencil, Trash2, Loader2, Mail,
+Users,Plus,Search,Crown,CheckCircle2,
+XCircle,Pencil,Trash2,Loader2,Mail
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/hooks/use-toast";
@@ -57,7 +57,7 @@ export function PeoplePage({ currentUserId }: { currentUserId: string }) {
     setLoading(true);
     const supabase = createClient();
     // Fetch all collaborators across all user's projects
-    const { data } = await (supabase as any)
+    const { data } = await supabase
       .from("collaborators")
       .select("id, user_id, role, created_at, profiles:user_id(id, full_name, email, avatar_url)")
       .order("created_at", { ascending: true });
@@ -94,7 +94,7 @@ export function PeoplePage({ currentUserId }: { currentUserId: string }) {
 
   const handleUpdateRole = async (collaboratorId: string, newRole: string) => {
     const supabase = createClient();
-    await (supabase as any)
+    await supabase
       .from("collaborators")
       .update({ role: newRole })
       .eq("id", collaboratorId);
@@ -105,7 +105,7 @@ export function PeoplePage({ currentUserId }: { currentUserId: string }) {
 
   const handleRemove = async (collaboratorId: string) => {
     const supabase = createClient();
-    await (supabase as any)
+    await supabase
       .from("collaborators")
       .delete()
       .eq("id", collaboratorId);

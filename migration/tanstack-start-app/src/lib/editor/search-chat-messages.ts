@@ -10,6 +10,17 @@ export interface ChatSearchHit {
   createdAt: string;
 }
 
+export interface SearchableMessage {
+  id: string;
+  content: string;
+  role: string;
+  created_at: string;
+}
+
+function normalizeRole(role: string): Message["role"] {
+  return role === "user" || role === "assistant" || role === "system" ? role : "assistant";
+}
+
 const STOP = new Set([
   "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "is", "it",
   "this", "that", "with", "from", "as", "be", "by", "was", "are", "were", "been", "have",
@@ -44,7 +55,7 @@ function snippetAround(content: string, terms: string[], max = 140): string {
 
 /** Fast keyword rank for chat history (no embeddings). */
 export function rankMessagesByKeyword(
-  messages: Message[],
+  messages: SearchableMessage[],
   query: string,
   limit = 50,
 ): ChatSearchHit[] {
@@ -65,7 +76,7 @@ export function rankMessagesByKeyword(
       id: msg.id,
       score,
       snippet: snippetAround(content, terms),
-      role: msg.role,
+      role: normalizeRole(msg.role),
       createdAt: msg.created_at,
     });
   }
@@ -89,7 +100,7 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 
 /** Rank by embedding cosine similarity (query vector precomputed). */
 export function rankMessagesByEmbedding(
-  messages: Message[],
+  messages: SearchableMessage[],
   queryVector: number[],
   vectors: Map<string, number[]>,
   limit = 50,
@@ -104,7 +115,7 @@ export function rankMessagesByEmbedding(
       id: msg.id,
       score,
       snippet: (msg.content ?? "").replace(/\s+/g, " ").slice(0, 160),
-      role: msg.role,
+      role: normalizeRole(msg.role),
       createdAt: msg.created_at,
     });
   }

@@ -1,12 +1,12 @@
 
 import { useState } from "react";
 import {
-  Smartphone, Monitor, Copy, Check, ExternalLink, Terminal,
-  Apple, Play, Sparkles, PackagePlus, Loader2,
+Smartphone,Monitor,Copy,Check,ExternalLink,Terminal,
+Apple,Play,Sparkles,PackagePlus,Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/hooks/use-toast";
-import type { Project, ProjectFile } from "@/types/database";
+import type { Project,ProjectFile } from "@/types/database";
 import { buildCapacitorScaffoldFiles } from "@/lib/native/capacitor-scaffold";
 
 interface NativeDistributionPanelProps {

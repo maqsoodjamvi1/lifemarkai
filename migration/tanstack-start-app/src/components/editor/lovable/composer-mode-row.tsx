@@ -3,10 +3,10 @@ import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { EditorMode } from "@/components/editor/editor-layout";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
+DropdownMenu,
+DropdownMenuContent,
+DropdownMenuItem,
+DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
 interface LovableComposerModeRowProps {
@@ -97,7 +97,7 @@ export function LovableComposerModeRow({
               ? "border-violet-500/50 bg-violet-500/15 text-violet-700 dark:text-violet-300"
               : "border-[color:var(--border-default)] text-[var(--fg-tertiary)] hover:text-[var(--fg-primary)] hover:bg-[var(--bg-muted)]/40",
           )}
-          title="Ask clarifying questions before the first build"
+          title="Ask a few questions before building (Lovable-style). Turn off to build immediately."
         >
           Clarify
         </button>

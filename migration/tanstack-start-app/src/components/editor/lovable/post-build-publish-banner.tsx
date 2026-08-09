@@ -1,6 +1,6 @@
 
-import { AnimatePresence, motion } from "framer-motion";
-import { ExternalLink, Rocket, X } from "lucide-react";
+import { AnimatePresence,motion } from "framer-motion";
+import { ExternalLink,Rocket,X } from "lucide-react";
 
 interface LovablePostBuildPublishBannerProps {
   visible: boolean;

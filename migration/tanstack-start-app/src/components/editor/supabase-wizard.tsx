@@ -1,6 +1,6 @@
 
 import { useState } from "react";
-import { Database, CheckCircle, XCircle, Loader2, Copy, ExternalLink, Wand2, ChevronRight } from "lucide-react";
+import { Database,CheckCircle,Loader2,Copy,ExternalLink,Wand2,ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";

@@ -1,13 +1,19 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { isManagementConfigured, queryManagedSql } from "@/lib/cloud/management";
+import { isManagementConfigured,queryManagedSql } from "@/lib/cloud/management";
 import { sendEmail } from "@/lib/email/resend";
 
 /** Native /api/cloud/export — GET SQL dump download, POST email the dump. */
 const MAX_TABLES = 200;
 const MAX_ROWS_PER_TABLE = 5_000;
 const MAX_TOTAL_BYTES = 20 * 1024 * 1024;
+
+interface ExportColumn {
+  name: string;
+  dataType: string;
+  nullable: boolean;
+  defaultValue: string | null;
+}
 
 function sqlLiteral(v: unknown): string {
   if (v === null || v === undefined) return "NULL";
@@ -44,21 +50,32 @@ async function buildDumpSql(projectId: string, projectName: string, ref: string)
     `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name LIMIT ${MAX_TABLES}`);
   if (!tablesRes.ok) throw new Error(`Could not list tables: ${tablesRes.error}`);
 
-  for (const { table_name } of tablesRes.rows) {
+  for (const tableRow of tablesRes.rows) {
+    const table_name = typeof tableRow.table_name === "string" ? tableRow.table_name : "";
     if (!/^[a-zA-Z0-9_]+$/.test(table_name)) continue;
     const colsRes = await queryManagedSql(ref,
       `SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '${table_name}' ORDER BY ordinal_position`);
     if (!colsRes.ok || colsRes.rows.length === 0) continue;
 
-    const colDefs = colsRes.rows.map((c) =>
-      `  "${c.column_name}" ${c.data_type}` + (c.column_default ? ` DEFAULT ${c.column_default}` : "") + (c.is_nullable === "NO" ? " NOT NULL" : ""));
+    const columns: ExportColumn[] = colsRes.rows.flatMap((columnRow) => {
+      if (typeof columnRow.column_name !== "string" || typeof columnRow.data_type !== "string") return [];
+      return [{
+        name: columnRow.column_name,
+        dataType: columnRow.data_type,
+        nullable: columnRow.is_nullable !== "NO",
+        defaultValue: typeof columnRow.column_default === "string" ? columnRow.column_default : null,
+      }];
+    });
+    if (columns.length === 0) continue;
+    const colDefs = columns.map((column) =>
+      `  "${column.name}" ${column.dataType}` + (column.defaultValue ? ` DEFAULT ${column.defaultValue}` : "") + (column.nullable ? "" : " NOT NULL"));
     chunks.push(`-- ── ${table_name} ──`, `CREATE TABLE IF NOT EXISTS "${table_name}" (`, colDefs.join(",\n"), `);`, ``);
 
     const dataRes = await queryManagedSql(ref, `SELECT * FROM "${table_name}" LIMIT ${MAX_ROWS_PER_TABLE}`);
     if (dataRes.ok && dataRes.rows.length > 0) {
-      const cols = colsRes.rows.map((c) => `"${c.column_name}"`).join(", ");
+      const cols = columns.map((column) => `"${column.name}"`).join(", ");
       for (const row of dataRes.rows) {
-        const values = colsRes.rows.map((c) => sqlLiteral(row[c.column_name])).join(", ");
+        const values = columns.map((column) => sqlLiteral(row[column.name])).join(", ");
         const stmt = `INSERT INTO "${table_name}" (${cols}) VALUES (${values});`;
         totalBytes += stmt.length;
         if (totalBytes > MAX_TOTAL_BYTES) { chunks.push(`-- Export truncated: 20 MB cap reached.`); break; }

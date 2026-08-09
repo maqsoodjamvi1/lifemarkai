@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
@@ -27,7 +26,7 @@ export const Route = createFileRoute("/api/projects/groups")({
         const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { data, error } = await (supabase as any)
+        const { data, error } = await supabase
           .from("project_groups")
           .select("*")
           .eq("user_id", user.id)
@@ -53,7 +52,7 @@ export const Route = createFileRoute("/api/projects/groups")({
           if (typeof parentId !== "string") {
             return Response.json({ error: "parent_id must be a string" }, { status: 400 });
           }
-          const { data: parent } = await (supabase as any)
+          const { data: parent } = await supabase
             .from("project_groups").select("id").eq("id", parentId).eq("user_id", user.id).single();
           if (!parent) return Response.json({ error: "Parent folder not found" }, { status: 404 });
           const parentDepth = await folderDepth(supabase, parentId);
@@ -62,7 +61,7 @@ export const Route = createFileRoute("/api/projects/groups")({
           }
         }
 
-        const { data: existing } = await (supabase as any)
+        const { data: existing } = await supabase
           .from("project_groups")
           .select("position")
           .eq("user_id", user.id)
@@ -71,7 +70,7 @@ export const Route = createFileRoute("/api/projects/groups")({
 
         const position = existing && existing.length > 0 ? existing[0].position + 1 : 0;
 
-        const { data, error } = await (supabase as any)
+        const { data, error } = await supabase
           .from("project_groups")
           .insert({
             user_id: user.id,

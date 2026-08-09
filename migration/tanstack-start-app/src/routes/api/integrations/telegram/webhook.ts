@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * Telegram bot webhook — receives every update Telegram sends to the bot.
  *
@@ -120,7 +119,7 @@ async function handlePOST(req: Request) {
         return Response.json({ ok: true });
       }
 
-      const { data: profile } = await (supabase as any)
+      const { data: profile } = await supabase
         .from("profiles")
         .select("id, telegram_chat_id")
         .eq("telegram_link_token", token)
@@ -138,7 +137,7 @@ async function handlePOST(req: Request) {
         return Response.json({ ok: true });
       }
 
-      await (supabase as any)
+      await supabase
         .from("profiles")
         .update({
           telegram_chat_id: chatId,
@@ -178,7 +177,7 @@ async function handlePOST(req: Request) {
 
     // ── 4) /build (or plain text) — create a project ─────────────────
     // Look up the user from the chat ID. Reject if they haven't linked.
-    const { data: linkedProfile } = await (supabase as any)
+    const { data: linkedProfile } = await supabase
       .from("profiles")
       .select("id")
       .eq("telegram_chat_id", chatId)
@@ -207,7 +206,7 @@ async function handlePOST(req: Request) {
 
     const name = deriveName(prompt).slice(0, 80);
 
-    const { data: project, error: insertErr } = await (supabase as any)
+    const { data: project, error: insertErr } = await supabase
       .from("projects")
       .insert({
         user_id: linkedProfile.id,
@@ -227,7 +226,7 @@ async function handlePOST(req: Request) {
 
     // Queue the prompt as a starter message so the editor opens with it
     // pre-filled (same path the ChatGPT action uses).
-    await (supabase as any).from("messages").insert({
+    await supabase.from("messages").insert({
       project_id: project.id,
       role: "user",
       content: prompt,

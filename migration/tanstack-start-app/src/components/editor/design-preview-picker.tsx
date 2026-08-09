@@ -1,6 +1,6 @@
 
-import { useEffect, useState } from "react";
-import { Loader2, Palette, X, Sparkles } from "lucide-react";
+import { useEffect,useState } from "react";
+import { Loader2,Palette,X,Sparkles } from "lucide-react";
 import type { DesignPreviewDirection } from "@/lib/ai/design-previews";
 import { DesignPreviewCards } from "./design-preview-cards";
 

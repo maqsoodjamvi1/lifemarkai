@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * POST /api/editor-intelligence/review
  *
@@ -8,13 +7,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
 import {
-  cancelCreditReservation,
-  reserveCredits,
-  settleCreditReservation,
+cancelCreditReservation,
+reserveCredits,
+settleCreditReservation,
 } from "@/lib/credits";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { ctoReview } from "@/lib/ai/editor-lenses/orchestrator";
 
 
@@ -34,7 +33,7 @@ async function handlePOST(req: Request) {
   const rl = await rateLimitAsync(`editor-intelligence-review:${user.id}`, RATE_LIMITS.ai);
   if (!rl.success) return Response.json({ error: "Rate limited" }, { status: 429 });
 
-  const { data: fileRows } = await (supabase as any)
+  const { data: fileRows } = await supabase
     .from("project_files")
     .select("path, content")
     .eq("project_id", projectId);
@@ -45,15 +44,22 @@ async function handlePOST(req: Request) {
   // Real spend for the cost lens, when available.
   let costSummary = { aiCents: 0, instanceCents: 0 };
   try {
-    const { data: usage } = await (supabase as any)
+    const { data: usage } = await supabase
       .from("lifemark_cloud_usage")
-      .select("ai_cents, instance_cents")
+      .select("ai_cents, compute_cents, db_server_cents, db_storage_cents, live_updates_cents, network_cents, storage_cents")
       .eq("project_id", projectId);
     if (Array.isArray(usage)) {
       costSummary = usage.reduce(
-        (acc: { aiCents: number; instanceCents: number }, r: { ai_cents?: number; instance_cents?: number }) => ({
+        (acc, r) => ({
           aiCents: acc.aiCents + (r.ai_cents ?? 0),
-          instanceCents: acc.instanceCents + (r.instance_cents ?? 0),
+          instanceCents:
+            acc.instanceCents +
+            r.compute_cents +
+            r.db_server_cents +
+            r.db_storage_cents +
+            r.live_updates_cents +
+            r.network_cents +
+            r.storage_cents,
         }),
         { aiCents: 0, instanceCents: 0 },
       );

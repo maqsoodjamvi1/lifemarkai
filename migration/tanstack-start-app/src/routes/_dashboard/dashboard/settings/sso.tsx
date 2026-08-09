@@ -1,4 +1,4 @@
-import { createFileRoute, getRouteApi } from "@tanstack/react-router";
+import { createFileRoute,getRouteApi } from "@tanstack/react-router";
 import { SSOSetupPage } from "@/components/dashboard/sso-setup-page";
 
 const layoutApi = getRouteApi("/_dashboard");

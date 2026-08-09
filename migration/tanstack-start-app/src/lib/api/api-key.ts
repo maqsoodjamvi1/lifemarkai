@@ -28,7 +28,7 @@ export async function validateApiKey(key: string): Promise<ApiKeyIdentity | null
   const hash = createHash("sha256").update(key).digest("hex");
   const supabase = createAdminClient();
 
-  const { data } = await (supabase as any)
+  const { data } = await supabase
     .from("api_keys")
     .select("user_id, scopes, expires_at, is_active")
     .eq("key_hash", hash)
@@ -39,7 +39,7 @@ export async function validateApiKey(key: string): Promise<ApiKeyIdentity | null
   if (data.expires_at && new Date(data.expires_at as string) < new Date()) return null;
 
   // Fire-and-forget last_used_at bump.
-  void (supabase as any)
+  void supabase
     .from("api_keys")
     .update({ last_used_at: new Date().toISOString() })
     .eq("key_hash", hash);

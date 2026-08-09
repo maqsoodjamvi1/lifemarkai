@@ -1,10 +1,10 @@
 
-import { useState, useEffect, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState,useEffect,useCallback } from "react";
+import { motion,AnimatePresence } from "framer-motion";
 import {
-  Plus, Trash2, Eye, EyeOff, Copy, Save, AlertCircle,
-  Check, RefreshCw, ChevronDown, Shield, Globe, Server,
-  Laptop2,
+Plus,Trash2,Eye,EyeOff,Copy,Save,AlertCircle,
+Check,RefreshCw,Shield,Globe,Server,
+Laptop2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

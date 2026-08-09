@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { ArrowRight, Link2, Loader2, Sparkles } from "lucide-react";
+import { useEffect,useRef,useState } from "react";
+import { Link,useNavigate,useSearch } from "@tanstack/react-router";
+import { ArrowRight,Link2,Loader2,Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface DashboardHeroProps {

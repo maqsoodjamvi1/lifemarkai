@@ -1,7 +1,6 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { signPreviewToken, previewTokenConfigured } from "@/lib/preview/preview-token";
+import { signPreviewToken,previewTokenConfigured } from "@/lib/preview/preview-token";
 import { buildPreviewUrl } from "@/lib/preview/preview-url";
 
 /**

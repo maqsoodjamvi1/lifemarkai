@@ -11,6 +11,7 @@ export const Route = createFileRoute("/api/domains/verify")({
         if (r.status === "unauthorized") return Response.json({ error: "Unauthorized" }, { status: 401 });
         if (r.status === "bad_request") return Response.json({ error: r.message }, { status: 400 });
         if (r.status === "not_found") return Response.json({ error: "Project not found" }, { status: 404 });
+        if (r.status === "database_error") return Response.json({ error: r.message }, { status: 500 });
         return Response.json(r.payload);
       },
     },

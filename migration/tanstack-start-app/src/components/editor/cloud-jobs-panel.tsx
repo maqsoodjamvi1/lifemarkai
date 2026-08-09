@@ -1,13 +1,11 @@
-// @ts-nocheck
-
 /**
  * CloudJobsPanel — "Jobs" section of the Lifemark Cloud panel.
  * Scheduled cron tasks (pg_cron) on the project's managed backend:
  * list, create (name / cron schedule / SQL command), delete.
  */
 
-import { useState, useEffect, useCallback } from "react";
-import { CalendarClock, Loader2, RefreshCw, Plus, Trash2 } from "lucide-react";
+import { useState,useEffect,useCallback } from "react";
+import { CalendarClock,Loader2,RefreshCw,Plus,Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 

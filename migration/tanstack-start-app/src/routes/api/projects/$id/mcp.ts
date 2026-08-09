@@ -1,8 +1,8 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { getProjectAccess, canReadProjectFiles } from "@/lib/project/access";
+import { getProjectAccess,canReadProjectFiles } from "@/lib/project/access";
+import type { Database,Json } from "@/types/database";
 
 /**
  * Native /api/projects/:id/mcp — owner-facing App-as-MCP config.
@@ -26,7 +26,7 @@ export const Route = createFileRoute("/api/projects/$id/mcp")({
         const access = await getProjectAccess(supabase, id, user.id);
         if (!canReadProjectFiles(access)) return Response.json({ error: "Project not found" }, { status: 404 });
 
-        const { data } = await (supabase as any)
+        const { data } = await supabase
           .from("app_mcp").select("enabled, token, actions").eq("project_id", id).maybeSingle();
 
         return Response.json({
@@ -44,7 +44,7 @@ export const Route = createFileRoute("/api/projects/$id/mcp")({
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const access = await getProjectAccess(supabase, id, user.id);
-        if (!canReadProjectFiles(access) || access?.role === "viewer") {
+        if (!canReadProjectFiles(access) || access === "viewer" || access === "public") {
           return Response.json({ error: "Forbidden" }, { status: 403 });
         }
 
@@ -55,16 +55,20 @@ export const Route = createFileRoute("/api/projects/$id/mcp")({
           return Response.json({ error: "Invalid JSON" }, { status: 400 });
         }
 
-        const patch: Record<string, unknown> = { project_id: id, updated_at: new Date().toISOString() };
+        const patch: Database["public"]["Tables"]["app_mcp"]["Insert"] = {
+          project_id: id,
+          actions: [],
+          updated_at: new Date().toISOString(),
+        };
         if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
-        if (Array.isArray(body.actions)) patch.actions = body.actions;
+        if (Array.isArray(body.actions)) patch.actions = body.actions as Json;
         if (body.rotateToken) {
           const bytes = new Uint8Array(24);
           crypto.getRandomValues(bytes);
           patch.token = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
         }
 
-        const { data, error } = await (supabase as any)
+        const { data, error } = await supabase
           .from("app_mcp")
           .upsert(patch, { onConflict: "project_id" })
           .select("enabled, token, actions")

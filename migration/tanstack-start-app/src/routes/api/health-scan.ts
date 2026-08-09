@@ -1,7 +1,7 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runHealthScan } from "@/lib/ai/self-healing";
+import { sendEmail } from "@/lib/email/resend";
 
 /**
  * GET /api/health-scan
@@ -85,20 +85,20 @@ async function handleGET(req: Request) {
             .in("severity", ["critical", "error"])
             .limit(10);
           let emailed = false;
-          if ((important?.length ?? 0) > 0) {
+          const importantFindings = important ?? [];
+          if (importantFindings.length > 0) {
             try {
               const { data: owner } = await supabase
                 .from("profiles").select("email, full_name").eq("id", project.user_id).single();
               if (owner?.email) {
-                const { sendEmail } = await import("@/lib/email/resend");
-                const list = (important ?? [])
+                const list = importantFindings
                   .map((f) => `<li><strong>[${f.severity}]</strong> ${f.title} <em>(${f.category})</em></li>`)
                   .join("");
                 await sendEmail({
                   to: owner.email,
-                  subject: `⚠️ ${project.name}: ${important.length} important finding${important.length === 1 ? "" : "s"} from project monitoring`,
+                  subject: `⚠️ ${project.name}: ${importantFindings.length} important finding${importantFindings.length === 1 ? "" : "s"} from project monitoring`,
                   html: `<p>Hi ${owner.full_name ?? "there"},</p>
-<p>LifemarkAI's scheduled monitoring checked <strong>${project.name}</strong> and found ${important.length} important issue${important.length === 1 ? "" : "s"}:</p>
+<p>LifemarkAI's scheduled monitoring checked <strong>${project.name}</strong> and found ${importantFindings.length} important issue${importantFindings.length === 1 ? "" : "s"}:</p>
 <ul>${list}</ul>
 <p>Open the project's Self-Heal panel to review proposed fixes, or ask the AI in chat to fix them.</p>
 <p style="color:#888;font-size:12px">You get this email because project monitoring is enabled (${monitoring.cadence ?? "daily"}). Turn it off in the Self-Heal panel.</p>`,

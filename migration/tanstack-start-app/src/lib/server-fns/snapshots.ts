@@ -4,20 +4,21 @@
 import { createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
 import {
-  canReadProjectFiles,
-  canWriteProjectFiles,
-  getProjectAccess,
+canReadProjectFiles,
+canWriteProjectFiles,
+getProjectAccess,
 } from "@/lib/project/access";
 import {
-  computePatches,
-  reconstructFromChain,
-  filesSize,
-  patchesSize,
-  shouldStoreBaseline,
-  type SnapshotFile,
-  type FilePatch,
-  type SnapshotChainEntry,
+computePatches,
+reconstructFromChain,
+parseSnapshotChain,
+parseSnapshotFiles,
+filesSize,
+patchesSize,
+shouldStoreBaseline,
+type SnapshotFile,
 } from "@/lib/diff/snapshot-diff";
+import type { Database,Json } from "../../types/database.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getChainDepth(supabase: any, latestId: string): Promise<number> {
@@ -71,7 +72,7 @@ export async function listOrGetSnapshot(data: any) {
     if (!user) return { status: "unauthorized" as const };
 
     if (data.id) {
-      const { data: snap } = await (supabase as any)
+      const { data: snap } = await supabase
         .from("project_snapshots")
         .select("id, user_id, project_id")
         .eq("id", data.id)
@@ -81,13 +82,13 @@ export async function listOrGetSnapshot(data: any) {
       const access = await getProjectAccess(supabase, snap.project_id, user.id);
       if (!canReadProjectFiles(access)) return { status: "not_found" as const };
 
-      const { data: chain, error } = await (supabase as any).rpc(
+      const { data: chain, error } = await supabase.rpc(
         "get_snapshot_chain",
         { p_snapshot_id: data.id },
       );
       if (error) return { status: "error" as const, message: error.message };
 
-      const files = reconstructFromChain((chain ?? []) as SnapshotChainEntry[]);
+      const files = reconstructFromChain(parseSnapshotChain(chain ?? []));
       return { status: "ok" as const, kind: "files" as const, files };
     }
 
@@ -101,7 +102,7 @@ export async function listOrGetSnapshot(data: any) {
     const access = await getProjectAccess(supabase, data.projectId, user.id);
     if (!canReadProjectFiles(access)) return { status: "not_found" as const };
 
-    const { data: rows } = await (supabase as any)
+    const { data: rows } = await supabase
       .from("project_snapshots")
       .select("id, label, is_baseline, is_pinned, pinned_at, created_at, screenshot_url")
       .eq("project_id", data.projectId)
@@ -120,7 +121,7 @@ export async function createSnapshot(data: any) {
     const access = await getProjectAccess(supabase, data.projectId, user.id);
     if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
 
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("id, user_id, preview_url")
       .eq("id", data.projectId)
@@ -130,7 +131,7 @@ export async function createSnapshot(data: any) {
     const screenshotUrl: string | null =
       (project as { preview_url?: string | null }).preview_url ?? null;
 
-    const { data: currentFiles } = await (supabase as any)
+    const { data: currentFiles } = await supabase
       .from("project_files")
       .select("path, content, language")
       .eq("project_id", data.projectId);
@@ -141,7 +142,7 @@ export async function createSnapshot(data: any) {
 
     const snapshotLabel = data.label ?? `Snapshot ${new Date().toLocaleString()}`;
 
-    const { data: latest } = await (supabase as any)
+    const { data: latest } = await supabase
       .from("project_snapshots")
       .select("id, is_baseline, files, patches")
       .eq("project_id", data.projectId)
@@ -149,37 +150,39 @@ export async function createSnapshot(data: any) {
       .limit(1)
       .maybeSingle();
 
-    const baselinePayload = (): Record<string, unknown> => ({
+    type SnapshotInsert = Database["public"]["Tables"]["project_snapshots"]["Insert"];
+    const baselinePayload = (): SnapshotInsert => ({
       project_id: data.projectId,
       user_id: user.id,
       label: snapshotLabel,
       is_baseline: true,
-      files: currentFiles,
+      files: currentFiles as unknown as Json,
       patches: null,
       parent_id: null,
       screenshot_url: screenshotUrl,
     });
 
-    let insertPayload: Record<string, unknown>;
+    let insertPayload: SnapshotInsert;
 
     if (!latest) {
       insertPayload = baselinePayload();
     } else {
-      let deltaPayload: Record<string, unknown> | undefined;
+      let deltaPayload: SnapshotInsert | undefined;
       try {
         let previousFiles: SnapshotFile[] | null = null;
 
         if (latest.is_baseline) {
-          previousFiles = (latest.files ?? []) as SnapshotFile[];
+          previousFiles = parseSnapshotFiles(latest.files ?? []);
         } else {
-          const { data: chain, error: chainErr } = await (supabase as any).rpc(
+          const { data: chain, error: chainErr } = await supabase.rpc(
             "get_snapshot_chain",
             { p_snapshot_id: latest.id },
           );
-          if (chainErr || !chain?.length) {
+          const parsedChain = chainErr ? [] : parseSnapshotChain(chain ?? []);
+          if (chainErr || parsedChain.length === 0) {
             deltaPayload = baselinePayload();
           } else {
-            previousFiles = reconstructFromChain(chain as SnapshotChainEntry[]);
+            previousFiles = reconstructFromChain(parsedChain);
           }
         }
 
@@ -204,8 +207,8 @@ export async function createSnapshot(data: any) {
               user_id: user.id,
               label: snapshotLabel,
               is_baseline: false,
-              files: [],
-              patches,
+              files: [] as Json,
+              patches: patches as unknown as Json,
               parent_id: latest.id,
               screenshot_url: screenshotUrl,
             };
@@ -218,7 +221,7 @@ export async function createSnapshot(data: any) {
       insertPayload = deltaPayload ?? baselinePayload();
     }
 
-    const { data: snapshot, error } = await (supabase as any)
+    const { data: snapshot, error } = await supabase
       .from("project_snapshots")
       .insert(insertPayload)
       .select("id, label, is_baseline, created_at, screenshot_url")
@@ -231,7 +234,9 @@ export async function createSnapshot(data: any) {
 
     const changedCount = insertPayload.is_baseline
       ? currentFiles.length
-      : (insertPayload.patches as FilePatch[]).length;
+      : Array.isArray(insertPayload.patches)
+        ? insertPayload.patches.length
+        : 0;
 
     return {
       status: "ok" as const,
@@ -248,7 +253,7 @@ export async function pinSnapshot(data: any) {
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
 
-    const { data: snap } = await (supabase as any)
+    const { data: snap } = await supabase
       .from("project_snapshots")
       .select("id, project_id")
       .eq("id", data.snapshotId)
@@ -258,7 +263,7 @@ export async function pinSnapshot(data: any) {
     const access = await getProjectAccess(supabase, snap.project_id, user.id);
     if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
 
-    const { data: row, error } = await (supabase as any)
+    const { data: row, error } = await supabase
       .from("project_snapshots")
       .update({
         is_pinned: !!data.isPinned,
@@ -277,7 +282,7 @@ export async function deleteSnapshot(data: any) {
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
 
-    const { data: snap } = await (supabase as any)
+    const { data: snap } = await supabase
       .from("project_snapshots")
       .select("id, project_id")
       .eq("id", data.id)
@@ -291,7 +296,7 @@ export async function deleteSnapshot(data: any) {
     // rejected delete looked identical to a successful one — and the panel
     // then removed the row from its list optimistically, so the version
     // "disappeared" and came back on reload.
-    const { error } = await (supabase as any)
+    const { error } = await supabase
       .from("project_snapshots")
       .delete()
       .eq("id", data.id);
@@ -310,7 +315,7 @@ export async function restoreSnapshot(data: any) {
     if (!user) return { status: "unauthorized" as const };
 
     // Match Next: restore is owner-only.
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("id")
       .eq("id", data.projectId)
@@ -318,7 +323,7 @@ export async function restoreSnapshot(data: any) {
       .single();
     if (!project) return { status: "not_found" as const, error: "Project not found" };
 
-    const { data: snapMeta } = await (supabase as any)
+    const { data: snapMeta } = await supabase
       .from("project_snapshots")
       .select("id, label, user_id")
       .eq("id", data.snapshotId)
@@ -327,15 +332,15 @@ export async function restoreSnapshot(data: any) {
       return { status: "not_found" as const, error: "Snapshot not found" };
     }
 
-    const { data: chain, error: chainErr } = await (supabase as any).rpc(
+    const { data: chain, error: chainErr } = await supabase.rpc(
       "get_snapshot_chain",
       { p_snapshot_id: data.snapshotId },
     );
     if (chainErr) return { status: "error" as const, message: chainErr.message };
 
-    const files = reconstructFromChain((chain ?? []) as SnapshotChainEntry[]);
+    const files = reconstructFromChain(parseSnapshotChain(chain ?? []));
 
-    const { data: currentFiles } = await (supabase as any)
+    const { data: currentFiles } = await supabase
       .from("project_files")
       .select("path, content, language")
       .eq("project_id", data.projectId);
@@ -372,7 +377,7 @@ export async function restoreSnapshot(data: any) {
     // are already failing, so the promise was most likely false at the exact
     // moment the project was empty. Refuse to start instead.
     if (currentFiles && currentFiles.length > 0) {
-      const { error: autoSaveError } = await (supabase as any)
+      const { error: autoSaveError } = await supabase
         .from("project_snapshots")
         .insert({
           project_id: data.projectId,
@@ -420,7 +425,7 @@ export async function restoreSnapshot(data: any) {
       };
     }
 
-    const { error: deleteError } = await (supabase as any)
+    const { error: deleteError } = await supabase
       .from("project_files")
       .delete()
       .eq("project_id", data.projectId);
@@ -439,7 +444,7 @@ export async function restoreSnapshot(data: any) {
       language: f.language,
     }));
 
-    const { error: insertError } = await (supabase as any)
+    const { error: insertError } = await supabase
       .from("project_files")
       .insert(rows);
 
@@ -448,7 +453,7 @@ export async function restoreSnapshot(data: any) {
       // the only thing standing between a failed restore and a lost project.
       let recovered = false;
       if (currentFiles && currentFiles.length > 0) {
-        const { error: rollbackError } = await (supabase as any)
+        const { error: rollbackError } = await supabase
           .from("project_files")
           .insert(
             currentFiles.map((f: { path: string; content: string; language?: string }) => ({
@@ -468,7 +473,7 @@ export async function restoreSnapshot(data: any) {
       };
     }
 
-    const { data: restoredFiles } = await (supabase as any)
+    const { data: restoredFiles } = await supabase
       .from("project_files")
       .select("*")
       .eq("project_id", data.projectId);

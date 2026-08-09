@@ -1,4 +1,3 @@
-// @ts-nocheck
 /**
  * App-user connector — OAuth callback (migration 154).
  *   GET /api/apps/:id/connect/:provider/callback?code=...&state=...
@@ -10,9 +9,9 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/server";
 import { redirectResponse } from "@/lib/api/redirect";
 import {
-  getProviderConfig,
-  providerCredentials,
-  upsertAppUserConnection,
+getProviderConfig,
+providerCredentials,
+upsertAppUserConnection,
 } from "@/lib/integrations/app-user-connections";
 
 

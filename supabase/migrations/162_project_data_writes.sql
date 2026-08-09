@@ -47,6 +47,9 @@ ALTER TABLE public.project_data_writes ENABLE ROW LEVEL SECURITY;
 
 -- Project members may READ their own audit trail. That is the point of an audit
 -- trail — the people whose data it is get to see what was done to it.
+DROP POLICY IF EXISTS project_data_writes_select_own
+  ON public.project_data_writes;
+
 CREATE POLICY project_data_writes_select_own
   ON public.project_data_writes
   FOR SELECT

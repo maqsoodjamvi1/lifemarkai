@@ -1,14 +1,13 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { buildDeployIndexHtml, buildNetlifyFileMap, buildVercelFilesList } from "@/lib/deploy/build-deploy-files";
+import { buildNetlifyFileMap,buildVercelFilesList } from "@/lib/deploy/build-deploy-files";
 import { buildLifemarkDeployUrl } from "@/lib/deploy/branded-deploy-url";
 import { sendDeploymentEmail } from "@/lib/email/resend";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import { enqueueDeployJob, getDeployQueue } from "@/lib/queue/client";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { enqueueDeployJob,getDeployQueue } from "@/lib/queue/client";
 import { logger } from "@/lib/logger";
-import { evaluatePublishGate, publishGateResponseBody } from "@/lib/security/publish-gate";
+import { evaluatePublishGate,publishGateResponseBody } from "@/lib/security/publish-gate";
 
 // ── Netlify helpers ────────────────────────────────────────────────────────
 
@@ -223,7 +222,7 @@ async function handleGET(req: Request) {
   if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
   // Verify ownership
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("id, user_id")
     .eq("id", projectId)
@@ -231,7 +230,7 @@ async function handleGET(req: Request) {
     .single();
   if (!project) return Response.json({ error: "Not found" }, { status: 404 });
 
-  const { data, error } = await (supabase as any)
+  const { data, error } = await supabase
     .from("deployments")
     .select("id, status, url, provider, snapshot_id, file_count, commit_sha, deployed_at, created_at")
     .eq("project_id", projectId)
@@ -267,7 +266,7 @@ async function handlePOST(req: Request) {
   } = await req.json();
 
   // Fetch project + files
-  const { data: project } = await (supabase as any)
+  const { data: project } = await supabase
     .from("projects")
     .select("*, project_files(*)")
     .eq("id", projectId)
@@ -276,7 +275,7 @@ async function handlePOST(req: Request) {
 
   if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
-  const { data: ownerBranding } = await (supabase as any)
+  const { data: ownerBranding } = await supabase
     .from("profiles")
     .select("branded_subdomain, branded_status")
     .eq("id", user.id)
@@ -288,13 +287,13 @@ async function handlePOST(req: Request) {
   let appSlug: string | null = (project as { app_slug?: string | null }).app_slug ?? null;
   if (!appSlug) {
     try {
-      const { data: gen } = await (supabase as any).rpc("generate_app_slug", {
+      const { data: gen } = await supabase.rpc("generate_app_slug", {
         p_name: (project as { name?: string }).name ?? "app",
       });
       if (typeof gen === "string" && gen) {
         appSlug = gen;
         // Persist so the slug is stable across future deploys.
-        await (supabase as any)
+        await supabase
           .from("projects")
           .update({ app_slug: gen })
           .eq("id", projectId)
@@ -339,7 +338,7 @@ async function handlePOST(req: Request) {
   }));
   let snapshotId: string | null = null;
   if (snapshotFiles.length > 0) {
-    const { data: snap } = await (supabase as any)
+    const { data: snap } = await supabase
       .from("project_snapshots")
       .insert({
         project_id: projectId,
@@ -356,7 +355,7 @@ async function handlePOST(req: Request) {
   }
 
   // Create deployment record (building state)
-  const { data: deployment } = await (supabase as any)
+  const { data: deployment } = await supabase
     .from("deployments")
     .insert({
       project_id: projectId,
@@ -413,7 +412,7 @@ async function handlePOST(req: Request) {
       } else if (provider === "netlify" && NETLIFY_TOKEN) {
         // ── Real Netlify deployment ──
         const site = await getOrCreateSite(projectId, project.name as string);
-        const { data: ownerProfile } = await (supabase as any)
+        const { data: ownerProfile } = await supabase
           .from("profiles")
           .select("referral_code")
           .eq("id", user.id)
@@ -445,7 +444,7 @@ async function handlePOST(req: Request) {
           // exist makes PostgREST reject the whole update, so the row would
           // have stayed "building" forever with nothing recorded. Checked
           // against information_schema rather than assumed.
-          await (supabase as any)
+          await supabase
             .from("deployments")
             .update({
               status: "failed",
@@ -462,7 +461,7 @@ async function handlePOST(req: Request) {
           return;
         }
 
-        await (supabase as any)
+        await supabase
           .from("deployments")
           .update({ build_log: buildLog.join("\n").slice(0, 20000) })
           .eq("id", deployment.id);
@@ -470,7 +469,7 @@ async function handlePOST(req: Request) {
       }
 
       // Update deployment record
-      await (supabase as any)
+      await supabase
         .from("deployments")
         .update({
           status: "live",
@@ -480,7 +479,7 @@ async function handlePOST(req: Request) {
         .eq("id", deployment.id);
 
       // Update project record
-      await (supabase as any)
+      await supabase
         .from("projects")
         .update({ deployed_url: deployedUrl, status: "active" })
         .eq("id", projectId);
@@ -498,7 +497,7 @@ async function handlePOST(req: Request) {
         userId: user.id,
         provider,
       });
-      await (supabase as any)
+      await supabase
         .from("deployments")
         .update({
           status: "failed",
@@ -507,7 +506,7 @@ async function handlePOST(req: Request) {
           // which is how the wrong name got here. The update silently failed, so a
           // failed deploy kept its old status and looked stuck rather than errored.
           build_log: err instanceof Error ? err.message : "Unknown error",
-        } as Record<string, unknown>)
+        })
         .eq("id", deployment.id);
     }
   })();

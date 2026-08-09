@@ -1,22 +1,21 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import {
-  canReadProjectFiles,
-  canWriteProjectFiles,
-  getProjectAccess,
+canReadProjectFiles,
+canWriteProjectFiles,
+getProjectAccess,
 } from "@/lib/project/access";
 import {
-  ensureEditorLensRoster,
-  insertEditorLensDecision,
-  insertEditorLensMessage,
-  loadEditorIntelligenceState,
+ensureEditorLensRoster,
+insertEditorLensDecision,
+insertEditorLensMessage,
+loadEditorIntelligenceState,
 } from "@/lib/ai/editor-lenses/persistence";
 import {
-  describeSupabaseError,
-  isTransientSupabaseError,
-  withSupabaseRetry,
+describeSupabaseError,
+isTransientSupabaseError,
+withSupabaseRetry,
 } from "@/lib/supabase/transient-error";
 
 interface Params {
@@ -37,7 +36,7 @@ async function loadProject(
   projectId: string,
 ): Promise<ProjectRow | null> {
   const { data, error } = await withSupabaseRetry(() =>
-    (supabase as any)
+    supabase
       .from("projects")
       .select("id, name, description, framework, status, user_id")
       .eq("id", projectId)

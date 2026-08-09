@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { authenticateApiRequest } from "@/lib/api/api-key";
@@ -54,8 +53,12 @@ export const Route = createFileRoute("/api/v1/projects")({
         if (!name || name.length > 100) {
           return Response.json({ error: "name is required (max 100 chars)" }, { status: 400, headers: CORS });
         }
-        const allowedFrameworks = ["nextjs", "react", "vue", "svelte", "vanilla"];
-        const framework = allowedFrameworks.includes(body.framework ?? "") ? body.framework : "nextjs";
+        const allowedFrameworks = ["nextjs", "react", "vue", "svelte"] as const;
+        type AllowedFramework = (typeof allowedFrameworks)[number];
+        const requestedFramework = body.framework as AllowedFramework | undefined;
+        const framework = requestedFramework && allowedFrameworks.includes(requestedFramework)
+          ? requestedFramework
+          : "nextjs";
         const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
         const supabase = createAdminClient();

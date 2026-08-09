@@ -1,11 +1,10 @@
-// @ts-nocheck
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { generateAI } from "@/lib/ai/generate";
 import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
-import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
-import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { canWriteProjectFiles,getProjectAccess } from "@/lib/project/access";
 
 
 const SUMMARISE_SYSTEM = `You are a concise technical summariser for an AI coding assistant.
@@ -35,7 +34,7 @@ async function handlePOST(req: Request, params: any) {
       return Response.json({ error: "Project not found" }, { status: 404 });
     }
 
-    const { data: project } = await (supabase as any)
+    const { data: project } = await supabase
       .from("projects")
       .select("id, name")
       .eq("id", projectId)
@@ -48,7 +47,7 @@ async function handlePOST(req: Request, params: any) {
     if (!rl.success) return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
 
     // Fetch messages to summarise — everything except the most recent 10
-    const { data: allMessages } = await (supabase as any)
+    const { data: allMessages } = await supabase
       .from("messages")
       .select("role, content, created_at")
       .eq("project_id", projectId)
@@ -87,7 +86,7 @@ async function handlePOST(req: Request, params: any) {
 
     // Conversation-derived context is private even when the project itself is
     // public. Persist it in the dedicated RLS-protected table.
-    const { error: contextError } = await (supabase as any)
+    const { error: contextError } = await supabase
       .from("project_private_context")
       .upsert(
         {

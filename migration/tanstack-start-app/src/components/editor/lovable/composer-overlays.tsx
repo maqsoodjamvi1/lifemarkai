@@ -2,19 +2,19 @@
 import { AnimatePresence } from "framer-motion";
 import type { ProjectFile } from "@/types/database";
 import { SnippetPicker } from "@/components/editor/snippet-picker";
-import { LovableComposerMentionAutocomplete, type LovableMentionItem } from "./composer-mention-autocomplete";
+import { LovableComposerMentionAutocomplete,type LovableMentionItem } from "./composer-mention-autocomplete";
 import { LovableComposerSkillPicker } from "./composer-skill-picker";
 import {
-  LovableComposerTemplatePicker,
-  type LovableSkillOption,
+LovableComposerTemplatePicker,
+type LovableSkillOption,
 } from "./composer-template-picker";
 import {
-  LovableComposerAnalyzeModal,
-  type LovableAnalyzeFileAttachment,
+LovableComposerAnalyzeModal,
+type LovableAnalyzeFileAttachment,
 } from "./composer-analyze-modal";
 import {
-  LovableComposerSaveSkillModal,
-  type LovableSaveSkillDraft,
+LovableComposerSaveSkillModal,
+type LovableSaveSkillDraft,
 } from "./composer-save-skill-modal";
 import { LovableComposerContextFilePicker } from "./composer-context-file-picker";
 

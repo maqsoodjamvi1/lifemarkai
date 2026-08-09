@@ -1,8 +1,8 @@
 
-import { useState, useEffect, useCallback } from "react";
+import { useState,useEffect,useCallback } from "react";
 import {
-  FolderOpen, FileCode, Search, ChevronRight, ChevronDown,
-  Download, Sparkles, Loader2, Check, X, ArrowLeft,
+FolderOpen,Search,ChevronRight,ChevronDown,
+Download,Sparkles,Loader2,Check,X,ArrowLeft
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

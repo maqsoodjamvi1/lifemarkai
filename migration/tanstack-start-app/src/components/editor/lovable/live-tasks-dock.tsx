@@ -1,7 +1,7 @@
 
-import { useEffect, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
-import { Check, ChevronRight, Loader2, Sparkles, X } from "lucide-react";
+import { useEffect,useState } from "react";
+import { AnimatePresence,motion } from "framer-motion";
+import { Check,ChevronRight,Loader2,Sparkles,X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { AgentTaskStep } from "./agent-step-utils";
 import { LovableAgentStepGlyph } from "./agent-step-glyph";

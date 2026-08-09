@@ -1,4 +1,4 @@
-import { createFileRoute, getRouteApi } from "@tanstack/react-router";
+import { createFileRoute,getRouteApi } from "@tanstack/react-router";
 import { fetchTeamPage } from "@/lib/dashboard-server";
 import { TeamShellPage } from "@/components/dashboard/shell-pages";
 
@@ -18,7 +18,7 @@ function TeamRoute() {
       user={user!}
       profile={data.profile}
       personalProjects={data.personalProjects}
-      teams={data.teams as any}
+      teams={data.teams}
     />
   );
 }

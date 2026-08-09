@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { getProjectActivity, ingestProjectActivity } from "@/lib/server-fns/project-activity";
+import { getProjectActivity,ingestProjectActivity } from "@/lib/server-fns/project-activity";
 
 /** Native /api/projects/:id/activity — GET(unified feed), POST(ingest event). */
 export const Route = createFileRoute("/api/projects/$id/activity")({

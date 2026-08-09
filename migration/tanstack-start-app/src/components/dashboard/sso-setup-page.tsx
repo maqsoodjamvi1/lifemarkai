@@ -1,12 +1,10 @@
 
-import { useState, useEffect } from "react";
+import { useState,useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import {
-  KeyRound, ArrowLeft, ChevronDown, ChevronUp, ExternalLink,
-  CheckCircle2, XCircle, AlertTriangle, Loader2, Globe, Shield,
-  Fingerprint, Users, Trash2, Play, Info, HelpCircle,
-  Copy, Check, Server, FileText, Link2,
-  Building2,
+KeyRound,ArrowLeft,ChevronDown,ChevronUp,AlertTriangle,Loader2,Globe,Shield,
+Fingerprint,Users,Trash2,Play,Info,HelpCircle,
+Copy,Check,Server,FileText,Building2
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { useWorkspaceIdentity } from "@/hooks/use-workspace-identity";

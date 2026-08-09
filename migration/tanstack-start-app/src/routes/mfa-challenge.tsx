@@ -4,9 +4,9 @@
  * Supabase Auth requires completing the MFA challenge before the session is fully active.
  */
 
-import { useState, useEffect } from "react";
+import { useState,useEffect } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { Loader2, ShieldCheck, KeyRound, AlertCircle, Zap } from "lucide-react";
+import { Loader2,ShieldCheck,KeyRound,AlertCircle,Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { createClient } from "@/lib/supabase/client";

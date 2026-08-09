@@ -1,6 +1,6 @@
 
-import { useState, useRef, useCallback, useEffect } from "react";
-import { MessageSquarePlus, X, ChevronDown, ChevronUp, Pin, Pencil, Check, Trash2, Wand2 } from "lucide-react";
+import { useState,useRef,useCallback,useEffect } from "react";
+import { MessageSquarePlus,X,ChevronDown,ChevronUp,Pin,Pencil,Check,Trash2,Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatAnnotationsForAi } from "@/lib/editor/format-annotations-for-ai";
 

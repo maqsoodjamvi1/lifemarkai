@@ -19,10 +19,9 @@
  * API. Mount under "designsystem" in editor-layout's panel switch.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback,useEffect,useState } from "react";
 import {
-  Loader2, Palette, Plus, Trash2, GripVertical, ExternalLink,
-  Check, AlertCircle, Sparkles, Link2,
+Loader2,Palette,Plus,Trash2,ExternalLink,AlertCircle,Sparkles,Link2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";

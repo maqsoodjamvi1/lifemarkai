@@ -1,5 +1,5 @@
 
-import { Play, X } from "lucide-react";
+import { Play,X } from "lucide-react";
 
 interface LovableContinueBannerProps {
   preview: string;

@@ -9,11 +9,11 @@
  * await consume(response, { signal, onEvent: handleStatus });
  */
 
-import { useCallback, useMemo } from "react";
+import { useCallback,useMemo } from "react";
 import type { ProjectFile } from "@/types/database";
-import { handleAIStream, type AIStreamHandlers, type HandleAIStreamResult } from "@/lib/ai/handle-ai-stream";
+import { handleAIStream,type AIStreamHandlers,type HandleAIStreamResult } from "@/lib/ai/handle-ai-stream";
 import type { ParsedFileUpdate } from "@/lib/ai/xml-stream-parser";
-import { usePreviewFileSync, type PreviewFileSyncOptions } from "@/hooks/use-preview-file-sync";
+import { usePreviewFileSync,type PreviewFileSyncOptions } from "@/hooks/use-preview-file-sync";
 
 export interface UseAIStreamChatOptions extends Omit<PreviewFileSyncOptions, "onFilesChange"> {
   onFilesChange: (files: ProjectFile[]) => void;

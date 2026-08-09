@@ -11,10 +11,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  matchSkills,
-  renderSkillBlock,
-  scoreSkill,
-  type SkillCandidate,
+matchSkills,
+renderSkillBlock,
+scoreSkill,
+type SkillCandidate,
 } from "./skill-matcher.ts";
 
 const ADD_AUTH: SkillCandidate = {

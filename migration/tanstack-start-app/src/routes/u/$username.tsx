@@ -1,4 +1,4 @@
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { createFileRoute,Link,notFound } from "@tanstack/react-router";
 import { fetchPublicProfile } from "@/lib/public-server";
 
 export const Route = createFileRoute("/u/$username")({
@@ -62,7 +62,7 @@ function PublicProfilePage() {
           {profile.avatar_url ? (
             <img
               src={profile.avatar_url}
-              alt={profile.full_name ?? profile.username}
+              alt={profile.full_name ?? profile.username ?? "Profile avatar"}
               className="w-20 h-20 rounded-2xl object-cover border border-white/10 shrink-0"
             />
           ) : (
@@ -94,7 +94,7 @@ function PublicProfilePage() {
                   key={project.id}
                   to="/p/$username/$projectSlug"
                   params={{
-                    username: profile.username,
+                    username: profile.username ?? "",
                     projectSlug: project.slug || project.id,
                   }}
                   className="group rounded-2xl border border-white/[0.08] bg-white/[0.03] overflow-hidden hover:border-violet-500/30 hover:bg-white/[0.05] transition-all"

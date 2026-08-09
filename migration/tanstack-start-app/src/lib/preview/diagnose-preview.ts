@@ -1,9 +1,9 @@
 import {
-  diagnoseBrokenImports,
-  type DiagnosableFile,
+diagnoseBrokenImports,
+type DiagnosableFile,
 } from "./diagnose-imports.ts";
 import {
-  diagnoseRuntimeErrors,
+diagnoseRuntimeErrors,
 } from "./diagnose-runtime.ts";
 import type { PreviewRuntimeError } from "./preview-error-bridge.ts";
 

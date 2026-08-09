@@ -1,20 +1,19 @@
 
-import { useState, useMemo, useCallback, useEffect, useRef } from "react";
+import { useState,useMemo,useCallback,useEffect,useRef } from "react";
 import {
-  RefreshCw, Smartphone, Tablet, Monitor,
-  ExternalLink, MousePointer, Terminal, Loader2,
-  Check, X, Wand2, AlignLeft, AlignCenter, AlignRight,
-  AlertTriangle, Wrench, Frame, MessageSquarePlus, Pencil, Pin, Globe, History,
-  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Maximize2, Minimize2,
+RefreshCw,Smartphone,Tablet,Monitor,
+ExternalLink,MousePointer,Terminal,Loader2,
+Check,X,Wand2,AlignLeft,AlignCenter,AlignRight,
+AlertTriangle,Wrench,Frame,MessageSquarePlus,Pencil,Pin,Globe,ChevronDown,ChevronUp,ChevronLeft,ChevronRight,Maximize2,Minimize2
 } from "lucide-react";
 import {
-  Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
+Tooltip,TooltipContent,TooltipProvider,TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence,motion } from "framer-motion";
 // NOTE: `claimVisualEditCredit` is imported statically here on purpose. It used
 // to be pulled in via `await import("./visual-edit-overlay")` further down, but
 // this module is ALREADY statically imported on this very line — so the dynamic
@@ -23,43 +22,42 @@ import { AnimatePresence, motion } from "framer-motion";
 //    imported by preview-panel.tsx, dynamic import will not move module into
 //    another chunk"
 // Keeping both forms just paid the cost of an async boundary for no code-split.
-import { VisualEditOverlay, VebBridgePopover, claimVisualEditCredit } from "./visual-edit-overlay";
+import { VebBridgePopover,claimVisualEditCredit } from "./visual-edit-overlay";
 import { PreviewAnnotations } from "./preview-annotations";
 import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
-import dynamic from "@/lib/lazy-component";
-import { EMPTY_PREVIEW_HTML, PREVIEW_ENGINE_REV } from "@/lib/preview/build-fallback-html";
+import { EMPTY_PREVIEW_HTML } from "@/lib/preview/build-fallback-html";
 import { filesContentSignature } from "@/lib/preview/files-signature";
+import { getRefreshEffectiveFiles } from "./preview-panel-utils";
 import {
-  isWebContainerPreviewEnabled,
-  shouldUseWebContainer,
-  WC_UNAVAILABLE_KEY,
-  type PreviewEngine,
+isWebContainerPreviewEnabled,
+shouldUseWebContainer,
+WC_UNAVAILABLE_KEY,
+type PreviewEngine,
 } from "@/lib/preview/resolve-preview-engine";
 import {
-  isSamePreviewOrigin,
-  normalizeSandboxPathname,
-  sandboxUrlWithPath,
+isSamePreviewOrigin,
+normalizeSandboxPathname,
+sandboxUrlWithPath,
 } from "@/lib/preview/sandbox-url";
 import { getPreviewBarLabel } from "@/lib/preview/preview-url";
 import { useSandboxPreview } from "@/lib/preview/use-sandbox-preview";
 import { usePreviewErrorGuard } from "@/hooks/use-preview-error-guard";
-import { isNoisePreviewError, type PreviewErrorReport } from "@/lib/preview/preview-error-bridge";
+import { isNoisePreviewError,type PreviewErrorReport } from "@/lib/preview/preview-error-bridge";
 import { derivePreviewPages } from "@/lib/preview/derive-pages";
-import { appendPreviewDiagnosis, buildPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
-import { applyVisualEdit, buildVisualEditPrompt } from "@/lib/editor/apply-visual-edit";
+import { appendPreviewDiagnosis,buildPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
+import { applyVisualEdit,buildVisualEditPrompt } from "@/lib/editor/apply-visual-edit";
 import { PreviewHealingOverlay } from "./preview-healing-overlay";
 import { Link } from "@tanstack/react-router";
 import { LovablePreviewInteractionToolbar } from "./lovable/preview-interaction-toolbar";
 import { LovablePreviewStatusPill } from "./lovable/preview-status-pill";
 import { LovableVersionPreviewBanner } from "./lovable/version-preview-banner";
-import { ratePreviewMetric, type PreviewPerfSnapshot } from "@/lib/preview/preview-perf-bridge";
+import { type PreviewPerfSnapshot } from "@/lib/preview/preview-perf-bridge";
 import {
-  describePreviewError,
-  shouldShowRawPreviewDiagnostics,
+describePreviewError,
+shouldShowRawPreviewDiagnostics,
 } from "@/lib/preview/preview-error-copy";
-import { PreviewCommentPins } from "./preview-comment-pins";
 import { createClient } from "@/lib/supabase/client";
 
 // Sandpack stubs — these branches are never reached (sandpackReady is always false)
@@ -1028,7 +1026,7 @@ export function PreviewPanel({
     void (async () => {
       let applied = 0;
       let prompted = 0;
-      let remaining = [...edits];
+      const remaining = [...edits];
       let working = filesRef.current;
       for (let i = 0; i < edits.length; i++) {
         const edit = edits[i];
@@ -1511,7 +1509,8 @@ export function PreviewPanel({
       filesDebounceTimerRef.current = null;
     }
 
-    const hasExplicit = Array.isArray(nextFiles) && nextFiles.length > 0;
+    const effectiveFiles = getRefreshEffectiveFiles(versionPreviewLabel, filesPropRef.current, nextFiles);
+    const hasExplicit = Array.isArray(effectiveFiles) && effectiveFiles.length > 0;
     const now = Date.now();
 
     if (!hasExplicit) {
@@ -1546,7 +1545,7 @@ export function PreviewPanel({
       return;
     }
 
-    const relevantFiles = previewRelevantFiles(nextFiles!);
+    const relevantFiles = previewRelevantFiles(effectiveFiles!);
     // Never blank a good preview with an empty payload (failed refresh / race).
     if (relevantFiles.length === 0) {
       const propRelevant = previewRelevantFiles(filesPropRef.current);
