@@ -1,6 +1,6 @@
 import type { EditorMode } from "@/components/editor/editor-layout";
 import type { ProjectFile } from "../../types/database.ts";
-import { classifyBuildIntent, isInformationalQuery, shouldAutoBuildMode } from "./build-intent.ts";
+import { classifyBuildIntent, isInformationalQuery, isMajorGreenfieldBuild, shouldAutoBuildMode } from "./build-intent.ts";
 import type { AIModel } from "./provider.ts";
 import {
 BALANCED_CODING_MODEL,
@@ -315,14 +315,20 @@ export function resolveModelChain(
     anchor = smallExistingEdit ? ECONOMY_CODING_MODEL : MODEL_TIERS.coding;
   } else if (mode === "agent" || mode === "build") {
     require.push("code");
+    const majorGreenfield = isMajorGreenfieldBuild(trimmed, ctx.fileCount);
     // Cost-aware routing: simple content sites + tiny edits go FREE first
     // (paid fallback on congestion; error fixes above never come here).
-    anchor = isFreeEligibleBuild(trimmed, ctx.fileCount)
-      ? FREE_CODING_MODEL
-      : smallExistingEdit
-        ? ECONOMY_CODING_MODEL
-        : MODEL_TIERS.coding;
-    preferCheap = isFreeEligibleBuild(trimmed, ctx.fileCount) || smallExistingEdit;
+    // Major greenfield apps (ERP, e-commerce, full sites) always start on the
+    // primary coding tier — free/economy models routinely ship 3-file scaffolds.
+    anchor = majorGreenfield
+      ? MODEL_TIERS.coding
+      : isFreeEligibleBuild(trimmed, ctx.fileCount)
+        ? FREE_CODING_MODEL
+        : smallExistingEdit
+          ? ECONOMY_CODING_MODEL
+          : MODEL_TIERS.coding;
+    preferCheap =
+      !majorGreenfield && (isFreeEligibleBuild(trimmed, ctx.fileCount) || smallExistingEdit);
   } else if (mode === "plan") {
     require.push("reasoning");
     anchor = trimmed.length > 200 ? MODEL_TIERS.coding : MODEL_TIERS.reasoning;
@@ -458,12 +464,18 @@ export function resolvePromptMode(
 
   // Chat tab: Q&A by default. Explicit slash commands escape to other modes.
   // Surgical edit intents auto-promote so "add a menu item" actually writes
-  // files — Chat mode itself never persists project_files. Greenfield
-  // "build a … app" stays in Chat unless the user uses /build (parity).
+  // files — Chat mode itself never persists project_files. Vague greenfield
+  // "build a website" stays in Chat (parity); specific product asks promote.
   if (ctx.currentMode === "chat") {
     if (/^\/build\b/i.test(trimmed)) return "build";
     if (/^\/agent\b/i.test(trimmed)) return "agent";
     if (/^\/plan\b/i.test(trimmed)) return "plan";
+    if (
+      shouldAutoBuildMode(trimmed) &&
+      !isVagueGreenfieldProjectPrompt(trimmed)
+    ) {
+      return stageFromCtx(ctx) === "app" ? "agent" : "build";
+    }
     if (ctx.fileCount > 0 && isSurgicalEditFromChat(trimmed)) {
       return shouldUseAgentForEdit(trimmed, ctx) ? "agent" : "patch";
     }
@@ -486,6 +498,9 @@ export function resolvePromptMode(
   // Honor Build tab — short UI chrome edits use patch (fast, writes files);
   // larger code changes on existing apps go through agent (Lovable default).
   if (ctx.currentMode === "build") {
+    if (isInformationalQuery(trimmed) && !shouldAutoBuildMode(trimmed)) {
+      return "chat";
+    }
     if (CHAT_KEYWORDS.test(trimmed) && !shouldAutoBuildMode(trimmed)) {
       return "chat";
     }

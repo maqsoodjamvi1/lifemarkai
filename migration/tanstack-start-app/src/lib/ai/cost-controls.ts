@@ -1,5 +1,6 @@
 import type { EditorMode } from "@/components/editor/editor-layout";
 import type { AIModel } from "./provider.ts";
+import { isMajorGreenfieldBuild } from "./build-intent.ts";
 import {
 DEFAULT_CODING_MODEL,
 ECONOMY_CHAT_MODEL,
@@ -130,6 +131,12 @@ export function maxOutputTokensForRequest(params: {
   if (params.mode === "plan") return Math.min(params.defaultChatMax, 2000);
   if (params.mode === "chat") return Math.min(params.defaultChatMax, 1800);
   if (params.mode === "patch") return Math.min(params.defaultChatMax, 3500);
+  if (
+    params.mode === "build" &&
+    isMajorGreenfieldBuild(params.prompt, params.fileCount)
+  ) {
+    return Math.max(params.defaultBuildMax, 56_000);
+  }
   return params.defaultBuildMax;
 }
 

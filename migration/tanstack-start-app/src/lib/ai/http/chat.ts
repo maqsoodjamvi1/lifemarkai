@@ -3,7 +3,7 @@ import { createClientFromRequest } from "../../supabase/request-client.ts";
 import { getServerUser } from "../../supabase/server-user.ts";
 import { canWriteProjectFiles,getProjectAccess } from "../../project/access.ts";
 import { generateAI } from "../generate.ts";
-import { ECONOMY_CODING_MODEL,ESCALATION_MODEL } from "../model-defaults.ts";
+import { DEFAULT_CHAT_MODEL,ECONOMY_CODING_MODEL,ESCALATION_MODEL } from "../model-defaults.ts";
 import { applyModelAdapter } from "../model-catalog.ts";
 import { sendLowCreditsEmail } from "../../email/resend.ts";
 import {
@@ -20,6 +20,7 @@ buildRepairPrompt,
 import { buildTemplateRefinementBlock } from "../template-refine.ts";
 import { pickStarterTemplate } from "../../templates/starter-catalog.ts";
 import { buildDesignDirectionBlock } from "../design-directions.ts";
+import { classifyBuildIntent,isAppShellAppType,isMajorGreenfieldBuild } from "../build-intent.ts";
 import { countUserAuthoredFiles,isGreenfieldProject } from "../scaffold-files.ts";
 import { resolvePromptMode } from "../editor-intelligence.ts";
 import { assessRequestScope,formatScopeAssessment } from "../scope-guard.ts";
@@ -109,7 +110,7 @@ import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 // to generate complete apps in one pass on Claude/Gemini. provider.ts clamps the
 // value down per-model (e.g. to 16K) if the slug falls back to gpt-4o, so raising
 // it is always safe.
-const BUILD_MAX_TOKENS = Number(process.env.BUILD_MAX_TOKENS) || 32000;
+const BUILD_MAX_TOKENS = Number(process.env.BUILD_MAX_TOKENS) || 40_000;
 const CHAT_MAX_TOKENS = Number(process.env.CHAT_MAX_TOKENS) || 4096;
 // If the model still hits the cap mid-JSON, ask it to continue this many times
 // before giving up — guarantees we don't ship a half-generated build.
@@ -725,6 +726,172 @@ export async function handleAiChat(req: Request) {
       hasImage: !!imageBase64,
     });
 
+    const runClarifyFirst =
+      mode === "build" && body.forceBuild !== true && clarifyFirst === true;
+
+    // ── Clarify-first (Lovable): questionnaire BEFORE research/subagents/build ──
+    if (runClarifyFirst) {
+      const clarifyReservation = await reserveCredits(supabase, {
+        userId,
+        amount: maxCreditCostForMode("chat"),
+        action: "clarify_message",
+        projectId,
+      });
+      if (!clarifyReservation) {
+        return Response.json(
+          { error: "Insufficient credits", requiredCredits: maxCreditCostForMode("chat") },
+          { status: 402 },
+        );
+      }
+
+      const clarifyIntent = classifyBuildIntent(persistedUserMessage);
+      const appShell = isAppShellAppType(clarifyIntent.appType);
+      const clarifySystemPrompt = [
+        "You are an expert product designer + software architect asking a user a few quick questions before building, exactly like Lovable's pre-build questionnaire.",
+        "Do NOT research, plan implementation, or generate code in this step — ONLY output the JSON question array.",
+        "Given a user's build request, generate 2-4 targeted questions. Prefer CHOICE questions with 3-4 concrete options.",
+        'Return ONLY a JSON array of question objects, no prose, no code fences.',
+        'Each object: id (string), question (string), type ("text"|"choice"), kind ("palette"|"typography"|"layout"|"structure"|"database"|"general"), options (string[] for choice).',
+        appShell
+          ? `This is a ${clarifyIntent.appType} / operations app. Ask kind structure or database questions: which modules to include first (offer 3-4 concrete bundles), authentication (email / OAuth / invite-only), and roles (admin vs staff vs read-only). Do NOT ask marketing palette/hero layout unless they explicitly wanted a public website.`
+          : "For NEW WEBSITE/APP builds ask design questions: one palette question (kind palette — each option is a named palette followed by 2-3 hex codes in parentheses), one typography pairing (kind typography), and one homepage layout (kind layout).",
+        "For DATABASE/BACKEND-heavy requests add kind database questions: core entities/tables, auth method, roles & permissions.",
+        "Keep every question short and answerable in one tap.",
+        "Respond ONLY with a valid JSON array.",
+      ].join("\n");
+
+      const clarifyEncoder = new TextEncoder();
+      const clarifyStream = new ReadableStream({
+        async start(controller) {
+          const { safeEnqueue: clarifyEnqueue, safeClose: clarifyClose } = createStreamSink(
+            controller,
+            clarifyEncoder,
+            req.signal,
+          );
+          let questionsJson = "";
+          let reservationFinalized = false;
+          try {
+            const clarifyResult = await generateAI(
+              {
+                model: DEFAULT_CHAT_MODEL,
+                messages: [
+                  { role: "system", content: clarifySystemPrompt },
+                  {
+                    role: "user",
+                    content:
+                      `Build request: ${persistedUserMessage}\n` +
+                      `Detected app type: ${clarifyIntent.appType}\n` +
+                      `User-authored files so far: ${fileCount} (0 = brand-new project).`,
+                  },
+                ],
+                maxTokens: 800,
+                stream: true,
+                jsonMode: true,
+                onChunk: (chunk) => { questionsJson += chunk; },
+              },
+              { projectId, userId, task: "chat.clarify" },
+            );
+
+            const clarifyCost = computeCreditCost({
+              mode: "chat",
+              tokensUsed: clarifyResult.tokensUsed,
+            });
+            const remaining = await settleCreditReservation(
+              supabase,
+              clarifyReservation.id,
+              clarifyCost,
+            );
+            if (remaining == null) throw new Error("Unable to settle clarification credits");
+            reservationFinalized = true;
+
+            let questions: unknown[] = [];
+            try {
+              const parsed: unknown = JSON.parse(questionsJson);
+              if (Array.isArray(parsed)) {
+                questions = parsed;
+              } else if (parsed && typeof parsed === "object") {
+                const arr = Object.values(parsed as Record<string, unknown>).find(Array.isArray);
+                if (arr) questions = arr as unknown[];
+              }
+            } catch { questions = []; }
+            questions = questions
+              .map((raw, i) => {
+                if (!raw || typeof raw !== "object") return null;
+                const r = raw as Record<string, unknown>;
+                const text = [r.question, r.q, r.text, r.prompt, r.label].find(
+                  (v): v is string => typeof v === "string" && v.trim() !== "",
+                );
+                if (!text) return null;
+                const rawOpts = Array.isArray(r.options)
+                  ? r.options
+                  : Array.isArray(r.choices)
+                    ? r.choices
+                    : [];
+                const options = (rawOpts as unknown[])
+                  .map((o) =>
+                    typeof o === "string"
+                      ? o
+                      : o && typeof o === "object"
+                        ? [
+                            (o as Record<string, unknown>).label,
+                            (o as Record<string, unknown>).value,
+                            (o as Record<string, unknown>).text,
+                          ].find((v): v is string => typeof v === "string")
+                        : undefined,
+                  )
+                  .filter((s): s is string => !!s && s.trim() !== "");
+                return {
+                  id: typeof r.id === "string" ? r.id : `q${i + 1}`,
+                  question: text.trim(),
+                  type: options.length > 0 ? "choice" : "text",
+                  kind: typeof r.kind === "string" ? r.kind : "general",
+                  ...(options.length > 0 ? { options } : {}),
+                };
+              })
+              .filter((q): q is NonNullable<typeof q> => q !== null);
+
+            const qPayload = JSON.stringify({
+              clarifying_questions: questions,
+              originalPrompt: message,
+              creditsUsed: clarifyCost,
+              remainingCredits: remaining,
+              done: true,
+              tokensUsed: clarifyResult.tokensUsed,
+            });
+            clarifyEnqueue(clarifyEncoder.encode(`data: ${qPayload}\n\n`));
+          } catch {
+            if (!reservationFinalized) {
+              try {
+                if (questionsJson.trim()) {
+                  await settleCreditReservation(
+                    supabase,
+                    clarifyReservation.id,
+                    clarifyReservation.amount,
+                  );
+                } else {
+                  await cancelCreditReservation(supabase, clarifyReservation.id);
+                }
+                reservationFinalized = true;
+              } catch (reservationError) {
+                logger.error(
+                  "ai.chat.clarify_reservation_finalize_failed",
+                  reservationError instanceof Error ? reservationError : new Error(String(reservationError)),
+                  { projectId, userId },
+                );
+              }
+            }
+            const errPayload = JSON.stringify({ error: "Failed to generate clarifying questions" });
+            clarifyEnqueue(clarifyEncoder.encode(`data: ${errPayload}\n\n`));
+          } finally {
+            clarifyClose();
+          }
+        },
+      });
+      return new Response(clarifyStream, {
+        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" },
+      });
+    }
+
     // Build system prompt based on mode + framework
     // Chat/plan modes get full codebase context (up to 60k chars); build mode embeds up to 80k.
     let systemPrompt: string;
@@ -790,11 +957,15 @@ export async function handleAiChat(req: Request) {
       // silently skipped both the starter template AND the design baseline for
       // exactly the request that needed them most.
       const greenfield = isGreenfieldProject(files);
+      const greenfieldIntent = greenfield ? classifyBuildIntent(message) : null;
       const autoTemplateId =
         templateId ?? (greenfield ? pickStarterTemplate(message) : null);
       if (autoTemplateId) {
         systemPrompt += buildTemplateRefinementBlock(autoTemplateId);
-      } else if (greenfield || isRestyleRequest) {
+      } else if (
+        (greenfield || isRestyleRequest) &&
+        !(greenfieldIntent && isAppShellAppType(greenfieldIntent.appType))
+      ) {
         systemPrompt += buildDesignDirectionBlock(message);
       }
 
@@ -1259,163 +1430,6 @@ The user has expressed frustration. Do the following:
       { role: "user", content: userContent as string },
     ];
 
-    // ── Clarify-first mode: ask AI for clarifying questions before building ──────
-    if (mode === "build" && clarifyFirst) {
-      const clarifyReservation = await reserveCredits(supabase, {
-        userId,
-        amount: maxCreditCostForMode("chat"),
-        action: "clarify_message",
-        projectId,
-      });
-      if (!clarifyReservation) {
-        return Response.json(
-          { error: "Insufficient credits", requiredCredits: maxCreditCostForMode("chat") },
-          { status: 402 },
-        );
-      }
-
-      const clarifySystemPrompt = [
-        "You are an expert product designer + software architect asking a user a few quick questions before building, exactly like Lovable's pre-build questionnaire.",
-        "Given a user's build request, generate 2-4 targeted questions. Prefer CHOICE questions with 3-4 concrete options.",
-        'Return ONLY a JSON array of question objects, no prose, no code fences.',
-        'Each object: id (string), question (string), type ("text"|"choice"), kind ("palette"|"typography"|"layout"|"structure"|"database"|"general"), options (string[] for choice).',
-        "For NEW WEBSITE/APP builds ask design questions: one palette question (kind palette — each option is a named palette followed by 2-3 hex codes in parentheses, e.g. \"Cherry Blossom (#F8C8DC, #B03052)\"), one typography pairing question (kind typography, e.g. \"Outfit + Figtree\"), and one homepage layout structure question (kind layout, options like \"Hero + feature grid\", \"Full-width banner + columns\", \"Magazine\", \"Split rows\").",
-        "For DATABASE/BACKEND requests (schema, tables, auth, user accounts, admin, CRUD) ask kind database questions instead: which entities/tables, auth method (email / OAuth / both), roles & permissions, public vs private data.",
-        "Keep every question short and answerable in one tap.",
-        "Respond ONLY with a valid JSON array.",
-      ].join("\n");
-
-      const clarifyEncoder = new TextEncoder();
-      const clarifyStream = new ReadableStream({
-        async start(controller) {
-          const { safeEnqueue: clarifyEnqueue, safeClose: clarifyClose } = createStreamSink(
-            controller,
-            clarifyEncoder,
-            req.signal,
-          );
-          let questionsJson = "";
-          let reservationFinalized = false;
-          try {
-            const clarifyResult = await generateAI(
-              {
-                model: effectiveModel,
-                messages: [
-                  { role: "system", content: clarifySystemPrompt },
-                  { role: "user", content: "Build request: " + persistedUserMessage + "\n\nProject has " + files.length + " existing files." },
-                ],
-                maxTokens: 600,
-                stream: true,
-                jsonMode: true,
-                onChunk: (chunk) => { questionsJson += chunk; },
-              },
-              { projectId, userId, task: "chat.clarify" },
-            );
-
-            const clarifyCost = computeCreditCost({
-              mode: "chat",
-              tokensUsed: clarifyResult.tokensUsed,
-            });
-            const remaining = await settleCreditReservation(
-              supabase,
-              clarifyReservation.id,
-              clarifyCost,
-            );
-            if (remaining == null) throw new Error("Unable to settle clarification credits");
-            reservationFinalized = true;
-
-            let questions: unknown[] = [];
-            try {
-              const parsed: unknown = JSON.parse(questionsJson);
-              if (Array.isArray(parsed)) {
-                questions = parsed;
-              } else if (parsed && typeof parsed === "object") {
-                // jsonMode forces an OBJECT on many models — they wrap the
-                // array ({"questions":[...]}). Take the first array value.
-                const arr = Object.values(parsed as Record<string, unknown>).find(Array.isArray);
-                if (arr) questions = arr as unknown[];
-              }
-            } catch { questions = []; }
-            // Normalize — models rename fields ("text"/"prompt" for question,
-            // option objects instead of strings). Empty questions rendered a
-            // blank wizard (observed live: "1/4" with no visible question).
-            questions = questions
-              .map((raw, i) => {
-                if (!raw || typeof raw !== "object") return null;
-                const r = raw as Record<string, unknown>;
-                const text = [r.question, r.q, r.text, r.prompt, r.label].find(
-                  (v): v is string => typeof v === "string" && v.trim() !== "",
-                );
-                if (!text) return null;
-                const rawOpts = Array.isArray(r.options)
-                  ? r.options
-                  : Array.isArray(r.choices)
-                    ? r.choices
-                    : [];
-                const options = (rawOpts as unknown[])
-                  .map((o) =>
-                    typeof o === "string"
-                      ? o
-                      : o && typeof o === "object"
-                        ? [
-                            (o as Record<string, unknown>).label,
-                            (o as Record<string, unknown>).value,
-                            (o as Record<string, unknown>).text,
-                          ].find((v): v is string => typeof v === "string")
-                        : undefined,
-                  )
-                  .filter((s): s is string => !!s && s.trim() !== "");
-                return {
-                  id: typeof r.id === "string" ? r.id : `q${i + 1}`,
-                  question: text.trim(),
-                  type: options.length > 0 ? "choice" : "text",
-                  kind: typeof r.kind === "string" ? r.kind : "general",
-                  ...(options.length > 0 ? { options } : {}),
-                };
-              })
-              .filter((q): q is NonNullable<typeof q> => q !== null);
-
-            const qPayload = JSON.stringify({
-              clarifying_questions: questions,
-              originalPrompt: message,
-              creditsUsed: clarifyCost,
-              remainingCredits: remaining,
-            });
-            clarifyEnqueue(clarifyEncoder.encode("data: " + qPayload + "\n\n"));
-            clarifyEnqueue(clarifyEncoder.encode("data: {}\n\n"));
-          } catch {
-            if (!reservationFinalized) {
-              try {
-                if (questionsJson.trim()) {
-                  await settleCreditReservation(
-                    supabase,
-                    clarifyReservation.id,
-                    clarifyReservation.amount,
-                  );
-                } else {
-                  await cancelCreditReservation(supabase, clarifyReservation.id);
-                }
-                reservationFinalized = true;
-              } catch (reservationError) {
-                logger.error(
-                  "ai.chat.clarify_reservation_finalize_failed",
-                  reservationError instanceof Error ? reservationError : new Error(String(reservationError)),
-                  { projectId, userId },
-                );
-              }
-            }
-            const errPayload = JSON.stringify({ error: "Failed to generate clarifying questions" });
-            clarifyEnqueue(clarifyEncoder.encode("data: " + errPayload + "\n\n"));
-          } finally {
-            clarifyClose();
-          }
-        },
-      });
-      return new Response(clarifyStream, {
-        headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" },
-      });
-    }
-
-
     const reservationAmount = maxCreditCostForMode(mode);
     const creditReservation = await reserveCredits(supabase, {
       userId,
@@ -1708,13 +1722,16 @@ The user has expressed frustration. Do the following:
           // rounds). This is what makes a 10-file app reliably complete.
           if (mode === "build") {
             let contRounds = 0;
+            const contCap = isMajorGreenfieldBuild(message, fileCount)
+              ? Math.max(BUILD_CONTINUATION_ROUNDS, 5)
+              : BUILD_CONTINUATION_ROUNDS;
             while (
               needsBuildContinuation(fullContent) &&
-              contRounds < BUILD_CONTINUATION_ROUNDS
+              contRounds < contCap
             ) {
               contRounds++;
               safeEnqueue(
-                encoder.encode(`data: ${JSON.stringify({ status: "continuing", message: `Response was long — continuing generation (${contRounds}/${BUILD_CONTINUATION_ROUNDS})…` })}\n\n`)
+                encoder.encode(`data: ${JSON.stringify({ status: "continuing", message: `Response was long — continuing generation (${contRounds}/${contCap})…` })}\n\n`)
               );
               let contChunk = "";
               try {
@@ -2158,28 +2175,34 @@ The user has expressed frustration. Do the following:
 
             let finalFiles = ensureCommonGeneratedSupportFiles(parsed.files, existingFiles);
 
-            // ── Validation pass ───────────────────────────────────────────
+            // ── Validation pass (up to 3 enrichment rounds on large greenfield) ─
             if (finalFiles.length > 0) {
-              // Correctness errors (broken imports, missing config) + type-agnostic
-              // RICHNESS errors (too thin / sparse) — both feed the auto-fix loop,
-              // so a structurally-valid-but-empty app gets enriched, not shipped.
-              const correctnessErrors = validateGeneratedFiles(finalFiles, existingFiles);
-              const richnessErrors = assessGenerationQuality(finalFiles, existingFiles, {
-                minFiles: buildIntent?.minFiles,
-                appType: buildIntent?.appType,
-              });
-              const validationErrors = [...correctnessErrors, ...richnessErrors];
-              const needsEnrichment = richnessErrors.length > 0;
+              const maxEnrichPasses = isMajorGreenfieldBuild(message, fileCount) ? 3 : 2;
+              for (let enrichPass = 0; enrichPass < maxEnrichPasses; enrichPass++) {
+                const correctnessErrors = validateGeneratedFiles(finalFiles, existingFiles);
+                const richnessErrors = assessGenerationQuality(finalFiles, existingFiles, {
+                  minFiles: buildIntent?.minFiles,
+                  appType: buildIntent?.appType,
+                });
+                const validationErrors = [...correctnessErrors, ...richnessErrors];
+                const needsEnrichment = richnessErrors.length > 0;
 
-              if (shouldAutoFix(validationErrors) && validationErrors.length > 0) {
+                if (!shouldAutoFix(validationErrors) || validationErrors.length === 0) {
+                  break;
+                }
+
                 usedAutoFix = true;
-                // ── Auto-fix pass — send errors back to AI ────────────────
+                const statusMsg =
+                  enrichPass === 0
+                    ? `Auto-fixing ${validationErrors.length} issue(s)…`
+                    : `Expanding build — ${validationErrors.length} completeness issue(s) remain…`;
                 safeEnqueue(
-                  encoder.encode(`data: ${JSON.stringify({ status: "fixing", message: `Auto-fixing ${validationErrors.length} issue(s)…` })}\n\n`)
+                  encoder.encode(`data: ${JSON.stringify({ status: "fixing", message: statusMsg })}\n\n`),
                 );
 
                 logger.info("ai.chat.autofix", {
                   projectId,
+                  pass: enrichPass + 1,
                   errorCount: validationErrors.length,
                   errors: validationErrors.map((e) => e.message),
                 });
@@ -2191,21 +2214,17 @@ The user has expressed frustration. Do the following:
                     needsEnrichment ? buildIntent?.blueprint : undefined,
                   );
                   let repairContent = "";
-                  const repairModel = simpleEconomyRequest ? ECONOMY_CODING_MODEL : ESCALATION_MODEL;
+                  const repairModel =
+                    needsEnrichment || isMajorGreenfieldBuild(message, fileCount)
+                      ? ESCALATION_MODEL
+                      : simpleEconomyRequest
+                        ? ECONOMY_CODING_MODEL
+                        : ESCALATION_MODEL;
                   await generateAI({
-                    // Escalation ladder (mirrors the lens system): repair with
-                    // the STRONGEST tier, not the model that just produced the
-                    // flawed output — the same brain asked to fix its own
-                    // systematic mistake mostly reproduces it. Fires at most
-                    // once per build and only after validation failed, so the
-                    // premium model's cost lands exactly where it pays.
                     model: repairModel,
                     messages: [
                       {
                         role: "system" as const,
-                        // Enrichment carries its own full build instructions in the
-                        // user message; the "fix only" AutoFix system prompt would
-                        // fight it, so use a neutral system prompt when enriching.
                         content: needsEnrichment
                           ? "You are LifemarkAI Build Engine. Follow the user message exactly and respond with ONLY the required JSON object."
                           : AUTO_FIX_SYSTEM_PROMPT,
@@ -2219,24 +2238,16 @@ The user has expressed frustration. Do the following:
                   }, { projectId, userId, task: "chat.build.autofix" });
 
                   const repaired = parseAIResponse(repairContent);
-                  if (repaired.files.length > 0) {
-                    // Merge repaired files on top of originals
-                    const mergedMap = new Map(finalFiles.map((f) => [f.path, f]));
-                    for (const rf of repaired.files) mergedMap.set(rf.path, rf);
-                    finalFiles = ensureCommonGeneratedSupportFiles(Array.from(mergedMap.values()), existingFiles);
-                    tokensUsed += 1000; // rough estimate for fix pass
-
-                    const remainingErrors = validateGeneratedFiles(finalFiles, existingFiles);
-                    if (shouldAutoFix(remainingErrors)) {
-                      logger.info("ai.chat.autofix_remaining", {
-                        projectId,
-                        errorCount: remainingErrors.length,
-                      });
-                    }
+                  if (repaired.files.length === 0) {
+                    break;
                   }
+                  const mergedMap = new Map(finalFiles.map((f) => [f.path, f]));
+                  for (const rf of repaired.files) mergedMap.set(rf.path, rf);
+                  finalFiles = ensureCommonGeneratedSupportFiles(Array.from(mergedMap.values()), existingFiles);
+                  tokensUsed += 1000;
                 } catch (fixErr) {
                   logger.warn("ai.chat.autofix_failed", { projectId, error: String(fixErr) });
-                  // Continue with original files if fix pass fails
+                  break;
                 }
               }
             } else {

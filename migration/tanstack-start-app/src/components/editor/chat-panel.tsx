@@ -89,6 +89,7 @@ looksLikeEditRequest,
 DEFAULT_CODING_MODEL,
 } from "@/lib/ai/editor-intelligence";
 import { countUserAuthoredFiles,isGreenfieldProject } from "@/lib/ai/scaffold-files";
+import { shouldClarifyBeforeBuild } from "@/lib/ai/build-intent";
 import { isNoisePreviewError,type PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import {
 getAutoFixAttempts,
@@ -582,7 +583,7 @@ export function ChatPanel({
     });
   }, [messages]);
   // Clarify-first mode
-  const [clarifyFirst, setClarifyFirst] = useState(false);
+  const [clarifyFirst, setClarifyFirst] = useState(true);
   const [showSkillPicker, setShowSkillPicker] = useState(false);
   const [skills, setSkills] = useState<{ custom: Array<{id:string;name:string;description:string|null;prompt:string;icon:string;tags:string[];use_count:number}>; builtin: Array<{id:string;name:string;description:string|null;prompt:string;icon:string;tags:string[];}> }>({ custom: [], builtin: [] });
   const [skillsLoaded, setSkillsLoaded] = useState(false);
@@ -3141,13 +3142,14 @@ ${(f.content ?? "").slice(0, 8000)}
           ...(modelManuallySelectedRef.current ? { model: effectiveModel } : {}),
           modelManuallySelected: modelManuallySelectedRef.current,
           framework: mobileMode ? "react-native" : (project.framework ?? "web"),
-          // Ask pre-build questions when: user enabled the toggle on a fresh
-          // project, OR the request is a DATABASE/BACKEND design task (Lovable
-          // asks schema/auth/roles questions before wiring a backend).
+          // Lovable-style: ask 2–4 tap-to-answer questions before research/build on
+          // greenfield apps. Toggle off with "Clarify" chip. Backend-only edits too.
           clarifyFirst:
             effectiveMode === "build" &&
             !opts?.forceBuild &&
-            ((clarifyFirst && isGreenfieldProject(files)) || dbClarifyIntent),
+            (dbClarifyIntent ||
+              (clarifyFirst &&
+                shouldClarifyBeforeBuild(userMessage, countUserAuthoredFiles(files)))),
           ...(effectiveMode === "build" && designTemplateId ? { templateId: designTemplateId } : {}),
           // If @mentions present, only send those files for context (saves tokens + focuses AI)
           files: mentionedFilesForAI
