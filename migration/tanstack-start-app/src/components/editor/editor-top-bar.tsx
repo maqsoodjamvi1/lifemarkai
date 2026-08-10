@@ -1150,7 +1150,6 @@ export function EditorTopBar({
                   { id: "payments" as LeftPanel,  label: "Payments",         icon: CreditCard },
                   { id: "security" as LeftPanel,  label: "Security",         icon: Shield    },
                   { id: "appauth" as LeftPanel,       label: "App sign-in",      icon: UserPlus  },
-                  { id: "designsystem" as LeftPanel,  label: "Design system",    icon: Sparkles  },
                   { id: "seo" as LeftPanel,       label: "SEO & AI search",  icon: Search    },
                 ] as { id: LeftPanel; label: string; icon: React.ElementType }[]).map(({ id, label, icon: Icon }) => (
                   <DropdownMenuItem

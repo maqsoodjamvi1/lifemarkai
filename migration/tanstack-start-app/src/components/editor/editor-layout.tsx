@@ -124,7 +124,7 @@ const PreviewPanel = dynamic(
 
 export type EditorMode = "chat" | "plan" | "build" | "agent" | "patch";
 export type ViewMode = "preview" | "code" | "both" | "files";
-export type LeftPanel = "chat" | "plan" | "agent" | "intelligence" | "healing" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "checkout" | "problems" | "apperrors" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "i18n" | "apidocs" | "cloud" | "dbmanager" | "storage" | "appconnectors" | "mcpcontext" | "aeo" | "vulnscan" | "dbseed" | "monetize" | "copygen" | "feedback" | "golive" | "nativeapps" | "icongen" | "compmarket" | "pwa" | "edgefn" | "apiplay" | "bundle" | "formgen" | "flags" | "changelog" | "dbquery" | "routerwiz" | "envhealth" | "promptopt" | "secrets" | "migrations" | "modelcmp" | "persona" | "activityfeed" | "ownership" | "configexport" | "savetemplate" | "diffviewer" | "depgraph" | "timelapse" | "aiintegration" | "appauth" | "designsystem" | "media" | "code";
+export type LeftPanel = "chat" | "plan" | "agent" | "intelligence" | "healing" | "activity" | "github" | "collab" | "supabase" | "env" | "image" | "figma" | "domains" | "history" | "deploys" | "analytics" | "knowledge" | "security" | "settings" | "search" | "components" | "design" | "comments" | "crossref" | "email" | "testing" | "guidance" | "e2e" | "packages" | "review" | "mcp" | "seo" | "customemail" | "designdir" | "designpanel" | "visualedits" | "publishpanel" | "payments" | "problems" | "apperrors" | "connectors" | "accessibility" | "schema" | "webhooks" | "performance" | "cloud" | "dbmanager" | "storage" | "appconnectors" | "monetize" | "edgefn" | "dbquery" | "secrets" | "savetemplate" | "diffviewer" | "appauth" | "media" | "code";
 
 interface EditorLayoutProps {
   project: Project;
@@ -1273,7 +1273,6 @@ export function EditorLayout({
     { id: "visualedits",   label: "Visual Edits", emoji: "✏️" },
     { id: "publishpanel",  label: "Publish",      emoji: "🚀" },
     { id: "payments",      label: "Billing",      emoji: "💳" },
-    { id: "checkout",      label: "Checkout",     emoji: "🛍️" },
     { id: "problems",   label: "Problems",   emoji: "⚠️" },
     // Runtime errors real visitors hit on the PUBLISHED app, as opposed to
     // "Problems", which is Monaco's compile-time markers. The panel shipped
@@ -1284,47 +1283,17 @@ export function EditorLayout({
     { id: "schema",        label: "Schema",  emoji: "🗃️" },
     { id: "webhooks",      label: "Webhooks", emoji: "🪝" },
     { id: "performance",   label: "Perf",     emoji: "🚀" },
-    { id: "i18n",          label: "i18n",     emoji: "🌍" },
-    { id: "apidocs",       label: "API Docs",  emoji: "📄" },
     { id: "cloud",         label: "Cloud",     emoji: "☁️" },
     { id: "dbmanager",     label: "Data",      emoji: "🗃️" },
     { id: "storage",       label: "Storage",   emoji: "🗄️" },
     { id: "media",         label: "Media",     emoji: "🖼️" },
     { id: "appconnectors", label: "Connectors", emoji: "🔌" },
-    { id: "mcpcontext",    label: "Context",    emoji: "🧠" },
-    { id: "aeo",           label: "AEO",        emoji: "✨" },
-    { id: "vulnscan",      label: "Security",   emoji: "🛡️" },
-    { id: "dbseed",        label: "Seed DB",    emoji: "🌱" },
     { id: "monetize",      label: "Monetize",   emoji: "💰" },
-    { id: "copygen",       label: "Copy",       emoji: "✍️" },
-    { id: "feedback",      label: "Feedback",   emoji: "💬" },
-    { id: "golive",        label: "Go Live",    emoji: "🚀" },
-    { id: "nativeapps",    label: "Native Apps", emoji: "📲" },
-    { id: "icongen",       label: "Icon Gen",   emoji: "🎨" },
-    { id: "compmarket",    label: "Components", emoji: "📦" },
-    { id: "pwa",           label: "PWA",        emoji: "📱" },
     { id: "edgefn",       label: "Edge Fns",   emoji: "⚡" },
-    { id: "apiplay",      label: "API Test",   emoji: "🧪" },
-    { id: "bundle",       label: "Bundle",     emoji: "📦" },
-    { id: "formgen",      label: "Form Gen",   emoji: "📝" },
-    { id: "flags",        label: "Feat Flags", emoji: "🚩" },
-    { id: "changelog",    label: "Changelog",  emoji: "📋" },
     { id: "dbquery",      label: "DB Query",   emoji: "🔍" },
-    { id: "routerwiz",    label: "Router",     emoji: "🗺️" },
-    { id: "envhealth",    label: "Env Health", emoji: "🩺" },
-    { id: "promptopt",    label: "Prompt Opt", emoji: "✨" },
     { id: "secrets",      label: "Secrets",    emoji: "🔐" },
-    { id: "migrations",   label: "Migrations", emoji: "🔄" },
-    { id: "modelcmp",     label: "Model Cmp",  emoji: "⚖️" },
-    { id: "activityfeed", label: "Activity",     emoji: "🕐" },
-    { id: "ownership",    label: "Ownership",    emoji: "🗺️" },
-    { id: "configexport", label: "Config I/O",    emoji: "💾" },
     { id: "savetemplate", label: "Publish Template", emoji: "🌐" },
     { id: "diffviewer",   label: "Diff Viewer",      emoji: "🔀" },
-    { id: "depgraph",     label: "Dep Graph",        emoji: "🕸️" },
-    { id: "timelapse",       label: "Time-Lapse",   emoji: "🎬" },
-    { id: "persona",         label: "AI Persona",   emoji: "🤖" },
-    { id: "aiintegration",   label: "AI for App",   emoji: "⚡" },
   ];
 
   // Primary tabs shown inline in the left panel header; rest go into overflow dropdown

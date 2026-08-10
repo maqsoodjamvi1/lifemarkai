@@ -472,7 +472,6 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
             actions={[
               { label: "Open Schema Designer", panel: "schema" },
               { label: "Open SQL Console",     panel: "dbquery" },
-              { label: "Database Seeding",     panel: "dbseed" },
             ]}
             onOpen={(p) => onOpenSubPanel?.(p)}
           />
@@ -523,9 +522,6 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
             title="Built-in AI"
             description="Lifemark AI for your deployed apps. No API keys needed — billed against AI balance."
             actions={[
-              { label: "Open AI Integration", panel: "aiintegration" },
-              { label: "AI Persona",          panel: "persona" },
-              { label: "Model Compare",       panel: "modelcmp" },
             ]}
             onOpen={(p) => onOpenSubPanel?.(p)}
           />
@@ -537,7 +533,6 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
             description="Encrypted environment variables, automatically injected into Edge Functions."
             actions={[
               { label: "Open Secrets Vault", panel: "secrets" },
-              { label: "Environment Health", panel: "envhealth" },
             ]}
             onOpen={(p) => onOpenSubPanel?.(p)}
           />
@@ -548,7 +543,6 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
             title="Logs & monitoring"
             description="Real-time backend activity and request traces."
             actions={[
-              { label: "Open Activity Feed", panel: "activityfeed" },
               { label: "Project Analytics",  panel: "analytics" },
               { label: "Problems",           panel: "problems" },
             ]}
