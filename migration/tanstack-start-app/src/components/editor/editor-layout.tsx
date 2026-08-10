@@ -1762,7 +1762,7 @@ export function EditorLayout({
           <PanelResizeHandle className="w-px bg-border hover:bg-primary/50 transition-colors cursor-col-resize" />
 
           {/* Right panel — preview/code or secondary panel */}
-          <Panel defaultSize={77.7} minSize={30} id="preview-panel">
+          <Panel defaultSize={78} minSize={30} id="preview-panel">
             <div data-panel-id="preview-panel" className="flex flex-col h-full relative">
               {/* Secondary panel overlay — shown when a tool panel is active */}
               {rightPanel && (
