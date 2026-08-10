@@ -97,7 +97,11 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
         <RuntimeEnvScript />
         <HeadContent />
       </head>
-      <body>
+      {/* suppressHydrationWarning: browser extensions (wallets, ColorZilla's
+          cz-shortcut-listen, etc.) mutate <body> attributes before React
+          hydrates, producing a noisy attribute-mismatch warning for every
+          affected user. Attribute-level only — children are still checked. */}
+      <body suppressHydrationWarning>
         {children}
         <Scripts />
       </body>
