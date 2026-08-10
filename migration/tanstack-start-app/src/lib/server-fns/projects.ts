@@ -206,6 +206,10 @@ export async function createProject(data: any) {
     const intentText = `${data.name ?? ""} ${data.description ?? ""}`;
     const staticDefault =
       classifyBuildIntent(intentText).appType === "marketing-website" ? "static" : undefined;
+    // Default generation framework is tanstack-start (same stack the platform
+    // itself runs on): one framework contract to keep bug-free instead of two.
+    // Simple marketing sites still get the instant no-build static runtime,
+    // and an explicit user choice or env override always wins.
     const requested =
       data.framework ??
       preferred ??
@@ -213,11 +217,11 @@ export async function createProject(data: any) {
         ? process.env.DEFAULT_NEW_PROJECT_FRAMEWORK
         : undefined) ??
       staticDefault ??
-      "react";
+      "tanstack-start";
 
     // Coerce rather than insert something projects_framework_check will reject:
     // a constraint violation surfaces as an opaque 500 on the create path.
-    const framework = ALLOWED_FRAMEWORKS.has(requested) ? requested : "react";
+    const framework = ALLOWED_FRAMEWORKS.has(requested) ? requested : "tanstack-start";
     const controlledTemplate = resolveControlledTemplate(`${data.name ?? ""} ${data.description ?? ""}`, framework);
 
     const { data: project, error } = await supabase

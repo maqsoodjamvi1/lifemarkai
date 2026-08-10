@@ -22,7 +22,7 @@ export function isRnFramework(f?: string | null): boolean {
  * and never invents "web".
  */
 export function initialWebFramework(f: Framework | null | undefined): Framework {
-  return isRnFramework(f) ? "react" : (f ?? "react");
+  return isRnFramework(f) ? "tanstack-start" : (f ?? "tanstack-start");
 }
 
 /** The framework to persist when the toggle changes. */

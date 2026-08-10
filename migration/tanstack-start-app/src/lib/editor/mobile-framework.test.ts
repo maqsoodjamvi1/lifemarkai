@@ -21,12 +21,13 @@ test("initialWebFramework keeps a real web framework", () => {
   assert.equal(initialWebFramework("tanstack-start"), "tanstack-start");
 });
 
-test("initialWebFramework falls back to 'react' for RN and null — never 'web'", () => {
+test("initialWebFramework falls back to 'tanstack-start' for RN and null — never 'web'", () => {
   // Regression: projects_framework_check has never accepted "web"; a project
   // that STARTED in mobile mode must restore to a value Postgres accepts.
-  assert.equal(initialWebFramework("react-native"), "react");
-  assert.equal(initialWebFramework(null), "react");
-  assert.equal(initialWebFramework(undefined), "react");
+  // Fallback tracks the platform's default generation framework.
+  assert.equal(initialWebFramework("react-native"), "tanstack-start");
+  assert.equal(initialWebFramework(null), "tanstack-start");
+  assert.equal(initialWebFramework(undefined), "tanstack-start");
 });
 
 test("frameworkForMobileMode persists RN when on, remembered web framework when off", () => {
