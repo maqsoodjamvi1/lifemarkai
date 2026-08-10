@@ -25,6 +25,8 @@ Create these personally, in order. Each tests a different path; fix only what ac
 | 8 | (on #4) "upgrade to full-stack" | project converts to tanstack-start, rebuilds |
 | 9 | "app with user accounts and Stripe payments" | tanstack-start from the start, WebContainer preview boots |
 | 10 | Publish #3, open the public URL, add a record, check `app_data` table | row appears in Supabase |
+| 11 | (on #4) DB panel → connect a test Supabase account (see docs/backend-strategy.md §onboarding) → "store customers in my database" | AI uses the connected Supabase, rows in client DB |
+| 12 | (on #4, before org ID is set) "upgrade to full-stack" | AI declines gracefully: "coming soon", stays static |
 
 Also verify while testing: console stays clean (extension noise aside), the amber
 "demo-grade storage" note shows in the Publish panel for static apps, and after a
