@@ -42,6 +42,7 @@ import { LovableComposerDock } from "./lovable/composer-dock";
 import { LovableComposerPreInput } from "./lovable/composer-pre-input";
 import { LovableComposerInputArea } from "./lovable/composer-input-area";
 import { LovableComposerSharePreview } from "./lovable/composer-share-preview";
+import { frameworkForMobileMode,initialWebFramework,isRnFramework } from "@/lib/editor/mobile-framework";
 import { LovableChatModals } from "./lovable/chat-modals";
 import { useComposerDockController } from "./lovable/use-composer-dock-controller";
 import { useChatKeyboardShortcuts } from "./lovable/use-chat-keyboard-shortcuts";
@@ -382,7 +383,7 @@ export function ChatPanel({
   const MAX_CONTEXT_FILES = 5;
   const [isDragging, setIsDragging] = useState(false);
   // React Native / Expo framework toggle — hydrated + persisted on project.framework
-  const isRnFramework = (f?: string | null) => f === "react-native" || f === "expo";
+  // (rules live in lib/editor/mobile-framework, unit-tested)
   const [mobileMode, setMobileMode] = useState(() => isRnFramework(project.framework));
   // "react", not "web". This value is PATCHed straight onto projects.framework,
   // and projects_framework_check has never accepted "web" — so for any project
@@ -394,7 +395,7 @@ export function ChatPanel({
   // Typed as Project["framework"] so the union survives to the onProjectUpdate
   // call below; inferring `string` there is what hid this for so long.
   const webFrameworkRef = useRef<Project["framework"]>(
-    isRnFramework(project.framework) ? "react" : (project.framework ?? "react"),
+    initialWebFramework(project.framework),
   );
   useEffect(() => {
     setMobileMode(isRnFramework(project.framework));
@@ -405,7 +406,7 @@ export function ChatPanel({
   const persistMobileMode = useCallback(
     (next: boolean) => {
       setMobileMode(next);
-      const framework = next ? "react-native" : webFrameworkRef.current;
+      const framework = frameworkForMobileMode(next, webFrameworkRef.current);
       onProjectUpdate?.({ framework });
       void fetch(`/api/projects/${project.id}`, {
         method: "PATCH",

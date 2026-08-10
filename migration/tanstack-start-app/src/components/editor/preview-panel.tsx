@@ -25,6 +25,7 @@ import { AnimatePresence,motion } from "framer-motion";
 import { VebBridgePopover,claimVisualEditCredit } from "./visual-edit-overlay";
 import { PreviewAnnotations } from "./preview-annotations";
 import { PreviewCommentPins } from "./preview-comment-pins";
+import { filterPinsForPage,toCommentPinList } from "@/lib/editor/comment-pin-markers";
 import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
@@ -720,30 +721,19 @@ export function PreviewPanel({
     };
   }, [projectId, refreshElementCommentPins]);
 
-  const pinsForCurrentPage = useMemo(() => {
-    return elementCommentPins.filter((c) => {
-      const page = c.page_path || "/";
-      return page === previewPath || page === "*" || !c.page_path;
-    });
-  }, [elementCommentPins, previewPath]);
+  const pinsForCurrentPage = useMemo(
+    () => filterPinsForPage(elementCommentPins, previewPath),
+    [elementCommentPins, previewPath],
+  );
 
   // Same-origin srcdoc engine renders pins as a DOM overlay (no VEB bridge).
   const srcdocCommentPins = useMemo(
-    () =>
-      pinsForCurrentPage.map((c, i) => ({
-        id: c.id,
-        xpath: c.element_xpath ?? "",
-        label: c.content?.slice(0, 80) || `Comment ${i + 1}`,
-      })),
+    () => toCommentPinList(pinsForCurrentPage),
     [pinsForCurrentPage],
   );
 
   const pushCommentPinsToPreview = useCallback(() => {
-    const pins = pinsForCurrentPage.map((c, i) => ({
-      id: c.id,
-      xpath: c.element_xpath,
-      label: c.content?.slice(0, 80) || `Comment ${i + 1}`,
-    }));
+    const pins = toCommentPinList(pinsForCurrentPage);
     getPreviewContentWindow()?.postMessage({ type: "lifemark-comment-pins", pins }, "*");
   }, [pinsForCurrentPage, getPreviewContentWindow]);
   const pushCommentPinsToPreviewRef = useRef(pushCommentPinsToPreview);

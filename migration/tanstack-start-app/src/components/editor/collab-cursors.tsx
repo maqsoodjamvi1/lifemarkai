@@ -3,18 +3,15 @@
  * CollabCursors
  *
  * Renders remote collaborator cursors and name-tags directly inside a Monaco
- * editor instance using its decorations API.
- *
- * Props:
- *   editor       — the Monaco editor instance
- *   collaborators — list of remote peers with cursor positions
- *   currentFile  — path of the currently open file (cursors for other files
- *                  are hidden)
+ * editor instance using its decorations API. The decoration/clamping rules
+ * live in lib/editor/collab-cursor-decorations (unit-tested); this component
+ * only applies them to the live editor and injects the per-peer styles.
  */
 
 import { useEffect,useRef } from "react";
 import type * as Monaco from "monaco-editor";
 import type { Collaborator } from "@/hooks/use-yjs-editor";
+import { buildCollabDecorations } from "@/lib/editor/collab-cursor-decorations";
 
 interface CollabCursorsProps {
   editor: Monaco.editor.IStandaloneCodeEditor | null;
@@ -31,67 +28,18 @@ export function CollabCursors({ editor, collaborators, currentFile }: CollabCurs
     const model = editor.getModel();
     if (!model) return;
 
-    // Build new decorations for peers that are on this file
-    const decorations: Monaco.editor.IModelDeltaDecoration[] = [];
+    const { decorations, styles } = buildCollabDecorations(collaborators, currentFile, model);
 
-    for (const collab of collaborators) {
-      if (!collab.cursor || collab.cursor.file !== currentFile) continue;
-
-      const { line, column, selection } = collab.cursor;
-      const color = collab.user.color;
-      const name  = collab.user.name;
-      const initials = name.slice(0, 2).toUpperCase();
-
-      // Clamp to valid model bounds
-      const lineCount = model.getLineCount();
-      const clampedLine   = Math.max(1, Math.min(line, lineCount));
-      const lineLen       = model.getLineLength(clampedLine);
-      const clampedColumn = Math.max(1, Math.min(column, lineLen + 1));
-
-      // ── Cursor line decoration (thin coloured bar) ─────────────────────
-      const styleId = `cursor-${collab.key.replace(/[^a-zA-Z0-9]/g, "_")}`;
-      injectCursorStyle(styleId, color, initials);
-
-      decorations.push({
-        range: {
-          startLineNumber: clampedLine,
-          startColumn:     clampedColumn,
-          endLineNumber:   clampedLine,
-          endColumn:       clampedColumn,
-        },
-        options: {
-          className:       `collab-cursor-${styleId}`,
-          beforeContentClassName: `collab-cursor-head-${styleId}`,
-          stickiness: 1, // NeverGrowsWhenTypingAtEdges
-        },
-      });
-
-      // ── Selection highlight ────────────────────────────────────────────
-      if (
-        selection &&
-        !(
-          selection.startLine === selection.endLine &&
-          selection.startColumn === selection.endColumn
-        )
-      ) {
-        const startLine   = Math.max(1, Math.min(selection.startLine, lineCount));
-        const endLine     = Math.max(1, Math.min(selection.endLine, lineCount));
-        const startColumn = Math.max(1, Math.min(selection.startColumn, model.getLineLength(startLine) + 1));
-        const endColumn   = Math.max(1, Math.min(selection.endColumn, model.getLineLength(endLine) + 1));
-
-        decorations.push({
-          range: { startLineNumber: startLine, startColumn, endLineNumber: endLine, endColumn },
-          options: {
-            className: `collab-selection-${styleId}`,
-            stickiness: 1,
-          },
-        });
-        injectSelectionStyle(styleId, color);
-      }
+    for (const style of styles) {
+      injectCursorStyle(style.styleId, style.color, style.initials);
+      if (style.withSelection) injectSelectionStyle(style.styleId, style.color);
     }
 
     // Swap decorations atomically
-    decorationIds.current = model.deltaDecorations(decorationIds.current, decorations);
+    decorationIds.current = model.deltaDecorations(
+      decorationIds.current,
+      decorations as Monaco.editor.IModelDeltaDecoration[],
+    );
   }, [editor, collaborators, currentFile]);
 
   // Clear decorations when unmounted

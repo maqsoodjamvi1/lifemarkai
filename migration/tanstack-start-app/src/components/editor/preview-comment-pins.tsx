@@ -1,5 +1,6 @@
 
 import { useEffect,useState } from "react";
+import { computeMarkerPosition,normalizeXpath } from "@/lib/editor/comment-pin-markers";
 
 export interface PreviewCommentPin {
   id: string;
@@ -47,7 +48,7 @@ export function PreviewCommentPins({
       pins.forEach((pin, index) => {
         try {
           const node = doc.evaluate(
-            pin.xpath.startsWith("//") ? pin.xpath : `//${pin.xpath}`,
+            normalizeXpath(pin.xpath),
             doc,
             null,
             XPathResult.FIRST_ORDERED_NODE_TYPE,
@@ -60,8 +61,7 @@ export function PreviewCommentPins({
             xpath: pin.xpath,
             label: pin.label,
             index,
-            left: iframeRect.left + r.left + r.width - 10,
-            top: iframeRect.top + r.top - 10,
+            ...computeMarkerPosition(iframeRect, r),
           });
         } catch {
           /* ignore bad xpath */
