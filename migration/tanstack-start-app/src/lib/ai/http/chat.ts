@@ -684,7 +684,7 @@ export async function handleAiChat(req: Request) {
             if (remaining == null) throw new Error("Unable to settle clarification credits");
             reservationFinalized = true;
 
-            let questions = parseClarifyingQuestions(questionsJson);
+            const questions = parseClarifyingQuestions(questionsJson);
             /* Legacy parser retained temporarily for blame context.
             try {
               const parsed: unknown = JSON.parse(questionsJson);
