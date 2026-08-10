@@ -3,7 +3,13 @@
 -- Accessed exclusively through /api/public/app-data/$slug (service role);
 -- no anon/authenticated grants on purpose.
 
-CREATE TABLE public.app_data (
+-- Helper used by the updated_at trigger; created here defensively because
+-- this database predates any migration that defined it.
+CREATE OR REPLACE FUNCTION public.update_updated_at_column() RETURNS TRIGGER AS $$
+BEGIN NEW.updated_at = now(); RETURN NEW; END;
+$$ LANGUAGE plpgsql SET search_path = public;
+
+CREATE TABLE IF NOT EXISTS public.app_data (
   id uuid NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   project_id uuid NOT NULL REFERENCES public.projects(id) ON DELETE CASCADE,
   collection text NOT NULL,
