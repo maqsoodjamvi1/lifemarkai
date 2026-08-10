@@ -17,6 +17,7 @@ import { useToast } from "@/hooks/use-toast";
 import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 import type { ProjectFile } from "@/types/database";
 import { useYjsEditor,type Collaborator as YjsCollaborator } from "@/hooks/use-yjs-editor";
+import { CollabCursors } from "./collab-cursors";
 import { createClient } from "@/lib/supabase/client";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import type * as Monaco from "monaco-editor";
@@ -191,6 +192,8 @@ export function CodePanel({
     aiCompletionsRef.current = aiCompletions;
   }, [activeTab, aiCompletions]);
 
+  // Bumped on every Monaco mount so CollabCursors re-reads the instance map.
+  const [editorMountVersion, setEditorMountVersion] = useState(0);
   const { bind: yjsBind, collaborators: yjsCollaborators } = useYjsEditor({
     projectId: projectId ?? "local",
     filePath:  activeTab?.path ?? "",
@@ -1706,6 +1709,7 @@ export function CodePanel({
                 theme={themeId}
                 onMount={(editor, monaco) => {
                   editorInstancesRef.current.set(tab.id, editor as unknown as Monaco.editor.IStandaloneCodeEditor);
+                  setEditorMountVersion((v) => v + 1);
                   // Lovable parity: reference the exact line(s) in chat as
                   // `path:12` / `path:12-34` pills (Ctrl/Cmd+Shift+L).
                   editor.addAction({
@@ -2101,6 +2105,15 @@ export function CodePanel({
               />
             </div>
           ))}
+          {/* Live collaborator cursors inside the active Monaco editor */}
+          {collabUser && projectId && activeTabId ? (
+            <CollabCursors
+              key={editorMountVersion}
+              editor={editorInstancesRef.current.get(activeTabId) ?? null}
+              collaborators={yjsCollaborators}
+              currentFile={activeTab?.path ?? ""}
+            />
+          ) : null}
           </div>{/* end left pane */}
 
           {/* Right split pane */}

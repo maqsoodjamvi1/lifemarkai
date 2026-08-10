@@ -5,6 +5,7 @@ import {
 X
 } from "lucide-react";
 import { suggestFollowUps } from "@/lib/ai/follow-up-suggestions";
+import { shouldClarifyCapabilities } from "@/lib/ai/clarification-intelligence";
 import { detectPastedSecret,redactSecret } from "@/lib/security/detect-secret";
 import { CONNECTORS } from "./app-connectors-panel";
 import { useToast } from "@/hooks/use-toast";
@@ -15,48 +16,40 @@ import type { FileState } from "@/components/editor/diff-viewer";
 import type { Project,ProjectFile,Message,Json } from "@/types/database";
 import type { EditorMode } from "./editor-layout";
 import type { GeneratedFile } from "./file-attachment-card";
-import {
-LovableChatPanelShell,
-LovableChatComposerShell,
-LovableComposerMobileSheet,
-LovableChatInputCard,
-LovableSecurityIssuesBar,
-LovableLiveLockBanner,
-LovableChatTimeline,
-type LovableChatTimelineHandle,
-LovableChatHeader,
-LovableChatHeaderStatus,
-LovableScrollToBottom,
-LovableContinueBanner,
-LovableDraftRestoreBanner,
-type ChatSearchMsgModeFilter,LovableChatSearchBar,
-type ChatSearchRoleFilter,
-LovableThreadItem,
-LovableContextSummaryBanner,
-type LovableFileDiffEntry,
-type LovableFileGenResult,
-LOVABLE_PROMPT_TEMPLATES,
-LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY,
-type LovableMentionItem,
-mergeAgentStep,
-type AgentTaskStep,
-groupIntoThreads,
-getDisplayMessageContent,
-LovableChatStreamingFooter,
-LovableChatTimelineHeader,
-LovableComposerDock,
-LovableComposerPreInput,
-LovableComposerInputArea,
-LovableChatModals,
-useComposerDockController,
-useChatKeyboardShortcuts,
-useThreadMessageProps,
-extractStreamingReasoning,
-type ClarifySession,
-type ClarifyQuestion,
-type LovableQueueItem,
-type LovableSecretBannerState
-} from "./lovable";
+import { LovableChatPanelShell } from "./lovable/chat-panel-shell";
+import { LovableChatComposerShell,LovableChatInputCard } from "./lovable/chat-composer-shell";
+import { LovableComposerMobileSheet } from "./lovable/composer-mobile-sheet";
+import { LovableSecurityIssuesBar } from "./lovable/security-issues-bar";
+import { LovableLiveLockBanner } from "./lovable/live-lock-banner";
+import { LovableChatTimeline,type LovableChatTimelineHandle } from "./lovable/chat-timeline";
+import { LovableChatHeader } from "./lovable/chat-header";
+import { LovableChatHeaderStatus } from "./lovable/composer-estimated-credits";
+import { LovableScrollToBottom } from "./lovable/scroll-to-bottom";
+import { LovableContinueBanner } from "./lovable/continue-banner";
+import { LovableDraftRestoreBanner } from "./lovable/draft-restore-banner";
+import { LovableChatSearchBar,type ChatSearchMsgModeFilter,type ChatSearchRoleFilter } from "./lovable/chat-search-bar";
+import { LovableThreadItem } from "./lovable/thread-item";
+import { LovableContextSummaryBanner } from "./lovable/context-summary-banner";
+import type { LovableFileDiffEntry } from "./lovable/types";
+import type { LovableFileGenResult } from "./lovable/file-gen-result-cards";
+import { LOVABLE_PROMPT_TEMPLATES,LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY } from "./lovable/prompt-templates";
+import type { LovableMentionItem } from "./lovable/composer-mention-autocomplete";
+import { mergeAgentStep,type AgentTaskStep } from "./lovable/agent-step-utils";
+import { groupIntoThreads,getDisplayMessageContent } from "./lovable/message-utils";
+import { LovableChatStreamingFooter } from "./lovable/streaming-footer";
+import { LovableChatTimelineHeader } from "./lovable/chat-timeline-header";
+import { LovableComposerDock } from "./lovable/composer-dock";
+import { LovableComposerPreInput } from "./lovable/composer-pre-input";
+import { LovableComposerInputArea } from "./lovable/composer-input-area";
+import { LovableComposerSharePreview } from "./lovable/composer-share-preview";
+import { LovableChatModals } from "./lovable/chat-modals";
+import { useComposerDockController } from "./lovable/use-composer-dock-controller";
+import { useChatKeyboardShortcuts } from "./lovable/use-chat-keyboard-shortcuts";
+import { useThreadMessageProps } from "./lovable/use-thread-message-props";
+import { extractStreamingReasoning } from "./lovable/streaming-utils";
+import type { ClarifySession,ClarifyQuestion } from "./lovable/clarify-session-card";
+import type { LovableQueueItem } from "./lovable/prompt-queue";
+import type { LovableSecretBannerState } from "./lovable/composer-secret-banner";
 import { parseLineRefs,removeLineRefFromInput } from "@/lib/editor/parse-line-refs";
 import { describeAiFailure,readErrorBody } from "@/lib/editor/ai-failure";
 import { formatGuestCommentsForAi } from "@/lib/editor/format-guest-comments";
@@ -2458,10 +2451,11 @@ export function ChatPanel({
       /\b(database|schema|tables?|migrations?|auth(entication)?|sign[ -]?up|log[ -]?in|user accounts?|roles?|permissions|admin (panel|dashboard)|crud)\b/i.test(
         userMessage,
       );
+    const capabilityClarifyIntent = shouldClarifyCapabilities(userMessage, opts?.forceBuild === true);
     // The smart router may map backend requests straight to AGENT — but the
     // clarify pipeline lives in build mode. Ask first, build after (unless the
     // user explicitly sits in Agent mode).
-    if (dbClarifyIntent && effectiveMode === "agent" && mode !== "agent") {
+    if ((dbClarifyIntent || capabilityClarifyIntent) && effectiveMode === "agent" && mode !== "agent") {
       effectiveMode = "build";
     }
     if (
@@ -2469,6 +2463,7 @@ export function ChatPanel({
       countUserAuthoredFiles(files) > 0 &&
       !opts?.forceBuild &&
       !dbClarifyIntent &&
+      !capabilityClarifyIntent &&
       process.env.NEXT_PUBLIC_AGENT_BUILDS !== "false" &&
       !isInformationalQuery(userMessage) &&
       !isSmallSurgicalEdit(userMessage)
@@ -3147,7 +3142,7 @@ ${(f.content ?? "").slice(0, 8000)}
           clarifyFirst:
             effectiveMode === "build" &&
             !opts?.forceBuild &&
-            (dbClarifyIntent ||
+            (dbClarifyIntent || capabilityClarifyIntent ||
               (clarifyFirst &&
                 shouldClarifyBeforeBuild(userMessage, countUserAuthoredFiles(files)))),
           ...(effectiveMode === "build" && designTemplateId ? { templateId: designTemplateId } : {}),
@@ -3378,12 +3373,13 @@ ${(f.content ?? "").slice(0, 8000)}
           if (data.clarifying_questions) {
             setActiveClarifySession({
               originalPrompt: (typeof data.originalPrompt === "string" ? data.originalPrompt : userMessage),
-              questions: (data.clarifying_questions as Array<{ id: string; question: string; type?: string; kind?: string; options?: string[] }>).map((q) => ({
+              questions: (data.clarifying_questions as Array<{ id: string; question: string; type?: string; kind?: string; multiple?: boolean; options?: ClarifyQuestion["options"] }>).map((q) => ({
                 id: q.id ?? `q-${Math.random()}`,
                 question: q.question,
                 type: (q.type as "text" | "choice") ?? "text",
                 kind: q.kind as ClarifyQuestion["kind"],
                 options: q.options,
+                multiple: q.multiple === true,
                 answer: "",
               })),
             });
@@ -6330,6 +6326,7 @@ ${(f.content ?? "").slice(0, 8000)}
             onStop={stopGeneration}
           />
         </LovableChatInputCard>
+        <LovableComposerSharePreview projectId={project.id} className="mt-2 mb-0 mx-1" />
       </LovableChatComposerShell>
       </LovableComposerMobileSheet>
 

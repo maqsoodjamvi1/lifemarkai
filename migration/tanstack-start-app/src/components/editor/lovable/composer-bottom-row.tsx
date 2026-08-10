@@ -9,6 +9,7 @@ LovableVisualEditsButton,
 type ComposerContextMenuActions,
 } from "./composer-toolbar";
 import { LovableComposerModeRow } from "./composer-mode-row";
+import { LovableComposerMobileToggle } from "./composer-mobile-toggle";
 import { LovableComposerModelMenu } from "./composer-model-menu";
 import { LovableComposerFileGenPicker } from "./composer-file-gen-picker";
 import type { LovableFileGenFormat } from "./composer-file-gen-picker";
@@ -158,6 +159,13 @@ export function LovableComposerBottomRow({
       )}
 
       <LovableComposerContextMenu actions={contextActions} />
+
+      {/* Web / React Native target — persistent chip (also in the "+" menu) */}
+      <LovableComposerMobileToggle
+        active={mobileMode}
+        disabled={mobileDisabled}
+        onToggle={onToggleMobileMode}
+      />
 
       {/* Lovable dump footer: plus | spacer | mic | send. Visual edits, clarify,
           model menu and file-gen live in the "+" menu / open on demand. */}

@@ -24,6 +24,7 @@ import { AnimatePresence,motion } from "framer-motion";
 // Keeping both forms just paid the cost of an async boundary for no code-split.
 import { VebBridgePopover,claimVisualEditCredit } from "./visual-edit-overlay";
 import { PreviewAnnotations } from "./preview-annotations";
+import { PreviewCommentPins } from "./preview-comment-pins";
 import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
@@ -725,6 +726,17 @@ export function PreviewPanel({
       return page === previewPath || page === "*" || !c.page_path;
     });
   }, [elementCommentPins, previewPath]);
+
+  // Same-origin srcdoc engine renders pins as a DOM overlay (no VEB bridge).
+  const srcdocCommentPins = useMemo(
+    () =>
+      pinsForCurrentPage.map((c, i) => ({
+        id: c.id,
+        xpath: c.element_xpath ?? "",
+        label: c.content?.slice(0, 80) || `Comment ${i + 1}`,
+      })),
+    [pinsForCurrentPage],
+  );
 
   const pushCommentPinsToPreview = useCallback(() => {
     const pins = pinsForCurrentPage.map((c, i) => ({
@@ -2407,6 +2419,15 @@ export function PreviewPanel({
                 }}
               />,
             )}
+            <PreviewCommentPins
+              iframeRef={iframeRef}
+              pins={srcdocCommentPins}
+              enabled={!commentPinMode}
+              onPinClick={(commentId) => {
+                const match = elementCommentPins.find((c) => c.id === commentId);
+                if (match) setActivePinComment(match);
+              }}
+            />
           </div>
         ) : previewEngine === "sandbox" &&
           !sandboxUrl &&
