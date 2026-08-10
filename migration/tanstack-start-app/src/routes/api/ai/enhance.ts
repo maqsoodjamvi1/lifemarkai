@@ -4,6 +4,8 @@ import { getServerUser } from "@/lib/supabase/server-user";
 import { generateAI } from "@/lib/ai/generate";
 import { ECONOMY_CHAT_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { z } from "zod";
+import { parseBody } from "@/lib/api/parse-body";
 
 /**
  * Native /api/ai/enhance — prompt enhancer (TRUE NATIVE, no worker).
@@ -34,10 +36,9 @@ export const Route = createFileRoute("/api/ai/enhance")({
         const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        const { prompt } = (await request.json()) as { prompt?: string };
-        if (!prompt || !prompt.trim()) {
-          return Response.json({ error: "prompt is required" }, { status: 400 });
-        }
+        const parsed = await parseBody(request, z.object({ prompt: z.string().trim().min(1).max(20_000) }));
+        if (parsed instanceof Response) return parsed;
+        const { prompt } = parsed;
 
         const rl = await rateLimitAsync(`enhance:${user.id}`, RATE_LIMITS.ai);
         if (!rl.success) return Response.json({ error: "Rate limited" }, { status: 429 });

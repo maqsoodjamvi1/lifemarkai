@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { authenticateApiRequest } from "@/lib/api/api-key";
 
@@ -42,23 +43,27 @@ export const Route = createFileRoute("/api/v1/projects")({
         const auth = await authenticateApiRequest(request, "projects:write");
         if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status, headers: CORS });
 
-        let body: { name?: string; description?: string; framework?: string };
+        let raw: unknown;
         try {
-          body = await request.json();
+          raw = await request.json();
         } catch {
           return Response.json({ error: "Invalid JSON body" }, { status: 400, headers: CORS });
         }
-
-        const name = (body.name ?? "").trim();
-        if (!name || name.length > 100) {
-          return Response.json({ error: "name is required (max 100 chars)" }, { status: 400, headers: CORS });
+        const schema = z.object({
+          name: z.string().trim().min(1).max(100),
+          description: z.string().max(2_000).optional(),
+          framework: z.enum(["static", "nextjs", "react", "vue", "svelte"]).optional(),
+        });
+        const parsedBody = schema.safeParse(raw);
+        if (!parsedBody.success) {
+          return Response.json(
+            { error: "Invalid request body", issues: parsedBody.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })) },
+            { status: 400, headers: CORS },
+          );
         }
-        const allowedFrameworks = ["static", "nextjs", "react", "vue", "svelte"] as const;
-        type AllowedFramework = (typeof allowedFrameworks)[number];
-        const requestedFramework = body.framework as AllowedFramework | undefined;
-        const framework = requestedFramework && allowedFrameworks.includes(requestedFramework)
-          ? requestedFramework
-          : "static";
+        const body = parsedBody.data;
+        const name = body.name;
+        const framework = body.framework ?? "static";
         const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
         const supabase = createAdminClient();

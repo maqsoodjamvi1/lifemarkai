@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { getFastAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { z } from "zod";
+import { parseBody } from "@/lib/api/parse-body";
 
 /**
  * Native /api/ai/commit-message — Conventional-Commits message from changed
@@ -21,12 +23,15 @@ export const Route = createFileRoute("/api/ai/commit-message")({
         const rl = await rateLimitAsync(user.id, RATE_LIMITS.ai);
         if (!rl.success) return Response.json({ error: "Rate limited" }, { status: 429 });
 
-        let body: { projectId?: string; changedFiles?: ChangedFile[] };
-        try { body = await request.json(); } catch { body = {}; }
-
-        const { projectId, changedFiles = [] } = body;
-        if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
-        if (changedFiles.length === 0) return Response.json({ error: "No changed files" }, { status: 400 });
+        const parsed = await parseBody(request, z.object({
+          projectId: z.string().min(1),
+          changedFiles: z.array(z.object({
+            path: z.string().min(1),
+            content: z.string().optional(),
+          }).passthrough()).min(1, "No changed files"),
+        }));
+        if (parsed instanceof Response) return parsed;
+        const { projectId, changedFiles } = parsed as { projectId: string; changedFiles: ChangedFile[] };
 
         const { data: project } = await supabase
           .from("projects").select("id, user_id, name, framework").eq("id", projectId).single();
