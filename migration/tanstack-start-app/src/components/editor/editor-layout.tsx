@@ -318,6 +318,24 @@ export function EditorLayout({
   );
   // Right-side secondary panel (null = show preview/code)
   const [rightPanel, setRightPanel] = useState<LeftPanel | null>(null);
+
+  // Panel-usage telemetry: one beacon per open. Fire-and-forget — a failed
+  // POST must never affect the editor. Data answers "which panels earn their
+  // maintenance cost" (see migration 172 for the monthly query).
+  const loggedPanelRef = useRef<string | null>(null);
+  useEffect(() => {
+    const panel = rightPanel ?? leftPanel;
+    if (!panel || loggedPanelRef.current === panel) return;
+    loggedPanelRef.current = panel;
+    try {
+      void fetch("/api/telemetry/panel-open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ panel }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch { /* never let telemetry throw */ }
+  }, [leftPanel, rightPanel]);
   const [leftChatOverlay, setLeftChatOverlay] = useState<"history" | null>(null);
 
   const [credits, setCredits] = useState(profile?.credits ?? 0);

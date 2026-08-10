@@ -186,6 +186,15 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
         )}
       </div>
 
+      {/* Static apps: demo-grade persistence — say so before users ship (step 3) */}
+      {(project.framework as string) === "static" && (
+        <div className="mx-3 mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 px-2.5 py-1.5 text-[10px] leading-relaxed text-amber-600 dark:text-amber-300">
+          This app uses demo-grade shared storage (LifemarkData) — great for demos and
+          internal tools. For secure accounts, private data or payments, ask the AI to
+          &quot;upgrade to full-stack&quot; before going live.
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="flex border-b border-border flex-shrink-0 overflow-x-auto">
         {tabs.map((t) => {

@@ -67,6 +67,24 @@ export type GeneratedDatabase = {
           },
         ];
       };
+      "panel_opens": {
+        Row: {
+            "created_at": string;
+            "id": string;
+            "panel": string;
+            "project_id": string | null;
+            "user_id": string;
+        };
+        Insert: {
+            "created_at"?: string;
+            "id"?: string;
+            "panel": string;
+            "project_id"?: string | null;
+            "user_id": string;
+        };
+        Update: never;
+        Relationships: [];
+      };
       "ai_eval_log": {
         Row: {
             "created_at": string;

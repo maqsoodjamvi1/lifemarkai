@@ -14,6 +14,36 @@ export function recommendedFrameworkForPrompt(prompt: string): CreationFramework
   return BACKEND_REQUIRED.test(prompt) ? "tanstack-start" : "static";
 }
 
+/** True when a chat/build request needs a REAL backend a static app can't provide. */
+export function promptNeedsRealBackend(prompt: string): boolean {
+  return BACKEND_REQUIRED.test(prompt);
+}
+
+/** "upgrade to full-stack" — the user accepting the static→TanStack upgrade. */
+const UPGRADE_INTENT =
+  /\b(?:upgrade|convert|switch|migrate)\b[^.!?]{0,40}\b(?:full[- ]?stack|tanstack|real backend)\b|\bfull[- ]?stack version\b/i;
+
+export function isUpgradeToFullStackIntent(message: string): boolean {
+  return UPGRADE_INTENT.test(message);
+}
+
+/**
+ * Appended to the static build prompt when the request needs a real backend.
+ * A static app must never FAKE auth/payments/database — that is a security
+ * lie users will ship. The model explains the upgrade instead.
+ */
+export const STATIC_BACKEND_GUARD = `
+
+## IMPORTANT — this request needs a real backend
+This is a STATIC project. It cannot provide real authentication, secure
+payments, a private database, roles/permissions, or realtime sync — and you
+must NEVER fake them client-side (a JavaScript "login" is a security lie).
+Do the parts of the request that ARE possible statically (UI, layout,
+LifemarkData records), and for the backend parts tell the user, briefly and
+clearly: this feature needs the full-stack version — reply "upgrade to
+full-stack" and the project will be converted to TanStack Start with a real
+backend, keeping the current design.`;
+
 export function resolveCreationFramework(
   prompt: string,
   selected: CreationFramework,

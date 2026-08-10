@@ -4,6 +4,11 @@ import { generateAI } from "../generate.ts";
 import { DEFAULT_CHAT_MODEL,ECONOMY_CODING_MODEL,ESCALATION_MODEL } from "../model-defaults.ts";
 import { applyModelAdapter } from "../model-catalog.ts";
 import { clampHistory } from "../context-clamp.ts";
+import {
+isUpgradeToFullStackIntent,
+promptNeedsRealBackend,
+STATIC_BACKEND_GUARD,
+} from "@/lib/project/generation-profile";
 import { sendLowCreditsEmail } from "../../email/resend.ts";
 import {
 AUTO_FIX_SYSTEM_PROMPT,
@@ -808,11 +813,25 @@ export async function handleAiChat(req: Request) {
         defaultBudget: 80000,
         hasImage: !!imageBase64,
       });
-      if (framework === "static") {
+      // Static → full-stack upgrade path: "upgrade to full-stack" on a static
+      // project converts it to TanStack Start for this and future builds.
+      let effectiveFramework = framework;
+      if (framework === "static" && isUpgradeToFullStackIntent(message)) {
+        effectiveFramework = "tanstack-start";
+        try {
+          await supabase
+            .from("projects")
+            .update({ framework: "tanstack-start", runtime: "framework" })
+            .eq("id", projectId);
+        } catch { /* best-effort — the build itself still upgrades */ }
+      }
+      if (effectiveFramework === "static") {
         systemPrompt = buildStaticGenerationPrompt(message, contextFiles, buildContextBudget) + suffix;
-      } else if (framework === "react-native") {
+        // Never fake auth/payments/db in a static app — explain the upgrade.
+        if (promptNeedsRealBackend(message)) systemPrompt += STATIC_BACKEND_GUARD;
+      } else if (effectiveFramework === "react-native") {
         systemPrompt = buildReactNativePrompt(message, contextFiles, buildContextBudget) + suffix;
-      } else if (framework === "nextjs" || framework === "next") {
+      } else if (effectiveFramework === "nextjs" || effectiveFramework === "next") {
         // SSR-first Next.js App Router — proper generateMetadata, Server Components.
         // Projects store "next" (FRAMEWORKS picker) while GitHub import detection
         // returns "nextjs" — accept both.
@@ -820,11 +839,11 @@ export async function handleAiChat(req: Request) {
       } else {
         // Pass the framework so the prompt ships ONE contract — the TanStack
         // blueprint for tanstack-start, the Vite rules for react/vue/svelte.
-        systemPrompt = (framework === "tanstack-start" || framework === "tanstack"
+        systemPrompt = (effectiveFramework === "tanstack-start" || effectiveFramework === "tanstack"
           ? buildTanStackGenerationPrompt(message, contextFiles, buildContextBudget)
-          : buildReactGenerationPrompt(message, contextFiles, buildContextBudget, framework)) + suffix;
+          : buildReactGenerationPrompt(message, contextFiles, buildContextBudget, effectiveFramework)) + suffix;
       }
-      systemPrompt += buildControlledTemplatePrompt(resolveControlledTemplate(message, framework));
+      systemPrompt += buildControlledTemplatePrompt(resolveControlledTemplate(message, effectiveFramework));
       if (simpleEconomyRequest) {
         systemPrompt += `\n\n---\n# Economy Small Edit Mode\nThis is a small edit/debug turn on an existing project. Keep the response minimal:\n- Return ONLY files that must change.\n- Prefer surgical changes over rewriting whole files.\n- Do not regenerate the whole app, create new pages, restyle unrelated UI, or expand product scope.\n- Keep existing imports, data, assets, and routes unless the user explicitly asked to change them.\n---`;
       }
