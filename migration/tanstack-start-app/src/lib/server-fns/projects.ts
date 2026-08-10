@@ -185,7 +185,9 @@ export async function createProject(data: any) {
           .eq("id", user.id)
           .maybeSingle();
         const p = profile?.preferred_framework;
-        if (typeof p === "string" && ALLOWED_FRAMEWORKS.has(p)) preferred = p;
+        // Framework choice was removed from the product: only the two platform
+        // stacks are still honored from legacy profile preferences.
+        if (p === "static" || p === "tanstack-start" || p === "tanstack") preferred = p;
       } catch {
         // Preference is an optimisation, never a reason to fail a create.
       }

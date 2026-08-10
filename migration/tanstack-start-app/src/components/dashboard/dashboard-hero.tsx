@@ -2,13 +2,12 @@ import { useEffect,useRef,useState } from "react";
 import { Link,useNavigate,useSearch } from "@tanstack/react-router";
 import { ArrowRight,Link2,Loader2,Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { resolveCreationFramework } from "@/lib/project/generation-profile";
+import { recommendedFrameworkForPrompt } from "@/lib/project/generation-profile";
 
 interface DashboardHeroProps {
   firstName: string;
 }
 
-type Framework = "static" | "react" | "tanstack-start" | "next" | "vue" | "svelte";
 
 const SUGGESTIONS = [
   "SaaS dashboard with analytics and user management",
@@ -22,8 +21,8 @@ function HeroPromptCreateBox() {
   // Vite + React + TypeScript is the default: it is the stack Lovable itself
   // generates, it publishes (an SSR build has no index.html to serve), and it
   // has no whole-document hydration for a browser extension to break.
-  const [framework, setFramework] = useState<Framework>("static");
-  const [frameworkManuallySelected, setFrameworkManuallySelected] = useState(false);
+  // No framework picker: the platform decides — instant static runtime for
+  // simple sites, TanStack Start for everything else (one contract, bug-free).
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -57,7 +56,7 @@ function HeroPromptCreateBox() {
         body: JSON.stringify({
           name,
           description: trimmed.slice(0, 10_000),
-          framework: resolveCreationFramework(trimmed, framework, frameworkManuallySelected),
+          framework: recommendedFrameworkForPrompt(trimmed),
         }),
       });
       if (res.status === 401) {
@@ -98,22 +97,9 @@ function HeroPromptCreateBox() {
         className="w-full resize-none bg-transparent px-4 pt-4 text-sm outline-none placeholder:text-muted-foreground/70 text-slate-900"
       />
       <div className="flex flex-wrap items-center gap-2 px-3 pb-3">
-        <div className="flex gap-1">
-          {(["static", "react", "tanstack-start", "next", "vue", "svelte"] as const).map((fw) => (
-            <button
-              key={fw}
-              type="button"
-              onClick={() => { setFramework(fw); setFrameworkManuallySelected(true); }}
-              className={`px-2 py-1 text-[11px] rounded-md border capitalize ${
-                framework === fw
-                  ? "border-violet-500/50 bg-violet-500/10 text-violet-700"
-                  : "border-transparent text-muted-foreground hover:bg-muted/60"
-              }`}
-            >
-              {fw === "static" ? "Simple" : fw === "next" ? "Next.js" : fw === "tanstack-start" ? "Start" : fw}
-            </button>
-          ))}
-        </div>
+        <span className="text-[11px] text-muted-foreground/70">
+          LifemarkAI picks the right stack for your app automatically
+        </span>
         <div className="ml-auto flex items-center gap-2">
           {error && (
             <span className="text-xs text-destructive max-w-[200px] truncate">{error}</span>

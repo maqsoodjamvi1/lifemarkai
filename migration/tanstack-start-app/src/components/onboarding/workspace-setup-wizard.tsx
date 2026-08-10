@@ -36,16 +36,6 @@ type AIStyle = "concise" | "detailed" | "creative";
 //
 // SSR stays fully supported, one click away, for anyone who wants the SEO and
 // first-paint win and accepts that trade.
-const FRAMEWORKS: { id: Framework; label: string; desc: string; icon: string }[] = [
-  { id: "static", label: "Simple Web", desc: "Fast HTML, CSS and JavaScript", icon: "🌐" },
-  { id: "react",   label: "React",    desc: "Client-side SPA — most robust", icon: "⚛" },
-  { id: "tanstack-start", label: "TanStack Start", desc: "Full-stack React, SSR", icon: "🏁" },
-  { id: "nextjs",  label: "Next.js",  desc: "Full-stack React, App Router", icon: "▲" },
-  { id: "vue",     label: "Vue 3",    desc: "Progressive framework",        icon: "🟢" },
-  { id: "svelte",  label: "Svelte",   desc: "Compile-time UI",              icon: "🔥" },
-  { id: "astro",   label: "Astro",    desc: "Content-first, islands arch",  icon: "🚀" },
-  { id: "remix",   label: "Remix",    desc: "Full-stack web standards",     icon: "💿" },
-];
 
 const AI_STYLES: { id: AIStyle; label: string; desc: string; icon: React.ElementType }[] = [
   { id: "concise",  label: "Concise",  desc: "Short, focused code — no boilerplate",       icon: Zap },
@@ -63,7 +53,6 @@ interface WizardState {
 
 const STEPS = [
   { id: "workspace",  label: "Workspace" },
-  { id: "framework",  label: "Framework" },
   { id: "ai-style",   label: "AI Style" },
   { id: "github",     label: "GitHub" },
   { id: "done",       label: "Done" },
@@ -109,7 +98,6 @@ export function WorkspaceSetupWizard({ onComplete, onSkip }: WorkspaceSetupWizar
   const isLast = step === STEPS.length - 1;
   const canNext = () => {
     if (currentStep.id === "workspace") return state.workspaceName.trim().length >= 2;
-    if (currentStep.id === "framework") return state.framework !== null;
     if (currentStep.id === "ai-style") return state.aiStyle !== null;
     return true;
   };
@@ -138,7 +126,9 @@ export function WorkspaceSetupWizard({ onComplete, onSkip }: WorkspaceSetupWizar
       if (user) {
         await supabase.from("profiles").update({
           workspace_name: state.workspaceName,
-          preferred_framework: state.framework,
+          // No framework choice: the platform decides (static for simple
+          // sites, TanStack Start otherwise).
+          preferred_framework: null,
           ai_style: state.aiStyle,
           onboarding_complete: true,
           setup_complete: true,
@@ -218,39 +208,6 @@ export function WorkspaceSetupWizard({ onComplete, onSkip }: WorkspaceSetupWizar
                     onKeyDown={(e) => { if (e.key === "Enter" && canNext()) setStep((s) => s + 1); }}
                   />
                   <p className="text-xs text-muted-foreground mt-2">You can change this anytime in settings.</p>
-                </div>
-              )}
-
-              {/* STEP 1 — Framework preference */}
-              {currentStep.id === "framework" && (
-                <div>
-                  <div className="w-10 h-10 rounded-xl bg-violet-500/10 flex items-center justify-center mb-4">
-                    <Code2 className="w-5 h-5 text-violet-400" />
-                  </div>
-                  <h2 className="text-xl font-bold">Default framework</h2>
-                  <p className="text-sm text-muted-foreground mt-1 mb-4">Which framework do you reach for first? AI will default to this for new projects.</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {FRAMEWORKS.map((fw) => (
-                      <button
-                        key={fw.id}
-                        onClick={() => setState((s) => ({ ...s, framework: fw.id }))}
-                        className={`flex items-start gap-2.5 p-3 rounded-xl border text-left transition-all ${
-                          state.framework === fw.id
-                            ? "border-violet-500/50 bg-violet-500/10 ring-1 ring-violet-500/30"
-                            : "border-border bg-muted/20 hover:border-border/80"
-                        }`}
-                      >
-                        <span className="text-lg leading-none mt-0.5">{fw.icon}</span>
-                        <div>
-                          <div className="text-xs font-semibold text-foreground">{fw.label}</div>
-                          <div className="text-[10px] text-muted-foreground mt-0.5">{fw.desc}</div>
-                        </div>
-                        {state.framework === fw.id && (
-                          <Check className="w-3.5 h-3.5 text-violet-400 ml-auto shrink-0 mt-0.5" />
-                        )}
-                      </button>
-                    ))}
-                  </div>
                 </div>
               )}
 
@@ -367,7 +324,7 @@ export function WorkspaceSetupWizard({ onComplete, onSkip }: WorkspaceSetupWizar
                   <div className="rounded-xl border border-border bg-muted/10 p-4 text-left space-y-3">
                     {[
                       { label: "Workspace", value: state.workspaceName },
-                      { label: "Default framework", value: FRAMEWORKS.find((f) => f.id === state.framework)?.label ?? "Next.js" },
+                      { label: "Stack", value: "Chosen automatically per app" },
                       { label: "AI style", value: AI_STYLES.find((s) => s.id === state.aiStyle)?.label ?? "Concise" },
                       { label: "GitHub", value: state.githubConnected ? "Connected ✓" : "Not connected" },
                     ].map(({ label, value }) => (
