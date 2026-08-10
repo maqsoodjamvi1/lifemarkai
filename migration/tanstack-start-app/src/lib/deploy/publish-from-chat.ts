@@ -283,6 +283,7 @@ export async function publishProjectFromChat(
         projectName: project.name as string,
         badgeHidden: (project as { badge_hidden?: boolean }).badge_hidden ?? false,
         referralCode: ownerProfile?.referral_code ?? null,
+        appSlug: (project as { app_slug?: string | null }).app_slug ?? null,
       });
       emit("Waiting for the site to go live…");
       deployedUrl = await deployToNetlify(site.id, fileMap);

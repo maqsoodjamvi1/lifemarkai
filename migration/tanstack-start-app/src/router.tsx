@@ -1,3 +1,6 @@
+// Improvement #4: global server-side error capture — expands cause chains in
+// console.error and records the last error for response-layer recovery.
+import "./lib/error-capture";
 import { createRouter } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
 import { initSentry } from "./lib/monitoring/sentry";

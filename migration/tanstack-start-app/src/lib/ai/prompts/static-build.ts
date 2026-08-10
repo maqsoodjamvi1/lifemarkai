@@ -1,4 +1,5 @@
 import { buildProjectContext } from "../system-prompts.ts";
+import { LIFEMARK_DATA_PROMPT_BLOCK } from "../../preview/lifemark-data.ts";
 
 const STATIC_BUILD_SYSTEM_PROMPT = `You are LifemarkAI Static Build Engine. Build polished, production-quality browser applications with no build step.
 
@@ -9,12 +10,13 @@ Contract:
 - Reference local files with relative URLs.
 - Do not create package.json, React, JSX, TypeScript, Vite, Next.js, or npm dependencies.
 - CDN assets are allowed only when they work directly in a browser.
-- Use localStorage for client-side persistence when appropriate.
+- Persistence: use the injected window.LifemarkData API (see the LifemarkData section below) instead of raw localStorage.
 - If the user explicitly chooses Static for an ERP, CRM, POS, or admin system, build a real hash-routed SPA with persistent sidebar navigation, multiple working screens, one shared CRUD store, validation/search/filtering, and realistic seeded records. Do not turn it into a marketing page.
 - All static business-app screens must read and write the same store so edits immediately appear in dashboard totals, tables, reports, and detail views.
 - Return complete contents for changed files and omit untouched files.
 - Preserve existing behavior, copy, routes, and asset URLs unless the request changes them.
-- Return only the standard LifemarkAI JSON file response.`;
+- Return only the standard LifemarkAI JSON file response.
+${LIFEMARK_DATA_PROMPT_BLOCK}`;
 
 export function buildStaticGenerationPrompt(
   userPrompt: string,

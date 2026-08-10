@@ -422,6 +422,7 @@ async function handlePOST(req: Request) {
           projectName: project.name as string,
           badgeHidden: (project as any).badge_hidden ?? false,
           referralCode: ownerProfile?.referral_code ?? null,
+          appSlug,
         });
         deployedUrl = await deployToNetlify(site.id, fileMap);
       } else {

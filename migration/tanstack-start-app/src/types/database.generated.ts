@@ -32,6 +32,41 @@ export type GeneratedDatabase = {
         };
         Relationships: [];
       };
+      "app_data": {
+        Row: {
+            "collection": string;
+            "created_at": string;
+            "data": Json;
+            "id": string;
+            "project_id": string;
+            "updated_at": string;
+        };
+        Insert: {
+            "collection": string;
+            "created_at"?: string;
+            "data"?: Json;
+            "id"?: string;
+            "project_id": string;
+            "updated_at"?: string;
+        };
+        Update: {
+            "collection"?: string;
+            "created_at"?: string;
+            "data"?: Json;
+            "id"?: string;
+            "project_id"?: string;
+            "updated_at"?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "app_data_project_id_fkey";
+            columns: ["project_id"];
+            isOneToOne: false;
+            referencedRelation: "projects";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       "ai_eval_log": {
         Row: {
             "created_at": string;

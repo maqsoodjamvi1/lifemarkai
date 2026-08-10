@@ -13,6 +13,7 @@
  * Designed to run inside the chat/agent stream — emits progress strings and
  * never throws: a verification failure is reported, not fatal.
  */
+import { z } from "zod";
 
 import { buildFallbackHtml } from "../preview/build-fallback-html.ts";
 import { verifyPreviewHtml } from "./preview-verify.ts";
@@ -332,13 +333,19 @@ function staticVerify(html: string): string[] {
     .map((c) => (c.detail ? `${c.name}: ${c.detail}` : c.name));
 }
 
+const fixFilesSchema = z.object({
+  files: z.array(z.object({ path: z.string().min(1), content: z.string() })).default([]),
+});
+
 function parseFixFiles(raw: string): Array<{ path: string; content: string }> {
   const trimmed = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
   const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
   if (!jsonMatch) return [];
   try {
-    const parsed = JSON.parse(jsonMatch[0]) as { files?: Array<{ path: string; content: string }> };
-    return Array.isArray(parsed.files) ? parsed.files : [];
+    // Improvement #2: schema-validate instead of trusting the cast — a model
+    // quirk (files as object, numeric content) can no longer slip through.
+    const parsed = fixFilesSchema.safeParse(JSON.parse(jsonMatch[0]));
+    return parsed.success ? parsed.data.files : [];
   } catch {
     return [];
   }

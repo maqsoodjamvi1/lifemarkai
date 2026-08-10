@@ -12,6 +12,7 @@ import { generateViaGateway,isGatewayAvailable } from "./gateway-client.ts";
 import { getDefaultAiModel } from "./model-defaults.ts";
 import { assertOpenRouterCredit,routesViaOpenRouter } from "./openrouter-credits.ts";
 import { recordAiEval } from "./eval-log.ts";
+import { toFriendlyProviderError } from "./provider-error.ts";
 export type { GenerateOptions, GenerateResult, AIMessage, AIModel } from "./provider.ts";
 
 export { generateDirect as generateDirectAI };
@@ -64,6 +65,8 @@ export async function generateAI(
       error: err instanceof Error ? err.message : String(err),
       viaGateway,
     });
-    throw err;
+    // Improvement #6: surface one actionable sentence (401/402/429/5xx) to the
+    // caller while keeping the raw provider error as `cause` for logs.
+    throw toFriendlyProviderError(err);
   }
 }

@@ -1,3 +1,4 @@
+import { sanitizeApiKey } from "./key-hygiene.ts";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { getDefaultAiModel,shouldRouteAllAiViaOpenRouter,resolveOpenRouterModelId } from "./model-defaults.ts";
@@ -290,7 +291,7 @@ export async function generateAI(options: GenerateOptions): Promise<GenerateResu
     //   • OPENROUTER_API_KEY is set
     //   • we have an equivalent OpenRouter model ID
     //   • we weren't already on OpenRouter (no infinite loop)
-    const orKey = process.env.OPENROUTER_API_KEY;
+    const orKey = sanitizeApiKey(process.env.OPENROUTER_API_KEY);
     const orModel = toOpenRouterModel(model);
     if (provider !== "openrouter" && orKey && orModel && isFallbackableError(err)) {
        
@@ -334,15 +335,17 @@ function createOpenAIClient(model: AIModel) {
     (model.startsWith("claude-") && !process.env.ANTHROPIC_API_KEY);
   const isGoogle = !forceOR && model.startsWith("gemini-");
 
-  const apiKey = forceOR
-    ? process.env.OPENROUTER_API_KEY
-    : isGoogle
-    ? process.env.GOOGLE_GENERATIVE_AI_API_KEY
-    : isOR
-    ? process.env.OPENROUTER_API_KEY
-    : isGroq
-    ? process.env.GROQ_API_KEY
-    : process.env.OPENAI_API_KEY;
+  const apiKey = sanitizeApiKey(
+    forceOR
+      ? process.env.OPENROUTER_API_KEY
+      : isGoogle
+      ? process.env.GOOGLE_GENERATIVE_AI_API_KEY
+      : isOR
+      ? process.env.OPENROUTER_API_KEY
+      : isGroq
+      ? process.env.GROQ_API_KEY
+      : process.env.OPENAI_API_KEY,
+  );
 
   if (!apiKey) {
     const providerName = forceOR || isOR ? "OpenRouter" : isGoogle ? "Google AI" : isGroq ? "Groq/Kimi" : "OpenAI";

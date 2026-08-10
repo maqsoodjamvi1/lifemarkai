@@ -3,6 +3,7 @@ import { canWriteProjectFiles,getProjectAccess } from "../../project/access.ts";
 import { generateAI } from "../generate.ts";
 import { DEFAULT_CHAT_MODEL,ECONOMY_CODING_MODEL,ESCALATION_MODEL } from "../model-defaults.ts";
 import { applyModelAdapter } from "../model-catalog.ts";
+import { clampHistory } from "../context-clamp.ts";
 import { sendLowCreditsEmail } from "../../email/resend.ts";
 import {
 AUTO_FIX_SYSTEM_PROMPT,
@@ -417,7 +418,9 @@ export async function handleAiChat(req: Request) {
 
     type MessageRow = { role: string; content: string; mode?: string; metadata?: Record<string, unknown> | null };
     const rawHistory = ((recentMessagesRes.data ?? []) as MessageRow[]).reverse();
-    const history = rawHistory.map((m) => ({ role: m.role, content: m.content }));
+    // Improvement #7: hard outer clamp — the smart selectors above decide WHAT
+    // goes in; this guarantees a selector bug can never blow up the prompt.
+    const history = clampHistory(rawHistory.map((m) => ({ role: m.role, content: m.content })));
 
     // Build a compact "file changes" context block from recent build-mode assistant turns.
     // Each build turn stores the list of generated file paths in its metadata.

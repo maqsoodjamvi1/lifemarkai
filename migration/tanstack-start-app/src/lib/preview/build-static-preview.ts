@@ -1,3 +1,4 @@
+import { injectLifemarkDataSdk } from "./lifemark-data.ts";
 import type { ProjectFile } from "../../types/database.ts";
 
 function normalizePath(path: string): string {
@@ -305,5 +306,9 @@ export function buildStaticPreview(
   html = rewriteLinkAssets(html, entry.path, fileByPath);
   html = rewriteStaticPageLinks(html, entry.path, fileByPath);
   html = injectIntoHead(html, moduleRegistryScript(normalized));
-  return injectStaticBridge(html, routeForHtmlPath(entry.path));
+  // LifemarkData SDK — localStorage mode in the editor preview; published
+  // deploys inject the hosted-endpoint variant in build-deploy-files. Runs
+  // AFTER the bridge so fragment entries are already wrapped in a full
+  // document and the SDK always lands in <head>.
+  return injectLifemarkDataSdk(injectStaticBridge(html, routeForHtmlPath(entry.path)));
 }

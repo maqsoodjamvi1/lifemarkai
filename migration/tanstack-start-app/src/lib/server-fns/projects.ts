@@ -1,8 +1,10 @@
 /**
  * Native projects list/create — Start-owned (no Next hop for dashboard create).
- * Template scaffolding for built-ins pulls from the main repo via relative import.
+ * Template scaffolding for built-ins pulls from the main repo via relative
+ * import.
  */
 import { z } from "zod";
+import { classifyBuildIntent } from "../ai/build-intent.ts";
 import { createAdminClient,createClient } from "../supabase/server.ts";
 import { getServerUser } from "../supabase/server-user.ts";
 import {
@@ -196,12 +198,21 @@ export async function createProject(data: any) {
     // react-router-dom), matching a real Lovable export file-for-file. The
     // PLATFORM itself runs on TanStack Start; that is a separate concern from
     // what it generates. tanstack-start remains fully supported and selectable.
+    // Improvement #1 (instant runtime): when the user didn't pick a framework
+    // and the prompt clearly describes a plain marketing/landing site, default
+    // to the no-build "static" runtime — instant preview, zero compile/install
+    // failure modes. Anything app-like still gets the full React pipeline, and
+    // an explicit framework choice always wins.
+    const intentText = `${data.name ?? ""} ${data.description ?? ""}`;
+    const staticDefault =
+      classifyBuildIntent(intentText).appType === "marketing-website" ? "static" : undefined;
     const requested =
       data.framework ??
       preferred ??
       (typeof process !== "undefined"
         ? process.env.DEFAULT_NEW_PROJECT_FRAMEWORK
         : undefined) ??
+      staticDefault ??
       "react";
 
     // Coerce rather than insert something projects_framework_check will reject:

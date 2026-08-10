@@ -1,4 +1,5 @@
 import { getBadgeHtml } from "../badge.ts";
+import { injectLifemarkDataSdk } from "../preview/lifemark-data.ts";
 import { buildFallbackHtml } from "../preview/build-fallback-html.ts";
 import type { ProjectFile } from "../../types/database.ts";
 
@@ -9,7 +10,20 @@ export type DeployBuildOpts = {
   projectName?: string;
   badgeHidden?: boolean;
   referralCode?: string | null;
+  /** Published app slug — enables the hosted LifemarkData backend. */
+  appSlug?: string | null;
+  /** LifemarkAI origin serving /api/public/app-data (defaults to APP_URL env). */
+  appDataBase?: string | null;
 };
+
+function appDataBaseUrl(opts: DeployBuildOpts): string | null {
+  return (
+    opts.appDataBase ??
+    process.env.NEXT_PUBLIC_APP_URL ??
+    process.env.APP_URL ??
+    null
+  );
+}
 
 function injectBadge(html: string, badgeHtml: string): string {
   if (!badgeHtml) return html;
@@ -47,7 +61,11 @@ export function buildDeployIndexHtml(files: DeployFile[], opts: DeployBuildOpts)
 
   if (isStaticHtmlProject(files)) {
     const index = files.find((f) => f.path === "index.html" || f.path === "/index.html")!;
-    return injectBadge(index.content, badgeHtml);
+    const withData = injectLifemarkDataSdk(index.content, {
+      slug: opts.appSlug ?? null,
+      apiBase: appDataBaseUrl(opts),
+    });
+    return injectBadge(withData, badgeHtml);
   }
 
   const html = buildFallbackHtml(toProjectFiles(files, opts.projectId ?? "deploy"));
