@@ -5,9 +5,11 @@ import { DEFAULT_CHAT_MODEL,ECONOMY_CODING_MODEL,ESCALATION_MODEL } from "../mod
 import { applyModelAdapter } from "../model-catalog.ts";
 import { clampHistory } from "../context-clamp.ts";
 import {
+isCloudProvisioningConfigured,
 isUpgradeToFullStackIntent,
 promptNeedsRealBackend,
 STATIC_BACKEND_GUARD,
+UPGRADE_NOT_READY_GUARD,
 } from "@/lib/project/generation-profile";
 import { sendLowCreditsEmail } from "../../email/resend.ts";
 import {
@@ -816,19 +818,31 @@ export async function handleAiChat(req: Request) {
       // Static → full-stack upgrade path: "upgrade to full-stack" on a static
       // project converts it to TanStack Start for this and future builds.
       let effectiveFramework = framework;
+      let upgradeNotReady = false;
       if (framework === "static" && isUpgradeToFullStackIntent(message)) {
-        effectiveFramework = "tanstack-start";
-        try {
-          await supabase
-            .from("projects")
-            .update({ framework: "tanstack-start", runtime: "framework" })
-            .eq("id", projectId);
-        } catch { /* best-effort — the build itself still upgrades */ }
+        if (isCloudProvisioningConfigured()) {
+          effectiveFramework = "tanstack-start";
+          try {
+            await supabase
+              .from("projects")
+              .update({ framework: "tanstack-start", runtime: "framework" })
+              .eq("id", projectId);
+          } catch { /* best-effort — the build itself still upgrades */ }
+        } else {
+          // Provisioning env not ready (SUPABASE_ORG_ID missing): converting
+          // would produce a TanStack app whose backend never connects — a
+          // broken app for a client. Stay static and explain instead.
+          upgradeNotReady = true;
+        }
       }
       if (effectiveFramework === "static") {
         systemPrompt = buildStaticGenerationPrompt(message, contextFiles, buildContextBudget) + suffix;
-        // Never fake auth/payments/db in a static app — explain the upgrade.
-        if (promptNeedsRealBackend(message)) systemPrompt += STATIC_BACKEND_GUARD;
+        if (upgradeNotReady) {
+          systemPrompt += UPGRADE_NOT_READY_GUARD;
+        } else if (promptNeedsRealBackend(message)) {
+          // Never fake auth/payments/db in a static app — explain the upgrade.
+          systemPrompt += STATIC_BACKEND_GUARD;
+        }
       } else if (effectiveFramework === "react-native") {
         systemPrompt = buildReactNativePrompt(message, contextFiles, buildContextBudget) + suffix;
       } else if (effectiveFramework === "nextjs" || effectiveFramework === "next") {

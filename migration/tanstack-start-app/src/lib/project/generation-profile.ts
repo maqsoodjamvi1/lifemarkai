@@ -32,6 +32,23 @@ export function isUpgradeToFullStackIntent(message: string): boolean {
  * A static app must never FAKE auth/payments/database — that is a security
  * lie users will ship. The model explains the upgrade instead.
  */
+/** Real-backend upgrades are only offered when provisioning is configured. */
+export function isCloudProvisioningConfigured(): boolean {
+  return Boolean(
+    process.env.SUPABASE_MANAGEMENT_TOKEN && process.env.SUPABASE_ORG_ID,
+  );
+}
+
+/** Shown instead of converting when provisioning is not configured yet. */
+export const UPGRADE_NOT_READY_GUARD = `
+
+## Full-stack upgrade requested but not available yet
+The platform's real-backend provisioning is not enabled in this environment.
+Do NOT convert or fake anything. Tell the user briefly: full-stack upgrades
+(real accounts, private database, payments) are coming soon; their app and
+data are safe, and this project can be upgraded later without losing the
+current design. Then complete any parts of their request that work statically.`;
+
 export const STATIC_BACKEND_GUARD = `
 
 ## IMPORTANT — this request needs a real backend
