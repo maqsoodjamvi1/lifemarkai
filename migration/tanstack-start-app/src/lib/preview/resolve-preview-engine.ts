@@ -28,8 +28,13 @@ export function isWebContainerPreviewEnabled(): boolean {
   // WebContainer-specific — `patchFilesForWebContainer` is used by the MODAL
   // preview path (patch-sandbox-preview-files.ts) and `fixHtmlEntry` by the
   // DEPLOY path (lib/deploy/build-project.ts). Removing it breaks both.
+  // DEFAULT ON (free engine): WebContainer runs entirely in the visitor's
+  // browser — npm install and the dev server execute on their machine, so
+  // framework previews cost the platform nothing. Modal still takes priority
+  // whenever it is configured (sandboxEnabled wins in the engine picker).
+  // Set NEXT_PUBLIC_PREVIEW_WEBCONTAINER=0 to force Modal-or-nothing.
   const flag = process.env.NEXT_PUBLIC_PREVIEW_WEBCONTAINER;
-  return flag === "1" || flag === "true";
+  return flag !== "0" && flag !== "false";
 }
 
 /** True when the project looks like a Vite/Node app (legacy WC eligibility). */
