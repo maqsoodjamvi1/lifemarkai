@@ -35,17 +35,7 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      - name: Agent mode routing
-        run: npx tsx scripts/verify-agent-mode-routing.ts
-
-      - name: OpenRouter routing
-        run: npx tsx scripts/verify-openrouter-routing.ts
-
-      - name: Intelligence routing heuristics
-        run: npm run verify:intelligence
-
-      - name: Preview transpiler + export contracts
-        run: npm run verify:previews
-
+      # The old verify:* steps referenced scripts deleted with the Next.js-era
+      # cleanup (937d822); their coverage now lives in the unit-test suite.
       - name: Lint
         run: npm run lint
