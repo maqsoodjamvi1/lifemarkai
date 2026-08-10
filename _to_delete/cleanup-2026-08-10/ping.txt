@@ -1,0 +1,18 @@
+tidy ran at 2026-07-30T16:47:06.8892718+05:00
+
+--- stashes before ---
+stash@{0}: On codex/security-hardening: finish.ps1 auto-stash
+stash@{1}: On master: !!GitHub_Desktop<master>
+drop: Dropped stash@{0} (b0d26d31759e08107deaff36733eef01d19a2329)
+
+--- stashes after ---
+stash@{0}: On master: !!GitHub_Desktop<master>
+
+--- working tree still intact? ---
+PRESENT  ship-all.ps1
+PRESENT  finish.ps1
+PRESENT  scripts\apply-migration-157.js
+PRESENT  setup-mobile.ps1
+
+--- branch ---
+codex/security-hardening

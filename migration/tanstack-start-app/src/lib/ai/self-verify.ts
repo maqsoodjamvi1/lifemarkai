@@ -380,6 +380,10 @@ export async function runSelfVerification(opts: {
   emit?: (status: string) => void;
   /** Live Modal/WC/deploy URL — preferred over srcdoc fallback when Playwright is available. */
   previewUrl?: string | null;
+  /** Complete in-memory candidate; canonical project files remain untouched. */
+  candidateFiles?: ProjectFile[];
+  /** Defaults false for candidate mode and true for legacy live verification. */
+  persistFixes?: boolean;
 }): Promise<SelfVerifyResult | null> {
   const { supabase, projectId } = opts;
   const emit = opts.emit ?? (() => {});
@@ -397,18 +401,23 @@ export async function runSelfVerification(opts: {
 
   try {
     // Load the full project (verification needs every file, not just this build's)
-    const { data: rows } = await supabase
-      .from("project_files")
-      .select("path, content, language")
-      .eq("project_id", projectId);
-    let files = (rows ?? []) as ProjectFile[];
+    let files: ProjectFile[];
+    if (opts.candidateFiles) {
+      files = opts.candidateFiles.map((file) => ({ ...file }));
+    } else {
+      const { data: rows } = await supabase
+        .from("project_files")
+        .select("path, content, language")
+        .eq("project_id", projectId);
+      files = (rows ?? []) as ProjectFile[];
+    }
     if (files.length === 0) return null;
 
     let liveUrl =
       typeof opts.previewUrl === "string" && /^https?:\/\//i.test(opts.previewUrl.trim())
         ? opts.previewUrl.trim()
         : null;
-    if (!liveUrl) {
+    if (!liveUrl && !opts.candidateFiles) {
       const { data: proj } = await supabase
         .from("projects")
         .select("preview_url, deployed_url")
@@ -597,14 +606,17 @@ export async function runSelfVerification(opts: {
           : f.path.endsWith(".css") ? "css"
           : f.path.endsWith(".html") ? "html"
           : "javascript";
-        await supabase.from("project_files").upsert(
-          { project_id: projectId, path: f.path, content: f.content, language },
-          { onConflict: "project_id,path" }
-        );
+        const persistFixes = opts.persistFixes ?? !opts.candidateFiles;
+        if (persistFixes) {
+          await supabase.from("project_files").upsert(
+            { project_id: projectId, path: f.path, content: f.content, language },
+            { onConflict: "project_id,path" }
+          );
         // The next verification round renders the LIVE preview — a fix that
         // only reached the database would be re-tested against the old file
         // and reported as "still broken" forever.
-        pushFileToRunningSandbox(supabase, projectId, f.path, f.content);
+          pushFileToRunningSandbox(supabase, projectId, f.path, f.content);
+        }
         result.fixedFiles.push({ path: f.path, content: f.content, language });
         // update local copy for the next verification round
         const idx = files.findIndex((pf) => pf.path === f.path);
@@ -625,7 +637,7 @@ export async function runSelfVerification(opts: {
       };
       // Let the sandbox push (1.2s debounce) and Vite's reload land before the
       // next round re-renders the live preview, or round N+1 tests round N's code.
-      await new Promise((resolve) => setTimeout(resolve, 4_000));
+      if (!opts.candidateFiles) await new Promise((resolve) => setTimeout(resolve, 4_000));
     }
 
     return result;

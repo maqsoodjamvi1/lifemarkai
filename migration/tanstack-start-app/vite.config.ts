@@ -246,6 +246,61 @@ export default defineConfig(({ mode }) => {
       ],
       exclude: ["@tiptap/pm"],
     },
+    build: {
+      // Keep route/editor growth from recreating multi-megabyte shared chunks.
+      // Rolldown partitions dependency closures at stable size boundaries,
+      // improving browser parse time and long-term cache reuse.
+      rolldownOptions: {
+        output: {
+          codeSplitting: {
+            minSize: 30_000,
+            maxSize: 450_000,
+            groups: [
+              {
+                name: (id) => {
+                  if (/node_modules[\\/](@tanstack|react|react-dom|scheduler)[\\/]/.test(id)) return "vendor-react-router";
+                  if (/node_modules[\\/](@tiptap|prosemirror|lowlight|highlight\.js)[\\/]/.test(id)) return "vendor-editor";
+                  if (/node_modules[\\/](mermaid|cytoscape|d3-|monaco-editor)[\\/]/.test(id)) return "vendor-visualization";
+                  if (id.includes("node_modules")) return "vendor-shared";
+                  return null;
+                },
+                test: /node_modules/,
+                includeDependenciesRecursively: false,
+                maxSize: 450_000,
+              },
+              {
+                name: "chat-ui",
+                test: /src[\\/]components[\\/]editor[\\/](chat-panel|lovable)[\\/.-]/,
+                includeDependenciesRecursively: false,
+                maxSize: 350_000,
+              },
+              {
+                name: "client-ai-utils",
+                test: /src[\\/]lib[\\/]ai[\\/]/,
+                includeDependenciesRecursively: false,
+                maxSize: 350_000,
+              },
+              {
+                name: (id) => {
+                  if (/src[\\/]routes[\\/]/.test(id)) return "app-routes";
+                  if (/src[\\/]components[\\/]editor[\\/]/.test(id)) return "editor-shared";
+                  if (/src[\\/]components[\\/]/.test(id)) return "app-components";
+                  if (/src[\\/]lib[\\/]/.test(id)) return "app-lib";
+                  return "app-shared";
+                },
+                test: /src[\\/]/,
+                includeDependenciesRecursively: false,
+                maxSize: 400_000,
+              },
+            ],
+          },
+        },
+      },
+      // The only remaining >500 KB raw chunk is the optional VS Code language
+      // service (673 KB raw / ~146 KB gzip), already isolated from initial UI.
+      // Keep warnings meaningful for any future chunk that exceeds that bound.
+      chunkSizeWarningLimit: 700,
+    },
     // SERVER environment: replace the baked literals with runtime env lookups.
     // `globalThis.process.env.X` is an entity name, which esbuild's define DOES
     // accept (unlike expressions), and the substituted entity is not re-scanned

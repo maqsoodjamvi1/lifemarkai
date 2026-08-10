@@ -35,6 +35,9 @@ import { isSimpleEditorRequest,maxOutputTokensForRequest,resolveBudgetAwareModel
 import { resolveSmartModel } from "../editor-intelligence.ts";
 import { persistChatTurnMessages } from "../persist-chat-turn.ts";
 import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
+import { commitGenerationSnapshot } from "../chat/commit-generation-snapshot.ts";
+import { checkTemplateCompatibility,lockControlledDependencyVersions,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
+import { recordGenerationVerification } from "../generation-observability.ts";
 
 
 export async function handleAiAgent(req: Request) {
@@ -100,7 +103,7 @@ export async function handleAiAgent(req: Request) {
 
   const { data: projectRow } = await supabase
     .from("projects")
-    .select("name, knowledge, cloud_enabled, cloud_project_ref, environment, disabled_skill_ids, metadata, deployed_url, preview_url")
+    .select("*")
     .eq("id", projectId)
     .single();
 
@@ -600,16 +603,11 @@ export async function handleAiAgent(req: Request) {
             projectFileMap.set(cleanPath, { path: cleanPath, content, language: detectLanguage(cleanPath) });
             send({ fileUpdated: { path: cleanPath, content: content.slice(0, 100) + "..." } });
 
-            // Persist to DB
-            await supabase.from("project_files").upsert(
-              { project_id: projectId, path: cleanPath, content, language: detectLanguage(cleanPath) },
-              { onConflict: "project_id,path" }
-            );
+            // Staged only: activation happens once after verification.
             // And into the RUNNING preview container — the DB alone leaves the
             // sandbox serving the old file (observed stale-preview bug).
-            pushFileToRunningSandbox(supabase, projectId, cleanPath, content);
           },
-          // Real deletion. The route persists via upsert only, so before this
+          // Deletions remain staged until the full snapshot is committed.
           // nothing ever issued a DELETE against project_files: delete_file
           // returned "Deleted: <path>", the summary said so, and the file was
           // still in the project and the preview — and reappeared in context next
@@ -617,11 +615,6 @@ export async function handleAiAgent(req: Request) {
           onFileDelete: async (path: string) => {
             producedBillableWork = true;
             const cleanPath = path.replace(/\\/g, "/").replace(/^\/+/, "");
-            const { error: deleteError } = await supabase
-              .from("project_files")
-              .delete()
-              .eq("project_id", projectId)
-              .eq("path", cleanPath);
 
             // Report the truth. An unchecked delete meant a failed one still
             // announced "Deleted: <path>" to the user and dropped the file from
@@ -629,10 +622,6 @@ export async function handleAiAgent(req: Request) {
             // were gone, while the project and the preview still had it. That
             // divergence is worse than the failure: the next turn is reasoning
             // about a file set that does not exist.
-            if (deleteError) {
-              send({ fileDeleteFailed: { path: cleanPath, error: deleteError.message } });
-              return;
-            }
             projectFileMap.delete(cleanPath);
             send({ fileDeleted: { path: cleanPath } });
           },
@@ -642,19 +631,9 @@ export async function handleAiAgent(req: Request) {
           (file) => !projectFileMap.has(file.path.replace(/\\/g, "/").replace(/^\/+/, "")),
         );
         if (supportFiles.length > 0) {
-          await supabase.from("project_files").upsert(
-            supportFiles.map((file) => ({
-              project_id: projectId,
-              path: file.path,
-              content: file.content,
-              language: file.language ?? detectLanguage(file.path),
-            })),
-            { onConflict: "project_id,path" },
-          );
           for (const file of supportFiles) {
             projectFileMap.set(file.path, { path: file.path, content: file.content, language: file.language });
             send({ fileUpdated: { path: file.path, content: file.content.slice(0, 100) + "..." } });
-            pushFileToRunningSandbox(supabase, projectId, file.path, file.content);
           }
         }
         // ── Post-generation guarantees ────────────────────────────────────
@@ -678,24 +657,17 @@ export async function handleAiAgent(req: Request) {
             if (file.path === "package.json") {
               const aligned = alignGeneratedPackageJson(file.content);
               if (aligned.changed.length > 0) file.content = aligned.content;
+              const template = resolveControlledTemplate(task, String((projectRow as { framework?: string } | null)?.framework ?? "react"));
+              const locked = lockControlledDependencyVersions(file.content, template);
+              if (locked.changed.length > 0) file.content = locked.content;
             }
             const prev = projectFileMap.get(file.path);
             if (!prev || (prev.content ?? "") !== file.content) guaranteed.push(file);
           }
           if (guaranteed.length > 0) {
-            await supabase.from("project_files").upsert(
-              guaranteed.map((file) => ({
-                project_id: projectId,
-                path: file.path,
-                content: file.content,
-                language: file.language ?? detectLanguage(file.path),
-              })),
-              { onConflict: "project_id,path" },
-            );
             for (const file of guaranteed) {
               projectFileMap.set(file.path, { path: file.path, content: file.content, language: file.language });
               send({ fileUpdated: { path: file.path, content: file.content.slice(0, 100) + "..." } });
-              pushFileToRunningSandbox(supabase, projectId, file.path, file.content);
             }
           }
         } catch {
@@ -705,6 +677,52 @@ export async function handleAiAgent(req: Request) {
         const filesChanged = Array.from(
           new Set([...(Array.isArray(result.filesChanged) ? result.filesChanged : []), ...supportFiles.map((file) => file.path), ...guaranteed.map((file) => file.path)]),
         );
+
+        let stagedVerification = null;
+        const preAgentRevision = Number((projectRow as { generation_revision?: number } | null)?.generation_revision ?? 0);
+        if (filesChanged.length > 0) {
+          const candidateFiles = Array.from(projectFileMap.values()).map((file) => ({
+            ...file,
+            language: file.language ?? detectLanguage(file.path),
+          }));
+          const template = resolveControlledTemplate(task, String((projectRow as { framework?: string } | null)?.framework ?? "react"));
+          const compatibility = checkTemplateCompatibility(template, candidateFiles);
+          if (!compatibility.compatible) {
+            send({ template_status: {
+              template: `${template.key}@${template.version}`,
+              missing: compatibility.missingPaths,
+              dependency_drift: compatibility.dependencyDrift,
+            } });
+          }
+          const { runSelfVerification } = await import("@/lib/ai/self-verify");
+          stagedVerification = await runSelfVerification({
+            supabase,
+            projectId,
+            userId: user.id,
+            candidateFiles: candidateFiles as unknown as import("@/types/database").ProjectFile[],
+            persistFixes: false,
+            emit: (status) => send({ verify_status: status }),
+          });
+          if (!stagedVerification?.passed) {
+            const reason = stagedVerification?.errors[0] ?? "candidate verification could not complete";
+            await (supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<unknown> })
+              .rpc("record_failed_generation", {
+                target_project_id: projectId,
+                run_source: "agent",
+                staged_files: candidateFiles,
+                failure_message: reason,
+              }).catch(() => undefined);
+            throw new Error(`Agent verification failed; the last working revision was preserved: ${reason}`);
+          }
+          for (const fixed of stagedVerification.fixedFiles) projectFileMap.set(fixed.path, fixed);
+          const committed = await commitGenerationSnapshot(
+            supabase,
+            projectId,
+            "agent",
+            Array.from(projectFileMap.values()),
+          );
+          for (const file of committed) pushFileToRunningSandbox(supabase, projectId, file.path, file.content);
+        }
 
         // Save agent task as messages — including a compact persisted work
         // trace (Lovable parity: expandable "Worked for Xs · N steps" on
@@ -773,7 +791,7 @@ export async function handleAiAgent(req: Request) {
 
         // ── Lovable parity: backend auto-wiring + self-verification ──────────
         let backendWiring = null;
-        let verification = null;
+        let verification = stagedVerification;
         if (filesChanged.length > 0) {
           try {
             const { data: changedRows } = await supabase
@@ -810,7 +828,7 @@ export async function handleAiAgent(req: Request) {
               projectId,
               userId: user.id,
               emit: (status) => send({ verify_status: status }),
-              maxRounds: simpleAgentRequest ? 0 : undefined,
+              maxRounds: stagedVerification ? 0 : simpleAgentRequest ? 0 : undefined,
             });
             // Errors that survive the auto-fix rounds become 'runtime' health
             // findings, which is what feeds the learned-rules flywheel
@@ -829,6 +847,25 @@ export async function handleAiAgent(req: Request) {
                   verification,
                 }).catch(() => {});
               } catch { /* ignore */ }
+              const { data: activeRevision } = await supabase
+                .from("projects")
+                .select("generation_revision")
+                .eq("id", projectId)
+                .single();
+              const expectedRevision = Number((activeRevision as { generation_revision?: number } | null)?.generation_revision);
+              if (Number.isSafeInteger(expectedRevision)) {
+                const { error: rollbackError } = await (supabase as unknown as {
+                  rpc: (name: string, args: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
+                }).rpc("rollback_generation_revision", {
+                  target_project_id: projectId,
+                  target_revision: preAgentRevision,
+                  expected_revision: expectedRevision,
+                });
+                if (!rollbackError) send({
+                  verify_status: "Verification failed after activation. Restored the last working revision.",
+                  auto_rolled_back: true,
+                });
+              }
             }
           } catch { verification = null; }
 
@@ -844,6 +881,13 @@ export async function handleAiAgent(req: Request) {
             backendWiring,
             verification,
           });
+          await recordGenerationVerification(
+            supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<unknown> },
+            projectId,
+            resolveControlledTemplate(task, String((projectRow as { framework?: string } | null)?.framework ?? "react")),
+            verification,
+            verification?.passed ? "verification" : "post-activation",
+          );
         }
 
         finalCreditCost = computeCreditCost({

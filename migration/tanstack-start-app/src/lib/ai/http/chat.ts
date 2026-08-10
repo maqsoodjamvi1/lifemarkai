@@ -98,9 +98,12 @@ import { resolveSmartModel } from "../editor-intelligence.ts";
 import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 import { buildStaticGenerationPrompt } from "../prompts/static-build.ts";
 import { commitGeneratedFiles } from "../chat/commit-generated-files.ts";
+import { buildClarificationPrompt,parseClarifyingQuestions } from "../chat/clarification.ts";
 import { resolveChatRequestContext } from "../chat/request-context.ts";
 import { createStreamSink } from "../chat/sse-stream.ts";
 import { createDeployActionResponse } from "../chat/deploy-action.ts";
+import { buildControlledTemplatePrompt,lockControlledDependencyVersions,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
+import { recordGenerationVerification } from "../generation-observability.ts";
 
 // Generation + backend wiring + self-verification can exceed a minute on
 // complex builds (Lovable budgets 15 min for agent runs).
@@ -610,19 +613,22 @@ export async function handleAiChat(req: Request) {
 
       const clarifyIntent = classifyBuildIntent(persistedUserMessage);
       const appShell = isAppShellAppType(clarifyIntent.appType);
-      const clarifySystemPrompt = [
+      const clarifySystemPrompt = buildClarificationPrompt(clarifyIntent.appType, appShell);
+      /* Legacy inline prompt retained temporarily for blame context. [
         "You are an expert product designer + software architect asking a user a few quick questions before building, exactly like Lovable's pre-build questionnaire.",
         "Do NOT research, plan implementation, or generate code in this step — ONLY output the JSON question array.",
-        "Given a user's build request, generate 2-4 targeted questions. Prefer CHOICE questions with 3-4 concrete options.",
+        "Given a user's build request, generate 1-4 targeted questions only for decisions that materially change the product. Prefer CHOICE questions with 3-5 concrete options.",
         'Return ONLY a JSON array of question objects, no prose, no code fences.',
-        'Each object: id (string), question (string), type ("text"|"choice"), kind ("palette"|"typography"|"layout"|"structure"|"database"|"general"), options (string[] for choice).',
+        'Each object: id (string), question (string), type ("text"|"choice"), kind ("palette"|"typography"|"layout"|"structure"|"database"|"general"), multiple (boolean), options ({label, description, value?}[] for choice).',
         appShell
           ? `This is a ${clarifyIntent.appType} / operations app. Ask kind structure or database questions: which modules to include first (offer 3-4 concrete bundles), authentication (email / OAuth / invite-only), and roles (admin vs staff vs read-only). Do NOT ask marketing palette/hero layout unless they explicitly wanted a public website.`
           : "For NEW WEBSITE/APP builds ask design questions: one palette question (kind palette — each option is a named palette followed by 2-3 hex codes in parentheses), one typography pairing (kind typography), and one homepage layout (kind layout).",
         "For DATABASE/BACKEND-heavy requests add kind database questions: core entities/tables, auth method, roles & permissions.",
+        "For connectors/integrations, first determine what the user means. Offer capability choices such as: generated apps access shared real data; each end user connects their own OAuth account; published apps receive a persistent backend/auth; add more AI providers. Use multiple:true when choices can be combined. Give every choice a concise outcome-focused description.",
+        "Do not ask about decisions already explicit in the request. Do not ask cosmetic questions for an existing app unless design is ambiguous and requested.",
         "Keep every question short and answerable in one tap.",
         "Respond ONLY with a valid JSON array.",
-      ].join("\n");
+      ].join("\n"); */
 
       const clarifyEncoder = new TextEncoder();
       const clarifyStream = new ReadableStream({
@@ -668,7 +674,8 @@ export async function handleAiChat(req: Request) {
             if (remaining == null) throw new Error("Unable to settle clarification credits");
             reservationFinalized = true;
 
-            let questions: unknown[] = [];
+            let questions = parseClarifyingQuestions(questionsJson);
+            /* Legacy parser retained temporarily for blame context.
             try {
               const parsed: unknown = JSON.parse(questionsJson);
               if (Array.isArray(parsed)) {
@@ -696,23 +703,36 @@ export async function handleAiChat(req: Request) {
                     typeof o === "string"
                       ? o
                       : o && typeof o === "object"
-                        ? [
-                            (o as Record<string, unknown>).label,
-                            (o as Record<string, unknown>).value,
-                            (o as Record<string, unknown>).text,
-                          ].find((v): v is string => typeof v === "string")
+                        ? (() => {
+                            const option = o as Record<string, unknown>;
+                            const label = [option.label, option.text, option.value].find(
+                              (v): v is string => typeof v === "string" && v.trim() !== "",
+                            );
+                            return label ? {
+                              label: label.trim(),
+                              ...(typeof option.description === "string" && option.description.trim()
+                                ? { description: option.description.trim() }
+                                : {}),
+                              ...(typeof option.value === "string" && option.value.trim()
+                                ? { value: option.value.trim() }
+                                : {}),
+                            } : undefined;
+                          })()
                         : undefined,
                   )
-                  .filter((s): s is string => !!s && s.trim() !== "");
+                  .filter((option): option is string | { label: string; description?: string; value?: string } =>
+                    typeof option === "string" ? option.trim() !== "" : !!option,
+                  );
                 return {
                   id: typeof r.id === "string" ? r.id : `q${i + 1}`,
                   question: text.trim(),
                   type: options.length > 0 ? "choice" : "text",
                   kind: typeof r.kind === "string" ? r.kind : "general",
+                  multiple: r.multiple === true,
                   ...(options.length > 0 ? { options } : {}),
                 };
               })
-              .filter((q): q is NonNullable<typeof q> => q !== null);
+              .filter((q): q is NonNullable<typeof q> => q !== null); */
 
             const qPayload = JSON.stringify({
               clarifying_questions: questions,
@@ -801,6 +821,7 @@ export async function handleAiChat(req: Request) {
           ? buildTanStackGenerationPrompt(message, contextFiles, buildContextBudget)
           : buildReactGenerationPrompt(message, contextFiles, buildContextBudget, framework)) + suffix;
       }
+      systemPrompt += buildControlledTemplatePrompt(resolveControlledTemplate(message, framework));
       if (simpleEconomyRequest) {
         systemPrompt += `\n\n---\n# Economy Small Edit Mode\nThis is a small edit/debug turn on an existing project. Keep the response minimal:\n- Return ONLY files that must change.\n- Prefer surgical changes over rewriting whole files.\n- Do not regenerate the whole app, create new pages, restyle unrelated UI, or expand product scope.\n- Keep existing imports, data, assets, and routes unless the user explicitly asked to change them.\n---`;
       }
@@ -1557,6 +1578,8 @@ The user has expressed frustration. Do the following:
 
           // ── Patch mode: apply find-and-replace patches ────────────────────
           let parsedFiles: ParsedFile[] = [];
+          let stagedVerification: SelfVerifyResult | null = null;
+          let preCommitRevision: number | null = null;
           /** Lovable honesty: don't claim success when nothing landed in project_files. */
           let patchOutcome: "applied" | "failed" | "n/a" = mode === "patch" ? "failed" : "n/a";
           if (mode === "patch") {
@@ -2128,6 +2151,16 @@ The user has expressed frustration. Do the following:
                     changed: aligned.changed,
                   });
                 }
+                const template = resolveControlledTemplate(costPrompt, framework);
+                const locked = lockControlledDependencyVersions(finalFiles[pkgIndex].content, template);
+                if (locked.changed.length > 0) {
+                  finalFiles[pkgIndex] = { ...finalFiles[pkgIndex], content: locked.content };
+                  logger.info("ai.chat.controlled_dependency_lock", {
+                    projectId,
+                    template: template.key,
+                    changed: locked.changed,
+                  });
+                }
               }
             }
 
@@ -2140,6 +2173,81 @@ The user has expressed frustration. Do the following:
                 .from("project_files")
                 .select("path, content, language")
                 .eq("project_id", projectId);
+              const { data: revisionRow } = await supabase
+                .from("projects")
+                .select("generation_revision")
+                .eq("id", projectId)
+                .single();
+              preCommitRevision = Number((revisionRow as { generation_revision?: number } | null)?.generation_revision ?? 0);
+
+              // Deterministic edits are part of the same staged candidate as
+              // model-generated files. They must never bypass verification or
+              // create a second, partially committed revision.
+              if (isMenuNavEditIntent(costPrompt)) {
+                const workingNavFiles = new Map<string, { path: string; content: string }>();
+                for (const file of (currentFiles ?? []) as Array<{ path: string; content: string }>) {
+                  workingNavFiles.set(file.path, file);
+                }
+                for (const file of parsedFiles) workingNavFiles.set(file.path, file);
+                const menuPatches = buildDeterministicMenuPatches(costPrompt, Array.from(workingNavFiles.values()));
+                const menuResults = collapsePatchResults(applyPatches(menuPatches, Array.from(workingNavFiles.values())));
+                for (const result of menuResults) {
+                  if (!result.applied) continue;
+                  const extension = result.path.split(".").pop()?.toLowerCase() ?? "text";
+                  const language = ({
+                    ts: "typescript", tsx: "typescript", js: "javascript",
+                    jsx: "javascript", css: "css", html: "html", json: "json", md: "markdown",
+                  } as Record<string, string>)[extension] ?? extension;
+                  const index = parsedFiles.findIndex((file) => file.path === result.path);
+                  const staged = { path: result.path, content: result.content, language };
+                  if (index >= 0) parsedFiles[index] = staged;
+                  else parsedFiles.push(staged);
+                }
+                if (menuPatches.length > 0) {
+                  logger.info("ai.chat.build_deterministic_menu_staged", {
+                    projectId,
+                    paths: menuPatches.map((patch) => patch.path),
+                  });
+                }
+              }
+
+              // Verify a complete candidate in memory BEFORE canonical files
+              // are changed. A failed candidate is recorded by the stream but
+              // never replaces the last working revision.
+              const candidateByPath = new Map<string, { path: string; content: string; language: string }>();
+              for (const file of (currentFiles ?? []) as Array<{ path: string; content: string; language: string }>) {
+                candidateByPath.set(file.path, file);
+              }
+              for (const file of parsedFiles) {
+                candidateByPath.set(file.path, { path: file.path, content: file.content, language: file.language });
+              }
+              const { runSelfVerification } = await import("@/lib/ai/self-verify");
+              stagedVerification = await runSelfVerification({
+                supabase,
+                projectId,
+                userId,
+                candidateFiles: Array.from(candidateByPath.values()) as unknown as import("@/types/database").ProjectFile[],
+                persistFixes: false,
+                emit: (status) => safeEnqueue(encoder.encode(`data: ${JSON.stringify({ verify_status: status })}\n\n`)),
+              });
+              if (!stagedVerification?.passed) {
+                const reason = stagedVerification?.errors[0] ?? "candidate verification could not complete";
+                await (supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<unknown> }).rpc(
+                  "record_failed_generation",
+                  {
+                    target_project_id: projectId,
+                    run_source: "chat",
+                    staged_files: parsedFiles.map((file) => ({ path: file.path, content: file.content, language: file.language })),
+                    failure_message: reason,
+                  },
+                ).catch(() => undefined);
+                throw new Error(`Verification blocked this generation before it replaced your working app: ${reason}`);
+              }
+              for (const fixed of stagedVerification.fixedFiles) {
+                const existing = parsedFiles.findIndex((file) => file.path === fixed.path);
+                if (existing >= 0) parsedFiles[existing] = { ...parsedFiles[existing], content: fixed.content };
+                else parsedFiles.push({ path: fixed.path, content: fixed.content, language: fixed.language });
+              }
 
               if (currentFiles && currentFiles.length > 0) {
                 try {
@@ -2192,47 +2300,6 @@ The user has expressed frustration. Do the following:
                 pushFileToRunningSandbox(supabase, projectId, file.path, file.content);
               }
 
-                            // empty desktop <nav>. Force About/Services/Contact into the real header.
-              if (isMenuNavEditIntent(costPrompt)) {
-                const mergedForNav = new Map<string, { path: string; content: string }>();
-                for (const f of (currentFiles as Array<{ path: string; content: string }> | null) ?? []) {
-                  mergedForNav.set(f.path, { path: f.path, content: f.content });
-                }
-                for (const f of parsedFiles) {
-                  mergedForNav.set(f.path, { path: f.path, content: f.content });
-                }
-                const workingNavFiles = Array.from(mergedForNav.values());
-                const menuPatches = buildDeterministicMenuPatches(costPrompt, workingNavFiles);
-                if (menuPatches.length > 0) {
-                  const menuResults = applyPatches(menuPatches, workingNavFiles);
-                  for (const pr of collapsePatchResults(menuResults)) {
-                    if (!pr.applied) continue;
-                    const lang = pr.path.split(".").pop()?.toLowerCase() ?? "text";
-                    const langMap: Record<string, string> = {
-                      ts: "typescript", tsx: "typescript", js: "javascript",
-                      jsx: "javascript", css: "css", html: "html", json: "json", md: "markdown",
-                    };
-                    const language = langMap[lang] ?? lang;
-                    parsedFiles = parsedFiles.map((f) =>
-                      f.path === pr.path ? { ...f, content: pr.content } : f,
-                    );
-                    if (!parsedFiles.some((f) => f.path === pr.path)) {
-                      parsedFiles.push({ path: pr.path, content: pr.content, language });
-                    }
-                    await supabase.from("project_files").upsert({
-                      project_id: projectId,
-                      path: pr.path,
-                      content: pr.content,
-                      language,
-                    }, { onConflict: "project_id,path" });
-                    pushFileToRunningSandbox(supabase, projectId, pr.path, pr.content);
-                  }
-                  logger.info("ai.chat.build_deterministic_menu", {
-                    projectId,
-                    paths: menuPatches.map((p) => p.path),
-                  });
-                }
-              }
             }
           }
 
@@ -2240,7 +2307,7 @@ The user has expressed frustration. Do the following:
           // Both run inside the stream so the user sees live progress; both
           // are best-effort and never fail the build.
           let backendWiring: AutoWireResult | null = null;
-          let verification: SelfVerifyResult | null = null;
+          let verification: SelfVerifyResult | null = stagedVerification;
           if ((mode === "build" || mode === "patch") && parsedFiles.length > 0) {
             const emitStatus = (key: string) => (status: string) => {
               safeEnqueue(encoder.encode(`data: ${JSON.stringify({ [key]: status })}\n\n`));
@@ -2278,13 +2345,15 @@ The user has expressed frustration. Do the following:
             const isStyleOnlyEdit = /(re-?style|re-?design|change\s+(the\s+)?(theme|template|design|look|colou?rs?|style)|update\s+(the\s+)?(website\s+)?(theme|template|design|look|style)|new\s+(theme|template|design|look|style)|different\s+(theme|template|design|look)|make\s+it\s+(dark|light|modern|minimal|colou?rful|cleaner))/i.test(message);
             const verifyOnlyFastLane = simpleEconomyRequest || isStyleOnlyEdit;
             try {
+              // Candidate verification already ran bounded repair rounds before
+              // commit. This post-commit pass is health confirmation only.
               const { runSelfVerification } = await import("@/lib/ai/self-verify");
               verification = await runSelfVerification({
                 supabase,
                 projectId,
                 userId,
                 emit: emitStatus("verify_status"),
-                maxRounds: verifyOnlyFastLane ? 0 : undefined,
+                maxRounds: stagedVerification ? 0 : verifyOnlyFastLane ? 0 : undefined,
               });
               if (verification && verification.fixesApplied > 0) {
                 usedAutoFix = true;
@@ -2309,6 +2378,41 @@ The user has expressed frustration. Do the following:
                 }).catch(() => {});
               }
             } catch { verification = null; }
+
+            // A candidate passed isolated checks but failed after activation
+            // (for example environment-specific startup). Restore the exact
+            // pre-generation snapshot automatically and report the failure.
+            if (verification && !verification.passed && preCommitRevision !== null) {
+              const { data: activeRevision } = await supabase
+                .from("projects")
+                .select("generation_revision")
+                .eq("id", projectId)
+                .single();
+              const expectedRevision = Number((activeRevision as { generation_revision?: number } | null)?.generation_revision);
+              if (Number.isSafeInteger(expectedRevision)) {
+                const { error: rollbackError } = await (supabase as unknown as {
+                  rpc: (name: string, args: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
+                }).rpc("rollback_generation_revision", {
+                  target_project_id: projectId,
+                  target_revision: preCommitRevision,
+                  expected_revision: expectedRevision,
+                });
+                if (!rollbackError) {
+                  safeEnqueue(encoder.encode(`data: ${JSON.stringify({
+                    verify_status: "Verification failed after activation. Restored the last working revision.",
+                    auto_rolled_back: true,
+                  })}\n\n`));
+                  parsedFiles = [];
+                }
+              }
+            }
+            await recordGenerationVerification(
+              supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<unknown> },
+              projectId,
+              resolveControlledTemplate(message, framework),
+              verification,
+              verification?.passed ? "verification" : "post-activation",
+            );
           }
 
           const buildActivity =

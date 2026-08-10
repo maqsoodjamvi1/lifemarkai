@@ -1,6 +1,6 @@
 import type { ProjectFile } from "../../types/database.ts";
 
-export type PreviewEngine = "detecting" | "sandbox" | "webcontainer" | "fallback";
+export type PreviewEngine = "detecting" | "static" | "sandbox" | "webcontainer" | "unavailable";
 
 /** Set in sessionStorage when WebContainer.boot() fails — skip retrying this session. */
 export const WC_UNAVAILABLE_KEY = "lifemark-wc-unavailable";
@@ -49,7 +49,7 @@ export function shouldUseWebContainer(files: Pick<ProjectFile, "path">[]): boole
  * Product preview engine = Modal sandbox only (Lovable).
  *
  * - Modal configured / booting / live → `"sandbox"`
- * - Modal missing → `"fallback"` which the panel treats as **Modal required**
+ * - Modal missing → `"unavailable"` which the panel treats as **Modal required**
  *   (not WebContainer, not esbuild, not E2B, not a fake srcdoc product).
  * - WebContainer only when `NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1` (draft).
  */
@@ -81,7 +81,7 @@ export function resolvePreviewEngine(
     typeof window !== "undefined" &&
     window.sessionStorage.getItem(WC_UNAVAILABLE_KEY) === "1"
   ) {
-    return "fallback";
+    return "unavailable";
   }
 
   if (allowWc && prefer && isolated && shouldUseWebContainer(files)) {
@@ -89,5 +89,5 @@ export function resolvePreviewEngine(
   }
 
   // Modal not configured → panel shows "Configure Modal" (not WC/esbuild/E2B).
-  return "fallback";
+  return "unavailable";
 }

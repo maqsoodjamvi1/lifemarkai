@@ -10,8 +10,23 @@ export interface ClarifyQuestion {
   type: "text" | "choice";
   /** Semantic kind — drives visual option rendering (Lovable parity). */
   kind?: "palette" | "typography" | "layout" | "structure" | "database" | "general";
-  options?: string[];
+  options?: Array<string | { label: string; description?: string; value?: string }>;
+  /** Let users select several compatible capabilities in one decision. */
+  multiple?: boolean;
   answer: string;
+}
+
+function optionDetails(option: NonNullable<ClarifyQuestion["options"]>[number]) {
+  if (typeof option === "string") return { label: option, value: option, description: "" };
+  return {
+    label: option.label,
+    value: option.value || option.label,
+    description: option.description || "",
+  };
+}
+
+function selectedAnswers(answer: string): string[] {
+  return answer.split(" | ").map((value) => value.trim()).filter(Boolean);
 }
 
 export interface ClarifySession {
@@ -76,7 +91,10 @@ export function LovableClarifySessionCard({
   const q = reviewing ? null : session.questions[step];
 
   const isCustomAnswer = useMemo(
-    () => !!q && q.answer.trim() !== "" && !(q.options ?? []).some((o) => o === q.answer || parseSwatches(o).label === q.answer),
+    () => !!q && q.answer.trim() !== "" && !(q.options ?? []).some((option) => {
+      const { label, value } = optionDetails(option);
+      return selectedAnswers(q.answer).some((answer) => answer === value || answer === label || answer === parseSwatches(label).label);
+    }),
     [q],
   );
 
@@ -131,21 +149,39 @@ export function LovableClarifySessionCard({
           {q.type === "choice" && (q.options?.length ?? 0) > 0 && (
             <div className={cn("grid gap-2", q.kind === "layout" ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-2")}>
               {(q.options ?? []).map((opt, oi) => {
-                const { label, hexes } = parseSwatches(opt);
-                const selected = q.answer === opt || q.answer === label;
+                const details = optionDetails(opt);
+                const { label, hexes } = parseSwatches(details.label);
+                const selected = selectedAnswers(q.answer).some((answer) => answer === details.value || answer === label);
                 return (
                   <button
-                    key={opt}
+                    key={details.value}
                     type="button"
-                    onClick={() => onUpdateQuestion(q.id, label)}
+                    onClick={() => {
+                      if (!q.multiple) {
+                        onUpdateQuestion(q.id, details.value);
+                        return;
+                      }
+                      const current = selectedAnswers(q.answer);
+                      const next = selected
+                        ? current.filter((answer) => answer !== details.value && answer !== label)
+                        : [...current, details.value];
+                      onUpdateQuestion(q.id, next.join(" | "));
+                    }}
                     className={cn(
-                      "rounded-xl border text-left transition-all",
+                      "rounded-xl border text-left transition-all flex gap-2.5",
                       q.kind === "layout" ? "p-2 bg-muted/40" : "px-3 py-2.5 bg-muted/30",
                       selected
                         ? "border-foreground ring-1 ring-foreground"
                         : "border-border hover:border-foreground/40",
                     )}
                   >
+                    {q.multiple && (
+                      <span className={cn(
+                        "mt-0.5 h-4 w-4 shrink-0 rounded border flex items-center justify-center text-[10px] font-bold",
+                        selected ? "bg-[#1F55F1] border-[#1F55F1] text-white" : "border-border bg-background",
+                      )}>{selected ? "✓" : ""}</span>
+                    )}
+                    <span className="min-w-0 flex-1">
                     {q.kind === "layout" && <LayoutThumb index={oi} />}
                     <span className={cn("flex items-center gap-2", q.kind === "layout" && "mt-1.5")}>
                       {hexes.length > 0 && (
@@ -156,6 +192,10 @@ export function LovableClarifySessionCard({
                         </span>
                       )}
                       <span className="text-xs font-medium text-foreground">{label}</span>
+                    </span>
+                    {details.description && (
+                      <span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">{details.description}</span>
+                    )}
                     </span>
                   </button>
                 );

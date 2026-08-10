@@ -12,6 +12,7 @@ getProjectAccess,
 } from "@/lib/project/access";
 import { tanstackStartScaffold } from "../templates/tanstack-start-scaffold.ts";
 import { lovableViteScaffold } from "../templates/lovable-vite-scaffold.ts";
+import { controlledTemplateMetadata,resolveControlledTemplate,stampControlledTemplateFiles } from "../templates/controlled-registry.ts";
 import { getTemplateById,type TemplateFile } from "../templates/built-in.ts";
 import type { Database,Json } from "../../types/database.ts";
 
@@ -206,6 +207,7 @@ export async function createProject(data: any) {
     // Coerce rather than insert something projects_framework_check will reject:
     // a constraint violation surfaces as an opaque 500 on the create path.
     const framework = ALLOWED_FRAMEWORKS.has(requested) ? requested : "react";
+    const controlledTemplate = resolveControlledTemplate(`${data.name ?? ""} ${data.description ?? ""}`, framework);
 
     const { data: project, error } = await supabase
       .from("projects")
@@ -218,6 +220,7 @@ export async function createProject(data: any) {
         status: "active",
         is_public: false,
         template_id: data.templateId ?? null,
+        metadata: controlledTemplateMetadata(controlledTemplate),
       })
       .select(PROJECT_SAFE_SELECT)
       .single();
@@ -308,7 +311,7 @@ export async function createProject(data: any) {
         if (failed) return failed;
       }
     } else {
-      const starterFiles = getStarterFiles(data.name, framework);
+      const starterFiles = stampControlledTemplateFiles(getStarterFiles(data.name, framework), controlledTemplate);
       const failed = await seedFiles(
         starterFiles.map((f) => ({ project_id: project.id, ...f })),
         "starter files",

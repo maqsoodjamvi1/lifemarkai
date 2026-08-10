@@ -1,0 +1,81 @@
+﻿[
+
+{"name":"kimi-plugin-inspect-react","keywords":[],"version":"1.0.3","description":"Φ╜╗ΘçÅτÜä Vite µÅÆΣ╗╢∩╝îτö¿Σ║Äσ£¿ React τ╗äΣ╗╢µ╕▓µƒôτÜä DOM Σ╕èσåÖσàÑµ║ÉτáüΣ╜ìτ╜«Σ┐íµü»∩╝îΣ╛┐Σ║Äσ£¿µ╡ÅΦºêσÖ¿Θçîσ«ÜΣ╜ìσê░σ»╣σ║öτÜäµûçΣ╗╢σÆîΦíîσêùπÇé","sanitized_name":"kimi-plugin-inspect-react","publisher":{"email":"541149506@qq.com","username":"chante"},"maintainers":[{"email":"emlcjnil@gmail.com","username":"emlcj"},{"email":"541149506@qq.com","username":"chante"}],"license":"ISC","date":"2026-01-21T05:14:02.929Z","links":{"npm":"https://www.npmjs.com/package/kimi-plugin-inspect-react"}}
+
+,
+
+{"name":"kimiflare","keywords":["ai","cli","coding-agent","terminal","kimi","k2.6","cloudflare","ai-gateway","workers-ai","vision","image-understanding","llm","code-generation","tui","mcp","model-context-protocol"],"version":"0.72.0","description":"A terminal coding agent powered by Kimi-K2.6, routed through your own Cloudflare AI Gateway ΓÇö per-request logs, response caching, authoritative cost. Web search, GitHub, headless browser, LSP, MCP, local memory, 262k context.","sanitized_name":"kimiflare","publisher":{"email":"sina.meraji@gmail.com","username":"sinameraji"},"maintainers":[{"email":"sina.meraji@gmail.com","username":"sinameraji"}],"license":"MIT","date":"2026-05-17T06:00:39.650Z","links":{"homepage":"https://github.com/sinameraji/kimiflare#readme","repository":"git+https://github.com/sinameraji/kimiflare.git","bugs":"https://github.com/sinameraji/kimiflare/issues","npm":"https://www.npmjs.com/package/kimiflare"}}
+
+,
+
+{"name":"opencode-kimi-full","keywords":["opencode","opencode-plugin","kimi","kimi-for-coding","moonshot","oauth","device-flow","reasoning-effort","prompt-cache-key"],"version":"1.4.0","description":"OpenCode plugin that brings the official Kimi OAuth device flow and Kimi-specific coding request fields to opencode, matching upstream kimi-cli.","sanitized_name":"opencode-kimi-full","publisher":{"email":"l3mn@ymail.com","username":"l3mn"},"maintainers":[{"email":"l3mn@ymail.com","username":"l3mn"}],"license":"MIT","date":"2026-05-09T12:09:10.447Z","links":{"homepage":"https://github.com/lemon07r/opencode-kimi-full#readme","repository":"git+https://github.com/lemon07r/opencode-kimi-full.git","bugs":"https://github.com/lemon07r/opencode-kimi-full/issues","npm":"https://www.npmjs.com/package/opencode-kimi-full"}}
+
+,
+
+{"name":"@ai-sdk/moonshotai","keywords":["ai"],"version":"2.0.22","description":"The **[Moonshot AI provider](https://ai-sdk.dev/providers/ai-sdk-providers/moonshotai)** for the [AI SDK](https://ai-sdk.dev/docs) contains language model support for the [Moonshot AI](https://platform.moonshot.cn) platform, including the Kimi model serie","sanitized_name":"@ai-sdk/moonshotai","publisher":{"email":"npm-oidc-no-reply@github.com","trustedPublisher":{"oidcConfigId":"oidc:***","id":"github"},"username":"GitHub Actions"},"maintainers":[{"email":"infra+release@vercel.com","username":"vercel-release-bot"},{"email":"matheus.frndes@gmail.com","username":"matheuss"},{"email":"matt.j.straka@gmail.com","username":"matt.straka"}],"license":"Apache-2.0","date":"2026-05-07T21:18:58.914Z","links":{"homepage":"https://ai-sdk.dev/docs","repository":"git+https://github.com/vercel/ai.git","bugs":"https://github.com/vercel/ai/issues","npm":"https://www.npmjs.com/package/@ai-sdk/moonshotai"}}
+
+,
+
+{"name":"@inquirer/external-editor","keywords":["answer","answers","ask","base","cli","command","command-line","confirm","editor","enquirer","external","external-editor","generate","generator","hyper","input","inquire","inquirer","interface","iterm","javascript","menu","node","nodejs","prompt","promptly","prompts","question","readline","scaffold","scaffolder","scaffolding","stdin","stdout","terminal","tty","ui","user","visual","yeoman","yo","zsh"],"version":"3.0.0","description":"Edit a string with the users preferred text editor using $VISUAL or $ENVIRONMENT","sanitized_name":"@inquirer/external-editor","publisher":{"email":"admin@simonboudrias.com","username":"sboudrias"},"maintainers":[{"email":"admin@simonboudrias.com","username":"sboudrias"},{"email":"mail@michael-kuehnel.de","username":"mischah"}],"license":"MIT","date":"2026-04-06T19:34:41.740Z","links":{"homepage":"https://github.com/SBoudrias/Inquirer.js/blob/main/packages/external-editor/README.md","repository":"git+https://github.com/SBoudrias/Inquirer.js.git","bugs":"https://github.com/SBoudrias/Inquirer.js/issues","npm":"https://www.npmjs.com/package/@inquirer/external-editor"}}
+
+,
+
+{"name":"@oh-my-kimi/cli","keywords":["agent","agent-ensemble","agent-orchestration","agentic-coding","ai","ai-agent","ai-agents","ai-coding","ai-devtools","autonomous-agents","cli","cli-tool","code-assistant","code-generation","code-review-automation","coding","coding-agent","dag","design-md","developer-experience","developer-tools","ensemble","git-worktree","graph-memory","k2.6","kimi","kimi-cli","kimi-code","kimi-k2","kimi-k2.6","language-server-protocol","large-language-model","llm","local-first","lsp","mcp","model-context-protocol","moonshot","multi-agent","multi-agent-orchestration","nodejs","oh-my-kimi","orchestration","parallel-execution","quality-gates","scheduler","task-graph","task-scheduler","tmux","typescript","workflow-automation","worktree","yolo-mode"],"version":"1.1.15","description":"Verified agent runtime for Kimi Code. Stable daily-use core with alpha orchestration surfaces.","sanitized_name":"@oh-my-kimi/cli","publisher":{"email":"ingeng2004@gmail.com","username":"dmae"},"maintainers":[{"email":"ingeng2004@gmail.com","username":"dmae"}],"license":"MIT","date":"2026-05-13T05:45:44.168Z","links":{"homepage":"https://oh-my-kimi.sbs/","repository":"git+https://github.com/dmae97/oh-my-kimi.git","bugs":"https://github.com/dmae97/oh-my-kimi/issues","npm":"https://www.npmjs.com/package/@oh-my-kimi/cli"}}
+
+,
+
+{"name":"pi-provider-kimi-code","keywords":["pi-package","pi-extension","pi-provider","pi","pi-coding-agent","pi-mono","coding-agent","ai-provider","llm","llm-provider","kimi","kimi-for-coding","kimi-coder","kimi-k2","kimi-k2.6","kimi-k2.5","moonshot","moonshotai","oauth","device-code","subscription"],"version":"0.3.0","description":"Pi extension for Kimi Code ΓÇö reuse your Kimi Code Plan in pi-coding-agent (K2.6, K2.5)","sanitized_name":"pi-provider-kimi-code","publisher":{"email":"npm-oidc-no-reply@github.com","trustedPublisher":{"oidcConfigId":"oidc:***","id":"github"},"username":"GitHub Actions"},"maintainers":[{"email":"yanleech@gmail.com","username":"133cha31"}],"license":"MIT","date":"2026-04-20T16:38:48.598Z","links":{"homepage":"https://github.com/Leechael/pi-provider-kimi-code#readme","repository":"git+https://github.com/Leechael/pi-provider-kimi-code.git","bugs":"https://github.com/Leechael/pi-provider-kimi-code/issues","npm":"https://www.npmjs.com/package/pi-provider-kimi-code"}}
+
+,
+
+{"name":"external-editor","keywords":["editor","external","user","visual"],"version":"3.1.0","description":"Edit a string with the users preferred text editor using $VISUAL or $ENVIRONMENT","sanitized_name":"external-editor","publisher":{"email":"kevin@mrkmg.com","username":"mrkmg"},"maintainers":[{"email":"kevin@mrkmg.com","username":"mrkmg"}],"license":"MIT","date":"2019-07-08T16:07:13.082Z","links":{"homepage":"https://github.com/mrkmg/node-external-editor#readme","repository":"git+https://github.com/mrkmg/node-external-editor.git","bugs":"https://github.com/mrkmg/node-external-editor/issues","npm":"https://www.npmjs.com/package/external-editor"}}
+
+,
+
+{"name":"kfc-code-cli","keywords":[],"version":"0.1.0-rc.1","description":"KFC crazy ","sanitized_name":"kfc-code-cli","publisher":{"email":"liruifeng1024@gmail.com","username":"liruifengv"},"maintainers":[{"email":"liruifeng1024@gmail.com","username":"liruifengv"}],"license":"MIT","date":"2026-05-15T12:45:49.949Z","links":{"npm":"https://www.npmjs.com/package/kfc-code-cli"}}
+
+,
+
+{"name":"@monaco-editor/react","keywords":["monaco","editor","react","vscode","code","text"],"version":"4.7.0","description":"Monaco Editor for React - use the monaco-editor in any React application without needing to use webpack (or rollup/parcel/etc) configuration files / plugins","sanitized_name":"@monaco-editor/react","publisher":{"email":"contact@surenatoyan.com","username":"surenat"},"maintainers":[{"email":"contact@surenatoyan.com","username":"surenat"}],"license":"MIT","date":"2025-02-13T16:13:41.390Z","links":{"homepage":"https://github.com/suren-atoyan/monaco-react#readme","repository":"git+https://github.com/suren-atoyan/monaco-react.git","bugs":"https://github.com/suren-atoyan/monaco-react/issues","npm":"https://www.npmjs.com/package/@monaco-editor/react"}}
+
+,
+
+{"name":"env-editor","keywords":["env","editor","environment","variable","default","editors","main","user","meta","metadata","info","name","binary","path","sublime","atom","vscode","webstorm","textmate","vim","neovim","intellij","nano","emacs"],"version":"1.3.0","description":"Get metadata on the default editor or a specific editor","sanitized_name":"env-editor","publisher":{"email":"sindresorhus@gmail.com","username":"sindresorhus"},"maintainers":[{"email":"sindresorhus@gmail.com","username":"sindresorhus"}],"license":"MIT","date":"2025-09-10T18:43:39.887Z","links":{"homepage":"https://github.com/sindresorhus/env-editor#readme","repository":"git+https://github.com/sindresorhus/env-editor.git","bugs":"https://github.com/sindresorhus/env-editor/issues","npm":"https://www.npmjs.com/package/env-editor"}}
+
+,
+
+{"name":"@ramarivera/pi-kimi-for-coding","keywords":["pi-package","pi","pi-extension","kimi","kimi-for-coding","oauth","device-flow"],"version":"0.1.8","description":"Pi extension that adds Kimi For Coding OAuth support using the official device flow and Kimi-specific request behavior.","sanitized_name":"@ramarivera/pi-kimi-for-coding","publisher":{"email":"npm-oidc-no-reply@github.com","trustedPublisher":{"oidcConfigId":"oidc:***","id":"github"},"username":"GitHub Actions"},"maintainers":[{"email":"ramarivera@gmail.com","username":"ramarivera"}],"license":"MIT","date":"2026-05-09T14:18:04.497Z","links":{"homepage":"https://github.com/ramarivera/pi-kimi-for-coding#readme","repository":"git+https://github.com/ramarivera/pi-kimi-for-coding.git","bugs":"https://github.com/ramarivera/pi-kimi-for-coding/issues","npm":"https://www.npmjs.com/package/@ramarivera/pi-kimi-for-coding"}}
+
+,
+
+{"name":"@moonshot-ai/kimi-agent-sdk","keywords":["kimi","moonshot","ai","agent","sdk","cli"],"version":"0.1.8","description":"SDK for interacting with Kimi Code CLI","sanitized_name":"@moonshot-ai/kimi-agent-sdk","publisher":{"email":"llcan1120@gmail.com","username":"tempurai"},"maintainers":[{"email":"llcan1120@gmail.com","username":"tempurai"},{"email":"justin.w.xd@gmail.com","username":"bigeagle"}],"license":"MIT","date":"2026-04-13T13:43:03.686Z","links":{"homepage":"https://github.com/MoonshotAI/kimi-agent-sdk#readme","repository":"git+https://github.com/MoonshotAI/kimi-agent-sdk.git","bugs":"https://github.com/MoonshotAI/kimi-agent-sdk/issues","npm":"https://www.npmjs.com/package/@moonshot-ai/kimi-agent-sdk"}}
+
+,
+
+{"name":"@monaco-editor/loader","keywords":["monaco","editor","loader","monaco-editor","monaco editor"],"version":"1.7.0","description":"the library aims to setup monaco editor into your browser","sanitized_name":"@monaco-editor/loader","publisher":{"email":"contact@surenatoyan.com","username":"surenat"},"maintainers":[{"email":"contact@surenatoyan.com","username":"surenat"}],"license":"MIT","date":"2025-11-21T07:15:47.432Z","links":{"homepage":"https://github.com/suren-atoyan/monaco-loader.git","repository":"git+https://github.com/suren-atoyan/monaco-loader.git","bugs":"https://github.com/suren-atoyan/monaco-loader/issues","npm":"https://www.npmjs.com/package/@monaco-editor/loader"}}
+
+,
+
+{"name":"lexical","keywords":["react","lexical","editor","contenteditable","rich-text"],"version":"0.44.0","description":"Lexical is an extensible text editor framework that provides excellent reliability, accessible and performance.","sanitized_name":"lexical","publisher":{"email":"gerard.rovira.sanchez@gmail.com","username":"zurfyx"},"maintainers":[{"email":"fantactuka@gmail.com","username":"fantactuka"},{"email":"dg@domgan.com","username":"trueadm"},{"email":"gerard.rovira.sanchez@gmail.com","username":"zurfyx"},{"email":"acy.watson@gmail.com","username":"acywatson"},{"email":"ivailo90@gmail.com","username":"ipavlov001"},{"email":"bob@redivi.com","username":"etrepum"}],"license":"MIT","date":"2026-04-27T14:47:00.970Z","links":{"homepage":"https://github.com/facebook/lexical#readme","repository":"git+https://github.com/facebook/lexical.git","bugs":"https://github.com/facebook/lexical/issues","npm":"https://www.npmjs.com/package/lexical"}}
+
+,
+
+{"name":"@zhivex-ai/kimi","keywords":["ai","sdk","kimi","llm","typescript"],"version":"0.6.4","description":"Kimi adapter for Zhivex AI SDK.","sanitized_name":"@zhivex-ai/kimi","publisher":{"email":"mortiz@zhivex.com","username":"mortiz.zhivex"},"maintainers":[{"email":"mortiz@zhivex.com","username":"mortiz.zhivex"}],"license":"MIT","date":"2026-05-13T12:16:56.503Z","links":{"homepage":"https://github.com/Zhivex/zhivex-ai-sdk#readme","repository":"git+https://github.com/Zhivex/zhivex-ai-sdk.git","bugs":"https://github.com/Zhivex/zhivex-ai-sdk/issues","npm":"https://www.npmjs.com/package/@zhivex-ai/kimi"}}
+
+,
+
+{"name":"kimi-cli","keywords":["kimi","webpack","redux-saga"],"version":"0.0.2","description":"Quickly generate the project's front-end tools","sanitized_name":"kimi-cli","publisher":{"email":"john_tech@163.com","username":"johnst"},"maintainers":[{"email":"john_tech@163.com","username":"johnst34"}],"license":"MIT","date":"2018-08-14T08:34:46.947Z","links":{"npm":"https://www.npmjs.com/package/kimi-cli"}}
+
+,
+
+{"name":"kimi-quota-feeder","keywords":["kimi","quota","claude-hud","moonshot"],"version":"1.2.0","description":"Kimi Coding Plan quota fetcher for claude-hud external usage","sanitized_name":"kimi-quota-feeder","publisher":{"email":"zhaolipei@outlook.com","username":"zhaolipei"},"maintainers":[{"email":"zhaolipei@outlook.com","username":"zhaolipei"}],"license":"MIT","date":"2026-04-29T12:21:58.706Z","links":{"npm":"https://www.npmjs.com/package/kimi-quota-feeder"}}
+
+,
+
+{"name":"kimi","keywords":["animation,states,path,finding"],"version":"6.0.2","description":"Define states with values and kimi will drive between the states","sanitized_name":"kimi","publisher":{"email":"me@mikkoh.com","username":"mikkoh"},"maintainers":[{"email":"me@mikkoh.com","username":"mikkoh"}],"license":"MIT","date":"2016-03-18T15:19:20.336Z","links":{"homepage":"https://github.com/mikkoh/kimi","repository":"git://github.com/mikkoh/kimi.git","bugs":"https://github.com/mikkoh/kimi/issues","npm":"https://www.npmjs.com/package/kimi"}}
+
+,
+
+{"name":"kimiclaude","keywords":["claude-code","openai","llm","cli","agent","deepseek","ollama","gemini"],"version":"1.1.7","description":"Kimiclaude: Advanced coding assistant powered by Kimi (Moonshot AI) models and Kimiclaude architecture.","sanitized_name":"kimiclaude","publisher":{"email":"Sahsaxboxvanx@gmail.com","username":"be1lnash3"},"maintainers":[{"email":"Sahsaxboxvanx@gmail.com","username":"be1lnash3"}],"license":"SEE LICENSE FILE","date":"2026-05-07T13:22:17.085Z","links":{"homepage":"https://github.com/Gitlawb/kimiclaude#readme","repository":"git+https://github.com/Gitlawb/kimiclaude.git","bugs":"https://github.com/Gitlawb/kimiclaude/issues","npm":"https://www.npmjs.com/package/kimiclaude"}}
+]
+

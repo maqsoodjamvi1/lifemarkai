@@ -2,6 +2,7 @@ import { useEffect,useRef,useState } from "react";
 import { Link,useNavigate,useSearch } from "@tanstack/react-router";
 import { ArrowRight,Link2,Loader2,Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { resolveCreationFramework } from "@/lib/project/generation-profile";
 
 interface DashboardHeroProps {
   firstName: string;
@@ -22,6 +23,7 @@ function HeroPromptCreateBox() {
   // generates, it publishes (an SSR build has no index.html to serve), and it
   // has no whole-document hydration for a browser extension to break.
   const [framework, setFramework] = useState<Framework>("static");
+  const [frameworkManuallySelected, setFrameworkManuallySelected] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -55,7 +57,7 @@ function HeroPromptCreateBox() {
         body: JSON.stringify({
           name,
           description: trimmed.slice(0, 10_000),
-          framework,
+          framework: resolveCreationFramework(trimmed, framework, frameworkManuallySelected),
         }),
       });
       if (res.status === 401) {
@@ -101,7 +103,7 @@ function HeroPromptCreateBox() {
             <button
               key={fw}
               type="button"
-              onClick={() => setFramework(fw)}
+              onClick={() => { setFramework(fw); setFrameworkManuallySelected(true); }}
               className={`px-2 py-1 text-[11px] rounded-md border capitalize ${
                 framework === fw
                   ? "border-violet-500/50 bg-violet-500/10 text-violet-700"

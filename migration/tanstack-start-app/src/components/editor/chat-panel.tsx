@@ -7,7 +7,6 @@ X
 import { suggestFollowUps } from "@/lib/ai/follow-up-suggestions";
 import { shouldClarifyCapabilities } from "@/lib/ai/clarification-intelligence";
 import { detectPastedSecret,redactSecret } from "@/lib/security/detect-secret";
-import { CONNECTORS } from "./app-connectors-panel";
 import { useToast } from "@/hooks/use-toast";
 import { normalizeArrayResponse } from "@/lib/api/array-response";
 import { createClient } from "@/lib/supabase/client";
@@ -56,7 +55,6 @@ import { describeAiFailure,readErrorBody } from "@/lib/editor/ai-failure";
 import { formatGuestCommentsForAi } from "@/lib/editor/format-guest-comments";
 import { formatErrorsForHealing } from "@/lib/preview/preview-error-bridge";
 import type { ChatSearchMode } from "@/lib/editor/search-chat-messages";
-import { printChatConversation } from "@/lib/editor/print-chat";
 import { buildLovableChatDayJumps,lovableChatDayKey } from "@/components/editor/lovable/chat-day-utils";
 import {
 LIFEMARK_CHAT_SETTINGS_EVENT,
@@ -723,6 +721,7 @@ export function ChatPanel({
   const [searchMatchCount, setSearchMatchCount] = useState(0);
   const [searchSource, setSearchSource] = useState<"cached" | "fallback" | null>(null);
   const [configuredConnectorIds, setConfiguredConnectorIds] = useState<Set<string>>(() => new Set());
+  const [connectorCatalog, setConnectorCatalog] = useState<Array<(typeof import("./app-connectors-panel"))["CONNECTORS"][number]>>([]);
   const [activeSearchHitIndex, setActiveSearchHitIndex] = useState(0);
   const [focusedMessageId, setFocusedMessageId] = useState<string | null>(null);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
@@ -4537,7 +4536,7 @@ ${(f.content ?? "").slice(0, 8000)}
             .slice(0, 4)
             .map((c): MentionItem => ({ kind: "user", display: c.display, email: c.email })),
           // App connectors (Lovable parity: "@" references a connector)
-          ...CONNECTORS
+          ...connectorCatalog
             .filter((c) =>
               mentionQuery.length > 0 &&
               (c.name.toLowerCase().includes(mentionQuery.toLowerCase()) ||
@@ -4774,13 +4773,16 @@ ${(f.content ?? "").slice(0, 8000)}
   // Which @connectors already have env credentials configured.
   useEffect(() => {
     let cancelled = false;
-    void fetch(`/api/projects/${project.id}/env`)
-      .then((r) => (r.ok ? r.json() : { envVars: [] }))
-      .then((data: { envVars?: Array<{ key: string }> }) => {
+    void Promise.all([
+      fetch(`/api/projects/${project.id}/env`).then((r) => (r.ok ? r.json() : { envVars: [] })),
+      import("./app-connectors-panel").then((module) => module.CONNECTORS),
+    ])
+      .then(([data, connectors]: [{ envVars?: Array<{ key: string }> }, (typeof import("./app-connectors-panel"))["CONNECTORS"]]) => {
         if (cancelled) return;
+        setConnectorCatalog(connectors);
         const keys = new Set((data.envVars ?? []).map((e) => e.key));
         const connected = new Set<string>();
-        for (const c of CONNECTORS) {
+        for (const c of connectors) {
           if (c.fields.every((f) => keys.has(f.key))) connected.add(c.id);
         }
         setConfiguredConnectorIds(connected);
@@ -5242,11 +5244,11 @@ ${(f.content ?? "").slice(0, 8000)}
   }
 
   function printChat() {
-    printChatConversation({
+    void import("@/lib/editor/print-chat").then(({ printChatConversation }) => printChatConversation({
       projectName: project.name,
       messages: visibleMessages,
       getDisplayContent: getDisplayMessageContent,
-    });
+    }));
   }
 
   const noCredits = credits <= 0;
