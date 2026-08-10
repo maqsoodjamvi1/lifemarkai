@@ -121,11 +121,21 @@ export function ProjectsGrid({ projects, emphasizeViews = false }: ProjectsGridP
           {filtered.map((project) => {
             const starred = getStarred(project);
             return (
-              <button
+              // div[role=button], not <button>: the card contains the Star
+              // <button>, and button-in-button is invalid HTML — React 19
+              // fails hydration on it (validateDOMNesting).
+              <div
                 key={project.id}
-                type="button"
+                role="button"
+                tabIndex={0}
                 onClick={() => void navigate({ to: "/editor/$projectId", params: { projectId: project.id } })}
-                className={`text-left rounded-xl border bg-card p-4 hover:border-violet-500/40 transition-colors ${
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    void navigate({ to: "/editor/$projectId", params: { projectId: project.id } });
+                  }
+                }}
+                className={`cursor-pointer text-left rounded-xl border bg-card p-4 hover:border-violet-500/40 transition-colors ${
                   starred ? "border-yellow-500/30" : "border-border"
                 }`}
               >
@@ -158,7 +168,7 @@ export function ProjectsGrid({ projects, emphasizeViews = false }: ProjectsGridP
                     </span>
                   </div>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>
