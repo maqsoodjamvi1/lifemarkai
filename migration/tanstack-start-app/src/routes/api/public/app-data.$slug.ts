@@ -17,6 +17,12 @@ import {
 APP_DATA_MAX_RECORD_BYTES,
 APP_DATA_MAX_ROWS_PER_COLLECTION,
 } from "@/lib/preview/lifemark-data";
+import {
+  SCHEMA_COLLECTION,
+  validateRecordAgainstSchema,
+  validateSchemaDefinition,
+  type LifemarkCollectionSchema,
+} from "@/lib/preview/lifemark-schema";
 
 const collectionSchema = z
   .string()
@@ -49,6 +55,30 @@ function rateLimited(request: Request): Response | null {
   const limit = rateLimit(`app-data:${clientIp(request)}`, RATE_LIMITS.api);
   if (!limit.success) return json({ error: "Rate limit exceeded — slow down." }, 429);
   return null;
+}
+
+/**
+ * Load the declared schema for a collection (or null). Schemas live in the
+ * reserved __schema__ collection as {collection, fields} records.
+ */
+async function loadSchema(
+  projectId: string,
+  collection: string,
+): Promise<{ recordId: string | null; schema: LifemarkCollectionSchema | null }> {
+  const supabase = createAdminClient();
+  const { data } = await supabase
+    .from("app_data")
+    .select("id, data")
+    .eq("project_id", projectId)
+    .eq("collection", SCHEMA_COLLECTION)
+    .eq("data->>collection", collection)
+    .limit(1)
+    .maybeSingle();
+  if (!data) return { recordId: null, schema: null };
+  const row = data as { id: string; data: { fields?: unknown } };
+  const fields = row.data?.fields;
+  if (typeof fields !== "object" || fields === null) return { recordId: row.id, schema: null };
+  return { recordId: row.id, schema: { fields } as LifemarkCollectionSchema };
 }
 
 /** Resolve a published project's id from its slug (or app_slug). */
@@ -96,18 +126,68 @@ export const Route = createFileRoute("/api/public/app-data/$slug")({
         if (limited) return limited;
         const body = await parseBody(
           request,
-          z.object({ collection: collectionSchema, data: z.record(z.string(), z.unknown()) }),
+          z.object({
+            collection: collectionSchema,
+            data: z.record(z.string(), z.unknown()).optional(),
+            schema: z.object({ fields: z.record(z.string(), z.unknown()) }).optional(),
+          }).refine((b) => !!b.data !== !!b.schema, {
+            message: "Provide exactly one of data or schema",
+          }),
         );
         if (body instanceof Response) return body;
-        if (JSON.stringify(body.data).length > APP_DATA_MAX_RECORD_BYTES) {
-          return json({ error: "Record too large" }, 413);
-        }
 
         const projectId = await resolveProject(params.slug);
         if (!projectId) return json({ error: "App not found" }, 404);
 
         const supabase = createAdminClient();
         const collection = body.collection.toLowerCase();
+
+        // ── Schema definition upsert (LifemarkData.defineSchema) ────────────
+        if (body.schema) {
+          const defErrors = validateSchemaDefinition(body.schema);
+          if (defErrors.length) {
+            return json({ error: `Invalid schema: ${defErrors.join("; ")}` }, 422);
+          }
+          const existing = await loadSchema(projectId, collection);
+          const record = { collection, fields: body.schema.fields };
+          const result = existing.recordId
+            ? await supabase
+                .from("app_data")
+                .update({ data: record as never })
+                .eq("id", existing.recordId)
+                .select("id")
+                .maybeSingle()
+            : await supabase
+                .from("app_data")
+                .insert({
+                  project_id: projectId,
+                  collection: SCHEMA_COLLECTION,
+                  data: record as never,
+                })
+                .select("id")
+                .single();
+          if (result.error) return json({ error: result.error.message }, 500);
+          return json({ ok: true, schema: record });
+        }
+
+        // ── Record insert (validated against the schema when one exists) ────
+        if (collection === SCHEMA_COLLECTION) {
+          return json({ error: "Reserved collection" }, 400);
+        }
+        const data = body.data as Record<string, unknown>;
+        if (JSON.stringify(data).length > APP_DATA_MAX_RECORD_BYTES) {
+          return json({ error: "Record too large" }, 413);
+        }
+        const { schema } = await loadSchema(projectId, collection);
+        if (schema) {
+          const errors = validateRecordAgainstSchema(data, schema);
+          if (errors.length) {
+            return json(
+              { error: `Schema validation failed (${collection}): ${errors.join("; ")}` },
+              422,
+            );
+          }
+        }
         const { count } = await supabase
           .from("app_data")
           .select("id", { count: "exact", head: true })
@@ -117,13 +197,13 @@ export const Route = createFileRoute("/api/public/app-data/$slug")({
           return json({ error: "Collection row limit reached" }, 409);
         }
 
-        const { data, error } = await supabase
+        const inserted = await supabase
           .from("app_data")
-          .insert({ project_id: projectId, collection, data: body.data as never })
+          .insert({ project_id: projectId, collection, data: data as never })
           .select("id, data, created_at, updated_at")
           .single();
-        if (error) return json({ error: error.message }, 500);
-        return json({ record: data });
+        if (inserted.error) return json({ error: inserted.error.message }, 500);
+        return json({ record: inserted.data });
       },
 
       PATCH: async ({ params, request }) => {
@@ -131,7 +211,11 @@ export const Route = createFileRoute("/api/public/app-data/$slug")({
         if (limited) return limited;
         const body = await parseBody(
           request,
-          z.object({ id: z.string().uuid(), data: z.record(z.string(), z.unknown()) }),
+          z.object({
+            id: z.string().uuid(),
+            collection: collectionSchema.optional(),
+            data: z.record(z.string(), z.unknown()),
+          }),
         );
         if (body instanceof Response) return body;
         if (JSON.stringify(body.data).length > APP_DATA_MAX_RECORD_BYTES) {
@@ -142,6 +226,38 @@ export const Route = createFileRoute("/api/public/app-data/$slug")({
         if (!projectId) return json({ error: "App not found" }, 404);
 
         const supabase = createAdminClient();
+
+        // Validate against the collection's schema. Older SDKs don't send the
+        // collection with PATCH — look it up from the record in that case.
+        let collection = body.collection?.toLowerCase() ?? null;
+        if (!collection) {
+          const { data: row } = await supabase
+            .from("app_data")
+            .select("collection")
+            .eq("id", body.id)
+            .eq("project_id", projectId)
+            .maybeSingle();
+          collection = (row as { collection: string } | null)?.collection ?? null;
+        }
+        if (collection === SCHEMA_COLLECTION) {
+          return json({ error: "Reserved collection" }, 400);
+        }
+        if (collection) {
+          const { schema } = await loadSchema(projectId, collection);
+          if (schema) {
+            const errors = validateRecordAgainstSchema(
+              body.data as Record<string, unknown>,
+              schema,
+            );
+            if (errors.length) {
+              return json(
+                { error: `Schema validation failed (${collection}): ${errors.join("; ")}` },
+                422,
+              );
+            }
+          }
+        }
+
         const { data, error } = await supabase
           .from("app_data")
           .update({ data: body.data as never })

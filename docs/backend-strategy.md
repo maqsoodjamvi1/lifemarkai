@@ -56,3 +56,28 @@ Revisit this decision when any of these happens:
 - A client's app outgrows Supabase free tier (→ they upgrade their own account).
 - Tier-3 demand exceeds 2 concurrent apps (→ paid Supabase org, priced into plans).
 - LifemarkData `app_data` grows past ~1 GB total (→ Neon shared-Postgres design).
+
+## Per-app server functions — DEFERRED (Base44 parity #3, Aug 2026)
+
+Base44 offers Deno serverless functions so a no-build app can still receive
+webhooks or run scheduled jobs. That would be the middle rung between tier 1
+(LifemarkData) and tier 3 (full TanStack + provisioned Supabase) — but it
+means operating a sandbox that executes untrusted generated code: the same
+class of infra cost and attack surface we just removed with Modal.
+
+**Decision: do not build it now.** The edge-functions panel is the natural UI
+if/when this changes.
+
+Review trigger: more than ~3 real client requests for "my static app needs a
+webhook / scheduled job" within a month → revisit, starting from Supabase Edge
+Functions on the client's own BYO project (tier 2) rather than our own runner.
+
+## Pricing notes (Base44 parity #4)
+
+When plans get priced, meter BUILD separately from RUN:
+- Build actions (AI generations/edits) — the cost driver today; per-credit.
+- Runtime (app_data rows/requests via the public API) — cheap but unbounded;
+  cap per tier instead of metering (e.g. free: 1K rows/collection, the current
+  hard cap) so one heavy app can't silently eat margin.
+Lesson from Base44 reviews: their #1 complaint is unpredictable credit burn —
+keep our pricing flatter and predictable; do NOT copy per-operation billing UX.
