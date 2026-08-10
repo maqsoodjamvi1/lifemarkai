@@ -13,8 +13,6 @@ DropdownMenu,DropdownMenuContent,DropdownMenuItem,DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 
-export type PreviewInteractionTool = "select" | "edit-text" | "annotate" | "comment" | null;
-
 export interface LovablePreviewInteractionToolbarProps {
   visualEdit?: boolean;
   visualEditDisabled?: boolean;

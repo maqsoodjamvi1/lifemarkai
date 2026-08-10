@@ -34,8 +34,6 @@ import { filesContentSignature } from "@/lib/preview/files-signature";
 import { getRefreshEffectiveFiles } from "./preview-panel-utils";
 import {
 isWebContainerPreviewEnabled,
-shouldUseWebContainer,
-WC_UNAVAILABLE_KEY,
 type PreviewEngine,
 } from "@/lib/preview/resolve-preview-engine";
 import {
@@ -62,64 +60,9 @@ shouldShowRawPreviewDiagnostics,
 } from "@/lib/preview/preview-error-copy";
 import { createClient } from "@/lib/supabase/client";
 
-// Sandpack stubs — these branches are never reached (sandpackReady is always false)
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const SandpackProvider = "div" as any;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const SandpackConsoleComp = "div" as any;
-
-// Sandpack dynamic imports kept for type reference but not used at runtime —
-// the preview always uses the local srcdoc/Babel engine (sandpackReady=false).
-// Removing these would require a larger refactor of the conditional render tree.
-
 // Visual Edit Bridge — injected into Sandpack iframe via files map
-const VEB_SCRIPT = `(function() {
-  if (window.parent === window) return;
-  var style = document.createElement('style');
-  style.textContent = [
-    '.lm-hover{outline:2px solid #7c3aed!important;outline-offset:2px;cursor:pointer!important}',
-    '.lm-selected{outline:2px solid #0e90e8!important;outline-offset:2px}'
-  ].join('');
-  document.head.appendChild(style);
-  var hovered = null;
-  function getXPath(el) {
-    var parts = [], cur = el;
-    while (cur && cur !== document.body) {
-      var tag = cur.tagName.toLowerCase();
-      var parent = cur.parentElement;
-      var sibs = parent ? Array.from(parent.children).filter(function(c){return c.tagName===cur.tagName}) : [cur];
-      parts.unshift(sibs.length > 1 ? tag+'['+(sibs.indexOf(cur)+1)+']' : tag);
-      cur = parent;
-    }
-    return '//'+parts.join('/');
-  }
-  document.addEventListener('mouseover', function(e) {
-    if (hovered && hovered !== e.target) hovered.classList.remove('lm-hover');
-    hovered = e.target;
-    if (hovered) hovered.classList.add('lm-hover');
-  });
-  document.addEventListener('mouseout', function(e) {
-    if (e.target) e.target.classList.remove('lm-hover');
-  });
-  document.addEventListener('click', function(e) {
-    e.preventDefault(); e.stopPropagation();
-    var el = e.target;
-    var rect = el.getBoundingClientRect();
-    document.querySelectorAll('.lm-selected').forEach(function(n){n.classList.remove('lm-selected')});
-    el.classList.add('lm-selected');
-    window.parent.postMessage({
-      source: 'lifemark-veb',
-      tagName: el.tagName.toLowerCase(),
-      textContent: (el.textContent || '').trim(),
-      classList: Array.from(el.classList).filter(function(c){return !c.startsWith('lm-')}),
-      xpath: getXPath(el),
-      rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
-    }, '*');
-  }, true);
-})();`;
-
 type DeviceSize = "mobile" | "tablet" | "desktop";
-type PreviewMachineState = "idle" | "building" | "loading" | "ready" | "error" | "fallback";
+type PreviewMachineState = "idle" | "building" | "loading" | "ready" | "error" | "unavailable";
 
 const PREVIEW_RELEVANT_FILE_RE = /(^|\/)(package\.json|index\.html|vite\.config\.[cm]?[jt]s|tailwind\.config\.[cm]?[jt]s|postcss\.config\.[cm]?js)$|(^|\/)(src|app|components|pages|lib|hooks|styles|public|assets)\//i;
 const PREVIEW_RELEVANT_EXT_RE = /\.(tsx?|jsx?|css|scss|sass|html|json|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf)$/i;
@@ -183,84 +126,11 @@ interface PreviewPanelProps {
   isPublic?: boolean;
 }
 
-function OutOfCreditsPreviewPaused() {
-  return (
-    <div className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
-      <div className="text-center max-w-sm px-8 py-10">
-        <div className="w-12 h-12 rounded-xl bg-violet-500/15 border border-violet-500/25 flex items-center justify-center mx-auto mb-4">
-          <AlertTriangle className="w-5 h-5 text-violet-400" />
-        </div>
-        <p className="text-sm font-semibold text-foreground mb-2">Preview paused</p>
-        <p className="text-xs text-muted-foreground leading-relaxed mb-5">
-          Your files are saved. Add credits to rebuild and preview your app.
-        </p>
-        <Link
-          to="/dashboard/billing"
-          className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium px-4 py-2 transition-colors"
-        >
-          Upgrade plan
-        </Link>
-      </div>
-    </div>
-  );
-}
-
 const DEVICE_WIDTHS: Record<DeviceSize, string> = {
   mobile: "390px",
   tablet: "768px",
   desktop: "100%",
 };
-
-// ── WebContainer availability flag with TTL ──────────────────────────────────
-// WC_UNAVAILABLE_KEY used to be set once and never cleared, so a single
-// transient boot failure (network blip loading @webcontainer/api, one slow
-// boot) locked the user into the fallback engine for the entire tab session.
-// The flag now expires after 10 minutes; a companion timestamp key tracks age.
-const WC_UNAVAILABLE_AT_KEY = `${WC_UNAVAILABLE_KEY}-at`;
-const WC_UNAVAILABLE_TTL_MS = 10 * 60 * 1000;
-
-// How long a WebContainer may keep warming in the BACKGROUND before we give up on
-// it. This must outlast WebContainerPreview's own phase budgets (boot 18s +
-// install 75s + start 35s ≈ 128s), otherwise we tear the container down while it
-// is still legitimately installing — which is precisely what the previous 12s
-// value did, so the background Vite hand-off could never once succeed.
-const WC_WARM_BUDGET_MS = 140_000;
-
-function isWcBlocked(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    if (sessionStorage.getItem(WC_UNAVAILABLE_KEY) !== "1") return false;
-    const at = Number(sessionStorage.getItem(WC_UNAVAILABLE_AT_KEY) ?? 0);
-    if (at > 0 && Date.now() - at > WC_UNAVAILABLE_TTL_MS) {
-      sessionStorage.removeItem(WC_UNAVAILABLE_KEY);
-      sessionStorage.removeItem(WC_UNAVAILABLE_AT_KEY);
-      return false;
-    }
-    // Legacy flag without a timestamp — start the TTL clock now.
-    if (!at) sessionStorage.setItem(WC_UNAVAILABLE_AT_KEY, String(Date.now()));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function markWcUnavailable(): void {
-  try {
-    sessionStorage.setItem(WC_UNAVAILABLE_KEY, "1");
-    sessionStorage.setItem(WC_UNAVAILABLE_AT_KEY, String(Date.now()));
-  } catch {
-    /* storage unavailable — engine choice just won't persist */
-  }
-}
-
-function clearWcBlock(): void {
-  try {
-    sessionStorage.removeItem(WC_UNAVAILABLE_KEY);
-    sessionStorage.removeItem(WC_UNAVAILABLE_AT_KEY);
-  } catch {
-    /* ignore */
-  }
-}
 
 const TAILWIND_SIZES = ["text-xs","text-sm","text-base","text-lg","text-xl","text-2xl","text-3xl","text-4xl"];
 const TAILWIND_WEIGHTS = ["font-normal","font-medium","font-semibold","font-bold","font-extrabold"];
@@ -272,70 +142,6 @@ const BG_COLORS = [
   "bg-transparent","bg-white","bg-black","bg-gray-100",
   "bg-blue-500","bg-green-500","bg-red-500","bg-yellow-500",
 ];
-
-function shouldAutoStartVitePreview(): boolean {
-  // Draft/legacy WebContainer only — Lovable production preview is Modal.
-  // Requires NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1; AUTO_VITE defaults off.
-  if (!isWebContainerPreviewEnabled()) return false;
-  return (
-    process.env.NEXT_PUBLIC_PREVIEW_AUTO_VITE === "1" ||
-    process.env.NEXT_PUBLIC_PREVIEW_AUTO_VITE === "true"
-  );
-}
-
-function detectTemplate(files: ProjectFile[]): "react-ts" | "react" | "static" {
-  const paths = files.map((f) => f.path);
-  if (paths.some((p) => p.endsWith(".tsx") || p.endsWith(".ts"))) return "react-ts";
-  if (paths.some((p) => p.endsWith(".jsx"))) return "react";
-  return "static";
-}
-
-function toSandpackFiles(files: ProjectFile[]): Record<string, { code: string }> {
-  const map: Record<string, { code: string }> = {};
-  for (const f of files) {
-    let sp = f.path.startsWith("/") ? f.path : `/${f.path}`;
-    sp = sp.replace(/^\/src\//, "/");
-    map[sp] = { code: f.content ?? "" };
-  }
-  if (!map["/index.css"] && !map["/styles.css"]) {
-    map["/index.css"] = { code: "@tailwind base;\n@tailwind components;\n@tailwind utilities;" };
-  }
-  return map;
-}
-
-function addVebBridge(
-  files: Record<string, { code: string }>
-): Record<string, { code: string }> {
-  const result = { ...files };
-  // Inject the bridge script file
-  result["/__veb.js"] = { code: VEB_SCRIPT };
-  // Inject into index.html (used by static template) or public/index.html (react template)
-  const htmlKey = result["/public/index.html"] ? "/public/index.html"
-    : result["/index.html"] ? "/index.html"
-    : null;
-  if (htmlKey) {
-    result[htmlKey] = {
-      code: result[htmlKey].code.replace("</body>", '<script src="/__veb.js"></script></body>'),
-    };
-  } else {
-    // Provide a custom index.html that includes the bridge
-    result["/public/index.html"] = {
-      code: `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Preview</title>
-</head>
-<body>
-  <div id="root"></div>
-  <script src="/__veb.js"></script>
-</body>
-</html>`,
-    };
-  }
-  return result;
-}
 
 // ── Device frame components ───────────────────────────────────────────────────
 
@@ -521,13 +327,8 @@ export function PreviewPanel({
   const [pinResolving, setPinResolving] = useState(false);
   const { toast } = useToast();
   const [previewEngine, setPreviewEngine] = useState<PreviewEngine>(() => {
-    if (typeof window === "undefined") return "fallback";
-    if (isWcBlocked()) return "fallback";
-    return "fallback";
+    return "unavailable";
   });
-  const [vitePreviewRequested, setVitePreviewRequested] = useState(shouldAutoStartVitePreview);
-  const [backgroundViteActive, setBackgroundViteActive] = useState(false);
-  const [backgroundViteKey, setBackgroundViteKey] = useState(0);
   const [consoleLines, setConsoleLines] = useState<{ type: string; text: string }[]>([]);
   const [networkLines, setNetworkLines] = useState<
     {
@@ -693,7 +494,7 @@ export function PreviewPanel({
   const [previewCompileFailed, setPreviewCompileFailed] = useState(false);
   const [previewCompileOk, setPreviewCompileOk] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const sandpackContainerRef = useRef<HTMLDivElement>(null);
+  const runtimeContainerRef = useRef<HTMLDivElement>(null);
 
   // ── In-browser (WebContainer) engine state ────────────────────────────────
   // Boot is once-per-page and install is slow, so this is driven by an effect
@@ -834,7 +635,7 @@ export function PreviewPanel({
 
   const getPreviewContentWindow = useCallback((): Window | null => {
     if (previewEngine === "webcontainer") {
-      return sandpackContainerRef.current?.querySelector("iframe")?.contentWindow ?? null;
+      return runtimeContainerRef.current?.querySelector("iframe")?.contentWindow ?? null;
     }
     if (previewEngine === "sandbox") {
       return sandboxIframeRef.current?.contentWindow ?? null;
@@ -1092,17 +893,22 @@ export function PreviewPanel({
   // leaving this pinned would have made the env var look broken.
   const staticRuntime = resolveProjectRuntime(runtime, framework, files) === "static";
   const webContainerAllowed = !staticRuntime && isWebContainerPreviewEnabled();
-  const forceFallbackPreview = false;
   const sandboxAvailable = sandboxEnabled;
   useEffect(() => {
     // "sandbox" whenever there are files (Modal renders them); "fallback" only
     // as the no-files empty state, which renders a neutral message — never an
     // in-browser engine.
     setPreviewEngine((prev) => {
-      const next = files.length === 0 || staticRuntime ? "fallback" : "sandbox";
+      const next = files.length === 0
+        ? "unavailable"
+        : staticRuntime
+          ? "static"
+        : useWebContainers || (!sandboxEnabled && webContainerAllowed)
+          ? "webcontainer"
+          : "sandbox";
       return prev === next ? prev : next;
     });
-  }, [files.length, staticRuntime]);
+  }, [files.length, staticRuntime, useWebContainers, sandboxEnabled, webContainerAllowed]);
 
   // Boot the in-browser runtime when this engine is selected.
   //
@@ -1155,7 +961,7 @@ export function PreviewPanel({
 
   const getActivePreviewIframe = useCallback((): HTMLIFrameElement | null => {
     if (previewEngine === "webcontainer") {
-      return sandpackContainerRef.current?.querySelector("iframe") ?? null;
+      return runtimeContainerRef.current?.querySelector("iframe") ?? null;
     }
     if (previewEngine === "sandbox") {
       return sandboxIframeRef.current;
@@ -1184,16 +990,6 @@ export function PreviewPanel({
 
   // Lovable parity: sandbox boot handled by useSandboxPreview (reconnect → POST).
   // Do not duplicate cold-start here.
-
-  // Draft/legacy: auto-warm WebContainer only when explicitly enabled and Modal is off.
-  useEffect(() => {
-    if (sandboxEnabled) return;
-    if (!webContainerAllowed || files.length === 0 || isWcBlocked()) return;
-    if (!shouldAutoStartVitePreview()) return;
-    if (!shouldUseWebContainer(files)) return;
-    setVitePreviewRequested(true);
-    setBackgroundViteActive(true);
-  }, [sandboxEnabled, webContainerAllowed, projectId, files.length]);
 
   // Top-bar URL bar → in-preview soft-nav (Modal VEB + SPA routers).
   useEffect(() => {
@@ -1346,11 +1142,11 @@ export function PreviewPanel({
         const type = d.type;
         const text = typeof d.text === "string" ? d.text : String(d.text ?? "");
         setConsoleLines((prev) => [...prev.slice(-99), { type, text }]);
-        if (projectId && (type === "log" || type === "warn" || type === "error" || type === "info")) {
+        if (projectId && (type === "log" || type === "warn" || type === "error" || type === "console-error" || type === "info")) {
           void fetch(`/api/projects/${projectId}/preview-telemetry`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ console: [{ type, text }] }),
+            body: JSON.stringify({ console: [{ type: type === "console-error" ? "error" : type, text }] }),
           }).catch(() => {});
         }
         if (type === "success") {
@@ -1797,7 +1593,7 @@ export function PreviewPanel({
         ? sandboxUrl
         : previewEngine === "webcontainer" && wcPreviewUrl
           ? wcPreviewUrl
-          : deployedUrl || null;
+          : null;
     try {
       if (url) sessionStorage.setItem("lifemark-live-preview-url", url);
       else sessionStorage.removeItem("lifemark-live-preview-url");
@@ -1805,7 +1601,7 @@ export function PreviewPanel({
     window.dispatchEvent(
       new CustomEvent("lifemark-live-preview-url", { detail: { url } }),
     );
-  }, [previewEngine, sandboxUrl, wcPreviewUrl, deployedUrl]);
+  }, [previewEngine, sandboxUrl, wcPreviewUrl]);
 
   const captureForAnnotation = useCallback(() => {
     const msgId = `ann-${Date.now()}`;
@@ -1853,7 +1649,7 @@ export function PreviewPanel({
       previewFilesSigRef.current = sig;
       setPreviewFiles(relevantFiles);
       const engine = previewEngineRef.current;
-      if (engine === "fallback" || engine === "detecting") {
+      if (engine === "static" || engine === "detecting") {
         setRefreshKey((k) => k + 1);
       }
       return;
@@ -1868,7 +1664,7 @@ export function PreviewPanel({
       setPreviewFiles(relevantFiles);
       const engine = previewEngineRef.current;
       // Warm sandbox/WC: sync in place — never remount iframe on every AI edit.
-      if (engine === "fallback" || engine === "detecting") {
+      if (engine === "static" || engine === "detecting") {
         setRefreshKey((k) => k + 1);
       }
     }, isGenerating ? 180 : 120);
@@ -1892,20 +1688,14 @@ export function PreviewPanel({
     transitionPreviewMachine("loading", "recover empty previewFiles");
   }, [files, previewFiles.length, transitionPreviewMachine]);
 
-  const template = useMemo(() => detectTemplate(files), [files]);
-  const sandpackFiles = useMemo(() => {
-    const base = toSandpackFiles(files);
-    return visualEditEnabled ? addVebBridge(base) : base;
-  }, [files, visualEditEnabled]);
-
   // Static projects deliberately bypass package installation and render their
   // browser-native files directly. Framework projects continue to use the one
   // high-fidelity sandbox/WebContainer path.
-  const fallbackHtml = useMemo(
-    () => staticRuntime ? buildStaticPreview(previewFiles) : "",
-    [previewFiles, staticRuntime],
+  const staticHtml = useMemo(
+    () => staticRuntime ? buildStaticPreview(previewFiles, previewPath) : "",
+    [previewFiles, previewPath, staticRuntime],
   );
-  const effectivePreviewHtml = fallbackHtml || EMPTY_PREVIEW_HTML;
+  const renderedStaticHtml = staticHtml || EMPTY_PREVIEW_HTML;
   const filesSignature = useMemo(() => filesContentSignature(previewFiles), [previewFiles]);
 
   // Foreground reliability guard: WebContainer can occasionally stall while its
@@ -1917,7 +1707,7 @@ export function PreviewPanel({
     // Lovable parity: wait on "Loading preview…" — never flash srcdoc mid-install.
     if (hideTopChrome) return;
     const timer = window.setTimeout(() => {
-      const frames = Array.from(sandpackContainerRef.current?.querySelectorAll("iframe") ?? []);
+      const frames = Array.from(runtimeContainerRef.current?.querySelectorAll("iframe") ?? []);
       const hasLivePreviewFrame = frames.some((frame) => {
         const src = frame.getAttribute("src") ?? "";
         const rect = frame.getBoundingClientRect();
@@ -1932,67 +1722,31 @@ export function PreviewPanel({
 
       if (hasLivePreviewFrame) return;
 
-      // SLOW IS NOT BROKEN. A cold WebContainer has to boot AND `npm install`
-      // before it can paint — WebContainerPreview itself budgets 18s/75s/35s for
-      // boot/install/start. This watchdog fires after 12s, so for any project that
-      // needs a real install it ALWAYS wins the race while the container is still
-      // happily installing. It used to call markWcUnavailable(), which poisons
-      // sessionStorage and pins the user to the srcdoc engine for the whole
-      // session — on a machine where WebContainer works perfectly.
-      //
-      // So: show the fast preview immediately (good UX), but DEMOTE the container
-      // to background warming rather than killing it. Its onReady swaps it back in
-      // when the dev server is actually up. Only a genuine failure (the child's
-      // onError, raised after ITS phase budgets expire) may mark WC unavailable.
-      setVitePreviewRequested(false); // keep the resolver on fallback (no flip-flop)
-      setBackgroundViteActive(true);  // …but keep the container alive and installing
+      // Slow startup is not an engine failure. Keep the selected framework
+      // runtime active and let the user restart it explicitly if needed.
       setConsoleLines((prev) => [
         ...prev.slice(-99),
         {
           type: "warn",
-          text: "Vite runtime is still warming up; showing the standard preview and switching over when it's ready.",
+          text: "Framework runtime is still warming up. It will remain on this engine; restart it manually if startup does not complete.",
         },
       ]);
-      setPreviewEngine("fallback");
-      transitionPreviewMachine("fallback", "vite still warming — demoted to background");
+      transitionPreviewMachine("loading", "framework runtime still warming");
     }, 12_000);
     return () => window.clearTimeout(timer);
   }, [previewEngine, refreshKey, filesSignature, toast, transitionPreviewMachine, hideTopChrome]);
 
-  // Backstop for background warming. This must OUTLAST the container's own phase
-  // budgets (boot 18s + install 75s + start 35s ≈ 128s) — at the old 12s it killed
-  // the warm-up long before `npm install` could possibly finish, which is why the
-  // background Vite path never once succeeded. It also no longer marks WC
-  // unavailable: a real failure arrives via the child's onError, and "still slow"
-  // is not evidence that WebContainer is broken.
-  useEffect(() => {
-    if (!backgroundViteActive || previewEngine !== "fallback") return;
-    const timer = window.setTimeout(() => {
-      setVitePreviewRequested(false);
-      setBackgroundViteActive(false);
-      transitionPreviewMachine("fallback", "background vite preview timed out");
-      setConsoleLines((prev) => [
-        ...prev.slice(-99),
-        {
-          type: "warn",
-          text: "Vite preview did not become ready in the background; standard preview stayed visible.",
-        },
-      ]);
-    }, WC_WARM_BUDGET_MS);
-    return () => window.clearTimeout(timer);
-  }, [backgroundViteActive, previewEngine, backgroundViteKey, transitionPreviewMachine]);
-
   useEffect(() => {
     unifiedIframeRef.current =
       previewEngine === "webcontainer"
-        ? sandpackContainerRef.current?.querySelector("iframe") ?? null
+        ? runtimeContainerRef.current?.querySelector("iframe") ?? null
         : iframeRef.current;
   }, [previewEngine, refreshKey, filesSignature]);
 
   useEffect(() => {
     setPreviewCompileFailed(false);
     setPreviewCompileOk(false);
-  }, [previewFiles, fallbackHtml]);
+  }, [previewFiles, staticHtml]);
 
   // At 0 credits: probe local preview first; fall back to deployment only if compile fails
   const showDeployedPreview =
@@ -2043,7 +1797,7 @@ export function PreviewPanel({
         ? "Preparing preview"
         : previewMachineState === "loading"
           ? (modalPhaseLabel || "Updating preview…")
-          : previewMachineState === "fallback"
+          : previewMachineState === "unavailable"
             ? "Preview unavailable"
             : previewMachineState === "error"
               ? "Preview needs repair"
@@ -2125,7 +1879,7 @@ export function PreviewPanel({
 
   // Inject element-pick script when comment pin mode is active (srcDoc iframe)
   useEffect(() => {
-    if (!commentPinMode || !fallbackHtml) return;
+    if (!commentPinMode || !staticHtml) return;
     const timer = window.setTimeout(() => {
       const iframe = iframeRef.current;
       const doc = iframe?.contentDocument;
@@ -2145,7 +1899,7 @@ export function PreviewPanel({
       doc.body.appendChild(script);
     }, 300);
     return () => window.clearTimeout(timer);
-  }, [commentPinMode, fallbackHtml, refreshKey]);
+  }, [commentPinMode, staticHtml, refreshKey]);
 
   // New iframe srcDoc — drop stale errors until the fresh preview reports status.
   // Keyed on the RENDERED html string, not fallbackHtml.length: two different
@@ -2153,35 +1907,11 @@ export function PreviewPanel({
   useEffect(() => {
     setActiveError(null);
     setErrorDismissed(false);
-  }, [effectivePreviewHtml, refreshKey]);
+  }, [renderedStaticHtml, refreshKey]);
 
   const hasFiles = files.length > 0;
-  const useFallback = previewEngine === "fallback";
+  const useStaticPreview = previewEngine === "static";
   // Draft/legacy WebContainer path — hidden unless NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1.
-  const viteCapable = webContainerAllowed && shouldUseWebContainer(files);
-
-  const retryVitePreview = useCallback(() => {
-    clearWcBlock();
-    if (!viteCapable) {
-      toast({
-        title: "Standard preview",
-        description: "This project does not use a Vite/package.json layout.",
-      });
-      return;
-    }
-    if (typeof window !== "undefined" && !window.crossOriginIsolated) {
-      toast({
-        title: "Reloading for Vite preview",
-        description: "A full page load is required for the in-browser Vite runtime.",
-      });
-      window.location.reload();
-      return;
-    }
-    setBackgroundViteActive(true);
-    setBackgroundViteKey((k) => k + 1);
-    clearPreviewLogs();
-  }, [toast, viteCapable]);
-
   function refresh() {
     if (previewEngine === "sandbox" && sandboxIframeRef.current?.contentWindow) {
       try {
@@ -2193,7 +1923,7 @@ export function PreviewPanel({
       }
     }
     if (previewEngine === "webcontainer") {
-      const iframe = sandpackContainerRef.current?.querySelector("iframe");
+      const iframe = runtimeContainerRef.current?.querySelector("iframe");
       if (iframe?.contentWindow) {
         try {
           iframe.contentWindow.location.reload();
@@ -2359,7 +2089,7 @@ export function PreviewPanel({
                   navSuppressRef.current = true;
                   setTimeout(() => { navSuppressRef.current = false; }, 1000);
                   const targetWin = previewEngine === "webcontainer"
-                    ? sandpackContainerRef.current?.querySelector("iframe")?.contentWindow
+                    ? runtimeContainerRef.current?.querySelector("iframe")?.contentWindow
                     : iframeRef.current?.contentWindow;
                   targetWin?.postMessage({ type: "lifemark-preview-navigate", pathname: target }, "*");
                   setPreviewPath(target);
@@ -2380,7 +2110,7 @@ export function PreviewPanel({
                   navSuppressRef.current = true;
                   setTimeout(() => { navSuppressRef.current = false; }, 1000);
                   const targetWin = previewEngine === "webcontainer"
-                    ? sandpackContainerRef.current?.querySelector("iframe")?.contentWindow
+                    ? runtimeContainerRef.current?.querySelector("iframe")?.contentWindow
                     : iframeRef.current?.contentWindow;
                   targetWin?.postMessage({ type: "lifemark-preview-navigate", pathname: target }, "*");
                   setPreviewPath(target);
@@ -2423,7 +2153,7 @@ export function PreviewPanel({
                       // only to iframeRef silently no-oped on WebContainer.
                       const targetWin =
                         previewEngine === "webcontainer"
-                          ? sandpackContainerRef.current?.querySelector("iframe")?.contentWindow
+                          ? runtimeContainerRef.current?.querySelector("iframe")?.contentWindow
                           : iframeRef.current?.contentWindow;
                       targetWin?.postMessage(
                         { type: "lifemark-preview-navigate", pathname: target },
@@ -2462,7 +2192,7 @@ export function PreviewPanel({
                   ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"
                   : previewMachineState === "error"
                     ? "bg-red-500/15 text-red-400 border-red-500/25"
-                    : previewMachineState === "fallback"
+                    : previewMachineState === "unavailable"
                       ? "bg-amber-500/15 text-amber-400 border-amber-500/25"
                       : "bg-blue-500/15 text-blue-400 border-blue-500/25"
               }`}
@@ -2474,7 +2204,7 @@ export function PreviewPanel({
                 Vite
               </span>
             )}
-            {previewEngine === "fallback" && !showDeployedPreview && (
+            {previewEngine === "unavailable" && !showDeployedPreview && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/25 mr-1">
                 Preview offline
               </span>
@@ -2659,14 +2389,14 @@ export function PreviewPanel({
               <p className="text-xs text-muted-foreground/40">Loading preview…</p>
             </div>
           </div>
-        ) : useFallback && staticRuntime ? (
+        ) : useStaticPreview && staticRuntime ? (
           <div className="flex flex-col flex-1 min-h-0 overflow-hidden relative">
             {withDeviceFrame(
               <iframe
                 id="static-preview-panel"
                 key={`static-${filesSignature}-${refreshKey}`}
                 ref={iframeRef}
-                srcDoc={effectivePreviewHtml}
+                srcDoc={renderedStaticHtml}
                 className="w-full h-full min-h-0 border-0 bg-white"
                 title="Static app preview"
                 sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
@@ -2757,12 +2487,12 @@ export function PreviewPanel({
           </div>
         ) : previewEngine === "webcontainer" ? (
           /* In-browser runtime (WebContainer) — zero server cost, runs on the
-             user's own machine. `sandpackContainerRef` is the host the rest of
+             user's own machine. `runtimeContainerRef` is the host the rest of
              this file already queries for `querySelector("iframe")` (visual
              edits, address bar, error bridge), so the iframe MUST live inside
              it or those features silently target nothing. */
           <div
-            ref={sandpackContainerRef}
+            ref={runtimeContainerRef}
             className={`flex flex-col flex-1 min-h-0 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}
           >
             {wcUrl ? (
@@ -2807,7 +2537,7 @@ export function PreviewPanel({
                       onClick={() => setWcNonce((n) => n + 1)}
                       className="text-xs px-3 py-1.5 rounded-md border hover:bg-muted"
                     >
-                      Retry
+                      Restart runtime
                     </button>
                   )}
                 </div>

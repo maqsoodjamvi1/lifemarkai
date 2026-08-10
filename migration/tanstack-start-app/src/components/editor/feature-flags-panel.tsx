@@ -25,7 +25,7 @@ const HOOK_CODE = `// hooks/use-feature-flag.ts
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
-export function useFeatureFlag(key: string): boolean {
+function useFeatureFlag(key: string): boolean {
   const [enabled, setEnabled] = useState(false);
   useEffect(() => {
     const supabase = createClient();
@@ -49,7 +49,7 @@ export function useFeatureFlag(key: string): boolean {
 const COMPONENT_CODE = `// components/feature-flag.tsx
 import { useFeatureFlag } from "@/hooks/use-feature-flag";
 
-export function FeatureFlag({
+function FeatureFlag({
   flag,
   children,
   fallback = null,

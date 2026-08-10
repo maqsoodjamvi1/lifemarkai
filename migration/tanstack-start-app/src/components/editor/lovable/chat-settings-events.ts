@@ -21,9 +21,3 @@ export function dispatchChatSettings(action: LifemarkChatSettingsAction): void {
     new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action } }),
   );
 }
-
-export function isChatSettingsEvent(
-  e: Event,
-): e is CustomEvent<{ action: LifemarkChatSettingsAction }> {
-  return e.type === LIFEMARK_CHAT_SETTINGS_EVENT;
-}
