@@ -116,6 +116,9 @@ async function loadSchema(
 
 /** Resolve a published project's id from its slug (or app_slug). */
 async function resolveProject(slug: string): Promise<string | null> {
+  // The slug is interpolated into a PostgREST .or() filter — reject anything
+  // that could carry filter syntax (commas, parens) before it gets there.
+  if (!/^[a-z0-9_-]{1,100}$/i.test(slug)) return null;
   const supabase = createAdminClient();
   const { data } = await supabase
     .from("projects")
