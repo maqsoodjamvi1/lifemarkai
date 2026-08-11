@@ -1667,9 +1667,25 @@ export function ChatPanel({
     const branchedAt = new Date().toISOString();
     pendingBranchRef.current = { snapshotId, branchedAt };
     onMessagesUpdate(truncated);
-    await sendMessage(getDisplayMessageContent(lastUserMsg), undefined, truncated, {
-      branchMeta: { snapshotId, branchedAt },
-    });
+    // Without an explicit overrideMode, sendMessage re-runs resolvePromptMode
+    // on the raw prompt text. On a project with fileCount===0 (which a
+    // regenerate can produce once the prior assistant turn is truncated
+    // away) a short/generic prompt gets reclassified by
+    // isVagueGreenfieldProjectPrompt() as Chat mode — Chat mode never writes
+    // project_files, so the model narrates a full "build" in the chat pane
+    // while zero bytes change on disk. Same bug class as
+    // handleDesignPreviewSelect/Skip above. The message being regenerated
+    // already recorded which mode produced it the first time (lastUserMsg.mode);
+    // pass that back explicitly so a regenerate can't silently downgrade to
+    // Chat regardless of file count.
+    await sendMessage(
+      getDisplayMessageContent(lastUserMsg),
+      lastUserMsg.mode && lastUserMsg.mode !== "patch" ? lastUserMsg.mode : "build",
+      truncated,
+      {
+        branchMeta: { snapshotId, branchedAt },
+      },
+    );
   }
 
   useEffect(() => {
