@@ -235,6 +235,18 @@ export function detectSandboxStart(files: SandboxFile[]): { port: number; startC
     return { port, startCommand: `npx next dev -p ${port}` };
   }
   const port = Number(process.env.MODAL_PREVIEW_PORT ?? process.env.SANDBOX_PREVIEW_PORT ?? DEFAULT_SANDBOX_PORT);
+  // Plain static scaffolds (index.html/app.js/styles.css, no build tooling)
+  // have no package.json and therefore no "dev" script — `npm run dev`
+  // 404s on package.json every single time and the in-container supervisor
+  // loop restarts it forever, in a tight ~1s crash loop, without ever
+  // producing a reachable preview (observed live: a freshly generated ERP
+  // scaffold with only index.html/app.js/styles.css spun in this loop
+  // indefinitely). Serve these with `npx serve` instead of assuming every
+  // project is an npm-scripted dev-server project.
+  const hasPackageJson = paths.some((p) => p === "package.json" || p.endsWith("/package.json"));
+  if (!hasPackageJson) {
+    return { port, startCommand: `npx --yes serve -l ${port} .` };
+  }
   return {
     port,
     startCommand: `npm run dev -- --host 0.0.0.0 --port ${port}`,
