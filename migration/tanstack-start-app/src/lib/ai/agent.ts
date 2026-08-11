@@ -128,7 +128,8 @@ function buildTools(
       name: "read_file",
       description: "Read the full contents of a file in the project",
       execute: async ({ path }: Record<string, unknown>) => {
-        const content = fileMap.get(path as string);
+        if (typeof path !== "string" || !path) return "Error: path is required and must be a non-empty string.";
+        const content = fileMap.get(path);
         if (content === undefined) return `File not found: ${path}`;
         return content;
       },
@@ -137,8 +138,15 @@ function buildTools(
       name: "write_file",
       description: "Write (create or overwrite) a file in the project. For edits to an existing file, prefer edit_file (surgical).",
       execute: async ({ path, content }: Record<string, unknown>) => {
-        const p = path as string;
-        const next = content as string;
+        // A malformed tool call (model omits/mistypes the path arg) used to
+        // reach onFileChange with path=undefined, which crashed on
+        // path.replace(...) — an UNCAUGHT exception that killed the whole
+        // shared ai-worker process, taking down every concurrent request,
+        // not just this one. Validate here and fail gracefully instead.
+        if (typeof path !== "string" || !path) return "Error: path is required and must be a non-empty string.";
+        if (typeof content !== "string") return "Error: content is required and must be a string.";
+        const p = path;
+        const next = content;
         // File Demolition guard: reject an overwrite that drops >100 lines of an
         // existing file down to near-nothing — almost always an accidental
         // truncation. The agent should use edit_file for targeted changes.
@@ -179,7 +187,8 @@ function buildTools(
       name: "delete_file",
       description: "Delete a file from the project",
       execute: async ({ path }: Record<string, unknown>) => {
-        const p = path as string;
+        if (typeof path !== "string" || !path) return "Error: path is required and must be a non-empty string.";
+        const p = path;
         if (!fileMap.has(p)) return `File not found: ${p}`;
         fileMap.delete(p);
         // Report honestly. Without a persistence hook the deletion is in-memory
@@ -197,7 +206,8 @@ function buildTools(
       description:
         "Surgically replace a specific snippet in a file. PREFER this over write_file for small/targeted changes — it's faster and safer than rewriting the whole file. Tries exact match, then a whitespace-flexible match. Fails if old_string is missing or not unique.",
       execute: async ({ path, old_string, new_string }: Record<string, unknown>) => {
-        const p = path as string;
+        if (typeof path !== "string" || !path) return "Error: path is required and must be a non-empty string.";
+        const p = path;
         const content = fileMap.get(p);
         if (content === undefined) return `File not found: ${p}`;
         const oldStr = String(old_string ?? "");

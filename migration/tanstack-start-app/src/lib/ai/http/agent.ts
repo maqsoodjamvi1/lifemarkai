@@ -599,6 +599,15 @@ export async function handleAiAgent(req: Request) {
           },
           onFileChange: async (path: string, content: string) => {
             producedBillableWork = true;
+            // Defense in depth: tool executes now validate path before calling
+            // this, but a malformed path here used to throw on path.replace()
+            // and crash the whole shared ai-worker process — every concurrent
+            // request, not just this one. Never let a bad path take the
+            // process down; skip the update and keep the run alive instead.
+            if (typeof path !== "string" || !path) {
+              send({ warning: "Agent produced a file update with no path; skipped." });
+              return;
+            }
             const cleanPath = path.replace(/\\/g, "/").replace(/^\/+/, "");
             projectFileMap.set(cleanPath, { path: cleanPath, content, language: detectLanguage(cleanPath) });
             send({ fileUpdated: { path: cleanPath, content: content.slice(0, 100) + "..." } });
@@ -614,6 +623,10 @@ export async function handleAiAgent(req: Request) {
           // turn, so the agent could "delete" it over and over.
           onFileDelete: async (path: string) => {
             producedBillableWork = true;
+            if (typeof path !== "string" || !path) {
+              send({ warning: "Agent produced a file delete with no path; skipped." });
+              return;
+            }
             const cleanPath = path.replace(/\\/g, "/").replace(/^\/+/, "");
 
             // Report the truth. An unchecked delete meant a failed one still
