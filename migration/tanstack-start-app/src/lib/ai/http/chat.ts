@@ -2588,15 +2588,41 @@ The user has expressed frustration. Do the following:
             }
           }
 
-          const remainingCredits = await settleCreditReservation(
-            supabase,
-            creditReservation.id,
-            creditCost,
-          );
-          if (remainingCredits == null) {
-            throw new Error("Unable to settle reserved credits");
+          // By this point the build has already run to completion and its
+          // files are persisted — everything below is billing/notification
+          // housekeeping. It used to share the outer try/catch, so a transient
+          // hiccup in settling the credit reservation (an RPC blip, or the
+          // reservation racing itself) propagated to the top-level catch and
+          // sent the client the same `{error}` SSE payload used for a build
+          // that never ran — the chat thread then showed "The request failed,
+          // so no changes were made" directly under a build that, on
+          // inspection, fully succeeded. Settling is scoped to its own
+          // try/catch so a failure here is logged and reconciled by the
+          // `finally` block's fallback settlement (`reservationFinalized`
+          // stays false) instead of overwriting a real success with a false
+          // failure. `profile.credits` (captured before this reservation was
+          // taken) is used as an approximate fallback balance for the "done"
+          // event the client actually reads.
+          let remainingCredits: number;
+          try {
+            const settled = await settleCreditReservation(
+              supabase,
+              creditReservation.id,
+              creditCost,
+            );
+            if (settled == null) throw new Error("Unable to settle reserved credits");
+            remainingCredits = settled;
+            reservationFinalized = true;
+          } catch (settleErr) {
+            logger.error(
+              "ai.chat.settle_credits_failed",
+              settleErr instanceof Error ? settleErr : new Error(String(settleErr)),
+              { projectId, userId, mode, reservationId: creditReservation.id },
+            );
+            remainingCredits = typeof profile?.credits === "number"
+              ? Math.max(0, profile.credits - creditCost)
+              : 0;
           }
-          reservationFinalized = true;
 
           // Warn user when credits drop low (fire-and-forget)
           const profileEmail = (profile as { email?: string }).email;
