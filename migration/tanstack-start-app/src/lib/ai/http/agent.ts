@@ -705,13 +705,20 @@ export async function handleAiAgent(req: Request) {
           });
           if (!stagedVerification?.passed) {
             const reason = stagedVerification?.errors[0] ?? "candidate verification could not complete";
-            await (supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<unknown> })
-              .rpc("record_failed_generation", {
-                target_project_id: projectId,
-                run_source: "agent",
-                staged_files: candidateFiles,
-                failure_message: reason,
-              }).catch(() => undefined);
+            try {
+              // Supabase's rpc() builder is thenable but not a real Promise —
+              // chaining .catch() directly threw "is not a function" and
+              // crashed the whole agent run before it could even report the
+              // verification failure. await + try/catch is the safe pattern
+              // (matches every other .rpc() call in this codebase).
+              await (supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<unknown> })
+                .rpc("record_failed_generation", {
+                  target_project_id: projectId,
+                  run_source: "agent",
+                  staged_files: candidateFiles,
+                  failure_message: reason,
+                });
+            } catch { /* best-effort logging only, never fails the run */ }
             throw new Error(`Agent verification failed; the last working revision was preserved: ${reason}`);
           }
           for (const fixed of stagedVerification.fixedFiles) projectFileMap.set(fixed.path, fixed);
