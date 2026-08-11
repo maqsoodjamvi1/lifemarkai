@@ -19,10 +19,43 @@ APP_DATA_MAX_ROWS_PER_COLLECTION,
 } from "@/lib/preview/lifemark-data";
 import {
   SCHEMA_COLLECTION,
-  validateRecordAgainstSchema,
+  prepareRecordForWrite,
+  uniqueFields,
   validateSchemaDefinition,
   type LifemarkCollectionSchema,
 } from "@/lib/preview/lifemark-schema";
+
+/**
+ * Enforce unique-declared fields across the collection. Returns error
+ * strings for values already taken by ANOTHER record.
+ */
+async function uniqueViolations(
+  projectId: string,
+  collection: string,
+  schema: LifemarkCollectionSchema,
+  data: Record<string, unknown>,
+  excludeId?: string,
+): Promise<string[]> {
+  const supabase = createAdminClient();
+  const errors: string[] = [];
+  for (const name of uniqueFields(schema)) {
+    const value = data[name];
+    if (value === undefined || value === null) continue;
+    let query = supabase
+      .from("app_data")
+      .select("id")
+      .eq("project_id", projectId)
+      .eq("collection", collection)
+      .eq(`data->>${name}`, String(value))
+      .limit(1);
+    if (excludeId) query = query.neq("id", excludeId);
+    const { data: rows } = await query;
+    if (rows && rows.length > 0) {
+      errors.push(`Field "${name}" must be unique — "${String(value)}" is already taken`);
+    }
+  }
+  return errors;
+}
 
 const collectionSchema = z
   .string()
@@ -174,19 +207,26 @@ export const Route = createFileRoute("/api/public/app-data/$slug")({
         if (collection === SCHEMA_COLLECTION) {
           return json({ error: "Reserved collection" }, 400);
         }
-        const data = body.data as Record<string, unknown>;
+        let data = body.data as Record<string, unknown>;
         if (JSON.stringify(data).length > APP_DATA_MAX_RECORD_BYTES) {
           return json({ error: "Record too large" }, 413);
         }
         const { schema } = await loadSchema(projectId, collection);
         if (schema) {
-          const errors = validateRecordAgainstSchema(data, schema);
+          const prepared = prepareRecordForWrite(data, schema);
+          const errors = prepared.errors.length
+            ? prepared.errors
+            : await uniqueViolations(projectId, collection, schema, prepared.data);
           if (errors.length) {
             return json(
-              { error: `Schema validation failed (${collection}): ${errors.join("; ")}` },
+              {
+                error: `Schema validation failed (${collection}): ${errors.join("; ")}`,
+                details: errors,
+              },
               422,
             );
           }
+          data = prepared.data;
         }
         const { count } = await supabase
           .from("app_data")
@@ -242,25 +282,30 @@ export const Route = createFileRoute("/api/public/app-data/$slug")({
         if (collection === SCHEMA_COLLECTION) {
           return json({ error: "Reserved collection" }, 400);
         }
+        let patchData = body.data as Record<string, unknown>;
         if (collection) {
           const { schema } = await loadSchema(projectId, collection);
           if (schema) {
-            const errors = validateRecordAgainstSchema(
-              body.data as Record<string, unknown>,
-              schema,
-            );
+            const prepared = prepareRecordForWrite(patchData, schema);
+            const errors = prepared.errors.length
+              ? prepared.errors
+              : await uniqueViolations(projectId, collection, schema, prepared.data, body.id);
             if (errors.length) {
               return json(
-                { error: `Schema validation failed (${collection}): ${errors.join("; ")}` },
+                {
+                  error: `Schema validation failed (${collection}): ${errors.join("; ")}`,
+                  details: errors,
+                },
                 422,
               );
             }
+            patchData = prepared.data;
           }
         }
 
         const { data, error } = await supabase
           .from("app_data")
-          .update({ data: body.data as never })
+          .update({ data: patchData as never })
           .eq("id", body.id)
           .eq("project_id", projectId)
           .select("id, data, created_at, updated_at")

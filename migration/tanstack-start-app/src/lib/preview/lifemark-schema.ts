@@ -41,6 +41,14 @@ export interface LifemarkFieldDef {
   type: LifemarkFieldType;
   required?: boolean;
   enum?: Array<string | number>;
+  /** Applied on create/update when the field is missing or null. */
+  default?: unknown;
+  /** number → minimum value; string/array → minimum length. */
+  min?: number;
+  /** number → maximum value; string/array → maximum length. */
+  max?: number;
+  /** string/number only — no two records in the collection may share a value. */
+  unique?: boolean;
 }
 
 export interface LifemarkCollectionSchema {
@@ -99,6 +107,33 @@ export function validateSchemaDefinition(schema: unknown): string[] {
         errors.push(`Field "${name}".enum must be a non-empty array of strings/numbers`);
       }
     }
+    if (d.min !== undefined && typeof d.min !== "number") {
+      errors.push(`Field "${name}".min must be a number`);
+    }
+    if (d.max !== undefined && typeof d.max !== "number") {
+      errors.push(`Field "${name}".max must be a number`);
+    }
+    if (
+      typeof d.min === "number" &&
+      typeof d.max === "number" &&
+      d.min > d.max
+    ) {
+      errors.push(`Field "${name}".min must be <= max`);
+    }
+    if (d.unique !== undefined) {
+      if (typeof d.unique !== "boolean") {
+        errors.push(`Field "${name}".unique must be a boolean`);
+      } else if (d.unique && d.type !== "string" && d.type !== "number") {
+        errors.push(`Field "${name}".unique is only supported for string/number fields`);
+      }
+    }
+    if (d.default !== undefined && FIELD_TYPES.includes(d.type as LifemarkFieldType)) {
+      if (!matchesType(d.default, d.type as LifemarkFieldType)) {
+        errors.push(`Field "${name}".default must match its declared type`);
+      } else if (d.enum && !d.enum.includes(d.default as string | number)) {
+        errors.push(`Field "${name}".default must be one of its enum values`);
+      }
+    }
   }
   return errors;
 }
@@ -142,6 +177,22 @@ export function validateRecordAgainstSchema(
     if (def.enum && !def.enum.includes(value as string | number)) {
       errors.push(`Field "${name}" must be one of: ${def.enum.join(", ")}`);
     }
+    // min/max — value range for numbers, length for strings and arrays
+    const measure =
+      def.type === "number"
+        ? (value as number)
+        : typeof value === "string" || Array.isArray(value)
+          ? (value as string | unknown[]).length
+          : null;
+    if (measure !== null) {
+      const what = def.type === "number" ? "" : " length";
+      if (typeof def.min === "number" && measure < def.min) {
+        errors.push(`Field "${name}"${what} must be >= ${def.min}`);
+      }
+      if (typeof def.max === "number" && measure > def.max) {
+        errors.push(`Field "${name}"${what} must be <= ${def.max}`);
+      }
+    }
   }
   for (const name of Object.keys(data)) {
     if (!(name in fields)) {
@@ -149,6 +200,43 @@ export function validateRecordAgainstSchema(
     }
   }
   return errors;
+}
+
+/**
+ * Prepare a record for writing: apply defaults, coerce common form-input
+ * mistakes (HTML inputs produce strings — "42" for a number field, "true"
+ * for a boolean), then validate. Returns the prepared data plus any errors.
+ */
+export function prepareRecordForWrite(
+  data: Record<string, unknown>,
+  schema: LifemarkCollectionSchema,
+): { data: Record<string, unknown>; errors: string[] } {
+  const out: Record<string, unknown> = { ...data };
+  for (const [name, def] of Object.entries(schema.fields ?? {})) {
+    let value = out[name];
+    if ((value === undefined || value === null) && def.default !== undefined) {
+      out[name] = def.default;
+      continue;
+    }
+    if (value === undefined || value === null) continue;
+    if (def.type === "number" && typeof value === "string" && value.trim() !== "") {
+      const n = Number(value);
+      if (Number.isFinite(n)) value = n;
+    } else if (def.type === "boolean" && (value === "true" || value === "false")) {
+      value = value === "true";
+    } else if (def.type === "string" && typeof value === "number") {
+      value = String(value);
+    }
+    out[name] = value;
+  }
+  return { data: out, errors: validateRecordAgainstSchema(out, schema) };
+}
+
+/** Names of fields declared unique (server enforces across the collection). */
+export function uniqueFields(schema: LifemarkCollectionSchema): string[] {
+  return Object.entries(schema.fields ?? {})
+    .filter(([, def]) => def.unique === true)
+    .map(([name]) => name);
 }
 
 function tsType(def: LifemarkFieldDef): string {
