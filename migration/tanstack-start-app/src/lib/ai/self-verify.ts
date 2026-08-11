@@ -436,7 +436,7 @@ export async function runSelfVerification(opts: {
       else if (typeof deployed === "string" && /^https?:\/\//i.test(deployed)) liveUrl = deployed;
     }
 
-    const playwright = await tryLoadPlaywright();
+    let playwright = await tryLoadPlaywright();
     result.engine = playwright ? "browser" : "static";
     emit(
       playwright
@@ -510,9 +510,27 @@ export async function runSelfVerification(opts: {
 
       const visionEnabled = process.env.VISION_REVIEW === "true";
       const appRoutes = extractAppRoutes(files);
-      const rendered = playwright
-        ? await renderAndCollectErrors(playwright, html, liveUrl, visionEnabled && round === 0, appRoutes)
-        : { errors: staticVerify(html), screenshot: null };
+      let rendered: { errors: string[]; screenshot: string | null };
+      if (playwright) {
+        try {
+          rendered = await renderAndCollectErrors(playwright, html, liveUrl, visionEnabled && round === 0, appRoutes);
+        } catch (renderErr) {
+          // The playwright PACKAGE can import successfully while its browser
+          // BINARY is missing from the image (e.g. `npx playwright install`
+          // never ran in this container) — tryLoadPlaywright only checks the
+          // former. That mismatch used to throw here, escape the round loop,
+          // and get silently eaten by the outer catch, rejecting every
+          // candidate with a content-free "could not complete" message. Once
+          // a real browser launch fails it will keep failing for the rest of
+          // this run, so stop trying it and use static checks for every
+          // remaining round instead of just this one.
+          console.error("[self-verify] real-browser render failed, falling back to static checks:", renderErr);
+          playwright = null;
+          rendered = { errors: staticVerify(html), screenshot: null };
+        }
+      } else {
+        rendered = { errors: staticVerify(html), screenshot: null };
+      }
       const runtimeErrors = rendered.errors;
 
       let errors = [...new Set([...contractErrors, ...runtimeErrors])].slice(0, 6);
