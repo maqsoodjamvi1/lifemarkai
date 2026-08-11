@@ -358,6 +358,17 @@ function relevantFiles(files: ProjectFile[], errors: string[]): ProjectFile[] {
   // data module it consumes — surface both so the fixer sees the page AND the
   // mock it disagrees with, not just whichever file the stack trace mentioned.
   const routeTokens = [...errorBlob.matchAll(/\[route \/([\w-]+)\]/g)].map((m) => m[1].toLowerCase());
+  // The "CSS covers markup classes" static check (preview-verify.ts) names the
+  // *class names* that lack a rule ("… never styled: nav-link, app-shell"), not
+  // any file path — so the generic `errorBlob.includes(name)` match below never
+  // fires for the stylesheet itself (a file named "styles.css" doesn't contain
+  // the substring "styles" in an error that only lists class names). Without an
+  // explicit boost here, `styles.css` silently misses the top-8 cut and the fix
+  // round never sees the file it's supposed to edit — the model then patches
+  // blind, which is why fix rounds for this error historically produced no
+  // visible change even though they clearly "ran" (see prod incident: .nav-link
+  // still missing from styles.css after a full fix round completed).
+  const cssCoverageIssue = /never styled/i.test(errorBlob);
   const scored = files
     .filter((f) => /\.(tsx|jsx|ts|js|css|html)$/.test(f.path))
     .map((f) => {
@@ -373,6 +384,7 @@ function relevantFiles(files: ProjectFile[], errors: string[]): ProjectFile[] {
       if (routeTokens.length > 0 && /^src\/data\//.test(f.path)) score += 2;
       if (/App\.(t|j)sx$/.test(f.path) || /main\.(t|j)sx$/.test(f.path)) score += 3;
       if (/index\.html$/.test(f.path)) score += 1;
+      if (cssCoverageIssue && /\.css$/.test(f.path)) score += 7;
       return { f, score };
     })
     .sort((a, b) => b.score - a.score);
