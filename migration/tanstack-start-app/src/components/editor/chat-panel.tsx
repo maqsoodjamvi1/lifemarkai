@@ -4165,12 +4165,29 @@ ${(f.content ?? "").slice(0, 8000)}
     }
   }
 
+  // Both handlers below fire only after the user has already committed to a
+  // build (they typed a build request and the design picker offered to
+  // refine it) — there is no vagueness left to resolve. Without an explicit
+  // overrideMode, sendMessage re-runs resolvePromptMode on the raw prompt,
+  // and isVagueGreenfieldProjectPrompt() silently reclassifies short generic
+  // asks ("Build the bakery landing page.") as Chat mode on a fileCount===0
+  // project. Chat mode never writes project_files, so the model happily
+  // narrates a full build and shows the code as an inert chat suggestion —
+  // the live preview and Code tab stay on the placeholder scaffold forever.
+  // Selecting a direction accidentally dodged this bug (buildDesignBrief()
+  // pads the prompt past the 100-char vagueness cutoff), but Skip re-sends
+  // the original short prompt unchanged and reliably hit it — every
+  // "Skip — AI picks for me" click on a short prompt silently no-op'd the
+  // build. Passing overrideMode="build" here matches what resolvePromptMode
+  // would have returned anyway for a non-vague version of this same prompt
+  // (design previews are only offered for visual/website builds, never
+  // erp/pos/crm app-shells, so "build" — not "agent" — is always right here).
   function handleDesignPreviewSelect(direction: DesignPreviewDirection) {
     const base = pendingDesignPrompt;
     setDesignPreviewOpen(false);
     setPendingDesignPrompt(null);
     if (!base) return;
-    void sendMessage(`${base}\n\n${buildDesignBrief(direction)}`);
+    void sendMessage(`${base}\n\n${buildDesignBrief(direction)}`, "build");
   }
 
   function handleDesignPreviewSkip() {
@@ -4178,7 +4195,7 @@ ${(f.content ?? "").slice(0, 8000)}
     setDesignPreviewOpen(false);
     setPendingDesignPrompt(null);
     skipDesignPreviewOnceRef.current = true;
-    if (base) void sendMessage(base);
+    if (base) void sendMessage(base, "build");
   }
 
   // Auto-drain the queue when streaming finishes (unless paused)
