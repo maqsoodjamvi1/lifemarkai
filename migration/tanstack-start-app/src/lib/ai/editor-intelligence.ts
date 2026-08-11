@@ -243,7 +243,6 @@ const COMPLEX_FEATURE_RE =
   /\b(auth|login|sign[- ]?up|database|supabase|postgres|payment|stripe|paddle|checkout|cart|subscription|api|backend|edge function|server|realtime|websocket|admin|dashboard|integration|webhook|oauth|upload|multi[- ]?tenant|role|permission|analytics|cms|ai|chatbot|llm)\b/i;
 
 /** App types that are content/presentation-first (no app logic to get wrong). */
-const CONTENT_APP_TYPES = new Set<string>(["marketing-website"]);
 
 /**
  * True when a build/agent request is safe to route to the FREE coding model:
@@ -258,18 +257,13 @@ const CONTENT_APP_TYPES = new Set<string>(["marketing-website"]);
 export function isFreeEligibleBuild(prompt: string, fileCount: number): boolean {
   const trimmed = prompt.trim();
   if (!trimmed || COMPLEX_FEATURE_RE.test(trimmed)) return false;
-  // Tiny incremental edit on an existing app ("make the header sticky").
-  if (fileCount > 0 && trimmed.length < 90) return true;
-  // New content-first site: classify only for new/near-empty projects.
-  if (fileCount <= 8) {
-    try {
-      const { appType } = classifyBuildIntent(trimmed);
-      return CONTENT_APP_TYPES.has(appType);
-    } catch {
-      return false;
-    }
-  }
-  return false;
+  // Tiny incremental edit on an ESTABLISHED app ("make the header sticky").
+  // fileCount >= 4 keeps fresh scaffolds (1-3 files) out: live prod runs
+  // showed the free tier's single provider taking 5-82s PER tool call on
+  // greenfield agent flows (17+ calls) - the stream times out and the build
+  // fails with "request failed". Greenfield is NEVER free-eligible; content
+  // sites included (two production failures on "landing page for a bakery").
+  return fileCount >= 4 && trimmed.length < 90;
 }
 
 function isSmallExistingEdit(prompt: string, fileCount: number): boolean {
