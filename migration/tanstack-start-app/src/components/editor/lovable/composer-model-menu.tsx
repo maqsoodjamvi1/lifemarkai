@@ -23,9 +23,20 @@ function modelPickerRank(model: (typeof CHAT_MODEL_OPTIONS)[number]): number {
   return 3;
 }
 
-export const LOVABLE_AI_MODELS = [...CHAT_MODEL_OPTIONS].sort(
-  (a, b) => modelPickerRank(a) - modelPickerRank(b) || a.label.localeCompare(b.label),
-);
+// LAZY on purpose — do NOT hoist this back to a module-level constant.
+// Iterating CHAT_MODEL_OPTIONS at module-init crashed production SSR on every
+// request ("CHAT_MODEL_OPTIONS is not iterable"): the bundler's chunk ordering
+// evaluated this module before the openrouter-models chunk had initialized.
+// Computing on first render is always safe; dev never reproduces the crash.
+let lovableAiModelsCache: Array<(typeof CHAT_MODEL_OPTIONS)[number]> | null = null;
+export function getLovableAiModels(): Array<(typeof CHAT_MODEL_OPTIONS)[number]> {
+  if (!lovableAiModelsCache) {
+    lovableAiModelsCache = [...CHAT_MODEL_OPTIONS].sort(
+      (a, b) => modelPickerRank(a) - modelPickerRank(b) || a.label.localeCompare(b.label),
+    );
+  }
+  return lovableAiModelsCache;
+}
 
 interface LovableComposerModelMenuProps {
   mode: EditorMode;
@@ -143,7 +154,7 @@ export function LovableComposerModelMenu({
             Smart
           </span>
         </DropdownMenuItem>
-        {LOVABLE_AI_MODELS.map((model) => (
+        {getLovableAiModels().map((model) => (
           <DropdownMenuItem
             key={model.id}
             onClick={() => onSelectModel(model.id, true)}
