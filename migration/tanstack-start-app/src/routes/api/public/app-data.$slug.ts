@@ -142,14 +142,37 @@ export const Route = createFileRoute("/api/public/app-data/$slug")({
         const projectId = await resolveProject(params.slug);
         if (!projectId) return json({ error: "App not found" }, 404);
 
+        // Optional query params: where=field:value (single equality filter)
+        // and limit=N (1..500) — enough for list pages without client-side
+        // filtering of the whole collection.
+        const limitParam = z.coerce.number().int().min(1).max(500)
+          .safeParse(url.searchParams.get("limit") ?? 500);
+        const whereRaw = url.searchParams.get("where");
+        let whereField: string | null = null;
+        let whereValue: string | null = null;
+        if (whereRaw) {
+          const idx = whereRaw.indexOf(":");
+          const field = idx > 0 ? whereRaw.slice(0, idx) : "";
+          const value = idx > 0 ? whereRaw.slice(idx + 1) : "";
+          if (!/^[a-zA-Z][a-zA-Z0-9_]{0,47}$/.test(field) || value.length > 256) {
+            return json({ error: "Invalid where filter — use field:value" }, 400);
+          }
+          whereField = field;
+          whereValue = value;
+        }
+
         const supabase = createAdminClient();
-        const { data, error } = await supabase
+        let query = supabase
           .from("app_data")
           .select("id, data, created_at, updated_at")
           .eq("project_id", projectId)
-          .eq("collection", parsed.data.toLowerCase())
+          .eq("collection", parsed.data.toLowerCase());
+        if (whereField !== null && whereValue !== null) {
+          query = query.eq(`data->>${whereField}`, whereValue);
+        }
+        const { data, error } = await query
           .order("created_at", { ascending: false })
-          .limit(500);
+          .limit(limitParam.success ? limitParam.data : 500);
         if (error) return json({ error: error.message }, 500);
         return json({ records: data ?? [] });
       },
@@ -163,9 +186,11 @@ export const Route = createFileRoute("/api/public/app-data/$slug")({
             collection: collectionSchema,
             data: z.record(z.string(), z.unknown()).optional(),
             schema: z.object({ fields: z.record(z.string(), z.unknown()) }).optional(),
-          }).refine((b) => !!b.data !== !!b.schema, {
-            message: "Provide exactly one of data or schema",
-          }),
+            seed: z.array(z.record(z.string(), z.unknown())).min(1).max(100).optional(),
+          }).refine(
+            (b) => [b.data, b.schema, b.seed].filter((x) => x !== undefined).length === 1,
+            { message: "Provide exactly one of data, schema or seed" },
+          ),
         );
         if (body instanceof Response) return body;
 
@@ -200,7 +225,89 @@ export const Route = createFileRoute("/api/public/app-data/$slug")({
                 .select("id")
                 .single();
           if (result.error) return json({ error: result.error.message }, 500);
-          return json({ ok: true, schema: record });
+
+          // Schema evolution safety: report how many EXISTING records no
+          // longer conform (e.g. a field became required), so the AI can
+          // migrate data instead of discovering breakage at the next write.
+          const parsedSchema = { fields: body.schema.fields } as LifemarkCollectionSchema;
+          const { data: sample } = await supabase
+            .from("app_data")
+            .select("id, data")
+            .eq("project_id", projectId)
+            .eq("collection", collection)
+            .limit(200);
+          let nonconforming = 0;
+          const sampleErrors: string[] = [];
+          for (const row of (sample ?? []) as Array<{ id: string; data: Record<string, unknown> }>) {
+            const check = prepareRecordForWrite(row.data ?? {}, parsedSchema);
+            if (check.errors.length) {
+              nonconforming++;
+              if (sampleErrors.length < 3) sampleErrors.push(`record ${row.id}: ${check.errors[0]}`);
+            }
+          }
+          return json({
+            ok: true,
+            schema: record,
+            ...(nonconforming > 0 ? { warnings: { nonconforming, sample: sampleErrors } } : {}),
+          });
+        }
+
+        // ── Idempotent bulk seeding (LifemarkData.seed) ─────────────────────
+        // Inserts ONLY when the collection is empty, closing the race where
+        // two first visitors of a published app both see [] and double-seed.
+        if (body.seed) {
+          if (collection === SCHEMA_COLLECTION) {
+            return json({ error: "Reserved collection" }, 400);
+          }
+          const { count: existing } = await supabase
+            .from("app_data")
+            .select("id", { count: "exact", head: true })
+            .eq("project_id", projectId)
+            .eq("collection", collection);
+          if ((existing ?? 0) > 0) return json({ ok: true, seeded: 0 });
+
+          const { schema } = await loadSchema(projectId, collection);
+          const rows: Array<Record<string, unknown>> = [];
+          const seen = new Map<string, Set<string>>();
+          for (const [i, raw] of body.seed.entries()) {
+            if (JSON.stringify(raw).length > APP_DATA_MAX_RECORD_BYTES) {
+              return json({ error: `Seed row ${i} too large` }, 413);
+            }
+            let row = raw as Record<string, unknown>;
+            if (schema) {
+              const prepared = prepareRecordForWrite(row, schema);
+              if (prepared.errors.length) {
+                return json(
+                  {
+                    error: `Schema validation failed (${collection}, seed row ${i}): ${prepared.errors.join("; ")}`,
+                    details: prepared.errors,
+                  },
+                  422,
+                );
+              }
+              row = prepared.data;
+              // intra-batch uniqueness for unique-declared fields
+              for (const name of uniqueFields(schema)) {
+                const value = row[name];
+                if (value === undefined || value === null) continue;
+                const set = seen.get(name) ?? new Set<string>();
+                if (set.has(String(value))) {
+                  return json(
+                    { error: `Seed rows duplicate unique field "${name}" value "${String(value)}"` },
+                    422,
+                  );
+                }
+                set.add(String(value));
+                seen.set(name, set);
+              }
+            }
+            rows.push(row);
+          }
+          const insertedSeed = await supabase
+            .from("app_data")
+            .insert(rows.map((r) => ({ project_id: projectId, collection, data: r as never })));
+          if (insertedSeed.error) return json({ error: insertedSeed.error.message }, 500);
+          return json({ ok: true, seeded: rows.length });
         }
 
         // ── Record insert (validated against the schema when one exists) ────

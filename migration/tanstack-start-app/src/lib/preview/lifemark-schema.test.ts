@@ -176,6 +176,9 @@ test("typesFromSchemas emits interfaces with enums, optionals and globals", () =
   assert.ok(dts.includes("qty: number;"));
   assert.ok(dts.includes("interface Window"));
   assert.ok(dts.includes("defineSchema"));
+  assert.ok(dts.includes("seed<"));
+  assert.ok(dts.includes("getSchema"));
+  assert.ok(dts.includes("where?:"));
 });
 
 // ── SDK script + prompt block wiring ─────────────────────────────────────────
@@ -198,4 +201,16 @@ test("prompt block teaches the schema-first workflow and the d.ts contract", () 
   assert.ok(LIFEMARK_DATA_PROMPT_BLOCK.includes("defineSchema"));
   assert.ok(LIFEMARK_DATA_PROMPT_BLOCK.includes("SCHEMA-FIRST"));
   assert.ok(LIFEMARK_DATA_PROMPT_BLOCK.includes("lifemark-data.d.ts"));
+  assert.ok(LIFEMARK_DATA_PROMPT_BLOCK.includes("LifemarkData.seed("));
+  assert.ok(LIFEMARK_DATA_PROMPT_BLOCK.includes("warnings.nonconforming"));
+});
+
+test("SDK script implements seed, getSchema and filtered list", () => {
+  const script = lifemarkDataSdkScript({ slug: "demo", apiBase: "https://lifemarkai.com" });
+  assert.ok(script.includes("async seed(c,rows)"));
+  assert.ok(script.includes("async getSchema(c)"));
+  assert.ok(script.includes("&where="));
+  assert.ok(script.includes("&limit="));
+  // seed sends prepped rows so defaults/coercion apply before the server sees them
+  assert.ok(script.includes("seed:prepped"));
 });

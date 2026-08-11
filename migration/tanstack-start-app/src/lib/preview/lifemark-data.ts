@@ -66,7 +66,9 @@ async function req(m,p,b){var r=await fetch(E+p,{method:m,headers:{"Content-Type
 window.LifemarkData={
   hosted:!!E,
   async defineSchema(c,fields){var s={fields:fields};localStorage.setItem(skey(c),JSON.stringify(s));if(E)await req("POST","",{collection:c,schema:s});},
-  async list(c){if(!E)return local(c);var j=await req("GET","?collection="+encodeURIComponent(c));return j.records||[];},
+  async getSchema(c){var s=schema(c);if(s)return s;if(!E)return null;var j=await req("GET","?collection=__schema__");var m=(j.records||[]).map(function(r){return r.data;}).filter(function(d){return d&&d.collection===c;})[0];return m?{fields:m.fields}:null;},
+  async list(c,o){o=o||{};if(!E){var rs=local(c);if(o.where){rs=rs.filter(function(r){for(var k in o.where){if(String((r.data||{})[k])!==String(o.where[k]))return false;}return true;});}if(o.limit)rs=rs.slice(0,o.limit);return rs;}var q="?collection="+encodeURIComponent(c);if(o.where){var wk=Object.keys(o.where)[0];if(wk)q+="&where="+encodeURIComponent(wk+":"+String(o.where[wk]));}if(o.limit)q+="&limit="+encodeURIComponent(o.limit);var j=await req("GET",q);return j.records||[];},
+  async seed(c,rows){var prepped=rows.map(function(r){return prep(c,r);});if(!E){if(local(c).length)return {seeded:0};save(c,prepped.map(function(d){return {id:uid(),data:d,created_at:new Date().toISOString()};}));return {seeded:prepped.length};}var j=await req("POST","",{collection:c,seed:prepped});return {seeded:j.seeded||0};},
   async create(c,d){d=prep(c,d);if(!E){var rs=local(c);var rec={id:uid(),data:d,created_at:new Date().toISOString()};rs.unshift(rec);save(c,rs);return rec;}var j=await req("POST","",{collection:c,data:d});return j.record;},
   async update(c,id,d){d=prep(c,d,id);if(!E){var rs=local(c).map(function(x){return x.id===id?{id:x.id,data:d,created_at:x.created_at}:x;});save(c,rs);return rs.find(function(x){return x.id===id;});}var j=await req("PATCH","",{id:id,collection:c,data:d});return j.record;},
   async remove(c,id){if(!E){save(c,local(c).filter(function(x){return x.id!==id;}));return {ok:true};}return req("DELETE","?id="+encodeURIComponent(id));}
@@ -90,7 +92,9 @@ export const LIFEMARK_DATA_PROMPT_BLOCK = `
 A global \`window.LifemarkData\` is injected into the app at runtime. Use it as the persistence layer — it is shared cloud storage for every visitor when the app is published (\`LifemarkData.hosted === true\`) and silently falls back to localStorage otherwise, so ALWAYS use it instead of raw localStorage.
 API (collection names are lowercase slugs like "customers"):
 - \`await LifemarkData.defineSchema(collection, fields)\` — declare the shape FIRST (see below)
-- \`await LifemarkData.list(collection)\` -> \`[{id, data, created_at}]\`
+- \`await LifemarkData.getSchema(collection)\` -> \`{fields} | null\`
+- \`await LifemarkData.list(collection, opts?)\` -> \`[{id, data, created_at}]\` — \`opts.where\` is a single-field equality filter (\`{where: {status: "active"}}\`), \`opts.limit\` caps results (max 500)
+- \`await LifemarkData.seed(collection, rows)\` -> \`{seeded}\` — bulk demo seeding; inserts ONLY if the collection is empty (race-safe), each row validated
 - \`await LifemarkData.create(collection, obj)\` -> record
 - \`await LifemarkData.update(collection, id, obj)\` -> record
 - \`await LifemarkData.remove(collection, id)\`
@@ -104,4 +108,6 @@ SCHEMA-FIRST (required workflow):
 2. Every create/update is validated against the schema (client-side in preview, server-side when published). Writes with missing required fields, wrong types, out-of-enum values, or UNDECLARED field names are rejected with a descriptive error — never work around this by renaming fields ad hoc; update the schema instead.
 3. Also write a \`lifemark-data.d.ts\` file in the app containing one exported interface per collection matching the schemas exactly (e.g. \`export interface Customer { name: string; email?: string; status?: "lead"|"active"|"churned"; ltv?: number; }\`), and keep it in sync whenever a schema changes. Consult this file before reading or writing records in later edits.
 
-Seed a collection with realistic demo rows on first load ONLY when \`list\` returns empty (after defineSchema). Do not build your own backend or auth unless the project has Lifemark Cloud enabled.`;
+4. Changing a schema over existing data: \`defineSchema\` responds with \`warnings.nonconforming\` when existing records no longer fit (e.g. a field became required). When that happens, migrate the old records with \`update\` before relying on the new shape.
+
+Seed demo data with \`await LifemarkData.seed(collection, rows)\` right after \`defineSchema\` on startup — it is a no-op when data already exists, so never guard it with a manual \`list\` check. Do not build your own backend or auth unless the project has Lifemark Cloud enabled.`;

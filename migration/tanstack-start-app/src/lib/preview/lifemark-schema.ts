@@ -292,8 +292,10 @@ export function typesFromSchemas(
   lines.push("  interface Window {");
   lines.push("    LifemarkData: {");
   lines.push("      hosted: boolean;");
-  lines.push("      defineSchema(collection: string, fields: Record<string, { type: string; required?: boolean; enum?: Array<string | number> }>): Promise<void>;");
-  lines.push("      list<T = Record<string, unknown>>(collection: string): Promise<Array<LifemarkRecord<T>>>;");
+  lines.push("      defineSchema(collection: string, fields: Record<string, { type: string; required?: boolean; enum?: Array<string | number>; default?: unknown; min?: number; max?: number; unique?: boolean }>): Promise<void>;");
+  lines.push("      getSchema(collection: string): Promise<{ fields: Record<string, unknown> } | null>;");
+  lines.push("      list<T = Record<string, unknown>>(collection: string, opts?: { where?: Record<string, string | number | boolean>; limit?: number }): Promise<Array<LifemarkRecord<T>>>;");
+  lines.push("      seed<T = Record<string, unknown>>(collection: string, rows: T[]): Promise<{ seeded: number }>;");
   lines.push("      create<T = Record<string, unknown>>(collection: string, data: T): Promise<LifemarkRecord<T>>;");
   lines.push("      update<T = Record<string, unknown>>(collection: string, id: string, data: T): Promise<LifemarkRecord<T>>;");
   lines.push("      remove(collection: string, id: string): Promise<{ ok: true }>;");
