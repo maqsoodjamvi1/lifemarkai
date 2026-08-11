@@ -648,8 +648,13 @@ export async function runSelfVerification(opts: {
     }
 
     return result;
-  } catch {
-    // Verification must never break the build
+  } catch (err) {
+    // Verification must never break the build — but a silently swallowed
+    // exception here is indistinguishable from a legitimate "verification
+    // found real errors" rejection to everything downstream (the generic
+    // "candidate verification could not complete" fallback in
+    // http/agent.ts). Log the real cause so it shows up in server logs.
+    console.error("[self-verify] verification threw and was suppressed:", err);
     return result.rounds > 0 ? result : null;
   }
 }
