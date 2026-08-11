@@ -35,6 +35,13 @@ import { applyPatches,collapsePatchResults,parsePatchResponse } from "../patch-a
 import { buildPersistedAssistantContent } from "../persist-message-mode.ts";
 import { persistChatTurnMessages } from "../persist-chat-turn.ts";
 import {
+detectAppGaps,
+extractDecisions,
+mergeDecisionsIntoKnowledge,
+nextStepsPromptBlock,
+renderDecisionsBlock,
+} from "../decision-memory.ts";
+import {
 buildNavEditContext,
 buildDeterministicMenuPatches,
 extractMenuLabelsFromPrompt,
@@ -684,7 +691,7 @@ export async function handleAiChat(req: Request) {
             if (remaining == null) throw new Error("Unable to settle clarification credits");
             reservationFinalized = true;
 
-            const questions = parseClarifyingQuestions(questionsJson);
+            let questions = parseClarifyingQuestions(questionsJson);
             /* Legacy parser retained temporarily for blame context.
             try {
               const parsed: unknown = JSON.parse(questionsJson);
@@ -791,7 +798,12 @@ export async function handleAiChat(req: Request) {
     let systemPrompt: string;
     if (mode === "build") {
       // Route to the right generator based on target framework
-      const suffix = schemaBlock + summaryBlock + fileChangesBlock + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock;
+      // Proactive gap scan (rule-based, free): hands the model concrete gaps
+      // in the CURRENT app so it volunteers "suggested next steps".
+      const gapsBlock = nextStepsPromptBlock(
+        detectAppGaps(files as Array<{ path: string; content?: string | null }>),
+      );
+      const suffix = schemaBlock + summaryBlock + fileChangesBlock + editorIntelligenceContext + workspaceKnowledgeBlock + knowledgeBlock + gapsBlock;
       // Intelligent file selection ("hydration"): give the builder only the files
       // relevant to this request instead of the whole project — cuts token cost
       // (a full-project turn can be ~157k tokens ≈ $2) and improves output quality.
@@ -2551,6 +2563,29 @@ The user has expressed frustration. Do the following:
               backendWiring,
               verification,
             });
+
+            // Decision memory (long-horizon consistency): deterministically
+            // extract the project's established decisions from the post-build
+            // file set and merge them into project knowledge, which every
+            // future prompt already injects as "always follow these". Best
+            // effort — a failure here must never fail the build.
+            try {
+              const existingFiles = (files as Array<{ path: string; content?: string | null }>) ?? [];
+              const byPath = new Map(existingFiles.map((f) => [f.path, f] as const));
+              for (const f of parsedFiles) byPath.set(f.path, { path: f.path, content: f.content });
+              const decisions = extractDecisions(Array.from(byPath.values()), framework);
+              const block = renderDecisionsBlock(decisions);
+              const currentKnowledge = projectData?.knowledge ?? "";
+              const nextKnowledge = mergeDecisionsIntoKnowledge(currentKnowledge, block);
+              if (nextKnowledge.trim() !== currentKnowledge.trim()) {
+                await supabase
+                  .from("projects")
+                  .update({ knowledge: nextKnowledge } as never)
+                  .eq("id", projectId);
+              }
+            } catch (memoryErr) {
+              logger.warn("decision-memory update skipped", { error: String(memoryErr) });
+            }
           }
 
           const remainingCredits = await settleCreditReservation(
