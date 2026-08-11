@@ -247,55 +247,16 @@ export default defineConfig(({ mode }) => {
       exclude: ["@tiptap/pm"],
     },
     build: {
-      // Keep route/editor growth from recreating multi-megabyte shared chunks.
-      // Rolldown partitions dependency closures at stable size boundaries,
-      // improving browser parse time and long-term cache reuse.
-      rolldownOptions: {
-        output: {
-          codeSplitting: {
-            minSize: 30_000,
-            maxSize: 450_000,
-            groups: [
-              {
-                name: (id) => {
-                  if (/node_modules[\\/](@tanstack|react|react-dom|scheduler)[\\/]/.test(id)) return "vendor-react-router";
-                  if (/node_modules[\\/](@tiptap|prosemirror|lowlight|highlight\.js)[\\/]/.test(id)) return "vendor-editor";
-                  if (/node_modules[\\/](mermaid|cytoscape|d3-|monaco-editor)[\\/]/.test(id)) return "vendor-visualization";
-                  if (id.includes("node_modules")) return "vendor-shared";
-                  return null;
-                },
-                test: /node_modules/,
-                includeDependenciesRecursively: false,
-                maxSize: 450_000,
-              },
-              {
-                name: "chat-ui",
-                test: /src[\\/]components[\\/]editor[\\/](chat-panel|lovable)[\\/.-]/,
-                includeDependenciesRecursively: false,
-                maxSize: 350_000,
-              },
-              {
-                name: "client-ai-utils",
-                test: /src[\\/]lib[\\/]ai[\\/]/,
-                includeDependenciesRecursively: false,
-                maxSize: 350_000,
-              },
-              {
-                name: (id) => {
-                  if (/src[\\/]routes[\\/]/.test(id)) return "app-routes";
-                  if (/src[\\/]components[\\/]editor[\\/]/.test(id)) return "editor-shared";
-                  if (/src[\\/]components[\\/]/.test(id)) return "app-components";
-                  if (/src[\\/]lib[\\/]/.test(id)) return "app-lib";
-                  return "app-shared";
-                },
-                test: /src[\\/]/,
-                includeDependenciesRecursively: false,
-                maxSize: 400_000,
-              },
-            ],
-          },
-        },
-      },
+      // NOTE: a custom rolldown codeSplitting.groups config used to live here
+      // (manual vendor/chat-ui/client-ai-utils partitions with
+      // includeDependenciesRecursively: false). It broke production TWICE by
+      // violating module-init order across chunk boundaries:
+      //   - SSR:    "CHAT_MODEL_OPTIONS is not iterable" (chat-ui chunk
+      //             evaluated before the model-catalog chunk) -> every request 500'd
+      //   - client: "TypeError: i is not a function" in vendor-shared -> hydration
+      //             died, every button dead
+      // Default chunking respects init order. Do not reintroduce manual groups
+      // without verifying a production build boots.
       // The only remaining >500 KB raw chunk is the optional VS Code language
       // service (673 KB raw / ~146 KB gzip), already isolated from initial UI.
       // Keep warnings meaningful for any future chunk that exceeds that bound.
