@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { isUpgradeToFullStackIntent,promptNeedsRealBackend,recommendedFrameworkForPrompt,resolveCreationFramework } from "./generation-profile.ts";
-test("ERP and CRM creation default straight to the full-stack TanStack Start profile", () => {
-  assert.equal(recommendedFrameworkForPrompt("Create an ERP for wholesale inventory"),"tanstack-start");
-  assert.equal(recommendedFrameworkForPrompt("Build a CRM with a deal pipeline"),"tanstack-start");
+test("ERP and CRM creation use the instant static SPA profile (MuseCode parity)", () => {
+  assert.equal(recommendedFrameworkForPrompt("Create an ERP for wholesale inventory"),"static");
+  assert.equal(recommendedFrameworkForPrompt("Build a CRM with a deal pipeline"),"static");
 });
 test("prompts needing a real backend go full-stack", () => {
   assert.equal(recommendedFrameworkForPrompt("Build a CRM with user authentication"),"tanstack-start");

@@ -4,18 +4,21 @@ const BUSINESS_SYSTEM = /\b(erp|enterprise resource planning|crm|customer relati
 const BACKEND_REQUIRED = /\b(auth(?:entication)?|user accounts?|roles?|permissions?|database|supabase|stripe|payments?|multi[- ]tenant|realtime|audit log|purchase orders?|invoices?|payroll)\b/i;
 
 /**
- * Business systems (ERP/CRM/POS/HRMS/admin dashboards/etc.) default straight
- * to the full-stack TanStack Start profile, same as any prompt that names a
- * real-backend need (auth, database, payments, realtime, multi-tenant) —
- * these apps are expected to end up with real accounts/data sooner or
- * later, and starting static then silently staying static (because the
- * first prompt didn't happen to say "database") produced live "React error"
- * crashes traced back to LifemarkData never being wired into the running
- * sandbox for these projects. Everything else (landing pages, calculators,
- * simple tools) still gets the instant no-build static SPA profile.
+ * MuseCode-parity routing: business systems (ERP/CRM/POS/admin) are built as
+ * static hash-routed SPAs first — instant no-build preview, LifemarkData
+ * persistence, zero engine cost. Only prompts that genuinely need a real
+ * backend (auth, database, payments, realtime, multi-tenant) go straight to
+ * the full-stack TanStack Start profile; everything else can upgrade later
+ * via "upgrade to full-stack" (see isUpgradeToFullStackIntent below) once
+ * Supabase provisioning is configured. Decided: keep static-first as the
+ * default rather than routing all ERP/CRM prompts to TanStack Start up
+ * front — the real fix for the "React error" crashes was the LifemarkData
+ * SDK injection bug (fixed separately in lifemark-data.ts /
+ * patch-sandbox-preview-files.ts / push-to-sandbox.ts), not the framework
+ * choice itself.
  */
 export function recommendedFrameworkForPrompt(prompt: string): CreationFramework {
-  return BACKEND_REQUIRED.test(prompt) || BUSINESS_SYSTEM.test(prompt) ? "tanstack-start" : "static";
+  return BACKEND_REQUIRED.test(prompt) ? "tanstack-start" : "static";
 }
 
 /** True when a chat/build request needs a REAL backend a static app can't provide. */
