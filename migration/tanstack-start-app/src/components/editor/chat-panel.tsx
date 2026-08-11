@@ -1668,29 +1668,27 @@ export function ChatPanel({
     pendingBranchRef.current = { snapshotId, branchedAt };
     onMessagesUpdate(truncated);
     // Without an explicit overrideMode, sendMessage re-runs resolvePromptMode
-    // on the raw prompt text. On a project with fileCount===0 (which a
-    // regenerate can produce once the prior assistant turn is truncated
-    // away) a short/generic prompt gets reclassified by
-    // isVagueGreenfieldProjectPrompt() as Chat mode — Chat mode never writes
-    // project_files, so the model narrates a full "build" in the chat pane
-    // while zero bytes change on disk. Same bug class as
-    // handleDesignPreviewSelect/Skip above.
-    //
-    // DO NOT trust lastUserMsg.mode here — verified live that it can already
-    // be poisoned: a message regenerated *while this bug was live* gets
-    // persisted with mode="chat" (whatever resolvePromptMode fell back to),
-    // and every subsequent regenerate would then read that back and replay
-    // the same downgrade forever, self-perpetuating. The editor's own
-    // `mode` prop (the live selected tab — chat/build/agent/plan) is the
-    // trustworthy signal: it's exactly what a normal, non-regenerate send
-    // would fall through to once resolvePromptMode clears the vagueness
-    // check, so using it here matches ordinary send behavior instead of
-    // replaying possibly-corrupt history. "patch" is a transient client-only
-    // mode (see the mode chip sync above), so it collapses to "build" here
-    // same as elsewhere in this file.
+    // on the raw prompt text, and — verified live, twice — BOTH plausible
+    // "trust existing state" signals turned out to be poisoned once this bug
+    // had fired even once:
+    //   1. lastUserMsg.mode: a message regenerated while the bug was live
+    //      gets persisted with mode="chat" (whatever resolvePromptMode fell
+    //      back to), so replaying it just repeats the downgrade forever.
+    //   2. the editor's own `mode` prop (the selected chat/build/agent/plan
+    //      tab): captured live via a fetch() interceptor on this exact
+    //      project — it ALSO read "chat" at the moment handleRegenerate ran,
+    //      despite the toolbar visibly showing "Building for web". Something
+    //      upstream syncs the active tab to the last message's (poisoned)
+    //      mode, so this channel inherits the same corruption.
+    // Both are historical/derived state and both were observed corrupted.
+    // The only reliable fix is to not read any of it: force "build"
+    // unconditionally, same as the already-proven handleDesignPreviewSelect/
+    // Skip fix above. Regenerate always re-runs the original prompt from
+    // scratch, so a full "build" pass is correct regardless of which tab
+    // produced the message being regenerated.
     await sendMessage(
       getDisplayMessageContent(lastUserMsg),
-      mode === "patch" ? "build" : mode,
+      "build",
       truncated,
       {
         branchMeta: { snapshotId, branchedAt },
