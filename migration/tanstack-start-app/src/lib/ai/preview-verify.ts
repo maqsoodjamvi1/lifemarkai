@@ -81,5 +81,39 @@ export function verifyPreviewHtml(html: string): PreviewVerifyResult {
     detail: constHandle ? "`const` module handle → 'already declared' duplicate crash" : undefined,
   });
 
+  // ── CSS coverage: classes the markup relies on but no rule ever styles ────
+  // Doesn't catch a crash — catches the "renders, but looks like raw HTML"
+  // failure mode: a generated stylesheet that never mentions the very classes
+  // the markup uses (e.g. .sidebar/.nav-list defined but .nav-link never
+  // styled, .app-shell missing its flex layout). Real-browser verification
+  // would have caught this visually; the static fallback needs an explicit
+  // check for it. Skipped for Tailwind CDN projects — their utility classes
+  // are compiled at runtime, not present as literal selectors in the source.
+  const isTailwindCdn = /type=["']text\/tailwindcss["']/.test(html);
+  if (!isTailwindCdn) {
+    const styleBlocks = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map((m) => m[1]);
+    const cssText = styleBlocks.join("\n");
+    if (cssText.trim().length > 0) {
+      const classCounts = new Map<string, number>();
+      for (const m of html.matchAll(/\sclass(?:Name)?=["']([^"']+)["']/g)) {
+        for (const cls of m[1].split(/\s+/)) {
+          if (!cls) continue;
+          classCounts.set(cls, (classCounts.get(cls) ?? 0) + 1);
+        }
+      }
+      const uncovered = [...classCounts.entries()]
+        .filter(([cls, count]) => count >= 2 && !cssText.includes(`.${cls}`))
+        .map(([cls]) => cls);
+      checks.push({
+        name: "CSS covers markup classes",
+        pass: uncovered.length === 0,
+        detail:
+          uncovered.length > 0
+            ? `${uncovered.length} class${uncovered.length === 1 ? "" : "es"} used repeatedly in the markup but never styled: ${uncovered.slice(0, 6).join(", ")}${uncovered.length > 6 ? "…" : ""}`
+            : undefined,
+      });
+    }
+  }
+
   return { ok: checks.every((c) => c.pass), checks };
 }
