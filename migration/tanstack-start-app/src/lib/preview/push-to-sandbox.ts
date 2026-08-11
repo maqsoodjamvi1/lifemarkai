@@ -19,6 +19,7 @@
 import { getSandboxProvider,isSandboxEnabled } from "@/lib/sandbox";
 import { ensureViteTunnelHmr } from "./patch-sandbox-preview-files.ts";
 import { repairImportsInFile } from "./normalize-imports.ts";
+import { injectLifemarkDataSdk } from "./lifemark-data.ts";
 
 /** Writes are deduped per project so a burst of agent saves coalesces. */
 const pending = new Map<string, Map<string, string>>();
@@ -138,7 +139,24 @@ async function flush(
 
   const patched = ensureViteTunnelHmr(repaired);
 
+  // Re-inject the LifemarkData SDK when THIS sync rewrites index.html.
+  //
+  // OBSERVED FAILURE: a regenerate rewrote a static (no package.json) ERP's
+  // index.html/app.js together; the fresh index.html landed in the live
+  // sandbox with no SDK script, `window.LifemarkData` was undefined, and the
+  // app's own defineSchema() call at startup threw and killed the whole
+  // preview. `known` (unlike `batch`) reflects the WHOLE project's paths, not
+  // just this sync's, so this correctly skips Vite/React projects — their
+  // package.json is always present even when only index.html changes.
+  const withData = known.has("package.json")
+    ? patched
+    : patched.map((f) =>
+        f.path === "index.html" && f.content
+          ? { ...f, content: injectLifemarkDataSdk(f.content) }
+          : f,
+      );
+
   // The Docker provider content-hashes against its in-container manifest, so
   // re-pushing an unchanged file is a no-op and this stays cheap.
-  await provider.writeFiles(sandboxId, patched);
+  await provider.writeFiles(sandboxId, withData);
 }

@@ -6,6 +6,7 @@ import { isTanStackStartProject } from "../templates/tanstack-start-scaffold.ts"
 import { ensureTypecheckToolchain } from "./ensure-toolchain.ts";
 import { LOVABLE_VITE_DEV_DEPENDENCIES } from "../templates/lovable-vite-scaffold.ts";
 import { normalizeProjectImports } from "./normalize-imports.ts";
+import { ensureLifemarkDataSdkInFiles } from "./lifemark-data.ts";
 
 /**
  * Synthesize missing Vite entry files. Incremental builds return only CHANGED
@@ -351,10 +352,12 @@ export function patchSandboxPreviewFiles<T extends { path: string; content?: str
   // copies. The Lovable set is a superset of the base set with those two
   // corrected, so this is strictly the same repair with the right versions.
   return patchFilesForWebContainer(
-    ensureViteTunnelHmr(
-      ensureSupabaseEnv(
-        ensureTailwindPluginDeps(
-          ensureTypecheckToolchain(ensureViteEntryFiles(normalizeProjectImports(files)), LOVABLE_VITE_DEV_DEPENDENCIES),
+    ensureLifemarkDataSdkInFiles(
+      ensureViteTunnelHmr(
+        ensureSupabaseEnv(
+          ensureTailwindPluginDeps(
+            ensureTypecheckToolchain(ensureViteEntryFiles(normalizeProjectImports(files)), LOVABLE_VITE_DEV_DEPENDENCIES),
+          ),
         ),
       ),
     ),

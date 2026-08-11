@@ -32,7 +32,7 @@ var E=${endpoint};
 function key(c){return "lifemarkdata:"+c;}
 function skey(c){return "lifemarkdata:__schema__:"+c;}
 function local(c){try{return JSON.parse(localStorage.getItem(key(c))||"[]");}catch(e){return [];}}
-function save(c,r){localStorage.setItem(key(c),JSON.stringify(r));}
+function save(c,r){try{localStorage.setItem(key(c),JSON.stringify(r));}catch(e){}}
 function schema(c){try{return JSON.parse(localStorage.getItem(skey(c))||"null");}catch(e){return null;}}
 function uid(){return (crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random()));}
 function typeOk(v,t){
@@ -65,7 +65,7 @@ return out;}
 async function req(m,p,b){var r=await fetch(E+p,{method:m,headers:{"Content-Type":"application/json"},body:b?JSON.stringify(b):undefined});var j=await r.json().catch(function(){return {};});if(!r.ok)throw new Error(j.error||("Request failed "+r.status));return j;}
 window.LifemarkData={
   hosted:!!E,
-  async defineSchema(c,fields){var s={fields:fields};localStorage.setItem(skey(c),JSON.stringify(s));if(E)await req("POST","",{collection:c,schema:s});},
+  async defineSchema(c,fields){var s={fields:fields};try{localStorage.setItem(skey(c),JSON.stringify(s));}catch(e){}if(E)await req("POST","",{collection:c,schema:s});},
   async getSchema(c){var s=schema(c);if(s)return s;if(!E)return null;var j=await req("GET","?collection=__schema__");var m=(j.records||[]).map(function(r){return r.data;}).filter(function(d){return d&&d.collection===c;})[0];return m?{fields:m.fields}:null;},
   async list(c,o){o=o||{};if(!E){var rs=local(c);if(o.where){rs=rs.filter(function(r){for(var k in o.where){if(String((r.data||{})[k])!==String(o.where[k]))return false;}return true;});}if(o.limit)rs=rs.slice(0,o.limit);return rs;}var q="?collection="+encodeURIComponent(c);if(o.where){var wk=Object.keys(o.where)[0];if(wk)q+="&where="+encodeURIComponent(wk+":"+String(o.where[wk]));}if(o.limit)q+="&limit="+encodeURIComponent(o.limit);var j=await req("GET",q);return j.records||[];},
   async seed(c,rows){var prepped=rows.map(function(r){return prep(c,r);});if(!E){if(local(c).length)return {seeded:0};save(c,prepped.map(function(d){return {id:uid(),data:d,created_at:new Date().toISOString()};}));return {seeded:prepped.length};}var j=await req("POST","",{collection:c,seed:prepped});return {seeded:j.seeded||0};},
@@ -84,6 +84,47 @@ export function injectLifemarkDataSdk(html: string, options: LifemarkDataOptions
     return html.replace(/<head[^>]*>/i, (tag) => `${tag}\n${sdk}`);
   }
   return `${sdk}\n${html}`;
+}
+
+/**
+ * Inject the SDK into a plain static project's index.html on its way into the
+ * live Modal sandbox — both at initial container boot and on every mid-session
+ * file sync.
+ *
+ * WHY THIS EXISTS: `build-static-preview.ts` (the editor's embedded srcdoc
+ * iframe) and `build-deploy-files.ts` (published apps) both call
+ * injectLifemarkDataSdk before serving index.html. The live sandbox preview —
+ * the `*.preview.lifemarkai.com` subdomain visitors actually hit — never did:
+ * neither `patchSandboxPreviewFiles` (container creation) nor `push-to-sandbox`
+ * (mid-session sync) referenced this injector at all. Every generated app is
+ * told by the system prompt that `window.LifemarkData` is "always available"
+ * and to call `defineSchema` first thing on startup — so on this one serving
+ * path the very first line of every ERP/dashboard-style app threw
+ * "LifemarkData is not defined" and the whole app died before rendering
+ * anything. Confirmed live on two independently generated projects.
+ *
+ * Scoped to plain static (no package.json) projects only, matching the same
+ * "flat scaffold" signal `detectSandboxStart` uses in sandbox/shared.ts —
+ * Vite/React projects boot through a different pipeline and are out of scope
+ * here.
+ */
+export function ensureLifemarkDataSdkInFiles<T extends { path: string; content?: string | null }>(
+  files: T[],
+): T[] {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\/+/, "");
+  const hasPackageJson = files.some((f) => norm(f.path) === "package.json");
+  if (hasPackageJson) return files;
+
+  const idx = files.findIndex((f) => norm(f.path) === "index.html");
+  if (idx < 0 || files[idx].content == null) return files;
+
+  const content = files[idx].content as string;
+  const withSdk = injectLifemarkDataSdk(content);
+  if (withSdk === content) return files;
+
+  const out = [...files];
+  out[idx] = { ...files[idx], content: withSdk } as T;
+  return out;
 }
 
 /** System-prompt block teaching the AI to persist through LifemarkData. */
