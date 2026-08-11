@@ -1674,13 +1674,23 @@ export function ChatPanel({
     // isVagueGreenfieldProjectPrompt() as Chat mode — Chat mode never writes
     // project_files, so the model narrates a full "build" in the chat pane
     // while zero bytes change on disk. Same bug class as
-    // handleDesignPreviewSelect/Skip above. The message being regenerated
-    // already recorded which mode produced it the first time (lastUserMsg.mode);
-    // pass that back explicitly so a regenerate can't silently downgrade to
-    // Chat regardless of file count.
+    // handleDesignPreviewSelect/Skip above.
+    //
+    // DO NOT trust lastUserMsg.mode here — verified live that it can already
+    // be poisoned: a message regenerated *while this bug was live* gets
+    // persisted with mode="chat" (whatever resolvePromptMode fell back to),
+    // and every subsequent regenerate would then read that back and replay
+    // the same downgrade forever, self-perpetuating. The editor's own
+    // `mode` prop (the live selected tab — chat/build/agent/plan) is the
+    // trustworthy signal: it's exactly what a normal, non-regenerate send
+    // would fall through to once resolvePromptMode clears the vagueness
+    // check, so using it here matches ordinary send behavior instead of
+    // replaying possibly-corrupt history. "patch" is a transient client-only
+    // mode (see the mode chip sync above), so it collapses to "build" here
+    // same as elsewhere in this file.
     await sendMessage(
       getDisplayMessageContent(lastUserMsg),
-      lastUserMsg.mode && lastUserMsg.mode !== "patch" ? lastUserMsg.mode : "build",
+      mode === "patch" ? "build" : mode,
       truncated,
       {
         branchMeta: { snapshotId, branchedAt },
