@@ -16,7 +16,7 @@ const COMPLEX_REQUEST_RE =
   /\b(auth|login|sign[- ]?up|database|supabase|postgres|payment|stripe|checkout|subscription|api|backend|edge function|server|realtime|websocket|oauth|upload|multi[- ]?tenant|permission|analytics|cms|ai connector|chatbot|llm|erp|crm|marketplace|e-?commerce|storefront|admin dashboard)\b/i;
 
 const WHOLE_APP_RE =
-  /\b(entire|whole|all pages|every page|all files|codebase|from scratch|rebuild|rewrite|refactor|migrate|redesign|restyle|new website|complete website|complete app|create (a|an)?\s*(website|app|store|erp|crm|dashboard))\b/i;
+  /\b(entire|whole|all pages|every page|all files|codebase|from scratch|rebuild|rewrite|refactor|migrate|redesign|restyle|new website|complete website|complete app|create (a|an)?\s*(website|app|store|erp|crm|dashboard)|(landing page|website|web ?site|homepage|portfolio|site|app|store|erp|crm|pos|dashboard) for\b)\b/i;
 
 const FIX_RE = /\b(fix|debug|resolve|repair|error|bug|broken|not working|crash|runtime|module not found)\b/i;
 
@@ -103,7 +103,15 @@ export function resolveBudgetAwareModel(params: {
     if (params.mode === "patch" || FIX_RE.test(params.prompt)) {
       return approvedModelOr(ECONOMY_CODING_MODEL, SAFE_ECONOMY_CODING_MODEL);
     }
-    return approvedModelOr(FREE_CODING_MODEL, SAFE_FREE_CODING_MODEL);
+    // Free model ONLY for small tweaks to an established app in plain build
+    // mode. Agent flows and near-greenfield builds are multi-step, large-output
+    // work — the free tier's single slow provider (observed 73-93s PER CALL in
+    // production) blows past the stream timeout and the whole build fails with
+    // "request failed, no changes made".
+    if (params.mode === "build" && params.fileCount >= 4) {
+      return approvedModelOr(FREE_CODING_MODEL, SAFE_FREE_CODING_MODEL);
+    }
+    return approvedModelOr(ECONOMY_CODING_MODEL, SAFE_ECONOMY_CODING_MODEL);
   }
 
   if (costMode === "economy" && isPremiumModel(requested) && !justifiedAutoClaude) {
