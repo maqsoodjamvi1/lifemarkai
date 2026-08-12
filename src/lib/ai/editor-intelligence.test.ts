@@ -134,6 +134,26 @@ test("resolvePromptMode preserves explicitly selected patch mode", () => {
   assert.equal(mode, "patch");
 });
 
+test("resolvePromptMode keeps a verb-less greenfield app description in build mode (confirmed live bug)", () => {
+  // Same root cause class as the shouldClarifyBeforeBuild fix above, but one
+  // level up: resolvePromptMode's own fileCount===0 gate independently
+  // required a verb (via shouldAutoBuildMode/isCodeChangeIntent), so even
+  // after fixing shouldClarifyBeforeBuild the bakery prompt never reached
+  // build mode at all — it silently fell through to "chat" and skipped both
+  // the build pipeline and the Clarify questionnaire.
+  const mode = resolvePromptMode(
+    "A cozy neighborhood bakery website called Flour and Ember with a menu, gallery, and location",
+    {
+      fileCount: 0,
+      hasPreviewError: false,
+      hasCredits: true,
+      currentMode: "build",
+    },
+  );
+
+  assert.equal(mode, "build");
+});
+
 test("shouldClarifyBeforeBuild triggers for new ERP request", async () => {
   const { shouldClarifyBeforeBuild } = await import("./build-intent.ts");
   assert.equal(
