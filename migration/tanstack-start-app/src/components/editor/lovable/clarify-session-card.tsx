@@ -1,6 +1,5 @@
 
-import { useMemo,useState } from "react";
-import { ChevronLeft,ChevronRight,ChevronsDownUp } from "lucide-react";
+import { ChevronsDownUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -73,31 +72,90 @@ function LayoutThumb({ index }: { index: number }) {
   );
 }
 
+/** One question rendered as a single row: label + inline answer controls. */
+function ClarifyQuestionRow({
+  q,
+  onUpdateQuestion,
+}: {
+  q: ClarifyQuestion;
+  onUpdateQuestion: (questionId: string, answer: string) => void;
+}) {
+  const isCustomAnswer = q.answer.trim() !== "" && !(q.options ?? []).some((option) => {
+    const { label, value } = optionDetails(option);
+    return selectedAnswers(q.answer).some((answer) => answer === value || answer === label || answer === parseSwatches(label).label);
+  });
+
+  return (
+    <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap py-1 [scrollbar-width:thin]" title={q.question}>
+      <span className="shrink-0 max-w-[40%] truncate text-xs font-medium text-foreground" title={q.question}>
+        {q.question}
+      </span>
+      {q.type === "choice" && (q.options?.length ?? 0) > 0 && (
+        <span className="flex items-center gap-1.5 shrink-0">
+          {(q.options ?? []).map((opt) => {
+            const details = optionDetails(opt);
+            const { label, hexes } = parseSwatches(details.label);
+            const selected = selectedAnswers(q.answer).some((answer) => answer === details.value || answer === label);
+            return (
+              <button
+                key={details.value}
+                type="button"
+                title={details.description || label}
+                onClick={() => {
+                  if (!q.multiple) {
+                    onUpdateQuestion(q.id, details.value);
+                    return;
+                  }
+                  const current = selectedAnswers(q.answer);
+                  const next = selected
+                    ? current.filter((answer) => answer !== details.value && answer !== label)
+                    : [...current, details.value];
+                  onUpdateQuestion(q.id, next.join(" | "));
+                }}
+                className={cn(
+                  "shrink-0 inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                  selected
+                    ? "border-foreground bg-foreground text-background"
+                    : "border-border bg-muted/30 text-foreground hover:border-foreground/40",
+                )}
+              >
+                {hexes.length > 0 && (
+                  <span className="flex -space-x-1">
+                    {hexes.slice(0, 2).map((h) => (
+                      <span key={h} className="w-2.5 h-2.5 rounded-full ring-1 ring-black/10" style={{ backgroundColor: h }} />
+                    ))}
+                  </span>
+                )}
+                {label}
+              </button>
+            );
+          })}
+        </span>
+      )}
+      <input
+        type="text"
+        value={isCustomAnswer || q.type === "text" ? q.answer : ""}
+        onChange={(e) => onUpdateQuestion(q.id, e.target.value)}
+        placeholder="Other…"
+        className="shrink-0 w-24 text-[11px] bg-background border border-border rounded-full px-2.5 py-1 text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-[#1F55F1]/50"
+      />
+    </div>
+  );
+}
+
 /**
- * Lovable-parity clarify wizard: ONE question per step with visual options
- * (layout thumbnails, palette swatches), ‹ › navigation, "Write your own…",
- * Skip all, and a final Review-answers step before submitting.
+ * Lovable-parity clarify form: every question rendered as ONE compact row
+ * (question label + inline pill options + a slim "Other…" input) in a single
+ * scrollable list, instead of a one-question-per-step wizard — answer
+ * everything at a glance, then Build.
  */
 export function LovableClarifySessionCard({
   session,
   onDismiss,
-  onUpdateQuestion,
   onBuildNow,
+  onUpdateQuestion,
   onSkipAndBuild,
 }: LovableClarifySessionCardProps) {
-  const total = session.questions.length;
-  const [step, setStep] = useState(0); // total === review step
-  const reviewing = step >= total;
-  const q = reviewing ? null : session.questions[step];
-
-  const isCustomAnswer = useMemo(
-    () => !!q && q.answer.trim() !== "" && !(q.options ?? []).some((option) => {
-      const { label, value } = optionDetails(option);
-      return selectedAnswers(q.answer).some((answer) => answer === value || answer === label || answer === parseSwatches(label).label);
-    }),
-    [q],
-  );
-
   const submit = () => {
     const answersBlock = session.questions
       .filter((x) => x.answer.trim())
@@ -116,11 +174,9 @@ export function LovableClarifySessionCard({
       tabIndex={0}
       className="mx-3 mb-2 max-w-md rounded-2xl border border-border bg-background shadow-surface-md overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-[#1F55F1]/30"
     >
-      {/* Header — the question itself, Lovable-style */}
+      {/* Header */}
       <div className="flex items-center gap-2 px-4 pt-3.5 pb-3 border-b border-border/60">
-        <span className="text-sm font-medium text-foreground">
-          {reviewing ? "Review answers" : q?.question}
-        </span>
+        <span className="text-sm font-medium text-foreground">A few quick questions</span>
         <button
           type="button"
           onClick={onDismiss}
@@ -131,112 +187,18 @@ export function LovableClarifySessionCard({
         </button>
       </div>
 
-      {/* Body */}
-      {reviewing ? (
-        <div className="px-4 py-3 space-y-3">
-          {session.questions.map((x) => (
-            <div key={x.id} className="space-y-0.5">
-              <p className="text-xs text-muted-foreground">{x.question}</p>
-              <p className="text-[13px] font-semibold text-foreground flex items-center gap-1.5">
-                <span className="w-1 h-1 rounded-full bg-foreground/70 inline-block" />
-                {x.answer.trim() ? parseSwatches(x.answer).label || x.answer : "Skipped"}
-              </p>
-            </div>
-          ))}
-        </div>
-      ) : q ? (
-        <div className="px-4 py-3 space-y-3">
-          {q.type === "choice" && (q.options?.length ?? 0) > 0 && (
-            <div className={cn("grid gap-2", q.kind === "layout" ? "grid-cols-2" : "grid-cols-1 sm:grid-cols-2")}>
-              {(q.options ?? []).map((opt, oi) => {
-                const details = optionDetails(opt);
-                const { label, hexes } = parseSwatches(details.label);
-                const selected = selectedAnswers(q.answer).some((answer) => answer === details.value || answer === label);
-                return (
-                  <button
-                    key={details.value}
-                    type="button"
-                    onClick={() => {
-                      if (!q.multiple) {
-                        onUpdateQuestion(q.id, details.value);
-                        return;
-                      }
-                      const current = selectedAnswers(q.answer);
-                      const next = selected
-                        ? current.filter((answer) => answer !== details.value && answer !== label)
-                        : [...current, details.value];
-                      onUpdateQuestion(q.id, next.join(" | "));
-                    }}
-                    className={cn(
-                      "rounded-xl border text-left transition-all flex gap-2.5",
-                      q.kind === "layout" ? "p-2 bg-muted/40" : "px-3 py-2.5 bg-muted/30",
-                      selected
-                        ? "border-foreground ring-1 ring-foreground"
-                        : "border-border hover:border-foreground/40",
-                    )}
-                  >
-                    {q.multiple && (
-                      <span className={cn(
-                        "mt-0.5 h-4 w-4 shrink-0 rounded border flex items-center justify-center text-[10px] font-bold",
-                        selected ? "bg-[#1F55F1] border-[#1F55F1] text-white" : "border-border bg-background",
-                      )}>{selected ? "✓" : ""}</span>
-                    )}
-                    <span className="min-w-0 flex-1">
-                    {q.kind === "layout" && <LayoutThumb index={oi} />}
-                    <span className={cn("flex items-center gap-2", q.kind === "layout" && "mt-1.5")}>
-                      {hexes.length > 0 && (
-                        <span className="flex -space-x-1">
-                          {hexes.map((h) => (
-                            <span key={h} className="w-3.5 h-3.5 rounded-full ring-1 ring-black/10" style={{ backgroundColor: h }} />
-                          ))}
-                        </span>
-                      )}
-                      <span className="text-xs font-medium text-foreground">{label}</span>
-                    </span>
-                    {details.description && (
-                      <span className="mt-0.5 block text-[11px] leading-4 text-muted-foreground">{details.description}</span>
-                    )}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-          <input
-            type="text"
-            value={isCustomAnswer || q.type === "text" ? q.answer : ""}
-            onChange={(e) => onUpdateQuestion(q.id, e.target.value)}
-            placeholder="Write your own…"
-            className="w-full text-xs bg-background border border-border rounded-lg px-3 py-2 text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-[#1F55F1]/50"
-          />
-        </div>
-      ) : null}
+      {/* Body — every question, one line each */}
+      <div className="px-4 py-2.5 divide-y divide-border/50 max-h-80 overflow-y-auto">
+        {session.questions.map((q) => (
+          <ClarifyQuestionRow key={q.id} q={q} onUpdateQuestion={onUpdateQuestion} />
+        ))}
+      </div>
 
-      {/* Footer — ‹ › nav, Skip all, Review/Submit */}
-      <div className="flex items-center gap-1 px-3 py-2.5 border-t border-border/60">
-        <button
-          type="button"
-          disabled={step === 0}
-          onClick={() => setStep((s) => Math.max(0, s - 1))}
-          aria-label="Previous question"
-          className="w-7 h-7 rounded-full flex items-center justify-center text-foreground/70 hover:bg-muted disabled:opacity-30"
-        >
-          <ChevronLeft className="w-4 h-4" />
-        </button>
-        <button
-          type="button"
-          disabled={reviewing}
-          onClick={() => setStep((s) => Math.min(total, s + 1))}
-          aria-label="Next question"
-          className="w-7 h-7 rounded-full flex items-center justify-center text-foreground/70 hover:bg-muted disabled:opacity-30"
-        >
-          <ChevronRight className="w-4 h-4" />
-        </button>
-        {!reviewing && total > 1 && (
-          <span className="ml-1 text-[10px] text-muted-foreground tabular-nums">
-            {step + 1}/{total}
-          </span>
-        )}
+      {/* Footer — Skip all, Build */}
+      <div className="flex items-center gap-2 px-3 py-2.5 border-t border-border/60">
+        <span className="text-[10px] text-muted-foreground tabular-nums">
+          {session.questions.filter((x) => x.answer.trim()).length}/{session.questions.length} answered
+        </span>
         <div className="ml-auto flex items-center gap-2">
           <Button
             size="sm"
@@ -248,10 +210,10 @@ export function LovableClarifySessionCard({
           </Button>
           <Button
             size="sm"
-            onClick={() => (reviewing ? submit() : setStep((s) => Math.min(total, s + 1)))}
+            onClick={submit}
             className="h-7 px-3.5 text-xs font-semibold rounded-full bg-[#1F55F1] hover:bg-[#1142DE] text-white"
           >
-            {reviewing ? "Submit" : step === total - 1 ? "Review" : "Next"}
+            Build
           </Button>
         </div>
       </div>
