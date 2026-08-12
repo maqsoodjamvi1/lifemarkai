@@ -140,6 +140,8 @@ API (collection names are lowercase slugs like "customers"):
 - \`await LifemarkData.update(collection, id, obj)\` -> record
 - \`await LifemarkData.remove(collection, id)\`
 
+IMPORTANT — the \`{id, data, created_at}\` wrapper applies ONLY to LifemarkData records (values you got back from \`list\`/\`create\`/\`update\`, or a single item pulled out of one of those arrays). It does NOT apply to any other in-app state: a local \`store.js\`/\`state.js\` you write yourself for things like the current session's profile, cart, or UI preferences is a plain object you designed — access its fields directly (e.g. \`profile.plan\`, never \`profile.data.plan\`) unless you chose to shape it with a \`.data\` wrapper yourself. Before writing \`x.data.y\` anywhere, confirm \`x\` actually came from a LifemarkData call — confirmed live bug: a generated \`sidebar.js\` read \`profile.data.plan\` from a hand-written local store whose \`getProfile()\` returned \`{id, name, plan}\` directly, crashing the whole app on load with "Cannot read properties of undefined".
+
 SCHEMA-FIRST (required workflow):
 1. Before any UI code, decide every collection's fields and call \`defineSchema\` once at app startup, e.g.:
    \`await LifemarkData.defineSchema("customers", { name: {type:"string", required:true}, email: {type:"string"}, status: {type:"string", enum:["lead","active","churned"]}, ltv: {type:"number"} })\`
