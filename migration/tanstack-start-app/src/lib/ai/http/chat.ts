@@ -613,23 +613,6 @@ export async function handleAiChat(req: Request) {
     const runClarifyFirst =
       mode === "build" && body.forceBuild !== true && clarifyFirst === true;
 
-    // TEMP DIAGNOSTIC (brutal-testing session): trace why clarifyFirst never
-    // fires from a fresh dashboard-created project despite the client sending
-    // clarifyFirst:true — remove after root cause is confirmed.
-    console.error(
-      "[CLARIFY_DIAG]",
-      JSON.stringify({
-        bodyMode: body.mode,
-        mode,
-        bodyClarifyFirst: body.clarifyFirst,
-        clarifyFirst,
-        bodyForceBuild: body.forceBuild,
-        runClarifyFirst,
-        fileCount,
-        projectId,
-      }),
-    );
-
     // ── Clarify-first (Lovable): questionnaire BEFORE research/subagents/build ──
     if (runClarifyFirst) {
       const clarifyReservation = await reserveCredits(supabase, {
@@ -639,7 +622,6 @@ export async function handleAiChat(req: Request) {
         projectId,
       });
       if (!clarifyReservation) {
-        console.error("[CLARIFY_DIAG] reserveCredits failed — insufficient credits", { projectId });
         return Response.json(
           { error: "Insufficient credits", requiredCredits: maxCreditCostForMode("chat") },
           { status: 402 },
