@@ -1,12 +1,14 @@
 # LifemarkAI — Codebase Guide
 
-A full-stack AI-powered app builder (Lovable.dev clone) built with Next.js 16, Supabase, and multi-model AI.
+A full-stack AI-powered app builder built with TanStack Start, React 19,
+Supabase, and multi-model AI. The active application lives at the repository
+root; there is no nested migration application or Next.js host runtime.
 
 ## Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Framework | Next.js 16 App Router (TypeScript) |
+| Framework | TanStack Start + TanStack Router + Vite (TypeScript) |
 | Database | Supabase (PostgreSQL + RLS + Realtime) |
 | Auth | Supabase Auth (Email + GitHub OAuth) |
 | AI | OpenRouter-first per-task tiers (streaming SSE): Pareto Code router (coding), Fusion (planning/chat/reasoning), DeepSeek V4 Flash (fast) — `MODEL_TIERS` in `lib/ai/editor-intelligence.ts`; Nano Banana 2 → DALL-E 3 for images |
@@ -104,40 +106,15 @@ In-memory rate limiter in `lib/rate-limit.ts`. Uses `RATE_LIMITS.ai` preset for 
 
 ## Directory Structure
 
-```
-app/
-  (auth)/           # Login + signup pages
-  (dashboard)/      # Dashboard layout + all dashboard pages
-  (marketing)/      # Public landing, pricing, templates
-  api/
-    ai/             # chat, agent, plan, image, transcribe
-    billing/        # Stripe checkout, portal, webhook
-    deploy/         # Deployment trigger + status
-    github/         # OAuth connect, sync, commits
-    notifications/  # Email notification triggers
-    projects/       # CRUD + files + export + invite
-
-components/
-  dashboard/        # All dashboard page components
-  editor/           # Monaco editor layout + all panels
-  marketing/        # Landing page sections
-  onboarding/       # New-user onboarding modal
-  ui/               # shadcn/ui primitives
-
-gateway/              # Cloudflare Worker — AI gateway proxy + usage logging
-
-lib/
-  ai/               # provider.ts, generate.ts (gateway-aware), agent.ts, gateway-client.ts
-  email/            # resend.ts — all email templates
-  github/           # Octokit client
-  stripe/           # Stripe client + plan definitions
-  supabase/         # server.ts + client.ts
-
-store/
-  app-store.ts      # Zustand store (persisted)
-
-types/
-  database.ts       # Full DB type definitions + convenience aliases
+```text
+src/routes/         # TanStack pages and native API routes
+src/components/     # dashboard, editor, marketing, onboarding, UI
+src/lib/            # AI, email, GitHub, Stripe, Supabase, preview, sandbox
+src/hooks/          # React hooks
+src/types/          # API and generated database types
+gateway/            # Cloudflare AI gateway
+supabase/           # database migrations and backend assets
+scripts/            # runtime, build, and verification tooling
 ```
 
 ## Database Tables

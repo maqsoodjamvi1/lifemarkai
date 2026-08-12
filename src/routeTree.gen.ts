@@ -36,8 +36,6 @@ import { Route as ApiDomainsRouteImport } from './routes/api/domains'
 import { Route as ApiEmailDomainRouteImport } from './routes/api/email-domain'
 import { Route as ApiFigmaRouteImport } from './routes/api/figma'
 import { Route as ApiHealthRouteImport } from './routes/api/health'
-import { Route as ApiPublicAppDataSlugRouteImport } from './routes/api/public/app-data.$slug'
-import { Route as ApiTelemetryPanelOpenRouteImport } from './routes/api/telemetry/panel-open'
 import { Route as ApiHealthScanRouteImport } from './routes/api/health-scan'
 import { Route as ApiKeysRouteImport } from './routes/api/keys'
 import { Route as ApiMcpRouteImport } from './routes/api/mcp'
@@ -170,6 +168,7 @@ import { Route as ApiSkillsImportRouteImport } from './routes/api/skills/import'
 import { Route as ApiSnippetsIdRouteImport } from './routes/api/snippets/$id'
 import { Route as ApiTeamsIdRouteImport } from './routes/api/teams/$id'
 import { Route as ApiTeamsTransferRouteImport } from './routes/api/teams/transfer'
+import { Route as ApiTelemetryPanelOpenRouteImport } from './routes/api/telemetry/panel-open'
 import { Route as ApiTestsRunRouteImport } from './routes/api/tests/run'
 import { Route as ApiV1ProjectsRouteImport } from './routes/api/v1/projects'
 import { Route as ApiWorkspaceBrandedUrlsRouteImport } from './routes/api/workspace/branded-urls'
@@ -247,6 +246,7 @@ import { Route as ApiProjectsGroupsGroupIdRouteImport } from './routes/api/proje
 import { Route as ApiProjectsInviteLinkRouteImport } from './routes/api/projects/invite/link'
 import { Route as ApiProjectsSnapshotsCompareRouteImport } from './routes/api/projects/snapshots/compare'
 import { Route as ApiProjectsSnapshotsRestoreRouteImport } from './routes/api/projects/snapshots/restore'
+import { Route as ApiPublicAppDataSlugRouteImport } from './routes/api/public/app-data.$slug'
 import { Route as ApiScimV2ServiceProviderConfigRouteImport } from './routes/api/scim/v2/ServiceProviderConfig'
 import { Route as ApiScimV2UsersRouteImport } from './routes/api/scim/v2/Users'
 import { Route as ApiSecurityScanWebhookRouteImport } from './routes/api/security/scan/webhook'
@@ -405,16 +405,6 @@ const ApiFigmaRoute = ApiFigmaRouteImport.update({
 const ApiHealthRoute = ApiHealthRouteImport.update({
   id: '/api/health',
   path: '/api/health',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiPublicAppDataSlugRoute = ApiPublicAppDataSlugRouteImport.update({
-  id: '/api/public/app-data/$slug',
-  path: '/api/public/app-data/$slug',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const ApiTelemetryPanelOpenRoute = ApiTelemetryPanelOpenRouteImport.update({
-  id: '/api/telemetry/panel-open',
-  path: '/api/telemetry/panel-open',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiHealthScanRoute = ApiHealthScanRouteImport.update({
@@ -1093,6 +1083,11 @@ const ApiTeamsTransferRoute = ApiTeamsTransferRouteImport.update({
   path: '/transfer',
   getParentRoute: () => ApiTeamsRoute,
 } as any)
+const ApiTelemetryPanelOpenRoute = ApiTelemetryPanelOpenRouteImport.update({
+  id: '/api/telemetry/panel-open',
+  path: '/api/telemetry/panel-open',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiTestsRunRoute = ApiTestsRunRouteImport.update({
   id: '/api/tests/run',
   path: '/api/tests/run',
@@ -1513,6 +1508,11 @@ const ApiProjectsSnapshotsRestoreRoute =
     path: '/restore',
     getParentRoute: () => ApiProjectsSnapshotsRoute,
   } as any)
+const ApiPublicAppDataSlugRoute = ApiPublicAppDataSlugRouteImport.update({
+  id: '/api/public/app-data/$slug',
+  path: '/api/public/app-data/$slug',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiScimV2ServiceProviderConfigRoute =
   ApiScimV2ServiceProviderConfigRouteImport.update({
     id: '/api/scim/v2/ServiceProviderConfig',
@@ -1680,8 +1680,6 @@ export interface FileRoutesByFullPath {
   '/api/email-domain': typeof ApiEmailDomainRoute
   '/api/figma': typeof ApiFigmaRoute
   '/api/health': typeof ApiHealthRoute
-  '/api/public/app-data/$slug': typeof ApiPublicAppDataSlugRoute
-  '/api/telemetry/panel-open': typeof ApiTelemetryPanelOpenRoute
   '/api/health-scan': typeof ApiHealthScanRoute
   '/api/keys': typeof ApiKeysRoute
   '/api/mcp': typeof ApiMcpRouteWithChildren
@@ -1814,6 +1812,7 @@ export interface FileRoutesByFullPath {
   '/api/snippets/$id': typeof ApiSnippetsIdRoute
   '/api/teams/$id': typeof ApiTeamsIdRouteWithChildren
   '/api/teams/transfer': typeof ApiTeamsTransferRoute
+  '/api/telemetry/panel-open': typeof ApiTelemetryPanelOpenRoute
   '/api/tests/run': typeof ApiTestsRunRoute
   '/api/v1/projects': typeof ApiV1ProjectsRouteWithChildren
   '/api/workspace/branded-urls': typeof ApiWorkspaceBrandedUrlsRoute
@@ -1891,6 +1890,7 @@ export interface FileRoutesByFullPath {
   '/api/projects/invite/link': typeof ApiProjectsInviteLinkRoute
   '/api/projects/snapshots/compare': typeof ApiProjectsSnapshotsCompareRoute
   '/api/projects/snapshots/restore': typeof ApiProjectsSnapshotsRestoreRoute
+  '/api/public/app-data/$slug': typeof ApiPublicAppDataSlugRoute
   '/api/scim/v2/ServiceProviderConfig': typeof ApiScimV2ServiceProviderConfigRoute
   '/api/scim/v2/Users': typeof ApiScimV2UsersRouteWithChildren
   '/api/security/scan/webhook': typeof ApiSecurityScanWebhookRoute
@@ -1944,8 +1944,6 @@ export interface FileRoutesByTo {
   '/api/email-domain': typeof ApiEmailDomainRoute
   '/api/figma': typeof ApiFigmaRoute
   '/api/health': typeof ApiHealthRoute
-  '/api/public/app-data/$slug': typeof ApiPublicAppDataSlugRoute
-  '/api/telemetry/panel-open': typeof ApiTelemetryPanelOpenRoute
   '/api/health-scan': typeof ApiHealthScanRoute
   '/api/keys': typeof ApiKeysRoute
   '/api/mcp': typeof ApiMcpRouteWithChildren
@@ -2078,6 +2076,7 @@ export interface FileRoutesByTo {
   '/api/snippets/$id': typeof ApiSnippetsIdRoute
   '/api/teams/$id': typeof ApiTeamsIdRouteWithChildren
   '/api/teams/transfer': typeof ApiTeamsTransferRoute
+  '/api/telemetry/panel-open': typeof ApiTelemetryPanelOpenRoute
   '/api/tests/run': typeof ApiTestsRunRoute
   '/api/v1/projects': typeof ApiV1ProjectsRouteWithChildren
   '/api/workspace/branded-urls': typeof ApiWorkspaceBrandedUrlsRoute
@@ -2155,6 +2154,7 @@ export interface FileRoutesByTo {
   '/api/projects/invite/link': typeof ApiProjectsInviteLinkRoute
   '/api/projects/snapshots/compare': typeof ApiProjectsSnapshotsCompareRoute
   '/api/projects/snapshots/restore': typeof ApiProjectsSnapshotsRestoreRoute
+  '/api/public/app-data/$slug': typeof ApiPublicAppDataSlugRoute
   '/api/scim/v2/ServiceProviderConfig': typeof ApiScimV2ServiceProviderConfigRoute
   '/api/scim/v2/Users': typeof ApiScimV2UsersRouteWithChildren
   '/api/security/scan/webhook': typeof ApiSecurityScanWebhookRoute
@@ -2210,8 +2210,6 @@ export interface FileRoutesById {
   '/api/email-domain': typeof ApiEmailDomainRoute
   '/api/figma': typeof ApiFigmaRoute
   '/api/health': typeof ApiHealthRoute
-  '/api/public/app-data/$slug': typeof ApiPublicAppDataSlugRoute
-  '/api/telemetry/panel-open': typeof ApiTelemetryPanelOpenRoute
   '/api/health-scan': typeof ApiHealthScanRoute
   '/api/keys': typeof ApiKeysRoute
   '/api/mcp': typeof ApiMcpRouteWithChildren
@@ -2344,6 +2342,7 @@ export interface FileRoutesById {
   '/api/snippets/$id': typeof ApiSnippetsIdRoute
   '/api/teams/$id': typeof ApiTeamsIdRouteWithChildren
   '/api/teams/transfer': typeof ApiTeamsTransferRoute
+  '/api/telemetry/panel-open': typeof ApiTelemetryPanelOpenRoute
   '/api/tests/run': typeof ApiTestsRunRoute
   '/api/v1/projects': typeof ApiV1ProjectsRouteWithChildren
   '/api/workspace/branded-urls': typeof ApiWorkspaceBrandedUrlsRoute
@@ -2421,6 +2420,7 @@ export interface FileRoutesById {
   '/api/projects/invite/link': typeof ApiProjectsInviteLinkRoute
   '/api/projects/snapshots/compare': typeof ApiProjectsSnapshotsCompareRoute
   '/api/projects/snapshots/restore': typeof ApiProjectsSnapshotsRestoreRoute
+  '/api/public/app-data/$slug': typeof ApiPublicAppDataSlugRoute
   '/api/scim/v2/ServiceProviderConfig': typeof ApiScimV2ServiceProviderConfigRoute
   '/api/scim/v2/Users': typeof ApiScimV2UsersRouteWithChildren
   '/api/security/scan/webhook': typeof ApiSecurityScanWebhookRoute
@@ -2476,8 +2476,6 @@ export interface FileRouteTypes {
     | '/api/email-domain'
     | '/api/figma'
     | '/api/health'
-    | '/api/public/app-data/$slug'
-    | '/api/telemetry/panel-open'
     | '/api/health-scan'
     | '/api/keys'
     | '/api/mcp'
@@ -2610,6 +2608,7 @@ export interface FileRouteTypes {
     | '/api/snippets/$id'
     | '/api/teams/$id'
     | '/api/teams/transfer'
+    | '/api/telemetry/panel-open'
     | '/api/tests/run'
     | '/api/v1/projects'
     | '/api/workspace/branded-urls'
@@ -2687,6 +2686,7 @@ export interface FileRouteTypes {
     | '/api/projects/invite/link'
     | '/api/projects/snapshots/compare'
     | '/api/projects/snapshots/restore'
+    | '/api/public/app-data/$slug'
     | '/api/scim/v2/ServiceProviderConfig'
     | '/api/scim/v2/Users'
     | '/api/security/scan/webhook'
@@ -2740,8 +2740,6 @@ export interface FileRouteTypes {
     | '/api/email-domain'
     | '/api/figma'
     | '/api/health'
-    | '/api/public/app-data/$slug'
-    | '/api/telemetry/panel-open'
     | '/api/health-scan'
     | '/api/keys'
     | '/api/mcp'
@@ -2874,6 +2872,7 @@ export interface FileRouteTypes {
     | '/api/snippets/$id'
     | '/api/teams/$id'
     | '/api/teams/transfer'
+    | '/api/telemetry/panel-open'
     | '/api/tests/run'
     | '/api/v1/projects'
     | '/api/workspace/branded-urls'
@@ -2951,6 +2950,7 @@ export interface FileRouteTypes {
     | '/api/projects/invite/link'
     | '/api/projects/snapshots/compare'
     | '/api/projects/snapshots/restore'
+    | '/api/public/app-data/$slug'
     | '/api/scim/v2/ServiceProviderConfig'
     | '/api/scim/v2/Users'
     | '/api/security/scan/webhook'
@@ -3005,8 +3005,6 @@ export interface FileRouteTypes {
     | '/api/email-domain'
     | '/api/figma'
     | '/api/health'
-    | '/api/public/app-data/$slug'
-    | '/api/telemetry/panel-open'
     | '/api/health-scan'
     | '/api/keys'
     | '/api/mcp'
@@ -3139,6 +3137,7 @@ export interface FileRouteTypes {
     | '/api/snippets/$id'
     | '/api/teams/$id'
     | '/api/teams/transfer'
+    | '/api/telemetry/panel-open'
     | '/api/tests/run'
     | '/api/v1/projects'
     | '/api/workspace/branded-urls'
@@ -3216,6 +3215,7 @@ export interface FileRouteTypes {
     | '/api/projects/invite/link'
     | '/api/projects/snapshots/compare'
     | '/api/projects/snapshots/restore'
+    | '/api/public/app-data/$slug'
     | '/api/scim/v2/ServiceProviderConfig'
     | '/api/scim/v2/Users'
     | '/api/security/scan/webhook'
@@ -3269,8 +3269,6 @@ export interface RootRouteChildren {
   ApiEmailDomainRoute: typeof ApiEmailDomainRoute
   ApiFigmaRoute: typeof ApiFigmaRoute
   ApiHealthRoute: typeof ApiHealthRoute
-  ApiPublicAppDataSlugRoute: typeof ApiPublicAppDataSlugRoute
-  ApiTelemetryPanelOpenRoute: typeof ApiTelemetryPanelOpenRoute
   ApiHealthScanRoute: typeof ApiHealthScanRoute
   ApiKeysRoute: typeof ApiKeysRoute
   ApiMcpRoute: typeof ApiMcpRouteWithChildren
@@ -3371,6 +3369,7 @@ export interface RootRouteChildren {
   ApiSecurityLeakedKeyRoute: typeof ApiSecurityLeakedKeyRoute
   ApiSecurityScanRoute: typeof ApiSecurityScanRouteWithChildren
   ApiSecurityScheduledScanRoute: typeof ApiSecurityScheduledScanRoute
+  ApiTelemetryPanelOpenRoute: typeof ApiTelemetryPanelOpenRoute
   ApiTestsRunRoute: typeof ApiTestsRunRoute
   ApiV1ProjectsRoute: typeof ApiV1ProjectsRouteWithChildren
   ApiWorkspaceBrandedUrlsRoute: typeof ApiWorkspaceBrandedUrlsRoute
@@ -3383,6 +3382,7 @@ export interface RootRouteChildren {
   ApiIntegrationsTelegramLinkRoute: typeof ApiIntegrationsTelegramLinkRoute
   ApiIntegrationsTelegramWebhookRoute: typeof ApiIntegrationsTelegramWebhookRoute
   ApiOauthCallbackConnectorRoute: typeof ApiOauthCallbackConnectorRoute
+  ApiPublicAppDataSlugRoute: typeof ApiPublicAppDataSlugRoute
   ApiScimV2ServiceProviderConfigRoute: typeof ApiScimV2ServiceProviderConfigRoute
   ApiScimV2UsersRoute: typeof ApiScimV2UsersRouteWithChildren
   ApiAppsIdConnectProviderRoute: typeof ApiAppsIdConnectProviderRouteWithChildren
@@ -3578,20 +3578,6 @@ declare module '@tanstack/react-router' {
       path: '/api/health'
       fullPath: '/api/health'
       preLoaderRoute: typeof ApiHealthRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/public/app-data/$slug': {
-      id: '/api/public/app-data/$slug'
-      path: '/api/public/app-data/$slug'
-      fullPath: '/api/public/app-data/$slug'
-      preLoaderRoute: typeof ApiPublicAppDataSlugRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/api/telemetry/panel-open': {
-      id: '/api/telemetry/panel-open'
-      path: '/api/telemetry/panel-open'
-      fullPath: '/api/telemetry/panel-open'
-      preLoaderRoute: typeof ApiTelemetryPanelOpenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/health-scan': {
@@ -4518,6 +4504,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTeamsTransferRouteImport
       parentRoute: typeof ApiTeamsRoute
     }
+    '/api/telemetry/panel-open': {
+      id: '/api/telemetry/panel-open'
+      path: '/api/telemetry/panel-open'
+      fullPath: '/api/telemetry/panel-open'
+      preLoaderRoute: typeof ApiTelemetryPanelOpenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/tests/run': {
       id: '/api/tests/run'
       path: '/api/tests/run'
@@ -5056,6 +5049,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/projects/snapshots/restore'
       preLoaderRoute: typeof ApiProjectsSnapshotsRestoreRouteImport
       parentRoute: typeof ApiProjectsSnapshotsRoute
+    }
+    '/api/public/app-data/$slug': {
+      id: '/api/public/app-data/$slug'
+      path: '/api/public/app-data/$slug'
+      fullPath: '/api/public/app-data/$slug'
+      preLoaderRoute: typeof ApiPublicAppDataSlugRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/scim/v2/ServiceProviderConfig': {
       id: '/api/scim/v2/ServiceProviderConfig'
@@ -5834,8 +5834,6 @@ const rootRouteChildren: RootRouteChildren = {
   ApiEmailDomainRoute: ApiEmailDomainRoute,
   ApiFigmaRoute: ApiFigmaRoute,
   ApiHealthRoute: ApiHealthRoute,
-  ApiPublicAppDataSlugRoute: ApiPublicAppDataSlugRoute,
-  ApiTelemetryPanelOpenRoute: ApiTelemetryPanelOpenRoute,
   ApiHealthScanRoute: ApiHealthScanRoute,
   ApiKeysRoute: ApiKeysRoute,
   ApiMcpRoute: ApiMcpRouteWithChildren,
@@ -5938,6 +5936,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSecurityLeakedKeyRoute: ApiSecurityLeakedKeyRoute,
   ApiSecurityScanRoute: ApiSecurityScanRouteWithChildren,
   ApiSecurityScheduledScanRoute: ApiSecurityScheduledScanRoute,
+  ApiTelemetryPanelOpenRoute: ApiTelemetryPanelOpenRoute,
   ApiTestsRunRoute: ApiTestsRunRoute,
   ApiV1ProjectsRoute: ApiV1ProjectsRouteWithChildren,
   ApiWorkspaceBrandedUrlsRoute: ApiWorkspaceBrandedUrlsRoute,
@@ -5951,6 +5950,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiIntegrationsTelegramLinkRoute: ApiIntegrationsTelegramLinkRoute,
   ApiIntegrationsTelegramWebhookRoute: ApiIntegrationsTelegramWebhookRoute,
   ApiOauthCallbackConnectorRoute: ApiOauthCallbackConnectorRoute,
+  ApiPublicAppDataSlugRoute: ApiPublicAppDataSlugRoute,
   ApiScimV2ServiceProviderConfigRoute: ApiScimV2ServiceProviderConfigRoute,
   ApiScimV2UsersRoute: ApiScimV2UsersRouteWithChildren,
   ApiAppsIdConnectProviderRoute: ApiAppsIdConnectProviderRouteWithChildren,

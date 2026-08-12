@@ -1,101 +1,45 @@
-# LifemarkAI — AI App Builder
+# LifeMarkAI — AI App Builder
 
-A full-featured Lovable.dev clone built with Next.js 16, Supabase, Monaco Editor, and multi-model AI.
+LifeMarkAI is an independent full-stack AI application-building platform built
+with TanStack Start, React, TypeScript, Supabase, Monaco Editor, and multi-model
+AI. The platform host, API routes, and production build live at the repository
+root.
 
-## Quick Start
+## Quick start
 
 ```bash
-# Install dependencies
-npm install
-
-# Run development server
+npm ci --legacy-peer-deps
+cp .env.local.example .env.local
 npm run dev
 ```
 
-Then open [http://localhost:3000](http://localhost:3000).
+Open `http://localhost:3001`.
 
-## Setup Required
-
-### 1. Supabase
-
-1. Create a project at [supabase.com](https://supabase.com)
-2. Apply every SQL file in `supabase/migrations/` in numeric order
-3. Enable Google and GitHub OAuth providers in Auth → Providers
-4. Set your redirect URL: `http://localhost:3000/auth/callback`
-
-### 2. Environment Variables
-
-All variables are already in `.env.local`. Fill in the blanks:
-
-```env
-# Supabase (already filled)
-NEXT_PUBLIC_SUPABASE_URL=...
-NEXT_PUBLIC_SUPABASE_ANON_KEY=...
-SUPABASE_SERVICE_ROLE_KEY=...
-
-# AI (already filled)
-OPENAI_API_KEY=...
-ANTHROPIC_API_KEY=...   # Add your key
-
-# Stripe — create products at dashboard.stripe.com
-STRIPE_PRO_MONTHLY_PRICE_ID=price_...
-STRIPE_TEAM_MONTHLY_PRICE_ID=price_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-
-# Netlify deploy (optional)
-NETLIFY_AUTH_TOKEN=...
-```
-
-### 3. Stripe Webhook (local dev)
+## Verification
 
 ```bash
-stripe listen --forward-to localhost:3000/api/billing/webhook
+npm run type-check
+npm test
+npm run lint
+npm run build
 ```
 
-## Architecture
+## Repository structure
 
-```
-app/
-├── (auth)/          # Login, signup, forgot/reset password
-├── (dashboard)/     # Protected: dashboard, settings, billing, analytics
-├── (marketing)/     # Public: landing, explore, project pages
-├── editor/          # AI editor (Monaco + chat + preview)
-└── api/             # All API routes
-
-components/
-├── ui/              # shadcn/ui primitives
-├── dashboard/       # Dashboard-specific components
-└── editor/          # Editor panels (chat, code, preview, file tree)
-
-lib/
-├── supabase/        # Client + server Supabase clients
-└── utils.ts         # Shared utilities
+```text
+src/                TanStack routes, components, hooks, libraries, and types
+supabase/           PostgreSQL migrations and backend functions
+scripts/            build, verification, and runtime worker tooling
+docker/             isolated generated-app sandbox image
+gateway/            optional Cloudflare AI gateway
+electron/           desktop packaging
+public/             static assets and embedded-app scripts
 ```
 
-## Features
+TanStack Start serves SSR pages and native API routes. A supervised AI worker
+isolates chat, agent, and fix SSE workloads. Supabase provides PostgreSQL,
+authentication, storage, realtime, and RLS.
 
-- **AI Code Generation** — GPT-4o, GPT-4o Mini, Claude 3.5 Sonnet, Claude Haiku
-- **Monaco Editor** — Multi-tab, syntax highlighting, IntelliSense
-- **Live Preview** — Instant Babel + Tailwind CDN preview in iframe
-- **File Tree** — Full file manager with rename/delete
-- **Project Management** — Create, duplicate, star, search, filter
-- **GitHub Import** — Import any public repo as a project
-- **Deploy** — One-click Netlify/Vercel deployment
-- **Snapshots** — Auto-snapshot before every AI generation
-- **Onboarding** — 3-step modal for new users
-- **Analytics** — Credit usage, views, deployments
-- **Billing** — Stripe subscriptions (Free/Pro/Team)
-- **Auth** — Email/password + Google OAuth + GitHub OAuth
-- **Yjs CRDT** — Real-time collaborative editing over Supabase Realtime
-
-## Database Schema
-
-Apply the numbered files in `supabase/migrations/` to create and evolve:
-- `profiles` — extends auth.users, stores plan/credits
-- `projects` — user projects with framework, visibility
-- `project_files` — individual files per project
-- `snapshots` — version history (diffs)
-- `deployments` — deploy history with status
-- `notifications` — in-app notification feed
-- `api_keys` — developer API key management
-- `project_views` — analytics view tracking
+Apply the numbered SQL files in `supabase/migrations/` in order. See
+`.env.local.example` for configuration and `docs/DEPLOY_COOLIFY.md` for
+production deployment.

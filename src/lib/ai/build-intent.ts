@@ -1140,18 +1140,16 @@ export function shouldClarifyBeforeBuild(
   if (!trimmed || trimmed.length > 4000) return false;
   if (isInformationalQuery(trimmed)) return false;
   if (/^(?:hi|hello|hey|thanks|thank you|ok(?:ay)?)\b/i.test(trimmed)) return false;
-  // Every branch above this point already only fires on a brand-new project
-  // (userAuthoredFileCount === 0, checked first). Requiring an explicit verb
-  // like "build"/"create" past that point was redundant AND wrong: the
-  // dashboard's own prompt box is labeled "Describe the app you want to
-  // build" next to a button labeled "Build" — so real users routinely type a
-  // bare noun-phrase description ("A fitness coaching landing page for a
-  // personal trainer, with a hero, pricing plans, and a booking form") with
-  // no verb at all, because the surrounding UI already established the
-  // intent. That phrasing failed both shouldAutoBuildMode (needs a verb) and
-  // the old fallback regex (same verbs again), so Clarify silently never
-  // fired on it — confirmed live. A non-empty, non-greeting, non-question
-  // message on an empty project has no other plausible reading; ask.
+  // The dashboard's own prompt box is labeled "Describe the app you want to
+  // build" next to a "Build" button, so real users routinely type a bare
+  // noun-phrase description with no "build"/"create"/"make" verb at all —
+  // the surrounding UI already established the intent. The old fallback
+  // below required an explicit verb, which meant Clarify silently never
+  // fired for prompts like "A fitness coaching landing page for a personal
+  // trainer, with a hero, pricing plans, and a booking form" — confirmed
+  // live. On a genuinely brand-new project (userAuthoredFileCount === 0,
+  // already checked above) any non-trivial, non-informational, non-casual
+  // description is a build description; there's nothing else it could be.
   return true;
 }
 

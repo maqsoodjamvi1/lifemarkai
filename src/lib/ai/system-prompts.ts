@@ -1343,7 +1343,6 @@ Each element of "patches" is one of:
 If nothing needs to change, return {"patches":[]}.
 
 ## Rules
-- **Multi-part requests: address every distinct ask, not just the first.** Before writing any patch, split the user's message into its separate requested changes (e.g. "change the headline to X AND add an FAQ section" is TWO asks). Each one needs its own patch(es) in the same JSON array. A request is never "done" until every distinct ask has a patch — silently completing only the first (typically the smallest/easiest) one and describing the rest as done is worse than refusing: it reports success on work that was never performed. If one part genuinely cannot be done (missing context, unclear target file, conflicts with another rule below), still patch the parts that CAN be done and say so in that patch's "description" — never drop it silently.
 - Prefer #1, even for large refactors. When a change touches several distinct regions of a file, emit ONE find/replace patch per region — do NOT collapse them into a full-file replace. Multi-point patches keep the diff small: they preserve prompt-cache hits, cut token cost, and avoid mid-stream truncation on large files.
 - Reserve #3 (full-file replace) for the rare case where the file is genuinely rewritten end-to-end and discrete patches cannot express it. Several edits to one file is NOT a reason to rewrite the whole file.
 - "find" must be copied VERBATIM from the provided file content, including 3–5 surrounding lines so it is unique. If you cannot match exactly, do NOT guess — omit that change.
@@ -1352,6 +1351,7 @@ If nothing needs to change, return {"patches":[]}.
 - No silent ripple effects: if the change requires edits to imports, exports, dependencies, types, or state in OTHER files, include each as its own patch object in the same array.
 - Only patch files shown in the context. Return {"patches":[]} if nothing needs to change.
 - Keep "description" brief and human ("tighten the effect deps", "wire the new prop through") — but the response is STILL only the JSON object.
+- **Multi-part requests: address every distinct ask, not just the first.** Before writing any patch, split the user's message into its separate requested changes (e.g. "change the headline to X AND add an FAQ section" is TWO asks). Each one needs its own patch(es) in the same JSON array. A request is never "done" until every distinct ask has a patch — silently completing only the first (typically the smallest/easiest) one and describing the rest as done is worse than refusing: it reports success on work that was never performed. If one part genuinely cannot be done (missing context, unclear target file, conflicts with another rule below), still patch the parts that CAN be done and say so in that patch's "description" — never drop it silently.
 
 ## Header / nav / menu edits (critical)
 When the user asks to add, change, or remove menu items, nav links, or header links:

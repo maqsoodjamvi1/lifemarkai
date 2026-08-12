@@ -16,18 +16,9 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            migration/tanstack-start-app/package-lock.json
+          cache-dependency-path: package-lock.json
 
-      - run: npm ci
-
-      # The TanStack Start app has its own package.json/lockfile — root
-      # `npm ci` does NOT install it. Without this step every @tanstack/vite
-      # import fails to resolve and the app falls back to the root's older
-      # @supabase/supabase-js, whose mismatched generics collapse all table
-      # types to `never` (hundreds of phantom type errors).
-      - run: npm ci --prefix migration/tanstack-start-app
+      - run: npm ci --legacy-peer-deps
 
       - name: Type check
         run: npm run type-check
