@@ -2,6 +2,7 @@
  * Native project snapshots — list / reconstruct / create / pin / delete / restore.
  */
 import { createClient } from "../supabase/server.ts";
+import { restoreProjectFilesAtomically } from "./restore-project-files.ts";
 import { getServerUser } from "../supabase/server-user.ts";
 import {
 canReadProjectFiles,
@@ -19,7 +20,6 @@ shouldStoreBaseline,
 type SnapshotFile,
 } from "@/lib/diff/snapshot-diff";
 import type { Database,Json } from "../../types/database.ts";
-import { restoreProjectFilesAtomically } from "./restore-project-files.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getChainDepth(supabase: any, latestId: string): Promise<number> {
@@ -403,7 +403,10 @@ export async function restoreSnapshot(data: any) {
     // This used to be delete-everything-then-insert, with no transaction and no
     // concurrency check — a raw two-step write straight to project_files. Every
     // failure mode of the insert left the project with ZERO FILES, and the
-    // function used to report `status: "ok"` regardless.
+    // function used to report `status: "ok"` regardless — the client then
+    // showed "Project reverted" over an empty project. Worse, the client's
+    // `handleFilesUpdate` ignores an empty array, so the file tree still looked
+    // populated and the user only discovered the loss on reload.
     //
     // WORSE, and the reason a real project was lost live: this path was the
     // ONLY writer to project_files that bypassed begin_generation/commit_generation
@@ -425,6 +428,7 @@ export async function restoreSnapshot(data: any) {
     // the existing 40001 conflict path instead of winning silently.
     //
     // Guards preserved from the old code, still necessary:
+    //
     // 1. NEVER DELETE TOWARDS NOTHING. `reconstructFromChain` returns [] for a
     //    baseline whose `files` is an empty array — which passes the `!baseline.files`
     //    check upstream because [] is truthy. Restoring "nothing" is never what

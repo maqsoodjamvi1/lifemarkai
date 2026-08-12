@@ -16,16 +16,9 @@ WORKDIR /app
 
 ENV NODE_OPTIONS=--max-old-space-size=4096
 
-# Root deps first: the AI worker's esbuild bundles use `packages: "external"`,
-# so their runtime imports (openai, stripe, @supabase/*, resend…) resolve from
-# the ROOT node_modules at runtime. Root package.json is a dependency manifest
-# only — there is no root application code left.
+# The TanStack Start host and its AI worker now share one root dependency graph.
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
-
-# Start app deps.
-COPY migration/tanstack-start-app/package.json migration/tanstack-start-app/package-lock.json ./migration/tanstack-start-app/
-RUN cd migration/tanstack-start-app && npm ci --no-audit --no-fund --legacy-peer-deps
+RUN npm ci --no-audit --no-fund --legacy-peer-deps
 
 # Copy the repo and build:
 #  1. AI HTTP bundles (.tmp/ai-http) for the SSE worker
@@ -71,8 +64,7 @@ COPY . .
 # here rather than in four other places. Without this the build SUCCEEDS and then
 # the image fails at `COPY ... .output` with "not found", which reads like a
 # build failure but is really a path mismatch.
-RUN cd migration/tanstack-start-app \
-  && node scripts/build-ai-http.mjs \
+RUN node scripts/build-ai-http.mjs \
   && npx vite build \
   && if [ ! -d .output ] && [ -d dist ]; then mv dist .output; fi \
   && test -d .output/server || (echo "BUILD ERROR: no server output in .output/ or dist/" && ls -la && exit 1)
@@ -86,17 +78,15 @@ ENV PORT=3000
 
 USER node
 
-# Root node_modules — externals for the esbuild route/AI bundles.
+# Runtime dependencies and application manifest.
 COPY --chown=node:node --from=build /app/node_modules ./node_modules
 COPY --chown=node:node --from=build /app/package.json ./package.json
 
-# Start app: server output, worker bundles, worker scripts, deps.
-COPY --chown=node:node --from=build /app/migration/tanstack-start-app/.output ./migration/tanstack-start-app/.output
-COPY --chown=node:node --from=build /app/migration/tanstack-start-app/.tmp ./migration/tanstack-start-app/.tmp
-COPY --chown=node:node --from=build /app/migration/tanstack-start-app/scripts ./migration/tanstack-start-app/scripts
-COPY --chown=node:node --from=build /app/migration/tanstack-start-app/node_modules ./migration/tanstack-start-app/node_modules
-COPY --chown=node:node --from=build /app/migration/tanstack-start-app/package.json ./migration/tanstack-start-app/package.json
+# Start server output and isolated AI worker bundle.
+COPY --chown=node:node --from=build /app/.output ./.output
+COPY --chown=node:node --from=build /app/.tmp ./.tmp
+COPY --chown=node:node --from=build /app/scripts ./scripts
 
 EXPOSE 3000
 
-CMD ["node", "migration/tanstack-start-app/scripts/start-production.mjs"]
+CMD ["node", "scripts/start-production.mjs"]

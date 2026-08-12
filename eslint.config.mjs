@@ -1,13 +1,12 @@
-import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
-import nextTypescript from "eslint-config-next/typescript";
+import js from "@eslint/js";
 import reactPlugin from "eslint-plugin-react";
 import reactHooksPlugin from "eslint-plugin-react-hooks";
+import tseslint from "typescript-eslint";
 
 /**
- * ESLint 9 flat config — migrated from .eslintrc.json.
- * `npm run lint` was broken after the ESLint 9 / eslint-config-next 16
- * upgrade: v9 requires eslint.config.*, and eslint-config-next 16 ships
- * native flat configs (no FlatCompat needed).
+ * ESLint 9 flat config for the root TanStack Start application.
+ * Next.js-specific presets were intentionally removed during the root
+ * promotion so linting no longer depends on the retired Next runtime.
  */
 const eslintConfig = [
   {
@@ -26,11 +25,18 @@ const eslintConfig = [
       "scripts/**",
     ],
   },
-  ...nextCoreWebVitals,
-  ...nextTypescript,
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
   {
-    // eslint-config-next registers its Next and TypeScript plugins, but its flat
-    // presets do not expose the React plugins to this separate override object.
+    files: ["**/*.cjs"],
+    languageOptions: {
+      globals: {
+        module: "readonly",
+        require: "readonly",
+      },
+    },
+  },
+  {
     plugins: {
       react: reactPlugin,
       "react-hooks": reactHooksPlugin,
@@ -40,9 +46,6 @@ const eslintConfig = [
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/ban-ts-comment": "warn",
       "@typescript-eslint/no-require-imports": "warn",
-      // The active application is TanStack Start, so Next.js page/image rules
-      // produce false positives and filesystem warnings for valid Vite code.
-      "@next/next/no-html-link-for-pages": "off",
       "react/no-unescaped-entities": "warn",
       "react-hooks/exhaustive-deps": "warn",
       "react-hooks/error-boundaries": "warn",
@@ -54,7 +57,12 @@ const eslintConfig = [
       "react-hooks/set-state-in-effect": "warn",
       "react-hooks/static-components": "warn",
       "no-console": ["warn", { allow: ["warn", "error"] }],
-      "@next/next/no-img-element": "off",
+      "no-constant-binary-expression": "warn",
+      "no-control-regex": "warn",
+      "no-empty": "warn",
+      "no-irregular-whitespace": "warn",
+      "no-shadow-restricted-names": "warn",
+      "no-useless-escape": "warn",
     },
   },
 ];

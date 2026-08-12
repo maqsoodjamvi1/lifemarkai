@@ -3,8 +3,8 @@
 Step-by-step to run the **TanStack Start** app on a Hostinger VPS via Coolify,
 using the `Dockerfile` in the repo root.
 
-> The app is a TanStack Start front/back plus three isolated Node workers
-> (API routes, sandbox/Modal, AI SSE) in one container; **Supabase, OpenRouter,
+> The app is a TanStack Start front/back plus an isolated AI SSE worker in one
+> container; **Supabase, OpenRouter,
 > Stripe, etc. are external services** reached by env vars. Apply DB migrations
 > to your Supabase project separately (see §6).
 
@@ -14,11 +14,9 @@ using the `Dockerfile` in the repo root.
 |------|---------|
 | 3000 | TanStack Start server (`.output/server/index.mjs`) — the only exposed port |
 | 3010 | AI SSE worker (chat/agent/fix) |
-| 3011 | API worker (all legacy `app/api` handlers, prebuilt esbuild bundles) |
-| 3012 | Sandbox worker (Modal cold boot / sync) |
 
-All four are supervised by `migration/tanstack-start-app/scripts/start-production.mjs`
-(the container CMD). Workers listen on localhost only.
+Both processes are supervised by `scripts/start-production.mjs` (the container
+CMD). The worker listens on localhost only.
 
 ## 1. Hostinger VPS prep
 

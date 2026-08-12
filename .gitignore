@@ -1,6 +1,9 @@
 # dependencies
 /node_modules
 /gateway/node_modules
+/.output/
+/.vinxi/
+/.tmp/
 
 # next.js
 /.next/

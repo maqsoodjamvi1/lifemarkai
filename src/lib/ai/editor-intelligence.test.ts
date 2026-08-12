@@ -135,7 +135,7 @@ test("resolvePromptMode preserves explicitly selected patch mode", () => {
 });
 
 test("resolvePromptMode keeps a verb-less greenfield app description in build mode (confirmed live bug)", () => {
-  // Same root cause class as the shouldClarifyBeforeBuild fix above, but one
+  // Same root cause class as the shouldClarifyBeforeBuild fix below, but one
   // level up: resolvePromptMode's own fileCount===0 gate independently
   // required a verb (via shouldAutoBuildMode/isCodeChangeIntent), so even
   // after fixing shouldClarifyBeforeBuild the bakery prompt never reached

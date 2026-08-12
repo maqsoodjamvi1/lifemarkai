@@ -1,17 +1,15 @@
 /**
- * Start next dev and pre-warm routes so the first browser load does not hit
- * ChunkLoadError while webpack is still compiling app/layout.js.
+ * Start TanStack Start and pre-warm the primary routes.
  */
 import { spawn } from "node:child_process";
 import http from "node:http";
 
-const PORT = process.env.PORT || "3000";
+const PORT = process.env.PORT || "3001";
 const BASE = `http://localhost:${PORT}`;
 const WARM_PATHS = [
   "/",
   "/login",
-  "/_next/static/chunks/app/layout.js",
-  "/_next/static/chunks/webpack.js",
+  "/api/health",
 ];
 
 function fetchPath(path) {
@@ -52,9 +50,7 @@ async function waitForServer() {
   console.warn("[dev-warm] server did not become ready in time");
 }
 
-// TanStack Start dev server (root `dev` delegates to migration/tanstack-start-app).
-// Was `dev:next` — that script ran `next dev`, which has been dead since the
-// Next.js app was removed (commit c363c8f); this helper silently failed with it.
+// TanStack Start now runs directly from the repository root.
 const child = spawn("npm", ["run", "dev"], {
   stdio: "inherit",
   env: process.env,
