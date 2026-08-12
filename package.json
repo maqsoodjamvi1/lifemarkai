@@ -42,7 +42,7 @@
     "@codemirror/lang-markdown": "^6.2.4",
     "@codemirror/theme-one-dark": "^6.1.2",
     "@codesandbox/sandpack-client": "2.19.8",
-    "@codesandbox/sandpack-react": "2.19.8",
+    "@codesandbox/sandpack-react": "2.20.0",
     "@hookform/resolvers": "^3.9.0",
     "@monaco-editor/react": "^4.6.0",
     "@octokit/rest": "^21.0.0",
