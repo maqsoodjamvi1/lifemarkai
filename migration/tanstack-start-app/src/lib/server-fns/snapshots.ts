@@ -2,6 +2,7 @@
  * Native project snapshots — list / reconstruct / create / pin / delete / restore.
  */
 import { createClient } from "../supabase/server.ts";
+import { restoreProjectFilesAtomically } from "./restore-project-files.ts";
 import { getServerUser } from "../supabase/server-user.ts";
 import {
 canReadProjectFiles,
@@ -397,26 +398,43 @@ export async function restoreSnapshot(data: any) {
       }
     }
 
-    // ── The most destructive few lines in the codebase ───────────────────────
+    // ── Formerly the most destructive few lines in the codebase ──────────────
     //
-    // This is delete-everything-then-insert, with no transaction. Every failure
-    // mode of the insert leaves the project with ZERO FILES, and the function
-    // used to report `status: "ok"` regardless — the client then showed
-    // "Project reverted" over an empty project. Worse, the client's
+    // This used to be delete-everything-then-insert, with no transaction and no
+    // concurrency check — a raw two-step write straight to project_files. Every
+    // failure mode of the insert left the project with ZERO FILES, and the
+    // function used to report `status: "ok"` regardless — the client then
+    // showed "Project reverted" over an empty project. Worse, the client's
     // `handleFilesUpdate` ignores an empty array, so the file tree still looked
     // populated and the user only discovered the loss on reload.
     //
-    // Three guards, in order of how badly they were needed:
+    // WORSE, and the reason a real project was lost live: this path was the
+    // ONLY writer to project_files that bypassed begin_generation/commit_generation
+    // (see commit-generated-files.ts / commit-generation-snapshot.ts), the
+    // revision-guarded RPC pair every AI generation commits through specifically
+    // so a slow/still-running generation can never silently overwrite work that
+    // happened after it started. A generation that began BEFORE the user clicked
+    // Restore, but was still mid-flight (self-repair loop, multi-minute
+    // continuation), captured `expected_revision` before the restore ran. Because
+    // the raw delete+insert here never bumped that revision counter, the stale
+    // generation's later `commit_generation` call saw an unchanged revision,
+    // passed its own conflict check, and clobbered the just-restored files —
+    // with no error, no toast, nothing: the restore looked like it silently did
+    // nothing, and reopening History showed the same broken project. Observed
+    // live: two Restore attempts on a corrupted ERP project (one explicit
+    // "Restore failed", one silent no-op) that never actually recovered the
+    // project. Routing through the SAME atomic, revision-checked RPC used by
+    // every generation closes this: any generation racing a restore now hits
+    // the existing 40001 conflict path instead of winning silently.
+    //
+    // Guards preserved from the old code, still necessary:
     //
     // 1. NEVER DELETE TOWARDS NOTHING. `reconstructFromChain` returns [] for a
     //    baseline whose `files` is an empty array — which passes the `!baseline.files`
     //    check upstream because [] is truthy. Restoring "nothing" is never what
     //    a user means by revert, so refuse before touching anything.
-    // 2. CHECK THE INSERT, AND PUT THE FILES BACK IF IT FAILED. Without a
-    //    transaction the only honest recovery is to re-insert what we deleted;
-    //    `currentFiles` is already in hand for the auto-save snapshot above.
-    // 3. VERIFY WHAT LANDED. A silent partial insert is indistinguishable from
-    //    success at the API layer, so count rows before claiming victory.
+    // 2. VERIFY WHAT LANDED. A silent partial commit is indistinguishable from
+    //    success at the API layer, so re-read and count rows before claiming victory.
     if (files.length === 0) {
       return {
         status: "error" as const,
@@ -425,37 +443,43 @@ export async function restoreSnapshot(data: any) {
       };
     }
 
-    const { error: deleteError } = await supabase
-      .from("project_files")
-      .delete()
-      .eq("project_id", data.projectId);
+    const writeResult = await restoreProjectFilesAtomically(
+      supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { code?: string; message: string } | null }> },
+      data.projectId,
+      files as Array<{ path: string; content: string; language: string }>,
+    );
 
-    if (deleteError) {
+    if (!writeResult.ok && writeResult.conflict) {
       return {
         status: "error" as const,
-        message: `Could not clear the current files, so nothing was changed: ${deleteError.message}`,
+        message:
+          "The project changed while this restore was running (an AI generation was still finishing), so nothing was overwritten. Your previous version is still saved — try Restore again now that it's settled.",
       };
     }
 
-    const rows = files.map((f) => ({
-      project_id: data.projectId,
-      path: f.path,
-      content: f.content,
-      language: f.language,
-    }));
+    if (!writeResult.ok && !writeResult.rpcMissing) {
+      return { status: "error" as const, message: `Restore failed, nothing was changed: ${writeResult.message}` };
+    }
 
-    const { error: insertError } = await supabase
-      .from("project_files")
-      .insert(rows);
-
-    if (insertError) {
-      // The project is empty at this instant. Putting back what we deleted is
-      // the only thing standing between a failed restore and a lost project.
-      let recovered = false;
-      if (currentFiles && currentFiles.length > 0) {
-        const { error: rollbackError } = await supabase
-          .from("project_files")
-          .insert(
+    if (!writeResult.ok && writeResult.rpcMissing) {
+      // Rolling deployment compatibility: only a genuinely missing RPC falls
+      // back to the old raw write. Permission, validation, and network failures
+      // are handled above and stay fatal rather than silently downgrading to
+      // the unguarded path.
+      const { error: deleteError } = await supabase.from("project_files").delete().eq("project_id", data.projectId);
+      if (deleteError) {
+        return {
+          status: "error" as const,
+          message: `Could not clear the current files, so nothing was changed: ${deleteError.message}`,
+        };
+      }
+      const { error: insertError } = await supabase.from("project_files").insert(
+        files.map((f) => ({ project_id: data.projectId, path: f.path, content: f.content, language: f.language })),
+      );
+      if (insertError) {
+        let recovered = false;
+        if (currentFiles && currentFiles.length > 0) {
+          const { error: rollbackError } = await supabase.from("project_files").insert(
             currentFiles.map((f: { path: string; content: string; language?: string }) => ({
               project_id: data.projectId,
               path: f.path,
@@ -463,14 +487,15 @@ export async function restoreSnapshot(data: any) {
               language: f.language,
             })),
           );
-        recovered = !rollbackError;
+          recovered = !rollbackError;
+        }
+        return {
+          status: "error" as const,
+          message: recovered
+            ? `Restore failed and your files were put back unchanged: ${insertError.message}`
+            : `Restore failed and the files could not be put back automatically: ${insertError.message}. Your previous version is saved as "Auto-save before restore to \\"${snapMeta.label}\\"" in version history.`,
+        };
       }
-      return {
-        status: "error" as const,
-        message: recovered
-          ? `Restore failed and your files were put back unchanged: ${insertError.message}`
-          : `Restore failed and the files could not be put back automatically: ${insertError.message}. Your previous version is saved as "Auto-save before restore to \\"${snapMeta.label}\\"" in version history.`,
-      };
     }
 
     const { data: restoredFiles } = await supabase

@@ -1351,6 +1351,7 @@ If nothing needs to change, return {"patches":[]}.
 - No silent ripple effects: if the change requires edits to imports, exports, dependencies, types, or state in OTHER files, include each as its own patch object in the same array.
 - Only patch files shown in the context. Return {"patches":[]} if nothing needs to change.
 - Keep "description" brief and human ("tighten the effect deps", "wire the new prop through") — but the response is STILL only the JSON object.
+- **Multi-part requests: address every distinct ask, not just the first.** Before writing any patch, split the user's message into its separate requested changes (e.g. "change the headline to X AND add an FAQ section" is TWO asks). Each one needs its own patch(es) in the same JSON array. A request is never "done" until every distinct ask has a patch — silently completing only the first (typically the smallest/easiest) one and describing the rest as done is worse than refusing: it reports success on work that was never performed. If one part genuinely cannot be done (missing context, unclear target file, conflicts with another rule below), still patch the parts that CAN be done and say so in that patch's "description" — never drop it silently.
 
 ## Header / nav / menu edits (critical)
 When the user asks to add, change, or remove menu items, nav links, or header links:

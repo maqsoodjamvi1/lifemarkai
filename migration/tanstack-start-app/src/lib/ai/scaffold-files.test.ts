@@ -109,3 +109,35 @@ test("a missing content field never throws", () => {
   assert.equal(countUserAuthoredFiles([{ path: "src/pages/Index.tsx" }]), 0);
   assert.equal(countUserAuthoredFiles([{ path: "src/pages/Index.tsx", content: null }]), 0);
 });
+
+/**
+ * The "static" framework's real starter scaffold — see getStarterFiles() in
+ * src/lib/server-fns/projects.ts. This is the platform's DEFAULT framework
+ * for most prompts (recommendedFrameworkForPrompt), so getting this wrong
+ * broke Clarify and the build→agent router for the majority of new projects,
+ * from the instant a project was created — before the first AI turn ran.
+ */
+const STATIC_SCAFFOLD = [
+  { path: "index.html", content: "<!doctype html>...".padEnd(400, "x") },
+  { path: "styles.css", content: "* { box-sizing: border-box; }".padEnd(150, "x") },
+  { path: "app.js", content: `console.log("App");` },
+];
+
+test("a pristine static-framework project counts as zero user files (confirmed live bug)", () => {
+  // Before this fix: styles.css and app.js matched nothing in
+  // SCAFFOLD_FILE_RE, so this returned 2 on a project nobody had touched yet.
+  assert.equal(countUserAuthoredFiles(STATIC_SCAFFOLD), 0);
+  assert.equal(isGreenfieldProject(STATIC_SCAFFOLD), true);
+});
+
+test("a grown static app.js/styles.css/index.html counts as real work", () => {
+  const grownAppJs = STATIC_SCAFFOLD.map((f) =>
+    f.path === "app.js" ? { ...f, content: "a".repeat(601) } : f,
+  );
+  assert.equal(countUserAuthoredFiles(grownAppJs), 1);
+
+  const grownIndexHtml = STATIC_SCAFFOLD.map((f) =>
+    f.path === "index.html" ? { ...f, content: "a".repeat(601) } : f,
+  );
+  assert.equal(countUserAuthoredFiles(grownIndexHtml), 1);
+});

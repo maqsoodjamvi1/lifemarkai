@@ -1140,10 +1140,17 @@ export function shouldClarifyBeforeBuild(
   if (!trimmed || trimmed.length > 4000) return false;
   if (isInformationalQuery(trimmed)) return false;
   if (/^(?:hi|hello|hey|thanks|thank you|ok(?:ay)?)\b/i.test(trimmed)) return false;
-  if (shouldAutoBuildMode(trimmed) || isMajorGreenfieldBuild(trimmed, 0)) {
-    return true;
-  }
-  return /\b(create|build|make|design|generate|develop|scaffold)\b/i.test(trimmed);
+  // The dashboard's own prompt box is labeled "Describe the app you want to
+  // build" next to a "Build" button, so real users routinely type a bare
+  // noun-phrase description with no "build"/"create"/"make" verb at all —
+  // the surrounding UI already established the intent. The old fallback
+  // below required an explicit verb, which meant Clarify silently never
+  // fired for prompts like "A fitness coaching landing page for a personal
+  // trainer, with a hero, pricing plans, and a booking form" — confirmed
+  // live. On a genuinely brand-new project (userAuthoredFileCount === 0,
+  // already checked above) any non-trivial, non-informational, non-casual
+  // description is a build description; there's nothing else it could be.
+  return true;
 }
 
 /**

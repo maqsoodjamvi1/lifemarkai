@@ -134,6 +134,26 @@ test("resolvePromptMode preserves explicitly selected patch mode", () => {
   assert.equal(mode, "patch");
 });
 
+test("resolvePromptMode keeps a verb-less greenfield app description in build mode (confirmed live bug)", () => {
+  // Same root cause class as the shouldClarifyBeforeBuild fix below, but one
+  // level up: resolvePromptMode's own fileCount===0 gate independently
+  // required a verb (via shouldAutoBuildMode/isCodeChangeIntent), so even
+  // after fixing shouldClarifyBeforeBuild the bakery prompt never reached
+  // build mode at all — it silently fell through to "chat" and skipped both
+  // the build pipeline and the Clarify questionnaire.
+  const mode = resolvePromptMode(
+    "A cozy neighborhood bakery website called Flour and Ember with a menu, gallery, and location",
+    {
+      fileCount: 0,
+      hasPreviewError: false,
+      hasCredits: true,
+      currentMode: "build",
+    },
+  );
+
+  assert.equal(mode, "build");
+});
+
 test("shouldClarifyBeforeBuild triggers for new ERP request", async () => {
   const { shouldClarifyBeforeBuild } = await import("./build-intent.ts");
   assert.equal(
@@ -145,4 +165,25 @@ test("shouldClarifyBeforeBuild triggers for new ERP request", async () => {
     false,
   );
   assert.equal(shouldClarifyBeforeBuild("hello", 0), false);
+});
+
+test("shouldClarifyBeforeBuild triggers on a verb-less description of a new app (confirmed live bug)", async () => {
+  // The dashboard's own prompt box is labeled "Describe the app you want to
+  // build" beside a button labeled "Build" — real users routinely type a
+  // bare noun-phrase description with no "build"/"create"/"make" verb at
+  // all, because the surrounding UI already established the intent. This
+  // exact prompt reproduced live: Clarify silently never fired on it and the
+  // project went straight to a full build with zero design/scope questions.
+  const { shouldClarifyBeforeBuild } = await import("./build-intent.ts");
+  assert.equal(
+    shouldClarifyBeforeBuild(
+      "A fitness coaching landing page for a personal trainer, with a hero, pricing plans, and a booking form",
+      0,
+    ),
+    true,
+  );
+  // Still correctly skips non-build content on a fresh project.
+  assert.equal(shouldClarifyBeforeBuild("what does this button do?", 0), false);
+  assert.equal(shouldClarifyBeforeBuild("thanks!", 0), false);
+  assert.equal(shouldClarifyBeforeBuild("", 0), false);
 });

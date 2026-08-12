@@ -5,10 +5,17 @@ const BACKEND_REQUIRED = /\b(auth(?:entication)?|user accounts?|roles?|permissio
 
 /**
  * MuseCode-parity routing: business systems (ERP/CRM/POS/admin) are built as
- * static hash-routed SPAs — instant no-build preview, LifemarkData
+ * static hash-routed SPAs first — instant no-build preview, LifemarkData
  * persistence, zero engine cost. Only prompts that genuinely need a real
- * backend (auth, database, payments, realtime, multi-tenant) go to the
- * full-stack TanStack Start profile.
+ * backend (auth, database, payments, realtime, multi-tenant) go straight to
+ * the full-stack TanStack Start profile; everything else can upgrade later
+ * via "upgrade to full-stack" (see isUpgradeToFullStackIntent below) once
+ * Supabase provisioning is configured. Decided: keep static-first as the
+ * default rather than routing all ERP/CRM prompts to TanStack Start up
+ * front — the real fix for the "React error" crashes was the LifemarkData
+ * SDK injection bug (fixed separately in lifemark-data.ts /
+ * patch-sandbox-preview-files.ts / push-to-sandbox.ts), not the framework
+ * choice itself.
  */
 export function recommendedFrameworkForPrompt(prompt: string): CreationFramework {
   return BACKEND_REQUIRED.test(prompt) ? "tanstack-start" : "static";

@@ -26,13 +26,36 @@
  * Hence this module. The rule now has ONE definition, and both sides import it.
  * If you add files to the starter scaffold, add them here in the same commit,
  * or first builds will start silently returning empty again.
+ *
+ * The third time was this one: getStarterFiles()'s "static" framework branch
+ * (src/lib/server-fns/projects.ts) — the platform's DEFAULT framework for
+ * every prompt that doesn't need a backend — scaffolds exactly three files:
+ * root-level index.html, styles.css, and app.js. This regex only ever
+ * recognized the Vite+React scaffold shape (src/App.tsx, src/index.css,
+ * etc.), so on a brand-new static project styles.css and app.js matched
+ * nothing and were counted as "user-authored" from the instant the project
+ * was created — before a single AI turn ran. That silently broke, for every
+ * static project (i.e. most projects): shouldClarifyBeforeBuild() (sees
+ * userAuthoredFileCount > 0, skips the pre-build questionnaire), and the
+ * client's build→agent promotion in chat-panel.tsx (sees fileCount > 0,
+ * promotes the very first message straight to Agent mode, skipping the Build
+ * pipeline and Clarify entirely). Confirmed live: a fresh static project's
+ * first message went directly to /api/ai/agent with zero Clarify questions.
  */
 
 export const SCAFFOLD_FILE_RE =
-  /^(index\.html|package\.json|package-lock\.json|vite\.config\.(t|j)s|components\.json|tsconfig(\.app|\.node)?\.json|tailwind\.config\.(t|j)s|postcss\.config\.js|eslint\.config\.js|\.gitignore|README\.md|public\/.*|src\/(main|App)\.tsx|src\/App\.css|src\/index\.css|src\/styles\.css|src\/vite-env\.d\.ts|src\/lib\/utils\.ts|src\/hooks\/use-mobile\.tsx|src\/pages\/(Index|NotFound)\.tsx|src\/components\/ui\/.*|src\/components\/layout\/(Header|Footer)\.tsx|src\/router\.tsx|src\/routeTree\.gen\.ts|src\/routes\/(__root|index)\.tsx)$/;
+  /^(index\.html|styles\.css|app\.js|package\.json|package-lock\.json|vite\.config\.(t|j)s|components\.json|tsconfig(\.app|\.node)?\.json|tailwind\.config\.(t|j)s|postcss\.config\.js|eslint\.config\.js|\.gitignore|README\.md|public\/.*|src\/(main|App)\.tsx|src\/App\.css|src\/index\.css|src\/styles\.css|src\/vite-env\.d\.ts|src\/lib\/utils\.ts|src\/hooks\/use-mobile\.tsx|src\/pages\/(Index|NotFound)\.tsx|src\/components\/ui\/.*|src\/components\/layout\/(Header|Footer)\.tsx|src\/router\.tsx|src\/routeTree\.gen\.ts|src\/routes\/(__root|index)\.tsx)$/;
 
 /** A home page this large is the user's app, not the starter placeholder. */
 export const GROWN_HOME_PAGE_CHARS = 1500;
+
+/**
+ * The static scaffold's three files start tiny (a few hundred chars at
+ * most — see getStarterFiles()'s "static" branch). Once a real build has
+ * run, any of them grows well past this, same idea as GROWN_HOME_PAGE_CHARS
+ * but sized for the smaller static starter.
+ */
+export const GROWN_STATIC_FILE_CHARS = 600;
 
 export interface ScaffoldCountableFile {
   path: string;
@@ -58,6 +81,15 @@ export function countUserAuthoredFiles(files: ScaffoldCountableFile[]): number {
     if (
       /^src\/(pages\/Index|routes\/index)\.tsx$/.test(path) &&
       (f.content ?? "").length > GROWN_HOME_PAGE_CHARS
+    ) {
+      count += 1;
+      continue;
+    }
+    // Same idea for the static scaffold's index.html/styles.css/app.js — once
+    // the AI has actually built into one of them, it stops being scaffold.
+    if (
+      /^(index\.html|styles\.css|app\.js)$/.test(path) &&
+      (f.content ?? "").length > GROWN_STATIC_FILE_CHARS
     ) {
       count += 1;
     }

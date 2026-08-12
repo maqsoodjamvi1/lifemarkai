@@ -1,6 +1,6 @@
 import type { EditorMode } from "@/components/editor/editor-layout";
 import type { ProjectFile } from "../../types/database.ts";
-import { classifyBuildIntent, isInformationalQuery, isMajorGreenfieldBuild, shouldAutoBuildMode } from "./build-intent.ts";
+import { classifyBuildIntent, isInformationalQuery, isMajorGreenfieldBuild, shouldAutoBuildMode, shouldClarifyBeforeBuild } from "./build-intent.ts";
 import type { AIModel } from "./provider.ts";
 import {
 BALANCED_CODING_MODEL,
@@ -525,7 +525,20 @@ export function resolvePromptMode(
       ctx.fileCount === 0 &&
       !shouldAutoBuildMode(trimmed) &&
       !isCodeChangeIntent(trimmed) &&
-      !/^\/build\b/i.test(trimmed)
+      !/^\/build\b/i.test(trimmed) &&
+      // shouldAutoBuildMode/isCodeChangeIntent both require an explicit verb
+      // ("build", "create", "add"...). The dashboard's own prompt box is
+      // labeled "Describe the app you want to build" next to a "Build"
+      // button, so real users routinely type a bare noun-phrase description
+      // with no verb at all ("A cozy neighborhood bakery website called
+      // Flour and Ember with a menu, gallery, and location"). Without this
+      // check those prompts fell all the way through to "chat" mode on a
+      // fresh project — silently skipping the Build pipeline (and, since
+      // Clarify-first only runs in build mode, skipping the pre-build
+      // questionnaire too). shouldClarifyBeforeBuild already recognizes a
+      // genuine app description on a greenfield project, so reuse that
+      // signal here instead of duplicating it.
+      !shouldClarifyBeforeBuild(trimmed, ctx.fileCount)
     ) {
       return "chat";
     }
