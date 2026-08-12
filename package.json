@@ -16,6 +16,7 @@
     "type-check": "tsc --noEmit",
     "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "verify:smoke": "node scripts/verify-production-smoke.mjs",
+    "verify:core-loop": "node --import tsx scripts/verify-core-loop-campaign.ts",
     "organize-imports": "node scripts/organize-imports.mjs",
     "remove-ts-nocheck": "node scripts/remove-ts-nocheck.mjs",
     "generate:database-types": "node scripts/generate-database-types.mjs",
