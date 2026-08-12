@@ -16,13 +16,40 @@ export function buildClarificationPrompt(appType: string, appShell: boolean): st
   ].join("\n");
 }
 
+/**
+ * Strip common wrapping the model adds around the JSON array despite being
+ * told "output only a JSON question array" — markdown code fences
+ * (```json ... ``` or ``` ... ```), or leading/trailing prose. Confirmed live
+ * bug (brutal-testing session): clarifyFirst correctly reached the model and
+ * got a real ~800-token response, but a bare JSON.parse on the raw stream
+ * text silently failed and returned [], which the client then correctly
+ * interpreted as "no questions" and force-built instead — so Clarify never
+ * appeared even though every upstream gate was working.
+ */
+function extractJsonArrayText(rawJson: string): string {
+  let text = rawJson.trim();
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) text = fenced[1].trim();
+  if (text.startsWith("[")) return text;
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start !== -1 && end !== -1 && end > start) return text.slice(start, end + 1);
+  return text;
+}
+
 export function parseClarifyingQuestions(rawJson: string): ClarifyingQuestion[] {
   let rows: unknown[];
   try {
-    const parsed: unknown = JSON.parse(rawJson);
+    const parsed: unknown = JSON.parse(extractJsonArrayText(rawJson));
     rows = Array.isArray(parsed) ? parsed : parsed && typeof parsed === "object"
       ? (Object.values(parsed as Record<string, unknown>).find(Array.isArray) as unknown[] | undefined) ?? [] : [];
-  } catch { return []; }
+  } catch {
+    console.error("[CLARIFY_DIAG] parseClarifyingQuestions failed to parse model output", {
+      rawJsonLength: rawJson.length,
+      rawJsonSnippet: rawJson.slice(0, 300),
+    });
+    return [];
+  }
   return rows.flatMap((raw, index) => {
     if (!raw || typeof raw !== "object") return [];
     const record = raw as Record<string, unknown>;
