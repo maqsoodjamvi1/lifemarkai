@@ -13,8 +13,18 @@ import type { AIModel } from "./provider.ts";
 
 // Quality-first defaults for user-visible generation and reasoning. Operators
 // can still override every tier through the OPENROUTER_* environment variables.
-const ROUTER_FRONTIER = "openai/gpt-5.6-terra";
-const ROUTER_CODING = "openai/gpt-5.6-terra";
+//
+// Switched off openai/gpt-5.6-terra for the default/free lineup on 2026-08-12
+// (brutal-testing session): the OpenRouter account backing this deployment ran
+// its balance negative and paused ALL generation, including the default tier,
+// taking down chat/build/clarify entirely. Qwen Coder + DeepSeek are both
+// already-approved, live-verified slugs in model-catalog.ts (DeepSeek V4 Pro/
+// Flash and Qwen3 Coder), meaningfully cheaper than GPT-5.6-terra, and give the
+// app a working default even when funding one provider runs out. The separate
+// Premium tier (PREMIUM_CODING_MODEL etc. below) is left on GPT-5.6-terra
+// untouched — this only repoints the tier used automatically by default.
+const ROUTER_FRONTIER = "deepseek/deepseek-v4-pro";
+const ROUTER_CODING = "qwen/qwen3-coder";
 const ROUTER_FAST = "deepseek/deepseek-v4-flash";
 
 // ─────────────────────────────────────────────────────────────────────────────
