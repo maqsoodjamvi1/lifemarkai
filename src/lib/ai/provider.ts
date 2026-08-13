@@ -134,7 +134,9 @@ function isFallbackableError(err: unknown): boolean {
  * ID is rejected. Env-overridable. gpt-4o is broadly available and cheap.
  */
 const OPENROUTER_SAFE_MODEL: string =
-  process.env.OPENROUTER_SAFE_FALLBACK_MODEL || "deepseek/deepseek-v4-flash";
+  process.env.CORE_LOOP_FALLBACK_MODEL ||
+  process.env.OPENROUTER_SAFE_FALLBACK_MODEL ||
+  "deepseek/deepseek-v4-flash";
 
 /**
  * True when OpenRouter rejected the request because the model slug itself is
