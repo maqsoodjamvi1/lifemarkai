@@ -351,8 +351,10 @@ async function main() {
   const summary = summarizeCoreLoop(attempts);
   const releaseGate = assessCoreLoopReleaseGate(summary, registrationProof.passed);
   const report = { campaignStartedAt, completedAt: new Date().toISOString(), baseUrl: BASE_URL, registrationProof, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary, releaseGate, attempts };
+  const serializedReport = `${JSON.stringify(report, null, 2)}\n`;
   const stampedPath = resolve(REPORT_DIR, `core-loop-${campaignStartedAt.replace(/[:.]/g, "-")}.json`);
-  writeFileSync(stampedPath, `${JSON.stringify(report, null, 2)}\n`);
+  writeFileSync(resolve(REPORT_DIR, "latest.json"), serializedReport);
+  writeFileSync(stampedPath, serializedReport);
   console.log(JSON.stringify({ summary, releaseGate }, null, 2));
   console.log(`Report: ${stampedPath}`);
   const smokePassed =
