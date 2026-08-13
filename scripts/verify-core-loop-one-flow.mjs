@@ -1,5 +1,23 @@
 import { spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+
+function loadEnv(path = ".env.local") {
+  try {
+    for (const raw of readFileSync(path, "utf8").split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#") || !line.includes("=")) continue;
+      const index = line.indexOf("=");
+      const key = line.slice(0, index).trim();
+      const value = line.slice(index + 1).trim().replace(/^(['"])(.*)\1$/, "$2");
+      if (!process.env[key]) process.env[key] = value;
+    }
+  } catch {
+    // The caller may supply all configuration through the shell or CI.
+  }
+}
+
+loadEnv();
 
 const BASE_URL = (process.env.CORE_LOOP_BASE_URL ?? "http://localhost:3001").replace(/\/$/, "");
 const STARTUP_TIMEOUT_MS = Math.max(
