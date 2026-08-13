@@ -79,3 +79,28 @@ Run 50 attempts during development and 100 before a public release. Review:
 Missing cost telemetry is reported as `null`; it is never treated as zero. A
 campaign is not release evidence until cost telemetry is complete and failures
 have reproducible issue records.
+
+## Private infrastructure control plane
+
+`config/private-infrastructure.json` is the versioned production-readiness
+contract for all 18 private infrastructure capabilities. It maps every
+capability to real source modules and gates external systems on explicit
+configuration. The verifier refuses to launch a release campaign when source or
+strict production configuration is missing.
+
+Run configuration-only preflight:
+
+```bash
+npm run verify:private-infrastructure:preflight
+```
+
+Run the complete private infrastructure transaction:
+
+```bash
+npm run verify:private-infrastructure
+```
+
+The complete command performs strict preflight and then starts the deterministic
+registration → credits → generation → repair → preview → deployment → public URL
+campaign. Backup readiness additionally requires the managed database recovery
+controls in `docs/BACKUP_AND_RECOVERY.md`.
