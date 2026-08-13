@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   summarizeCoreLoop,
@@ -53,6 +54,8 @@ const ATTEMPTS = Math.max(1, Number.parseInt(process.env.CORE_LOOP_ATTEMPTS ?? "
 const DEPLOY_TIMEOUT_MS = Math.max(30_000, Number.parseInt(process.env.CORE_LOOP_DEPLOY_TIMEOUT_MS ?? "180000", 10));
 const PROMPTS_PATH = resolve(process.env.CORE_LOOP_PROMPTS ?? "tests/core-loop-prompts.json");
 const REPORT_DIR = resolve(process.env.CORE_LOOP_REPORT_DIR ?? "artifacts/core-loop");
+const REQUIRE_REGISTRATION_PROOF =
+  process.env.CORE_LOOP_REQUIRE_REGISTRATION_PROOF === "true" || ATTEMPTS >= 50;
 
 type DoneEvent = {
   done?: boolean;
@@ -62,6 +65,86 @@ type DoneEvent = {
 };
 
 type Deployment = { status?: string; url?: string; id?: string };
+
+type RegistrationProof = {
+  attempted: boolean;
+  passed: boolean;
+  creditsGranted: number | null;
+  error?: string;
+};
+
+function registrationEmail(baseEmail: string) {
+  const [local, domain] = baseEmail.split("@");
+  if (!local || !domain) throw new Error("CORE_LOOP_EMAIL must be a valid email address");
+  return `${local}+registration-${Date.now()}-${randomUUID().slice(0, 8)}@${domain}`;
+}
+
+async function proveFreshRegistration(
+  client: SupabaseClient,
+  admin: SupabaseClient | null,
+): Promise<RegistrationProof> {
+  if (!admin) {
+    return {
+      attempted: false,
+      passed: false,
+      creditsGranted: null,
+      error: "SUPABASE_SERVICE_ROLE_KEY is required to verify and clean up a fresh registration",
+    };
+  }
+
+  const email = registrationEmail(EMAIL);
+  const password = `CoreLoop-${randomUUID()}-aA1!`;
+  const { data, error } = await client.auth.signUp({ email, password });
+  const userId = data.user?.id;
+  if (error || !userId) {
+    return {
+      attempted: true,
+      passed: false,
+      creditsGranted: null,
+      error: error?.message ?? "Supabase signup returned no user",
+    };
+  }
+
+  try {
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const { data: profile, error: profileError } = await admin
+        .from("profiles")
+        .select("credits")
+        .eq("id", userId)
+        .maybeSingle();
+      if (profileError) {
+        return {
+          attempted: true,
+          passed: false,
+          creditsGranted: null,
+          error: profileError.message,
+        };
+      }
+      if (profile) {
+        const creditsGranted = Number(profile.credits ?? 0);
+        return {
+          attempted: true,
+          passed: creditsGranted > 0,
+          creditsGranted,
+          ...(creditsGranted > 0 ? {} : { error: "fresh registration received no credits" }),
+        };
+      }
+      await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+    }
+    return {
+      attempted: true,
+      passed: false,
+      creditsGranted: null,
+      error: "profile trigger did not create a row within 15 seconds",
+    };
+  } finally {
+    const { error: cleanupError } = await admin.auth.admin.deleteUser(userId);
+    if (cleanupError) {
+      console.warn(`Registration probe cleanup failed for ${userId}: ${cleanupError.message}`);
+    }
+  }
+}
 
 function authCookie(session: { access_token: string; refresh_token: string; expires_at?: number; expires_in: number; token_type: string; user: unknown }) {
   const ref = new URL(SUPABASE_URL).hostname.split(".")[0];
@@ -146,6 +229,13 @@ async function main() {
   const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   const admin = serviceKey ? createClient(SUPABASE_URL, serviceKey) : null;
+  const registrationProof = await proveFreshRegistration(client, admin);
+  if (REQUIRE_REGISTRATION_PROOF && !registrationProof.passed) {
+    throw new Error(`fresh registration proof failed: ${registrationProof.error ?? "unknown error"}`);
+  }
+  if (!registrationProof.passed) {
+    console.warn(`Registration proof not completed: ${registrationProof.error ?? "unknown error"}`);
+  }
   const { data: auth, error: authError } = await client.auth.signInWithPassword({ email: EMAIL, password: PASSWORD });
   if (authError || !auth.session) throw new Error(`test-account sign-in failed: ${authError?.message ?? "no session"}`);
   const cookie = authCookie(auth.session);
@@ -251,14 +341,14 @@ async function main() {
         attempt.repairRounds = Math.max(attempt.repairRounds, costs.repairRounds);
       }
       attempts.push(attempt);
-      const interim = { campaignStartedAt, baseUrl: BASE_URL, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary: summarizeCoreLoop(attempts), attempts };
+      const interim = { campaignStartedAt, baseUrl: BASE_URL, registrationProof, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary: summarizeCoreLoop(attempts), attempts };
       writeFileSync(resolve(REPORT_DIR, "latest.json"), `${JSON.stringify(interim, null, 2)}\n`);
       console.log(`[${attempt.index}/${ATTEMPTS}] ${attempt.publicUrlPassed ? "PASS" : `FAIL:${attempt.failedStage}`} ${prompt.slice(0, 70)}`);
     }
   }
 
   const summary = summarizeCoreLoop(attempts);
-  const report = { campaignStartedAt, completedAt: new Date().toISOString(), baseUrl: BASE_URL, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary, attempts };
+  const report = { campaignStartedAt, completedAt: new Date().toISOString(), baseUrl: BASE_URL, registrationProof, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary, attempts };
   const stampedPath = resolve(REPORT_DIR, `core-loop-${campaignStartedAt.replace(/[:.]/g, "-")}.json`);
   writeFileSync(stampedPath, `${JSON.stringify(report, null, 2)}\n`);
   console.log(JSON.stringify(summary, null, 2));
