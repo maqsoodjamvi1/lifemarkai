@@ -35,12 +35,26 @@ SUPABASE_SERVICE_ROLE_KEY=...
 The runner also accepts the legacy `NEXT_PUBLIC_SUPABASE_URL` and
 `NEXT_PUBLIC_SUPABASE_ANON_KEY` names already used by older environments.
 
-Run:
+Run the complete local workflow with one command. It starts Vite, waits for
+LifeMarkAI to become ready, runs 50 attempts, writes the report, and stops Vite:
+
+```bash
+npm run verify:core-loop:one-flow
+```
+
+First use the one-attempt smoke command:
+
+```bash
+npm run verify:core-loop:smoke
+```
+
+If LifeMarkAI is already running, the campaign-only command remains available:
 
 ```bash
 npm run verify:core-loop
 ```
 
+Set `CORE_LOOP_STARTUP_TIMEOUT_MS` if startup needs more than three minutes.
 Use `CORE_LOOP_ATTEMPTS=1` only as a pipeline smoke check. Use 50 for a
 stabilization campaign and 100 for release evidence. The default prompt suite is
 `tests/core-loop-prompts.json`; override it with `CORE_LOOP_PROMPTS`.
