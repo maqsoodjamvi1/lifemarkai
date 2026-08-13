@@ -371,7 +371,7 @@ async function handlePOST(req: Request) {
   if (!deployment) return Response.json({ error: "Failed to create deployment" }, { status: 500 });
 
   // ── Try Bull queue first (reliable, with retry + build logs) ──────────────
-  const queue = getDeployQueue();
+  const queue = process.env.DEPLOY_WORKER_ENABLED === "true" ? getDeployQueue() : null;
   if (queue) {
     await enqueueDeployJob({
       projectId,
