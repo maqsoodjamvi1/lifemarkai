@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync,readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 function loadEnv(path = ".env.local") {
@@ -25,6 +25,23 @@ const STARTUP_TIMEOUT_MS = Math.max(
   Number.parseInt(process.env.CORE_LOOP_STARTUP_TIMEOUT_MS ?? "180000", 10),
 );
 const ATTEMPTS = process.env.CORE_LOOP_ATTEMPTS ?? (process.argv.includes("--smoke") ? "1" : "50");
+
+function assertRuntimeDependencies() {
+  const viteBin = fileURLToPath(new URL("../node_modules/vite/bin/vite.js", import.meta.url));
+  if (!existsSync(viteBin)) {
+    throw new Error("Dependencies are not installed. Run npm ci, then retry the core-loop command.");
+  }
+  if (process.platform === "linux" && process.arch === "x64") {
+    const binding = fileURLToPath(new URL("../node_modules/@rolldown/binding-linux-x64-gnu/package.json", import.meta.url));
+    if (!existsSync(binding)) {
+      throw new Error(
+        "Rolldown's Linux native binding is missing. Pull the latest branch and run npm ci. " +
+        "For an existing Codespace, repair it with npm install --include=optional, then retry.",
+      );
+    }
+  }
+  return viteBin;
+}
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -72,7 +89,7 @@ function stop(child) {
 }
 
 async function main() {
-  const viteBin = fileURLToPath(new URL("../node_modules/vite/bin/vite.js", import.meta.url));
+  const viteBin = assertRuntimeDependencies();
   const campaign = fileURLToPath(new URL("./verify-core-loop-campaign.ts", import.meta.url));
   const env = { ...process.env, CORE_LOOP_ATTEMPTS: ATTEMPTS };
 
