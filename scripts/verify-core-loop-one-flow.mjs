@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const BASE_URL = (process.env.CORE_LOOP_BASE_URL ?? "http://localhost:3001").replace(/\/$/, "");
 const STARTUP_TIMEOUT_MS = Math.max(
   30_000,
   Number.parseInt(process.env.CORE_LOOP_STARTUP_TIMEOUT_MS ?? "180000", 10),
 );
-const ATTEMPTS = process.env.CORE_LOOP_ATTEMPTS ?? "1";
+const ATTEMPTS = process.env.CORE_LOOP_ATTEMPTS ?? (process.argv.includes("--smoke") ? "1" : "50");
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -53,14 +54,14 @@ function stop(child) {
 }
 
 async function main() {
-  const viteBin = new URL("../node_modules/vite/bin/vite.js", import.meta.url);
-  const campaign = new URL("./verify-core-loop-campaign.ts", import.meta.url);
+  const viteBin = fileURLToPath(new URL("../node_modules/vite/bin/vite.js", import.meta.url));
+  const campaign = fileURLToPath(new URL("./verify-core-loop-campaign.ts", import.meta.url));
   const env = { ...process.env, CORE_LOOP_ATTEMPTS: ATTEMPTS };
 
   console.log(`Starting LifeMarkAI at ${BASE_URL}...`);
   const server = spawn(
     process.execPath,
-    [viteBin.pathname, "dev", "--port", new URL(BASE_URL).port || "3001"],
+    [viteBin, "dev", "--port", new URL(BASE_URL).port || "3001"],
     { env, stdio: "inherit" },
   );
 
@@ -76,7 +77,7 @@ async function main() {
 
     const runner = spawn(
       process.execPath,
-      ["--import", "tsx", campaign.pathname],
+      ["--import", "tsx", campaign],
       { env, stdio: "inherit" },
     );
     const exitCode = await new Promise((resolve, reject) => {
