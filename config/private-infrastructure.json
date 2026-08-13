@@ -18,7 +18,8 @@
         [
           "ANTHROPIC_API_KEY"
         ]
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "agents",
@@ -26,7 +27,8 @@
       "paths": [
         "src/lib/ai/http/agent.ts",
         "src/lib/ai/http/chat.ts"
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "generation_contract",
@@ -34,7 +36,8 @@
       "paths": [
         "src/lib/ai/code-parser.ts",
         "src/lib/ai/streaming-file-extractor.ts"
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "automatic_repair",
@@ -42,7 +45,8 @@
       "paths": [
         "src/lib/ai/self-verify.ts",
         "src/lib/ai/prompts/auto-fix.ts"
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "sandbox",
@@ -59,7 +63,8 @@
         [
           "SANDBOX_BASE_URL"
         ]
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "remote_preview",
@@ -67,7 +72,8 @@
       "paths": [
         "src/lib/preview/serve-preview.ts",
         "src/routes/api/projects/$id/sandbox-preview.ts"
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "dependency_cache",
@@ -75,7 +81,8 @@
       "paths": [
         "docker/sandbox/Dockerfile",
         "src/lib/sandbox/modal.ts"
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "repositories",
@@ -83,24 +90,23 @@
       "paths": [
         "src/lib/server-fns/snapshots.ts",
         "src/lib/server-fns/restore-project-files.ts"
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "queues",
       "label": "Background queues and workers",
       "paths": [
-        "src/lib/queue/client.ts",
-        "scripts/ai-http-worker.mjs"
+        "src/lib/queue/client.ts"
       ],
       "anyEnv": [
         [
-          "REDIS_URL"
-        ],
-        [
-          "UPSTASH_REDIS_REST_URL",
-          "UPSTASH_REDIS_REST_TOKEN"
+          "REDIS_URL",
+          "DEPLOY_WORKER_ENABLED"
         ]
-      ]
+      ],
+      "status": "partial",
+      "blocker": "Deploy jobs are enqueued but no production deploy worker consumes the queue."
     },
     {
       "id": "cloud_database",
@@ -118,7 +124,8 @@
           "NEXT_PUBLIC_SUPABASE_URL",
           "SUPABASE_SERVICE_ROLE_KEY"
         ]
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "secrets_connectors",
@@ -126,7 +133,8 @@
       "paths": [
         "src/routes/api/projects/$id/env-health.ts",
         "src/components/editor/connector-wizard-panel.tsx"
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "deployment",
@@ -145,7 +153,8 @@
         [
           "COOLIFY_API_TOKEN"
         ]
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "billing",
@@ -159,7 +168,8 @@
           "STRIPE_SECRET_KEY",
           "STRIPE_WEBHOOK_SECRET"
         ]
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "rate_limiting",
@@ -167,23 +177,23 @@
       "paths": [
         "src/lib/rate-limit.ts",
         "src/lib/security/detect-secret.ts"
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "observability",
       "label": "Logs, metrics and tracing",
       "paths": [
         "src/lib/logger.ts",
-        "src/lib/ai/generation-observability.ts"
+        "src/lib/ai/generation-observability.ts",
+        "src/lib/monitoring/sentry.ts"
       ],
       "anyEnv": [
         [
           "SENTRY_DSN"
-        ],
-        [
-          "OTEL_EXPORTER_OTLP_ENDPOINT"
         ]
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "enterprise",
@@ -191,7 +201,8 @@
       "paths": [
         "src/routes/api/workspace/identity.ts",
         "src/lib/workspace/identity.ts"
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "security",
@@ -199,7 +210,8 @@
       "paths": [
         "src/lib/security/static-scan.ts",
         "src/routes/api/projects/$id/security-scan.ts"
-      ]
+      ],
+      "status": "implemented"
     },
     {
       "id": "backup_recovery",
@@ -212,7 +224,8 @@
         [
           "DATABASE_URL"
         ]
-      ]
+      ],
+      "status": "implemented"
     }
   ]
 }
