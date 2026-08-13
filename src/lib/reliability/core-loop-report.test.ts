@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { summarizeCoreLoop, type CoreLoopAttempt } from "./core-loop-report.ts";
+import { assessCoreLoopReleaseGate,summarizeCoreLoop, type CoreLoopAttempt } from "./core-loop-report.ts";
 
 const base: CoreLoopAttempt = {
   index: 1,
@@ -59,4 +59,21 @@ test("does not pretend missing cost telemetry is zero", () => {
   assert.equal(summary.averageSandboxCostCentsPerProject, null);
   assert.equal(summary.costTelemetryComplete, false);
   assert.equal(summary.automaticRepairSuccessRate, null);
+});
+
+test("release gate requires volume, registration, success, and complete costs", () => {
+  const summary = summarizeCoreLoop(Array.from({ length: 50 }, (_, index) => ({ ...base, index: index + 1 })));
+  assert.deepEqual(assessCoreLoopReleaseGate(summary, true), {
+    eligible: true,
+    passed: true,
+    reasons: [],
+  });
+
+  const incomplete = assessCoreLoopReleaseGate(
+    summarizeCoreLoop([{ ...base, aiCostCents: null, sandboxCostCents: null }]),
+    false,
+  );
+  assert.equal(incomplete.eligible, false);
+  assert.equal(incomplete.passed, false);
+  assert.ok(incomplete.reasons.length >= 3);
 });
