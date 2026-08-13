@@ -215,7 +215,7 @@ async function loadE2B(): Promise<{ Sandbox: any } | null> {
   try {
     const name = ["@e2b", "code-interpreter"].join("/");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mod = (await import(/* webpackIgnore: true */ name as string)) as any;
+    const mod = (await import(/* @vite-ignore */ name as string)) as any;
     return mod?.Sandbox ? { Sandbox: mod.Sandbox } : null;
   } catch {
     return null;
