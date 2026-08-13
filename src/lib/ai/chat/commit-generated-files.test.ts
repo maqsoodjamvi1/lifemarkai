@@ -2,9 +2,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { commitGeneratedFiles } from "./commit-generated-files.ts";
 
+function previousFilesQuery(rows: Array<{ path: string; content: string }> = []) {
+  return {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          in: async () => ({ data: rows, error: null }),
+        }),
+      }),
+    }),
+  };
+}
+
 test("generated files use begin + atomic commit RPC", async () => {
   const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
   const client = {
+    ...previousFilesQuery(),
     rpc: async (name: string, args: Record<string, unknown>) => {
       calls.push({ name, args });
       return name === "begin_generation"
@@ -22,6 +35,7 @@ test("generated files use begin + atomic commit RPC", async () => {
 
 test("generation conflicts preserve newer project files", async () => {
   const client = {
+    ...previousFilesQuery([{ path: "app.js", content: "old" }]),
     rpc: async (name: string) => name === "begin_generation"
       ? { data: [{ run_id: "run-1", base_revision: 2 }], error: null }
       : { data: null, error: { code: "40001", message: "generation conflict" } },
