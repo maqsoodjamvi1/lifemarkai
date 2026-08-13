@@ -119,6 +119,7 @@ import { createStreamSink } from "../chat/sse-stream.ts";
 import { createDeployActionResponse } from "../chat/deploy-action.ts";
 import { buildControlledTemplatePrompt,lockControlledDependencyVersions,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
+import { getCoreLoopPolicy,isCoreLoopRequest } from "../../reliability/core-loop-policy.ts";
 
 // Generation + backend wiring + self-verification can exceed a minute on
 // complex builds (Lovable budgets 15 min for agent runs).
@@ -160,11 +161,15 @@ export async function handleAiChat(req: Request) {
       projectServiceKey,
       modelManuallySelected = false,
       rawMessage,
+      coreLoop: coreLoopValue = false,
     } = body;
     type ChatRouteMode = "chat" | "plan" | "build" | "agent" | "patch";
     let mode: ChatRouteMode = (["chat", "plan", "build", "agent", "patch"] as const).includes(body.mode)
       ? (body.mode as ChatRouteMode)
       : "chat";
+    const coreLoop = isCoreLoopRequest(coreLoopValue);
+    const coreLoopPolicy = getCoreLoopPolicy();
+    if (coreLoop) mode = coreLoopPolicy.mode;
     const costPrompt = typeof rawMessage === "string" && rawMessage.trim() ? rawMessage : message;
 
     // ── Lovable-agent behavior: questions get ANSWERS, not rebuilds ────────
@@ -179,7 +184,7 @@ export async function handleAiChat(req: Request) {
     // pipeline and asked to find-and-replace inside a placeholder.
     let autoRoutedPatch = false;
     const hasRealWork = Array.isArray(files) && !isGreenfieldProject(files);
-    if (mode === "build" && body.forceBuild !== true && hasRealWork && typeof message === "string") {
+    if (!coreLoop && mode === "build" && body.forceBuild !== true && hasRealWork && typeof message === "string") {
       try {
         const { isInformationalQuery, isSmallSurgicalEdit } = await import("@/lib/ai/build-intent");
         if (isInformationalQuery(message)) {
@@ -219,7 +224,7 @@ export async function handleAiChat(req: Request) {
 
     // Mirror the client smart router so Build-tab chit-chat ("hello", "thanks")
     // cannot trigger a full regeneration when the UI still says Build.
-    if (body.forceBuild !== true && typeof persistedUserMessage === "string") {
+    if (!coreLoop && body.forceBuild !== true && typeof persistedUserMessage === "string") {
       const authoredCount = Array.isArray(files) ? countUserAuthoredFiles(files) : 0;
       const resolved = resolvePromptMode(persistedUserMessage, {
         fileCount: authoredCount,
@@ -533,7 +538,7 @@ export async function handleAiChat(req: Request) {
     // This never blocks permanently: `forceBuild` skips it, and the message
     // tells the user so. Placed after the cloud-action block because it follows
     // the same shape — stream one message, charge nothing, return.
-    if ((mode === "build" || mode === "agent") && body.forceBuild !== true && Array.isArray(files)) {
+    if (!coreLoop && (mode === "build" || mode === "agent") && body.forceBuild !== true && Array.isArray(files)) {
       const assessment = assessRequestScope(costPrompt, {
         userAuthoredFileCount: countUserAuthoredFiles(files),
       });
@@ -587,14 +592,16 @@ export async function handleAiChat(req: Request) {
     const serverAutoModel = modelManuallySelected === true
       ? model
       : resolveSmartModel(mode, { fileCount, hasPreviewError: false }, costPrompt);
-    const effectiveModel = resolveBudgetAwareModel({
-      requestedModel: serverAutoModel,
-      mode,
-      prompt: costPrompt,
-      fileCount,
-      manuallySelected: modelManuallySelected === true,
-      hasImage: !!imageBase64,
-    });
+    const effectiveModel = coreLoop
+      ? coreLoopPolicy.primaryModel
+      : resolveBudgetAwareModel({
+          requestedModel: serverAutoModel,
+          mode,
+          prompt: costPrompt,
+          fileCount,
+          manuallySelected: modelManuallySelected === true,
+          hasImage: !!imageBase64,
+        });
     const outputMaxTokens = maxOutputTokensForRequest({
       mode,
       prompt: costPrompt,
@@ -611,7 +618,7 @@ export async function handleAiChat(req: Request) {
     });
 
     const runClarifyFirst =
-      mode === "build" && body.forceBuild !== true && clarifyFirst === true;
+      !coreLoop && mode === "build" && body.forceBuild !== true && clarifyFirst === true;
 
     // ── Clarify-first (Lovable): questionnaire BEFORE research/subagents/build ──
     if (runClarifyFirst) {
