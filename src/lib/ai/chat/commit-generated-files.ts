@@ -1,16 +1,28 @@
 import type { createClientFromRequest } from "../../supabase/request-client.ts";
 import { sanitizeGeneratedFile } from "../html-sanity.ts";
 import type { ParsedFile } from "../code-parser.ts";
+import { enforceGeneratedFileContract } from "../generated-file-contract.ts";
 
 export async function commitGeneratedFiles(
   supabase: ReturnType<typeof createClientFromRequest>,
   projectId: string,
   files: ParsedFile[],
 ): Promise<ParsedFile[]> {
-  const sanitizedFiles = files.map((file) => ({
+  const normalizedFiles = enforceGeneratedFileContract(files);
+  const sanitizedFiles = normalizedFiles.map((file) => ({
     ...file,
     content: sanitizeGeneratedFile(file.path, file.content),
   }));
+  const { data: previousRows, error: previousError } = await supabase
+    .from("project_files")
+    .select("path, content")
+    .eq("project_id", projectId)
+    .in("path", sanitizedFiles.map((file) => file.path));
+  if (previousError) throw new Error(`Could not validate generated-file replacements: ${previousError.message}`);
+  const contractedFiles = enforceGeneratedFileContract(
+    sanitizedFiles,
+    (previousRows ?? []) as Array<{ path: string; content: string }>,
+  );
   const rpc = supabase as unknown as {
     rpc: (name: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { code?: string; message: string } | null }>;
   };
@@ -28,7 +40,7 @@ export async function commitGeneratedFiles(
     const { error: commitError } = await rpc.rpc("commit_generation", {
       target_run_id: runId,
       expected_revision: baseRevision,
-      staged_files: sanitizedFiles.map((file) => ({
+      staged_files: contractedFiles.map((file) => ({
         path: file.path,
         content: file.content,
         language: file.language,
@@ -40,7 +52,7 @@ export async function commitGeneratedFiles(
       }
       throw new Error(`Could not atomically save generated files: ${commitError.message}`);
     }
-    return sanitizedFiles;
+    return contractedFiles;
   }
 
   // Rolling deployment compatibility: migration 166 may reach the app database
@@ -49,7 +61,7 @@ export async function commitGeneratedFiles(
   const rpcMissing = beginError.code === "PGRST202" || /begin_generation.*schema cache|function.*not found/i.test(beginError.message);
   if (!rpcMissing) throw new Error(`Could not start generated-file transaction: ${beginError.message}`);
   const { error } = await supabase.from("project_files").upsert(
-    sanitizedFiles.map((file) => ({
+    contractedFiles.map((file) => ({
       project_id: projectId,
       path: file.path,
       content: file.content,
@@ -58,5 +70,5 @@ export async function commitGeneratedFiles(
     { onConflict: "project_id,path" },
   );
   if (error) throw new Error(`Could not save generated files: ${error.message}`);
-  return sanitizedFiles;
+  return contractedFiles;
 }

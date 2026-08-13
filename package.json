@@ -16,6 +16,7 @@
     "type-check": "tsc --noEmit",
     "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "verify:smoke": "node scripts/verify-production-smoke.mjs",
+    "verify:core-loop": "node --import tsx scripts/verify-core-loop-campaign.ts",
     "organize-imports": "node scripts/organize-imports.mjs",
     "remove-ts-nocheck": "node scripts/remove-ts-nocheck.mjs",
     "generate:database-types": "node scripts/generate-database-types.mjs",
@@ -31,7 +32,14 @@
     "cap:open:ios": "cap open ios",
     "cap:open:android": "cap open android",
     "cap:run:ios": "cap run ios",
-    "cap:run:android": "cap run android"
+    "cap:run:android": "cap run android",
+    "verify:core-loop:one-flow": "node scripts/verify-core-loop-one-flow.mjs",
+    "verify:core-loop:smoke": "node scripts/verify-core-loop-one-flow.mjs --smoke",
+    "verify:private-infrastructure:preflight": "node scripts/verify-private-infrastructure.mjs --strict",
+    "verify:private-infrastructure": "node scripts/verify-private-infrastructure.mjs --strict --run-core-loop",
+    "worker:deploy": "node --import tsx scripts/deploy-worker.mjs",
+    "backup:database": "node scripts/backup-database.mjs",
+    "recovery:drill": "node scripts/restore-drill.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.0",
@@ -125,7 +133,8 @@
     "zustand": "^4.5.2"
   },
   "optionalDependencies": {
-    "@rolldown/binding-win32-x64-msvc": "1.2.3"
+    "@rolldown/binding-win32-x64-msvc": "1.2.3",
+    "@rolldown/binding-linux-x64-gnu": "1.2.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

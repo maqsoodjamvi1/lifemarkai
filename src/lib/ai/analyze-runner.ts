@@ -161,7 +161,7 @@ async function runE2B(opts: {
 }): Promise<AnalyzeRunResult> {
   const name = ["@e2b", "code-interpreter"].join("/");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mod = (await import(/* webpackIgnore: true */ name as string)) as any;
+  const mod = (await import(/* @vite-ignore */ name as string)) as any;
   const Sandbox = mod?.Sandbox;
   if (!Sandbox) throw new Error("E2B SDK not installed (npm i @e2b/code-interpreter)");
 
@@ -251,7 +251,7 @@ async function runModal(opts: {
   inputFile?: { name: string; buffer: Buffer };
 }): Promise<AnalyzeRunResult> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mod = (await import(/* webpackIgnore: true */ "modal")) as any;
+  const mod = (await import(/* @vite-ignore */ "modal")) as any;
   const ModalClient = mod?.ModalClient;
   if (!ModalClient) throw new Error("Modal SDK not installed (npm i modal)");
 

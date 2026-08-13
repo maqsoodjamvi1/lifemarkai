@@ -7,6 +7,7 @@ import { sendDeploymentEmail } from "@/lib/email/resend";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { enqueueDeployJob,getDeployQueue } from "@/lib/queue/client";
 import { logger } from "@/lib/logger";
+import { createTraceContext,parseTraceparent,traceparent } from "@/lib/monitoring/tracing";
 import { evaluatePublishGate,publishGateResponseBody } from "@/lib/security/publish-gate";
 
 // ── Netlify helpers ────────────────────────────────────────────────────────
@@ -371,7 +372,7 @@ async function handlePOST(req: Request) {
   if (!deployment) return Response.json({ error: "Failed to create deployment" }, { status: 500 });
 
   // ── Try Bull queue first (reliable, with retry + build logs) ──────────────
-  const queue = getDeployQueue();
+  const queue = process.env.DEPLOY_WORKER_ENABLED === "true" && provider === "lifemarkai" ? getDeployQueue() : null;
   if (queue) {
     await enqueueDeployJob({
       projectId,
@@ -382,6 +383,7 @@ async function handlePOST(req: Request) {
       // keep the Redis payload small and avoid stale snapshots.
       projectName: project.name as string,
       badgeHidden: (project as any).badge_hidden ?? false,
+      traceparent: traceparent(createTraceContext(parseTraceparent(req.headers.get("traceparent")))),
     });
     logger.info("deploy.queued", { deploymentId: deployment.id, projectId, userId: user.id });
     return Response.json({

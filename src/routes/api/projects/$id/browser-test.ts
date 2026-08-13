@@ -5,6 +5,7 @@ import { getServerUser } from "@/lib/supabase/server-user";
 import { generateAI } from "@/lib/ai/generate";
 import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { canWriteProjectFiles,getProjectAccess } from "@/lib/project/access";
+import { loadOptionalPlaywright } from "@/lib/optional-playwright";
 
 
 /**
@@ -209,21 +210,6 @@ function normalizeTestPlan(value: unknown): TestStep[] {
  * package availability mid-process. Failure to import falls back to fetch
  * with a single console warning (operator is presumably looking at logs).
  */
-async function tryLoadPlaywright(): Promise<null | { chromium: any }> {
-  if (process.env.PLAYWRIGHT_ENABLED !== "true") return null;
-  try {
-    // Use a string variable for the import so Next/webpack doesn't try to
-    // resolve "playwright" at build time on hosts without it installed.
-    const modName = "playwright";
-    const mod = await import(/* webpackIgnore: true */ modName);
-    if (!mod?.chromium?.launch) return null;
-    return { chromium: mod.chromium };
-  } catch (err) {
-    console.warn("[browser-test] Playwright requested but failed to load:", (err as Error).message);
-    return null;
-  }
-}
-
 /**
  * Fetch the page via Playwright Chromium.
  *
@@ -480,7 +466,7 @@ Return the JSON test plan now.`;
         // ── 2) Load the page via the best available engine ─────────────────────
         // Real Chromium when PLAYWRIGHT_ENABLED=true AND playwright is importable.
         // Otherwise: plain fetch + HTML→text strip (still useful, just no JS).
-        const playwright = await tryLoadPlaywright();
+        const playwright = await loadOptionalPlaywright();
         const loadMsg = playwright
           ? `Launching Chromium and visiting ${target}…`
           : `Fetching ${target}…`;

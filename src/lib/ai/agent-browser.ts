@@ -3,6 +3,7 @@
  * Prefers Playwright when available; falls back to HTTP fetch + HTML text.
  */
 import { buildFallbackHtml } from "../preview/build-fallback-html.ts";
+import { loadOptionalPlaywright } from "../optional-playwright.ts";
 
 export type BrowseAction = "navigate" | "click" | "fill" | "screenshot" | "snapshot";
 
@@ -18,20 +19,6 @@ export type BrowsePreviewArgs = {
   projectId?: string | null;
   files?: Array<{ path: string; content: string }>;
 };
-
-async function tryLoadPlaywright(): Promise<{ chromium: unknown } | null> {
-  if (process.env.PLAYWRIGHT_ENABLED === "false" || process.env.PLAYWRIGHT_ENABLED === "0") {
-    return null;
-  }
-  try {
-    const modName = "playwright";
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mod = (await import(/* webpackIgnore: true */ modName)) as any;
-    return mod?.chromium ? mod : mod?.default?.chromium ? mod.default : null;
-  } catch {
-    return null;
-  }
-}
 
 function htmlToText(html: string): string {
   return html
@@ -88,7 +75,7 @@ export async function browsePreview(args: BrowsePreviewArgs): Promise<string> {
   if (!action) return "Error: action is required (navigate|click|fill|screenshot|snapshot).";
 
   const resolved = resolveTargetUrl(args);
-  const playwright = await tryLoadPlaywright();
+  const playwright = await loadOptionalPlaywright();
 
   if (!playwright) {
     if (action === "navigate" || action === "snapshot") {
