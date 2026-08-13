@@ -28,6 +28,7 @@ import { guardFileWrite } from "./guard-file-write.ts";
 import { fingerprintError } from "./failure-fingerprint.ts";
 import { recordRepairOutcome } from "./record-outcome.ts";
 import type { ProjectFile } from "../../types/database.ts";
+import { loadOptionalPlaywright } from "../optional-playwright.ts";
 
 export interface SelfVerifyResult {
   engine: "browser" | "static";
@@ -47,23 +48,6 @@ type SupabaseClient = any;
 // before the re-verify that would confirm the fix.
 const TIME_BUDGET_MS = 90_000;
 const RENDER_SETTLE_MS = 3_500;
-
-/** Dynamically load Playwright without letting bundlers resolve it at build time. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function tryLoadPlaywright(): Promise<{ chromium: any } | null> {
-  // Default ON: attempt a real browser render unless explicitly disabled. If
-  // `playwright` isn't installed (optional dep), the import throws and we fall
-  // back to the (now much stronger) static checks — so this is always safe.
-  if (process.env.PLAYWRIGHT_ENABLED === "false" || process.env.PLAYWRIGHT_ENABLED === "0") return null;
-  try {
-    const modName = "playwright";
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mod = (await import(/* webpackIgnore: true */ modName)) as any;
-    return mod?.chromium ? mod : mod?.default?.chromium ? mod.default : null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Vision QA — send the rendered screenshot to a vision-capable model and get
@@ -448,7 +432,7 @@ export async function runSelfVerification(opts: {
       else if (typeof deployed === "string" && /^https?:\/\//i.test(deployed)) liveUrl = deployed;
     }
 
-    let playwright = await tryLoadPlaywright();
+    let playwright = await loadOptionalPlaywright();
     result.engine = playwright ? "browser" : "static";
     emit(
       playwright
@@ -529,7 +513,7 @@ export async function runSelfVerification(opts: {
         } catch (renderErr) {
           // The playwright PACKAGE can import successfully while its browser
           // BINARY is missing from the image (e.g. `npx playwright install`
-          // never ran in this container) — tryLoadPlaywright only checks the
+          // never ran in this container) — the loader only checks the
           // former. That mismatch used to throw here, escape the round loop,
           // and get silently eaten by the outer catch, rejecting every
           // candidate with a content-free "could not complete" message. Once

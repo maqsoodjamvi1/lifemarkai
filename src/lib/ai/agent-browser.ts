@@ -3,6 +3,7 @@
  * Prefers Playwright when available; falls back to HTTP fetch + HTML text.
  */
 import { buildFallbackHtml } from "../preview/build-fallback-html.ts";
+import { loadOptionalPlaywright } from "../optional-playwright.ts";
 
 export type BrowseAction = "navigate" | "click" | "fill" | "screenshot" | "snapshot";
 
@@ -18,25 +19,6 @@ export type BrowsePreviewArgs = {
   projectId?: string | null;
   files?: Array<{ path: string; content: string }>;
 };
-
-async function tryLoadPlaywright(): Promise<{ chromium: unknown } | null> {
-  // Browser automation is an operator opt-in. Keeping it off by default means
-  // the normal web app does not need Playwright or a downloaded Chromium binary.
-  if (process.env.PLAYWRIGHT_ENABLED !== "true") return null;
-  try {
-    // Function indirection is intentional: Vite's dependency scanner follows
-    // ordinary dynamic imports (even a variable string) and otherwise reports
-    // the optional `playwright` package as an unresolved app dependency.
-    const runtimeImport = new Function("specifier", "return import(specifier)") as (
-      specifier: string,
-    ) => Promise<unknown>;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mod = (await runtimeImport("playwright")) as any;
-    return mod?.chromium ? mod : mod?.default?.chromium ? mod.default : null;
-  } catch {
-    return null;
-  }
-}
 
 function htmlToText(html: string): string {
   return html
@@ -93,7 +75,7 @@ export async function browsePreview(args: BrowsePreviewArgs): Promise<string> {
   if (!action) return "Error: action is required (navigate|click|fill|screenshot|snapshot).";
 
   const resolved = resolveTargetUrl(args);
-  const playwright = await tryLoadPlaywright();
+  const playwright = await loadOptionalPlaywright();
 
   if (!playwright) {
     if (action === "navigate" || action === "snapshot") {
