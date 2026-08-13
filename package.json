@@ -133,7 +133,8 @@
     "zustand": "^4.5.2"
   },
   "optionalDependencies": {
-    "@rolldown/binding-win32-x64-msvc": "1.2.3"
+    "@rolldown/binding-win32-x64-msvc": "1.2.3",
+    "@rolldown/binding-linux-x64-gnu": "1.2.3"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
