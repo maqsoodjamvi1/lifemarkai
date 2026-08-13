@@ -20,13 +20,18 @@ export type BrowsePreviewArgs = {
 };
 
 async function tryLoadPlaywright(): Promise<{ chromium: unknown } | null> {
-  if (process.env.PLAYWRIGHT_ENABLED === "false" || process.env.PLAYWRIGHT_ENABLED === "0") {
-    return null;
-  }
+  // Browser automation is an operator opt-in. Keeping it off by default means
+  // the normal web app does not need Playwright or a downloaded Chromium binary.
+  if (process.env.PLAYWRIGHT_ENABLED !== "true") return null;
   try {
-    const modName = "playwright";
+    // Function indirection is intentional: Vite's dependency scanner follows
+    // ordinary dynamic imports (even a variable string) and otherwise reports
+    // the optional `playwright` package as an unresolved app dependency.
+    const runtimeImport = new Function("specifier", "return import(specifier)") as (
+      specifier: string,
+    ) => Promise<unknown>;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mod = (await import(/* webpackIgnore: true */ modName)) as any;
+    const mod = (await runtimeImport("playwright")) as any;
     return mod?.chromium ? mod : mod?.default?.chromium ? mod.default : null;
   } catch {
     return null;
