@@ -24,17 +24,28 @@ function loadEnv(path = ".env.local") {
 
 loadEnv();
 
-const required = (name: string) => {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`${name} is required`);
-  return value;
+const firstEnv = (...names: string[]) =>
+  names.map((name) => process.env[name]?.trim()).find(Boolean);
+
+const missing: string[] = [];
+const requireOne = (label: string, ...names: string[]) => {
+  const value = firstEnv(...names);
+  if (!value) missing.push(`${label} (${names.join(" or ")})`);
+  return value ?? "";
 };
 
 const BASE_URL = (process.env.CORE_LOOP_BASE_URL ?? "http://localhost:3001").replace(/\/$/, "");
-const SUPABASE_URL = required("VITE_SUPABASE_URL");
-const SUPABASE_ANON_KEY = required("VITE_SUPABASE_ANON_KEY");
-const EMAIL = required("CORE_LOOP_EMAIL");
-const PASSWORD = required("CORE_LOOP_PASSWORD");
+const SUPABASE_URL = requireOne("Supabase URL", "VITE_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL");
+const SUPABASE_ANON_KEY = requireOne(
+  "Supabase anonymous key",
+  "VITE_SUPABASE_ANON_KEY",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+);
+const EMAIL = requireOne("test-account email", "CORE_LOOP_EMAIL");
+const PASSWORD = requireOne("test-account password", "CORE_LOOP_PASSWORD");
+if (missing.length > 0) {
+  throw new Error(`Core-loop configuration is incomplete:\n- ${missing.join("\n- ")}\nSee docs/CORE_LOOP_RELIABILITY.md.`);
+}
 const PROVIDER = process.env.CORE_LOOP_DEPLOY_PROVIDER ?? "netlify";
 const ATTEMPTS = Math.max(1, Number.parseInt(process.env.CORE_LOOP_ATTEMPTS ?? "50", 10));
 const DEPLOY_TIMEOUT_MS = Math.max(30_000, Number.parseInt(process.env.CORE_LOOP_DEPLOY_TIMEOUT_MS ?? "180000", 10));

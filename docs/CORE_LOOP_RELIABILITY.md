@@ -32,6 +32,9 @@ VITE_SUPABASE_ANON_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...
 ```
 
+The runner also accepts the legacy `NEXT_PUBLIC_SUPABASE_URL` and
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` names already used by older environments.
+
 Run:
 
 ```bash
