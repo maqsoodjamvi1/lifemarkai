@@ -32,7 +32,9 @@
     "cap:open:ios": "cap open ios",
     "cap:open:android": "cap open android",
     "cap:run:ios": "cap run ios",
-    "cap:run:android": "cap run android"
+    "cap:run:android": "cap run android",
+    "verify:core-loop:one-flow": "node scripts/verify-core-loop-one-flow.mjs",
+    "verify:core-loop:smoke": "node scripts/verify-core-loop-one-flow.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.0",
