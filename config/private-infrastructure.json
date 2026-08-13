@@ -107,7 +107,7 @@
       "label": "Supabase/PostgreSQL provisioning",
       "paths": [
         "src/routes/api/cloud/provision.ts",
-        "supabase/config.toml"
+        "src/lib/supabase/server.ts"
       ],
       "anyEnv": [
         [
@@ -152,7 +152,7 @@
       "label": "Credits, billing and cost accounting",
       "paths": [
         "src/routes/api/billing/webhook.ts",
-        "src/lib/credits/index.ts"
+        "src/lib/credits.ts"
       ],
       "anyEnv": [
         [
@@ -189,8 +189,8 @@
       "id": "enterprise",
       "label": "Team permissions and enterprise controls",
       "paths": [
-        "src/routes/api/teams/$id/members.ts",
-        "src/routes/api/enterprise/sso.ts"
+        "src/routes/api/workspace/identity.ts",
+        "src/lib/workspace/identity.ts"
       ]
     },
     {
