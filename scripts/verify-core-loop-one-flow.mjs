@@ -26,6 +26,32 @@ const STARTUP_TIMEOUT_MS = Math.max(
 );
 const ATTEMPTS = process.env.CORE_LOOP_ATTEMPTS ?? (process.argv.includes("--smoke") ? "1" : "50");
 
+function firstConfigured(...names) {
+  return names.some((name) => Boolean(process.env[name]?.trim()));
+}
+
+function assertCampaignConfiguration() {
+  const missing = [];
+  if (!firstConfigured("VITE_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL")) {
+    missing.push("VITE_SUPABASE_URL");
+  }
+  if (!firstConfigured("VITE_SUPABASE_ANON_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY")) {
+    missing.push("VITE_SUPABASE_ANON_KEY");
+  }
+  if (!firstConfigured("CORE_LOOP_EMAIL")) missing.push("CORE_LOOP_EMAIL");
+  if (!firstConfigured("CORE_LOOP_PASSWORD")) missing.push("CORE_LOOP_PASSWORD");
+  if (Number.parseInt(ATTEMPTS, 10) >= 50 && !firstConfigured("SUPABASE_SERVICE_ROLE_KEY")) {
+    missing.push("SUPABASE_SERVICE_ROLE_KEY (required for registration proof on 50+ attempts)");
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      "Core-loop configuration is incomplete. Add these values to private .env.local (never commit it):\\n- " +
+      missing.join("\\n- ") +
+      "\\nSee docs/CORE_LOOP_RELIABILITY.md.",
+    );
+  }
+}
+
 function assertRuntimeDependencies() {
   const viteBin = fileURLToPath(new URL("../node_modules/vite/bin/vite.js", import.meta.url));
   if (!existsSync(viteBin)) {
@@ -89,6 +115,7 @@ function stop(child) {
 }
 
 async function main() {
+  assertCampaignConfiguration();
   const viteBin = assertRuntimeDependencies();
   const campaign = fileURLToPath(new URL("./verify-core-loop-campaign.ts", import.meta.url));
   const env = { ...process.env, CORE_LOOP_ATTEMPTS: ATTEMPTS };
