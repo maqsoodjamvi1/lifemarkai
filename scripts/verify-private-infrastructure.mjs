@@ -45,6 +45,7 @@ async function main() {
 
   const results = manifest.capabilities.map((capability) => {
     const missingPaths = capability.paths.filter((path) => !existsSync(resolve(path)));
+    const implementationComplete = capability.status !== "partial";
     const configured =
       !capability.anyEnv ||
       capability.anyEnv.length === 0 ||
@@ -53,20 +54,25 @@ async function main() {
       id: capability.id,
       label: capability.label,
       sourceReady: missingPaths.length === 0,
+      implementationComplete,
       configured,
+      blocker: capability.blocker ?? null,
       missingPaths,
       acceptedEnvironmentGroups: capability.anyEnv ?? [],
     };
   });
 
   const missingSource = results.filter((result) => !result.sourceReady);
+  const incomplete = results.filter((result) => !result.implementationComplete);
   const unconfigured = results.filter((result) => !result.configured);
   for (const result of results) {
-    const state = result.sourceReady && result.configured
+    const state = result.sourceReady && result.implementationComplete && result.configured
       ? "READY"
       : !result.sourceReady
         ? "MISSING_SOURCE"
-        : "NEEDS_CONFIG";
+        : !result.implementationComplete
+          ? "INCOMPLETE"
+          : "NEEDS_CONFIG";
     console.log(`${state.padEnd(14)} ${result.id.padEnd(22)} ${result.label}`);
   }
 
@@ -75,8 +81,9 @@ async function main() {
     checkedAt: new Date().toISOString(),
     strict,
     sourceReady: missingSource.length === 0,
+    implementationComplete: incomplete.length === 0,
     productionConfigured: unconfigured.length === 0,
-    ready: missingSource.length === 0 && (!strict || unconfigured.length === 0),
+    ready: missingSource.length === 0 && incomplete.length === 0 && (!strict || unconfigured.length === 0),
     results,
   };
   console.log(JSON.stringify(report, null, 2));
