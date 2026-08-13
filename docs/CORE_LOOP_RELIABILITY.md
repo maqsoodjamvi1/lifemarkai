@@ -22,7 +22,14 @@ campaigns require this registration proof.
 
 ## Configuration
 
-Create the private configuration from the committed placeholder template, then replace every placeholder:\n\n```bash\ncp .env.core-loop.example .env.local\n```\n\nNever commit `.env.local` or paste its secret values into chat. Add these to the shell or that private file:\n
+Create the private configuration from the committed placeholder template, then replace every placeholder:
+
+```bash
+cp .env.core-loop.example .env.local
+```
+
+Never commit `.env.local` or paste its secret values into chat. Add these to the shell or that private file:
+
 ```dotenv
 CORE_LOOP_BASE_URL=http://localhost:3001
 CORE_LOOP_EMAIL=reliability-test@example.com
