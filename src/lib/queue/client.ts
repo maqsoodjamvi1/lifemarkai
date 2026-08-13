@@ -53,6 +53,8 @@ export interface DeployJobPayload {
   files?: Array<{ path: string; content: string }>;
   projectName: string;
   badgeHidden?: boolean;
+  /** W3C trace context propagated from the enqueueing API request. */
+  traceparent?: string;
 }
 
 export interface BuildJobPayload {
