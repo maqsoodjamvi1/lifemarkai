@@ -97,7 +97,9 @@
       "id": "queues",
       "label": "Background queues and workers",
       "paths": [
-        "src/lib/queue/client.ts"
+        "src/lib/queue/client.ts",
+        "src/lib/queue/deploy-processor.ts",
+        "scripts/deploy-worker.mjs"
       ],
       "anyEnv": [
         [
@@ -105,8 +107,7 @@
           "DEPLOY_WORKER_ENABLED"
         ]
       ],
-      "status": "partial",
-      "blocker": "Deploy jobs are enqueued but no production deploy worker consumes the queue."
+      "status": "implemented"
     },
     {
       "id": "cloud_database",
@@ -186,11 +187,15 @@
       "paths": [
         "src/lib/logger.ts",
         "src/lib/ai/generation-observability.ts",
-        "src/lib/monitoring/sentry.ts"
+        "src/lib/monitoring/sentry.ts",
+        "src/lib/monitoring/tracing.ts"
       ],
       "anyEnv": [
         [
           "SENTRY_DSN"
+        ],
+        [
+          "OTEL_EXPORTER_OTLP_ENDPOINT"
         ]
       ],
       "status": "implemented"
@@ -218,11 +223,14 @@
       "label": "Backup and disaster recovery",
       "paths": [
         "src/lib/server-fns/snapshots.ts",
+        "scripts/backup-database.mjs",
+        "scripts/restore-drill.mjs",
         "docs/BACKUP_AND_RECOVERY.md"
       ],
       "anyEnv": [
         [
-          "DATABASE_URL"
+          "DATABASE_URL",
+          "RECOVERY_DATABASE_URL"
         ]
       ],
       "status": "implemented"
