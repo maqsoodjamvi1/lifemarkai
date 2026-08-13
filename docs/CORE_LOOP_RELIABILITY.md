@@ -15,6 +15,11 @@ preview → deployment → reachable public URL.
 Never use a real customer's account. Campaigns create real projects, consume AI
 credits, start sandboxes, and publish real URLs.
 
+When the service-role key is configured, the runner also creates a unique
+plus-addressed Supabase user, waits for the profile trigger to grant credits,
+records the result, and deletes that probe user immediately. Full 50+ attempt
+campaigns require this registration proof.
+
 ## Configuration
 
 Add these to the shell or a private `.env.local` file:
@@ -42,6 +47,7 @@ CORE_LOOP_AI_MODEL=qwen/qwen3-coder
 CORE_LOOP_FALLBACK_MODEL=deepseek/deepseek-v4-flash
 CORE_LOOP_DEPLOY_PROVIDER=netlify
 CORE_LOOP_MAX_REPAIR_ROUNDS=2
+CORE_LOOP_REQUIRE_REGISTRATION_PROOF=true
 ```
 
 These values are embedded in the JSON report. Campaign requests always use
@@ -83,7 +89,9 @@ A timestamped final report contains every attempt and these aggregates:
 - automatic-repair success rate;
 - average AI and sandbox/compute cost;
 - manual-intervention rate;
-- the exact failed stage and error for each unsuccessful attempt.
+- the exact failed stage and error for each unsuccessful attempt;
+- fresh-registration and initial-credit proof;
+- an explicit release-gate decision with failure reasons.
 
 Reports are intentionally ignored by Git because they may contain project IDs,
 URLs, prompts, and operational cost data. Attach the sanitized report to the
