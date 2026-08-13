@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
+  assessCoreLoopReleaseGate,
   summarizeCoreLoop,
   type CoreLoopAttempt,
   type CoreLoopStage,
@@ -348,12 +349,19 @@ async function main() {
   }
 
   const summary = summarizeCoreLoop(attempts);
-  const report = { campaignStartedAt, completedAt: new Date().toISOString(), baseUrl: BASE_URL, registrationProof, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary, attempts };
+  const releaseGate = assessCoreLoopReleaseGate(summary, registrationProof.passed);
+  const report = { campaignStartedAt, completedAt: new Date().toISOString(), baseUrl: BASE_URL, registrationProof, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary, releaseGate, attempts };
   const stampedPath = resolve(REPORT_DIR, `core-loop-${campaignStartedAt.replace(/[:.]/g, "-")}.json`);
   writeFileSync(stampedPath, `${JSON.stringify(report, null, 2)}\n`);
-  console.log(JSON.stringify(summary, null, 2));
+  console.log(JSON.stringify({ summary, releaseGate }, null, 2));
   console.log(`Report: ${stampedPath}`);
-  process.exit(summary.publicUrlSuccessRate === 1 ? 0 : 1);
+  const smokePassed =
+    ATTEMPTS < 50 &&
+    summary.generationSuccessRate === 1 &&
+    summary.previewSuccessRate === 1 &&
+    summary.deploymentSuccessRate === 1 &&
+    summary.publicUrlSuccessRate === 1;
+  process.exit((releaseGate.eligible ? releaseGate.passed : smokePassed) ? 0 : 1);
 }
 
 main().catch((error) => {
