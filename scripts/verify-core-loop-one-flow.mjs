@@ -26,32 +26,57 @@ const STARTUP_TIMEOUT_MS = Math.max(
 );
 const ATTEMPTS = process.env.CORE_LOOP_ATTEMPTS ?? (process.argv.includes("--smoke") ? "1" : "50");
 
-function firstConfigured(...names) {
-  return names.some((name) => Boolean(process.env[name]?.trim()));
+function configuredValue(...names) {
+  return names.map((name) => process.env[name]?.trim()).find(Boolean) ?? "";
 }
 
-function assertCampaignConfiguration() {
-  const missing = [];
-  if (!firstConfigured("VITE_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL")) {
-    missing.push("VITE_SUPABASE_URL");
-  }
-  if (!firstConfigured("VITE_SUPABASE_ANON_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY")) {
-    missing.push("VITE_SUPABASE_ANON_KEY");
-  }
-  if (!firstConfigured("CORE_LOOP_EMAIL")) missing.push("CORE_LOOP_EMAIL");
-  if (!firstConfigured("CORE_LOOP_PASSWORD")) missing.push("CORE_LOOP_PASSWORD");
-  if (Number.parseInt(ATTEMPTS, 10) >= 50 && !firstConfigured("SUPABASE_SERVICE_ROLE_KEY")) {
-    missing.push("SUPABASE_SERVICE_ROLE_KEY (required for registration proof on 50+ attempts)");
-  }
-  if (missing.length > 0) {
-    throw new Error(
-      "Core-loop configuration is incomplete. Add these values to private .env.local (never commit it):\\n- " +
-      missing.join("\\n- ") +
-      "\\nSee docs/CORE_LOOP_RELIABILITY.md.",
-    );
-  }
+function isPlaceholder(value) {
+  return /(?:your-project|replace-with|example\.com|use-a-dedicated-secret|^\.\.\.$)/i.test(value);
 }
 
+async function assertCampaignConfiguration() {
+  const urlValue = configuredValue("VITE_SUPABASE_URL", "NEXT_PUBLIC_SUPABASE_URL");
+  const anonKey = configuredValue("VITE_SUPABASE_ANON_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  const checks = [
+    ["VITE_SUPABASE_URL", urlValue],
+    ["VITE_SUPABASE_ANON_KEY", anonKey],
+    ["CORE_LOOP_EMAIL", configuredValue("CORE_LOOP_EMAIL")],
+    ["CORE_LOOP_PASSWORD", configuredValue("CORE_LOOP_PASSWORD")],
+  ];
+  if (Number.parseInt(ATTEMPTS, 10) >= 50) checks.push(["SUPABASE_SERVICE_ROLE_KEY", configuredValue("SUPABASE_SERVICE_ROLE_KEY")]);
+  const missing = checks.filter(([, value]) => !value).map(([name]) => name);
+  const placeholders = checks.filter(([, value]) => value && isPlaceholder(value)).map(([name]) => name);
+  if (missing.length > 0 || placeholders.length > 0) {
+    const details = [
+      ...missing.map((name) => name + " is missing"),
+      ...placeholders.map((name) => name + " still contains an example placeholder"),
+    ];
+    throw new Error("Core-loop configuration is not ready. Update private .env.local:\n- " + details.join("\n- ") + "\nSee docs/CORE_LOOP_RELIABILITY.md.");
+  }
+
+  let supabaseUrl;
+  try {
+    supabaseUrl = new URL(urlValue);
+    if (supabaseUrl.protocol !== "https:" && supabaseUrl.hostname !== "localhost") throw new Error("hosted projects must use https");
+  } catch (error) {
+    throw new Error("VITE_SUPABASE_URL is invalid: " + (error instanceof Error ? error.message : String(error)));
+  }
+
+  try {
+    const response = await fetch(new URL("/auth/v1/health", supabaseUrl), {
+      headers: { apikey: anonKey },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 300);
+      throw new Error("HTTP " + response.status + (detail ? ": " + detail : ""));
+    }
+  } catch (error) {
+    const rawCause = error instanceof Error ? error.cause : null;
+    const cause = rawCause && typeof rawCause === "object" ? " (" + String(rawCause.code ?? rawCause.message ?? "") + ")" : "";
+    throw new Error("Cannot reach Supabase Auth at " + supabaseUrl.origin + ": " + (error instanceof Error ? error.message : String(error)) + cause + ". Verify the project URL, that the Supabase project is active, and that Codespaces can access it.");
+  }
+}
 function assertRuntimeDependencies() {
   const viteBin = fileURLToPath(new URL("../node_modules/vite/bin/vite.js", import.meta.url));
   if (!existsSync(viteBin)) {
@@ -115,7 +140,7 @@ function stop(child) {
 }
 
 async function main() {
-  assertCampaignConfiguration();
+  await assertCampaignConfiguration();
   const viteBin = assertRuntimeDependencies();
   const campaign = fileURLToPath(new URL("./verify-core-loop-campaign.ts", import.meta.url));
   const env = { ...process.env, CORE_LOOP_ATTEMPTS: ATTEMPTS };
