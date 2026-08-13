@@ -6,6 +6,7 @@ import {
   type CoreLoopAttempt,
   type CoreLoopStage,
 } from "../src/lib/reliability/core-loop-report.ts";
+import { getCoreLoopPolicy } from "../src/lib/reliability/core-loop-policy.ts";
 
 function loadEnv(path = ".env.local") {
   try {
@@ -46,7 +47,8 @@ const PASSWORD = requireOne("test-account password", "CORE_LOOP_PASSWORD");
 if (missing.length > 0) {
   throw new Error(`Core-loop configuration is incomplete:\n- ${missing.join("\n- ")}\nSee docs/CORE_LOOP_RELIABILITY.md.`);
 }
-const PROVIDER = process.env.CORE_LOOP_DEPLOY_PROVIDER ?? "netlify";
+const CORE_LOOP_POLICY = getCoreLoopPolicy();
+const PROVIDER = CORE_LOOP_POLICY.deploymentProvider;
 const ATTEMPTS = Math.max(1, Number.parseInt(process.env.CORE_LOOP_ATTEMPTS ?? "50", 10));
 const DEPLOY_TIMEOUT_MS = Math.max(30_000, Number.parseInt(process.env.CORE_LOOP_DEPLOY_TIMEOUT_MS ?? "180000", 10));
 const PROMPTS_PATH = resolve(process.env.CORE_LOOP_PROMPTS ?? "tests/core-loop-prompts.json");
@@ -193,7 +195,19 @@ async function main() {
       const generationResponse = await fetch(`${BASE_URL}/api/ai/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Cookie: cookie },
-        body: JSON.stringify({ projectId: project.id, message: prompt, mode: "build", files: [], history: [] }),
+        body: JSON.stringify({
+          projectId: project.id,
+          message: prompt,
+          mode: CORE_LOOP_POLICY.mode,
+          framework: CORE_LOOP_POLICY.framework,
+          model: CORE_LOOP_POLICY.primaryModel,
+          modelManuallySelected: true,
+          forceBuild: true,
+          clarifyFirst: false,
+          coreLoop: true,
+          files: [],
+          history: [],
+        }),
       });
       const done = await readDoneEvent(generationResponse);
       attempt.generationMs = Date.now() - generationStarted;
@@ -237,14 +251,14 @@ async function main() {
         attempt.repairRounds = Math.max(attempt.repairRounds, costs.repairRounds);
       }
       attempts.push(attempt);
-      const interim = { campaignStartedAt, baseUrl: BASE_URL, provider: PROVIDER, summary: summarizeCoreLoop(attempts), attempts };
+      const interim = { campaignStartedAt, baseUrl: BASE_URL, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary: summarizeCoreLoop(attempts), attempts };
       writeFileSync(resolve(REPORT_DIR, "latest.json"), `${JSON.stringify(interim, null, 2)}\n`);
       console.log(`[${attempt.index}/${ATTEMPTS}] ${attempt.publicUrlPassed ? "PASS" : `FAIL:${attempt.failedStage}`} ${prompt.slice(0, 70)}`);
     }
   }
 
   const summary = summarizeCoreLoop(attempts);
-  const report = { campaignStartedAt, completedAt: new Date().toISOString(), baseUrl: BASE_URL, provider: PROVIDER, summary, attempts };
+  const report = { campaignStartedAt, completedAt: new Date().toISOString(), baseUrl: BASE_URL, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary, attempts };
   const stampedPath = resolve(REPORT_DIR, `core-loop-${campaignStartedAt.replace(/[:.]/g, "-")}.json`);
   writeFileSync(stampedPath, `${JSON.stringify(report, null, 2)}\n`);
   console.log(JSON.stringify(summary, null, 2));
