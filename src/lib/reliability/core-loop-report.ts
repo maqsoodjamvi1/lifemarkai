@@ -77,3 +77,28 @@ export function summarizeCoreLoop(attempts: CoreLoopAttempt[]): CoreLoopSummary 
       knownSandboxCosts.length === attempts.length,
   };
 }
+
+export interface CoreLoopReleaseGate {
+  eligible: boolean;
+  passed: boolean;
+  reasons: string[];
+}
+
+export function assessCoreLoopReleaseGate(
+  summary: CoreLoopSummary,
+  registrationPassed: boolean,
+  minimumAttempts = 50,
+): CoreLoopReleaseGate {
+  const reasons: string[] = [];
+  if (summary.attempts < minimumAttempts) reasons.push(`requires at least ${minimumAttempts} attempts`);
+  if (!registrationPassed) reasons.push("fresh registration and credit grant were not proven");
+  if (summary.generationSuccessRate < 0.95) reasons.push("generation success is below 95%");
+  if (summary.previewSuccessRate < 0.95) reasons.push("preview success is below 95%");
+  if (summary.deploymentSuccessRate < 0.95) reasons.push("deployment success is below 95%");
+  if (summary.publicUrlSuccessRate < 0.95) reasons.push("public URL success is below 95%");
+  if (summary.manualInterventionRate > 0.05) reasons.push("manual intervention exceeds 5%");
+  if (!summary.costTelemetryComplete) reasons.push("cost telemetry is incomplete");
+
+  const eligible = summary.attempts >= minimumAttempts;
+  return { eligible, passed: eligible && reasons.length === 0, reasons };
+}
