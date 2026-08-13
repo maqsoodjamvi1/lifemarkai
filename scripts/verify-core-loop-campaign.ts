@@ -66,6 +66,65 @@ type DoneEvent = {
 };
 
 type Deployment = { status?: string; url?: string; id?: string };
+type SandboxPreview = {
+  enabled?: boolean;
+  ok?: boolean;
+  ready?: boolean;
+  previewUrl?: string | null;
+  sandboxId?: string | null;
+  phase?: string | null;
+  phaseDetail?: string | null;
+  error?: string;
+};
+
+async function startRemotePreview(projectId: string, cookie: string) {
+  const start = await jsonFetch<SandboxPreview>(
+    `/api/projects/${projectId}/sandbox-preview`,
+    cookie,
+    { method: "POST", body: "{}" },
+  );
+  if (start.enabled === false) throw new Error("remote sandbox preview is not configured");
+  if (start.ok === false && start.phase === "error") {
+    throw new Error(start.error ?? start.phaseDetail ?? "remote preview failed to start");
+  }
+  if (start.previewUrl && start.sandboxId && start.ready !== false) {
+    return { previewUrl: start.previewUrl, sandboxId: start.sandboxId };
+  }
+
+  const deadline = Date.now() + DEPLOY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const state = await jsonFetch<SandboxPreview>(
+      `/api/projects/${projectId}/sandbox-preview?phaseOnly=1`,
+      cookie,
+    );
+    if (state.previewUrl && state.sandboxId && state.ok === true && state.phase === "ready") {
+      return { previewUrl: state.previewUrl, sandboxId: state.sandboxId };
+    }
+    if (state.phase === "error" || state.phase === "unreachable") {
+      throw new Error(state.error ?? state.phaseDetail ?? `remote preview entered ${state.phase}`);
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000));
+  }
+  throw new Error(`remote preview did not become ready within ${DEPLOY_TIMEOUT_MS}ms`);
+}
+
+async function stopRemotePreview(
+  projectId: string,
+  sandboxId: string,
+  cookie: string,
+) {
+  try {
+    await jsonFetch(
+      `/api/projects/${projectId}/sandbox-preview/stop`,
+      cookie,
+      { method: "POST", body: JSON.stringify({ sandboxId }) },
+    );
+  } catch (error) {
+    console.warn(
+      `Could not stop sandbox ${sandboxId}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
 
 type RegistrationProof = {
   attempted: boolean;
@@ -258,6 +317,7 @@ async function main() {
     const prompt = prompts[index % prompts.length];
     const startedAt = new Date().toISOString();
     let stage: CoreLoopStage = "project";
+    let sandboxId: string | null = null;
     const attempt: CoreLoopAttempt = {
       index: index + 1,
       prompt,
@@ -309,9 +369,15 @@ async function main() {
       if (!attempt.generationPassed) throw new Error("generation completed without files");
 
       stage = "preview";
+      const remotePreview = await startRemotePreview(project.id, cookie);
+      sandboxId = remotePreview.sandboxId;
+      const previewResponse = await fetch(remotePreview.previewUrl, { redirect: "follow" });
+      if (!previewResponse.ok) {
+        throw new Error(`remote preview returned ${previewResponse.status}`);
+      }
       const preview = await jsonFetch<{ ok?: boolean }>(`/api/projects/${project.id}/preview-verify`, cookie, {
         method: "POST",
-        body: "{}",
+        body: JSON.stringify({ previewUrl: remotePreview.previewUrl }),
       });
       attempt.previewPassed = preview.ok === true;
       if (!attempt.previewPassed) throw new Error("preview verification failed");
@@ -335,6 +401,9 @@ async function main() {
       attempt.error = error instanceof Error ? error.message : String(error);
       attempt.manualInterventionRequired = true;
     } finally {
+      if (attempt.projectId && sandboxId) {
+        await stopRemotePreview(attempt.projectId, sandboxId, cookie);
+      }
       if (attempt.projectId) {
         const costs = await projectCosts(admin, attempt.projectId, startedAt);
         attempt.aiCostCents = costs.aiCostCents;
