@@ -2283,6 +2283,7 @@ The user has expressed frustration. Do the following:
                 userId,
                 candidateFiles: Array.from(candidateByPath.values()) as unknown as import("@/types/database").ProjectFile[],
                 persistFixes: false,
+                maxRounds: coreLoop ? coreLoopPolicy.maxAutomaticRepairRounds : undefined,
                 emit: (status) => safeEnqueue(encoder.encode(`data: ${JSON.stringify({ verify_status: status })}\n\n`)),
               });
               if (!stagedVerification?.passed) {
