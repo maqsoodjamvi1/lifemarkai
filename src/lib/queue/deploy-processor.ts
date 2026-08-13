@@ -1,5 +1,5 @@
 import type { Job } from "bullmq";
-import { createAdminClient } from "@/lib/supabase/server";
+import { createClient } from "@supabase/supabase-js";
 import { publishBuild } from "@/lib/deploy/publish-build";
 import { buildLifemarkDeployUrl } from "@/lib/deploy/branded-deploy-url";
 import { logger } from "@/lib/logger";
@@ -17,7 +17,10 @@ export async function processDeployJob(job: Job<DeployJobPayload>) {
     parent,
     attributes: { "job.id": String(job.id ?? ""), "deployment.id": payload.deploymentId, "project.id": payload.projectId },
   }, async () => {
-    const supabase = createAdminClient() as any;
+    const supabaseUrl = process.env.VITE_SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!supabaseUrl || !serviceKey) throw new Error("Supabase service configuration is required");
+    const supabase = createClient(supabaseUrl, serviceKey, { auth: { autoRefreshToken: false, persistSession: false } }) as any;
     const { data: deployment } = await supabase
       .from("deployments")
       .select("id,status,project_id,user_id")
