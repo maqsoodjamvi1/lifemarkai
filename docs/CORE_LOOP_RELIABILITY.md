@@ -35,6 +35,19 @@ SUPABASE_SERVICE_ROLE_KEY=...
 The runner also accepts the legacy `NEXT_PUBLIC_SUPABASE_URL` and
 `NEXT_PUBLIC_SUPABASE_ANON_KEY` names already used by older environments.
 
+The release-proof lane is intentionally narrow:
+
+```dotenv
+CORE_LOOP_AI_MODEL=qwen/qwen3-coder
+CORE_LOOP_FALLBACK_MODEL=deepseek/deepseek-v4-flash
+CORE_LOOP_DEPLOY_PROVIDER=netlify
+CORE_LOOP_MAX_REPAIR_ROUNDS=2
+```
+
+These values are embedded in the JSON report. Campaign requests always use
+TanStack Build mode and bypass smart routing, Patch mode, clarification, scope
+questionnaires, and auxiliary editor workflows.
+
 Run the complete local workflow with one command. It starts Vite, waits for
 LifeMarkAI to become ready, runs 50 attempts, writes the report, and stops Vite:
 
