@@ -25,6 +25,15 @@ The production milestone is one reliable transaction:
 
 `npm run verify:core-loop` exercises and measures this complete loop.
 
+### Deterministic release-proof lane
+
+Reliability campaigns set `coreLoop: true`. That lane cannot be auto-routed to
+Chat, Plan, Patch, clarification, scope questionnaires, or smart model tiers. It
+uses the canonical policy in `src/lib/reliability/core-loop-policy.ts`: TanStack
+Build mode, one primary model with one safe fallback, server-verified preview,
+and one deployment provider. Reports embed the policy used for reproducibility.
+Normal editor sessions retain every advanced mode and provider.
+
 ## Runtime boundaries
 
 - `src/routes`: TanStack pages and HTTP APIs.
