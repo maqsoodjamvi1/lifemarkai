@@ -599,3 +599,80 @@ test("assessGenerationQuality rejects ERP without operations schema", () => {
 
   assert.ok(errors.some((e) => e.type === "missing_erp_data_backing"));
 });
+
+
+test("validateGeneratedFiles accepts a complete TanStack Start scaffold without Vite entry files", () => {
+  const files = [
+    {
+      path: "package.json",
+      language: "json",
+      content: JSON.stringify({
+        scripts: { dev: "vite dev", build: "vite build" },
+        dependencies: {
+          "@tanstack/react-start": "^1.168.0",
+          "@tanstack/react-router": "^1.170.0",
+          "@vitejs/plugin-react": "^4.3.0",
+          vite: "^7.0.0",
+          react: "^18.3.1",
+          "react-dom": "^18.3.1",
+        },
+      }),
+    },
+    { path: "tsconfig.json", language: "json", content: "{}" },
+    {
+      path: "vite.config.ts",
+      language: "typescript",
+      content: "import { defineConfig } from 'vite'; export default defineConfig({});",
+    },
+    {
+      path: "src/routes/__root.tsx",
+      language: "typescriptreact",
+      content: "export function RootComponent() { return <html><body /></html>; }",
+    },
+    {
+      path: "src/routes/index.tsx",
+      language: "typescriptreact",
+      content: "export default function Home() { return <main><h1>Home</h1></main>; }",
+    },
+  ];
+
+  const errors = validateGeneratedFiles(files);
+  const missing = errors
+    .filter((error) => error.type === "missing_config")
+    .map((error) => error.file);
+
+  assert.deepEqual(missing, []);
+  assert.ok(!errors.some((error) => error.file === "index.html"));
+  assert.ok(!errors.some((error) => error.file === "src/main.tsx"));
+  assert.ok(!errors.some((error) => error.file === "src/App.tsx"));
+});
+
+test("validateGeneratedFiles still requires the TanStack home route", () => {
+  const files = [
+    {
+      path: "package.json",
+      language: "json",
+      content: JSON.stringify({
+        dependencies: {
+          "@tanstack/react-start": "^1.168.0",
+          "@tanstack/react-router": "^1.170.0",
+        },
+      }),
+    },
+    { path: "tsconfig.json", language: "json", content: "{}" },
+    { path: "vite.config.ts", language: "typescript", content: "export default {};" },
+    {
+      path: "src/routes/__root.tsx",
+      language: "typescriptreact",
+      content: "export function RootComponent() { return <html><body /></html>; }",
+    },
+  ];
+
+  const errors = validateGeneratedFiles(files);
+  assert.ok(
+    errors.some(
+      (error) =>
+        error.type === "missing_config" && error.file === "src/routes/index.tsx",
+    ),
+  );
+});
