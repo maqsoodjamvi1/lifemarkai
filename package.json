@@ -36,6 +36,7 @@
     "cap:run:android": "cap run android",
     "verify:core-loop:one-flow": "node scripts/verify-core-loop-one-flow.mjs",
     "verify:core-loop:smoke": "node scripts/verify-core-loop-one-flow.mjs --smoke",
+    "verify:core-loop:release": "node scripts/verify-core-loop-release.mjs",
     "verify:private-infrastructure:preflight": "node scripts/verify-private-infrastructure.mjs --strict",
     "verify:private-infrastructure": "node scripts/verify-private-infrastructure.mjs --strict --run-core-loop",
     "worker:deploy": "node --import tsx scripts/deploy-worker.mjs",

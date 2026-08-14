@@ -89,7 +89,14 @@ LifeMarkAI to become ready, runs 50 attempts, writes the report, and stops Vite:
 npm run verify:core-loop:one-flow
 ```
 
-First use the one-attempt smoke command:
+To enforce the required order in one command—one complete smoke run, followed
+only on success by exactly 50 attempts—run:
+
+```bash
+npm run verify:core-loop:release
+```
+
+For diagnosis, the smoke phase remains available by itself:
 
 ```bash
 npm run verify:core-loop:smoke
