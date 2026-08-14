@@ -1,7 +1,7 @@
 import { createAdminClient } from "../../supabase/server.ts";
 import { canWriteProjectFiles,getProjectAccess } from "../../project/access.ts";
-import { generateAI } from "../generate.ts";
-import { DEFAULT_CHAT_MODEL,ECONOMY_CODING_MODEL,ESCALATION_MODEL } from "../model-defaults.ts";
+import { runGenerationStage } from "../chat/generation-service.ts";
+import { DEFAULT_CHAT_MODEL } from "../model-defaults.ts";
 import { applyModelAdapter } from "../model-catalog.ts";
 import { clampHistory } from "../context-clamp.ts";
 import {
@@ -13,10 +13,8 @@ UPGRADE_NOT_READY_GUARD,
 } from "@/lib/project/generation-profile";
 import { sendLowCreditsEmail } from "../../email/resend.ts";
 import {
-AUTO_FIX_SYSTEM_PROMPT,
 buildReactNativePrompt,
 buildProjectContext,
-buildRepairPrompt,
 } from "@/lib/ai/system-prompts";
 import { CHAT_SYSTEM_PROMPT } from "../prompts/chat.ts";
 import { PLAN_SYSTEM_PROMPT } from "../prompts/plan.ts";
@@ -58,8 +56,8 @@ buildDeterministicTextPatches,
 parseTextReplacementIntent,
 parseHeadingDescriptor,
 } from "@/lib/ai/text-edit";
-import { parseAIResponse,validateGeneratedFiles,assessGenerationQuality,shouldAutoFix,needsBuildContinuation,detectLanguage,type ParsedFile } from "../code-parser.ts";
-import { ensureCommonGeneratedSupportFiles } from "../generated-support-files.ts";
+import { parseAIResponse,shouldAutoFix,needsBuildContinuation,detectLanguage,type ParsedFile } from "../code-parser.ts";
+import { prepareGeneratedFiles,validateGenerationStage } from "../chat/validation-service.ts";
 import { ensureWebsiteChrome } from "../website-chrome.ts";
 import { alignGeneratedPackageJson,stripGeneratedRouteTree } from "../../preview/align-package-json.ts";
 import { StreamingFileExtractor } from "../streaming-file-extractor.ts";
@@ -79,13 +77,14 @@ parallelSubagentsEnabled,
 planSubagents,
 runParallelSubagents,
 } from "@/lib/ai/subagents-parallel";
-import { computeCreditCost,maxCreditCostForMode } from "../credit-cost.ts";
 import {
-cancelCreditReservation,
+cancelStageCredits,
 claimDailyCredits,
-reserveCredits,
-settleCreditReservation,
-} from "@/lib/credits";
+computeCreditCost,
+maxCreditCostForMode,
+reserveStageCredits,
+settleStageCredits,
+} from "../chat/accounting-service.ts";
 import type { AutoWireResult,SelfVerifyResult } from "./result-types.ts";
 import { autoWireAi } from "../auto-wire-ai.ts";
 import { selectRelevantFiles } from "../file-selector.ts";
@@ -110,9 +109,9 @@ maxOutputTokensForRequest,
 resolveBudgetAwareModel,
 } from "@/lib/ai/cost-controls";
 import { resolveSmartModel } from "../editor-intelligence.ts";
-import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
+import { commitGenerationStage } from "../chat/commit-service.ts";
 import { buildStaticGenerationPrompt } from "../prompts/static-build.ts";
-import { commitGeneratedFiles } from "../chat/commit-generated-files.ts";
+import { runRepairStage } from "../chat/repair-service.ts";
 import { buildClarificationPrompt,parseClarifyingQuestions } from "../chat/clarification.ts";
 import { resolveChatRequestContext } from "../chat/request-context.ts";
 import { createStreamSink } from "../chat/sse-stream.ts";
@@ -622,7 +621,7 @@ export async function handleAiChat(req: Request) {
 
     // ── Clarify-first (Lovable): questionnaire BEFORE research/subagents/build ──
     if (runClarifyFirst) {
-      const clarifyReservation = await reserveCredits(supabase, {
+      const clarifyReservation = await reserveStageCredits(supabase, {
         userId,
         amount: maxCreditCostForMode("chat"),
         action: "clarify_message",
@@ -665,7 +664,7 @@ export async function handleAiChat(req: Request) {
           let questionsJson = "";
           let reservationFinalized = false;
           try {
-            const clarifyResult = await generateAI(
+            const clarifyResult = await runGenerationStage(
               {
                 model: DEFAULT_CHAT_MODEL,
                 messages: [
@@ -690,7 +689,7 @@ export async function handleAiChat(req: Request) {
               mode: "chat",
               tokensUsed: clarifyResult.tokensUsed,
             });
-            const remaining = await settleCreditReservation(
+            const remaining = await settleStageCredits(
               supabase,
               clarifyReservation.id,
               clarifyCost,
@@ -771,13 +770,13 @@ export async function handleAiChat(req: Request) {
             if (!reservationFinalized) {
               try {
                 if (questionsJson.trim()) {
-                  await settleCreditReservation(
+                  await settleStageCredits(
                     supabase,
                     clarifyReservation.id,
                     clarifyReservation.amount,
                   );
                 } else {
-                  await cancelCreditReservation(supabase, clarifyReservation.id);
+                  await cancelStageCredits(supabase, clarifyReservation.id);
                 }
                 reservationFinalized = true;
               } catch (reservationError) {
@@ -1374,7 +1373,7 @@ The user has expressed frustration. Do the following:
     ];
 
     const reservationAmount = maxCreditCostForMode(mode);
-    const creditReservation = await reserveCredits(supabase, {
+    const creditReservation = await reserveStageCredits(supabase, {
       userId,
       amount: reservationAmount,
       action: `${mode}_message`,
@@ -1560,7 +1559,7 @@ The user has expressed frustration. Do the following:
           : null;
 
         try {
-          const result = await generateAI(
+          const result = await runGenerationStage(
             {
               model: effectiveModel,
               messages,
@@ -1601,7 +1600,7 @@ The user has expressed frustration. Do the following:
               );
               let contChunk = "";
               try {
-                await generateAI({
+                await runGenerationStage({
                   model: effectiveModel,
                   messages: [
                     ...messages,
@@ -1768,7 +1767,7 @@ The user has expressed frustration. Do the following:
                           .filter((p) => /\.(tsx|jsx|html)$/i.test(p))
                           .slice(0, 12)
                           .join(", ");
-                await generateAI({
+                await runGenerationStage({
                   model: effectiveModel,
                   messages: [
                     {
@@ -2041,19 +2040,19 @@ The user has expressed frustration. Do the following:
               });
             }
 
-            let finalFiles = ensureCommonGeneratedSupportFiles(parsed.files, existingFiles);
+            let finalFiles = prepareGeneratedFiles(parsed.files, existingFiles);
 
             // ── Validation pass (up to 3 enrichment rounds on large greenfield) ─
             if (finalFiles.length > 0) {
               const maxEnrichPasses = isMajorGreenfieldBuild(message, fileCount) ? 3 : 2;
               for (let enrichPass = 0; enrichPass < maxEnrichPasses; enrichPass++) {
-                const correctnessErrors = validateGeneratedFiles(finalFiles, existingFiles);
-                const richnessErrors = assessGenerationQuality(finalFiles, existingFiles, {
+                const {
+                  validationErrors,
+                  needsEnrichment,
+                } = validateGenerationStage(finalFiles, existingFiles, {
                   minFiles: buildIntent?.minFiles,
                   appType: buildIntent?.appType,
                 });
-                const validationErrors = [...correctnessErrors, ...richnessErrors];
-                const needsEnrichment = richnessErrors.length > 0;
 
                 if (!shouldAutoFix(validationErrors) || validationErrors.length === 0) {
                   break;
@@ -2076,43 +2075,21 @@ The user has expressed frustration. Do the following:
                 });
 
                 try {
-                  const repairPrompt = buildRepairPrompt(
-                    finalFiles,
-                    validationErrors.map((e) => e.message),
-                    needsEnrichment ? buildIntent?.blueprint : undefined,
-                  );
-                  let repairContent = "";
-                  const repairModel =
-                    needsEnrichment || isMajorGreenfieldBuild(message, fileCount)
-                      ? ESCALATION_MODEL
-                      : simpleEconomyRequest
-                        ? ECONOMY_CODING_MODEL
-                        : ESCALATION_MODEL;
-                  await generateAI({
-                    model: repairModel,
-                    messages: [
-                      {
-                        role: "system" as const,
-                        content: needsEnrichment
-                          ? "You are LifemarkAI Build Engine. Follow the user message exactly and respond with ONLY the required JSON object."
-                          : AUTO_FIX_SYSTEM_PROMPT,
-                      },
-                      { role: "user" as const, content: repairPrompt },
-                    ],
+                  const repaired = await runRepairStage({
+                    files: finalFiles,
+                    existingFiles,
+                    errors: validationErrors.map((error) => error.message),
+                    blueprint: buildIntent?.blueprint,
+                    needsEnrichment,
+                    majorGreenfield: isMajorGreenfieldBuild(message, fileCount),
+                    simpleEconomyRequest,
                     maxTokens: outputMaxTokens,
-                    stream: true,
-                    jsonMode: true,
-                    onChunk: (chunk) => { repairContent += chunk; },
-                  }, { projectId, userId, task: "chat.build.autofix" });
-
-                  const repaired = parseAIResponse(repairContent);
-                  if (repaired.files.length === 0) {
-                    break;
-                  }
-                  const mergedMap = new Map(finalFiles.map((f) => [f.path, f]));
-                  for (const rf of repaired.files) mergedMap.set(rf.path, rf);
-                  finalFiles = ensureCommonGeneratedSupportFiles(Array.from(mergedMap.values()), existingFiles);
-                  tokensUsed += 1000;
+                    projectId,
+                    userId,
+                  });
+                  if (!repaired) break;
+                  finalFiles = repaired.files;
+                  tokensUsed += repaired.tokenEstimate;
                 } catch (fixErr) {
                   logger.warn("ai.chat.autofix_failed", { projectId, error: String(fixErr) });
                   break;
@@ -2139,7 +2116,7 @@ The user has expressed frustration. Do the following:
                   logger.warn("ai.chat.no_files_parsed", { projectId, model: effectiveModel, unlabelledFences: unlabelled });
               try {
                 let retryContent = "";
-                await generateAI({
+                await runGenerationStage({
                   model: effectiveModel,
                   messages: [
                     ...messages,
@@ -2161,7 +2138,7 @@ The user has expressed frustration. Do the following:
                 }, { projectId, userId, task: "chat.build.format_retry" });
                 const retryParsed = parseAIResponse(retryContent);
                 if (retryParsed.files.length > 0) {
-                  finalFiles = ensureCommonGeneratedSupportFiles(retryParsed.files, existingFiles);
+                  finalFiles = prepareGeneratedFiles(retryParsed.files, existingFiles);
                   fullContent = retryContent; // persist the output that actually contained files
                   tokensUsed += 1500; // rough estimate for the retry pass
                 } else {
@@ -2347,14 +2324,11 @@ The user has expressed frustration. Do the following:
               // streamed fragment reaches canonical project_files, so parse,
               // continuation, or disconnect failures leave the prior project
               // intact instead of producing a half-updated application.
-              parsedFiles = await commitGeneratedFiles(supabase, projectId, parsedFiles);
-              for (const file of parsedFiles) {
-                // Sync the final (sanitized/repaired) content into the running
-                // sandbox — the container was created from the scaffold before
-                // the build finished, so without this the preview keeps the
-                // scaffold until it is destroyed by hand.
-                pushFileToRunningSandbox(supabase, projectId, file.path, file.content);
-              }
+              parsedFiles = await commitGenerationStage(
+                supabase,
+                projectId,
+                parsedFiles,
+              );
 
             }
           }
@@ -2613,7 +2587,7 @@ The user has expressed frustration. Do the following:
           // event the client actually reads.
           let remainingCredits: number;
           try {
-            const settled = await settleCreditReservation(
+            const settled = await settleStageCredits(
               supabase,
               creditReservation.id,
               creditCost,
@@ -2787,14 +2761,14 @@ The user has expressed frustration. Do the following:
                   creditReservation.amount,
                   finalCreditCost ?? creditReservation.amount,
                 );
-                const remaining = await settleCreditReservation(
+                const remaining = await settleStageCredits(
                   supabase,
                   creditReservation.id,
                   fallbackCost,
                 );
                 reservationFinalized = remaining != null;
               } else {
-                await cancelCreditReservation(supabase, creditReservation.id);
+                await cancelStageCredits(supabase, creditReservation.id);
                 reservationFinalized = true;
               }
             } catch (reservationError) {
