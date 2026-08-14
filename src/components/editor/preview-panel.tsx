@@ -34,10 +34,10 @@ import { buildStaticPreview } from "@/lib/preview/build-static-preview";
 import { resolveProjectRuntime, type ProjectRuntime } from "@/lib/project/runtime";
 import { filesContentSignature } from "@/lib/preview/files-signature";
 import { getRefreshEffectiveFiles } from "./preview-panel-utils";
-import {
-isWebContainerPreviewEnabled,
-type PreviewEngine,
-} from "@/lib/preview/resolve-preview-engine";
+import type { PreviewEngine } from "@/lib/preview/resolve-preview-engine";
+import { PhoneFrame,TabletFrame,type DeviceSize } from "./preview-device-frame";
+import { usePreviewEnginePolicy } from "./use-preview-engine-policy";
+import { usePreviewMachine,type PreviewMachineState } from "./use-preview-machine";
 import {
 isSamePreviewOrigin,
 normalizeSandboxPathname,
@@ -63,8 +63,6 @@ shouldShowRawPreviewDiagnostics,
 import { createClient } from "@/lib/supabase/client";
 
 // Visual Edit Bridge — injected into Sandpack iframe via files map
-type DeviceSize = "mobile" | "tablet" | "desktop";
-type PreviewMachineState = "idle" | "building" | "loading" | "ready" | "error" | "unavailable";
 
 const PREVIEW_RELEVANT_FILE_RE = /(^|\/)(package\.json|index\.html|vite\.config\.[cm]?[jt]s|tailwind\.config\.[cm]?[jt]s|postcss\.config\.[cm]?js)$|(^|\/)(src|app|components|pages|lib|hooks|styles|public|assets)\//i;
 const PREVIEW_RELEVANT_EXT_RE = /\.(tsx?|jsx?|css|scss|sass|html|json|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf)$/i;
@@ -144,101 +142,6 @@ const BG_COLORS = [
   "bg-transparent","bg-white","bg-black","bg-gray-100",
   "bg-blue-500","bg-green-500","bg-red-500","bg-yellow-500",
 ];
-
-// ── Device frame components ───────────────────────────────────────────────────
-
-function useScaleToFit(naturalW: number, naturalH: number) {
-  const hostRef = useRef<HTMLDivElement>(null);
-  const [scale, setScale] = useState(1);
-  useEffect(() => {
-    const el = hostRef.current;
-    if (!el) return;
-    const measure = () => {
-      const { clientWidth: w, clientHeight: h } = el;
-      if (w < 8 || h < 8) return;
-      setScale(Math.min(1, w / naturalW, h / naturalH));
-    };
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [naturalW, naturalH]);
-  return { hostRef, scale };
-}
-
-function PhoneFrame({ children }: { children: React.ReactNode }) {
-  const { hostRef, scale } = useScaleToFit(390, 812);
-  return (
-    <div ref={hostRef} data-device-container className="relative flex h-full w-full items-center justify-center overflow-hidden py-4">
-      {/* Outer bezel — ScaledIframe: scale-to-fit viewport */}
-      <div
-        data-scaled-iframe
-        className="relative flex flex-col rounded-[44px] overflow-hidden shadow-[0_0_0_2px_#3a3a3c,0_0_0_8px_#1c1c1e,0_20px_60px_rgba(0,0,0,0.7)] origin-center"
-        style={{
-          width: 390,
-          height: 812,
-          background: "#000",
-          flexShrink: 0,
-          transform: `scale(${scale})`,
-        }}
-      >
-        {/* Dynamic Island */}
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 w-28 h-7 bg-black rounded-full z-20 flex items-center justify-center gap-2">
-          <div className="w-2.5 h-2.5 rounded-full bg-[#1a1a1a] border border-[#2a2a2a]" />
-          <div className="w-3.5 h-3.5 rounded-full bg-[#1a1a1a] border border-[#2a2a2a]" />
-        </div>
-        {/* Status bar */}
-        <div className="relative z-10 flex items-center justify-between px-8 pt-4 pb-1 text-white bg-transparent pointer-events-none">
-          <span className="text-[13px] font-semibold">9:41</span>
-          <div className="flex items-center gap-1.5 text-white">
-            <svg width="17" height="12" viewBox="0 0 17 12" fill="currentColor" opacity="0.9"><rect x="0" y="3" width="3" height="9" rx="1"/><rect x="4.5" y="2" width="3" height="10" rx="1"/><rect x="9" y="0" width="3" height="12" rx="1"/><rect x="13.5" y="0" width="3" height="12" rx="1" opacity="0.3"/></svg>
-            <svg width="16" height="12" viewBox="0 0 16 12" fill="currentColor" opacity="0.9"><path d="M8 2.4C5.1 2.4 2.5 3.7 0.8 5.8L2.2 7.2C3.5 5.5 5.6 4.4 8 4.4s4.5 1.1 5.8 2.8l1.4-1.4C13.5 3.7 10.9 2.4 8 2.4zM8 6.4c-1.6 0-3 .7-4 1.8L5.4 9.6C6.1 8.8 7 8.4 8 8.4s1.9.4 2.6 1.2l1.4-1.4C11 7.1 9.6 6.4 8 6.4zM8 10.4c-.6 0-1.1.2-1.5.5L8 13l1.5-2.1c-.4-.3-.9-.5-1.5-.5z"/></svg>
-            <svg width="25" height="12" viewBox="0 0 25 12" fill="currentColor" opacity="0.9"><rect x="0" y="1" width="21" height="10" rx="2.5" stroke="white" strokeWidth="1" fill="none" opacity="0.4"/><rect x="22" y="4" width="3" height="4" rx="1"/><rect x="1.5" y="2.5" width="16" height="7" rx="1.5"/></svg>
-          </div>
-        </div>
-        {/* Screen content */}
-        <div className="flex-1 overflow-hidden">{children}</div>
-        {/* Home indicator */}
-        <div className="flex justify-center pb-2 pt-1 bg-black">
-          <div className="w-28 h-1 bg-white/30 rounded-full" />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TabletFrame({ children }: { children: React.ReactNode }) {
-  const { hostRef, scale } = useScaleToFit(768, 680);
-  return (
-    <div ref={hostRef} data-device-container className="relative flex h-full w-full items-center justify-center overflow-hidden py-4">
-      <div
-        data-scaled-iframe
-        className="relative rounded-[24px] overflow-hidden shadow-[0_0_0_2px_#3a3a3c,0_0_0_10px_#1c1c1e,0_20px_60px_rgba(0,0,0,0.7)] origin-center"
-        style={{
-          width: 768,
-          height: 680,
-          background: "#000",
-          flexShrink: 0,
-          transform: `scale(${scale})`,
-        }}
-      >
-        {/* Camera */}
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 w-2 h-2 bg-[#2a2a2a] rounded-full z-20 border border-[#3a3a3c]" />
-        {/* Status bar */}
-        <div className="relative z-10 flex items-center justify-between px-6 pt-2 pb-1 text-white bg-transparent pointer-events-none">
-          <span className="text-[12px] font-semibold">9:41</span>
-          <div className="flex items-center gap-1.5">
-            <svg width="16" height="11" viewBox="0 0 17 12" fill="currentColor" opacity="0.9"><rect x="0" y="3" width="3" height="9" rx="1"/><rect x="4.5" y="2" width="3" height="10" rx="1"/><rect x="9" y="0" width="3" height="12" rx="1"/></svg>
-            <svg width="22" height="11" viewBox="0 0 25 12" fill="currentColor" opacity="0.9"><rect x="0" y="1" width="21" height="10" rx="2.5" stroke="white" strokeWidth="1" fill="none" opacity="0.4"/><rect x="22" y="4" width="3" height="4" rx="1"/><rect x="1.5" y="2.5" width="16" height="7" rx="1.5"/></svg>
-          </div>
-        </div>
-        <div className="flex-1 overflow-hidden h-[calc(100%-32px)]">{children}</div>
-        {/* Home bar */}
-        <div className="absolute bottom-1 left-1/2 -translate-x-1/2 w-20 h-1 bg-white/20 rounded-full" />
-      </div>
-    </div>
-  );
-}
 
 export function PreviewPanel({
   files,
@@ -396,35 +299,20 @@ export function PreviewPanel({
     return () => { cancelled = true; };
   }, [projectId]);
 
-  const [previewMachineState, setPreviewMachineState] = useState<PreviewMachineState>("idle");
-  const previewBuildShaRef = useRef<string>("");
-  const previewEngineRef = useRef(previewEngine);
-  previewEngineRef.current = previewEngine;
-  // Stable forever — never put this in effect deps that also setState, or a
-  // new callback identity + always-new routeNav object causes Maximum update depth.
-  const transitionPreviewMachine = useCallback((next: PreviewMachineState, reason: string) => {
-    setPreviewMachineState((prev) => {
-      if (prev === next) return prev;
-      const payload = {
-        from: prev,
-        to: next,
-        reason,
-        engine: previewEngineRef.current,
-        buildSha: previewBuildShaRef.current,
-        at: Date.now(),
-      };
-      // Defer side effects — calling setState inside a setState updater can cascade
-      // into Maximum update depth with parent error-report handlers.
-      queueMicrotask(() => {
-        window.dispatchEvent(new CustomEvent("lifemark-preview-machine-transition", { detail: payload }));
-        setConsoleLines((lines) => [
-          ...lines.slice(-99),
-          { type: "log", text: `[preview] ${payload.from} -> ${payload.to}: ${payload.reason}` },
-        ]);
-      });
-      return next;
-    });
-  }, []);
+  const {
+    previewMachineState,
+    previewBuildShaRef,
+    previewEngineRef,
+    transitionPreviewMachine,
+  } = usePreviewMachine(previewEngine, (transition) => {
+    setConsoleLines((lines) => [
+      ...lines.slice(-99),
+      {
+        type: "log",
+        text: `[preview] ${transition.from} -> ${transition.to}: ${transition.reason}`,
+      },
+    ]);
+  });
   // Real cloud sandbox preview (Modal — Lovable parity).
   const {
     previewUrl: sandboxUrl,
@@ -884,33 +772,26 @@ export function PreviewPanel({
     })();
   }, [toast, projectId]);
 
-  // MODAL-ONLY PREVIEW. The Modal cloud sandbox is the single, sole preview
-  // engine — the WebContainer / esbuild / srcdoc in-browser engines are fully
-  // retired (their code below is unreachable and kept only until physically
-  // deleted). When Modal is unavailable we show a neutral "preview unavailable"
-  // pane rather than switching engines. Rationale: one real engine = exact
-  // parity with the deployed app + no engine-switch state races.
-  // Was hardcoded `false` while the product was Modal-only. Now driven by the
-  // real flag so NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1 actually takes effect —
-  // leaving this pinned would have made the env var look broken.
-  const staticRuntime = resolveProjectRuntime(runtime, framework, files) === "static";
-  const webContainerAllowed = !staticRuntime && isWebContainerPreviewEnabled();
-  const sandboxAvailable = sandboxEnabled;
+  // Docker-backed remote sandbox is the authoritative product preview.
+  // WebContainer is an explicit fallback only; it is never selected merely
+  // because the server sandbox is temporarily unavailable.
+  const {
+    engine: selectedPreviewEngine,
+    staticRuntime,
+    webContainerEnabled: webContainerAllowed,
+    sandboxAvailable,
+  } = usePreviewEnginePolicy({
+    files,
+    framework,
+    runtime,
+    sandboxEnabled,
+    useWebContainers,
+  });
   useEffect(() => {
-    // "sandbox" whenever there are files (Modal renders them); "fallback" only
-    // as the no-files empty state, which renders a neutral message — never an
-    // in-browser engine.
-    setPreviewEngine((prev) => {
-      const next = files.length === 0
-        ? "unavailable"
-        : staticRuntime
-          ? "static"
-        : webContainerAllowed && (useWebContainers || !sandboxEnabled)
-          ? "webcontainer"
-          : "sandbox";
-      return prev === next ? prev : next;
-    });
-  }, [files.length, staticRuntime, useWebContainers, sandboxEnabled, webContainerAllowed]);
+    setPreviewEngine((previous) =>
+      previous === selectedPreviewEngine ? previous : selectedPreviewEngine,
+    );
+  }, [selectedPreviewEngine]);
 
   // Boot the in-browser runtime when this engine is selected.
   //
