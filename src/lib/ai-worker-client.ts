@@ -12,6 +12,22 @@ const BASE = `http://${HOST}:${PORT}`;
 
 let child: ChildProcess | null = null;
 let starting: Promise<void> | null = null;
+let cleanupRegistered = false;
+
+function stopOwnedWorker(): void {
+  if (child && child.exitCode === null && !child.killed) {
+    child.kill("SIGTERM");
+  }
+}
+
+function registerWorkerCleanup(): void {
+  if (cleanupRegistered) return;
+  cleanupRegistered = true;
+  // The worker is intentionally long-lived during dev, but it must not outlive
+  // the Vite SSR process that owns it. Otherwise the next reliability run cannot
+  // bind its well-known port (3010).
+  process.once("exit", stopOwnedWorker);
+}
 
 function workerScript(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -52,6 +68,7 @@ async function ensureWorker(): Promise<void> {
         return;
       }
       const script = workerScript();
+      registerWorkerCleanup();
       child = spawn(process.execPath, [script], {
         cwd: path.dirname(script),
         env: {
