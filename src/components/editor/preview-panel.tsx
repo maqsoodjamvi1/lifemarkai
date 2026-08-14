@@ -905,7 +905,7 @@ export function PreviewPanel({
         ? "unavailable"
         : staticRuntime
           ? "static"
-        : useWebContainers || (!sandboxEnabled && webContainerAllowed)
+        : webContainerAllowed && (useWebContainers || !sandboxEnabled)
           ? "webcontainer"
           : "sandbox";
       return prev === next ? prev : next;
