@@ -60,6 +60,7 @@ const REQUIRE_REGISTRATION_PROOF =
 
 type DoneEvent = {
   done?: boolean;
+  error?: string;
   fileCount?: number;
   creditsUsed?: number;
   verification?: { passed?: boolean; fixesApplied?: number; errors?: string[] };
@@ -140,7 +141,6 @@ function registrationEmail(baseEmail: string) {
 }
 
 async function proveFreshRegistration(
-  client: SupabaseClient,
   admin: SupabaseClient | null,
 ): Promise<RegistrationProof> {
   if (!admin) {
@@ -154,14 +154,18 @@ async function proveFreshRegistration(
 
   const email = registrationEmail(EMAIL);
   const password = `CoreLoop-${randomUUID()}-aA1!`;
-  const { data, error } = await client.auth.signUp({ email, password });
+  const { data, error } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+  });
   const userId = data.user?.id;
   if (error || !userId) {
     return {
       attempted: true,
       passed: false,
       creditsGranted: null,
-      error: error?.message ?? "Supabase signup returned no user",
+      error: error?.message ?? "Supabase admin createUser returned no user",
     };
   }
 
@@ -239,6 +243,7 @@ async function readDoneEvent(response: Response): Promise<DoneEvent> {
       if (!payload) continue;
       try {
         const event = JSON.parse(payload) as DoneEvent;
+        if (event.error) throw new Error(event.error);
         if (event.done) return event;
       } catch {
         // Ignore heartbeats and incomplete/non-JSON events.
@@ -289,7 +294,7 @@ async function main() {
   const client = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   const admin = serviceKey ? createClient(SUPABASE_URL, serviceKey) : null;
-  const registrationProof = await proveFreshRegistration(client, admin);
+  const registrationProof = await proveFreshRegistration(admin);
   if (REQUIRE_REGISTRATION_PROOF && !registrationProof.passed) {
     throw new Error(`fresh registration proof failed: ${registrationProof.error ?? "unknown error"}`);
   }

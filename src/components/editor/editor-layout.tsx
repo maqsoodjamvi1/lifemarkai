@@ -1561,7 +1561,7 @@ export function EditorLayout({
                 badgeHidden={(project as { badge_hidden?: boolean }).badge_hidden ?? false}
                 projectId={project.id}
                 credits={uiCredits}
-                useWebContainers={false}
+                useWebContainers
                 isPublic={!!project.is_public}
                 onOpenPanel={handleOpenPanel}
                 onSendAnnotatedToChat={(prompt, img) => { setMobilePaneActive("left"); setLeftPanel("chat"); setPendingBuildFromFile({ prompt, imageBase64: img }); }}
