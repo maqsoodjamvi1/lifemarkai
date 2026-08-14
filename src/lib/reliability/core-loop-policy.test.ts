@@ -4,12 +4,24 @@ import { getCoreLoopPolicy,isCoreLoopRequest } from "./core-loop-policy.ts";
 
 test("core-loop policy has one deterministic default path", () => {
   assert.deepEqual(getCoreLoopPolicy({}), {
-    contractVersion: 1,
+    contractVersion: 2,
     framework: "tanstack",
     mode: "build",
     primaryModel: "qwen/qwen3-coder",
     fallbackModel: "deepseek/deepseek-v4-flash",
     previewStrategy: "server-verified",
+    sandboxProvider: "docker",
+    browserFallback: "webcontainer",
+    apiSurface: [
+      "POST /api/projects",
+      "POST /api/ai/chat",
+      "POST /api/projects/:projectId/sandbox-preview",
+      "GET /api/projects/:projectId/sandbox-preview",
+      "POST /api/projects/:projectId/sandbox-preview/stop",
+      "POST /api/projects/:projectId/preview-verify",
+      "POST /api/deploy",
+      "GET /api/deploy",
+    ],
     deploymentProvider: "netlify",
     maxAutomaticRepairRounds: 2,
   });

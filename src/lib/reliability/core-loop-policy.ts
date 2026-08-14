@@ -1,10 +1,15 @@
+import { CORE_LOOP_API_SURFACE } from "./core-loop-api-surface.ts";
+
 export type CoreLoopPolicy = {
-  contractVersion: 1;
+  contractVersion: 2;
   framework: "tanstack";
   mode: "build";
   primaryModel: string;
   fallbackModel: string;
   previewStrategy: "server-verified";
+  sandboxProvider: "docker";
+  browserFallback: "webcontainer";
+  apiSurface: string[];
   deploymentProvider: string;
   maxAutomaticRepairRounds: number;
 };
@@ -22,7 +27,7 @@ const positiveInt = (value: string | undefined, fallback: number) => {
  */
 export function getCoreLoopPolicy(env: Environment = process.env): CoreLoopPolicy {
   return {
-    contractVersion: 1,
+    contractVersion: 2,
     framework: "tanstack",
     mode: "build",
     primaryModel:
@@ -35,6 +40,9 @@ export function getCoreLoopPolicy(env: Environment = process.env): CoreLoopPolic
       env.OPENROUTER_SAFE_FALLBACK_MODEL?.trim() ||
       "deepseek/deepseek-v4-flash",
     previewStrategy: "server-verified",
+    sandboxProvider: "docker",
+    browserFallback: "webcontainer",
+    apiSurface: CORE_LOOP_API_SURFACE.map((entry) => `${entry.method} ${entry.path}`),
     deploymentProvider: env.CORE_LOOP_DEPLOY_PROVIDER?.trim() || "netlify",
     maxAutomaticRepairRounds: positiveInt(env.CORE_LOOP_MAX_REPAIR_ROUNDS, 2),
   };

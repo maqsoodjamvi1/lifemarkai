@@ -31,13 +31,13 @@ import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
 import { EMPTY_PREVIEW_HTML } from "@/lib/preview/build-fallback-html";
 import { buildStaticPreview } from "@/lib/preview/build-static-preview";
-import { resolveProjectRuntime, type ProjectRuntime } from "@/lib/project/runtime";
+import type { ProjectRuntime } from "@/lib/project/runtime";
 import { filesContentSignature } from "@/lib/preview/files-signature";
 import { getRefreshEffectiveFiles } from "./preview-panel-utils";
 import type { PreviewEngine } from "@/lib/preview/resolve-preview-engine";
 import { PhoneFrame,TabletFrame,type DeviceSize } from "./preview-device-frame";
 import { usePreviewEnginePolicy } from "./use-preview-engine-policy";
-import { usePreviewMachine,type PreviewMachineState } from "./use-preview-machine";
+import { usePreviewMachine } from "./use-preview-machine";
 import {
 isSamePreviewOrigin,
 normalizeSandboxPathname,
