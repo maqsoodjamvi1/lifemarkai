@@ -110,6 +110,7 @@ resolveBudgetAwareModel,
 } from "@/lib/ai/cost-controls";
 import { resolveSmartModel } from "../editor-intelligence.ts";
 import { commitGenerationStage } from "../chat/commit-service.ts";
+import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 import { buildStaticGenerationPrompt } from "../prompts/static-build.ts";
 import { runRepairStage } from "../chat/repair-service.ts";
 import { buildClarificationPrompt,parseClarifyingQuestions } from "../chat/clarification.ts";
