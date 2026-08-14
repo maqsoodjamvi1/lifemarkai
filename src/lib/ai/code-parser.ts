@@ -1348,10 +1348,15 @@ export function validateGeneratedFiles(
   if (isNewProject) {
     const required = isNextProject
       ? ["package.json", "tsconfig.json", "app/layout.tsx", "app/page.tsx"]
-      : [
-          "index.html", "vite.config.ts", "tsconfig.json",
-          "package.json", "src/main.tsx", "src/App.tsx",
-        ];
+      : isTanStackProject
+        ? [
+            "package.json", "tsconfig.json", "vite.config.ts",
+            "src/routes/__root.tsx", "src/routes/index.tsx",
+          ]
+        : [
+            "index.html", "vite.config.ts", "tsconfig.json",
+            "package.json", "src/main.tsx", "src/App.tsx",
+          ];
     for (const req of required) {
       if (!allPaths.has(req)) {
         errors.push({
