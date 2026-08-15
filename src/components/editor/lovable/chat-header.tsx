@@ -84,17 +84,13 @@ export function LovableChatHeader({
     <div
       data-chat-header
       className={cn(
-        // Lovable dump: the chat panel has NO header row — the timeline starts
-        // directly under the top bar. Utilities live in the composer "+" menu
-        // (see composer-toolbar) and via chat-settings events; keep this
-        // mounted-but-hidden so nothing regresses if a flag re-enables it.
-        "hidden",
-        "items-center gap-2 px-3 py-2 border-b border-[color:var(--border-translucent)] shrink-0",
-        "bg-[var(--bg-base)]/90 backdrop-blur-sm",
+        "flex h-11 items-center gap-2 px-3 border-b border-[color:var(--border-translucent)] shrink-0",
+        "bg-[var(--bg-base)]/95 backdrop-blur-xl",
         className,
       )}
     >
-      <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-[500] text-[var(--fg-primary)] bg-[var(--bg-secondary-pulse)] border border-[color:var(--border-default)] shadow-surface-xs">
+      <span className="text-xs font-semibold tracking-tight text-[var(--fg-primary)]">AI workspace</span>
+      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-[600] capitalize text-[#1F55F1] bg-blue-500/10 border border-blue-500/15">
         {MODE_LABELS[mode] ?? mode}
       </span>
       <span className="text-[10px] text-[var(--fg-quaternary)] tabular-nums">{creditLabel}</span>
