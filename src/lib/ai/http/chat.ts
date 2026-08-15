@@ -57,9 +57,7 @@ parseTextReplacementIntent,
 parseHeadingDescriptor,
 } from "@/lib/ai/text-edit";
 import { parseAIResponse,shouldAutoFix,needsBuildContinuation,detectLanguage,type ParsedFile } from "../code-parser.ts";
-import { prepareGeneratedFiles,validateGenerationStage } from "../chat/validation-service.ts";
-import { ensureWebsiteChrome } from "../website-chrome.ts";
-import { alignGeneratedPackageJson,stripGeneratedRouteTree } from "../../preview/align-package-json.ts";
+import { generationValidationSignature,normalizeGenerationStage,prepareGeneratedFiles,validateGenerationStage } from "../chat/validation-service.ts";
 import { StreamingFileExtractor } from "../streaming-file-extractor.ts";
 import { logger } from "../../logger.ts";
 import { getProjectSchemaContext } from "../../supabase/schema-reader.ts";
@@ -117,7 +115,7 @@ import { buildClarificationPrompt,parseClarifyingQuestions } from "../chat/clari
 import { resolveChatRequestContext } from "../chat/request-context.ts";
 import { createStreamSink } from "../chat/sse-stream.ts";
 import { createDeployActionResponse } from "../chat/deploy-action.ts";
-import { buildControlledTemplatePrompt,lockControlledDependencyVersions,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
+import { buildControlledTemplatePrompt,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
 import { getCoreLoopPolicy,isCoreLoopRequest } from "../../reliability/core-loop-policy.ts";
 
@@ -2041,11 +2039,38 @@ The user has expressed frustration. Do the following:
               });
             }
 
-            let finalFiles = prepareGeneratedFiles(parsed.files, existingFiles);
+            const normalizeBuildCandidate = (candidate: ParsedFile[]): ParsedFile[] => {
+              if (mode !== "build" || candidate.length === 0) {
+                return prepareGeneratedFiles(candidate, existingFiles);
+              }
+              const normalized = normalizeGenerationStage(candidate, existingFiles, {
+                prompt: costPrompt,
+                framework,
+                appType: buildIntent?.appType,
+                brand: projectData?.name ?? undefined,
+              });
+              if (normalized.alignedDependencies.length > 0) {
+                logger.info("ai.chat.package_pins_aligned", {
+                  projectId,
+                  changed: normalized.alignedDependencies,
+                });
+              }
+              if (normalized.controlledDependencies.length > 0) {
+                logger.info("ai.chat.controlled_dependency_lock", {
+                  projectId,
+                  template: normalized.controlledTemplate,
+                  changed: normalized.controlledDependencies,
+                });
+              }
+              return normalized.files;
+            };
+
+            let finalFiles = normalizeBuildCandidate(parsed.files);
 
             // ── Validation pass (up to 3 enrichment rounds on large greenfield) ─
             if (finalFiles.length > 0) {
               const maxEnrichPasses = isMajorGreenfieldBuild(message, fileCount) ? 3 : 2;
+              let previousValidationSignature: string | null = null;
               for (let enrichPass = 0; enrichPass < maxEnrichPasses; enrichPass++) {
                 const {
                   validationErrors,
@@ -2053,11 +2078,24 @@ The user has expressed frustration. Do the following:
                 } = validateGenerationStage(finalFiles, existingFiles, {
                   minFiles: buildIntent?.minFiles,
                   appType: buildIntent?.appType,
+                  singlePage: buildIntent?.singlePage,
                 });
 
                 if (!shouldAutoFix(validationErrors) || validationErrors.length === 0) {
                   break;
                 }
+
+                const validationSignature = generationValidationSignature(validationErrors);
+                if (validationSignature === previousValidationSignature) {
+                  logger.warn("ai.chat.autofix_stalled", {
+                    projectId,
+                    pass: enrichPass + 1,
+                    errorCount: validationErrors.length,
+                    errors: validationErrors.map((error) => error.message),
+                  });
+                  break;
+                }
+                previousValidationSignature = validationSignature;
 
                 usedAutoFix = true;
                 const statusMsg =
@@ -2089,13 +2127,14 @@ The user has expressed frustration. Do the following:
                     userId,
                   });
                   if (!repaired) break;
-                  finalFiles = repaired.files;
+                  finalFiles = normalizeBuildCandidate(repaired.files);
                   tokensUsed += repaired.tokenEstimate;
                 } catch (fixErr) {
                   logger.warn("ai.chat.autofix_failed", { projectId, error: String(fixErr) });
                   break;
                 }
               }
+
             } else {
               // ── Zero files parsed: the model ignored the build output format
               // (common with weaker models that answer in prose + code fences).
@@ -2139,7 +2178,7 @@ The user has expressed frustration. Do the following:
                 }, { projectId, userId, task: "chat.build.format_retry" });
                 const retryParsed = parseAIResponse(retryContent);
                 if (retryParsed.files.length > 0) {
-                  finalFiles = prepareGeneratedFiles(retryParsed.files, existingFiles);
+                  finalFiles = normalizeBuildCandidate(retryParsed.files);
                   fullContent = retryContent; // persist the output that actually contained files
                   tokensUsed += 1500; // rough estimate for the retry pass
                 } else {
@@ -2156,44 +2195,32 @@ The user has expressed frustration. Do the following:
             }
 
             // ── Post-generation guarantees ────────────────────────────────
-            // Everything above is the model's work checked against prompts. The
-            // three passes below are deterministic and run last, so a bad turn
-            // degrades into a plain build rather than a broken one.
+            // Re-run the idempotent platform-owned normalizer after the final
+            // model pass. It also ran before every validation pass so package
+            // and support-file defects never consumed an AI repair round.
             if (mode === "build" && finalFiles.length > 0) {
-              // 1. `src/routeTree.gen.ts` belongs to the tanstackStart() Vite
-              //    plugin, never to the model.
-              finalFiles = stripGeneratedRouteTree(finalFiles);
+              finalFiles = normalizeBuildCandidate(finalFiles);
+            }
 
-              // 2. Header + footer. A landing page without site chrome is not a
-              //    landing page; the prompt asked, this makes sure.
-              finalFiles = ensureWebsiteChrome(finalFiles, existingFiles, {
+            // Never activate a knowingly invalid major/core-loop generation.
+            // This final gate also covers the zero-file format-retry path.
+            if (
+              mode === "build" &&
+              finalFiles.length > 0 &&
+              (coreLoop || isMajorGreenfieldBuild(message, fileCount))
+            ) {
+              const remaining = validateGenerationStage(finalFiles, existingFiles, {
+                minFiles: buildIntent?.minFiles,
                 appType: buildIntent?.appType,
-                brand: projectData?.name ?? undefined,
-              });
-
-              // 3. Pin every dependency we own. One React-18-only version next
-              //    to the React 19 base set aborts `npm install` with ERESOLVE,
-              //    which the user experiences as a preview that never boots.
-              const pkgIndex = finalFiles.findIndex((f) => f.path === "package.json");
-              if (pkgIndex >= 0) {
-                const aligned = alignGeneratedPackageJson(finalFiles[pkgIndex].content);
-                if (aligned.changed.length > 0) {
-                  finalFiles[pkgIndex] = { ...finalFiles[pkgIndex], content: aligned.content };
-                  logger.info("ai.chat.package_pins_aligned", {
-                    projectId,
-                    changed: aligned.changed,
-                  });
-                }
-                const template = resolveControlledTemplate(costPrompt, framework);
-                const locked = lockControlledDependencyVersions(finalFiles[pkgIndex].content, template);
-                if (locked.changed.length > 0) {
-                  finalFiles[pkgIndex] = { ...finalFiles[pkgIndex], content: locked.content };
-                  logger.info("ai.chat.controlled_dependency_lock", {
-                    projectId,
-                    template: template.key,
-                    changed: locked.changed,
-                  });
-                }
+                singlePage: buildIntent?.singlePage,
+              }).validationErrors.filter((error) => error.severity === "error");
+              if (remaining.length > 0) {
+                throw new Error(
+                  `Generation contract remained invalid after bounded repair: ${remaining
+                    .slice(0, 5)
+                    .map((error) => error.message)
+                    .join(" | ")}`,
+                );
               }
             }
 

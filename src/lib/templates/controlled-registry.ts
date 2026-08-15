@@ -94,11 +94,11 @@ export function lockControlledDependencyVersions(content: string, template: Cont
     const pkg = JSON.parse(content) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
     const changed: string[] = [];
     for (const [section, pins] of [["dependencies", template.dependencies], ["devDependencies", template.devDependencies]] as const) {
-      const current = pkg[section];
-      if (!current) continue;
+      const current = pkg[section] ?? {};
+      pkg[section] = current;
       for (const [name, pin] of Object.entries(pins)) {
-        if (name in current && current[name] !== pin) {
-          changed.push(`${name}: ${current[name]} -> ${pin}`);
+        if (current[name] !== pin) {
+          changed.push(`${name}: ${current[name] ?? "missing"} -> ${pin}`);
           current[name] = pin;
         }
       }
@@ -124,11 +124,11 @@ export function checkTemplateCompatibility(
       const pkg = JSON.parse(packageFile.content) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
       for (const [name, pin] of Object.entries(template.dependencies)) {
         const actual = pkg.dependencies?.[name];
-        if (actual !== undefined && actual !== pin) dependencyDrift.push(`${name}: ${actual} != ${pin}`);
+        if (actual !== pin) dependencyDrift.push(`${name}: ${actual ?? "missing"} != ${pin}`);
       }
       for (const [name, pin] of Object.entries(template.devDependencies)) {
         const actual = pkg.devDependencies?.[name];
-        if (actual !== undefined && actual !== pin) dependencyDrift.push(`${name}: ${actual} != ${pin}`);
+        if (actual !== pin) dependencyDrift.push(`${name}: ${actual ?? "missing"} != ${pin}`);
       }
     } catch { dependencyDrift.push("package.json is invalid JSON"); }
   }

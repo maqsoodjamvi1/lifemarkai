@@ -166,18 +166,110 @@ function parseNamedImports(clause: string): string[] {
     .filter((name): name is string => /^[A-Za-z_$][\w$]*$/.test(name ?? ""));
 }
 
-function exportedNames(content: string): Set<string> {
+function localBindingNames(content: string): Set<string> {
   const names = new Set<string>();
-  for (const match of content.matchAll(/\bexport\s+(?:const|let|var|function|class|interface|type)\s+([A-Za-z_$][\w$]*)\b/g)) {
-    names.add(match[1]);
+  let depth = 0;
+  for (const line of content.split("\n")) {
+    if (depth === 0) {
+      const declaration = line.match(
+        /^\s*(?:export\s+)?(?:declare\s+)?(?:async\s+)?(?:const|let|var|function|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)\b/,
+      );
+      if (declaration?.[1]) names.add(declaration[1]);
+      const defaultDeclaration = line.match(
+        /^\s*export\s+default\s+(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)\b/,
+      );
+      if (defaultDeclaration?.[1]) names.add(defaultDeclaration[1]);
+    }
+    const stripped = line
+      .replace(/(['"`])(?:\\.|(?!\1).)*\1/g, "")
+      .replace(/\/\/.*$/, "");
+    for (const char of stripped) {
+      if (char === "{") depth++;
+      else if (char === "}") depth = Math.max(0, depth - 1);
+    }
   }
-  for (const match of content.matchAll(/\bexport\s*\{([^}]+)\}/g)) {
-    for (const raw of match[1].split(",")) {
-      const name = raw.trim().split(/\s+as\s+/i).pop()?.trim();
-      if (name && name !== "default") names.add(name);
+
+  for (const match of content.matchAll(/\bimport\s+([\s\S]*?)\s+from\s+['"][^'"]+['"]/g)) {
+    const clause = match[1].trim();
+    const defaultName = parseDefaultImport(clause);
+    if (defaultName) names.add(defaultName);
+    const namespaceName = clause.match(/\*\s+as\s+([A-Za-z_$][\w$]*)/)?.[1];
+    if (namespaceName) names.add(namespaceName);
+    const named = clause.match(/\{([^}]+)\}/)?.[1] ?? "";
+    for (const raw of named.split(",")) {
+      const local = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/i).pop()?.trim();
+      if (local && /^[A-Za-z_$][\w$]*$/.test(local)) names.add(local);
     }
   }
   return names;
+}
+
+function exportedNames(content: string): Set<string> {
+  const names = new Set<string>();
+  const locals = localBindingNames(content);
+  for (const match of content.matchAll(/\bexport\s+(?:declare\s+)?(?:async\s+)?(?:const|let|var|function|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)\b/g)) {
+    names.add(match[1]);
+  }
+  for (const match of content.matchAll(/\bexport\s*\{([^}]+)\}\s*(?:from\s+['"][^'"]+['"])?/g)) {
+    const reExport = /\}\s*from\s+['"]/.test(match[0]);
+    for (const raw of match[1].split(",")) {
+      const parts = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/i);
+      const local = parts[0]?.trim();
+      const exported = parts.pop()?.trim();
+      if (exported && exported !== "default" && (reExport || (local && locals.has(local)))) names.add(exported);
+    }
+  }
+  return names;
+}
+
+function normalizeTypeDefaultImports<T extends MinimalGeneratedFile>(file: T): T {
+  let changed = false;
+  const content = (file.content ?? "").replace(
+    /import\s+(?:type\s+)?([A-Za-z_$][\w$]*)(?:\s*,\s*\{([^}]*)\})?\s+from\s+(['"])([^'"]+)\3\s*;?/g,
+    (statement, defaultName: string, namedClause: string | undefined, quote: string, spec: string) => {
+      const resolved = resolveImport(file.path, spec);
+      if (!resolved || !isTypesPath(resolved)) return statement;
+      const entries = [
+        defaultName,
+        ...(namedClause ?? "")
+          .split(",")
+          .map((entry) => entry.trim().replace(/^type\s+/, ""))
+          .filter(Boolean),
+      ];
+      changed = true;
+      return `import type { ${entries.join(", ")} } from ${quote}${spec}${quote};`;
+    },
+  );
+  return changed ? { ...file, content } : file;
+}
+
+function normalizeGeneratedJsxExtensions<T extends MinimalGeneratedFile>(files: T[]): T[] {
+  const renamed = new Map<string, string>();
+  const normalized = files.map((file) => {
+    const path = normalizePath(file.path);
+    if (!path.endsWith(".ts") || !/<[A-Z][A-Za-z0-9]*(?:\s|>|\/>)/.test(file.content ?? "")) {
+      return file;
+    }
+    const nextPath = `${path.slice(0, -3)}.tsx`;
+    renamed.set(stripExtension(path), nextPath);
+    return { ...file, path: nextPath, language: "typescriptreact" };
+  });
+  if (renamed.size === 0) return normalized;
+
+  return normalized.map((file) => {
+    let changed = false;
+    const content = (file.content ?? "").replace(
+      /(\b(?:from\s+|import\s*\(\s*)['"])([^'"]+\.ts)(['"])/g,
+      (statement, prefix: string, spec: string, suffix: string) => {
+        const resolved = resolveImport(file.path, spec);
+        const target = resolved ? renamed.get(stripExtension(resolved)) : undefined;
+        if (!target) return statement;
+        changed = true;
+        return `${prefix}${spec.slice(0, -3)}.tsx${suffix}`;
+      },
+    );
+    return changed ? { ...file, content } : file;
+  });
 }
 
 function pascalCase(value: string): string {
@@ -270,13 +362,20 @@ function stripRedundantNamedReExports(content: string): string {
   let next = content;
   const declared = new Set<string>();
   for (const match of content.matchAll(
-    /\bexport\s+(?:async\s+)?(?:function|const|class|let|var)\s+([A-Za-z_$][\w$]*)\b/g,
+    /\bexport\s+(?:declare\s+)?(?:async\s+)?(?:function|const|class|let|var|interface|type|enum)\s+([A-Za-z_$][\w$]*)\b/g,
   )) {
     declared.add(match[1]);
   }
-  for (const name of declared) {
-    next = next.replace(new RegExp(`\\nexport\\s*\\{\\s*${name}\\s*\\}\\s*;\\s*(?=\\n|$)`, "g"), "\n");
-  }
+  const locals = localBindingNames(content);
+  next = next.replace(/(^|\n)([ \t]*)export\s*\{([^}]+)\}\s*;(?!\s*from)/g, (_statement, start: string, indent: string, list: string) => {
+    const kept = list.split(",").filter((raw: string) => {
+      const parts = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/i);
+      const local = parts[0]?.trim();
+      const exported = parts.at(-1)?.trim();
+      return !!local && locals.has(local) && !!exported && !declared.has(exported);
+    });
+    return kept.length > 0 ? `${start}${indent}export { ${kept.map((entry: string) => entry.trim()).join(", ")} };` : start;
+  });
   // Orphan comment left behind when every generated re-export was stripped.
   next = next.replace(/\n\/\/ LifemarkAI generated missing named exports\n(?!\s*export)/g, "\n");
   return next;
@@ -491,9 +590,10 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
   files: T[],
   existingFiles: MinimalGeneratedFile[] = [],
 ): T[] {
-  const out = [...files];
+  const normalizedFiles = normalizeGeneratedJsxExtensions(files.map(normalizeTypeDefaultImports));
+  const out = [...normalizedFiles];
   const paths = new Set<string>();
-  const allInputFiles = [...existingFiles, ...files];
+  const allInputFiles = [...existingFiles, ...normalizedFiles];
   for (const file of allInputFiles) addPathVariants(paths, file.path);
 
   const neededExports = new Map<string, Set<string>>();

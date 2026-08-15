@@ -36,6 +36,8 @@ export interface BuildIntent {
   niche: string | null;
   statusLabel: string;
   blueprint: string;
+  /** True only when the user explicitly asks for one landing/page surface. */
+  singlePage: boolean;
   /** Minimum file count a real version of this app type should have. */
   minFiles: number;
 }
@@ -125,6 +127,7 @@ const PORTFOLIO_KEYWORDS = /\b(portfolio (?:site|website|page)|personal (?:site|
  * "website" is an explicit statement about the ARTIFACT, and it wins.
  */
 const SITE_INTENT_KEYWORDS = /\b(landing page|marketing site|company site|business site|brochure site|one[- ]pager|one[- ]page site|homepage|web ?site)\b/i;
+const SINGLE_PAGE_SITE_KEYWORDS = /\b(landing page|one[- ]pager|one[- ]page(?: site)?|single[- ]page(?: site)?)\b/i;
 
 /**
  * …unless the same prompt also asks for transactional or back-office behaviour.
@@ -292,6 +295,26 @@ function rescueVagueIntent(prompt: string, niche: string | null): BuildAppType |
   return bestScore >= VAGUE_SCORE_THRESHOLD ? best : null;
 }
 
+const SINGLE_PAGE_BLUEPRINT = (niche: string | null) => `## Autonomous Complete Landing Page Blueprint
+You are building one polished, production-style landing page${niche ? ` for **${titleCase(niche)}**` : ""}. Keep it deliberately single-page. Do NOT create filler routes merely to satisfy a website template.
+
+Required home-page sections (all substantial and reachable from anchor navigation):
+1. Sticky header with brand, section links, and a primary CTA.
+2. Hero with a specific value proposition, supporting copy, two actions, and a visual treatment.
+3. Trust/value row plus a rich product, menu, service, or feature grid with 8+ realistic items.
+4. Story/process section and 3+ differentiated value propositions.
+5. Testimonials or proof with realistic names and details.
+6. Contact/inquiry form with validation and visible loading/success/error states.
+7. Location/hours or FAQ when the niche fits, then a complete footer.
+
+Architecture:
+- One routed home page. Split the sections into reusable components; do not put the entire site in one giant route file.
+- Use local seeded content and a preview-safe form fallback. Only add Supabase migrations/client/data access when the request explicitly asks for persistent data, authentication, or a connected backend.
+- Every visible action must work: anchor navigation scrolls, menu/filter controls update state, and form submission shows a result.
+- Use realistic ${niche ?? "business"} content, accessible labels, responsive layouts, and clear focus/hover states.
+
+Minimum 12+ files: scaffold, home route, shared chrome, 6+ section components, data, and utilities. Richness comes from the page itself, not unrelated routes.`;
+
 const BLUEPRINTS: Record<BuildAppType, (niche: string | null) => string> = {
   "marketing-website": (niche) => `## Autonomous Complete Website Blueprint
 You are building a complete, production-style niche website${niche ? ` for **${titleCase(niche)}**` : ""}. Act like Lovable — infer everything yourself. Do NOT ask questions. A "website" is never a single landing page unless the user explicitly says one-page.
@@ -309,7 +332,7 @@ Each page must be reachable through React Router nav and footer links; App.tsx w
 
 Database-backed behavior:
 - Include Supabase-ready persistence even for websites: lead/contact submissions, newsletter subscribers, blog/resources, case studies/portfolio items, testimonials, and optional service inquiries.
-- Generate \`supabase/migrations/001_website_schema.sql\` with tables, indexes, RLS enabled, owner/public-safe policies where appropriate.
+- Generate \`supabase/migrations/001_website_schema.sql\` with tables, indexes, RLS enabled, owner/public-safe policies, and explicit least-privilege anon/authenticated grants for the intended Data API surface.
 - Generate \`src/lib/supabase.ts\` (env-based client) and \`src/lib/data-source.ts\` or hooks that read from Supabase when env vars exist, with seeded local fallback data so preview still works without credentials.
 - Contact/newsletter forms must call the data layer and show loading/success/error states, not be dead buttons.
 
@@ -343,6 +366,7 @@ Architecture:
 Database-backed behavior:
 - Generate \`supabase/migrations/001_ecommerce_schema.sql\` with products, categories, customers, carts/cart_items, orders/order_items, payments, reviews, inventory_events, newsletter_subscribers.
 - Enable RLS on every table and add safe public read policies for catalog tables plus user/order ownership policies.
+- Add explicit least-privilege anon/authenticated grants for only the Data API operations those policies are meant to expose.
 - Generate \`src/lib/supabase.ts\`, \`src/lib/store-api.ts\`, and hooks that read/write through Supabase when env vars exist, with seeded local fallback data so preview remains usable.
 - Checkout must create a pending order through the data layer, reduce local inventory in preview mode, and show success/error states.
 
@@ -374,6 +398,7 @@ Architecture:
 Database-backed behavior:
 - Generate \`supabase/migrations/001_erp_schema.sql\` with companies, users/profiles, roles, products, warehouses, inventory_items, inventory_movements, suppliers, purchase_orders, purchase_order_items, customers, sales_orders, sales_order_items, invoices, employees, audit_logs.
 - Enable RLS on every table and include owner/company-scoped policies. Never use a \`role\` column on profiles; use membership/roles tables.
+- Add explicit least-privilege authenticated grants for only the company-scoped Data API operations those policies are meant to expose.
 - Generate \`src/lib/supabase.ts\`, \`src/lib/erp-api.ts\`, and domain hooks that read/write through Supabase when env vars exist, with seeded local fallback data so preview remains usable.
 - CRUD forms must update the data layer and show optimistic loading/success/error states. Tables must support search/filter/sort locally at minimum.
 
@@ -853,6 +878,7 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
       niche: extractNiche(prompt),
       statusLabel: "Designing Lovable-inspired builder UI…",
       blueprint: BLUEPRINTS["general-app"](extractNiche(prompt)),
+      singlePage: false,
       minFiles: MIN_FILES_BY_TYPE["general-app"],
     };
   }
@@ -946,8 +972,9 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
     appType = "marketing-website";
   }
 
+  const singlePage = appType === "marketing-website" && SINGLE_PAGE_SITE_KEYWORDS.test(prompt);
   const blueprint = [
-    BLUEPRINTS[appType](niche),
+    singlePage ? SINGLE_PAGE_BLUEPRINT(niche) : BLUEPRINTS[appType](niche),
     industryProfileFor(prompt, niche),
     APP_SHELL_APP_TYPES.has(appType) ? APP_SHELL_CONTRACT : "",
   ]
@@ -959,7 +986,8 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
     niche,
     statusLabel: STATUS_LABELS[appType](niche, prompt),
     blueprint,
-    minFiles: MIN_FILES_BY_TYPE[appType],
+    singlePage,
+    minFiles: singlePage ? 12 : MIN_FILES_BY_TYPE[appType],
   };
 }
 
@@ -1101,6 +1129,11 @@ export function buildUserDirective(intent: BuildIntent): string {
   if (APP_SHELL_APP_TYPES.has(intent.appType)) {
     lines.push(
       `CRITICAL: App type "${intent.appType}" is an operations/admin product — build the sidebar app under /admin (or the routes in the blueprint), NOT a marketing landing site. A small public homepage is fine; the deliverable is the management UI and data modules.`,
+    );
+  }
+  if (intent.singlePage) {
+    lines.push(
+      "CRITICAL: This is an explicit single-page landing build. Keep one routed home page with rich anchor-linked sections; do not invent extra About/Blog/Contact routes or a database the user did not request.",
     );
   }
   lines.push(
