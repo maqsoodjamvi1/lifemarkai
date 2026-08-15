@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { controlledTemplateMetadata, resolveControlledTemplate, checkTemplateCompatibility,planControlledTemplateUpgrade,stampControlledTemplateFiles } from "./controlled-registry.ts";
+import { controlledTemplateMetadata, resolveControlledTemplate, checkTemplateCompatibility,lockControlledDependencyVersions,planControlledTemplateUpgrade,stampControlledTemplateFiles } from "./controlled-registry.ts";
 import { tanstackStartScaffold } from "./tanstack-start-scaffold.ts";
 
 test("CRM and ERP resolve to distinct controlled full-stack contracts", () => {
@@ -19,6 +19,22 @@ test("compatibility reports missing CRM infrastructure", () => {
   const result = checkTemplateCompatibility(template, [{ path: "package.json", content: "{}" }]);
   assert.equal(result.compatible, false);
   assert.ok(result.missingPaths.includes("supabase/migrations"));
+  assert.ok(result.dependencyDrift.some((drift) => drift.startsWith("@tanstack/react-router: missing")));
+});
+
+test("dependency lock completes a sparse generated package manifest", () => {
+  const template = resolveControlledTemplate("CRM", "tanstack-start");
+  const locked = lockControlledDependencyVersions(
+    JSON.stringify({ name: "generated-app", dependencies: { react: "^18.2.0" } }),
+    template,
+  );
+  const pkg = JSON.parse(locked.content);
+
+  assert.equal(pkg.dependencies.react, template.dependencies.react);
+  assert.equal(pkg.dependencies["@tanstack/react-router"], template.dependencies["@tanstack/react-router"]);
+  assert.equal(pkg.dependencies["class-variance-authority"], template.dependencies["class-variance-authority"]);
+  assert.equal(pkg.devDependencies.vite, template.devDependencies.vite);
+  assert.ok(locked.changed.some((change) => change.startsWith("@tanstack/react-router: missing")));
 });
 
 test("template identity stamps the sandbox cache contract without changing dependencies", () => {

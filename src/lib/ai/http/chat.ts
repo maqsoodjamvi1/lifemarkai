@@ -1,7 +1,7 @@
 import { createAdminClient } from "../../supabase/server.ts";
 import { canWriteProjectFiles,getProjectAccess } from "../../project/access.ts";
-import { generateAI } from "../generate.ts";
-import { DEFAULT_CHAT_MODEL,ECONOMY_CODING_MODEL,ESCALATION_MODEL } from "../model-defaults.ts";
+import { runGenerationStage } from "../chat/generation-service.ts";
+import { DEFAULT_CHAT_MODEL } from "../model-defaults.ts";
 import { applyModelAdapter } from "../model-catalog.ts";
 import { clampHistory } from "../context-clamp.ts";
 import {
@@ -13,10 +13,8 @@ UPGRADE_NOT_READY_GUARD,
 } from "@/lib/project/generation-profile";
 import { sendLowCreditsEmail } from "../../email/resend.ts";
 import {
-AUTO_FIX_SYSTEM_PROMPT,
 buildReactNativePrompt,
 buildProjectContext,
-buildRepairPrompt,
 } from "@/lib/ai/system-prompts";
 import { CHAT_SYSTEM_PROMPT } from "../prompts/chat.ts";
 import { PLAN_SYSTEM_PROMPT } from "../prompts/plan.ts";
@@ -58,10 +56,8 @@ buildDeterministicTextPatches,
 parseTextReplacementIntent,
 parseHeadingDescriptor,
 } from "@/lib/ai/text-edit";
-import { parseAIResponse,validateGeneratedFiles,assessGenerationQuality,shouldAutoFix,needsBuildContinuation,detectLanguage,type ParsedFile } from "../code-parser.ts";
-import { ensureCommonGeneratedSupportFiles } from "../generated-support-files.ts";
-import { ensureWebsiteChrome } from "../website-chrome.ts";
-import { alignGeneratedPackageJson,stripGeneratedRouteTree } from "../../preview/align-package-json.ts";
+import { parseAIResponse,shouldAutoFix,needsBuildContinuation,detectLanguage,type ParsedFile } from "../code-parser.ts";
+import { generationValidationSignature,normalizeGenerationStage,prepareGeneratedFiles,validateGenerationStage } from "../chat/validation-service.ts";
 import { StreamingFileExtractor } from "../streaming-file-extractor.ts";
 import { logger } from "../../logger.ts";
 import { getProjectSchemaContext } from "../../supabase/schema-reader.ts";
@@ -79,13 +75,14 @@ parallelSubagentsEnabled,
 planSubagents,
 runParallelSubagents,
 } from "@/lib/ai/subagents-parallel";
-import { computeCreditCost,maxCreditCostForMode } from "../credit-cost.ts";
 import {
-cancelCreditReservation,
+cancelStageCredits,
 claimDailyCredits,
-reserveCredits,
-settleCreditReservation,
-} from "@/lib/credits";
+computeCreditCost,
+maxCreditCostForMode,
+reserveStageCredits,
+settleStageCredits,
+} from "../chat/accounting-service.ts";
 import type { AutoWireResult,SelfVerifyResult } from "./result-types.ts";
 import { autoWireAi } from "../auto-wire-ai.ts";
 import { selectRelevantFiles } from "../file-selector.ts";
@@ -110,16 +107,18 @@ maxOutputTokensForRequest,
 resolveBudgetAwareModel,
 } from "@/lib/ai/cost-controls";
 import { resolveSmartModel } from "../editor-intelligence.ts";
+import { commitGenerationStage } from "../chat/commit-service.ts";
 import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 import { buildStaticGenerationPrompt } from "../prompts/static-build.ts";
-import { commitGeneratedFiles } from "../chat/commit-generated-files.ts";
+import { runRepairStage } from "../chat/repair-service.ts";
 import { buildClarificationPrompt,parseClarifyingQuestions } from "../chat/clarification.ts";
 import { resolveChatRequestContext } from "../chat/request-context.ts";
 import { createStreamSink } from "../chat/sse-stream.ts";
 import { createDeployActionResponse } from "../chat/deploy-action.ts";
-import { buildControlledTemplatePrompt,lockControlledDependencyVersions,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
+import { buildControlledTemplatePrompt,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
 import { getCoreLoopPolicy,isCoreLoopRequest } from "../../reliability/core-loop-policy.ts";
+import { completeEnterpriseOrchestrationState,createBuildOrchestration,evaluateBuildCompletion,evaluateEnterpriseGates,parseEnterpriseOrchestrationState } from "../orchestration-controller.ts";
 
 // Generation + backend wiring + self-verification can exceed a minute on
 // complex builds (Lovable budgets 15 min for agent runs).
@@ -462,6 +461,7 @@ export async function handleAiChat(req: Request) {
       disabled_skill_ids?: string[] | null;
       cloud_enabled?: boolean;
       github_repo?: string | null;
+      metadata?: Record<string, unknown> | null;
     } | null;
     const projectKnowledge = projectData?.knowledge?.trim();
     const knowledgeBlock = projectKnowledge
@@ -589,6 +589,12 @@ export async function handleAiChat(req: Request) {
     // Model selection asks "how big is this project", which is a question about
     // the user's work, not about the 25-file scaffold every project ships with.
     const fileCount = Array.isArray(files) ? countUserAuthoredFiles(files) : 0;
+    const buildOrchestration = createBuildOrchestration({
+      prompt: costPrompt,
+      requestedMode: mode,
+      files: Array.isArray(files) ? files as Array<{ path: string; content: string }> : [],
+      previousState: parseEnterpriseOrchestrationState(projectData?.metadata?.enterprise_orchestration),
+    });
     const serverAutoModel = modelManuallySelected === true
       ? model
       : resolveSmartModel(mode, { fileCount, hasPreviewError: false }, costPrompt);
@@ -622,7 +628,7 @@ export async function handleAiChat(req: Request) {
 
     // ── Clarify-first (Lovable): questionnaire BEFORE research/subagents/build ──
     if (runClarifyFirst) {
-      const clarifyReservation = await reserveCredits(supabase, {
+      const clarifyReservation = await reserveStageCredits(supabase, {
         userId,
         amount: maxCreditCostForMode("chat"),
         action: "clarify_message",
@@ -665,7 +671,7 @@ export async function handleAiChat(req: Request) {
           let questionsJson = "";
           let reservationFinalized = false;
           try {
-            const clarifyResult = await generateAI(
+            const clarifyResult = await runGenerationStage(
               {
                 model: DEFAULT_CHAT_MODEL,
                 messages: [
@@ -690,7 +696,7 @@ export async function handleAiChat(req: Request) {
               mode: "chat",
               tokensUsed: clarifyResult.tokensUsed,
             });
-            const remaining = await settleCreditReservation(
+            const remaining = await settleStageCredits(
               supabase,
               clarifyReservation.id,
               clarifyCost,
@@ -771,13 +777,13 @@ export async function handleAiChat(req: Request) {
             if (!reservationFinalized) {
               try {
                 if (questionsJson.trim()) {
-                  await settleCreditReservation(
+                  await settleStageCredits(
                     supabase,
                     clarifyReservation.id,
                     clarifyReservation.amount,
                   );
                 } else {
-                  await cancelCreditReservation(supabase, clarifyReservation.id);
+                  await cancelStageCredits(supabase, clarifyReservation.id);
                 }
                 reservationFinalized = true;
               } catch (reservationError) {
@@ -1365,6 +1371,9 @@ The user has expressed frustration. Do the following:
 
     // Model-aware prompting: tune the system prompt to the selected model
     // (fast → minimal change, frontier → plan+verify, non-Claude → strict contract).
+    if (mode === "build" || mode === "patch") {
+      systemPrompt += buildOrchestration.promptBlock;
+    }
     systemPrompt = applyModelAdapter(systemPrompt, effectiveModel);
 
     const messages: import("@/lib/ai/provider").AIMessage[] = [
@@ -1374,7 +1383,7 @@ The user has expressed frustration. Do the following:
     ];
 
     const reservationAmount = maxCreditCostForMode(mode);
-    const creditReservation = await reserveCredits(supabase, {
+    const creditReservation = await reserveStageCredits(supabase, {
       userId,
       amount: reservationAmount,
       action: `${mode}_message`,
@@ -1560,7 +1569,7 @@ The user has expressed frustration. Do the following:
           : null;
 
         try {
-          const result = await generateAI(
+          const result = await runGenerationStage(
             {
               model: effectiveModel,
               messages,
@@ -1601,7 +1610,7 @@ The user has expressed frustration. Do the following:
               );
               let contChunk = "";
               try {
-                await generateAI({
+                await runGenerationStage({
                   model: effectiveModel,
                   messages: [
                     ...messages,
@@ -1633,6 +1642,7 @@ The user has expressed frustration. Do the following:
 
           // ── Patch mode: apply find-and-replace patches ────────────────────
           let parsedFiles: ParsedFile[] = [];
+          let enterpriseGateEvidence: Array<{ id: string; passed: boolean; evidence: string[] }> = [];
           let stagedVerification: SelfVerifyResult | null = null;
           let preCommitRevision: number | null = null;
           /** Lovable honesty: don't claim success when nothing landed in project_files. */
@@ -1768,7 +1778,7 @@ The user has expressed frustration. Do the following:
                           .filter((p) => /\.(tsx|jsx|html)$/i.test(p))
                           .slice(0, 12)
                           .join(", ");
-                await generateAI({
+                await runGenerationStage({
                   model: effectiveModel,
                   messages: [
                     {
@@ -2041,23 +2051,78 @@ The user has expressed frustration. Do the following:
               });
             }
 
-            let finalFiles = ensureCommonGeneratedSupportFiles(parsed.files, existingFiles);
+            const normalizeBuildCandidate = (candidate: ParsedFile[]): ParsedFile[] => {
+              if (mode !== "build" || candidate.length === 0) {
+                return prepareGeneratedFiles(candidate, existingFiles);
+              }
+              const normalized = normalizeGenerationStage(candidate, existingFiles, {
+                prompt: costPrompt,
+                framework,
+                appType: buildIntent?.appType,
+                brand: projectData?.name ?? undefined,
+              });
+              if (normalized.alignedDependencies.length > 0) {
+                logger.info("ai.chat.package_pins_aligned", {
+                  projectId,
+                  changed: normalized.alignedDependencies,
+                });
+              }
+              if (normalized.controlledDependencies.length > 0) {
+                logger.info("ai.chat.controlled_dependency_lock", {
+                  projectId,
+                  template: normalized.controlledTemplate,
+                  changed: normalized.controlledDependencies,
+                });
+              }
+              return normalized.files;
+            };
+
+            let finalFiles = normalizeBuildCandidate(parsed.files);
 
             // ── Validation pass (up to 3 enrichment rounds on large greenfield) ─
             if (finalFiles.length > 0) {
               const maxEnrichPasses = isMajorGreenfieldBuild(message, fileCount) ? 3 : 2;
+              let previousValidationSignature: string | null = null;
               for (let enrichPass = 0; enrichPass < maxEnrichPasses; enrichPass++) {
-                const correctnessErrors = validateGeneratedFiles(finalFiles, existingFiles);
-                const richnessErrors = assessGenerationQuality(finalFiles, existingFiles, {
+                const stageValidation = validateGenerationStage(finalFiles, existingFiles, {
                   minFiles: buildIntent?.minFiles,
                   appType: buildIntent?.appType,
+                  singlePage: buildIntent?.singlePage,
                 });
-                const validationErrors = [...correctnessErrors, ...richnessErrors];
-                const needsEnrichment = richnessErrors.length > 0;
+                const candidateFiles = [
+                  ...existingFiles.filter((oldFile) => !finalFiles.some((newFile) => newFile.path === oldFile.path)),
+                  ...finalFiles,
+                ];
+                const completion = evaluateBuildCompletion({
+                  orchestration: buildOrchestration,
+                  files: candidateFiles,
+                  changedFiles: finalFiles,
+                });
+                const enterpriseGates = evaluateEnterpriseGates({
+                  orchestration: buildOrchestration,
+                  candidateFiles,
+                  changedFiles: finalFiles,
+                });
+                const validationErrors = buildOrchestration.largeScope
+                  ? [...stageValidation.validationErrors, ...completion.errors, ...enterpriseGates.errors]
+                  : [...stageValidation.validationErrors, ...enterpriseGates.errors];
+                const needsEnrichment = stageValidation.needsEnrichment || completion.errors.length > 0 || enterpriseGates.errors.length > 0;
 
                 if (!shouldAutoFix(validationErrors) || validationErrors.length === 0) {
                   break;
                 }
+
+                const validationSignature = generationValidationSignature(validationErrors);
+                if (validationSignature === previousValidationSignature) {
+                  logger.warn("ai.chat.autofix_stalled", {
+                    projectId,
+                    pass: enrichPass + 1,
+                    errorCount: validationErrors.length,
+                    errors: validationErrors.map((error) => error.message),
+                  });
+                  break;
+                }
+                previousValidationSignature = validationSignature;
 
                 usedAutoFix = true;
                 const statusMsg =
@@ -2076,48 +2141,27 @@ The user has expressed frustration. Do the following:
                 });
 
                 try {
-                  const repairPrompt = buildRepairPrompt(
-                    finalFiles,
-                    validationErrors.map((e) => e.message),
-                    needsEnrichment ? buildIntent?.blueprint : undefined,
-                  );
-                  let repairContent = "";
-                  const repairModel =
-                    needsEnrichment || isMajorGreenfieldBuild(message, fileCount)
-                      ? ESCALATION_MODEL
-                      : simpleEconomyRequest
-                        ? ECONOMY_CODING_MODEL
-                        : ESCALATION_MODEL;
-                  await generateAI({
-                    model: repairModel,
-                    messages: [
-                      {
-                        role: "system" as const,
-                        content: needsEnrichment
-                          ? "You are LifemarkAI Build Engine. Follow the user message exactly and respond with ONLY the required JSON object."
-                          : AUTO_FIX_SYSTEM_PROMPT,
-                      },
-                      { role: "user" as const, content: repairPrompt },
-                    ],
+                  const repaired = await runRepairStage({
+                    files: finalFiles,
+                    existingFiles,
+                    errors: validationErrors.map((error) => error.message),
+                    blueprint: buildIntent?.blueprint,
+                    needsEnrichment,
+                    majorGreenfield: isMajorGreenfieldBuild(message, fileCount),
+                    simpleEconomyRequest,
                     maxTokens: outputMaxTokens,
-                    stream: true,
-                    jsonMode: true,
-                    onChunk: (chunk) => { repairContent += chunk; },
-                  }, { projectId, userId, task: "chat.build.autofix" });
-
-                  const repaired = parseAIResponse(repairContent);
-                  if (repaired.files.length === 0) {
-                    break;
-                  }
-                  const mergedMap = new Map(finalFiles.map((f) => [f.path, f]));
-                  for (const rf of repaired.files) mergedMap.set(rf.path, rf);
-                  finalFiles = ensureCommonGeneratedSupportFiles(Array.from(mergedMap.values()), existingFiles);
-                  tokensUsed += 1000;
+                    projectId,
+                    userId,
+                  });
+                  if (!repaired) break;
+                  finalFiles = normalizeBuildCandidate(repaired.files);
+                  tokensUsed += repaired.tokenEstimate;
                 } catch (fixErr) {
                   logger.warn("ai.chat.autofix_failed", { projectId, error: String(fixErr) });
                   break;
                 }
               }
+
             } else {
               // ── Zero files parsed: the model ignored the build output format
               // (common with weaker models that answer in prose + code fences).
@@ -2139,7 +2183,7 @@ The user has expressed frustration. Do the following:
                   logger.warn("ai.chat.no_files_parsed", { projectId, model: effectiveModel, unlabelledFences: unlabelled });
               try {
                 let retryContent = "";
-                await generateAI({
+                await runGenerationStage({
                   model: effectiveModel,
                   messages: [
                     ...messages,
@@ -2161,7 +2205,7 @@ The user has expressed frustration. Do the following:
                 }, { projectId, userId, task: "chat.build.format_retry" });
                 const retryParsed = parseAIResponse(retryContent);
                 if (retryParsed.files.length > 0) {
-                  finalFiles = ensureCommonGeneratedSupportFiles(retryParsed.files, existingFiles);
+                  finalFiles = normalizeBuildCandidate(retryParsed.files);
                   fullContent = retryContent; // persist the output that actually contained files
                   tokensUsed += 1500; // rough estimate for the retry pass
                 } else {
@@ -2178,44 +2222,54 @@ The user has expressed frustration. Do the following:
             }
 
             // ── Post-generation guarantees ────────────────────────────────
-            // Everything above is the model's work checked against prompts. The
-            // three passes below are deterministic and run last, so a bad turn
-            // degrades into a plain build rather than a broken one.
+            // Re-run the idempotent platform-owned normalizer after the final
+            // model pass. It also ran before every validation pass so package
+            // and support-file defects never consumed an AI repair round.
             if (mode === "build" && finalFiles.length > 0) {
-              // 1. `src/routeTree.gen.ts` belongs to the tanstackStart() Vite
-              //    plugin, never to the model.
-              finalFiles = stripGeneratedRouteTree(finalFiles);
+              finalFiles = normalizeBuildCandidate(finalFiles);
+            }
 
-              // 2. Header + footer. A landing page without site chrome is not a
-              //    landing page; the prompt asked, this makes sure.
-              finalFiles = ensureWebsiteChrome(finalFiles, existingFiles, {
+            // Never activate a knowingly invalid major/core-loop generation.
+            // This final gate also covers the zero-file format-retry path.
+            if (
+              mode === "build" &&
+              finalFiles.length > 0 &&
+              (coreLoop || isMajorGreenfieldBuild(message, fileCount) || buildOrchestration.largeScope || buildOrchestration.risk === "high" || buildOrchestration.risk === "critical")
+            ) {
+              const remaining = validateGenerationStage(finalFiles, existingFiles, {
+                minFiles: buildIntent?.minFiles,
                 appType: buildIntent?.appType,
-                brand: projectData?.name ?? undefined,
-              });
-
-              // 3. Pin every dependency we own. One React-18-only version next
-              //    to the React 19 base set aborts `npm install` with ERESOLVE,
-              //    which the user experiences as a preview that never boots.
-              const pkgIndex = finalFiles.findIndex((f) => f.path === "package.json");
-              if (pkgIndex >= 0) {
-                const aligned = alignGeneratedPackageJson(finalFiles[pkgIndex].content);
-                if (aligned.changed.length > 0) {
-                  finalFiles[pkgIndex] = { ...finalFiles[pkgIndex], content: aligned.content };
-                  logger.info("ai.chat.package_pins_aligned", {
-                    projectId,
-                    changed: aligned.changed,
-                  });
-                }
-                const template = resolveControlledTemplate(costPrompt, framework);
-                const locked = lockControlledDependencyVersions(finalFiles[pkgIndex].content, template);
-                if (locked.changed.length > 0) {
-                  finalFiles[pkgIndex] = { ...finalFiles[pkgIndex], content: locked.content };
-                  logger.info("ai.chat.controlled_dependency_lock", {
-                    projectId,
-                    template: template.key,
-                    changed: locked.changed,
-                  });
-                }
+                singlePage: buildIntent?.singlePage,
+              }).validationErrors.filter((error) => error.severity === "error");
+              if (buildOrchestration.largeScope) {
+                const candidateFiles = [
+                  ...existingFiles.filter((oldFile) => !finalFiles.some((newFile) => newFile.path === oldFile.path)),
+                  ...finalFiles,
+                ];
+                remaining.push(...evaluateBuildCompletion({
+                  orchestration: buildOrchestration,
+                  files: candidateFiles,
+                  changedFiles: finalFiles,
+                }).errors);
+                const enterpriseGates = evaluateEnterpriseGates({ orchestration: buildOrchestration, candidateFiles, changedFiles: finalFiles });
+                enterpriseGateEvidence = enterpriseGates.gates;
+                remaining.push(...enterpriseGates.errors);
+              } else {
+                const candidateFiles = [
+                  ...existingFiles.filter((oldFile) => !finalFiles.some((newFile) => newFile.path === oldFile.path)),
+                  ...finalFiles,
+                ];
+                const enterpriseGates = evaluateEnterpriseGates({ orchestration: buildOrchestration, candidateFiles, changedFiles: finalFiles });
+                enterpriseGateEvidence = enterpriseGates.gates;
+                remaining.push(...enterpriseGates.errors);
+              }
+              if (remaining.length > 0) {
+                throw new Error(
+                  `Generation contract remained invalid after bounded repair: ${remaining
+                    .slice(0, 5)
+                    .map((error) => error.message)
+                    .join(" | ")}`,
+                );
               }
             }
 
@@ -2347,13 +2401,37 @@ The user has expressed frustration. Do the following:
               // streamed fragment reaches canonical project_files, so parse,
               // continuation, or disconnect failures leave the prior project
               // intact instead of producing a half-updated application.
-              parsedFiles = await commitGeneratedFiles(supabase, projectId, parsedFiles);
-              for (const file of parsedFiles) {
-                // Sync the final (sanitized/repaired) content into the running
-                // sandbox — the container was created from the scaffold before
-                // the build finished, so without this the preview keeps the
-                // scaffold until it is destroyed by hand.
-                pushFileToRunningSandbox(supabase, projectId, file.path, file.content);
+              parsedFiles = await commitGenerationStage(
+                supabase,
+                projectId,
+                parsedFiles,
+              );
+
+              // Persist orchestration progress only after the atomic commit
+              // succeeds. Failed or rolled-back candidates never advance the
+              // enterprise roadmap.
+              try {
+                const committedMap = new Map<string, { path: string; content: string }>();
+                for (const file of (currentFiles ?? []) as Array<{ path: string; content: string }>) committedMap.set(file.path, file);
+                for (const file of parsedFiles) committedMap.set(file.path, file);
+                const enterpriseState = completeEnterpriseOrchestrationState(
+                  buildOrchestration,
+                  Array.from(committedMap.values()),
+                  new Date().toISOString(),
+                  enterpriseGateEvidence.map((gate) => ({ id: gate.id, passed: gate.passed })),
+                );
+                const { data: latestProject } = await supabase
+                  .from("projects")
+                  .select("metadata")
+                  .eq("id", projectId)
+                  .single();
+                const latestMetadata = ((latestProject as { metadata?: Record<string, unknown> } | null)?.metadata ?? {}) as Record<string, unknown>;
+                await supabase
+                  .from("projects")
+                  .update({ metadata: { ...latestMetadata, enterprise_orchestration: enterpriseState } as unknown as import("@/types/database").Json })
+                  .eq("id", projectId);
+              } catch (stateError) {
+                logger.warn("ai.chat.orchestration_state_persist_failed", { projectId, error: String(stateError) });
               }
 
             }
@@ -2496,6 +2574,20 @@ The user has expressed frustration. Do the following:
             (mode === "build" || mode === "patch") && parsedFiles.length > 0
               ? {
                   files_changed: parsedFiles.map((f) => f.path),
+                  orchestration: {
+                    intent: buildOrchestration.intent,
+                    large_scope: buildOrchestration.largeScope,
+                    app_kind: buildOrchestration.appKind,
+                    phase: buildOrchestration.currentPhase.id,
+                    phase_label: buildOrchestration.currentPhase.label,
+                    max_changed_files: buildOrchestration.maxChangedFiles,
+                    risk: buildOrchestration.risk,
+                    required_gates: buildOrchestration.requiredGates,
+                    policy_version: buildOrchestration.state.version,
+                    project_fingerprint: buildOrchestration.state.projectFingerprint,
+                    enterprise_gates: enterpriseGateEvidence,
+                    deferred: buildOrchestration.deferredCapabilities,
+                  },
                   snapshot_id: preBuildSnapshotId ?? undefined,
                   work_seconds: Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000)),
                   ...(buildActivity ? { build_activity: buildActivity, steps: buildActivity.length } : {}),
@@ -2613,7 +2705,7 @@ The user has expressed frustration. Do the following:
           // event the client actually reads.
           let remainingCredits: number;
           try {
-            const settled = await settleCreditReservation(
+            const settled = await settleStageCredits(
               supabase,
               creditReservation.id,
               creditCost,
@@ -2787,14 +2879,14 @@ The user has expressed frustration. Do the following:
                   creditReservation.amount,
                   finalCreditCost ?? creditReservation.amount,
                 );
-                const remaining = await settleCreditReservation(
+                const remaining = await settleStageCredits(
                   supabase,
                   creditReservation.id,
                   fallbackCost,
                 );
                 reservationFinalized = remaining != null;
               } else {
-                await cancelCreditReservation(supabase, creditReservation.id);
+                await cancelStageCredits(supabase, creditReservation.id);
                 reservationFinalized = true;
               }
             } catch (reservationError) {

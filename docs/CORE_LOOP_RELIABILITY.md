@@ -9,6 +9,7 @@ preview → deployment → reachable public URL.
 - A deployed or locally running LifeMarkAI instance.
 - A dedicated test user whose registration created a `profiles` row.
 - Enough credits for the selected number of attempts.
+- A reachable Docker daemon; Docker is the only release-gate preview backend.
 - One configured deployment provider (`netlify` is the default).
 - `SUPABASE_SERVICE_ROLE_KEY` if AI and compute cost telemetry is required.
 
@@ -41,7 +42,20 @@ CORE_LOOP_DEPLOY_TIMEOUT_MS=180000
 VITE_SUPABASE_URL=https://example.supabase.co
 VITE_SUPABASE_ANON_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...
+
+# The one-flow runner enforces these values. Set DOCKER_HOST only when the
+# daemon is not available at /var/run/docker.sock.
+SANDBOX_PROVIDER=docker
+SANDBOX_PUBLIC_HOST=localhost
+# DOCKER_HOST=http://127.0.0.1:2375
 ```
+
+For a remote runner, replace `localhost` with a host the runner can reach or
+configure `SANDBOX_PREVIEW_DOMAIN`. The one-flow command sets
+`CORE_LOOP_ACTIVE=1`, forces `SANDBOX_PROVIDER=docker`, and supplies the
+core-loop host when `SANDBOX_PUBLIC_HOST` is omitted. It never falls back to
+Modal. WebContainer remains an explicit editor-only fallback and is never valid
+release-gate evidence.
 
 The runner also accepts the legacy `NEXT_PUBLIC_SUPABASE_URL` and
 `NEXT_PUBLIC_SUPABASE_ANON_KEY` names already used by older environments.
@@ -58,16 +72,31 @@ CORE_LOOP_REQUIRE_REGISTRATION_PROOF=true
 
 These values are embedded in the JSON report. Campaign requests always use
 TanStack Build mode and bypass smart routing, Patch mode, clarification, scope
-questionnaires, and auxiliary editor workflows.
+questionnaires, and auxiliary editor workflows. The campaign also rejects any
+request outside this contract: project creation, AI chat, sandbox start/status,
+sandbox stop, preview verification, deployment start, and deployment status.
 
-Run the complete local workflow with one command. It starts Vite, waits for
+Run the behavior-based infrastructure contract first:
+
+```bash
+npm run test:infrastructure-contracts
+```
+
+Then run the complete local workflow with one command. It starts Vite, waits for
 LifeMarkAI to become ready, runs 50 attempts, writes the report, and stops Vite:
 
 ```bash
 npm run verify:core-loop:one-flow
 ```
 
-First use the one-attempt smoke command:
+To enforce the required order in one command—one complete smoke run, followed
+only on success by exactly 50 attempts—run:
+
+```bash
+npm run verify:core-loop:release
+```
+
+For diagnosis, the smoke phase remains available by itself:
 
 ```bash
 npm run verify:core-loop:smoke
@@ -80,8 +109,10 @@ npm run verify:core-loop
 ```
 
 Set `CORE_LOOP_STARTUP_TIMEOUT_MS` if startup needs more than three minutes.
-Use `CORE_LOOP_ATTEMPTS=1` only as a pipeline smoke check. Use 50 for a
-stabilization campaign and 100 for release evidence. The default prompt suite is
+The smoke command must pass before starting the paid gate. Use
+`CORE_LOOP_ATTEMPTS=1` only as a pipeline smoke check. The release command
+defaults to exactly 50 attempts; do not count WebContainer previews or partial
+runs as evidence. Use 100 for extended release evidence. The default prompt suite is
 `tests/core-loop-prompts.json`; override it with `CORE_LOOP_PROMPTS`.
 
 ## Output

@@ -5,23 +5,30 @@ import test from "node:test";
 type Capability = {
   id: string;
   label: string;
-  paths: string[];
+  status: "implemented" | "partial";
   anyEnv?: string[][];
 };
 
 const manifest = JSON.parse(
   readFileSync("config/private-infrastructure.json", "utf8"),
-) as { version: number; capabilities: Capability[] };
+) as {
+  version: number;
+  behavioralContract: string;
+  capabilities: Capability[];
+};
 
 test("private infrastructure manifest covers every required capability once", () => {
-  assert.equal(manifest.version, 1);
+  assert.equal(manifest.version, 2);
+  assert.equal(
+    manifest.behavioralContract,
+    "src/lib/infrastructure/private-behavioral-contracts.test.ts",
+  );
   assert.equal(manifest.capabilities.length, 18);
   const ids = manifest.capabilities.map((capability) => capability.id);
   assert.equal(new Set(ids).size, ids.length);
   for (const capability of manifest.capabilities) {
     assert.ok(capability.label.length > 0);
-    assert.ok(capability.paths.length > 0);
-    assert.equal(new Set(capability.paths).size, capability.paths.length);
+    assert.equal(capability.status, "implemented");
   }
 });
 

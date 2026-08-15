@@ -9,6 +9,7 @@ import {
   type CoreLoopStage,
 } from "../src/lib/reliability/core-loop-report.ts";
 import { getCoreLoopPolicy } from "../src/lib/reliability/core-loop-policy.ts";
+import { assertCoreLoopApiRequest } from "../src/lib/reliability/core-loop-api-surface.ts";
 
 function loadEnv(path = ".env.local") {
   try {
@@ -215,8 +216,14 @@ function authCookie(session: { access_token: string; refresh_token: string; expi
   return `sb-${ref}-auth-token=${encodeURIComponent(JSON.stringify(session))}`;
 }
 
+function coreLoopUrl(path: string, method: string): string {
+  assertCoreLoopApiRequest(method, path);
+  return `${BASE_URL}${path}`;
+}
+
 async function jsonFetch<T>(path: string, cookie: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${BASE_URL}${path}`, {
+  const method = init.method ?? "GET";
+  const response = await fetch(coreLoopUrl(path, method), {
     ...init,
     headers: { "Content-Type": "application/json", Cookie: cookie, ...init.headers },
   });
@@ -241,13 +248,15 @@ async function readDoneEvent(response: Response): Promise<DoneEvent> {
       if (!line.startsWith("data: ")) continue;
       const payload = line.slice(6).trim();
       if (!payload) continue;
+      let event: DoneEvent;
       try {
-        const event = JSON.parse(payload) as DoneEvent;
-        if (event.error) throw new Error(event.error);
-        if (event.done) return event;
+        event = JSON.parse(payload) as DoneEvent;
       } catch {
         // Ignore heartbeats and incomplete/non-JSON events.
+        continue;
       }
+      if (event.error) throw new Error(event.error);
+      if (event.done) return event;
     }
     if (done) break;
   }
@@ -348,7 +357,7 @@ async function main() {
 
       stage = "generation";
       const generationStarted = Date.now();
-      const generationResponse = await fetch(`${BASE_URL}/api/ai/chat`, {
+      const generationResponse = await fetch(coreLoopUrl("/api/ai/chat", "POST"), {
         method: "POST",
         headers: { "Content-Type": "application/json", Cookie: cookie },
         body: JSON.stringify({

@@ -333,9 +333,10 @@ const BUG_FREE_GENERATION_CONTRACT = `
 
 const PRODUCT_MATURITY_CONTRACT = `
 ## Product Maturity Contract
-- "Create a website" means a complete 5-10 page routed website by default: Home, Services/Solutions, About, Portfolio/Case Studies/Gallery, Blog/Resources, Contact, plus optional Pricing/FAQ/Careers/Industries when useful.
+- "Create a website" means a complete 5-10 page routed website by default: Home, Services/Solutions, About, Portfolio/Case Studies/Gallery, Blog/Resources, Contact, plus optional Pricing/FAQ/Careers/Industries when useful. An explicit "landing page", "one-page", or "single-page" request is the exception: build one rich anchor-linked page with reusable section components and no filler routes.
 - Every marketing / landing / storefront / portfolio website MUST use the two-tier header: top bar (phone + email + social icons) and a main row with logo + menu links on one row. Admin/dashboard apps keep sidebar + content topbar instead.
-- Websites, stores, ERP, CRM, booking, marketplace, and admin systems must be data-backed by default. Generate Supabase migration SQL under supabase/migrations/, an env-based Supabase client, and a data-access layer/hooks. Keep seeded local fallback data so preview works before credentials are connected.
+- Full multi-page websites, stores, ERP, CRM, booking, marketplace, and admin systems must be data-backed by default. Generate Supabase migration SQL under supabase/migrations/, an env-based Supabase client, and a data-access layer/hooks. Keep seeded local fallback data so preview works before credentials are connected. An explicit single-page landing request may stay preview-safe/local unless the user asks for persistence, authentication, or a connected backend.
+- Supabase migrations must enable RLS and include only the explicit anon/authenticated grants needed by the intended Data API surface; never put a service-role secret in generated browser code.
 - E-commerce stores must include storefront pages, cart/checkout, account/orders, admin products, admin orders, products/categories/customers/orders/order_items/inventory schema, and working data-layer actions.
 - ERP systems must include sidebar navigation, 8-10 operations modules, CRUD-style forms, dense tables, roles/company-aware schema, audit logs, and working data-layer actions.
 - Do not satisfy product requests with static mock screens only. Mock data is allowed as fallback/seed data, but the architecture must be ready to persist and query real records.

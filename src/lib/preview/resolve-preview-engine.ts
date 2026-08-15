@@ -32,7 +32,7 @@ export function isWebContainerPreviewEnabled(): boolean {
   // browser — npm install and the dev server execute on their machine, so
   // framework previews cost the platform nothing. Modal still takes priority
   // whenever it is configured (sandboxEnabled wins in the engine picker).
-  // Set NEXT_PUBLIC_PREVIEW_WEBCONTAINER=0 to force Modal-or-nothing.
+  // Set NEXT_PUBLIC_PREVIEW_WEBCONTAINER=0 to disable the explicit fallback.
   const flag = process.env.NEXT_PUBLIC_PREVIEW_WEBCONTAINER;
   return flag !== "0" && flag !== "false";
 }
@@ -51,32 +51,31 @@ export function shouldUseWebContainer(files: Pick<ProjectFile, "path">[]): boole
 }
 
 /**
- * Product preview engine = Modal sandbox only (Lovable).
+ * Product preview engine = server sandbox first, explicit WebContainer fallback.
  *
- * - Modal configured / booting / live → `"sandbox"`
- * - Modal missing → `"unavailable"` which the panel treats as **Modal required**
- *   (not WebContainer, not esbuild, not E2B, not a fake srcdoc product).
- * - WebContainer only when `NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1` (draft).
+ * - Docker/server sandbox configured, booting, or live → `"sandbox"`
+ * - Server sandbox missing → `"unavailable"` unless WebContainer is explicitly allowed.
+ * - WebContainer requires the caller opt-in plus browser isolation.
  */
 export function resolvePreviewEngine(
   files: Pick<ProjectFile, "path">[],
   opts?: {
     preferWebContainers?: boolean;
     crossOriginIsolated?: boolean;
-    /** Live Modal tunnel URL — highest fidelity. */
+    /** Live server-sandbox URL — highest fidelity. */
     sandboxUrl?: string | null;
-    /** Modal configured / booting — stay on sandbox even before URL arrives. */
+    /** Server sandbox configured / booting — stay there before the URL arrives. */
     sandboxEnabled?: boolean;
-    /** Explicit opt-in for draft WebContainer path. */
+    /** Explicit opt-in for the single browser fallback. */
     allowWebContainer?: boolean;
   },
 ): Exclude<PreviewEngine, "detecting"> {
-  // Lovable product path — Modal always wins when available or booting.
+  // Server execution always wins when available or booting.
   if (opts?.sandboxUrl || opts?.sandboxEnabled) {
     return "sandbox";
   }
 
-  // Draft WebContainer — never the default product path.
+  // Browser fallback — explicit, isolated, and never part of the release proof.
   const allowWc =
     opts?.allowWebContainer === true && isWebContainerPreviewEnabled();
   const prefer = opts?.preferWebContainers === true;
@@ -93,6 +92,6 @@ export function resolvePreviewEngine(
     return "webcontainer";
   }
 
-  // Modal not configured → panel shows "Configure Modal" (not WC/esbuild/E2B).
+  // No configured server and no explicit browser fallback.
   return "unavailable";
 }

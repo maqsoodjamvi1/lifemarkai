@@ -294,6 +294,68 @@ test("ensureCommonGeneratedSupportFiles repairs missing pages, utilities, data, 
   assert.ok(!errors.some((e) => e.type === "broken_import" || e.type === "missing_named_export" || e.type === "missing_default_export"), JSON.stringify(errors));
 });
 
+test("ensureCommonGeneratedSupportFiles normalizes model default imports from the shared types module", () => {
+  const repaired = ensureCommonGeneratedSupportFiles([
+    {
+      path: "src/routes/products.tsx",
+      language: "typescriptreact",
+      content: "import Product from '../lib/types';\nexport function Products({ item }: { item: Product }) { return <div>{item.name}</div>; }",
+    },
+    {
+      path: "src/routes/testimonials.tsx",
+      language: "typescriptreact",
+      content: "import Testimonial from '../lib/types';\nexport function Testimonials({ item }: { item: Testimonial }) { return <div>{item.name}</div>; }",
+    },
+    {
+      path: "src/lib/types.ts",
+      language: "typescript",
+      content: "export type Existing = { id: string };",
+    },
+  ]);
+  const byPath = new Map(repaired.map((file) => [file.path, file.content]));
+
+  assert.match(byPath.get("src/routes/products.tsx") ?? "", /import type \{ Product \} from '..\/lib\/types'/);
+  assert.match(byPath.get("src/routes/testimonials.tsx") ?? "", /import type \{ Testimonial \} from '..\/lib\/types'/);
+  assert.match(byPath.get("src/lib/types.ts") ?? "", /export type Product/);
+  assert.match(byPath.get("src/lib/types.ts") ?? "", /export type Testimonial/);
+  assert.ok(!(byPath.get("src/lib/types.ts") ?? "").includes("export default"));
+});
+
+test("ensureCommonGeneratedSupportFiles repairs dangling data exports and JSX file extensions", () => {
+  const repaired = ensureCommonGeneratedSupportFiles([
+    {
+      path: "src/App.tsx",
+      language: "typescriptreact",
+      content: [
+        "import { getProducts, getTestimonials, getBlogPosts, getGalleryItems, submitContact, subscribeNewsletter, getFAQ } from './lib/data-source';",
+        "export default function App() { return <main>{String(Boolean(getProducts && getTestimonials && getBlogPosts && getGalleryItems && submitContact && subscribeNewsletter && getFAQ))}</main>; }",
+      ].join("\n"),
+    },
+    {
+      path: "src/lib/data-source.ts",
+      language: "typescript",
+      content: "function FallbackView() { return null; }\nconst fallbackView = <FallbackView />;\nexport { getProducts, getTestimonials, getBlogPosts, getGalleryItems, submitContact, subscribeNewsletter, getFAQ };\nexport { fallbackView };",
+    },
+  ]);
+  const dataFile = repaired.find((file) => file.path === "src/lib/data-source.tsx");
+
+  assert.ok(dataFile, "JSX-bearing TypeScript support modules must be renamed to .tsx");
+  assert.equal(dataFile.language, "typescriptreact");
+  assert.match(dataFile.content, /export async function getProducts/);
+  assert.match(dataFile.content, /export async function getFAQ/);
+  assert.match(dataFile.content, /export async function subscribeNewsletter/);
+  assert.doesNotMatch(dataFile.content, /export \{ getProducts,/);
+
+  const errors = validateGeneratedFiles(repaired, [
+    { path: "index.html", language: "html", content: "<div id=\"root\"></div><script type=\"module\" src=\"/src/main.tsx\"></script>" },
+    { path: "vite.config.ts", language: "typescript", content: "export default {};" },
+    { path: "tsconfig.json", language: "json", content: "{}" },
+    { path: "package.json", language: "json", content: JSON.stringify({ scripts: { dev: "vite" }, dependencies: { react: "^18", "react-dom": "^18", vite: "^5", "@vitejs/plugin-react": "^4" } }) },
+    { path: "src/main.tsx", language: "typescriptreact", content: "import { createRoot } from 'react-dom/client'; import App from './App'; createRoot(document.getElementById('root')!).render(<App />);" },
+  ]);
+  assert.ok(!errors.some((error) => error.type === "jsx_in_ts_file" || error.type === "missing_named_export"), JSON.stringify(errors));
+});
+
 test("validateGeneratedFiles catches duplicate top-level declarations", () => {
   const errors = validateGeneratedFiles([
     {
@@ -510,6 +572,22 @@ test("assessGenerationQuality rejects thin website without database backing", ()
 
   assert.ok(errors.some((e) => e.type === "too_few_website_pages"));
   assert.ok(errors.some((e) => e.type === "missing_website_data_backing"));
+});
+
+test("assessGenerationQuality grades an explicit landing page as one rich route without mandatory Supabase", () => {
+  const errors = assessGenerationQuality([
+    { path: "src/routes/__root.tsx", language: "typescriptreact", content: "export function Root() { return <div />; }" },
+    {
+      path: "src/routes/index.tsx",
+      language: "typescriptreact",
+      content: "export function Home() { return <><section /><section /><section /><section /><section /><section /></>; }",
+    },
+    { path: "src/components/layout/Header.tsx", language: "typescriptreact", content: "export function Header() { return <header><nav /></header>; }" },
+    { path: "src/components/layout/Footer.tsx", language: "typescriptreact", content: "export function Footer() { return <footer />; }" },
+  ], [], { appType: "marketing-website", minFiles: 1, singlePage: true });
+
+  assert.ok(!errors.some((e) => e.type === "too_few_website_pages"), JSON.stringify(errors));
+  assert.ok(!errors.some((e) => e.type === "missing_website_data_backing"), JSON.stringify(errors));
 });
 
 test("assessGenerationQuality accepts mature database-backed website structure", () => {

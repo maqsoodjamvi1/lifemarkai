@@ -71,7 +71,9 @@ async function getOrCreateSite(projectId: string): Promise<NetlifySite> {
     );
     const existing = sites.find((s) => s.name === siteName);
     if (existing) return existing;
-  } catch {}
+  } catch {
+    // site lookup is best-effort; creation below will handle the fallback.
+  }
   return netlifyFetch<NetlifySite>("/sites", {
     method: "POST",
     body: JSON.stringify({ name: siteName, custom_domain: null }),

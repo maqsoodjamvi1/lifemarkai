@@ -65,7 +65,9 @@ async function getOrCreateSite(
     );
     const existing = sites.find((s) => s.name === siteName);
     if (existing) return existing;
-  } catch {}
+  } catch {
+    // site lookup is best-effort; creation below is the fallback path.
+  }
 
   // Create new site
   return netlifyFetch<NetlifySite>("/sites", {

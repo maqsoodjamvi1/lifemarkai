@@ -55,7 +55,11 @@ export function PwaInstallPrompt() {
   }
 
   function dismiss() {
-    try { localStorage.setItem(DISMISS_KEY, String(Date.now())); } catch {}
+    try {
+      localStorage.setItem(DISMISS_KEY, String(Date.now()));
+    } catch {
+      // persistence is optional; the prompt can still close.
+    }
     setVisible(false);
   }
 

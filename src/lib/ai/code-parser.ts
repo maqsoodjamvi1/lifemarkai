@@ -684,15 +684,56 @@ function findDuplicateDeclarations(content: string): string[] {
   return [...duplicates];
 }
 
+function localBindingNames(content: string): Set<string> {
+  const names = new Set<string>();
+  let depth = 0;
+  for (const line of content.split("\n")) {
+    if (depth === 0) {
+      const declaration = line.match(
+        /^\s*(?:export\s+)?(?:declare\s+)?(?:async\s+)?(?:const|let|var|function|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)\b/,
+      );
+      if (declaration?.[1]) names.add(declaration[1]);
+      const defaultDeclaration = line.match(
+        /^\s*export\s+default\s+(?:async\s+)?(?:function|class)\s+([A-Za-z_$][\w$]*)\b/,
+      );
+      if (defaultDeclaration?.[1]) names.add(defaultDeclaration[1]);
+    }
+    const stripped = line
+      .replace(/(['"`])(?:\\.|(?!\1).)*\1/g, "")
+      .replace(/\/\/.*$/, "");
+    for (const char of stripped) {
+      if (char === "{") depth++;
+      else if (char === "}") depth = Math.max(0, depth - 1);
+    }
+  }
+  for (const match of content.matchAll(/\bimport\s+([\s\S]*?)\s+from\s+['"][^'"]+['"]/g)) {
+    const clause = match[1].trim();
+    const defaultName = clause.match(/^(?:type\s+)?([A-Za-z_$][\w$]*)/)?.[1];
+    if (defaultName) names.add(defaultName);
+    const namespaceName = clause.match(/\*\s+as\s+([A-Za-z_$][\w$]*)/)?.[1];
+    if (namespaceName) names.add(namespaceName);
+    const named = clause.match(/\{([^}]+)\}/)?.[1] ?? "";
+    for (const raw of named.split(",")) {
+      const local = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/i).pop()?.trim();
+      if (local && /^[A-Za-z_$][\w$]*$/.test(local)) names.add(local);
+    }
+  }
+  return names;
+}
+
 function exportedNames(content: string): Set<string> {
   const names = new Set<string>();
-  for (const match of content.matchAll(/\bexport\s+(?:const|let|var|function|class|interface|type)\s+([A-Za-z_$][\w$]*)\b/g)) {
+  const locals = localBindingNames(content);
+  for (const match of content.matchAll(/\bexport\s+(?:declare\s+)?(?:async\s+)?(?:const|let|var|function|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)\b/g)) {
     names.add(match[1]);
   }
-  for (const match of content.matchAll(/\bexport\s*\{([^}]+)\}/g)) {
+  for (const match of content.matchAll(/\bexport\s*\{([^}]+)\}\s*(?:from\s+['"][^'"]+['"])?/g)) {
+    const reExport = /\}\s*from\s+['"]/.test(match[0]);
     for (const raw of match[1].split(",")) {
-      const name = raw.trim().split(/\s+as\s+/i).pop()?.trim();
-      if (name && name !== "default") names.add(name);
+      const parts = raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/i);
+      const local = parts[0]?.trim();
+      const exported = parts.pop()?.trim();
+      if (exported && exported !== "default" && (reExport || (local && locals.has(local)))) names.add(exported);
     }
   }
   return names;
@@ -1385,7 +1426,7 @@ export function validateGeneratedFiles(
 export function assessGenerationQuality(
   files: ParsedFile[],
   existingFiles: ParsedFile[] = [],
-  opts: { minFiles?: number; appType?: string } = {}
+  opts: { minFiles?: number; appType?: string; singlePage?: boolean } = {}
 ): ValidationError[] {
   const errors: ValidationError[] = [];
   const minFiles = opts.minFiles ?? 10;
@@ -1502,14 +1543,14 @@ export function assessGenerationQuality(
   );
 
   if (appType === "marketing-website") {
-    if (pageCount < 5) {
+    if (!opts.singlePage && pageCount < 5) {
       errors.push({
         type: "too_few_website_pages",
         message: `Only ${pageCount} routed page file(s) found. A complete website needs 5-10 linked pages such as Home, Services, About, Portfolio/Case Studies, Blog/Resources, and Contact.`,
         severity: "error",
       });
     }
-    if (!hasSupabaseMigration || !hasSupabaseClient || !hasDataLayer) {
+    if (!opts.singlePage && (!hasSupabaseMigration || !hasSupabaseClient || !hasDataLayer)) {
       errors.push({
         type: "missing_website_data_backing",
         message: "Website builds must include Supabase migration SQL, src/lib/supabase.ts, and a data-access layer/hooks with local fallback data for leads/contact/newsletter/content.",

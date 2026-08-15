@@ -75,7 +75,11 @@ function run(
       },
     });
     const timer = setTimeout(() => {
-      try { child.kill("SIGKILL"); } catch {}
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore timeout cleanup errors; the process is already being torn down
+      }
       onLog?.(`[build] '${cmd} ${args.join(" ")}' timed out after ${timeoutMs}ms`);
       resolve(124);
     }, timeoutMs);

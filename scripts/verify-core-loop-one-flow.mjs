@@ -143,9 +143,18 @@ async function main() {
   await assertCampaignConfiguration();
   const viteBin = assertRuntimeDependencies();
   const campaign = fileURLToPath(new URL("./verify-core-loop-campaign.ts", import.meta.url));
-  const env = { ...process.env, CORE_LOOP_ATTEMPTS: ATTEMPTS };
+  const coreLoopHost = new URL(BASE_URL).hostname;
+  const env = {
+    ...process.env,
+    CORE_LOOP_ATTEMPTS: ATTEMPTS,
+    CORE_LOOP_ACTIVE: "1",
+    SANDBOX_PROVIDER: "docker",
+    SANDBOX_PUBLIC_HOST: process.env.SANDBOX_PUBLIC_HOST || coreLoopHost,
+    SANDBOX_PUBLIC_SCHEME: process.env.SANDBOX_PUBLIC_SCHEME || "http",
+  };
 
   console.log(`Starting LifeMarkAI at ${BASE_URL}...`);
+  console.log(`Core-loop preview backend: Docker (${env.SANDBOX_PUBLIC_HOST})`);
   const server = spawn(
     process.execPath,
     [viteBin, "dev", "--port", new URL(BASE_URL).port || "3001"],

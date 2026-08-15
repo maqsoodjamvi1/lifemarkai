@@ -2,15 +2,14 @@
  * Sandbox execution provider — run a generated app in a real isolated
  * environment and get a LIVE preview URL (Lovable-parity real execution).
  *
- * Production (Lovable): **Modal Sandboxes** only (`lib/sandbox/modal.ts`).
+ * Core release path: **private Docker** (`lib/sandbox/docker.ts`).
  *
- * Draft / legacy:
- * - **E2B** — opt-in via `SANDBOX_PROVIDER=e2b` or `ENABLE_E2B_SANDBOX=1`.
- *   Not auto-selected when Modal is missing.
- * - In-browser WebContainer / esbuild — gated in preview-panel / resolve-preview-engine.
+ * Explicit fallbacks outside the release gate:
+ * - In-browser WebContainer — selected only by an explicit editor preference.
+ * - Modal / E2B — optional operator-selected remote providers.
  *
  * Design notes:
- * - Provider-agnostic interface so Docker / Firecracker can be added later.
+ * - Provider policy is pure and contract-tested.
  * - E2B SDK is dependency-optional (dynamic import).
  */
 
@@ -186,6 +185,7 @@ export interface SandboxProvider {
 import { DEFAULT_TIMEOUT_MS,trunc,waitForServer } from "./shared.ts";
 import { ModalSandboxProvider } from "./modal.ts";
 import { DockerSandboxProvider } from "./docker.ts";
+import { selectSandboxProvider } from "./provider-policy.ts";
 export {
   detectSandboxStart,
   sandboxNameForProject,
@@ -517,38 +517,25 @@ function isE2bSandboxAllowed(): boolean {
 }
 
 /**
- * Lovable production path = Modal.
- * E2B is draft/legacy and never auto-selected.
+ * Core-loop execution is always Docker. Other providers are available only
+ * outside the release-proof process and never become silent core-loop fallbacks.
  */
 export function getSandboxProvider(): SandboxProvider {
   if (!cached) {
-    const pref = (process.env.SANDBOX_PROVIDER ?? "auto").toLowerCase();
+    const requested = (process.env.SANDBOX_PROVIDER ?? "auto").toLowerCase();
+    const docker = new DockerSandboxProvider();
     const modal = new ModalSandboxProvider();
     const e2b = new E2BSandboxProvider();
-    if (pref === "docker") {
-      // Self-hosted Docker runner. EXPLICIT OPT-IN ONLY — never auto-selected,
-      // because it executes untrusted generated code on your own host and that
-      // should always be a decision, never a fallback nobody noticed.
-      const dockerProvider = new DockerSandboxProvider();
-      if (dockerProvider.isEnabled()) {
-        cached = dockerProvider;
-        return cached;
-      }
-      console.warn(
-        "[sandbox] SANDBOX_PROVIDER=docker but neither SANDBOX_PREVIEW_DOMAIN nor SANDBOX_PUBLIC_HOST is set — falling back.",
-      );
-    }
-    if (pref === "e2b" && isE2bSandboxAllowed()) {
-      cached = e2b;
-    } else if (pref === "modal" || modal.isEnabled()) {
-      cached = modal;
-    } else if (isE2bSandboxAllowed() && e2b.isEnabled()) {
-      // Explicit draft opt-in only — never silent fallback.
-      cached = e2b;
-    } else {
-      // Modal class still returned so isEnabled() is false → thin srcdoc fallback.
-      cached = modal;
-    }
+    const selected = selectSandboxProvider({
+      coreLoop: process.env.CORE_LOOP_ACTIVE === "1",
+      requested,
+      dockerEnabled: docker.isEnabled(),
+      modalEnabled: modal.isEnabled(),
+      e2bEnabled: e2b.isEnabled(),
+      e2bAllowed: isE2bSandboxAllowed(),
+    });
+
+    cached = selected === "docker" ? docker : selected === "e2b" ? e2b : modal;
   }
   return cached;
 }
@@ -559,8 +546,8 @@ export function getSandboxProviderId(): SandboxProvider["id"] {
 }
 
 /**
- * True when the production Modal sandbox (or explicitly enabled draft E2B) is available.
- * When false, the editor shows "Modal preview required" — not WebContainer/srcdoc/esbuild.
+ * True when the selected server sandbox is configured.
+ * The core-loop selector never substitutes another provider for missing Docker.
  */
 export function isSandboxEnabled(): boolean {
   const provider = getSandboxProvider();
