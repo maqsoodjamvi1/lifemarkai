@@ -117,6 +117,7 @@ import { createStreamSink } from "../chat/sse-stream.ts";
 import { createDeployActionResponse } from "../chat/deploy-action.ts";
 import { buildControlledTemplatePrompt,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
+import { describeRejectedGeneration } from "../generation-diagnostics.ts";
 import { getCoreLoopPolicy,isCoreLoopRequest } from "../../reliability/core-loop-policy.ts";
 import { completeEnterpriseOrchestrationState,createBuildOrchestration,evaluateBuildCompletion,evaluateEnterpriseGates,parseEnterpriseOrchestrationState } from "../orchestration-controller.ts";
 
@@ -1405,6 +1406,11 @@ The user has expressed frustration. Do the following:
         let fullContent = "";
         let tokensUsed = 0;
         let usedAutoFix = false;
+        // Counted so the contract-gate error can say what actually happened.
+        // It used to claim every rejection came "after bounded repair", which
+        // is false when the repair loop never ran — and that wording sent a
+        // core-loop investigation hunting a broken repair loop that was fine.
+        let autoFixRounds = 0;
         const streamedFilePaths = new Set<string>();
         // Keep streamed files in memory for progress and billing only. Canonical
         // project_files are written only after the complete response parses and
@@ -2125,6 +2131,7 @@ The user has expressed frustration. Do the following:
                 previousValidationSignature = validationSignature;
 
                 usedAutoFix = true;
+                autoFixRounds += 1;
                 const statusMsg =
                   enrichPass === 0
                     ? `Auto-fixing ${validationErrors.length} issue(s)…`
@@ -2264,11 +2271,38 @@ The user has expressed frustration. Do the following:
                 remaining.push(...enterpriseGates.errors);
               }
               if (remaining.length > 0) {
+                // Last chance to record anything about these files: the save to
+                // project_files happens below this throw, so a rejected build
+                // leaves no artifact behind. Without this, the only evidence of
+                // a failed core-loop run is one sentence naming a file that no
+                // longer exists anywhere — which is exactly how a real failure
+                // became undiagnosable. Shape only, never content.
+                const diagnostic = describeRejectedGeneration(
+                  finalFiles,
+                  remaining.map((error) => error.message),
+                );
+                logger.error(
+                  "ai.chat.generation_contract_rejected",
+                  new Error("generation contract rejected"),
+                  {
+                    projectId,
+                    model: effectiveModel,
+                    autoFixRounds,
+                    fileCount: diagnostic.fileCount,
+                    totalBytes: diagnostic.totalBytes,
+                    offenders: diagnostic.offenders,
+                    errors: remaining.map((error) => error.message),
+                  },
+                );
+                const repairNote =
+                  autoFixRounds > 0
+                    ? `after ${autoFixRounds} repair round${autoFixRounds === 1 ? "" : "s"}`
+                    : "with no repair round attempted";
                 throw new Error(
-                  `Generation contract remained invalid after bounded repair: ${remaining
+                  `Generation contract remained invalid ${repairNote}: ${remaining
                     .slice(0, 5)
                     .map((error) => error.message)
-                    .join(" | ")}`,
+                    .join(" | ")} [${diagnostic.summaryLine}]`,
                 );
               }
             }
