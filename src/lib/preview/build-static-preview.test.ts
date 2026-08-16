@@ -146,3 +146,33 @@ test("buildStaticPreview runs nested local ES modules through an import map", ()
   assert.match(html, /import "app:\/app\.js"/);
   assert.doesNotMatch(html, /from \\"\.\.\/data\/seed\.js/);
 });
+
+test("buildStaticPreview reports a bundler error instead of leaking an unrunnable TSX entry script (#9)", () => {
+  const html = buildStaticPreview([
+    { path: "index.html", content: '<div id="root"></div><script type="module" src="/src/main.tsx"></script>' },
+    { path: "src/main.tsx", content: 'import App from "./App"; App.mount();' },
+  ]);
+
+  // The original root-relative src must never survive into the srcdoc: left
+  // in place, the browser resolves it against the PARENT document's origin
+  // (not the project's files) and the fetch 404s/CORS-fails silently (#9).
+  assert.doesNotMatch(html, /src=["']\/src\/main\.tsx["']/);
+  assert.doesNotMatch(html, /<script[^>]*type="module"[^>]*>\s*<\/script>/);
+  // A visible, actionable "bundler" preview error is reported instead, using
+  // the same postMessage contract the sandbox/WebContainer error bridge uses
+  // so the existing self-heal / "Preview paused" UI picks it up.
+  assert.match(html, /kind:\s*"bundler"/);
+  assert.match(html, /Failed to compile/);
+  assert.match(html, /src\/main\.tsx/);
+  assert.match(html, /source:\s*"lifemark-preview-errors"/);
+});
+
+test("buildStaticPreview leaves genuinely static projects alone (no bundler error)", () => {
+  const html = buildStaticPreview([
+    { path: "index.html", content: '<script src="app.js"></script>' },
+    { path: "app.js", content: "console.log('ok');" },
+  ]);
+
+  assert.doesNotMatch(html, /data-lifemark-unsupported-entry/);
+  assert.doesNotMatch(html, /kind:\s*"bundler"/);
+});
