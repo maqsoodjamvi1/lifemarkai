@@ -833,7 +833,7 @@ export class DockerSandboxProvider implements SandboxProvider {
             };
           }
           if (npmExit !== 0) {
-            return { ok: false, error: `npm install failed (exit ${npmExit}).`, logs: trunc(logs) };
+            return { ok: false, error: `npm install failed (exit ${npmExit}): ${trunc(logs).slice(-600)}`, logs: trunc(logs) };
           }
         }
       }
