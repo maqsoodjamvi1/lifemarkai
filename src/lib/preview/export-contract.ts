@@ -242,6 +242,9 @@ export function findMissingModules(files: ProjectFileLike[]): MissingModule[] {
     }
 
     for (const spec of new Set(collectAllSpecs(file.content))) {
+      // TanStack Start route tree is written by the Vite plugin at dev time
+      // (same exemption as normalize-imports.ts isGenerated).
+      if (/routeTree\.gen$/.test(spec.replace(/\.(ts|tsx|js|jsx)$/, ""))) continue;
       const res = resolveModule(file.path, spec, byPath);
       if (res.kind !== "missing") continue;
 

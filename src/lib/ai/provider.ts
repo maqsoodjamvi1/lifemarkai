@@ -392,13 +392,16 @@ function maxOutputFor(model: string): number {
   if (m.includes("gemini")) return 64000; // Gemini 3.x flash/pro: 64K output
   if (m.includes("gpt-4o")) return 16384; // 4o / 4o-mini cap
   if (m.includes("deepseek")) return 32000;
+  if (m.includes("qwen")) return 65_536; // qwen3-coder supports far more than the old default
   return 16384; // conservative default for unknown / open-weight models
 }
 
 /** Clamp a requested output-token count to what the model actually supports. */
 export function clampMaxTokens(model: string, requested?: number): number | undefined {
   if (requested == null) return requested;
-  return Math.min(requested, maxOutputFor(model));
+  const ceiling = maxOutputFor(model);
+  if (requested > ceiling * 1.25) console.warn("[ai/clamp] " + model + ": requested " + requested + " output tokens, clamped to " + ceiling);
+  return Math.min(requested, ceiling);
 }
 
 async function generateOpenAI(options: GenerateOptions & { model: AIModel }): Promise<GenerateResult> {
@@ -460,6 +463,7 @@ async function generateOpenAI(options: GenerateOptions & { model: AIModel }): Pr
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content ?? "";
+      if (chunk.choices[0]?.finish_reason === "length") console.warn("[ai/truncated] response hit the output token cap (finish_reason=length)");
       if (delta) {
         fullContent += delta;
         options.onChunk(delta);
@@ -662,6 +666,7 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content ?? "";
+      if (chunk.choices[0]?.finish_reason === "length") console.warn("[ai/truncated] response hit the output token cap (finish_reason=length)");
       if (delta) {
         fullContent += delta;
         options.onChunk(delta);
@@ -726,6 +731,7 @@ async function generateGoogle(options: GenerateOptions & { model: AIModel }): Pr
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta?.content ?? "";
+      if (chunk.choices[0]?.finish_reason === "length") console.warn("[ai/truncated] response hit the output token cap (finish_reason=length)");
       if (delta) {
         fullContent += delta;
         options.onChunk(delta);
