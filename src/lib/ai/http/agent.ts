@@ -1,4 +1,5 @@
 import { createClientFromRequest } from "../../supabase/request-client.ts";
+import { createAdminClient } from "../../supabase/server.ts";
 import { getServerUser } from "../../supabase/server-user.ts";
 import { runAgent,type AgentStep } from "../agent.ts";
 import { mcpInitialize,mcpListTools,mcpCallTool } from "../mcp-client.ts";
@@ -39,6 +40,9 @@ import { commitGenerationSnapshot } from "../chat/commit-generation-snapshot.ts"
 import { checkTemplateCompatibility,lockControlledDependencyVersions,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
 import { setCorrelation } from "../../observability/correlation.ts";
+import { ensureBuildRunId,getCorrelation } from "../../observability/correlation.ts";
+import { isFeatureEnabled } from "../../config/features.ts";
+import { BuildRunStore } from "../../build-runs/store.ts";
 
 
 export async function handleAiAgent(req: Request) {
@@ -495,11 +499,42 @@ export async function handleAiAgent(req: Request) {
     );
   }
 
+  // ── Phase 6 pilot: durable build run (flag: VERCEL_WORKFLOW_ENABLED) ──────
+  // Flag off (default): buildRunStore stays null, zero extra queries, byte-
+  // identical behaviour. Flag on: the run gets a build_runs row, every SSE
+  // event is persisted for reconnect replay (GET /api/build-runs/:id/events),
+  // and the terminal state lands exactly once — closing the browser no longer
+  // erases the build's history.
+  let buildRunStore: BuildRunStore | null = null;
+  let buildRunId: string | null = null;
+  if (isFeatureEnabled("vercelWorkflow", { userId: user.id, projectId })) {
+    try {
+      const admin = await createAdminClient();
+      buildRunStore = new BuildRunStore(admin as never);
+      buildRunId = getCorrelation()?.buildRunId ?? ensureBuildRunId();
+      await buildRunStore.startRun({
+        runId: buildRunId,
+        projectId,
+        userId: user.id,
+        mode: "agent",
+        model: typeof model === "string" ? model : undefined,
+        creditsReserved: creditReservation.amount,
+        creditReservationKey: `resv_${creditReservation.id}`,
+      });
+    } catch (err) {
+      // Durability is a pilot; the live build must not depend on it.
+      console.warn("[agent] build-run start failed:", err);
+      buildRunStore = null;
+    }
+  }
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
-      const send = (data: object) =>
+      const send = (data: object) => {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
+        if (buildRunStore && buildRunId) buildRunStore.appendEvent(buildRunId, data);
+      };
 
       let reservationFinalized = false;
       let producedBillableWork = false;
@@ -945,9 +980,25 @@ export async function handleAiAgent(req: Request) {
             ? { engine: verification.engine, passed: verification.passed, fixesApplied: verification.fixesApplied, errors: verification.errors }
             : undefined,
         });
+        if (buildRunStore && buildRunId) {
+          await buildRunStore.finishRun({
+            runId: buildRunId,
+            status: "completed",
+            creditsFinalized: finalCreditCost ?? undefined,
+            creditFinalizationKey: `fin_${creditReservation.id}`,
+            verificationPassed: verification?.passed,
+          });
+        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Agent failed";
         send({ error: msg });
+        if (buildRunStore && buildRunId) {
+          await buildRunStore.finishRun({
+            runId: buildRunId,
+            status: "failed",
+            failureCode: msg.slice(0, 200),
+          });
+        }
       } finally {
         if (!reservationFinalized) {
           try {
