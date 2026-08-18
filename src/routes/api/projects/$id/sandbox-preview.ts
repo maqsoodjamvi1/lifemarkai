@@ -10,6 +10,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
+import { correlationFromRequest,runWithCorrelation,setCorrelation } from "@/lib/observability/correlation";
 import {
 detectSandboxStart,
 getSandboxProvider,
@@ -24,10 +25,6 @@ import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { patchSandboxPreviewFiles } from "@/lib/preview/patch-sandbox-preview-files";
 import type { Database,Json } from "@/types/database";
 
-
-interface Params {
-  params: Promise<{ id: string }>;
-}
 
 /**
  * Does this provider error mean "the sandbox you asked for no longer exists"?
@@ -85,7 +82,7 @@ function isSandboxTunnelUrl(value: unknown): value is string {
  *  each other's fresh Modal sandboxes ("user termination request"). */
 const bootInflight = new Map<string, Promise<Response>>();
 
-async function handlePOST(req: Request, params: any) {
+async function handlePOST(req: Request, params: { id: string }) {
   const { id: projectId } = params;
   const existing = bootInflight.get(projectId);
   if (existing) {
@@ -99,14 +96,25 @@ async function handlePOST(req: Request, params: any) {
     // the Retry button can all fire one, never mind a second browser tab.
     return existing.then((res) => res.clone());
   }
-  const run = handlePOSTUnlocked(req, params).finally(() => {
+  // The correlation context wraps the BOOT, not the request: concurrent callers
+  // share one boot via bootInflight, so the ids belong to the boot that actually
+  // ran. For the same reason the shared response is not stamped with correlation
+  // headers — the second caller would receive the first caller's requestId.
+  const run = runWithCorrelation(
+    {
+      ...correlationFromRequest(req),
+      route: "api/projects/:id/sandbox-preview",
+      projectId,
+    },
+    () => handlePOSTUnlocked(req, params),
+  ).finally(() => {
     if (bootInflight.get(projectId) === run) bootInflight.delete(projectId);
   });
   bootInflight.set(projectId, run);
   return run;
 }
 
-async function handlePOSTUnlocked(req: Request, params: any) {
+async function handlePOSTUnlocked(req: Request, params: { id: string }) {
   const { id: projectId } = params;
 
   const supabase = await createClient();
@@ -252,6 +260,8 @@ async function handlePOSTUnlocked(req: Request, params: any) {
     onProgress: (phase, detail) => persistPhase(phase, detail),
   });
 
+  if (result.ok && result.sandboxId) setCorrelation({ sandboxSessionId: result.sandboxId });
+
   if (!result.ok) {
     // ZOMBIE SANDBOX RECOVERY.
     //
@@ -294,6 +304,7 @@ async function handlePOSTUnlocked(req: Request, params: any) {
       });
 
       if (retry.ok) {
+        if (retry.sandboxId) setCorrelation({ sandboxSessionId: retry.sandboxId });
         const { error: previewUrlErr } = await writeMeta(
           {
             sandbox_id: retry.sandboxId,

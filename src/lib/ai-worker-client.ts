@@ -3,6 +3,13 @@
  * Never imports lib/ai/http or app/api into the Vite SSR graph.
  */
 import { spawn,type ChildProcess } from "node:child_process";
+import {
+applyCorrelationHeaders,
+correlationFromRequest,
+ensureBuildRunId,
+runWithCorrelation,
+withCorrelationHeaders,
+} from "./observability/correlation.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -96,7 +103,31 @@ async function ensureWorker(): Promise<void> {
   await starting;
 }
 
+/**
+ * Forward one AI request to the worker process.
+ *
+ * The worker is a SEPARATE Node process, so in-process AsyncLocalStorage does
+ * not reach it — the correlation ids travel as `x-lifemark-*` headers and the
+ * worker re-establishes its own context from them. Chat and agent mint a
+ * buildRunId here (they are the two entrypoints that start a user-visible
+ * build) so generation, self-verify, repair rounds and the deploy that follows
+ * all report the same run. `fix` deliberately does not: it runs INSIDE an
+ * existing build and inherits that build's id from the incoming header.
+ */
 export async function proxyAiToWorker(
+  name: "fix" | "chat" | "agent",
+  request: Request,
+): Promise<Response> {
+  return runWithCorrelation(
+    { ...correlationFromRequest(request), route: `api/ai/${name}` },
+    async () => {
+      if (name !== "fix") ensureBuildRunId();
+      return withCorrelationHeaders(await forwardToWorker(name, request));
+    },
+  );
+}
+
+async function forwardToWorker(
   name: "fix" | "chat" | "agent",
   request: Request,
 ): Promise<Response> {
@@ -120,6 +151,7 @@ export async function proxyAiToWorker(
   const headers = new Headers(request.headers);
   headers.delete("host");
   headers.delete("connection");
+  applyCorrelationHeaders(headers);
   const body = await request.arrayBuffer();
 
   try {

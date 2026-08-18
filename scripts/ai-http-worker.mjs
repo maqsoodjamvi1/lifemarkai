@@ -22,6 +22,37 @@ const bundleDir = path.join(startAppRoot, ".tmp/ai-http");
 const ALS_KEY = "__lifemark_request_als_store__";
 const als = (globalThis[ALS_KEY] ||= new AsyncLocalStorage());
 
+// Same key as src/lib/observability/correlation.ts. The bundled handlers read
+// their correlation ids from this store; seeding it here (from the headers the
+// Start process stamped) is what makes worker log lines joinable with request
+// log lines for the same build.
+const CORRELATION_KEY = "__lifemark_correlation_als__";
+const correlationAls = (globalThis[CORRELATION_KEY] ||= new AsyncLocalStorage());
+
+const CORRELATION_HEADERS = {
+  requestId: "x-lifemark-request-id",
+  buildRunId: "x-lifemark-build-run-id",
+  sandboxSessionId: "x-lifemark-sandbox-session-id",
+  deploymentId: "x-lifemark-deployment-id",
+};
+
+function correlationFromHeaders(request, route) {
+  const read = (name) => {
+    const value = request.headers.get(name);
+    if (!value) return undefined;
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.length > 128) return undefined;
+    return /^[A-Za-z0-9_.:-]+$/.test(trimmed) ? trimmed : undefined;
+  };
+  return {
+    requestId: read(CORRELATION_HEADERS.requestId) || `req_worker_${Date.now().toString(36)}`,
+    buildRunId: read(CORRELATION_HEADERS.buildRunId),
+    sandboxSessionId: read(CORRELATION_HEADERS.sandboxSessionId),
+    deploymentId: read(CORRELATION_HEADERS.deploymentId),
+    route: `ai-worker/${route}`,
+  };
+}
+
 function loadEnvFile(filePath) {
   if (!fs.existsSync(filePath)) return;
   for (const line of fs.readFileSync(filePath, "utf8").split(/\r?\n/)) {
@@ -251,7 +282,11 @@ const server = http.createServer(async (req, res) => {
     const webReq = await toWebRequest(req);
     console.log(`[ai-worker] → ${name} body ${Date.now() - t0}ms`);
     // Handlers use createClientFromRequest (Cookie header) — no next/headers ALS.
-    const result = await handler(webReq);
+    const correlation = correlationFromHeaders(webReq, name);
+    console.log(
+      `[ai-worker] ctx ${name} requestId=${correlation.requestId} buildRunId=${correlation.buildRunId || "-"}`,
+    );
+    const result = await correlationAls.run(correlation, () => handler(webReq));
     const pending =
       webReq[Symbol.for("lifemark.pendingSetCookies")] || [];
     console.log(`[ai-worker] ← ${name} ${Date.now() - t0}ms status=${result.status}`);

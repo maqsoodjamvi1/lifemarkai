@@ -1,4 +1,5 @@
 import { createAdminClient } from "../../supabase/server.ts";
+import { setCorrelation } from "../../observability/correlation.ts";
 import { canWriteProjectFiles,getProjectAccess } from "../../project/access.ts";
 import { runGenerationStage } from "../chat/generation-service.ts";
 import { DEFAULT_CHAT_MODEL } from "../model-defaults.ts";
@@ -165,6 +166,11 @@ export async function handleAiChat(req: Request) {
     let mode: ChatRouteMode = (["chat", "plan", "build", "agent", "patch"] as const).includes(body.mode)
       ? (body.mode as ChatRouteMode)
       : "chat";
+    // Phase 0: attach identity to the correlation context so every downstream
+    // log line, AI call and sandbox action in this request carries the same
+    // project/user without threading ctx through a dozen call sites.
+    setCorrelation({ userId, projectId: typeof projectId === "string" ? projectId : undefined });
+
     const coreLoop = isCoreLoopRequest(coreLoopValue);
     const coreLoopPolicy = getCoreLoopPolicy();
     if (coreLoop) mode = coreLoopPolicy.mode;

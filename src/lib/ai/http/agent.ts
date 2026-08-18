@@ -38,6 +38,7 @@ import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 import { commitGenerationSnapshot } from "../chat/commit-generation-snapshot.ts";
 import { checkTemplateCompatibility,lockControlledDependencyVersions,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
+import { setCorrelation } from "../../observability/correlation.ts";
 
 
 export async function handleAiAgent(req: Request) {
@@ -60,6 +61,8 @@ export async function handleAiAgent(req: Request) {
       ? previewUrl.trim()
       : null;
   const costTask = typeof rawTask === "string" && rawTask.trim() ? rawTask : task;
+  // Phase 0: identity on the correlation context (see http/chat.ts).
+  setCorrelation({ userId: user.id, projectId: typeof projectId === "string" ? projectId : undefined });
   if (!projectId || typeof projectId !== "string") {
     return Response.json({ error: "projectId is required" }, { status: 400 });
   }

@@ -13,6 +13,7 @@ import { getDefaultAiModel } from "./model-defaults.ts";
 import { assertOpenRouterCredit,routesViaOpenRouter } from "./openrouter-credits.ts";
 import { recordAiEval } from "./eval-log.ts";
 import { toFriendlyProviderError } from "./provider-error.ts";
+import { correlationFields } from "../observability/correlation.ts";
 export type { GenerateOptions, GenerateResult, AIMessage, AIModel } from "./provider.ts";
 
 export { generateDirect as generateDirectAI };
@@ -26,6 +27,17 @@ export async function generateAI(
   // model only supports less.
   const model = options.model ?? getDefaultAiModel();
   options = { ...options, maxTokens: clampMaxTokens(model, options.maxTokens) };
+
+  // Phase 0: most call sites pass no ctx at all, so ai_eval_log rows arrive
+  // with null project/user and cannot be attributed. The request already knows
+  // both — take them from the correlation context when the caller did not pass
+  // them. An explicit ctx always wins; this only fills gaps.
+  const correlation = correlationFields();
+  ctx = {
+    ...ctx,
+    projectId: ctx?.projectId ?? correlation.projectId,
+    userId: ctx?.userId ?? correlation.userId,
+  };
 
   // Pre-flight guard: never overdraw the OpenRouter account. Blocks only when the
   // balance is CONFIRMED depleted (fail-open otherwise); cached ~60s so it adds
