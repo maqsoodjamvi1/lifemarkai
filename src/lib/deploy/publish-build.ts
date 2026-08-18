@@ -16,6 +16,8 @@
 import { randomUUID } from "crypto";
 import { tryViteBuild,looksLikeViteProject,type BuildFile } from "./build-project.ts";
 import { storeBuild } from "./build-store.ts";
+import { recordEvent } from "../observability/events.ts";
+import { setCorrelation } from "../observability/correlation.ts";
 
 export interface PublishBuildResult {
   ok: boolean;
@@ -54,8 +56,13 @@ export async function publishBuild(
   onLog?: (line: string) => void,
 ): Promise<PublishBuildResult> {
   const buildId = randomUUID();
+  // Phase 1: the deploy attempt gets a correlation id so its events join the
+  // build that triggered it. The stored buildId doubles as the deploymentId.
+  setCorrelation({ deploymentId: `dep_${buildId}`, projectId });
+  const publishStartedAt = Date.now();
 
   if (!files.length) {
+    recordEvent("deployment_failed", { reason: "no_files", durationMs: Date.now() - publishStartedAt });
     return { ok: false, buildId: null, fileCount: 0, detail: "project has no files", compiled: false };
   }
 
@@ -74,7 +81,8 @@ export async function publishBuild(
           ? "ENABLE_SERVER_VITE_BUILD is not 'true' — the server will not compile this project"
           : "vite build failed — see the build log above";
       onLog?.(`[publish] ${reason}`);
-      return { ok: false, buildId: null, fileCount: 0, detail: reason, compiled: false };
+      recordEvent("deployment_failed", { reason: "vite_build_failed", durationMs: Date.now() - publishStartedAt });
+    return { ok: false, buildId: null, fileCount: 0, detail: reason, compiled: false };
     }
   } else if (isPlainStaticSite(files)) {
     onLog?.("[publish] static site — no compile step needed");
@@ -83,16 +91,23 @@ export async function publishBuild(
     const detail =
       "project is neither a Vite app nor a static site with index.html — nothing to publish";
     onLog?.(`[publish] ${detail}`);
+    recordEvent("deployment_failed", { reason: "unpublishable_project", durationMs: Date.now() - publishStartedAt });
     return { ok: false, buildId: null, fileCount: 0, detail, compiled: false };
   }
 
   const stored = await storeBuild(projectId, buildId, output);
   if (!stored.ok) {
     onLog?.(`[publish] could not store build: ${stored.error}`);
+    recordEvent("deployment_failed", { reason: "store_failed", durationMs: Date.now() - publishStartedAt });
     return { ok: false, buildId: null, fileCount: 0, detail: stored.error, compiled };
   }
 
   onLog?.(`[publish] stored ${stored.fileCount} file(s) as build ${buildId}`);
+  recordEvent("deployment_completed", {
+    fileCount: stored.fileCount,
+    compiled,
+    durationMs: Date.now() - publishStartedAt,
+  });
   return {
     ok: true,
     buildId,

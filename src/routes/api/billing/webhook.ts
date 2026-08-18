@@ -6,6 +6,7 @@ import { sendCreditsPurchasedEmail } from "@/lib/email/resend";
 import { completeDomainPurchase } from "@/lib/domains/complete-domain-purchase";
 import type { RegistrantContact } from "@/lib/domains/registrar";
 import type Stripe from "stripe";
+import { recordEvent } from "@/lib/observability/events";
 
 /**
  * Native /api/billing/webhook — Stripe webhook (off the worker).
@@ -20,6 +21,7 @@ export const Route = createFileRoute("/api/billing/webhook")({
         const sig = request.headers.get("stripe-signature");
 
         if (!sig || !process.env.STRIPE_WEBHOOK_SECRET) {
+          recordEvent("stripe_webhook_rejected", { reason: "missing_signature" });
           return Response.json({ error: "Missing stripe signature" }, { status: 400 });
         }
 
@@ -27,8 +29,12 @@ export const Route = createFileRoute("/api/billing/webhook")({
         try {
           event = stripe.webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET);
         } catch {
+          recordEvent("stripe_webhook_rejected", { reason: "invalid_signature" });
           return Response.json({ error: "Invalid signature" }, { status: 400 });
         }
+        // Only the event TYPE and id — never the payload (customer emails,
+        // amounts and addresses live in there).
+        recordEvent("stripe_webhook_received", { eventType: event.type, eventId: event.id });
 
         const supabase = createAdminClient();
 

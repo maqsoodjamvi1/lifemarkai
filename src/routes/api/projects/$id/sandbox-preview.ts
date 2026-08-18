@@ -11,6 +11,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
 import { correlationFromRequest,runWithCorrelation,setCorrelation } from "@/lib/observability/correlation";
+import { recordEvent } from "@/lib/observability/events";
 import {
 detectSandboxStart,
 getSandboxProvider,
@@ -261,6 +262,11 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
   });
 
   if (result.ok && result.sandboxId) setCorrelation({ sandboxSessionId: result.sandboxId });
+  recordEvent(result.ok ? "sandbox_boot_completed" : "sandbox_boot_failed", {
+    provider: getSandboxProviderId(),
+    ready: result.ready !== false,
+    error: result.ok ? undefined : result.error,
+  });
 
   if (!result.ok) {
     // ZOMBIE SANDBOX RECOVERY.
@@ -303,6 +309,12 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
         onProgress: (phase, detail) => persistPhase(phase, detail),
       });
 
+      recordEvent(retry.ok ? "sandbox_boot_completed" : "sandbox_boot_failed", {
+        provider: getSandboxProviderId(),
+        retryAfterZombie: true,
+        ready: retry.ready !== false,
+        error: retry.ok ? undefined : retry.error,
+      });
       if (retry.ok) {
         if (retry.sandboxId) setCorrelation({ sandboxSessionId: retry.sandboxId });
         const { error: previewUrlErr } = await writeMeta(

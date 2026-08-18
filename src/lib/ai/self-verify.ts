@@ -14,6 +14,7 @@
  * never throws: a verification failure is reported, not fatal.
  */
 import { z } from "zod";
+import { recordEvent } from "../observability/events.ts";
 
 import { buildFallbackHtml } from "../preview/build-fallback-html.ts";
 import { verifyPreviewHtml } from "./preview-verify.ts";
@@ -661,6 +662,14 @@ export async function runSelfVerification(opts: {
       if (!opts.candidateFiles) await new Promise((resolve) => setTimeout(resolve, 4_000));
     }
 
+    recordEvent("build_verification_completed", {
+      engine: result.engine,
+      passed: result.passed,
+      rounds: result.rounds,
+      fixesApplied: result.fixesApplied,
+      errorCount: result.errors.length,
+      durationMs: Date.now() - startedAt,
+    });
     return result;
   } catch (err) {
     // Verification must never break the build — but a silently swallowed
@@ -669,6 +678,15 @@ export async function runSelfVerification(opts: {
     // "candidate verification could not complete" fallback in
     // http/agent.ts). Log the real cause so it shows up in server logs.
     console.error("[self-verify] verification threw and was suppressed:", err);
+    recordEvent("build_verification_completed", {
+      engine: result.engine,
+      passed: result.passed,
+      rounds: result.rounds,
+      fixesApplied: result.fixesApplied,
+      errorCount: result.errors.length,
+      crashed: true,
+      durationMs: Date.now() - startedAt,
+    });
     return result.rounds > 0 ? result : null;
   }
 }

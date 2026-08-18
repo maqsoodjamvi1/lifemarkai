@@ -14,6 +14,7 @@ import { assertOpenRouterCredit,routesViaOpenRouter } from "./openrouter-credits
 import { recordAiEval } from "./eval-log.ts";
 import { toFriendlyProviderError } from "./provider-error.ts";
 import { correlationFields } from "../observability/correlation.ts";
+import { recordEvent } from "../observability/events.ts";
 export type { GenerateOptions, GenerateResult, AIMessage, AIModel } from "./provider.ts";
 
 export { generateDirect as generateDirectAI };
@@ -65,6 +66,15 @@ export async function generateAI(
       success: true,
       viaGateway,
     });
+    recordEvent("ai_generation_completed", {
+      model,
+      task: ctx?.task,
+      durationMs: Date.now() - startedAt,
+      tokensUsed: result.tokensUsed,
+      toolCallCount: result.toolCalls?.length ?? 0,
+      viaGateway,
+      success: true,
+    });
     return result;
   } catch (err) {
     recordAiEval({
@@ -76,6 +86,14 @@ export async function generateAI(
       success: false,
       error: err instanceof Error ? err.message : String(err),
       viaGateway,
+    });
+    recordEvent("ai_generation_failed", {
+      model,
+      task: ctx?.task,
+      durationMs: Date.now() - startedAt,
+      viaGateway,
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
     });
     // Improvement #6: surface one actionable sentence (401/402/429/5xx) to the
     // caller while keeping the raw provider error as `cause` for logs.
