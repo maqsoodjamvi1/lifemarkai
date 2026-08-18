@@ -1,4 +1,4 @@
-export type SandboxProviderId = "docker" | "modal" | "e2b";
+export type SandboxProviderId = "docker" | "modal" | "e2b" | "vercel";
 
 export interface SandboxProviderPolicyInput {
   /** Dedicated release-proof process; never permits a remote-provider fallback. */
@@ -9,6 +9,8 @@ export interface SandboxProviderPolicyInput {
   modalEnabled: boolean;
   e2bEnabled: boolean;
   e2bAllowed: boolean;
+  /** Phase 7: VERCEL_SANDBOX_ENABLED + credentials. Explicit request only — never an auto fallback. */
+  vercelAllowed?: boolean;
 }
 
 /**
@@ -28,6 +30,10 @@ export function selectSandboxProvider(
   if (requested === "docker") return "docker";
   if (requested === "modal") return "modal";
   if (requested === "e2b" && input.e2bAllowed) return "e2b";
+  // Phase 7: benchmark lane. Only an explicit SANDBOX_PROVIDER=vercel selects
+  // it, and only while the flag+credentials allow it; auto mode never falls
+  // back here, and the core-loop return above keeps the release lane Docker.
+  if (requested === "vercel" && input.vercelAllowed) return "vercel";
 
   if (input.dockerEnabled) return "docker";
   if (input.modalEnabled) return "modal";

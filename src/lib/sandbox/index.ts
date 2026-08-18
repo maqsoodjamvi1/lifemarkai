@@ -94,7 +94,7 @@ export interface ClaudeCodeResult {
 }
 
 export interface SandboxProvider {
-  readonly id: "modal" | "e2b" | "docker" | "firecracker";
+  readonly id: "modal" | "e2b" | "docker" | "firecracker" | "vercel";
   /** True when credentials/SDK are present. */
   isEnabled(): boolean;
   /**
@@ -185,6 +185,7 @@ export interface SandboxProvider {
 import { DEFAULT_TIMEOUT_MS,trunc,waitForServer } from "./shared.ts";
 import { ModalSandboxProvider } from "./modal.ts";
 import { DockerSandboxProvider } from "./docker.ts";
+import { VercelSandboxProvider } from "./vercel.ts";
 import { selectSandboxProvider } from "./provider-policy.ts";
 export {
   detectSandboxStart,
@@ -526,6 +527,7 @@ export function getSandboxProvider(): SandboxProvider {
     const docker = new DockerSandboxProvider();
     const modal = new ModalSandboxProvider();
     const e2b = new E2BSandboxProvider();
+    const vercel = new VercelSandboxProvider();
     const selected = selectSandboxProvider({
       coreLoop: process.env.CORE_LOOP_ACTIVE === "1",
       requested,
@@ -533,9 +535,14 @@ export function getSandboxProvider(): SandboxProvider {
       modalEnabled: modal.isEnabled(),
       e2bEnabled: e2b.isEnabled(),
       e2bAllowed: isE2bSandboxAllowed(),
+      vercelAllowed: vercel.isEnabled(),
     });
 
-    cached = selected === "docker" ? docker : selected === "e2b" ? e2b : modal;
+    cached =
+      selected === "docker" ? docker
+      : selected === "e2b" ? e2b
+      : selected === "vercel" ? vercel
+      : modal;
   }
   return cached;
 }
