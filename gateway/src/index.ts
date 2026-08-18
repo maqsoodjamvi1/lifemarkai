@@ -42,9 +42,17 @@ export interface Env {
   APP_URL: string;
   /** When not "false", route all models through OpenRouter when OPENROUTER_API_KEY is set. */
   AI_VIA_OPENROUTER?: string;
+
+  // ── Phase 5 (Vercel adoption plan): Vercel AI Gateway as an alternative upstream ──
+  /** API key for https://ai-gateway.vercel.sh; absence disables the upstream entirely. */
+  VERCEL_AI_GATEWAY_API_KEY?: string;
+  /** "true" routes ALL slash-model traffic to Vercel AI Gateway (kill switch: "false"/unset). */
+  VERCEL_AI_GATEWAY_ENABLED?: string;
+  /** 0..100 — deterministic per-user A/B split to Vercel AI Gateway. Ignored when ENABLED is "true"/"false". */
+  VERCEL_AI_GATEWAY_PERCENT?: string;
 }
 
-type AIProvider = "openai" | "anthropic" | "openrouter" | "google";
+type AIProvider = "openai" | "anthropic" | "openrouter" | "google" | "vercel-gateway";
 
 interface RouteInfo {
   provider: AIProvider;
@@ -124,7 +132,57 @@ function shouldUseOpenRouter(env: Env): boolean {
   return !!env.OPENROUTER_API_KEY;
 }
 
-function resolveRoute(model: string, env: Env): RouteInfo {
+// ── Phase 5: OpenRouter vs Vercel AI Gateway upstream selection ──────────────
+//
+// Both upstreams are OpenAI-compatible and serve the SAME slash-model ids, so
+// switching upstream never changes the model — the A/B compares gateways, not
+// model families (the plan's fairness requirement). Everything this Worker
+// owns (auth, attribution, cost calculation, credit deduction, usage
+// persistence, allowlists) is upstream-agnostic and runs unchanged.
+//
+// Selection order:
+//   VERCEL_AI_GATEWAY_ENABLED="false" → OpenRouter, always (the one-env rollback)
+//   VERCEL_AI_GATEWAY_ENABLED="true"  → Vercel AI Gateway, always
+//   VERCEL_AI_GATEWAY_PERCENT=N      → N% of users, hashed on user id — the
+//     same user always gets the same upstream, so one build never straddles two
+//   otherwise                         → OpenRouter (default; also the fallback
+//     when no VERCEL_AI_GATEWAY_API_KEY is configured)
+
+function abBucket(key: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash % 100;
+}
+
+function shouldUseVercelGateway(env: Env, userId: string): boolean {
+  if (!env.VERCEL_AI_GATEWAY_API_KEY) return false;
+  const flag = env.VERCEL_AI_GATEWAY_ENABLED?.toLowerCase();
+  if (flag === "false" || flag === "0") return false;
+  if (flag === "true" || flag === "1") return true;
+  const percent = Math.min(100, Math.max(0, parseInt(env.VERCEL_AI_GATEWAY_PERCENT ?? "0", 10) || 0));
+  if (percent <= 0) return false;
+  // No user identity → stay on the default upstream rather than coin-flipping.
+  if (!userId) return false;
+  return abBucket(`vercel-gateway:${userId}`) < percent;
+}
+
+function vercelGatewayRoute(env: Env): RouteInfo {
+  return {
+    provider: "vercel-gateway",
+    upstreamUrl: "https://ai-gateway.vercel.sh/v1/chat/completions",
+    apiKey: env.VERCEL_AI_GATEWAY_API_KEY!,
+  };
+}
+
+function resolveRoute(model: string, env: Env, userId = ""): RouteInfo {
+  // Phase 5: only slash models (the OpenRouter population) participate in the
+  // A/B — native gpt-/claude-/gemini- routing below is untouched.
+  if (model.includes("/") && shouldUseVercelGateway(env, userId)) {
+    return vercelGatewayRoute(env);
+  }
   if (shouldUseOpenRouter(env)) {
     if (!env.OPENROUTER_API_KEY) {
       throw new Error("OPENROUTER_API_KEY is required when AI_VIA_OPENROUTER is enabled");
@@ -234,6 +292,22 @@ async function dispatchWithFallback(
 
   if (res.ok || route.provider === "openrouter" || !isFallbackableStatus(res.status)) {
     return { res, usedModel: model, usedProvider: route.provider };
+  }
+
+  // Phase 5: Vercel AI Gateway keeps OpenRouter as the EMERGENCY upstream.
+  // Slash models are already OpenRouter ids, so retry with the same model —
+  // toOpenRouterModel() below would return null for them and skip the retry.
+  if (route.provider === "vercel-gateway" && env.OPENROUTER_API_KEY) {
+    await res.text().catch(() => {});
+    const emergencyRoute: RouteInfo = {
+      provider: "openrouter",
+      upstreamUrl: "https://openrouter.ai/api/v1/chat/completions",
+      apiKey: env.OPENROUTER_API_KEY,
+    };
+    const emergencyRes = await doFetch(
+      buildUpstreamRequest(body, emergencyRoute, env.APP_URL)
+    );
+    return { res: emergencyRes, usedModel: model, usedProvider: "openrouter" };
   }
 
   const orModel = toOpenRouterModel(model);
@@ -536,7 +610,7 @@ async function handleChat(request: Request, env: Env, ctx: ExecutionContext): Pr
 
   let route: RouteInfo;
   try {
-    route = resolveRoute(model, env);
+    route = resolveRoute(model, env, userId);
   } catch (err) {
     return new Response(JSON.stringify({ error: String(err) }), {
       status: 400,
@@ -612,6 +686,9 @@ async function handleChat(request: Request, env: Env, ctx: ExecutionContext): Pr
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",
+        // Phase 5: tell the app which upstream actually served this request so
+        // eval rows can compare OpenRouter vs Vercel AI Gateway per response.
+        "X-Lifemark-Upstream": streamProvider,
         ...corsHeaders(origin),
       },
     });
@@ -636,7 +713,11 @@ async function handleChat(request: Request, env: Env, ctx: ExecutionContext): Pr
 
   return new Response(JSON.stringify(responseBody), {
     status: 200,
-    headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Lifemark-Upstream": streamProvider,
+      ...corsHeaders(origin),
+    },
   });
 }
 

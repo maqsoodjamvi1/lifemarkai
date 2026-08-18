@@ -14,6 +14,7 @@
  */
 
 import type { GenerateOptions,GenerateResult,AIModel } from "./provider.ts";
+import { recordEvent } from "../observability/events.ts";
 import { getDefaultAiModel } from "./model-defaults.ts";
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -130,6 +131,10 @@ export async function generateViaGateway(
       throw new Error(`[gateway-client] Upstream error ${res.status}: ${errText}`);
     }
 
+    // Phase 5: which upstream (openrouter | vercel-gateway) actually served
+    // this — the per-response datum the A/B comparison table is built from.
+    reportUpstream(res, model, true);
+
     const reader = res.body.getReader();
     let fullContent = "";
     let promptTokens = 0;
@@ -166,6 +171,7 @@ export async function generateViaGateway(
     const errText = await res.text();
     throw new Error(`[gateway-client] Upstream error ${res.status}: ${errText}`);
   }
+  reportUpstream(res, model, false);
 
   const data = await res.json() as OAIChunk & {
     tool_calls?: Array<{ id: string; function: { name: string; arguments: string } }>;
@@ -228,4 +234,20 @@ export async function injectGatewaySecret(opts: InjectSecretOptions): Promise<vo
     const err = await res.text();
     throw new Error(`[gateway-client] inject-secret failed: ${err}`);
   }
+}
+
+
+/** Phase 5: record which gateway upstream served a response (A/B datum). */
+function reportUpstream(res: Response, model: string, streamed: boolean): void {
+  const upstream = res.headers.get("x-lifemark-upstream");
+  if (!upstream) return;
+  recordEvent("external_call_completed", {
+    dependency: "lifemark-gateway",
+    operation: "chat",
+    upstream,
+    model,
+    streamed,
+    success: true,
+    durationMs: 0,
+  });
 }
