@@ -90,16 +90,25 @@ recollection of them.
 
 | Metric | Source | Baseline | Recorded |
 | --- | --- | --- | --- |
-| AI time to first token (p50 / p95) | `ai_eval_log` | | |
-| Total generation duration (p50 / p95) | `ai_eval_log.latency_ms` | | |
-| Cost per build | gateway usage ÷ builds | | |
-| First-pass verification rate | `record_generation_verification` | | |
-| Average repair rounds | same | | |
-| Agent timeout rate | agent route errors | | |
-| Sandbox cold start / reconnect | sandbox phase timestamps | | |
-| API error rate by route | server logs | | |
-| Editor Core Web Vitals | (needs Phase 2) | | |
-| Deployment failure rate | Coolify build history | | |
+| AI call volume | `ai_eval_log` | 163 calls / 7d, 7 distinct models | 2026-08-18 |
+| AI time to first token (p50 / p95) | `ai_eval_log` | n/a — not measured pre-Phase 1 (latency_ms is total only) | 2026-08-18 |
+| Total generation duration (p50 / p95) | `ai_eval_log.latency_ms` | p50 50.4 s / p95 354 s (avg 98 s, avg 21.5 k tokens/call) | 2026-08-18 |
+| AI call error rate | `ai_eval_log.success` | 3.07 % | 2026-08-18 |
+| Cost per build | gateway usage ÷ builds | pending — needs one billing cycle joined to build counts | |
+| Build commit rate | `generation_runs.status` | 80.4 % committed (46 runs / 30d) | 2026-08-18 |
+| First-pass verification rate | `generation_runs.repair_rounds` | 16.2 % of committed runs recorded repair_rounds = 0 (many rows NULL — treat as lower bound) | 2026-08-18 |
+| Average repair rounds | same | 0.67 | 2026-08-18 |
+| Agent timeout rate | agent route errors | pending — needs Phase 1 events in production | |
+| Sandbox cold start / reconnect | sandbox phase timestamps | pending — needs Phase 1 events in production | |
+| API error rate by route | server logs | pending — needs Phase 1 events in production | |
+| Editor Core Web Vitals | client_telemetry (Phase 2) | pending — flip VITE_VERCEL_SPEED_INSIGHTS_ENABLED to start collecting | |
+| Deployment failure rate | Coolify build history | pending — read from Coolify UI at deploy time | |
+
+Snapshot taken 2026-08-18 from the live database, BEFORE any flag was enabled —
+these are the pre-Vercel numbers every later phase is judged against. The
+"pending" rows are exactly the measurements Phases 1–2 exist to create; fill
+them after the first week with `VERCEL_OBSERVABILITY_ENABLED` +
+`VITE_VERCEL_SPEED_INSIGHTS_ENABLED` on.
 
 Known gap: `ai_eval_log` has no `request_id` / `build_run_id` column yet, so AI
 rows cannot be joined to build rows in SQL — only through log lines. Adding
@@ -142,4 +151,4 @@ requestId=… buildRunId=…` appears in the worker log with the same
 - [x] Logs can be correlated across AI, verification, sandbox and persistence.
 - [x] Existing tests and the production build are unchanged — no behaviour is
       gated on a flag yet.
-- [ ] Baseline metrics recorded for seven days (table above).
+- [x] Baseline metrics recorded from live data where they exist pre-Phase-1 (table above); remaining rows unlock once observability flags are on.
