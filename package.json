@@ -17,6 +17,7 @@
     "test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
     "test:infrastructure-contracts": "node --import tsx --test src/lib/infrastructure/private-behavioral-contracts.test.ts",
     "verify:smoke": "node scripts/verify-production-smoke.mjs",
+    "verify:deploy-safety": "node scripts/verify-deploy-smoke.mjs",
     "verify:core-loop": "node --import tsx scripts/verify-core-loop-campaign.ts",
     "organize-imports": "node scripts/organize-imports.mjs",
     "remove-ts-nocheck": "node scripts/remove-ts-nocheck.mjs",

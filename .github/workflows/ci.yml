@@ -30,3 +30,36 @@ jobs:
       # cleanup (937d822); their coverage now lives in the unit-test suite.
       - name: Lint
         run: npm run lint
+
+      # ── Phase 3 (Vercel adoption plan): a broken build must not be promotable ──
+      - name: Production build
+        run: npm run build
+        env:
+          # Build-time placeholders only; runtime secrets come from Coolify.
+          VITE_SUPABASE_URL: https://placeholder.supabase.co
+          VITE_SUPABASE_ANON_KEY: ci-placeholder
+          VITE_APP_URL: http://localhost:3001
+
+      # Boot the built server and assert the SAFETY invariants: auth is
+      # enforced, unsigned Stripe webhooks are rejected, errors leak nothing.
+      # Placeholders are enough because every check asserts a REJECTION.
+      - name: Deploy-safety smoke tests
+        run: |
+          node scripts/start-production.mjs &
+          SERVER_PID=$!
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3001/health >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          node scripts/verify-deploy-smoke.mjs http://localhost:3001
+          STATUS=$?
+          kill $SERVER_PID 2>/dev/null || true
+          exit $STATUS
+        env:
+          VITE_SUPABASE_URL: https://placeholder.supabase.co
+          VITE_SUPABASE_ANON_KEY: ci-placeholder
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder
+          VITE_APP_URL: http://localhost:3001
+          STRIPE_SECRET_KEY: sk_test_placeholder
+          STRIPE_WEBHOOK_SECRET: whsec_placeholder
