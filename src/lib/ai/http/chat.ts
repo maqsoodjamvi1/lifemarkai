@@ -119,6 +119,7 @@ import { createDeployActionResponse } from "../chat/deploy-action.ts";
 import { buildControlledTemplatePrompt,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
 import { getCoreLoopPolicy,isCoreLoopRequest } from "../../reliability/core-loop-policy.ts";
+import { completeEnterpriseOrchestrationState,createBuildOrchestration,evaluateBuildCompletion,evaluateEnterpriseGates,parseEnterpriseOrchestrationState } from "../orchestration-controller.ts";
 
 // Generation + backend wiring + self-verification can exceed a minute on
 // complex builds (Lovable budgets 15 min for agent runs).
@@ -466,6 +467,7 @@ export async function handleAiChat(req: Request) {
       disabled_skill_ids?: string[] | null;
       cloud_enabled?: boolean;
       github_repo?: string | null;
+      metadata?: Record<string, unknown> | null;
     } | null;
     const projectKnowledge = projectData?.knowledge?.trim();
     const knowledgeBlock = projectKnowledge
@@ -593,6 +595,12 @@ export async function handleAiChat(req: Request) {
     // Model selection asks "how big is this project", which is a question about
     // the user's work, not about the 25-file scaffold every project ships with.
     const fileCount = Array.isArray(files) ? countUserAuthoredFiles(files) : 0;
+    const buildOrchestration = createBuildOrchestration({
+      prompt: costPrompt,
+      requestedMode: mode,
+      files: Array.isArray(files) ? files as Array<{ path: string; content: string }> : [],
+      previousState: parseEnterpriseOrchestrationState(projectData?.metadata?.enterprise_orchestration),
+    });
     const serverAutoModel = modelManuallySelected === true
       ? model
       : resolveSmartModel(mode, { fileCount, hasPreviewError: false }, costPrompt);
@@ -1369,6 +1377,9 @@ The user has expressed frustration. Do the following:
 
     // Model-aware prompting: tune the system prompt to the selected model
     // (fast → minimal change, frontier → plan+verify, non-Claude → strict contract).
+    if (mode === "build" || mode === "patch") {
+      systemPrompt += buildOrchestration.promptBlock;
+    }
     systemPrompt = applyModelAdapter(systemPrompt, effectiveModel);
 
     const messages: import("@/lib/ai/provider").AIMessage[] = [
@@ -1637,6 +1648,7 @@ The user has expressed frustration. Do the following:
 
           // ── Patch mode: apply find-and-replace patches ────────────────────
           let parsedFiles: ParsedFile[] = [];
+          let enterpriseGateEvidence: Array<{ id: string; passed: boolean; evidence: string[] }> = [];
           let stagedVerification: SelfVerifyResult | null = null;
           let preCommitRevision: number | null = null;
           /** Lovable honesty: don't claim success when nothing landed in project_files. */
@@ -2078,14 +2090,29 @@ The user has expressed frustration. Do the following:
               const maxEnrichPasses = isMajorGreenfieldBuild(message, fileCount) ? 3 : 2;
               let previousValidationSignature: string | null = null;
               for (let enrichPass = 0; enrichPass < maxEnrichPasses; enrichPass++) {
-                const {
-                  validationErrors,
-                  needsEnrichment,
-                } = validateGenerationStage(finalFiles, existingFiles, {
+                const stageValidation = validateGenerationStage(finalFiles, existingFiles, {
                   minFiles: buildIntent?.minFiles,
                   appType: buildIntent?.appType,
                   singlePage: buildIntent?.singlePage,
                 });
+                const candidateFiles = [
+                  ...existingFiles.filter((oldFile) => !finalFiles.some((newFile) => newFile.path === oldFile.path)),
+                  ...finalFiles,
+                ];
+                const completion = evaluateBuildCompletion({
+                  orchestration: buildOrchestration,
+                  files: candidateFiles,
+                  changedFiles: finalFiles,
+                });
+                const enterpriseGates = evaluateEnterpriseGates({
+                  orchestration: buildOrchestration,
+                  candidateFiles,
+                  changedFiles: finalFiles,
+                });
+                const validationErrors = buildOrchestration.largeScope
+                  ? [...stageValidation.validationErrors, ...completion.errors, ...enterpriseGates.errors]
+                  : [...stageValidation.validationErrors, ...enterpriseGates.errors];
+                const needsEnrichment = stageValidation.needsEnrichment || completion.errors.length > 0 || enterpriseGates.errors.length > 0;
 
                 if (!shouldAutoFix(validationErrors) || validationErrors.length === 0) {
                   break;
@@ -2213,13 +2240,35 @@ The user has expressed frustration. Do the following:
             if (
               mode === "build" &&
               finalFiles.length > 0 &&
-              (coreLoop || isMajorGreenfieldBuild(message, fileCount))
+              (coreLoop || isMajorGreenfieldBuild(message, fileCount) || buildOrchestration.largeScope || buildOrchestration.risk === "high" || buildOrchestration.risk === "critical")
             ) {
               const remaining = validateGenerationStage(finalFiles, existingFiles, {
                 minFiles: buildIntent?.minFiles,
                 appType: buildIntent?.appType,
                 singlePage: buildIntent?.singlePage,
               }).validationErrors.filter((error) => error.severity === "error");
+              if (buildOrchestration.largeScope) {
+                const candidateFiles = [
+                  ...existingFiles.filter((oldFile) => !finalFiles.some((newFile) => newFile.path === oldFile.path)),
+                  ...finalFiles,
+                ];
+                remaining.push(...evaluateBuildCompletion({
+                  orchestration: buildOrchestration,
+                  files: candidateFiles,
+                  changedFiles: finalFiles,
+                }).errors);
+                const enterpriseGates = evaluateEnterpriseGates({ orchestration: buildOrchestration, candidateFiles, changedFiles: finalFiles });
+                enterpriseGateEvidence = enterpriseGates.gates;
+                remaining.push(...enterpriseGates.errors);
+              } else {
+                const candidateFiles = [
+                  ...existingFiles.filter((oldFile) => !finalFiles.some((newFile) => newFile.path === oldFile.path)),
+                  ...finalFiles,
+                ];
+                const enterpriseGates = evaluateEnterpriseGates({ orchestration: buildOrchestration, candidateFiles, changedFiles: finalFiles });
+                enterpriseGateEvidence = enterpriseGates.gates;
+                remaining.push(...enterpriseGates.errors);
+              }
               if (remaining.length > 0) {
                 throw new Error(
                   `Generation contract remained invalid after bounded repair: ${remaining
@@ -2364,6 +2413,33 @@ The user has expressed frustration. Do the following:
                 parsedFiles,
               );
 
+              // Persist orchestration progress only after the atomic commit
+              // succeeds. Failed or rolled-back candidates never advance the
+              // enterprise roadmap.
+              try {
+                const committedMap = new Map<string, { path: string; content: string }>();
+                for (const file of (currentFiles ?? []) as Array<{ path: string; content: string }>) committedMap.set(file.path, file);
+                for (const file of parsedFiles) committedMap.set(file.path, file);
+                const enterpriseState = completeEnterpriseOrchestrationState(
+                  buildOrchestration,
+                  Array.from(committedMap.values()),
+                  new Date().toISOString(),
+                  enterpriseGateEvidence.map((gate) => ({ id: gate.id, passed: gate.passed })),
+                );
+                const { data: latestProject } = await supabase
+                  .from("projects")
+                  .select("metadata")
+                  .eq("id", projectId)
+                  .single();
+                const latestMetadata = ((latestProject as { metadata?: Record<string, unknown> } | null)?.metadata ?? {}) as Record<string, unknown>;
+                await supabase
+                  .from("projects")
+                  .update({ metadata: { ...latestMetadata, enterprise_orchestration: enterpriseState } as unknown as import("@/types/database").Json })
+                  .eq("id", projectId);
+              } catch (stateError) {
+                logger.warn("ai.chat.orchestration_state_persist_failed", { projectId, error: String(stateError) });
+              }
+
             }
           }
 
@@ -2504,6 +2580,20 @@ The user has expressed frustration. Do the following:
             (mode === "build" || mode === "patch") && parsedFiles.length > 0
               ? {
                   files_changed: parsedFiles.map((f) => f.path),
+                  orchestration: {
+                    intent: buildOrchestration.intent,
+                    large_scope: buildOrchestration.largeScope,
+                    app_kind: buildOrchestration.appKind,
+                    phase: buildOrchestration.currentPhase.id,
+                    phase_label: buildOrchestration.currentPhase.label,
+                    max_changed_files: buildOrchestration.maxChangedFiles,
+                    risk: buildOrchestration.risk,
+                    required_gates: buildOrchestration.requiredGates,
+                    policy_version: buildOrchestration.state.version,
+                    project_fingerprint: buildOrchestration.state.projectFingerprint,
+                    enterprise_gates: enterpriseGateEvidence,
+                    deferred: buildOrchestration.deferredCapabilities,
+                  },
                   snapshot_id: preBuildSnapshotId ?? undefined,
                   work_seconds: Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000)),
                   ...(buildActivity ? { build_activity: buildActivity, steps: buildActivity.length } : {}),
