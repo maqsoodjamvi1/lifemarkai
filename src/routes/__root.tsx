@@ -8,6 +8,8 @@ Scripts,
 import { createServerFn } from "@tanstack/react-start";
 import appCss from "../styles.css?url";
 import { PreviewBooting } from "@/components/preview-booting";
+import { useEffect } from "react";
+import { initClientTelemetry } from "@/lib/analytics/client-telemetry";
 import {
 isSandboxPreviewHost,
 previewHostOptionsFromEnv,
@@ -83,6 +85,12 @@ export const Route = createRootRoute({
 
 function RootComponent() {
   const ctx = Route.useRouteContext() as { previewBooting?: boolean };
+  // Phase 2: web-vitals capture. Deferred to idle time inside, and a complete
+  // no-op unless VITE_VERCEL_SPEED_INSIGHTS_ENABLED is set — the editor's
+  // startup cost is one useEffect and one flag check.
+  useEffect(() => {
+    initClientTelemetry();
+  }, []);
   return (
     <RootDocument>
       {ctx?.previewBooting ? <PreviewBooting /> : <Outlet />}
