@@ -15,6 +15,8 @@ import { recordAiEval } from "./eval-log.ts";
 import { toFriendlyProviderError } from "./provider-error.ts";
 import { correlationFields } from "../observability/correlation.ts";
 import { recordEvent } from "../observability/events.ts";
+import { isFeatureEnabled } from "../config/features.ts";
+import { AiSdkTransportError,generateViaVercelAiSdk } from "./vercel-ai-adapter.ts";
 export type { GenerateOptions, GenerateResult, AIMessage, AIModel } from "./provider.ts";
 
 export { generateDirect as generateDirectAI };
@@ -52,9 +54,7 @@ export async function generateAI(
   const viaGateway = isGatewayAvailable();
   const startedAt = Date.now();
   try {
-    const result = viaGateway
-      ? await generateViaGateway(options, ctx)
-      : await generateDirect(options);
+    const result = await runThroughSelectedAdapter(options, ctx, viaGateway);
     recordAiEval({
       model,
       task: ctx?.task,
@@ -99,4 +99,45 @@ export async function generateAI(
     // caller while keeping the raw provider error as `cause` for logs.
     throw toFriendlyProviderError(err);
   }
+}
+
+
+/**
+ * Phase 4 adapter selection. The Vercel AI SDK path runs only when the
+ * `vercelAiSdk` flag resolves ON for this user/project AND the request has no
+ * jsonMode (the SDK adapter does not implement the prefill trick yet — those
+ * requests stay legacy rather than silently changing behaviour).
+ *
+ * Fallback is for TRANSPORT problems only (AiSdkTransportError: SDK not
+ * installed, provider construction failed). A model error thrown by the SDK
+ * path propagates — re-running it on the legacy adapter would double-charge
+ * exactly the expensive failures (the plan's no-duplicate-charges criterion).
+ */
+async function runThroughSelectedAdapter(
+  options: Parameters<typeof generateDirect>[0],
+  ctx: { projectId?: string; userId?: string; task?: string } | undefined,
+  viaGateway: boolean,
+) {
+  const wantSdk =
+    !options.jsonMode &&
+    isFeatureEnabled("vercelAiSdk", { userId: ctx?.userId, projectId: ctx?.projectId });
+
+  if (wantSdk) {
+    try {
+      return await generateViaVercelAiSdk(options);
+    } catch (err) {
+      if (!(err instanceof AiSdkTransportError)) throw err;
+      // Streaming requests may have already emitted chunks; a transport error
+      // is thrown before the first byte in this adapter, so the legacy retry
+      // starts a clean stream.
+      recordEvent("ai_generation_failed", {
+        adapter: "vercel-ai-sdk",
+        fallback: "legacy",
+        error: err.message,
+        success: false,
+      });
+    }
+  }
+
+  return viaGateway ? generateViaGateway(options, ctx) : generateDirect(options);
 }

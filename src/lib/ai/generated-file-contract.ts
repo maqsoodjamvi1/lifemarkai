@@ -1,5 +1,5 @@
-import type { ParsedFile } from "./code-parser";
-import { guardFileWrite } from "./guard-file-write";
+import type { ParsedFile } from "./code-parser.ts";
+import { guardFileWrite } from "./guard-file-write.ts";
 
 export interface FileContractIssue {
   code: string;
