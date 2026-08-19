@@ -94,13 +94,33 @@ export function resetVercelAiSdkProbe(): void {
   probe = null;
 }
 
-function resolveModelId(model: string): { baseURL: string; apiKey: string | undefined; modelId: string } {
-  // Same upstream the legacy adapter uses for slash models, so the A/B holds
-  // the model constant and varies only the transport.
+type SdkTransport =
+  | { mode: "vercel-gateway"; modelId: string }
+  | { mode: "openrouter"; modelId: string; baseURL: string; apiKey: string | undefined };
+
+/**
+ * Pick the SDK's upstream:
+ *
+ *   vercel-gateway — on Vercel deployments (VERCEL env is always set there) or
+ *     wherever AI_GATEWAY_API_KEY is configured. The model id is passed as a
+ *     plain "creator/model" STRING and the SDK's default gateway provider
+ *     routes it through Vercel AI Gateway, authenticating with the
+ *     deployment's OIDC token (or the key) — no secret ever passes through
+ *     application code. This is what "Vercel AI models" means here.
+ *
+ *   openrouter — everywhere else (the VPS/Coolify deployment): same upstream
+ *     the legacy adapter uses for slash models, so the A/B holds the model
+ *     constant and varies only the transport.
+ */
+function resolveTransport(model: string): SdkTransport {
+  if (process.env.AI_GATEWAY_API_KEY || process.env.VERCEL) {
+    return { mode: "vercel-gateway", modelId: model };
+  }
   return {
+    mode: "openrouter",
+    modelId: model,
     baseURL: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
     apiKey: process.env.OPENROUTER_API_KEY,
-    modelId: model,
   };
 }
 
@@ -144,16 +164,22 @@ export async function generateViaVercelAiSdk(options: GenerateOptions): Promise<
     throw new AiSdkTransportError("Vercel AI SDK is not installed (npm install ai @ai-sdk/openai)");
   }
   const model = options.model ?? getDefaultAiModel();
-  const { baseURL, apiKey, modelId } = resolveModelId(model);
-  if (!apiKey) {
-    throw new AiSdkTransportError("OPENROUTER_API_KEY is not set for the AI SDK adapter");
-  }
+  const transport = resolveTransport(model);
 
   let provider: unknown;
-  try {
-    provider = sdk.openai.createOpenAI({ baseURL, apiKey })(modelId);
-  } catch (err) {
-    throw new AiSdkTransportError("AI SDK provider construction failed", err);
+  if (transport.mode === "vercel-gateway") {
+    // Plain string model id → the SDK's default Vercel AI Gateway provider.
+    // Auth is ambient (deployment OIDC token or AI_GATEWAY_API_KEY).
+    provider = transport.modelId;
+  } else {
+    if (!transport.apiKey) {
+      throw new AiSdkTransportError("OPENROUTER_API_KEY is not set for the AI SDK adapter");
+    }
+    try {
+      provider = sdk.openai.createOpenAI({ baseURL: transport.baseURL, apiKey: transport.apiKey })(transport.modelId);
+    } catch (err) {
+      throw new AiSdkTransportError("AI SDK provider construction failed", err);
+    }
   }
 
   const base: Record<string, unknown> = {
