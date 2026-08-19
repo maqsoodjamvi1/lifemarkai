@@ -11,7 +11,7 @@ runWithCorrelation,
 withCorrelationHeaders,
 } from "./observability/correlation.ts";
 import path from "node:path";
-import { fileURLToPath,pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const HOST = process.env.LIFEMARK_AI_WORKER_HOST || "127.0.0.1";
 const PORT = Number(process.env.LIFEMARK_AI_WORKER_PORT || 3010);
@@ -122,87 +122,9 @@ export async function proxyAiToWorker(
     { ...correlationFromRequest(request), route: `api/ai/${name}` },
     async () => {
       if (name !== "fix") ensureBuildRunId();
-      const response = runsInProcess()
-        ? await runHandlerInProcess(name, request)
-        : await forwardToWorker(name, request);
-      return withCorrelationHeaders(response);
+      return withCorrelationHeaders(await forwardToWorker(name, request));
     },
   );
-}
-
-/**
- * Serverless mode (Vercel): there is no long-lived machine to host the worker
- * on port 3010 — spawning it per-invocation would re-esbuild the bundles on
- * every cold start and die at the first port bind. Instead the SAME esbuild
- * bundles the worker serves (.tmp/ai-http/*.mjs, produced by the prebuild step
- * during `npm run build` and shipped into the function via vercel.json
- * includeFiles) are imported directly and invoked in-process.
- *
- * In-process also means the Phase 0 correlation context is shared for free:
- * the bundles pin their AsyncLocalStorage to the same globalThis key, so no
- * header hop is even needed — but the headers are still stamped so the
- * handler's own header-based re-seeding sees consistent ids.
- *
- * Opt-in: automatic when VERCEL is set; LIFEMARK_AI_INPROCESS=1 forces it
- * anywhere (useful for local testing). The VPS keeps the worker process.
- */
-function runsInProcess(): boolean {
-  return process.env.LIFEMARK_AI_INPROCESS === "1" || !!process.env.VERCEL;
-}
-
-type AiHandler = (request: Request) => Promise<Response>;
-const inProcessHandlers = new Map<string, AiHandler>();
-const inProcessLoads = new Map<string, Promise<AiHandler>>();
-
-async function loadInProcessHandler(name: "fix" | "chat" | "agent"): Promise<AiHandler> {
-  const cached = inProcessHandlers.get(name);
-  if (cached) return cached;
-  let loading = inProcessLoads.get(name);
-  if (!loading) {
-    loading = (async () => {
-      const file = path.resolve(process.cwd(), ".tmp/ai-http", `${name}.mjs`);
-      // Computed specifier + @vite-ignore: this must resolve at RUNTIME inside
-      // the deployed function, never at bundle time.
-      const mod = (await import(/* @vite-ignore */ pathToFileURL(file).href)) as Record<string, unknown>;
-      const fn =
-        name === "fix" ? mod.handleAiFix : name === "chat" ? mod.handleAiChat : mod.handleAiAgent;
-      if (typeof fn !== "function") {
-        throw new Error(`AI bundle ${name}.mjs is missing its handler export`);
-      }
-      const handler = fn as AiHandler;
-      inProcessHandlers.set(name, handler);
-      return handler;
-    })();
-    loading.catch(() => inProcessLoads.delete(name));
-    inProcessLoads.set(name, loading);
-  }
-  return loading;
-}
-
-async function runHandlerInProcess(
-  name: "fix" | "chat" | "agent",
-  request: Request,
-): Promise<Response> {
-  try {
-    const handler = await loadInProcessHandler(name);
-    const headers = new Headers(request.headers);
-    headers.delete("host");
-    headers.delete("connection");
-    applyCorrelationHeaders(headers);
-    const body = await request.arrayBuffer();
-    const forwarded = new Request(request.url, {
-      method: "POST",
-      headers,
-      body: body.byteLength ? body : undefined,
-    });
-    return await handler(forwarded);
-  } catch (err) {
-    console.error(`[ai-worker-client] in-process ${name} failed:`, err);
-    return Response.json(
-      { error: err instanceof Error ? err.message : "AI handler failed to load" },
-      { status: 503 },
-    );
-  }
 }
 
 async function forwardToWorker(
