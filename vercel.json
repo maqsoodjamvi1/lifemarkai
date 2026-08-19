@@ -21,5 +21,14 @@
       "path": "/api/cron/sandbox-cleanup",
       "schedule": "0 5 * * *"
     }
+  ],
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist/client",
+  "framework": null,
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/ssr"
+    }
   ]
 }
