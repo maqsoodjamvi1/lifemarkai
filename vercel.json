@@ -1,1 +1,39 @@
-{"$schema": "https://openapi.vercel.sh/vercel.json", "buildCommand": "npm run build", "outputDirectory": "dist/client", "framework": null, "rewrites": [{"source": "/(.*)", "destination": "/api/ssr"}], "crons": [{"path": "/api/cloud/daily-backups", "schedule": "0 3 * * *"}, {"path": "/api/cloud/bill-usage", "schedule": "30 3 * * *"}, {"path": "/api/health-scan", "schedule": "0 4 * * *"}, {"path": "/api/security/scheduled-scan", "schedule": "15 4 * * *"}, {"path": "/api/cron/sandbox-cleanup", "schedule": "0 5 * * *"}]}
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist/client",
+  "framework": null,
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api/ssr"
+    }
+  ],
+  "functions": {
+    "api/ssr.mjs": {
+      "includeFiles": ".tmp/ai-http/**"
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/cloud/daily-backups",
+      "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cloud/bill-usage",
+      "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/health-scan",
+      "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/security/scheduled-scan",
+      "schedule": "15 4 * * *"
+    },
+    {
+      "path": "/api/cron/sandbox-cleanup",
+      "schedule": "0 5 * * *"
+    }
+  ]
+}
