@@ -102,7 +102,10 @@ async function startRemotePreview(projectId: string, cookie: string) {
     if (state.previewUrl && state.sandboxId && state.ok === true && state.phase === "ready") {
       return { previewUrl: state.previewUrl, sandboxId: state.sandboxId };
     }
-    if (state.phase === "error" || state.phase === "unreachable") {
+    // "app_error" = the container is serving but the app answers 5xx (a build
+    // failure in the generated code). Terminal here: polling longer cannot fix
+    // a file that does not compile, and the phaseDetail names the real cause.
+    if (state.phase === "error" || state.phase === "unreachable" || state.phase === "app_error") {
       throw new Error(state.error ?? state.phaseDetail ?? `remote preview entered ${state.phase}`);
     }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000));
@@ -387,7 +390,19 @@ async function main() {
       sandboxId = remotePreview.sandboxId;
       const previewResponse = await fetch(remotePreview.previewUrl, { redirect: "follow" });
       if (!previewResponse.ok) {
-        throw new Error(`remote preview returned ${previewResponse.status}`);
+        // KEEP THE BODY. A bare "remote preview returned 500" is unactionable —
+        // it cannot tell a Traefik 502 (sandbox down) from vite answering its
+        // own 500 (the generated code does not transform), and those have
+        // nothing to do with each other. Vite puts the file, line and message
+        // straight in the response, so a run that throws this away forces the
+        // next debugging pass to be a guess. Truncated because a vite error
+        // page carries the whole module graph after the part that matters.
+        const detail = await previewResponse.text().catch(() => "");
+        const snippet = detail.replace(/\s+/g, " ").trim().slice(0, 600);
+        throw new Error(
+          `remote preview returned ${previewResponse.status}` +
+            (snippet ? ` — ${snippet}` : ""),
+        );
       }
       const preview = await jsonFetch<{ ok?: boolean }>(`/api/projects/${project.id}/preview-verify`, cookie, {
         method: "POST",

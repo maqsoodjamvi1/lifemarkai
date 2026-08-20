@@ -588,6 +588,26 @@ export function useSandboxPreview(projectId: string) {
             });
             return;
           }
+          // "app_error": the container is serving, but the app answers 5xx —
+          // its build failed. This is NOT a dead sandbox and must never reach
+          // the cold-reboot path below: rebooting re-runs the same broken
+          // build and the pane loops forever on "Sandbox expired — restarting".
+          // Stop the spinner and surface the reason so the user (or the repair
+          // loop) acts on the actual error instead of waiting on a boot that
+          // already finished.
+          if (data.phase === "app_error") {
+            setState((s) => ({
+              ...s,
+              loading: false,
+              previewUrl: null,
+              phase: "app_error",
+              phaseDetail: typeof data.phaseDetail === "string" ? data.phaseDetail : s.phaseDetail,
+              error:
+                (typeof data.phaseDetail === "string" ? data.phaseDetail : null) ??
+                "Your app failed to build.",
+            }));
+            return;
+          }
           if (typeof data.phase === "string") {
             setState((s) => ({
               ...s,

@@ -529,13 +529,19 @@ async function handleGET(req: Request, params: any) {
     // never succeeded. Warn once per poll window when we're only assuming.
     const probe = claimsReady
       ? getPreviewProbeState(previewUrlForProbe!)
-      : { state: "unknown" as const, fails: 0 };
+      : { state: "unknown" as const, fails: 0, lastStatus: 0 };
     if (probe.state === "unverified") {
       console.warn(
         `[sandbox-preview] reporting ready for ${previewUrlForProbe} but the tunnel has NEVER answered a probe — ` +
           `this server may be unable to reach modal.host at all. Treat ok:true as unconfirmed.`,
       );
     }
+    // A 5xx FROM THE APP is its own failure mode and must not be reported as a
+    // dead or expired sandbox. The container is fine; the code inside it does
+    // not compile. Telling the user to restart the sandbox there sends them
+    // round a loop that cannot fix anything — the file has to be repaired.
+    const appErrored = probe.lastStatus >= 500 && probe.lastStatus !== 502
+      && probe.lastStatus !== 503 && probe.lastStatus !== 504;
 
     return Response.json({
       enabled: true,
@@ -546,10 +552,13 @@ async function handleGET(req: Request, params: any) {
       // instead of spinning on a "ready" that will never paint.
       // "reachable" is only asserted when a probe actually succeeded.
       previewProbe: probe.state,
-      phase: claimsReady && !alive ? "unreachable" : phase,
+      previewStatus: probe.lastStatus || null,
+      phase: claimsReady && !alive ? (appErrored ? "app_error" : "unreachable") : phase,
       phaseDetail:
         claimsReady && !alive
-          ? "Preview sandbox is no longer responding — it likely expired. Restart it to get a fresh one."
+          ? appErrored
+            ? `Your app is running but returned HTTP ${probe.lastStatus} — the code failed to build. Restarting won't help; the error has to be fixed.`
+            : "Preview sandbox is no longer responding — it likely expired. Restart it to get a fresh one."
           : phaseDetail,
       provider: getSandboxProviderId(),
     });

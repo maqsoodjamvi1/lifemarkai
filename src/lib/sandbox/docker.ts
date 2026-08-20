@@ -48,7 +48,7 @@ SandboxProvider,
 SandboxRunResult,
 TypecheckResult,
 } from "./index.ts";
-import { DEFAULT_TIMEOUT_MS,trunc,waitForServer } from "./shared.ts";
+import { appServing,DEFAULT_TIMEOUT_MS,trunc,waitForServer } from "./shared.ts";
 import { SYNC_MANIFEST,filesToPrune } from "./prune-files.ts";
 import { parseTscOutput } from "./tsc-diagnostics.ts";
 import { dependenciesAlreadySatisfied } from "./deps-satisfied.ts";
@@ -458,6 +458,48 @@ async function claimPort(): Promise<number | null> {
     }
   }
   return null;
+}
+
+/**
+ * Is the app inside the container SERVING?
+ *
+ * THE `nc -z` TRAP (this is where "remote preview returned 500" came from).
+ * The old probe was three fallbacks OR'd together, and the last one was
+ * `nc -z`, a bare TCP connect. It succeeds the instant vite binds the port
+ * and says nothing whatsoever about what vite then serves. So when generated
+ * code failed to transform — a syntax error, an unresolvable import — vite
+ * came up and answered every request with its own 500 error overlay, `nc -z`
+ * reported UP, boot returned `ready: true`, the route persisted phase
+ * "ready" and handed the tunnel URL to the editor and to the verification
+ * harness. The harness fetched it and got 500. Reproducibly, because a
+ * transform error is deterministic: same prompt, same broken file, same 500.
+ *
+ * The OR-chain hid it twice over. `curl -fsS` does fail on 5xx and `wget`
+ * exits non-zero on it too — but a failure in either one just fell through
+ * to `nc -z`, which passed. The chain could only ever be as strict as its
+ * most permissive link.
+ *
+ * So: ask for the STATUS CODE, once, from whichever client the image has,
+ * and judge it. `nc` survives only as a last resort for an image carrying
+ * neither curl nor wget, where a socket check is genuinely all we can do.
+ */
+export function buildLocalProbeScript(port: number): string {
+  const url = `http://127.0.0.1:${port}/`;
+  return [
+    `if command -v curl >/dev/null 2>&1; then`,
+    // -w '%{http_code}' reports 000 on a refused/timed-out connection, which
+    // is exactly the "not listening yet" signal we want — and unlike -f it
+    // still reports 500 rather than collapsing it into a generic failure.
+    `  S=$(curl -sS -o /dev/null -m 3 -w '%{http_code}' ${url} 2>/dev/null);`,
+    `elif command -v wget >/dev/null 2>&1; then`,
+    // -S prints the response headers to stderr even for a 5xx, so the status
+    // survives wget's non-zero exit.
+    `  S=$(wget -q -S -O /dev/null -T 3 ${url} 2>&1 | awk '/HTTP\//{c=$2} END{print c}');`,
+    `else`,
+    `  nc -z 127.0.0.1 ${port} 2>/dev/null && S=socket || S=000;`,
+    `fi;`,
+    `echo "LM_STATUS=\${S:-000}"`,
+  ].join(" ");
 }
 
 export class DockerSandboxProvider implements SandboxProvider {
@@ -1146,23 +1188,53 @@ export class DockerSandboxProvider implements SandboxProvider {
    * node:*-alpine; on a Debian-based image `curl` is the fallback and the
    * `nc -z` third branch covers an image with neither.
    */
+  /**
+   * Last in-container HTTP status this probe saw, per sandbox.
+   *
+   * `false` from waitForLocalServer cannot distinguish "nothing is listening"
+   * from "vite is listening and answering 500", and those need opposite
+   * responses: the first is a boot problem (wait / reboot), the second is a
+   * code problem that only a repair round fixes. Callers read this to say
+   * which one happened instead of just that readiness was withheld.
+   */
+  private lastLocalStatus = new Map<string, number>();
+
+  localStatusFor(sandboxId: string): number {
+    return this.lastLocalStatus.get(sandboxId) ?? 0;
+  }
+
+
   private async waitForLocalServer(
     sandboxId: string,
     port: number,
     timeoutMs: number,
   ): Promise<boolean> {
-    const probe =
-      `wget -q -O /dev/null -T 3 http://127.0.0.1:${port}/ 2>/dev/null || ` +
-      `curl -fsS -m 3 -o /dev/null http://127.0.0.1:${port}/ 2>/dev/null || ` +
-      `nc -z 127.0.0.1 ${port} 2>/dev/null`;
+    const probe = buildLocalProbeScript(port);
     const deadline = Date.now() + timeoutMs;
     // Back off from 250ms to 2s: a warm boot answers almost immediately and
     // shouldn't pay a fixed poll interval, while a cold npm-install boot
     // shouldn't hammer the socket for two minutes.
     let delay = 250;
     while (Date.now() < deadline) {
-      const res = await this.exec(sandboxId, `${probe} && echo LM_UP`);
-      if (res.stdout.includes("LM_UP")) return true;
+      const res = await this.exec(sandboxId, probe);
+      const m = /LM_STATUS=(\S+)/.exec(res.stdout ?? "");
+      const raw = m?.[1] ?? "000";
+      if (raw === "socket") {
+        // No HTTP client in the image. A socket check is all we have, so keep
+        // the old permissive behaviour rather than failing every boot — but
+        // record 0 so nothing downstream reports this as a verified 200.
+        this.lastLocalStatus.set(sandboxId, 0);
+        return true;
+      }
+      const status = Number.parseInt(raw, 10);
+      if (Number.isFinite(status) && status > 0) {
+        this.lastLocalStatus.set(sandboxId, status);
+      }
+      // A 5xx does NOT end the wait: vite recovers on its own once a pending
+      // install finishes or the next HMR pass lands, and a healthy-but-slow
+      // app is unaffected because it returns the moment it serves. Only an app
+      // still 5xx-ing at the deadline is reported not ready.
+      if (appServing(status)) return true;
       await new Promise((r) => setTimeout(r, delay));
       delay = Math.min(delay * 1.5, 2000);
     }
