@@ -121,6 +121,19 @@ export function alignGeneratedPackageJson(content: string): AlignResult {
     typeof deps["@tanstack/react-start"] === "string" ||
     typeof dev["@tanstack/react-start"] === "string";
 
+  // The model sometimes emits @tanstack/react-start-plugin@^0.0.x from the old
+  // alpha API. The Vite plugin now ships inside @tanstack/react-start
+  // ("@tanstack/react-start/plugin/vite"); the standalone package stopped at
+  // 1.131.x, so ^0.0.x matches nothing on the registry and every sandbox
+  // npm install dies with ETARGET. Remove it from both sections (deps/dev are
+  // live references into root, so deletion propagates).
+  for (const section of [deps, dev]) {
+    if (typeof section["@tanstack/react-start-plugin"] === "string") {
+      changed.push(`@tanstack/react-start-plugin: ${section["@tanstack/react-start-plugin"]} → removed (obsolete)`);
+      delete section["@tanstack/react-start-plugin"];
+    }
+  }
+
   const devPins = isTanStack
     ? Object.fromEntries(
         Object.entries(BASE_APP_DEV_DEPENDENCIES).filter(([name]) => name !== "vite"),
