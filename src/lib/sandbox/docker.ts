@@ -1140,21 +1140,30 @@ export class DockerSandboxProvider implements SandboxProvider {
    * report readiness within a second of vite binding the port, rather than up
    * to a full poll interval late.
    *
-   * `wget -q -O /dev/null -T 3` treats any HTTP response as success, including
-   * a 404: the question is whether the server is accepting requests, and the
-   * dev server answering *anything* proves that. Busybox wget ships in
-   * node:*-alpine; on a Debian-based image `curl` is the fallback and the
-   * `nc -z` third branch covers an image with neither.
+   * `wget -q -O /dev/null -T 3` (busybox, ships in node:*-alpine) exits
+   * non-zero on a 4xx/5xx response same as `curl -f` does - that is
+   * deliberate: a listening-but-erroring dev server (a crash loop, a build
+   * that fails to serve `/`) must NOT read as ready. `curl` is the fallback
+   * for a Debian-based image; see the comment on `probe` below for why
+   * `nc -z` is gated to only run when neither tool exists.
    */
   private async waitForLocalServer(
     sandboxId: string,
     port: number,
     timeoutMs: number,
   ): Promise<boolean> {
+    // `nc -z` is a bare TCP check - it says nothing about whether the HTTP
+    // layer is answering, only that something is listening. It must ONLY run
+    // when neither wget nor curl exist, never as a catch-all for "the HTTP
+    // tool ran and got a non-2xx status": both wget and curl exit non-zero on
+    // a 4xx/5xx response, and a container mid-crash-loop (Vite up, app
+    // throwing 500 on every request) still has its port open. Falling
+    // through to `nc -z` in that case reports readiness for a server that
+    // cannot actually serve a page - which is exactly the bug this guards.
     const probe =
-      `wget -q -O /dev/null -T 3 http://127.0.0.1:${port}/ 2>/dev/null || ` +
-      `curl -fsS -m 3 -o /dev/null http://127.0.0.1:${port}/ 2>/dev/null || ` +
-      `nc -z 127.0.0.1 ${port} 2>/dev/null`;
+      `if command -v wget >/dev/null 2>&1; then wget -q -O /dev/null -T 3 http://127.0.0.1:${port}/ 2>/dev/null; ` +
+      `elif command -v curl >/dev/null 2>&1; then curl -fsS -m 3 -o /dev/null http://127.0.0.1:${port}/ 2>/dev/null; ` +
+      `else nc -z 127.0.0.1 ${port} 2>/dev/null; fi`;
     const deadline = Date.now() + timeoutMs;
     // Back off from 250ms to 2s: a warm boot answers almost immediately and
     // shouldn't pay a fixed poll interval, while a cold npm-install boot
