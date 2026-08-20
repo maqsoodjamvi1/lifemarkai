@@ -19,10 +19,12 @@ import { recordEvent } from "../observability/events.ts";
 import { buildFallbackHtml } from "../preview/build-fallback-html.ts";
 import { verifyPreviewHtml } from "./preview-verify.ts";
 import { findContractErrors } from "../preview/export-contract.ts";
+import { filesWithSyntaxErrors, findMissingListKeys, findUnresolvedLocalImports, runTypecheckGate } from "../verify/typecheck-gate.ts";
+import { typecheckRunningSandbox } from "../preview/typecheck-project.ts";
 import { pushFileToRunningSandbox } from "../preview/push-to-sandbox.ts";
 import { generateAI } from "./generate.ts";
-import { ECONOMY_CODING_MODEL,getDefaultAiModel } from "./model-defaults.ts";
-import { selectModelChain,applyModelAdapter } from "./model-catalog.ts";
+import { DEFAULT_CODING_MODEL,DIAGNOSIS_MODEL,ECONOMY_CODING_MODEL,ESCALATION_MODEL,FAST_CODING_MODEL,getDefaultAiModel } from "./model-defaults.ts";
+import { applyModelAdapter } from "./model-catalog.ts";
 import { AUTO_FIX_SYSTEM_PROMPT } from "./system-prompts.ts";
 import { buildPreviewDiagnosis } from "../preview/diagnose-preview.ts";
 import { guardFileWrite } from "./guard-file-write.ts";
@@ -56,7 +58,11 @@ const RENDER_SETTLE_MS = 3_500;
  * model via VISION_REVIEW_MODEL (default: a cheap vision-capable slug).
  */
 async function visionDesignReview(screenshotBase64: string): Promise<string[]> {
-  const model = process.env.VISION_REVIEW_MODEL || "openai/gpt-4o-mini";
+  // Was openai/gpt-4o-mini. Every OpenAI model was removed from this product on
+  // 2026-08-19; gemini-3.1-flash-lite is the same price ($0.25/$1.50), two
+  // generations newer, vision-capable, and has 7 provider endpoints against
+  // gpt-4o-mini's fewer. Still overridable via VISION_REVIEW_MODEL.
+  const model = process.env.VISION_REVIEW_MODEL || "google/gemini-3.1-flash-lite";
   const res = await generateAI({
     model,
     maxTokens: 300,
@@ -337,6 +343,30 @@ function parseFixFiles(raw: string): Array<{ path: string; content: string }> {
 }
 
 /** Pick the files most relevant to an error message (entry files + matches). */
+/**
+ * Files named EXPLICITLY by a compiler diagnostic — "src/App.tsx:2:77 — TS2304".
+ *
+ * A compile error carries an exact path, so guessing is unnecessary. The
+ * heuristic scorer below exists for RUNTIME errors, where the stack trace names
+ * minified vendor code and the real file has to be inferred from route tags and
+ * filename fragments — it ships up to 8 files at 6,000 chars each, roughly
+ * 12,000 input tokens, because it genuinely does not know which one is wrong.
+ *
+ * Paying that for an error that already states the file is the single most
+ * wasteful thing in the repair path.
+ */
+function filesNamedByCompiler(files: ProjectFile[], errors: string[]): ProjectFile[] {
+  const paths = new Set<string>();
+  for (const e of errors) {
+    // Matches both gate formats: "src/App.tsx:2:77 — TS2304: …" (typecheck)
+    // and "src/App.tsx:4 — imports \"./X\"…" (unresolved import).
+    const m = e.match(/^([\w./-]+\.\w+):\d+/);
+    if (m) paths.add(m[1]);
+  }
+  if (paths.size === 0) return [];
+  return files.filter((f) => paths.has(f.path));
+}
+
 function relevantFiles(files: ProjectFile[], errors: string[]): ProjectFile[] {
   const errorBlob = errors.join("\n");
   // Route tags ("[route /reports] …") name the crashing page and, usually, the
@@ -391,7 +421,12 @@ export async function runSelfVerification(opts: {
 }): Promise<SelfVerifyResult | null> {
   const { supabase, projectId } = opts;
   const emit = opts.emit ?? (() => {});
-  const maxRounds = opts.maxRounds ?? 2;
+  // HARD CAP at two repair rounds. `opts.maxRounds ?? 2` was only a default, so
+  // any caller could raise it — and each extra round is a full render plus a
+  // repair generation, i.e. real latency and real money, on a build that has
+  // already failed twice. Two verified attempts then stop and report.
+  const MAX_REPAIR_ROUNDS = 2;
+  const maxRounds = Math.min(opts.maxRounds ?? MAX_REPAIR_ROUNDS, MAX_REPAIR_ROUNDS);
   const startedAt = Date.now();
 
   const result: SelfVerifyResult = {
@@ -443,15 +478,25 @@ export async function runSelfVerification(opts: {
         : "Verifying your app…",
     );
 
-    // Hybrid cross-model verify: each fix round uses a different, family-diverse
-    // model so a stuck error gets a fresh perspective instead of the same model
-    // failing the same way. Final entry anchors to the proven coding tier.
-    const fixChain = selectModelChain("fix runtime and build errors in the app", {
-      require: ["fixes", "code"],
-      preferCheap: true,
-      maxChain: maxRounds + 1,
-      anchor: ECONOMY_CODING_MODEL,
-    });
+    // ── The repair ladder ───────────────────────────────────────────────────
+    // Explicit, not inferred. selectModelChain() used to pick these by scoring
+    // a synthetic prompt, which meant the models doing your repairs changed
+    // whenever the scoring heuristics were tuned. The ladder is now fixed:
+    //
+    //   round 0  DEFAULT_CODING_MODEL   the generator repairs its own build,
+    //                                   but ONLY after DIAGNOSIS_MODEL has told
+    //                                   it what actually went wrong
+    //   round 1  ESCALATION_MODEL       the expensive model, and only here —
+    //                                   reached solely after a real browser
+    //                                   render has confirmed round 0 failed
+    //
+    // Two repair rounds, hard-capped. Round 2 exists only to render and report;
+    // it never repairs (see the `round === maxRounds` return below). Anything
+    // still broken after two verified attempts is a bug report, not a third bill.
+    const fixLadder: string[] = [
+      DEFAULT_CODING_MODEL,
+      ESCALATION_MODEL,
+    ];
 
     // A repair attempt cannot be scored at the moment it is made — only the
     // next render says whether it worked. So each attempt is held here and
@@ -462,12 +507,14 @@ export async function runSelfVerification(opts: {
       before: ReturnType<typeof fingerprintError>[];
       round: number;
       model?: string;
+      /** Which check produced the BEFORE labels — see the note in settle(). */
+      signal: "typecheck" | "runtime";
       written: string[];
       rejected: string[];
       startedAt: number;
     } | null = null;
 
-    const settle = (after: string[]) => {
+    const settle = (after: string[], afterSignal: "typecheck" | "runtime") => {
       if (!pending) return;
       recordRepairOutcome({
         projectId,
@@ -475,12 +522,15 @@ export async function runSelfVerification(opts: {
         stage: "self_verify",
         round: pending.round,
         model: pending.model,
-        // Labels come from a render, so they only cover the routes the sweep
-        // actually reached. Stored explicitly because a success rate measured
-        // this way is not comparable with one measured by the compiler.
-        signal: "runtime",
+        // Which check produced these labels, recorded explicitly because the
+        // two are NOT comparable. Runtime labels only cover the routes the
+        // browser sweep actually reached and stop at the first crash; compiler
+        // labels cover every file and every error in them. Averaging a success
+        // rate across both would produce a number that means nothing — and now
+        // that the typecheck gate runs first, most rounds carry compiler labels.
+        signal: pending.signal,
         before: pending.before,
-        after: after.map((message) => fingerprintError(message, "runtime")),
+        after: after.map((message) => fingerprintError(message, afterSignal)),
         filesWritten: pending.written,
         filesRejected: pending.rejected,
         durationMs: Date.now() - pending.startedAt,
@@ -505,10 +555,117 @@ export async function runSelfVerification(opts: {
       // trace that points into minified react-dom.
       const contractErrors = findContractErrors(files);
 
+      // ── Deterministic type-check, BEFORE the browser ───────────────────────
+      // A compile error found here names the file, line and column. The same
+      // error found by rendering arrives as an opaque runtime stack trace deep
+      // inside react-dom, and the first crash masks all the others — so a
+      // browser-only pass finds one bug per round however many exist.
+      //
+      // Ordered first for a second reason: if the code cannot compile, the
+      // render is guaranteed to be uninformative, so paying for a browser
+      // launch before knowing that is wasted latency on every broken build.
+      //
+      // `available: false` means the compiler could not run (missing, timed
+      // out). That is NOT a pass — it is unknown — so the browser check still
+      // happens exactly as before and nothing regresses.
+      // Unresolved LOCAL imports run first — pure string work, no child
+      // process, so it costs nothing and it catches the one class tsc cannot
+      // report distinguishably. `import { Card } from "./Card"` where Card.tsx
+      // was never created raises TS2307, the exact code tsc also raises for
+      // `import from "react"` in a project with no node_modules — so the type
+      // gate has to filter TS2307 wholesale and this defect would vanish with
+      // it. Resolving relative specifiers against the real file set separates
+      // the two: a missing local file is a bug, a missing package is sandbox.
+      //
+      // findContractErrors() above is the sibling check — it catches a symbol
+      // that is imported but not exported, and explicitly skips modules it
+      // cannot resolve. This covers precisely that skipped case.
+      const importErrors = findUnresolvedLocalImports(files).map((u) => u.formatted);
+
+      // React logs a missing list `key` through console.error, so it reaches the
+      // preview's error stream and the user sees a red console on an app that
+      // otherwise works fine. Measured once in a 50-build smoke run — the only
+      // render failure whose app was genuinely usable. Free to detect, so it
+      // never justifies a model call.
+      const keyWarnings = findMissingListKeys(files).map((k) => k.formatted);
+
+      // ── Which compiler ────────────────────────────────────────────────────
+      // Two type-checkers exist and they are NOT equivalent:
+      //
+      //   sandbox (preview/typecheck-project.ts) runs `tsc` INSIDE the running
+      //     container, where the project's real dependency tree is installed.
+      //     It is strictly stronger — it is the only check in the system that
+      //     can see `import { Body } from "@tanstack/react-router"` where that
+      //     export does not exist (TS2305). Valid-looking text to every regex.
+      //
+      //   local (verify/typecheck-gate.ts) runs tsc in a temp dir with NO
+      //     node_modules, so it must discard every module-resolution
+      //     diagnostic and is therefore blind to that whole class.
+      //
+      // Prefer the sandbox one — but ONLY when the sandbox actually holds the
+      // files being verified. In candidate mode the candidate has not been
+      // pushed: the container still has the PREVIOUS version, so a sandbox
+      // check would compile the old code and report a false clean on a broken
+      // candidate. That is the worst possible failure for a verification step,
+      // so candidate mode always uses the local gate.
+      let typeErrorList: string[] = [];
+      let compilerUsed: "sandbox" | "local" | "none" = "none";
+
+      if (!opts.candidateFiles) {
+        const sandboxCheck = await typecheckRunningSandbox(supabase, projectId, { timeoutSec: 25 }).catch(
+          () => null,
+        );
+        if (sandboxCheck) {
+          compilerUsed = "sandbox";
+          typeErrorList = sandboxCheck.diagnostics
+            .filter((d) => d.category === "error")
+            .slice(0, 6)
+            .map((d) =>
+              d.file
+                ? `${d.file}:${d.line ?? 0}:${d.column ?? 0} — TS${d.code}: ${d.message}`
+                : `TS${d.code}: ${d.message}`,
+            );
+        }
+      }
+
+      if (compilerUsed === "none") {
+        const typecheck = await runTypecheckGate(files, { timeoutMs: 30_000, maxErrors: 6 });
+        if (typecheck.available) {
+          compilerUsed = "local";
+          typeErrorList = typecheck.errors.map((e) => e.formatted);
+        } else if (typecheck.skippedReason) {
+          console.warn(`[self-verify] typecheck gate skipped: ${typecheck.skippedReason}`);
+        }
+      }
+
+      const typeErrors = [...importErrors, ...typeErrorList, ...keyWarnings];
+
+      // Which compiler ran is worth knowing in production. "local" on a live
+      // build means the sandbox check silently returned null — no container,
+      // DISABLE_SANDBOX_TYPECHECK set, the provider lacking the capability, or
+      // a timeout — and the weaker checker has quietly taken over. That looks
+      // identical in the logs to the strong one passing, which is exactly how a
+      // whole class of errors starts sailing through unnoticed.
+      if (round === 0) {
+        console.info(
+          `[self-verify] compiler=${compilerUsed} typeErrors=${typeErrorList.length} importErrors=${importErrors.length} candidate=${Boolean(opts.candidateFiles)}`,
+        );
+      }
+
+      // Compile errors short-circuit the render. There is nothing a browser can
+      // add about code that does not build, and skipping the launch here is
+      // what turns the gate into a latency SAVING rather than an extra step.
+      if (typeErrors.length > 0) {
+        const what = importErrors.length > 0 && typeErrorList.length === 0 ? "Missing file" : "Compile";
+        emit(`${what} check found ${typeErrors.length} error${typeErrors.length === 1 ? "" : "s"} — fixing before preview…`);
+      }
+
       const visionEnabled = process.env.VISION_REVIEW === "true";
       const appRoutes = extractAppRoutes(files);
       let rendered: { errors: string[]; screenshot: string | null };
-      if (playwright) {
+      if (typeErrors.length > 0) {
+        rendered = { errors: [], screenshot: null };
+      } else if (playwright) {
         try {
           rendered = await renderAndCollectErrors(playwright, html, liveUrl, visionEnabled && round === 0, appRoutes);
         } catch (renderErr) {
@@ -530,7 +687,10 @@ export async function runSelfVerification(opts: {
       }
       const runtimeErrors = rendered.errors;
 
-      let errors = [...new Set([...contractErrors, ...runtimeErrors])].slice(0, 6);
+      // Type errors lead: they carry a file:line:column, so the repair model can
+      // go straight to the defect instead of inferring a location from a stack.
+      let errors = [...new Set([...typeErrors, ...contractErrors, ...runtimeErrors])].slice(0, 6);
+      const roundSignal: "typecheck" | "runtime" = typeErrors.length > 0 ? "typecheck" : "runtime";
 
       // ── Vision design review (env-gated, Lovable "agent looks at the result") ──
       // Only when the app renders cleanly: a vision model screens the actual
@@ -546,7 +706,7 @@ export async function runSelfVerification(opts: {
 
       // Settle the previous round's attempt against what this render found,
       // before any early return can skip it.
-      settle(errors);
+      settle(errors, roundSignal);
 
       if (errors.length === 0) {
         result.passed = true;
@@ -563,7 +723,19 @@ export async function runSelfVerification(opts: {
 
       // ── Fix round ───────────────────────────────────────────────────────────
       emit(`Found: ${errors[0].slice(0, 110)} — fixing…`);
-      const context = relevantFiles(files, errors)
+      // ── Context selection: precise when we can be, broad only when we must ─
+      // Compiler errors name their file. Sending only those files instead of
+      // the heuristic top-8 typically cuts repair INPUT tokens by ~4-6x, and
+      // input is what dominates a repair call: the fix itself is a few hundred
+      // tokens, the context is thousands.
+      //
+      // Falls back to the heuristic whenever the compiler named nothing we
+      // still hold (a deleted file, an odd path), so a narrower context can
+      // never mean an emptier one.
+      const namedByCompiler = filesNamedByCompiler(files, errors);
+      const usePreciseContext = roundSignal === "typecheck" && namedByCompiler.length > 0;
+      const contextFiles = usePreciseContext ? namedByCompiler : relevantFiles(files, errors);
+      const context = contextFiles
         .map((f) => `=== ${f.path} ===\n${(f.content ?? "").slice(0, 6_000)}`)
         .join("\n\n");
       const diagnosis = buildPreviewDiagnosis(
@@ -575,8 +747,79 @@ export async function runSelfVerification(opts: {
         })),
       );
 
-      const fixModel = fixChain[Math.min(round, fixChain.length - 1)] ?? ECONOMY_CODING_MODEL ?? getDefaultAiModel();
-      if (round > 0) emit("Retrying the fix with a different model…");
+      // ── Which model repairs ───────────────────────────────────────────────
+      // A compiler error is a LOCALISED, mechanical defect: a missing import, a
+      // wrong argument count, a name that does not exist. The compiler has
+      // already done the hard part — finding it — and with precise context the
+      // prompt is small, which is exactly the regime the fast tier handles well
+      // (measured 7/7 on edit-precision and surgical-restraint, ~1.7s on short
+      // prompts). Using the generator here would pay 2.4x the input rate and 7x
+      // the output rate to add a missing import.
+      //
+      // The fast tier is used ONLY when the context is genuinely small. It
+      // collapses on large inputs — measured 175s on a 250-line file against
+      // 16s for the generator — so a big context must never land here.
+      const PRECISE_CONTEXT_CHAR_BUDGET = 12_000;
+      const cheapRepairEligible =
+        round === 0 && usePreciseContext && context.length <= PRECISE_CONTEXT_CHAR_BUDGET;
+
+      const fixModel = cheapRepairEligible
+        ? FAST_CODING_MODEL
+        : (fixLadder[Math.min(round, fixLadder.length - 1)] ?? ECONOMY_CODING_MODEL ?? getDefaultAiModel());
+
+      // ── AI diagnosis, round 0 only ────────────────────────────────────────
+      // buildPreviewDiagnosis() above is a DETERMINISTIC reading of the error
+      // list — it is kept, because it is free and it never hallucinates. This
+      // adds a second, reasoning pass on top of it from a DIFFERENT vendor than
+      // the model about to do the repair.
+      //
+      // It runs once, before the first repair, and deliberately not before the
+      // second: by round 1 the escalation model is reading the round-0 diagnosis
+      // AND the errors that survived the round-0 repair, which is strictly more
+      // information than a fresh diagnosis would give it.
+      //
+      // Prose only, no code, ~400 tokens. If it fails or times out the repair
+      // proceeds without it rather than failing the build — a missing diagnosis
+      // makes the repair worse, not impossible.
+      let aiDiagnosis = "";
+      // SKIPPED for compiler errors, deliberately. A diagnosis call exists to
+      // turn a vague runtime stack trace into a located cause. When the error
+      // already reads "src/App.tsx:2:77 — TS2304: Cannot find name 'Dashboard'",
+      // there is nothing left to diagnose — paying a reasoning model at
+      // $1.44/M input to restate a compiler message is pure cost, and it also
+      // adds seconds of latency to the cheapest kind of fix there is.
+      //
+      // This matters because the type-check gate finds MORE errors than the
+      // browser ever did. Without this branch, the gate would have increased
+      // spend: every compile error it surfaced would have triggered a paid
+      // diagnosis that the compiler had already performed for free.
+      if (round === 0 && roundSignal !== "typecheck") {
+        emit("Working out what went wrong…");
+        const diag = await generateAI(
+          {
+            model: DIAGNOSIS_MODEL,
+            messages: [
+              {
+                role: "system",
+                content:
+                  "You are diagnosing a failed web app build. Explain the ROOT CAUSE of the errors below in at most 5 short bullets. " +
+                  "Name the exact file and symbol at fault where you can. Do NOT write any code, do NOT suggest a rewrite, " +
+                  "and do NOT restate the error text — say what is actually wrong and why it produces that error.",
+              },
+              {
+                role: "user",
+                content: `Errors:\n${errors.map((e) => `- ${e}`).join("\n")}\n\nRelevant files:\n${context}`,
+              },
+            ],
+            temperature: 0,
+            maxTokens: 400,
+          },
+          { projectId, userId: opts.userId, task: "self_verify.diagnose" },
+        ).catch(() => null);
+        aiDiagnosis = (diag?.content ?? "").trim();
+      }
+
+      if (round > 0) emit("First fix didn't hold — escalating…");
       const fix = await generateAI(
         {
           model: fixModel,
@@ -586,7 +829,9 @@ export async function runSelfVerification(opts: {
               role: "user",
               content: `Fix these runtime errors found while rendering the app in a browser:\n\n${errors
                 .map((e) => `- ${e}`)
-                .join("\n")}${diagnosis ? `\n\nPreview diagnosis (fix these first):\n${diagnosis}` : ""}\n\nRelevant files:\n${context}\n\nReturn the fixed files as JSON.`,
+                .join("\n")}${diagnosis ? `\n\nPreview diagnosis (fix these first):\n${diagnosis}` : ""}${
+                aiDiagnosis ? `\n\nRoot-cause analysis from a second model — treat this as the brief, not a suggestion:\n${aiDiagnosis}` : ""
+              }\n\nRelevant files:\n${context}\n\nReturn the fixed files as JSON.`,
             },
           ],
           temperature: 0.1,
@@ -602,10 +847,43 @@ export async function runSelfVerification(opts: {
         return result;
       }
 
+      // ── Reject a repair that does not parse ───────────────────────────────
+      // guardFileWrite() below refuses a blanking write and a repetition loop,
+      // but it cannot see TRUNCATION: a repair that hit its 6,000-token ceiling
+      // returns a file that is syntactically incomplete yet neither empty nor
+      // repetitive, so it passes every existing guard and lands on top of a
+      // working file. That is the "a failed build must never replace the last
+      // working version" rule, and until now nothing enforced it.
+      //
+      // Syntax only. A repair that leaves a TYPE error behind is still progress
+      // and the next round settles it; a repair that leaves a SYNTAX error is
+      // corruption, and a file that does not parse cannot be an improvement on
+      // one that does.
+      const repairCandidate = new Map(files.map((f) => [f.path, f]));
+      for (const rf of fixedFiles) {
+        repairCandidate.set(rf.path, {
+          ...(repairCandidate.get(rf.path) ?? {}),
+          path: rf.path,
+          content: rf.content,
+        } as ProjectFile);
+      }
+      const corrupted = await filesWithSyntaxErrors([...repairCandidate.values()]).catch(
+        () => new Map<string, string>(),
+      );
+
       const written: string[] = [];
       const rejected: string[] = [];
 
       for (const f of fixedFiles) {
+        const corruption = corrupted.get(f.path);
+        if (corruption) {
+          // Keep the previous content. Recorded as rejected so the round scores
+          // honestly as "still broken" rather than silently claiming success.
+          console.warn(`[self-verify] rejected corrupt repair of ${f.path}: ${corruption}`);
+          rejected.push(f.path);
+          continue;
+        }
+
         // Same reasoning as the auto-fix route: this loop is driven by a
         // failing preview, so an unvalidated write turns one bad model response
         // into a ratchet that every later round makes worse. Refusing a suspect
@@ -650,8 +928,9 @@ export async function runSelfVerification(opts: {
       // the NEXT round's render finds, and the only honest verdict on a repair
       // is what the code does afterwards, not what the model claimed.
       pending = {
-        before: errors.map((message) => fingerprintError(message, "runtime")),
+        before: errors.map((message) => fingerprintError(message, roundSignal)),
         round: round + 1,
+        signal: roundSignal,
         model: fix?.model,
         written,
         rejected,

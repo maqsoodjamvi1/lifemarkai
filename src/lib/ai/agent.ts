@@ -1,4 +1,5 @@
 import { generateAI } from "./generate.ts";
+import { recordAiEval } from "./eval-log.ts";
 import type { AIMessage,ToolDefinition,ToolCall } from "./provider.ts";
 import { DEFAULT_CODING_MODEL } from "./model-defaults.ts";
 import { selectModelChain,applyModelAdapter } from "./model-catalog.ts";
@@ -718,6 +719,14 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
     messages.push({ role: "assistant", content: aiResult.content || `[tool calls: ${toolCallSummary}]` });
 
     const observations: string[] = [];
+    // Tool DISPATCH outcome, tracked separately from the generation that
+    // chose the tools. A model can produce a perfectly valid-looking tool call
+    // that fails on execution — wrong path, bad args, a tool that does not
+    // exist — and until now that was invisible: generate() logs the call as a
+    // success (it returned tool calls, as asked) and the failure only appeared
+    // as text inside an observation string the model reads back.
+    let toolErrorCount = 0;
+    const dispatchStartedAt = Date.now();
 
     for (const tc of aiResult.toolCalls as ToolCall[]) {
       // ── "finish" tool signals completion ─────────────────────────────
@@ -750,6 +759,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
       // ── Execute the tool ──────────────────────────────────────────────
       const impl = toolImpls[tc.name];
       let observation = impl ? "" : `Unknown tool: ${tc.name}`;
+      if (!impl) toolErrorCount++;
       if (impl) {
         try {
           observation = await impl.execute(tc.args);
@@ -759,6 +769,7 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
           }
         } catch (err) {
           observation = `Error executing ${tc.name}: ${String(err)}`;
+          toolErrorCount++;
         }
       }
 
@@ -772,6 +783,22 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
 
       observations.push(`Tool: ${tc.name}\nResult: ${observation}`);
     }
+
+    // One row per dispatch batch, under its OWN task name so it never pollutes
+    // the latency or cost statistics of `agent.iteration`. Zero tokens: this is
+    // execution, not generation. `success` is false when any tool failed, which
+    // is what makes "which model writes tool calls that actually work" a
+    // queryable question rather than a hunch.
+    recordAiEval({
+      model: activeModel as string,
+      task: "agent.tool_dispatch",
+      projectId,
+      userId,
+      latencyMs: Date.now() - dispatchStartedAt,
+      toolCalls: (aiResult.toolCalls as ToolCall[]).length,
+      toolErrors: toolErrorCount,
+      success: toolErrorCount === 0,
+    });
 
     // Feed all observations back as a single user message, with an escalating
     // nudge so the model actually calls finish() instead of looping forever.
