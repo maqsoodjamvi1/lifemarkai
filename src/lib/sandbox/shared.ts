@@ -81,9 +81,107 @@ export function appServing(status: number): boolean {
  * WHY readiness was withheld instead of just that it was.
  */
 const lastWaitStatus = new Map<string, number>();
+const MAX_PROBE_CACHE_ENTRIES = 500;
+
+function boundedSet<T>(map: Map<string, T>, key: string, value: T): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > MAX_PROBE_CACHE_ENTRIES) {
+    const oldest = map.keys().next().value as string | undefined;
+    if (!oldest) break;
+    map.delete(oldest);
+  }
+}
 
 export function lastServerStatus(url: string): number {
   return lastWaitStatus.get(url) ?? 0;
+}
+
+const MODULE_BLOCK_RE = /<script\b([^>]*)\btype=["']module["']([^>]*)>([\s\S]*?)<\/script>/gi;
+const SRC_RE = /\bsrc=["']([^"']+)["']/i;
+const IMPORT_RE = /(?:\bimport\s*(?:[^"'()]*?\sfrom\s*)?|\bexport\s+[^"']*?\sfrom\s*|\bimport\s*\(\s*)["']([^"']+)["']/g;
+
+function sameOriginAsset(base: URL, specifier: string): URL | null {
+  if (!specifier || specifier.startsWith("data:") || specifier.startsWith("blob:")) return null;
+  try {
+    const resolved = new URL(specifier, base);
+    return resolved.origin === base.origin ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load the HTML entry and its static Vite module graph.
+ *
+ * Vite can return 200 for index.html while src/main.tsx (or one of its imports)
+ * returns a transform-error 500. Walking the same-origin imports catches that
+ * before the iframe is declared ready, without launching a browser.
+ */
+export async function probeServedModuleGraph(
+  url: string,
+  timeoutMs = 8_000,
+): Promise<{ serving: boolean; status: number; failedUrl?: string }> {
+  const root = new URL(url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const htmlResponse = await fetch(root, { signal: controller.signal });
+    if (!appServing(htmlResponse.status)) {
+      return { serving: false, status: htmlResponse.status, failedUrl: root.href };
+    }
+    const contentType = htmlResponse.headers.get("content-type") ?? "";
+    if (!contentType.includes("html")) return { serving: true, status: htmlResponse.status };
+
+    const html = await htmlResponse.text();
+    const queue: URL[] = [];
+    const queued = new Set<string>();
+    MODULE_BLOCK_RE.lastIndex = 0;
+    let scriptMatch: RegExpExecArray | null;
+    while ((scriptMatch = MODULE_BLOCK_RE.exec(html))) {
+      const attributes = `${scriptMatch[1]} ${scriptMatch[2]}`;
+      const src = SRC_RE.exec(attributes)?.[1];
+      const asset = src ? sameOriginAsset(root, src) : null;
+      if (asset && !queued.has(asset.href)) {
+        queued.add(asset.href);
+        queue.push(asset);
+      }
+      if (!src && scriptMatch[3]) {
+        IMPORT_RE.lastIndex = 0;
+        let inlineImport: RegExpExecArray | null;
+        while ((inlineImport = IMPORT_RE.exec(scriptMatch[3]))) {
+          const child = sameOriginAsset(root, inlineImport[1]);
+          if (child && !queued.has(child.href)) {
+            queued.add(child.href);
+            queue.push(child);
+          }
+        }
+      }
+    }
+
+    while (queue.length > 0) {
+      const moduleUrl = queue.shift()!;
+      const response = await fetch(moduleUrl, { signal: controller.signal });
+      if (!appServing(response.status)) {
+        return { serving: false, status: response.status, failedUrl: moduleUrl.href };
+      }
+      const source = await response.text();
+      IMPORT_RE.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = IMPORT_RE.exec(source))) {
+        const child = sameOriginAsset(moduleUrl, match[1]);
+        if (child && !queued.has(child.href)) {
+          queued.add(child.href);
+          queue.push(child);
+        }
+      }
+    }
+    return { serving: true, status: htmlResponse.status };
+  } catch {
+    return { serving: false, status: 0, failedUrl: root.href };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -102,12 +200,12 @@ export async function waitForServer(url: string, timeoutMs: number): Promise<boo
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(5000) });
-      lastWaitStatus.set(url, res.status);
-      if (appServing(res.status)) return true;
+      const probe = await probeServedModuleGraph(url, Math.min(8_000, Math.max(1, deadline - Date.now())));
+      boundedSet(lastWaitStatus, url, probe.status);
+      if (probe.serving) return true;
     } catch {
       /* not listening yet */
-      lastWaitStatus.set(url, 0);
+      boundedSet(lastWaitStatus, url, 0);
     }
     await new Promise((r) => setTimeout(r, 1500));
   }
@@ -180,17 +278,11 @@ export async function isPreviewReachable(url: string, timeoutMs = 8000): Promise
     try {
       // Follow redirects (default). `redirect: "manual"` was a bug here — a
       // tunnel that 30x's could surface a status we'd misread as dead.
-      const res = await fetch(url, {
-        method: "GET",
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      // The app must actually SERVE — see appServing. Behind Traefik a dead
-      // vite still yields an HTTP response (502), which must read as DOWN or
-      // the "unreachable" self-heal can never fire; and a vite answering its
-      // own 500 compile-error overlay must read as DOWN too, or the editor
-      // frames that error page and calls it ready. A dev-server 404 is up.
-      status = res.status;
-      reached = appServing(res.status);
+      const probe = await probeServedModuleGraph(url, timeoutMs);
+      // Probe the imported module graph too. A Vite HTML shell can be 200 while
+      // src/main.tsx or a nested import returns a transform-error 500.
+      status = probe.status;
+      reached = probe.serving;
     } catch {
       reached = false;
       status = 0;
@@ -205,7 +297,7 @@ export async function isPreviewReachable(url: string, timeoutMs = 8000): Promise
     // to prefer a cold reboot over a permanently blank iframe.
     const ok = reached ? true : fails < PREVIEW_PROBE_FAILURES_BEFORE_DEAD;
 
-    previewProbeCache.set(url, {
+    boundedSet(previewProbeCache, url, {
       ok,
       at: Date.now(),
       fails,
@@ -216,7 +308,7 @@ export async function isPreviewReachable(url: string, timeoutMs = 8000): Promise
     return ok;
   })();
 
-  previewProbeCache.set(url, { ...prev, inflight: run });
+  boundedSet(previewProbeCache, url, { ...prev, inflight: run });
   return run;
 }
 

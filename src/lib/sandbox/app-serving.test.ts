@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { appServing } from "./shared.ts";
+import http from "node:http";
+import { appServing,probeServedModuleGraph } from "./shared.ts";
 
 /**
  * REGRESSION: "remote preview returned 500".
@@ -48,4 +49,60 @@ test("other app-side 5xx are not serving either", () => {
   // 501/505 come from the app, not the proxy — same verdict as 500.
   assert.equal(appServing(501), false);
   assert.equal(appServing(505), false);
+});
+
+function serveGraph(handler: http.RequestListener): Promise<{ url: string; close: () => Promise<void> }> {
+  return new Promise((resolve) => {
+    const server = http.createServer(handler);
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as { port: number }).port;
+      resolve({
+        url: `http://127.0.0.1:${port}/`,
+        close: () => new Promise<void>((done) => server.close(() => done())),
+      });
+    });
+  });
+}
+
+test("a 200 HTML shell is not ready when its Vite entry module returns 500", async () => {
+  const server = await serveGraph((req, res) => {
+    if (req.url === "/") {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end('<script type="module" src="/src/main.tsx"></script>');
+      return;
+    }
+    res.writeHead(500, { "Content-Type": "text/plain" });
+    res.end("Transform failed");
+  });
+  try {
+    const result = await probeServedModuleGraph(server.url);
+    assert.equal(result.serving, false);
+    assert.equal(result.status, 500);
+    assert.match(result.failedUrl ?? "", /src\/main\.tsx$/);
+  } finally {
+    await server.close();
+  }
+});
+
+test("nested static imports must all compile before readiness", async () => {
+  const server = await serveGraph((req, res) => {
+    if (req.url === "/") {
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end('<script src="/src/main.tsx" type="module"></script>');
+    } else if (req.url === "/src/main.tsx") {
+      res.writeHead(200, { "Content-Type": "application/javascript" });
+      res.end('import "./broken.ts";');
+    } else {
+      res.writeHead(500, { "Content-Type": "text/plain" });
+      res.end("Nested transform failed");
+    }
+  });
+  try {
+    const result = await probeServedModuleGraph(server.url);
+    assert.equal(result.serving, false);
+    assert.equal(result.status, 500);
+    assert.match(result.failedUrl ?? "", /src\/broken\.ts$/);
+  } finally {
+    await server.close();
+  }
 });

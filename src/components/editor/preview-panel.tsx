@@ -162,17 +162,6 @@ export function PreviewPanel({
   const [toolbarCollapsed, setToolbarCollapsed] = useState(() => {
     try { return localStorage.getItem("lifemark-preview-toolbar-collapsed") === "1"; } catch { return false; }
   });
-  const [previewToolbarVisible, setPreviewToolbarVisible] = useState(() => {
-    try { return localStorage.getItem("lifemark-preview-interaction-toolbar-hidden") !== "1"; } catch { return true; }
-  });
-  useEffect(() => {
-    const show = () => {
-      setPreviewToolbarVisible(true);
-      try { localStorage.setItem("lifemark-preview-interaction-toolbar-hidden", "0"); } catch { /* private mode */ }
-    };
-    window.addEventListener("lifemark-show-preview-toolbar", show);
-    return () => window.removeEventListener("lifemark-show-preview-toolbar", show);
-  }, []);
   // In-app fullscreen preview (Esc exits)
   const [previewFullscreen, setPreviewFullscreen] = useState(false);
   useEffect(() => {
@@ -2809,7 +2798,7 @@ MODAL_TOKEN_SECRET=...
 
         {hideTopChrome && <LovablePreviewStatusPill label={previewStatusText} />}
 
-        {hideTopChrome && previewToolbarVisible && (
+        {hideTopChrome && (
           <LovablePreviewInteractionToolbar
             visualEdit={visualEdit}
             visualEditDisabled={!!versionPreviewLabel}
@@ -2889,10 +2878,6 @@ MODAL_TOKEN_SECRET=...
             onDismissCommentsBanner={() => setCommentsBannerDismissed(true)}
             reverting={isRevertingPreview}
             onDismissReverting={() => setIsRevertingPreview(false)}
-            onHide={() => {
-              setPreviewToolbarVisible(false);
-              try { localStorage.setItem("lifemark-preview-interaction-toolbar-hidden", "1"); } catch { /* private mode */ }
-            }}
           />
         )}
 

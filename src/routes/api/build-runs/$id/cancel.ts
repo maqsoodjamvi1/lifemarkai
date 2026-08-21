@@ -29,11 +29,13 @@ export const Route = createFileRoute("/api/build-runs/$id/cancel")({
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         // Ownership via the user's own session + RLS.
-        const { data: run } = await supabase
+        const { data: run } = await (supabase
           .from("build_runs")
           .select("id, status")
           .eq("id", runId)
-          .maybeSingle();
+          .maybeSingle() as unknown as Promise<{
+            data: { id: string; status: string } | null;
+          }>);
         if (!run) return Response.json({ error: "Not found" }, { status: 404 });
         if (run.status !== "running") {
           return Response.json({ ok: true, status: run.status, alreadyTerminal: true });
@@ -41,12 +43,21 @@ export const Route = createFileRoute("/api/build-runs/$id/cancel")({
 
         // Writes need the service role (RLS allows owners SELECT only).
         const admin = createAdminClient();
-        await admin
-          .from("build_runs")
+        const buildRuns = admin.from("build_runs") as unknown as {
+          update(patch: Record<string, unknown>): {
+            eq(column: string, value: unknown): {
+              eq(column: string, value: unknown): PromiseLike<unknown>;
+            };
+          };
+        };
+        await buildRuns
           .update({ status: "cancelled", completed_at: new Date().toISOString(), failure_code: "user_cancelled" })
           .eq("id", runId)
           .eq("status", "running");
-        await (admin.from("build_run_events") as any).insert({
+        const buildRunEvents = admin.from("build_run_events") as unknown as {
+          insert(row: Record<string, unknown>): PromiseLike<unknown>;
+        };
+        await buildRunEvents.insert({
           run_id: runId,
           payload: { cancelled: true, by: "user" },
         });

@@ -29,9 +29,11 @@ type CreditReservation,
  *   { action: "dismiss", findingId }          → status 'dismissed'
  */
 
-interface Params { params: Promise<{ id: string }> }
-
-async function getOwnedProject(supabase: any, projectId: string, userId: string) {
+async function getOwnedProject(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  projectId: string,
+  userId: string,
+) {
   const { data: project } = await supabase
     .from("projects")
     .select("id, user_id, name, environment")
@@ -41,7 +43,7 @@ async function getOwnedProject(supabase: any, projectId: string, userId: string)
   return project;
 }
 
-async function handleGET(_: Request, params: any) {
+async function handleGET(_: Request, params: { id: string }) {
   const { id } = params;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -79,7 +81,7 @@ function parseFixJson(raw: string): { files: Array<{ path: string; content: stri
   }
   if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.files)) return null;
   const files = parsed.files.filter(
-    (f: any) =>
+    (f: { path?: unknown; content?: unknown }) =>
       f && typeof f.path === "string" && f.path.length > 0 &&
       typeof f.content === "string" && f.content.length > 0
   );
@@ -87,7 +89,7 @@ function parseFixJson(raw: string): { files: Array<{ path: string; content: stri
   return { files, summary: typeof parsed.summary === "string" ? parsed.summary : undefined };
 }
 
-async function handlePOST(req: Request, params: any) {
+async function handlePOST(req: Request, params: { id: string }) {
   const { id } = params;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();

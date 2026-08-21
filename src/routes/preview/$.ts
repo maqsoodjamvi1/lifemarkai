@@ -37,7 +37,7 @@ function forbidden(): Response {
   );
 }
 
-async function handleGET(req: Request, params: any) {
+async function handleGET(req: Request, params: { _splat?: string }) {
   const splat = String(params?._splat ?? "").replace(/^\/+/, "");
   const segments = splat.split("/").filter(Boolean);
   const projectId = segments[0];

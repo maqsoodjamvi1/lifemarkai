@@ -58,8 +58,8 @@ export function useIsMobile(): ViewportInfo {
           mqlStandalone.matches ||
           // iOS Safari before display-mode media query — falls back to the
           // legacy property which only exists on Safari.
-          (typeof (window.navigator as any).standalone === "boolean" &&
-            (window.navigator as any).standalone === true),
+          (typeof (window.navigator as Navigator & { standalone?: boolean }).standalone === "boolean" &&
+            (window.navigator as Navigator & { standalone?: boolean }).standalone === true),
       });
     }
 

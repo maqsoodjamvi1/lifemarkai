@@ -1,5 +1,8 @@
 import { CORE_LOOP_API_SURFACE } from "./core-loop-api-surface.ts";
 
+/** Production coding tier used by the release-gate campaign when unset. */
+export const CORE_LOOP_CAMPAIGN_PRIMARY_MODEL = "openai/gpt-5.6-luna";
+
 export type CoreLoopPolicy = {
   contractVersion: 2;
   framework: "tanstack";
@@ -22,8 +25,27 @@ const positiveInt = (value: string | undefined, fallback: number) => {
 };
 
 /**
+ * Pin CORE_LOOP_AI_MODEL for campaign runners when the operator left it unset.
+ * Preserves an explicit CORE_LOOP_AI_MODEL; does not clear OPENROUTER_CODING_MODEL
+ * (policy still honors that cascade for non-campaign callers).
+ */
+export function pinCoreLoopCampaignAiModel(env: Environment = process.env): string {
+  const existing = env.CORE_LOOP_AI_MODEL?.trim();
+  if (existing) return existing;
+  env.CORE_LOOP_AI_MODEL = CORE_LOOP_CAMPAIGN_PRIMARY_MODEL;
+  return CORE_LOOP_CAMPAIGN_PRIMARY_MODEL;
+}
+
+/**
  * One deterministic policy for release-proof generation. Advanced editor
  * features remain available, but the core-loop campaign never depends on them.
+ *
+ * Model resolution (first non-empty wins):
+ *   CORE_LOOP_AI_MODEL → DEFAULT_AI_MODEL → OPENROUTER_CODING_MODEL → fallback.
+ * Campaign runners call pinCoreLoopCampaignAiModel() before getCoreLoopPolicy()
+ * so a Codespace OPENROUTER_CODING_MODEL override cannot select a stalled
+ * provider. The chat route also honors an explicit coreLoop request model when
+ * modelManuallySelected is true.
  */
 export function getCoreLoopPolicy(env: Environment = process.env): CoreLoopPolicy {
   return {

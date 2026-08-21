@@ -1,0 +1,100 @@
+From ee584d449059007cf9ffb1ae1b39b6b0406246f7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 21 Aug 2026 10:47:32 +0000
+Subject: [PATCH] docs(core-loop): where the release gate can run, and what to
+ do when it stops
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The reliability doc predates the early-stop breaker and never said where the
+gate can physically run. Both gaps cost real time: the gate needs a Docker
+daemon, the app on CORE_LOOP_BASE_URL, and private credentials simultaneously,
+and an environment missing the daemon cannot run it however complete the rest
+of the configuration looks.
+
+Adds two sections:
+
+- Where to run it — the three simultaneous requirements, the wall-clock budget
+  (50 attempts at up to 300s each), why a remote host needs tmux/screen, the
+  smoke-before-gate sequence, and the npm ci / Rolldown-binding repair.
+- When the campaign stops early — how to read earlyStop.signature, and the
+  instruction not to rerun hoping for a better draw or raise the threshold.
+
+The last paragraph is the one worth having in writing: if a campaign burned
+many attempts on the same defect and the breaker never fired, the signatures
+were not identical, which is a normalizer bug. The fix is a collapsing test
+case in core-loop-report.test.ts, not a higher threshold.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QGy3NZWndBAVM8qKdAzXm1
+---
+ docs/CORE_LOOP_RELIABILITY.md | 52 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 52 insertions(+)
+
+diff --git a/docs/CORE_LOOP_RELIABILITY.md b/docs/CORE_LOOP_RELIABILITY.md
+index 85a4c12..943bff3 100644
+--- a/docs/CORE_LOOP_RELIABILITY.md
++++ b/docs/CORE_LOOP_RELIABILITY.md
+@@ -115,6 +115,58 @@ defaults to exactly 50 attempts; do not count WebContainer previews or partial
+ runs as evidence. Use 100 for extended release evidence. The default prompt suite is
+ `tests/core-loop-prompts.json`; override it with `CORE_LOOP_PROMPTS`.
+ 
++## Where to run it
++
++The gate needs three things at once: a **Docker daemon** (the only supported
++release-gate preview backend), the app itself on `CORE_LOOP_BASE_URL`
++(`verify:core-loop:release` spawns `vite dev` for you), and the private
++Supabase/OpenRouter credentials. A Codespace or your own machine satisfies all
++three; environments without a Docker daemon cannot run it at all, however
++complete the rest of the configuration looks.
++
++Budget the wall-clock before starting: 50 attempts at up to
++`CORE_LOOP_GENERATION_TIMEOUT_MS` (300s) each is several hours in the worst
++case. The runner checkpoints `artifacts/core-loop/latest.json` after every
++attempt, so an interrupted campaign still carries evidence — but a disconnected
++terminal kills the run, so use `tmux`/`screen` on a remote host.
++
++Sequence that avoids paying for a broken harness:
++
++```bash
++git pull
++npm ci                     # not `npm install`
++npm run verify:core-loop:smoke     # 1 attempt, proves the whole path
++npm run verify:core-loop:release   # smoke again, then the 50-run gate
++```
++
++If `npm ci` leaves Rolldown's Linux binding missing — the runner checks for it
++and says so — repair with `npm install --include=optional` rather than
++reinstalling from scratch.
++
++`CORE_LOOP_AI_MODEL` defaults to the campaign tier, so a stray
++`OPENROUTER_CODING_MODEL` in a Codespace cannot quietly downgrade the gate. Set
++it explicitly only to override that tier on purpose.
++
++## When the campaign stops early
++
++After `CORE_LOOP_STOP_AFTER_IDENTICAL_FAILURES` consecutive identical failures
++(default 3, floor 2) the campaign exits non-zero and writes `earlyStop` into
++the report and `latest.json`. This is the circuit breaker working: one systemic
++defect would otherwise consume every remaining attempt and its credits.
++
++Read `earlyStop.signature`. It is `<stage>:<message>`, normalized so volatile
++detail (UUIDs, large numbers, container ids, per-attempt sandbox hosts) cannot
++disguise one root cause as many. Diagnose that single cause, fix it, and rerun
++the full suite. Do not rerun hoping for a better draw, and do not raise the
++threshold to push past it.
++
++One failure mode deserves its own reaction. If a campaign burned many attempts
++on what is obviously the **same** defect and the breaker never fired, the
++signatures were not identical — that is a bug in
++`normalizeCoreLoopFailureSignature`, not a reason to lower the threshold. Add
++the offending pair of errors to `core-loop-report.test.ts` as a case that must
++collapse to one signature, then widen the normalizer until it does.
++
+ ## Output
+ 
+ The runner checkpoints after every attempt to
+-- 
+2.43.0
+

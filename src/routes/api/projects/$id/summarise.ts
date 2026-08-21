@@ -17,11 +17,7 @@ Your task: produce a dense, factual summary (max 400 words) that captures:
 
 Write in present tense. Be specific with names and file paths. No preamble or meta-commentary.`;
 
-interface Params {
-  params: Promise<{ id: string }>;
-}
-
-async function handlePOST(req: Request, params: any) {
+async function handlePOST(req: Request, params: { id: string }) {
   try {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);

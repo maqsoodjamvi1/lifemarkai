@@ -95,6 +95,9 @@ export const Route = createFileRoute("/api/telemetry/client")({
             project_hash: parsed.identity.projectHash ?? null,
             session_sample: item.sessionSample,
           }));
+          // `client_telemetry.id` is GENERATED ALWAYS AS IDENTITY. PostgREST still
+          // reports it as required, so the generated Insert type demands an id the
+          // database refuses to accept — the cast is the documented escape hatch.
           await (supabase.from("client_telemetry") as any).insert(rows);
         } catch {
           /* best-effort sink */

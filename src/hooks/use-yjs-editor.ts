@@ -94,8 +94,6 @@ export function useYjsEditor({
   const editorRef    = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const disposables  = useRef<Array<{ dispose(): void }>>([]);
   const sessionRef   = useRef<ProjectSession | null>(null);
-  const filePathRef  = useRef(filePath);
-  filePathRef.current = filePath;
 
   // ── Session lifecycle ─────────────────────────────────────────────────────
 
@@ -136,7 +134,9 @@ export function useYjsEditor({
 
     provider.on("awareness-change", onAwarenessChange);
     provider.on("synced", onSynced);
-    if (provider.synced) setSynced(true);
+    if (provider.synced) {
+      queueMicrotask(() => setSynced(true));
+    }
 
     return () => {
       provider.off("awareness-change", onAwarenessChange as Parameters<typeof provider.off>[1]);
@@ -183,7 +183,7 @@ export function useYjsEditor({
       // ── Y.Text changes → Monaco model (remote edits) ────────────────────
       let applyingRemote = false;
 
-      const yObserver = (event: Y.YTextEvent) => {
+      const yObserver = (_event: Y.YTextEvent) => {
         if (applyingRemote) return;
         const editorModel = editorRef.current?.getModel();
         if (!editorModel) return;
@@ -235,7 +235,7 @@ export function useYjsEditor({
       const cursorSub = editor.onDidChangeCursorSelection((e) => {
         const pos = e.selection.getStartPosition();
         provider.setCursor({
-          file: filePathRef.current,
+          file: filePath,
           line: pos.lineNumber,
           column: pos.column,
           selection: {

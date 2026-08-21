@@ -1,4 +1,4 @@
-import { useCallback,useRef,useState } from "react";
+import { useCallback,useEffect,useRef,useState } from "react";
 import type { PreviewEngine } from "@/lib/preview/resolve-preview-engine";
 
 export type PreviewMachineState =
@@ -27,8 +27,11 @@ export function usePreviewMachine(
   const previewBuildShaRef = useRef("");
   const previewEngineRef = useRef(engine);
   const onTransitionRef = useRef(onTransition);
-  previewEngineRef.current = engine;
-  onTransitionRef.current = onTransition;
+
+  useEffect(() => {
+    previewEngineRef.current = engine;
+    onTransitionRef.current = onTransition;
+  }, [engine, onTransition]);
 
   const transitionPreviewMachine = useCallback(
     (next: PreviewMachineState, reason: string) => {

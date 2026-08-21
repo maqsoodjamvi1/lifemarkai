@@ -75,7 +75,6 @@ async function handlePOST(req: Request, params: any) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: project } = await supabase
     .from("projects")
     .select("id, user_id, is_public, deployed_url")
@@ -100,7 +99,6 @@ async function handlePOST(req: Request, params: any) {
 
   // Auth mirrors ai-proxy: owner, collaborator, or any caller for public apps.
   if (!typedProject.is_public && user?.id !== typedProject.user_id) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: collab } = await supabase
       .from("collaborators")
       .select("role")
@@ -160,7 +158,6 @@ async function handlePOST(req: Request, params: any) {
   }
 
   // Read connector credentials from the project's .env file
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: envRow } = await supabase
     .from("project_files")
     .select("content")

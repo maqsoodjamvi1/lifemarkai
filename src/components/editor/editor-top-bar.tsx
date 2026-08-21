@@ -2,7 +2,7 @@
 import { useState,useRef,useCallback,useEffect,useMemo } from "react";
 import { useNavigate,useRouter } from "@tanstack/react-router";
 import {
-Zap,ChevronDown,Bot,MessageSquare,Eye,Code2,Palette,Blocks,MousePointer2,
+Zap,ChevronDown,Eye,Code2,
 Columns,Rocket,Settings,Sparkles,Loader2,
 PanelLeft,PanelsTopLeft,Download,
 Share2,Globe,Lock,Copy,ExternalLink,Shield,Brain,Pencil,Trash2,
@@ -32,7 +32,6 @@ import { NotificationsBell } from "./notifications-bell";
 import { LovableUpgradeDialog } from "./lovable/upgrade-dialog";
 import { dispatchChatSettings } from "./lovable/chat-settings-events";
 import { cn } from "@/lib/utils";
-import { usePreviewToken } from "@/hooks/use-preview-token";
 import { sandboxUrlWithPath } from "@/lib/preview/sandbox-url";
 
 /** Open preview / live URL with the current in-app route preserved. */
@@ -140,32 +139,18 @@ function useRelativeTime(date: Date | null | undefined): string {
   return "Saved";
 }
 
-const MODES: { id: EditorMode; label: string; icon: React.ElementType; description: string }[] = [
-  { id: "chat", label: "Chat", icon: MessageSquare, description: "Conversational edits" },
-  { id: "plan", label: "Plan", icon: Sparkles, description: "Plan before building" },
-  { id: "build", label: "Build", icon: Code2, description: "Full app generation" },
-  { id: "agent", label: "Agent", icon: Bot, description: "Autonomous AI agent" },
-];
-
 export function EditorTopBar({
   project,
-  editorMode,
   viewMode,
   credits,
-  leftPanel,
   showFileTree,
   profile,
   lastSaved,
-  onModeChange,
   onViewChange,
-  onLeftPanelChange,
   onToggleFileTree,
   onOpenShortcuts,
   onRename,
   onDuplicate,
-  onDelete,
-  devMode = true,
-  onDevModeToggle,
   onEnvironmentChange,
   rightPanel,
   onRightPanelChange,
@@ -205,10 +190,6 @@ export function EditorTopBar({
   const [previewRoutePath, setPreviewRoutePath] = useState("/");
   const [routeCanBack, setRouteCanBack] = useState(false);
   const [routeCanForward, setRouteCanForward] = useState(false);
-  // Short-lived signed preview URL (falls back to the plain path when tokens
-  // aren't configured server-side).
-  const { url: _signedPreviewUrl } = usePreviewToken(project.id);
-
   const [previewStatusText, setPreviewStatusText] = useState<string | null>(null);
 
   useEffect(() => {
@@ -735,19 +716,10 @@ export function EditorTopBar({
   // Deliberately narrow: a running deploy and a Test/Live toggle are normal
   // states, not problems, and dotting them would train people to ignore it.
   const statusNeedsAttention = creditsLow || deployStatus === "failed";
-  const ModeIcon = MODES.find((item) => item.id === editorMode)?.icon ?? MessageSquare;
-  const designPanelActive = rightPanel === "designpanel" || rightPanel === "designdir" ||
-    rightPanel === "visualedits" || rightPanel === "guidance" || rightPanel === "components" ||
-    rightPanel === "figma" || rightPanel === "image" || rightPanel === "media";
-
-  const openTool = (panel: LeftPanel) => {
-    onLeftPanelChange(panel);
-    onRightPanelChange?.(rightPanel === panel ? null : panel);
-  };
 
   return (
     <TooltipProvider>
-      <div className="sticky top-0 z-50 flex h-12 flex-shrink-0 items-center gap-2 border-b border-border/70 bg-background/95 px-2.5 shadow-[0_1px_0_rgba(0,0,0,0.02)] backdrop-blur-xl safe-area-top safe-area-x">
+      <div className="sticky top-0 z-50 flex items-center gap-1 px-2 h-11 border-b border-border bg-background flex-shrink-0 safe-area-top safe-area-x">
 
         {/* ── Left: width-synced to chat panel (Lovable [data-editor-chat-nav-container]) ── */}
         <div
@@ -983,7 +955,7 @@ export function EditorTopBar({
               right cluster is exactly Share and Publish, and anything else
               sitting beside them competes with the only button in the row
               that ships. Moved, not removed. */}
-          <NotificationsBell projectId={project.id} className="hidden lg:flex" />
+          <NotificationsBell projectId={project.id} className="hidden sm:flex" />
 
           {/* ── Status & tools — one control instead of nine ──────────────────
               This bar used to carry, loose and side by side: an autosave
@@ -1094,37 +1066,6 @@ export function EditorTopBar({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Editing mode is a first-class workspace control. Keeping it in
-              the top bar makes the chat panel and canvas feel like one tool. */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="hidden h-7 items-center gap-1.5 rounded-full border border-border/70 bg-background px-2.5 text-xs font-medium text-foreground shadow-sm transition-colors hover:bg-muted/60 md:flex"
-                aria-label={`Editor mode: ${editorMode}`}
-              >
-                <ModeIcon className="h-3.5 w-3.5 text-[#1F55F1]" />
-                <span className="capitalize">{editorMode === "patch" ? "Quick edit" : editorMode}</span>
-                <ChevronDown className="h-3 w-3 text-muted-foreground" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="center" className="w-60 p-1.5">
-              <DropdownMenuLabel className="px-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">AI workflow</DropdownMenuLabel>
-              {MODES.map(({ id, label, icon: Icon, description }) => (
-                <DropdownMenuItem key={id} onClick={() => onModeChange(id)} className="gap-2.5 rounded-md py-2">
-                  <span className={cn("grid h-7 w-7 place-items-center rounded-md", editorMode === id ? "bg-blue-500/10 text-[#1F55F1]" : "bg-muted text-muted-foreground")}>
-                    <Icon className="h-3.5 w-3.5" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-xs font-medium">{label}</span>
-                    <span className="block text-[10px] text-muted-foreground">{description}</span>
-                  </span>
-                  {editorMode === id && <CheckCircle2 className="h-3.5 w-3.5 text-[#1F55F1]" />}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
           {!isMobile && (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -1222,74 +1163,6 @@ export function EditorTopBar({
             </DropdownMenu>
           </ViewSwitcherPill>
 
-          {/* Design and product features are intentionally outside “More”.
-              Every item opens its existing functional editor panel. */}
-          <div className="hidden h-7 items-center rounded-full border border-border/70 bg-background p-0.5 shadow-sm xl:flex">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className={cn(
-                    "flex h-6 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors",
-                    designPanelActive ? "bg-blue-500/10 text-[#1F55F1]" : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
-                  )}
-                >
-                  <Palette className="h-3.5 w-3.5" /> Design
-                  <ChevronDown className="h-3 w-3 opacity-60" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="center" className="w-56 p-1.5">
-                <DropdownMenuLabel className="px-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Design workspace</DropdownMenuLabel>
-                {([
-                  { id: "designpanel" as LeftPanel, label: "Design system", icon: Palette },
-                  { id: "designdir" as LeftPanel, label: "Design directions", icon: Sparkles },
-                  { id: "visualedits" as LeftPanel, label: "Visual edits", icon: Pencil },
-                  { id: "components" as LeftPanel, label: "Components", icon: Blocks },
-                  { id: "figma" as LeftPanel, label: "Import from Figma", icon: LayoutDashboard },
-                  { id: "image" as LeftPanel, label: "Generate images", icon: Eye },
-                  { id: "media" as LeftPanel, label: "Media library", icon: FolderOpen },
-                  { id: "accessibility" as LeftPanel, label: "Accessibility", icon: CheckCircle2 },
-                ]).map(({ id, label, icon: Icon }) => (
-                  <DropdownMenuItem key={id} onClick={() => openTool(id)} className="gap-2.5 rounded-md py-2 text-xs">
-                    <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="flex-1">{label}</span>
-                    {rightPanel === id && <span className="h-1.5 w-1.5 rounded-full bg-[#1F55F1]" />}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            <div className="h-4 w-px bg-border/70" />
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button type="button" className="flex h-6 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground">
-                  <Blocks className="h-3.5 w-3.5" /> Features
-                  <ChevronDown className="h-3 w-3 opacity-60" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="center" className="w-60 p-1.5">
-                <DropdownMenuLabel className="px-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">App features</DropdownMenuLabel>
-                {([
-                  { id: "cloud" as LeftPanel, label: "Cloud & database", icon: Cloud },
-                  { id: "appauth" as LeftPanel, label: "Authentication", icon: UserPlus },
-                  { id: "connectors" as LeftPanel, label: "Connectors", icon: Link2 },
-                  { id: "payments" as LeftPanel, label: "Payments", icon: CreditCard },
-                  { id: "analytics" as LeftPanel, label: "Analytics", icon: BarChart2 },
-                  { id: "security" as LeftPanel, label: "Security", icon: Shield },
-                  { id: "seo" as LeftPanel, label: "SEO & AI search", icon: Search },
-                  { id: "settings" as LeftPanel, label: "Project settings", icon: Settings },
-                ]).map(({ id, label, icon: Icon }) => (
-                  <DropdownMenuItem key={id} onClick={() => openTool(id)} className="gap-2.5 rounded-md py-2 text-xs">
-                    <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="flex-1">{label}</span>
-                    {rightPanel === id && <span className="h-1.5 w-1.5 rounded-full bg-[#1F55F1]" />}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-
           {/* Center URL bar — Lovable parity: editable route on desktop + mobile */}
           <UrlBarPill
             className={cn("flex-1", isMobile ? "max-w-full px-2" : "max-w-md")}
@@ -1325,23 +1198,6 @@ export function EditorTopBar({
             work there; they just stop competing with the only button in this
             row that ships something. Gap 8px, matching theirs. */}
         <div className="flex items-center gap-2 flex-shrink-0">
-
-          {(viewMode === "preview" || viewMode === "both") && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="hidden h-7 w-7 rounded-full text-foreground/65 hover:bg-muted hover:text-foreground sm:inline-flex"
-                  aria-label="Show preview toolbar"
-                  onClick={() => window.dispatchEvent(new CustomEvent("lifemark-show-preview-toolbar"))}
-                >
-                  <MousePointer2 className="h-3.5 w-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>Show preview editing toolbar</TooltipContent>
-            </Tooltip>
-          )}
 
           {/* Notifications — kept inline because its unread badge is the only
               thing in this cluster that has to be seen without being asked

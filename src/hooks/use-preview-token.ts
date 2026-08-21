@@ -20,8 +20,7 @@ interface PreviewTokenState {
 
 export function usePreviewToken(projectId: string | undefined, sha?: string): PreviewTokenState {
   // Stable per-mount correlation id (parity with Lovable's __lovable_load_id).
-  const loadIdRef = useRef<string>(newLoadId());
-  const loadId = loadIdRef.current;
+  const [loadId] = useState<string>(() => newLoadId());
   const [token, setToken] = useState<string | null>(null);
   const [url, setUrl] = useState<string>(
     projectId ? buildPreviewUrl({ projectId, sha, loadId }) : ""
@@ -29,6 +28,7 @@ export function usePreviewToken(projectId: string | undefined, sha?: string): Pr
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mintRef = useRef<(() => Promise<void>) | null>(null);
 
   const mint = useCallback(async () => {
     if (!projectId) return;
@@ -56,7 +56,9 @@ export function usePreviewToken(projectId: string | undefined, sha?: string): Pr
       // Re-mint at 80% of the token lifetime.
       const msUntilRefresh = Math.max(30_000, (data.expiresAt * 1000 - Date.now()) * 0.8);
       if (timer.current) clearTimeout(timer.current);
-      timer.current = setTimeout(() => void mint(), msUntilRefresh);
+      timer.current = setTimeout(() => {
+        void mintRef.current?.();
+      }, msUntilRefresh);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to mint preview token");
       if (projectId) setUrl(buildPreviewUrl({ projectId, sha, loadId }));
@@ -64,6 +66,10 @@ export function usePreviewToken(projectId: string | undefined, sha?: string): Pr
       setLoading(false);
     }
   }, [projectId, sha, loadId]);
+
+  useEffect(() => {
+    mintRef.current = mint;
+  }, [mint]);
 
   useEffect(() => {
     void mint();

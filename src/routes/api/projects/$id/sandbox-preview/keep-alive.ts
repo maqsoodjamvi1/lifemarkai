@@ -13,11 +13,7 @@ import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
 import { getSandboxProvider,isSandboxEnabled } from "@/lib/sandbox";
 
 
-interface Params {
-  params: Promise<{ id: string }>;
-}
-
-async function handlePOST(req: Request, params: any) {
+async function handlePOST(req: Request, params: { id: string }) {
   const { id: projectId } = params;
 
   if (!isSandboxEnabled()) {

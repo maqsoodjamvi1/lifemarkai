@@ -1,0 +1,76 @@
+From 904f650004b8e335880b2b983f9c4d15dce186f8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 21 Aug 2026 10:52:06 +0000
+Subject: [PATCH] fix(ci): give the deploy-safety smoke tests the port the
+ server listens on
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+master is still red after the type-check fix. Run #224 got as far as the
+"Deploy-safety smoke tests" step and reported `0 passed, 12 failed`, every
+one of them `fetch failed url=http://localhost:3001/...`.
+
+Nothing is wrong with the assertions or the server. start-production.mjs
+binds `PORT` and defaults to 3000; every URL in that step is 3001, and the
+step never set PORT. The server came up healthy on 3000, the readiness loop
+spent its full 60 x 2s expiring against 3001 (hence the step's 2m06s), and
+then all twelve checks failed to connect. Reproduced locally: identical
+failure without PORT, `12 passed, 0 failed` with `PORT=3001`.
+
+The step is also changed to say which of the two things happened. A server
+that never binds and a server that rejects everything produced byte-identical
+output before — twelve "fetch failed" lines — which is exactly why this read
+as a broken app rather than a missing variable. It now fails immediately with
+an explicit message and dumps the supervisor log, and dumps it too when the
+checks themselves fail.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QGy3NZWndBAVM8qKdAzXm1
+---
+ .github/workflows/ci.yml | 20 ++++++++++++++++++--
+ 1 file changed, 18 insertions(+), 2 deletions(-)
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 12c3de0..0888f23 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -58,17 +58,33 @@ jobs:
+       # Placeholders are enough because every check asserts a REJECTION.
+       - name: Deploy-safety smoke tests
+         run: |
+-          node scripts/start-production.mjs &
++          node scripts/start-production.mjs > /tmp/start-production.log 2>&1 &
+           SERVER_PID=$!
++          READY=0
+           for i in $(seq 1 60); do
+-            if curl -sf http://localhost:3001/health >/dev/null 2>&1; then break; fi
++            if curl -sf http://localhost:3001/health >/dev/null 2>&1; then READY=1; break; fi
+             sleep 2
+           done
++          # Without this branch a server that never binds looks exactly like a
++          # server that rejects every request: the loop just expires and all
++          # twelve checks report "fetch failed", which is what hid a missing
++          # PORT. Say which of the two happened, and show the server log.
++          if [ "$READY" -ne 1 ]; then
++            echo "::error::start-production.mjs never answered on http://localhost:3001/health"
++            cat /tmp/start-production.log
++            kill $SERVER_PID 2>/dev/null || true
++            exit 1
++          fi
+           node scripts/verify-deploy-smoke.mjs http://localhost:3001
+           STATUS=$?
++          if [ "$STATUS" -ne 0 ]; then cat /tmp/start-production.log; fi
+           kill $SERVER_PID 2>/dev/null || true
+           exit $STATUS
+         env:
++          # start-production.mjs listens on PORT (default 3000); every URL in
++          # this step is 3001. Without this the server comes up healthy on the
++          # wrong port and all twelve checks fail with "fetch failed".
++          PORT: "3001"
+           VITE_SUPABASE_URL: https://placeholder.supabase.co
+           VITE_SUPABASE_ANON_KEY: ci-placeholder
+           NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+-- 
+2.43.0
+

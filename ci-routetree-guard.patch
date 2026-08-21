@@ -1,0 +1,49 @@
+From 96562d72de5a43b56b8421f821462b0574bb4f63 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 21 Aug 2026 04:04:48 +0000
+Subject: [PATCH] ci: fail when the committed route tree is stale
+
+The 2026-08-21 red build came from src/routeTree.gen.ts not being
+regenerated after PR #14 added three API routes. Nothing in the pipeline
+could catch it: type-check is the step that fails, and it runs before the
+build that would regenerate the file.
+
+The production build already regenerates the route tree, so a diff after
+it is proof the committed copy was out of date. Assert that, with an
+error message naming the fix.
+
+Verified both ways locally: clean tree passes, a one-line edit fails.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QGy3NZWndBAVM8qKdAzXm1
+---
+ .github/workflows/ci.yml | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 211c5eb..12c3de0 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -40,6 +40,19 @@ jobs:
+           VITE_SUPABASE_ANON_KEY: ci-placeholder
+           VITE_APP_URL: http://localhost:3001
+ 
++      # A stale committed route tree is exactly what turned CI red on
++      # 2026-08-21: PR #14 added three API routes without regenerating it, and
++      # type-check can never self-heal because it runs BEFORE the build. The
++      # build above regenerates the tree, so any diff here proves the committed
++      # file was out of date.
++      - name: Route tree is up to date
++        run: |
++          if ! git diff --quiet -- src/routeTree.gen.ts; then
++            echo "::error file=src/routeTree.gen.ts::Stale route tree. Run 'npm run build' and commit the regenerated src/routeTree.gen.ts."
++            git diff --stat -- src/routeTree.gen.ts
++            exit 1
++          fi
++
+       # Boot the built server and assert the SAFETY invariants: auth is
+       # enforced, unsigned Stripe webhooks are rejected, errors leak nothing.
+       # Placeholders are enough because every check asserts a REJECTION.
+-- 
+2.43.0
+

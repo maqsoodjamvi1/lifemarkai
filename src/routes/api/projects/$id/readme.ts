@@ -6,7 +6,7 @@ import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 
 // POST /api/projects/[id]/readme
 // Reads project files, generates a README.md with AI, upserts it as a project file.
-async function handlePOST(req: Request, params: any) {
+async function handlePOST(req: Request, params: { id: string }) {
   const { id } = params;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();

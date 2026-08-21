@@ -41,7 +41,6 @@ async function handlePOST(req: Request, params: any) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: project } = await supabase
     .from("projects")
     .select("id, user_id, ai_integration_enabled, ai_credits_used, ai_credit_limit, is_public")
@@ -60,7 +59,6 @@ async function handlePOST(req: Request, params: any) {
 
   // Auth: owner, collaborator, OR any caller when the project is public.
   if (!project.is_public && user?.id !== project.user_id) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data: collab } = await supabase
       .from("collaborators")
       .select("role")

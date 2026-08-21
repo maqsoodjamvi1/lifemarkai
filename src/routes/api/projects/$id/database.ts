@@ -5,8 +5,6 @@ import { queryManagedSql,runManagedSql } from "@/lib/cloud/management";
 import { ENV_FILE_PATH,parseEnvFile } from "@/lib/project/env-file";
 
 
-interface Params { params: Promise<{ id: string }> }
-
 /**
  * Database Manager for the APP BEING BUILT (per-project backend) — NOT the
  * platform database. Lovable-Cloud-style table browser / editor / SQL runner.
@@ -97,7 +95,7 @@ async function loadOwnedProject(supabase: Supabase, projectId: string, userId: s
 }
 
 // ── GET — ?action=tables | ?action=rows&table=X&limit=50&offset=0 ────────────
-async function handleGET(req: Request, params: any) {
+async function handleGET(req: Request, params: { id: string }) {
   const { id: projectId } = params;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -178,7 +176,7 @@ async function handleGET(req: Request, params: any) {
 }
 
 // ── POST — insert / update / delete / sql ────────────────────────────────────
-async function handlePOST(req: Request, params: any) {
+async function handlePOST(req: Request, params: { id: string }) {
   const { id: projectId } = params;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();

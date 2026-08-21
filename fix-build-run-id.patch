@@ -1,0 +1,123 @@
+From f9060600fde605177ea08db14f8b0e4ed705b869 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 21 Aug 2026 10:25:49 +0000
+Subject: [PATCH] fix(build-runs): never reuse an inbound build id the database
+ will reject
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+`build_runs.id` is CHECK-constrained to `^run_[A-Za-z0-9_-]+$`. sanitizeId(),
+which guards the inbound x-lifemark-build-run-id header, is deliberately
+looser — it protects log lines, so it also accepts '.' and ':' and imposes no
+prefix. The two do not agree.
+
+On /api/ai/agent and /api/ai/chat that header is client-controlled:
+proxyAiToWorker seeds the correlation context from the request, and
+ensureBuildRunId() reused whatever was there as long as it was truthy. A
+request carrying `x-lifemark-build-run-id: a.b` (or any id minted with a
+different prefix — req_/sbx_/dep_) therefore reached startRun() as a primary
+key the constraint rejects.
+
+The failure is silent by design at every layer below: startRun only warns,
+so the build keeps running with durability off — no build_runs row, every
+build_run_events insert failing its foreign key, and nothing for
+GET /api/build-runs/:id/events to replay on reconnect. Exactly the
+running-but-broken shape that is expensive to diagnose later.
+
+ensureBuildRunId() now re-mints unless the inherited id matches the pattern
+the database will accept. Well-formed upstream ids are still inherited, so
+chat -> self-verify -> repair -> deploy continue to report one run.
+
+Tests assert both directions and were confirmed to fail against the unfixed
+source. type-check 0 errors, 631/631 tests, lint 0 errors.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QGy3NZWndBAVM8qKdAzXm1
+---
+ src/lib/observability/correlation.test.ts | 29 +++++++++++++++++++++++
+ src/lib/observability/correlation.ts      | 22 ++++++++++++++++-
+ 2 files changed, 50 insertions(+), 1 deletion(-)
+
+diff --git a/src/lib/observability/correlation.test.ts b/src/lib/observability/correlation.test.ts
+index 3e98480..9478fa5 100644
+--- a/src/lib/observability/correlation.test.ts
++++ b/src/lib/observability/correlation.test.ts
+@@ -137,6 +137,35 @@ describe("header propagation", () => {
+     assert.equal(seed.buildRunId, undefined);
+   });
+ 
++  /**
++   * The database is stricter than the log sanitizer: build_runs.id is
++   * CHECK ^run_[A-Za-z0-9_-]+$, while sanitizeId also allows '.' and ':' and
++   * any prefix. An id that survives the header but not the constraint would
++   * make startRun's insert fail — and startRun only warns, so the build would
++   * lose durability with nothing surfaced.
++   */
++  it("does not reuse an inbound build id the database would reject", () => {
++    for (const hostile of ["a.b", "req_abc", "sbx_abc", "run", "run_"]) {
++      const seed = correlationFromRequest(
++        new Request("http://localhost/api/ai/agent", {
++          headers: { [CORRELATION_HEADERS.buildRunId]: hostile },
++        }),
++      );
++      const minted = runWithCorrelation(seed, () => ensureBuildRunId());
++      assert.notEqual(minted, hostile);
++      assert.match(minted, /^run_[A-Za-z0-9_-]+$/);
++    }
++  });
++
++  it("still reuses a well-formed inbound build id", () => {
++    const seed = correlationFromRequest(
++      new Request("http://localhost/api/ai/agent", {
++        headers: { [CORRELATION_HEADERS.buildRunId]: "run_from_upstream" },
++      }),
++    );
++    assert.equal(runWithCorrelation(seed, () => ensureBuildRunId()), "run_from_upstream");
++  });
++
+   it("stamps outbound headers and clears stale ones", () => {
+     runWithCorrelation({ requestId: "req_1", buildRunId: "run_1" }, () => {
+       const headers = applyCorrelationHeaders(
+diff --git a/src/lib/observability/correlation.ts b/src/lib/observability/correlation.ts
+index f7ed2e1..97efa8e 100644
+--- a/src/lib/observability/correlation.ts
++++ b/src/lib/observability/correlation.ts
+@@ -120,13 +120,33 @@ export function runWithCorrelation<T>(
+   return getAls().run(ctx, fn);
+ }
+ 
++/**
++ * `build_runs.id` is CHECK-constrained to `^run_[A-Za-z0-9_-]+$`, but
++ * sanitizeId() is deliberately looser: it guards LOG LINES, so it also accepts
++ * '.' and ':' and imposes no prefix. An inbound x-lifemark-build-run-id is
++ * client-controlled on the chat/agent entrypoints, so a value like "a.b" — or
++ * any id minted with a different prefix (req_/sbx_/dep_) — passes sanitizeId
++ * and is then REJECTED by the constraint. BuildRunStore.startRun only warns on
++ * a failed insert, so the build would keep running with durability silently
++ * off: no build_runs row, every build_run_events insert failing its foreign
++ * key, and nothing for the reconnect-replay endpoint to return.
++ *
++ * Anything that would not survive the insert is therefore not reused as a
++ * build id.
++ */
++const BUILD_RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]+$/;
++
++export function isBuildRunId(value: string | null | undefined): value is string {
++  return typeof value === "string" && BUILD_RUN_ID_PATTERN.test(value);
++}
++
+ /**
+  * Mint the build id once and reuse it for the whole build. Chat, self-verify,
+  * repair rounds and the deploy that follows all report the same run.
+  */
+ export function ensureBuildRunId(): string {
+   const ctx = getCorrelation();
+-  if (ctx?.buildRunId) return ctx.buildRunId;
++  if (isBuildRunId(ctx?.buildRunId)) return ctx.buildRunId;
+   const id = newBuildRunId();
+   setCorrelation({ buildRunId: id });
+   return id;
+-- 
+2.43.0
+

@@ -8,7 +8,7 @@ import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
 
 
 /** POST — quick preview sanity check after AI builds (prefers live Modal URL). */
-async function handlePOST(req: Request, params: any) {
+async function handlePOST(req: Request, params: { id: string }) {
   const { id } = params;
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);

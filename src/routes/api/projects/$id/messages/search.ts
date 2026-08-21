@@ -11,7 +11,7 @@ import { assertChatAccess } from "@/lib/project/chat-access";
 
 
 /** GET /api/projects/[id]/messages/search?q=&mode=keyword|semantic */
-async function handleGET(req: Request, params: any) {
+async function handleGET(req: Request, params: { id: string }) {
   const { id } = params;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();

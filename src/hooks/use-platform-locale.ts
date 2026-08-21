@@ -10,13 +10,19 @@ type PlatformStringKey,
 
 /** Platform UI locale — persisted in localStorage, synced to `<html lang>`. */
 export function usePlatformLocale() {
+  // Keep the server and first client render identical; hydrate the persisted
+  // browser preference after mount.
   const [locale, setLocaleState] = useState<PlatformLocale>("en");
 
   useEffect(() => {
     const stored = getStoredPlatformLocale();
-    setLocaleState(stored);
     document.documentElement.lang = stored;
+    queueMicrotask(() => setLocaleState(stored));
   }, []);
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   useEffect(() => {
     function onChange(e: Event) {

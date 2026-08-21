@@ -56,7 +56,6 @@ export interface LovablePreviewInteractionToolbarProps {
   /** Lovable dump: “Reverting to earlier version...” tray */
   reverting?: boolean;
   onDismissReverting?: () => void;
-  onHide?: () => void;
   className?: string;
 }
 
@@ -103,11 +102,9 @@ export function LovablePreviewInteractionToolbar({
   onDismissCommentsBanner,
   reverting = false,
   onDismissReverting,
-  onHide,
   className,
 }: LovablePreviewInteractionToolbarProps) {
   const [minimized, setMinimized] = useState(false);
-  const [toolbarTheme, setToolbarTheme] = useState<"auto" | "light" | "dark">("auto");
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
   const shellRef = useRef<HTMLDivElement>(null);
@@ -203,7 +200,7 @@ export function LovablePreviewInteractionToolbar({
 
   const positionStyle = pos
     ? { left: pos.x, top: pos.y, transform: "none" as const }
-    : { left: "50%", bottom: 16, transform: "translateX(-50%)" as const };
+    : { left: "50%", top: 16, transform: "translateX(-50%)" as const };
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -215,10 +212,7 @@ export function LovablePreviewInteractionToolbar({
       >
         <div
           className={cn(
-            "relative overflow-hidden text-[#1B1B1B] dark:text-[var(--fg-primary)]",
-            toolbarTheme === "light" && "bg-white/80 text-[#1B1B1B]",
-            toolbarTheme === "dark" && "bg-[#171717]/85 !text-white",
-            toolbarTheme === "auto" && "bg-white/[0.62] dark:bg-black/55",
+            "relative overflow-hidden bg-white/[0.48] dark:bg-black/40 text-[#1B1B1B] dark:text-[var(--fg-primary)]",
             "shadow-[0_4px_4px_-2px_rgba(0,0,0,0.04),0_2px_2px_-1px_rgba(0,0,0,0.04),0_0_0_0.5px_rgba(0,0,0,0.12),inset_0_0.5px_0_rgba(255,255,255,0.24)]",
             "backdrop-blur-md backdrop-saturate-[1.4]",
             "rounded-full transition-[width,height] duration-200",
@@ -374,21 +368,6 @@ export function LovablePreviewInteractionToolbar({
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-44">
-                    <DropdownMenuItem
-                      onClick={() => {
-                        setPos(null);
-                        try { localStorage.removeItem(STORAGE_KEY); } catch { /* private mode */ }
-                      }}
-                      className="text-xs gap-2"
-                    >
-                      <Frame className="size-3.5" /> Dock bottom center
-                    </DropdownMenuItem>
-                    {(["auto", "light", "dark"] as const).map((theme) => (
-                      <DropdownMenuItem key={theme} onClick={() => setToolbarTheme(theme)} className="text-xs gap-2 pl-7">
-                        <span className="flex-1 capitalize">{theme} theme</span>
-                        {toolbarTheme === theme && <span className="size-1.5 rounded-full bg-[#2F6FED]" />}
-                      </DropdownMenuItem>
-                    ))}
                     {onCaptureAnnotate && (
                       <DropdownMenuItem onClick={onCaptureAnnotate} className="text-xs gap-2">
                         <Pencil className="size-3.5" />
@@ -427,14 +406,6 @@ export function LovablePreviewInteractionToolbar({
                           <Smartphone className="size-3.5" /> Mobile
                         </DropdownMenuItem>
                       </>
-                    )}
-                    <DropdownMenuItem onClick={() => setMinimized(true)} className="text-xs gap-2">
-                      <Minimize2 className="size-3.5" /> Minimize toolbar
-                    </DropdownMenuItem>
-                    {onHide && (
-                      <DropdownMenuItem onClick={onHide} className="text-xs gap-2">
-                        <ChevronRight className="size-3.5" /> Hide toolbar
-                      </DropdownMenuItem>
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>

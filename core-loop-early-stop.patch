@@ -1,0 +1,674 @@
+From 9f4f4b88801f18e0871100c2d86adcaa645b72df Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 21 Aug 2026 08:38:21 +0000
+Subject: [PATCH] feat(core-loop): stop the release campaign after repeated
+ identical failures
+
+The 50-run release gate had no circuit breaker: one systemic defect burned
+every remaining attempt (and its credits) before anyone saw the report.
+
+Campaign changes:
+
+- After CORE_LOOP_STOP_AFTER_IDENTICAL_FAILURES consecutive identical
+  failures (default 3, floor 2) the campaign exits non-zero and writes
+  `earlyStop` plus the offending signature into the report and latest.json
+  immediately, so the run that stopped is visible without waiting.
+- Every failed attempt now carries a normalized `failureSignature`;
+  passes carry null. A pass resets the streak.
+- The campaign pins its own AI model tier and honours a request-model
+  override on the server, so a stray OPENROUTER_CODING_MODEL in a
+  Codespace cannot stall the gate. Generation aborts at 300s.
+
+Failure signatures are `<stage>:<message>` with the stage prefix stripped
+from the message, and are aggressively normalized -- a signature that stays
+unique per attempt makes the early stop fail OPEN, which defeats the whole
+feature. Collapsed: UUIDs, 5+ digit runs, mixed hex ids of 7+ chars
+(docker/sandbox container ids are not UUID-shaped), and URL hosts down to
+`<sub>.provider.tld` with the path kept. Preview and deployment errors carry
+a fresh random sandbox host on every single attempt, so without the host and
+hex rules three identical root causes produced three different signatures
+and the breaker never tripped.
+
+The stage-prefix strip also matches spaced spellings, so stage `public-url`
+against "public URL check failed" no longer yields
+`public-url:public URL check failed`.
+
+type-check 0 errors, 629/629 tests pass, lint 0 errors.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QGy3NZWndBAVM8qKdAzXm1
+---
+ .env.core-loop.example                       |   7 +-
+ scripts/verify-core-loop-campaign.ts         | 197 +++++++++++++++----
+ scripts/verify-core-loop-one-flow.mjs        |   4 +
+ src/lib/reliability/core-loop-policy.test.ts |  40 +++-
+ src/lib/reliability/core-loop-policy.ts      |  22 +++
+ src/lib/reliability/core-loop-report.test.ts |  95 ++++++++-
+ src/lib/reliability/core-loop-report.ts      |  76 +++++++
+ 7 files changed, 395 insertions(+), 46 deletions(-)
+
+diff --git a/.env.core-loop.example b/.env.core-loop.example
+index a8382c7..ce4ac5e 100644
+--- a/.env.core-loop.example
++++ b/.env.core-loop.example
+@@ -6,9 +6,14 @@ CORE_LOOP_EMAIL=reliability-test@example.com
+ CORE_LOOP_PASSWORD=replace-with-dedicated-test-account-password
+ CORE_LOOP_DEPLOY_PROVIDER=netlify
+ CORE_LOOP_DEPLOY_TIMEOUT_MS=180000
+-CORE_LOOP_AI_MODEL=qwen/qwen3-coder
++CORE_LOOP_GENERATION_TIMEOUT_MS=300000
++CORE_LOOP_STOP_AFTER_IDENTICAL_FAILURES=3
++# Campaign runners default to gpt-5.6-luna when unset so a Codespace
++# OPENROUTER_CODING_MODEL=qwen override cannot stall the release gate.
++CORE_LOOP_AI_MODEL=openai/gpt-5.6-luna
+ CORE_LOOP_FALLBACK_MODEL=deepseek/deepseek-v4-flash
+ CORE_LOOP_MAX_REPAIR_ROUNDS=2
++CORE_LOOP_REQUIRE_REGISTRATION_PROOF=true
+ 
+ VITE_SUPABASE_URL=https://your-project.supabase.co
+ VITE_SUPABASE_ANON_KEY=replace-with-supabase-anon-key
+diff --git a/scripts/verify-core-loop-campaign.ts b/scripts/verify-core-loop-campaign.ts
+index 1cda9ea..067c4b9 100644
+--- a/scripts/verify-core-loop-campaign.ts
++++ b/scripts/verify-core-loop-campaign.ts
+@@ -4,11 +4,13 @@ import { randomUUID } from "node:crypto";
+ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+ import {
+   assessCoreLoopReleaseGate,
++  normalizeCoreLoopFailureSignature,
++  shouldStopCoreLoopCampaign,
+   summarizeCoreLoop,
+   type CoreLoopAttempt,
+   type CoreLoopStage,
+ } from "../src/lib/reliability/core-loop-report.ts";
+-import { getCoreLoopPolicy } from "../src/lib/reliability/core-loop-policy.ts";
++import { getCoreLoopPolicy, pinCoreLoopCampaignAiModel } from "../src/lib/reliability/core-loop-policy.ts";
+ import { assertCoreLoopApiRequest } from "../src/lib/reliability/core-loop-api-surface.ts";
+ 
+ function loadEnv(path = ".env.local") {
+@@ -27,6 +29,7 @@ function loadEnv(path = ".env.local") {
+ }
+ 
+ loadEnv();
++pinCoreLoopCampaignAiModel();
+ 
+ const firstEnv = (...names: string[]) =>
+   names.map((name) => process.env[name]?.trim()).find(Boolean);
+@@ -54,6 +57,11 @@ const CORE_LOOP_POLICY = getCoreLoopPolicy();
+ const PROVIDER = CORE_LOOP_POLICY.deploymentProvider;
+ const ATTEMPTS = Math.max(1, Number.parseInt(process.env.CORE_LOOP_ATTEMPTS ?? "50", 10));
+ const DEPLOY_TIMEOUT_MS = Math.max(30_000, Number.parseInt(process.env.CORE_LOOP_DEPLOY_TIMEOUT_MS ?? "180000", 10));
++const GENERATION_TIMEOUT_MS = Math.max(30_000, Number.parseInt(process.env.CORE_LOOP_GENERATION_TIMEOUT_MS ?? "300000", 10));
++const STOP_AFTER_IDENTICAL_FAILURES = Math.max(
++  2,
++  Number.parseInt(process.env.CORE_LOOP_STOP_AFTER_IDENTICAL_FAILURES ?? "3", 10) || 3,
++);
+ const PROMPTS_PATH = resolve(process.env.CORE_LOOP_PROMPTS ?? "tests/core-loop-prompts.json");
+ const REPORT_DIR = resolve(process.env.CORE_LOOP_REPORT_DIR ?? "artifacts/core-loop");
+ const REQUIRE_REGISTRATION_PROOF =
+@@ -102,7 +110,10 @@ async function startRemotePreview(projectId: string, cookie: string) {
+     if (state.previewUrl && state.sandboxId && state.ok === true && state.phase === "ready") {
+       return { previewUrl: state.previewUrl, sandboxId: state.sandboxId };
+     }
+-    if (state.phase === "error" || state.phase === "unreachable") {
++    // "app_error" = the container is serving but the app answers 5xx (a build
++    // failure in the generated code). Terminal here: polling longer cannot fix
++    // a file that does not compile, and the phaseDetail names the real cause.
++    if (state.phase === "error" || state.phase === "unreachable" || state.phase === "app_error") {
+       throw new Error(state.error ?? state.phaseDetail ?? `remote preview entered ${state.phase}`);
+     }
+     await new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000));
+@@ -234,31 +245,52 @@ async function jsonFetch<T>(path: string, cookie: string, init: RequestInit = {}
+   return body as T;
+ }
+ 
+-async function readDoneEvent(response: Response): Promise<DoneEvent> {
++async function readDoneEvent(response: Response, timeoutMs = GENERATION_TIMEOUT_MS): Promise<DoneEvent> {
+   if (!response.ok || !response.body) throw new Error(`generation returned ${response.status}: ${await response.text()}`);
+   const reader = response.body.getReader();
+   const decoder = new TextDecoder();
+   let buffer = "";
+-  while (true) {
+-    const { done, value } = await reader.read();
+-    buffer += decoder.decode(value, { stream: !done });
+-    const lines = buffer.split("\n");
+-    buffer = lines.pop() ?? "";
+-    for (const line of lines) {
+-      if (!line.startsWith("data: ")) continue;
+-      const payload = line.slice(6).trim();
+-      if (!payload) continue;
+-      let event: DoneEvent;
+-      try {
+-        event = JSON.parse(payload) as DoneEvent;
+-      } catch {
+-        // Ignore heartbeats and incomplete/non-JSON events.
+-        continue;
++  const deadline = Date.now() + timeoutMs;
++  const readBeforeDeadline = async () => {
++    const remainingMs = deadline - Date.now();
++    if (remainingMs <= 0) throw new Error(`generation timed out after ${timeoutMs}ms`);
++    let timer: ReturnType<typeof setTimeout> | undefined;
++    try {
++      return await Promise.race([
++        reader.read(),
++        new Promise<never>((_, reject) => {
++          timer = setTimeout(() => reject(new Error(`generation timed out after ${timeoutMs}ms`)), remainingMs);
++          timer.unref?.();
++        }),
++      ]);
++    } finally {
++      if (timer) clearTimeout(timer);
++    }
++  };
++  try {
++    while (true) {
++      const { done, value } = await readBeforeDeadline();
++      buffer += decoder.decode(value, { stream: !done });
++      const lines = buffer.split("\n");
++      buffer = lines.pop() ?? "";
++      for (const line of lines) {
++        if (!line.startsWith("data: ")) continue;
++        const payload = line.slice(6).trim();
++        if (!payload) continue;
++        let event: DoneEvent;
++        try {
++          event = JSON.parse(payload) as DoneEvent;
++        } catch {
++          // Ignore heartbeats and incomplete/non-JSON events.
++          continue;
++        }
++        if (event.error) throw new Error(event.error);
++        if (event.done) return event;
+       }
+-      if (event.error) throw new Error(event.error);
+-      if (event.done) return event;
++      if (done) break;
+     }
+-    if (done) break;
++  } finally {
++    await reader.cancel().catch(() => {});
+   }
+   throw new Error("generation stream ended without a done event");
+ }
+@@ -326,7 +358,19 @@ async function main() {
+   const campaignStartedAt = new Date().toISOString();
+   const attempts: CoreLoopAttempt[] = [];
+   mkdirSync(REPORT_DIR, { recursive: true });
++  console.log(
++    `Core-loop gate: model=${CORE_LOOP_POLICY.primaryModel} fallback=${CORE_LOOP_POLICY.fallbackModel} ` +
++      `attempts=${ATTEMPTS} generationTimeoutMs=${GENERATION_TIMEOUT_MS} ` +
++      `stopAfterIdenticalFailures=${STOP_AFTER_IDENTICAL_FAILURES}`,
++  );
++  if (/qwen3-coder/i.test(CORE_LOOP_POLICY.primaryModel)) {
++    console.warn(
++      "Warning: core-loop primary model is qwen3-coder, which previously stalled the release gate. " +
++        "Set CORE_LOOP_AI_MODEL=openai/gpt-5.6-luna (or unset it so the campaign default applies).",
++    );
++  }
+ 
++  let earlyStop: ReturnType<typeof shouldStopCoreLoopCampaign> | null = null;
+   for (let index = 0; index < ATTEMPTS; index += 1) {
+     const prompt = prompts[index % prompts.length];
+     const startedAt = new Date().toISOString();
+@@ -357,24 +401,40 @@ async function main() {
+ 
+       stage = "generation";
+       const generationStarted = Date.now();
+-      const generationResponse = await fetch(coreLoopUrl("/api/ai/chat", "POST"), {
+-        method: "POST",
+-        headers: { "Content-Type": "application/json", Cookie: cookie },
+-        body: JSON.stringify({
+-          projectId: project.id,
+-          message: prompt,
+-          mode: CORE_LOOP_POLICY.mode,
+-          framework: CORE_LOOP_POLICY.framework,
+-          model: CORE_LOOP_POLICY.primaryModel,
+-          modelManuallySelected: true,
+-          forceBuild: true,
+-          clarifyFirst: false,
+-          coreLoop: true,
+-          files: [],
+-          history: [],
+-        }),
+-      });
+-      const done = await readDoneEvent(generationResponse);
++      const generationAbort = new AbortController();
++      const generationTimer = setTimeout(() => generationAbort.abort(), GENERATION_TIMEOUT_MS);
++      generationTimer.unref?.();
++      let done: DoneEvent;
++      try {
++        const generationResponse = await fetch(coreLoopUrl("/api/ai/chat", "POST"), {
++          method: "POST",
++          headers: { "Content-Type": "application/json", Cookie: cookie },
++          signal: generationAbort.signal,
++          body: JSON.stringify({
++            projectId: project.id,
++            message: prompt,
++            mode: CORE_LOOP_POLICY.mode,
++            framework: CORE_LOOP_POLICY.framework,
++            model: CORE_LOOP_POLICY.primaryModel,
++            modelManuallySelected: true,
++            forceBuild: true,
++            clarifyFirst: false,
++            coreLoop: true,
++            files: [],
++            history: [],
++          }),
++        });
++        done = await readDoneEvent(generationResponse);
++      } catch (error) {
++        if (generationAbort.signal.aborted) {
++          throw new Error(
++            `generation timed out after ${GENERATION_TIMEOUT_MS}ms (model=${CORE_LOOP_POLICY.primaryModel})`,
++          );
++        }
++        throw error;
++      } finally {
++        clearTimeout(generationTimer);
++      }
+       attempt.generationMs = Date.now() - generationStarted;
+       attempt.generationPassed = Number(done.fileCount ?? 0) > 0;
+       attempt.creditsUsed = typeof done.creditsUsed === "number" ? done.creditsUsed : null;
+@@ -387,7 +447,19 @@ async function main() {
+       sandboxId = remotePreview.sandboxId;
+       const previewResponse = await fetch(remotePreview.previewUrl, { redirect: "follow" });
+       if (!previewResponse.ok) {
+-        throw new Error(`remote preview returned ${previewResponse.status}`);
++        // KEEP THE BODY. A bare "remote preview returned 500" is unactionable —
++        // it cannot tell a Traefik 502 (sandbox down) from vite answering its
++        // own 500 (the generated code does not transform), and those have
++        // nothing to do with each other. Vite puts the file, line and message
++        // straight in the response, so a run that throws this away forces the
++        // next debugging pass to be a guess. Truncated because a vite error
++        // page carries the whole module graph after the part that matters.
++        const detail = await previewResponse.text().catch(() => "");
++        const snippet = detail.replace(/\s+/g, " ").trim().slice(0, 600);
++        throw new Error(
++          `remote preview returned ${previewResponse.status}` +
++            (snippet ? ` — ${snippet}` : ""),
++        );
+       }
+       const preview = await jsonFetch<{ ok?: boolean }>(`/api/projects/${project.id}/preview-verify`, cookie, {
+         method: "POST",
+@@ -424,22 +496,61 @@ async function main() {
+         attempt.sandboxCostCents = costs.sandboxCostCents;
+         attempt.repairRounds = Math.max(attempt.repairRounds, costs.repairRounds);
+       }
++      attempt.failureSignature = normalizeCoreLoopFailureSignature(attempt);
+       attempts.push(attempt);
+-      const interim = { campaignStartedAt, baseUrl: BASE_URL, registrationProof, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary: summarizeCoreLoop(attempts), attempts };
++      const interim = {
++        campaignStartedAt,
++        baseUrl: BASE_URL,
++        registrationProof,
++        policy: CORE_LOOP_POLICY,
++        provider: PROVIDER,
++        summary: summarizeCoreLoop(attempts),
++        earlyStop: null,
++        attempts,
++      };
+       writeFileSync(resolve(REPORT_DIR, "latest.json"), `${JSON.stringify(interim, null, 2)}\n`);
+       console.log(`[${attempt.index}/${ATTEMPTS}] ${attempt.publicUrlPassed ? "PASS" : `FAIL:${attempt.failedStage}`} ${prompt.slice(0, 70)}`);
++      const stopCheck = shouldStopCoreLoopCampaign(attempts, STOP_AFTER_IDENTICAL_FAILURES);
++      if (stopCheck.stop) {
++        earlyStop = stopCheck;
++        console.error(
++          `Stopping campaign early after ${stopCheck.consecutive} identical failures ` +
++            `(${stopCheck.signature}). Fix the systemic defect before resuming.`,
++        );
++        const stopped = {
++          ...interim,
++          earlyStop,
++          summary: summarizeCoreLoop(attempts),
++        };
++        writeFileSync(resolve(REPORT_DIR, "latest.json"), `${JSON.stringify(stopped, null, 2)}\n`);
++        break;
++      }
+     }
+   }
+ 
+   const summary = summarizeCoreLoop(attempts);
+   const releaseGate = assessCoreLoopReleaseGate(summary, registrationProof.passed);
+-  const report = { campaignStartedAt, completedAt: new Date().toISOString(), baseUrl: BASE_URL, registrationProof, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary, releaseGate, attempts };
++  const report = {
++    campaignStartedAt,
++    completedAt: new Date().toISOString(),
++    baseUrl: BASE_URL,
++    registrationProof,
++    policy: CORE_LOOP_POLICY,
++    provider: PROVIDER,
++    summary,
++    releaseGate,
++    earlyStop,
++    attempts,
++  };
+   const serializedReport = `${JSON.stringify(report, null, 2)}\n`;
+   const stampedPath = resolve(REPORT_DIR, `core-loop-${campaignStartedAt.replace(/[:.]/g, "-")}.json`);
+   writeFileSync(resolve(REPORT_DIR, "latest.json"), serializedReport);
+   writeFileSync(stampedPath, serializedReport);
+-  console.log(JSON.stringify({ summary, releaseGate }, null, 2));
++  console.log(JSON.stringify({ summary, releaseGate, earlyStop }, null, 2));
+   console.log(`Report: ${stampedPath}`);
++  if (earlyStop?.stop) {
++    process.exit(1);
++  }
+   const smokePassed =
+     ATTEMPTS < 50 &&
+     summary.generationSuccessRate === 1 &&
+diff --git a/scripts/verify-core-loop-one-flow.mjs b/scripts/verify-core-loop-one-flow.mjs
+index b3b2b9d..a924473 100644
+--- a/scripts/verify-core-loop-one-flow.mjs
++++ b/scripts/verify-core-loop-one-flow.mjs
+@@ -148,6 +148,10 @@ async function main() {
+     ...process.env,
+     CORE_LOOP_ATTEMPTS: ATTEMPTS,
+     CORE_LOOP_ACTIVE: "1",
++    // Explicit campaign tier so OPENROUTER_CODING_MODEL (legacy qwen in some
++    // Codespaces) cannot stall the release gate. Operator override still wins.
++    // Keep in sync with CORE_LOOP_CAMPAIGN_PRIMARY_MODEL in core-loop-policy.ts.
++    CORE_LOOP_AI_MODEL: process.env.CORE_LOOP_AI_MODEL?.trim() || "openai/gpt-5.6-luna",
+     SANDBOX_PROVIDER: "docker",
+     SANDBOX_PUBLIC_HOST: process.env.SANDBOX_PUBLIC_HOST || coreLoopHost,
+     SANDBOX_PUBLIC_SCHEME: process.env.SANDBOX_PUBLIC_SCHEME || "http",
+diff --git a/src/lib/reliability/core-loop-policy.test.ts b/src/lib/reliability/core-loop-policy.test.ts
+index e54b246..cb12a17 100644
+--- a/src/lib/reliability/core-loop-policy.test.ts
++++ b/src/lib/reliability/core-loop-policy.test.ts
+@@ -1,6 +1,11 @@
+ import assert from "node:assert/strict";
+ import test from "node:test";
+-import { getCoreLoopPolicy,isCoreLoopRequest } from "./core-loop-policy.ts";
++import {
++  CORE_LOOP_CAMPAIGN_PRIMARY_MODEL,
++  getCoreLoopPolicy,
++  isCoreLoopRequest,
++  pinCoreLoopCampaignAiModel,
++} from "./core-loop-policy.ts";
+ 
+ test("core-loop policy has one deterministic default path", () => {
+   assert.deepEqual(getCoreLoopPolicy({}), {
+@@ -40,6 +45,39 @@ test("core-loop policy accepts explicit operator overrides", () => {
+   assert.equal(policy.maxAutomaticRepairRounds, 3);
+ });
+ 
++test("CORE_LOOP_AI_MODEL wins over OPENROUTER_CODING_MODEL", () => {
++  const policy = getCoreLoopPolicy({
++    CORE_LOOP_AI_MODEL: "openai/gpt-5.6-luna",
++    OPENROUTER_CODING_MODEL: "qwen/qwen3-coder",
++  });
++  assert.equal(policy.primaryModel, "openai/gpt-5.6-luna");
++});
++
++test("OPENROUTER_CODING_MODEL remains a valid policy override when CORE_LOOP_AI_MODEL is unset", () => {
++  const policy = getCoreLoopPolicy({
++    OPENROUTER_CODING_MODEL: "qwen/qwen3-coder",
++  });
++  assert.equal(policy.primaryModel, "qwen/qwen3-coder");
++});
++
++test("campaign pin selects Luna when CORE_LOOP_AI_MODEL is unset despite OPENROUTER_CODING_MODEL", () => {
++  const env: Record<string, string | undefined> = {
++    OPENROUTER_CODING_MODEL: "qwen/qwen3-coder",
++  };
++  assert.equal(pinCoreLoopCampaignAiModel(env), CORE_LOOP_CAMPAIGN_PRIMARY_MODEL);
++  assert.equal(env.CORE_LOOP_AI_MODEL, CORE_LOOP_CAMPAIGN_PRIMARY_MODEL);
++  assert.equal(getCoreLoopPolicy(env).primaryModel, CORE_LOOP_CAMPAIGN_PRIMARY_MODEL);
++});
++
++test("campaign pin preserves an explicit CORE_LOOP_AI_MODEL", () => {
++  const env: Record<string, string | undefined> = {
++    CORE_LOOP_AI_MODEL: "openai/custom-gate",
++    OPENROUTER_CODING_MODEL: "qwen/qwen3-coder",
++  };
++  assert.equal(pinCoreLoopCampaignAiModel(env), "openai/custom-gate");
++  assert.equal(getCoreLoopPolicy(env).primaryModel, "openai/custom-gate");
++});
++
+ test("only literal true activates the core-loop lane", () => {
+   assert.equal(isCoreLoopRequest(true), true);
+   assert.equal(isCoreLoopRequest("true"), false);
+diff --git a/src/lib/reliability/core-loop-policy.ts b/src/lib/reliability/core-loop-policy.ts
+index edaa7be..95cb2b5 100644
+--- a/src/lib/reliability/core-loop-policy.ts
++++ b/src/lib/reliability/core-loop-policy.ts
+@@ -1,5 +1,8 @@
+ import { CORE_LOOP_API_SURFACE } from "./core-loop-api-surface.ts";
+ 
++/** Production coding tier used by the release-gate campaign when unset. */
++export const CORE_LOOP_CAMPAIGN_PRIMARY_MODEL = "openai/gpt-5.6-luna";
++
+ export type CoreLoopPolicy = {
+   contractVersion: 2;
+   framework: "tanstack";
+@@ -21,9 +24,28 @@ const positiveInt = (value: string | undefined, fallback: number) => {
+   return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+ };
+ 
++/**
++ * Pin CORE_LOOP_AI_MODEL for campaign runners when the operator left it unset.
++ * Preserves an explicit CORE_LOOP_AI_MODEL; does not clear OPENROUTER_CODING_MODEL
++ * (policy still honors that cascade for non-campaign callers).
++ */
++export function pinCoreLoopCampaignAiModel(env: Environment = process.env): string {
++  const existing = env.CORE_LOOP_AI_MODEL?.trim();
++  if (existing) return existing;
++  env.CORE_LOOP_AI_MODEL = CORE_LOOP_CAMPAIGN_PRIMARY_MODEL;
++  return CORE_LOOP_CAMPAIGN_PRIMARY_MODEL;
++}
++
+ /**
+  * One deterministic policy for release-proof generation. Advanced editor
+  * features remain available, but the core-loop campaign never depends on them.
++ *
++ * Model resolution (first non-empty wins):
++ *   CORE_LOOP_AI_MODEL → DEFAULT_AI_MODEL → OPENROUTER_CODING_MODEL → fallback.
++ * Campaign runners call pinCoreLoopCampaignAiModel() before getCoreLoopPolicy()
++ * so a Codespace OPENROUTER_CODING_MODEL override cannot select a stalled
++ * provider. The chat route also honors an explicit coreLoop request model when
++ * modelManuallySelected is true.
+  */
+ export function getCoreLoopPolicy(env: Environment = process.env): CoreLoopPolicy {
+   return {
+diff --git a/src/lib/reliability/core-loop-report.test.ts b/src/lib/reliability/core-loop-report.test.ts
+index 77306bc..0e862ef 100644
+--- a/src/lib/reliability/core-loop-report.test.ts
++++ b/src/lib/reliability/core-loop-report.test.ts
+@@ -1,6 +1,12 @@
+ import assert from "node:assert/strict";
+ import test from "node:test";
+-import { assessCoreLoopReleaseGate,summarizeCoreLoop, type CoreLoopAttempt } from "./core-loop-report.ts";
++import {
++  assessCoreLoopReleaseGate,
++  normalizeCoreLoopFailureSignature,
++  shouldStopCoreLoopCampaign,
++  summarizeCoreLoop,
++  type CoreLoopAttempt,
++} from "./core-loop-report.ts";
+ 
+ const base: CoreLoopAttempt = {
+   index: 1,
+@@ -77,3 +83,90 @@ test("release gate requires volume, registration, success, and complete costs",
+   assert.equal(incomplete.passed, false);
+   assert.ok(incomplete.reasons.length >= 3);
+ });
++
++test("failure signatures ignore volatile ids so systemic defects match", () => {
++  const a = normalizeCoreLoopFailureSignature({
++    publicUrlPassed: false,
++    failedStage: "generation",
++    error: "generation timed out after 300000ms (model=openai/gpt-5.6-luna)",
++  });
++  const b = normalizeCoreLoopFailureSignature({
++    publicUrlPassed: false,
++    failedStage: "generation",
++    error: "generation timed out after 180000ms (model=openai/gpt-5.6-luna)",
++  });
++  assert.equal(a, "generation:timed out after <n>ms (model=openai/gpt-5.6-luna)");
++  assert.equal(a, b);
++  assert.equal(
++    normalizeCoreLoopFailureSignature({
++      publicUrlPassed: false,
++      failedStage: "preview",
++      error: "sandbox abcdef12-3456-7890-abcd-ef1234567890 failed",
++    }),
++    "preview:sandbox <uuid> failed",
++  );
++  assert.equal(
++    normalizeCoreLoopFailureSignature({ publicUrlPassed: true, failedStage: undefined, error: undefined }),
++    null,
++  );
++});
++
++test("campaign stops after consecutive identical failures and resets on a pass", () => {
++  const fail = (index: number): CoreLoopAttempt => ({
++    ...base,
++    index,
++    publicUrlPassed: false,
++    generationPassed: false,
++    previewPassed: false,
++    deploymentPassed: false,
++    manualInterventionRequired: true,
++    failedStage: "generation",
++    error: "generation timed out after 300000ms (model=openai/gpt-5.6-luna)",
++  });
++  assert.equal(shouldStopCoreLoopCampaign([fail(1), fail(2)], 3).stop, false);
++  assert.equal(shouldStopCoreLoopCampaign([fail(1), fail(2), fail(3)], 3).stop, true);
++  assert.equal(
++    shouldStopCoreLoopCampaign([fail(1), fail(2), { ...base, index: 3 }, fail(4), fail(5)], 3).stop,
++    false,
++  );
++});
++
++test("failure signatures collapse per-attempt hosts, container ids, and spaced stage prefixes", () => {
++  const preview = (host: string) =>
++    normalizeCoreLoopFailureSignature({
++      publicUrlPassed: false,
++      failedStage: "preview",
++      error: `preview: sandbox https://${host}.preview.lifemarkai.app/app returned HTTP 502`,
++    });
++  assert.equal(preview("lm-7f3k9q"), preview("lm-2a8b4d"));
++  assert.equal(preview("lm-7f3k9q"), "preview:sandbox https://<sub>.lifemarkai.app/app returned HTTP 502");
++
++  const container = (id: string) =>
++    normalizeCoreLoopFailureSignature({
++      publicUrlPassed: false,
++      failedStage: "preview",
++      error: `docker container ${id} exited`,
++    });
++  assert.equal(container("a3f9c1b2d4e5"), container("b7e2d9f10c33"));
++  assert.equal(container("a3f9c1b2d4e5"), "preview:docker container <hex> exited");
++
++  // The stage is "public-url" but the error spells it "public URL".
++  assert.equal(
++    normalizeCoreLoopFailureSignature({
++      publicUrlPassed: false,
++      failedStage: "public-url",
++      error: "public URL check failed: https://site-4821.netlify.app 404",
++    }),
++    "public-url:check failed: https://<sub>.netlify.app 404",
++  );
++
++  // Ordinary hex-looking words without digits must survive.
++  assert.equal(
++    normalizeCoreLoopFailureSignature({
++      publicUrlPassed: false,
++      failedStage: "deployment",
++      error: "deployment defaced the build output",
++    }),
++    "deployment:defaced the build output",
++  );
++});
+diff --git a/src/lib/reliability/core-loop-report.ts b/src/lib/reliability/core-loop-report.ts
+index 4ec0f17..8c6dc55 100644
+--- a/src/lib/reliability/core-loop-report.ts
++++ b/src/lib/reliability/core-loop-report.ts
+@@ -27,6 +27,8 @@ export interface CoreLoopAttempt {
+   deployedUrl?: string;
+   failedStage?: CoreLoopStage;
+   error?: string;
++  /** Normalized systemic-failure key; null/undefined when the attempt passed. */
++  failureSignature?: string | null;
+ }
+ 
+ export interface CoreLoopSummary {
+@@ -102,3 +104,77 @@ export function assessCoreLoopReleaseGate(
+   const eligible = summary.attempts >= minimumAttempts;
+   return { eligible, passed: eligible && reasons.length === 0, reasons };
+ }
++
++/**
++ * Collapse volatile ids, hosts and timestamps so repeated systemic failures
++ * compare equal. Format: `<stage>:<message>` without repeating the stage
++ * inside the message.
++ *
++ * Normalization must be aggressive: a signature that stays unique per attempt
++ * makes the early-stop fail open and the campaign burns every remaining run on
++ * one root cause. Preview and deployment errors in particular carry a fresh
++ * sandbox host or container id on every attempt.
++ */
++export function normalizeCoreLoopFailureSignature(
++  attempt: Pick<CoreLoopAttempt, "publicUrlPassed" | "failedStage" | "error">,
++): string | null {
++  if (attempt.publicUrlPassed) return null;
++  const stage = attempt.failedStage ?? "unknown";
++  let message = String(attempt.error ?? "unknown")
++    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
++    // Per-attempt sandbox/deploy hosts: keep the provider, drop the random subdomain.
++    .replace(/(https?:\/\/)([^/\s"'`)<>]+)/gi, (_match, scheme: string, authority: string) => {
++      const portMatch = /^(.*?)(:\d+)?$/.exec(authority);
++      const host = portMatch?.[1] ?? authority;
++      const port = portMatch?.[2] ?? "";
++      const labels = host.split(".");
++      const normalizedHost = labels.length > 2 ? `<sub>.${labels.slice(-2).join(".")}` : host;
++      return `${scheme}${normalizedHost}${port}`;
++    })
++    // Container/sandbox ids: hex runs that mix digits and letters.
++    .replace(/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}\b/gi, "<hex>")
++    .replace(/\d{5,}/g, "<n>")
++    .replace(/\s+/g, " ")
++    .trim();
++  // Errors often already begin with the stage name ("generation timed out…"),
++  // sometimes spelled with a space instead of the hyphen ("public URL check…").
++  const stagePattern = escapeRegExp(stage).replace(/\\?-/g, "[\\s._-]?");
++  message = message.replace(new RegExp(`^${stagePattern}(?:\\s+|[:\\-–—]+\\s*)`, "i"), "").trim();
++  message = message.slice(0, 240);
++  return `${stage}:${message || "unknown"}`;
++}
++
++function escapeRegExp(value: string): string {
++  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
++}
++
++export type CoreLoopEarlyStop = {
++  stop: boolean;
++  signature: string | null;
++  consecutive: number;
++};
++
++/**
++ * Stop burning credits when the same actionable failure repeats. A pass resets
++ * the streak. Default threshold is 3 identical consecutive failures.
++ */
++export function shouldStopCoreLoopCampaign(
++  attempts: Array<Pick<CoreLoopAttempt, "publicUrlPassed" | "failedStage" | "error">>,
++  consecutiveIdenticalFailures = 3,
++): CoreLoopEarlyStop {
++  const threshold = Math.max(2, consecutiveIdenticalFailures);
++  let signature: string | null = null;
++  let consecutive = 0;
++  for (let index = attempts.length - 1; index >= 0; index -= 1) {
++    const next = normalizeCoreLoopFailureSignature(attempts[index]!);
++    if (!next) break;
++    if (signature === null) signature = next;
++    if (next !== signature) break;
++    consecutive += 1;
++  }
++  return {
++    stop: signature !== null && consecutive >= threshold,
++    signature,
++    consecutive,
++  };
++}
+-- 
+2.43.0
+

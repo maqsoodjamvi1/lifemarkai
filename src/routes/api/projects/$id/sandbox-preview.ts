@@ -316,14 +316,15 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
         error: retry.ok ? undefined : retry.error,
       });
       if (retry.ok) {
+        const retryReady = retry.ready !== false;
         if (retry.sandboxId) setCorrelation({ sandboxSessionId: retry.sandboxId });
         const { error: previewUrlErr } = await writeMeta(
           {
             sandbox_id: retry.sandboxId,
             sandbox_port: port,
             sandbox_provider: getSandboxProviderId(),
-            sandbox_phase: "ready",
-            sandbox_phase_detail: null,
+            sandbox_phase: retryReady ? "ready" : "starting",
+            sandbox_phase_detail: retryReady ? null : "Sandbox recovered; waiting for the app module graph to compile…",
             sandbox_updated_at: new Date().toISOString(),
           },
           { preview_url: retry.previewUrl },
@@ -334,11 +335,13 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
         return Response.json({
           enabled: true,
           ok: true,
-          previewUrl: retry.previewUrl,
+          previewUrl: retryReady ? retry.previewUrl : null,
           sandboxId: retry.sandboxId,
           logs: retry.logs,
           provider: getSandboxProviderId(),
-          phase: "ready",
+          ready: retryReady,
+          phase: retryReady ? "ready" : "starting",
+          phaseDetail: retryReady ? null : "Sandbox recovered; waiting for the app module graph to compile…",
           sandboxName: sandboxNameForProject(projectId),
           recovered: true,
         });
