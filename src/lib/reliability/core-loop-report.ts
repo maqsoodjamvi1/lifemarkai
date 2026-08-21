@@ -27,6 +27,8 @@ export interface CoreLoopAttempt {
   deployedUrl?: string;
   failedStage?: CoreLoopStage;
   error?: string;
+  /** Normalized systemic-failure key; null/undefined when the attempt passed. */
+  failureSignature?: string | null;
 }
 
 export interface CoreLoopSummary {
@@ -101,4 +103,78 @@ export function assessCoreLoopReleaseGate(
 
   const eligible = summary.attempts >= minimumAttempts;
   return { eligible, passed: eligible && reasons.length === 0, reasons };
+}
+
+/**
+ * Collapse volatile ids, hosts and timestamps so repeated systemic failures
+ * compare equal. Format: `<stage>:<message>` without repeating the stage
+ * inside the message.
+ *
+ * Normalization must be aggressive: a signature that stays unique per attempt
+ * makes the early-stop fail open and the campaign burns every remaining run on
+ * one root cause. Preview and deployment errors in particular carry a fresh
+ * sandbox host or container id on every attempt.
+ */
+export function normalizeCoreLoopFailureSignature(
+  attempt: Pick<CoreLoopAttempt, "publicUrlPassed" | "failedStage" | "error">,
+): string | null {
+  if (attempt.publicUrlPassed) return null;
+  const stage = attempt.failedStage ?? "unknown";
+  let message = String(attempt.error ?? "unknown")
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<uuid>")
+    // Per-attempt sandbox/deploy hosts: keep the provider, drop the random subdomain.
+    .replace(/(https?:\/\/)([^/\s"'`)<>]+)/gi, (_match, scheme: string, authority: string) => {
+      const portMatch = /^(.*?)(:\d+)?$/.exec(authority);
+      const host = portMatch?.[1] ?? authority;
+      const port = portMatch?.[2] ?? "";
+      const labels = host.split(".");
+      const normalizedHost = labels.length > 2 ? `<sub>.${labels.slice(-2).join(".")}` : host;
+      return `${scheme}${normalizedHost}${port}`;
+    })
+    // Container/sandbox ids: hex runs that mix digits and letters.
+    .replace(/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}\b/gi, "<hex>")
+    .replace(/\d{5,}/g, "<n>")
+    .replace(/\s+/g, " ")
+    .trim();
+  // Errors often already begin with the stage name ("generation timed out…"),
+  // sometimes spelled with a space instead of the hyphen ("public URL check…").
+  const stagePattern = escapeRegExp(stage).replace(/\\?-/g, "[\\s._-]?");
+  message = message.replace(new RegExp(`^${stagePattern}(?:\\s+|[:\\-–—]+\\s*)`, "i"), "").trim();
+  message = message.slice(0, 240);
+  return `${stage}:${message || "unknown"}`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export type CoreLoopEarlyStop = {
+  stop: boolean;
+  signature: string | null;
+  consecutive: number;
+};
+
+/**
+ * Stop burning credits when the same actionable failure repeats. A pass resets
+ * the streak. Default threshold is 3 identical consecutive failures.
+ */
+export function shouldStopCoreLoopCampaign(
+  attempts: Array<Pick<CoreLoopAttempt, "publicUrlPassed" | "failedStage" | "error">>,
+  consecutiveIdenticalFailures = 3,
+): CoreLoopEarlyStop {
+  const threshold = Math.max(2, consecutiveIdenticalFailures);
+  let signature: string | null = null;
+  let consecutive = 0;
+  for (let index = attempts.length - 1; index >= 0; index -= 1) {
+    const next = normalizeCoreLoopFailureSignature(attempts[index]!);
+    if (!next) break;
+    if (signature === null) signature = next;
+    if (next !== signature) break;
+    consecutive += 1;
+  }
+  return {
+    stop: signature !== null && consecutive >= threshold,
+    signature,
+    consecutive,
+  };
 }

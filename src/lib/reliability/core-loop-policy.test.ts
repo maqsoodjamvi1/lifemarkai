@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getCoreLoopPolicy,isCoreLoopRequest } from "./core-loop-policy.ts";
+import {
+  CORE_LOOP_CAMPAIGN_PRIMARY_MODEL,
+  getCoreLoopPolicy,
+  isCoreLoopRequest,
+  pinCoreLoopCampaignAiModel,
+} from "./core-loop-policy.ts";
 
 test("core-loop policy has one deterministic default path", () => {
   assert.deepEqual(getCoreLoopPolicy({}), {
@@ -38,6 +43,39 @@ test("core-loop policy accepts explicit operator overrides", () => {
   assert.equal(policy.fallbackModel, "anthropic/test-fallback");
   assert.equal(policy.deploymentProvider, "vercel");
   assert.equal(policy.maxAutomaticRepairRounds, 3);
+});
+
+test("CORE_LOOP_AI_MODEL wins over OPENROUTER_CODING_MODEL", () => {
+  const policy = getCoreLoopPolicy({
+    CORE_LOOP_AI_MODEL: "openai/gpt-5.6-luna",
+    OPENROUTER_CODING_MODEL: "qwen/qwen3-coder",
+  });
+  assert.equal(policy.primaryModel, "openai/gpt-5.6-luna");
+});
+
+test("OPENROUTER_CODING_MODEL remains a valid policy override when CORE_LOOP_AI_MODEL is unset", () => {
+  const policy = getCoreLoopPolicy({
+    OPENROUTER_CODING_MODEL: "qwen/qwen3-coder",
+  });
+  assert.equal(policy.primaryModel, "qwen/qwen3-coder");
+});
+
+test("campaign pin selects Luna when CORE_LOOP_AI_MODEL is unset despite OPENROUTER_CODING_MODEL", () => {
+  const env: Record<string, string | undefined> = {
+    OPENROUTER_CODING_MODEL: "qwen/qwen3-coder",
+  };
+  assert.equal(pinCoreLoopCampaignAiModel(env), CORE_LOOP_CAMPAIGN_PRIMARY_MODEL);
+  assert.equal(env.CORE_LOOP_AI_MODEL, CORE_LOOP_CAMPAIGN_PRIMARY_MODEL);
+  assert.equal(getCoreLoopPolicy(env).primaryModel, CORE_LOOP_CAMPAIGN_PRIMARY_MODEL);
+});
+
+test("campaign pin preserves an explicit CORE_LOOP_AI_MODEL", () => {
+  const env: Record<string, string | undefined> = {
+    CORE_LOOP_AI_MODEL: "openai/custom-gate",
+    OPENROUTER_CODING_MODEL: "qwen/qwen3-coder",
+  };
+  assert.equal(pinCoreLoopCampaignAiModel(env), "openai/custom-gate");
+  assert.equal(getCoreLoopPolicy(env).primaryModel, "openai/custom-gate");
 });
 
 test("only literal true activates the core-loop lane", () => {
