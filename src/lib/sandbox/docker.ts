@@ -1189,6 +1189,40 @@ export class DockerSandboxProvider implements SandboxProvider {
    * its main process returns, taking every descendant with it regardless of
    * nohup/setsid/&. Detached execs get no stdout and no exit code back.
    */
+  /**
+   * Smoke-check the live dev server from INSIDE the container: fetch `/`
+   * and confirm it answers 200 with a non-empty body, not just that the
+   * TCP port is open (that is all `waitForLocalServer` above verifies).
+   *
+   * This exists so the frontend can gate routing the user to the live
+   * preview iframe on more than bare readiness - a crash-looping dev
+   * server can still hold its port open while every request 500s or
+   * returns an empty response, and readiness alone would wrongly call
+   * that "up". Callers should treat `ok: false` as a reason to keep
+   * showing a loading state or the last-known-good snapshot (see
+   * `src/lib/preview/snapshot-cache.ts`) instead of the live iframe.
+   */
+  async smokeCheckHtml(
+    sandboxId: string,
+    port: number,
+    timeoutMs = 5000,
+  ): Promise<{ ok: boolean; status: number; bytes: number }> {
+    const timeoutS = Math.max(1, Math.ceil(timeoutMs / 1000));
+    const probe = `curl -sS -m ${timeoutS} -o /tmp/.lm_smoke_body -w "%{http_code}" http://127.0.0.1:${port}/ 2>/dev/null || echo 000`;
+    try {
+      const res = await this.exec(sandboxId, probe);
+      const status = Number.parseInt(res.stdout.trim().slice(-3), 10) || 0;
+      const sizeRes = await this.exec(
+        sandboxId,
+        "wc -c < /tmp/.lm_smoke_body 2>/dev/null || echo 0",
+      );
+      const bytes = Number.parseInt(sizeRes.stdout.trim(), 10) || 0;
+      return { ok: status === 200 && bytes > 0, status, bytes };
+    } catch {
+      return { ok: false, status: 0, bytes: 0 };
+    }
+  }
+
   async exec(
     sandboxId: string,
     command: string,
