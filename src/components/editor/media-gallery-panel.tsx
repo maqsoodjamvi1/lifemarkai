@@ -129,7 +129,6 @@ export function MediaGalleryPanel({ files, onSendToChat, onFilesUpdate }: MediaG
     try {
       const { createClient } = await import("@/lib/supabase/client");
       const supabase = createClient();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error } = await supabase.from("project_files").delete().eq("id", item.fileId);
       if (error) throw error;
       onFilesUpdate?.(files.filter((f) => f.id !== item.fileId));

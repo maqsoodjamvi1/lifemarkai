@@ -109,7 +109,12 @@ function SignupContent() {
           <p className="text-muted-foreground mb-6">
             We sent a confirmation link to <strong>{email}</strong>. Click it to activate your account.
           </p>
-          <Button variant="outline" onClick={() => (window.location.href = withAuthRedirect("/login", safeRedirect))}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              window.location.assign(withAuthRedirect("/login", safeRedirect));
+            }}
+          >
             Back to login
           </Button>
         </motion.div>

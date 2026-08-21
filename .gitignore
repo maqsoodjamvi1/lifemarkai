@@ -19,6 +19,7 @@
 .env
 .env.local
 .env.*.local
+.env.local.bak-*
 
 # debug
 npm-debug.log*
@@ -67,6 +68,9 @@ tmp-preview-diag*.txt
 tmp-preview-diag*.json
 tmp-parse-lovable-out*.txt
 scripts/tmp-*.mjs
+/eslint.json
+/lint-output.txt
+/_to_delete/
 
 # Probe scripts written into the migration app during the port (any depth).
 npm-install-result.txt

@@ -135,9 +135,12 @@ export function usePreviewErrorGuard(
   // stable — an inline onHealRequest from PreviewPanel used to recreate the
   // whole API object every render and thrash dependent effects.
   const onHealRequestRef = useRef(onHealRequest);
-  onHealRequestRef.current = onHealRequest;
   const autoHealRef = useRef(autoHeal);
-  autoHealRef.current = autoHeal;
+
+  useEffect(() => {
+    onHealRequestRef.current = onHealRequest;
+    autoHealRef.current = autoHeal;
+  }, [onHealRequest, autoHeal]);
 
   const buildReport = useCallback((): PreviewErrorReport => {
     const errors = [...errorsRef.current];

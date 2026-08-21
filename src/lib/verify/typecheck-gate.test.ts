@@ -249,7 +249,7 @@ describe("repair corruption guard", () => {
 });
 
 describe("missing list keys", () => {
-  const one = (code) => findMissingListKeys([f("src/X.tsx", code)]);
+  const one = (code: string) => findMissingListKeys([f("src/X.tsx", code)]);
 
   it("flags a mapped element with no key", () => {
     assert.equal(one(`export const A=({xs})=><div>{xs.map(x => <Row value={x} />)}</div>;`).length, 1);

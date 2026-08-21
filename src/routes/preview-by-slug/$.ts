@@ -32,7 +32,7 @@ function notFoundHtml(): Response {
   );
 }
 
-function resolveRequest(req: Request, params: any): { slug: string; assetPath: string } | null {
+function resolveRequest(req: Request, params: { _splat?: string }): { slug: string; assetPath: string } | null {
   const splat = String(params?._splat ?? "").replace(/^\/+/, "");
   const hostSlug = appSlugFromHost(req.headers.get("host"));
 
@@ -46,7 +46,7 @@ function resolveRequest(req: Request, params: any): { slug: string; assetPath: s
   return { slug: segments[0], assetPath: segments.slice(1).join("/") };
 }
 
-async function handleGET(req: Request, params: any): Promise<Response> {
+async function handleGET(req: Request, params: { _splat?: string }): Promise<Response> {
   const resolved = resolveRequest(req, params);
   if (!resolved) return notFoundHtml();
   const { slug, assetPath } = resolved;

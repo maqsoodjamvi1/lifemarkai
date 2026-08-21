@@ -28,7 +28,7 @@ export function Navbar() {
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
-  }, []);
+  }, [supabase]);
 
   return (
     <header

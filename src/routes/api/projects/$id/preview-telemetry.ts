@@ -4,6 +4,36 @@ getPreviewTelemetryFn,
 postPreviewTelemetry,
 } from "@/lib/server-fns/preview-telemetry";
 
+type ConsoleEntry = { type?: string; text: string };
+type NetworkEntry = {
+  method?: string;
+  url: string;
+  status?: number;
+  ok?: boolean;
+  durationMs?: number;
+  contentType?: string;
+  error?: string;
+};
+
+function isConsoleEntry(value: unknown): value is ConsoleEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Record<string, unknown>;
+  return typeof entry.text === "string" &&
+    (entry.type === undefined || typeof entry.type === "string");
+}
+
+function isNetworkEntry(value: unknown): value is NetworkEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Record<string, unknown>;
+  return typeof entry.url === "string" &&
+    (entry.method === undefined || typeof entry.method === "string") &&
+    (entry.status === undefined || typeof entry.status === "number") &&
+    (entry.ok === undefined || typeof entry.ok === "boolean") &&
+    (entry.durationMs === undefined || typeof entry.durationMs === "number") &&
+    (entry.contentType === undefined || typeof entry.contentType === "string") &&
+    (entry.error === undefined || typeof entry.error === "string");
+}
+
 function denied(result: { httpStatus: number; error: string }) {
   return Response.json({ error: result.error }, { status: result.httpStatus });
 }
@@ -29,8 +59,8 @@ export const Route = createFileRoute("/api/projects/$id/preview-telemetry")({
         }
         const result = await postPreviewTelemetry({
           projectId: params.id,
-          console: Array.isArray(body.console) ? (body.console as any) : undefined,
-          network: Array.isArray(body.network) ? (body.network as any) : undefined,
+          console: Array.isArray(body.console) ? body.console.filter(isConsoleEntry) : undefined,
+          network: Array.isArray(body.network) ? body.network.filter(isNetworkEntry) : undefined,
         });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });

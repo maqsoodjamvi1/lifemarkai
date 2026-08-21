@@ -52,7 +52,9 @@ export function useWorkspaceIdentity() {
   }, []);
 
   useEffect(() => {
-    void reload();
+    queueMicrotask(() => {
+      void reload();
+    });
   }, [reload]);
 
   const patch = useCallback(async (body: Record<string, unknown>) => {

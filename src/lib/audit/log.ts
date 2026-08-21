@@ -53,7 +53,6 @@ export async function logAuditEvent(event: AuditEventInput): Promise<boolean> {
   try {
     const supabase = await createAdminClient();
     // Direct insert (not the log_audit_event RPC) so we can persist ip/user_agent.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { error } = await supabase.from("audit_logs").insert({
       user_id: event.userId,
       team_id: event.teamId ?? null,

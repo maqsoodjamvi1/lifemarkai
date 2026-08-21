@@ -17,11 +17,7 @@ import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { patchSandboxPreviewFiles } from "@/lib/preview/patch-sandbox-preview-files";
 
 
-interface Params {
-  params: Promise<{ id: string }>;
-}
-
-async function handlePATCH(req: Request, params: any) {
+async function handlePATCH(req: Request, params: { id: string }) {
   const { id: projectId } = params;
 
   if (!isSandboxEnabled()) {

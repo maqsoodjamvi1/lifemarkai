@@ -8,19 +8,18 @@ interface LovableChatHeaderQueuePillProps {
   className?: string;
 }
 
-/** Shows queued follow-up count in the chat header while AI is busy. */
+/** Reflects the composer queue; it does not own or duplicate queue state. */
 export function LovableChatHeaderQueuePill({ count, paused, className }: LovableChatHeaderQueuePillProps) {
   if (count <= 0) return null;
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium",
-        "border border-violet-500/30 bg-violet-500/10 text-violet-700 dark:text-violet-300 tabular-nums",
+        "inline-flex items-center gap-1 rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[10px] font-medium text-violet-700 tabular-nums dark:text-violet-300",
         className,
       )}
-      title={paused ? "Queue paused" : "Prompts waiting in queue"}
+      title={paused ? "Prompt queue paused" : "Prompts waiting in queue"}
     >
-      <ListOrdered className="w-3 h-3 shrink-0" />
+      <ListOrdered className="size-3 shrink-0" />
       {count} queued{paused ? " · paused" : ""}
     </span>
   );

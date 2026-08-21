@@ -20,7 +20,6 @@ async function handleGET(_: Request, params: any) {
     return Response.json({ error: "Project not found" }, { status: 404 });
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: project } = await supabase
     .from("projects").select("metadata").eq("id", projectId).single();
   const meta = (project?.metadata ?? {}) as { connector_permissions?: Record<string, string> };

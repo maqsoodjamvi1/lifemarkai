@@ -347,6 +347,7 @@ export function ChatPanel({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [copiedAll, setCopiedAll] = useState(false);
+  const copiedAllTimerRef = useRef<number | null>(null);
   const [allCodeBlocksCollapsed, setAllCodeBlocksCollapsed] = useState(false);
   const [messageDiffs, setMessageDiffs] = useState<Record<string, FileDiffEntry[]>>({});
   // Skills auto-attached by the chat API for the *currently-streaming* response.
@@ -587,8 +588,8 @@ export function ChatPanel({
   const [activeClarifySession, setActiveClarifySession] = useState<ClarifySession | null>(null);
   // Step-plan approval: msgId -> Set<stepIndex>
   const [approvedSteps, setApprovedSteps] = useState<Record<string, Set<number>>>({});
-  // Patch mode: track how many patches were applied per assistant message
-  const [patchCounts, setPatchCounts] = useState<Record<string, number>>({});
+  // Patch counts are written during streaming and persisted with message metadata.
+  const [, setPatchCounts] = useState<Record<string, number>>({});
   const [messageChangedPaths, setMessageChangedPaths] = useState<Record<string, string[]>>({});
 
   // Connector approval card (Lovable parity): blocked agent write via a
@@ -1427,7 +1428,6 @@ export function ChatPanel({
 
       // Refresh files from DB (same pattern as triggerAutoFix)
       const supabase = createClient();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data: updatedFiles, error: refreshError } = await supabase
         .from("project_files")
         .select("*")
@@ -5305,19 +5305,18 @@ ${(f.content ?? "").slice(0, 8000)}
   }, [messages]);
 
   const chatThreads = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase();
     let filtered = showBookmarks
       ? visibleMessages.filter((m) => bookmarkedIds.has(m.id))
       : searchQuery && searchHitIds
         ? visibleMessages.filter((m) => searchHitIds.has(m.id))
-        : searchQuery
-          ? visibleMessages.filter((m) =>
-              m.content.toLowerCase().includes(searchQuery.toLowerCase()),
-            )
+        : normalizedQuery
+          ? visibleMessages.filter((m) => m.content.toLowerCase().includes(normalizedQuery))
           : visibleMessages;
-    if (searchQuery.trim() && searchRoleFilter !== "all") {
+    if (normalizedQuery && searchRoleFilter !== "all") {
       filtered = filtered.filter((m) => m.role === searchRoleFilter);
     }
-    if (searchQuery.trim() && searchMsgModeFilter !== "all") {
+    if (normalizedQuery && searchMsgModeFilter !== "all") {
       filtered = filtered.filter((m) => (m.mode ?? "chat") === searchMsgModeFilter);
     }
     return groupIntoThreads(filtered);
@@ -5404,6 +5403,7 @@ ${(f.content ?? "").slice(0, 8000)}
   useEffect(() => {
     return () => {
       window.speechSynthesis?.cancel();
+      if (copiedAllTimerRef.current !== null) window.clearTimeout(copiedAllTimerRef.current);
     };
   }, []);
 
@@ -5563,8 +5563,6 @@ ${(f.content ?? "").slice(0, 8000)}
           void (async () => {
             const text = visibleMessages.map((m) => `${m.role === "user" ? "You" : "AI"}: ${m.content}`).join("\n\n");
             await navigator.clipboard.writeText(text);
-            setCopiedAll(true);
-            setTimeout(() => setCopiedAll(false), 2000);
             toast({ description: "All messages copied" });
           })();
           break;
@@ -5817,67 +5815,40 @@ ${(f.content ?? "").slice(0, 8000)}
     >
       <LovableChatHeader
         mode={mode}
+        creditLabel={`${mode === "build" || mode === "agent" ? "2" : "1"} credit${mode === "patch" ? " · patch" : ""} / msg`}
         queueCount={promptQueue.length}
         queuePaused={queuePaused}
-        creditLabel={`${mode === "build" || mode === "agent" ? "2" : "1"} credit${mode === "patch" ? " · patch" : ""} / msg`}
-        hasMessages={visibleMessages.length > 0}
         messageCount={visibleMessages.length}
         showSearch={showSearch}
         showBookmarks={showBookmarks}
         bookmarkCount={bookmarkedIds.size}
         allCodeBlocksCollapsed={allCodeBlocksCollapsed}
-        copiedAll={copiedAll}
         compactDensity={compactDensity}
+        copiedAll={copiedAll}
+        onExportMarkdown={exportChatAsMarkdown}
+        onExportJson={exportChatAsJson}
+        onCopyAll={() => {
+          void navigator.clipboard.writeText(visibleMessages.map((m) => `${m.role === "user" ? "You" : "AI"}: ${m.content}`).join("\n\n")).then(() => {
+            setCopiedAll(true);
+            if (copiedAllTimerRef.current !== null) window.clearTimeout(copiedAllTimerRef.current);
+            copiedAllTimerRef.current = window.setTimeout(() => {
+              copiedAllTimerRef.current = null;
+              setCopiedAll(false);
+            }, 2_000);
+            toast({ description: "All messages copied" });
+          }).catch(() => toast({ title: "Could not copy messages", variant: "destructive" }));
+        }}
+        onClearChat={() => void handleClearChat()}
+        onToggleSearch={() => window.dispatchEvent(new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "search" } }))}
+        onToggleBookmarks={() => window.dispatchEvent(new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "bookmarks" } }))}
+        onToggleCodeBlocks={() => window.dispatchEvent(new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "toggle-code-blocks" } }))}
         onToggleCompactDensity={() => {
-          setCompactDensity((v) => {
-            const next = !v;
-            try {
-              localStorage.setItem(
-                `lifemark-chat-density-${project.id}`,
-                next ? "compact" : "comfortable",
-              );
-            } catch { /* private mode */ }
+          setCompactDensity((value) => {
+            const next = !value;
+            try { localStorage.setItem(`lifemark-chat-density-${project.id}`, next ? "compact" : "comfortable"); } catch { /* private mode */ }
             return next;
           });
         }}
-        onExportMarkdown={exportChatAsMarkdown}
-        onExportJson={exportChatAsJson}
-        onPrintChat={printChat}
-        onCopyAll={async () => {
-          const text = visibleMessages.map((m) => `${m.role === "user" ? "You" : "AI"}: ${m.content}`).join("\n\n");
-          await navigator.clipboard.writeText(text);
-          setCopiedAll(true);
-          setTimeout(() => setCopiedAll(false), 2000);
-          toast({ description: "All messages copied" });
-        }}
-        onClearChat={() => void handleClearChat()}
-        onToggleSearch={() => {
-          window.dispatchEvent(
-            new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "search" } }),
-          );
-        }}
-        onToggleBookmarks={() => {
-          window.dispatchEvent(
-            new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "bookmarks" } }),
-          );
-        }}
-        onToggleCodeBlocks={() => {
-          window.dispatchEvent(
-            new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "toggle-code-blocks" } }),
-          );
-        }}
-        onCollapseAllThreads={() => {
-          window.dispatchEvent(
-            new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "collapse-threads" } }),
-          );
-        }}
-        onExpandAllThreads={() => {
-          window.dispatchEvent(
-            new CustomEvent(LIFEMARK_CHAT_SETTINGS_EVENT, { detail: { action: "expand-threads" } }),
-          );
-        }}
-        chatDays={chatDays}
-        onJumpToDay={(messageId) => scrollToMessage(messageId)}
       />
       <LovableChatHeaderStatus />
 

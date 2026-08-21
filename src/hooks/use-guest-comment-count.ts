@@ -42,8 +42,11 @@ export function useGuestCommentCount(projectId: string | undefined): GuestCommen
   }, [projectId]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (!projectId) return;
+    queueMicrotask(() => {
+      void refresh();
+    });
+  }, [projectId, refresh]);
 
   useEffect(() => {
     if (!projectId) return;
