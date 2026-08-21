@@ -590,6 +590,11 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
   files: T[],
   existingFiles: MinimalGeneratedFile[] = [],
 ): T[] {
+  const needsTypesDefaultExport = [...existingFiles, ...files].some((file) =>
+    importRecords(file).some((record) =>
+      !!parseDefaultImport(record.clause) && !!record.resolved && isTypesPath(record.resolved),
+    ),
+  );
   const normalizedFiles = normalizeGeneratedJsxExtensions(files.map(normalizeTypeDefaultImports));
   const out = [...normalizedFiles];
   const paths = new Set<string>();
@@ -649,9 +654,16 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
     const known = findKnownFile(allInputFiles, typesPath);
     const missing = neededTypes.filter((name) => !exportedNames(known?.content ?? "").has(name));
     if (!known || missing.length > 0) {
-      const content = known
+      let content = known
         ? appendTypeExports(known.content ?? "", missing)
         : typesFile(neededTypes);
+      if (needsTypesDefaultExport && !/\bexport\s+default\b/.test(content)) {
+        content = appendBlock(
+          content,
+          "// LifemarkAI generated default types export",
+          "const lifemarkGeneratedTypes = {};\nexport default lifemarkGeneratedTypes;",
+        );
+      }
       upsertSupportFile(out, paths, known?.path ?? typesPath, "typescript", content);
     }
   }

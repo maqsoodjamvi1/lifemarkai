@@ -42,7 +42,7 @@ function isTransientNetworkError(error: unknown): boolean {
       ? String((error.cause as { code?: string; message?: string }).code ?? (error.cause as { message?: string }).message ?? "")
       : "";
   const haystack = `${message} ${cause}`;
-  return /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|UND_ERR_|CONNECT_TIMEOUT|socket hang up|network|TLS|aborted/i.test(
+  return /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|UND_ERR_|CONNECT_TIMEOUT|socket hang up|network|TLS/i.test(
     haystack,
   );
 }
