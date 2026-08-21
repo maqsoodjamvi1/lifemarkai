@@ -730,6 +730,150 @@ export type GeneratedDatabase = {
         };
         Relationships: [];
       };
+      "build_run_events": {
+        Row: {
+            "created_at": string;
+            "id": number;
+            "payload": Json;
+            "run_id": string;
+        };
+        Insert: {
+            "created_at"?: string;
+            "id": number;
+            "payload": Json;
+            "run_id": string;
+        };
+        Update: {
+            "created_at"?: string;
+            "id"?: number;
+            "payload"?: Json;
+            "run_id"?: string;
+        };
+        Relationships: [
+                  {
+                            "foreignKeyName": "build_run_events_run_id_fkey",
+                            "columns": [
+                                      "run_id"
+                            ],
+                            "isOneToOne": false,
+                            "referencedRelation": "build_runs",
+                            "referencedColumns": [
+                                      "id"
+                            ]
+                  }
+        ];
+      };
+      "build_run_steps": {
+        Row: {
+            "completed_at": string;
+            "error": string | null;
+            "id": number;
+            "result": Json | null;
+            "run_id": string;
+            "started_at": string;
+            "status": string;
+            "step_key": string;
+        };
+        Insert: {
+            "completed_at"?: string;
+            "error"?: string | null;
+            "id": number;
+            "result"?: Json | null;
+            "run_id": string;
+            "started_at"?: string;
+            "status"?: string;
+            "step_key": string;
+        };
+        Update: {
+            "completed_at"?: string;
+            "error"?: string | null;
+            "id"?: number;
+            "result"?: Json | null;
+            "run_id"?: string;
+            "started_at"?: string;
+            "status"?: string;
+            "step_key"?: string;
+        };
+        Relationships: [
+                  {
+                            "foreignKeyName": "build_run_steps_run_id_fkey",
+                            "columns": [
+                                      "run_id"
+                            ],
+                            "isOneToOne": false,
+                            "referencedRelation": "build_runs",
+                            "referencedColumns": [
+                                      "id"
+                            ]
+                  }
+        ];
+      };
+      "build_runs": {
+        Row: {
+            "ai_gateway_provider": string | null;
+            "candidate_version": number | null;
+            "completed_at": string | null;
+            "credit_finalization_key": string | null;
+            "credit_reservation_key": string | null;
+            "credits_finalized": number | null;
+            "credits_reserved": number | null;
+            "failure_code": string | null;
+            "id": string;
+            "mode": string;
+            "model": string | null;
+            "project_id": string;
+            "sandbox_provider": string | null;
+            "started_at": string;
+            "status": string;
+            "user_id": string;
+            "verification_passed": boolean | null;
+            "workflow_provider": string;
+            "workflow_run_id": string | null;
+        };
+        Insert: {
+            "ai_gateway_provider"?: string | null;
+            "candidate_version"?: number | null;
+            "completed_at"?: string | null;
+            "credit_finalization_key"?: string | null;
+            "credit_reservation_key"?: string | null;
+            "credits_finalized"?: number | null;
+            "credits_reserved"?: number | null;
+            "failure_code"?: string | null;
+            "id": string;
+            "mode": string;
+            "model"?: string | null;
+            "project_id": string;
+            "sandbox_provider"?: string | null;
+            "started_at"?: string;
+            "status"?: string;
+            "user_id": string;
+            "verification_passed"?: boolean | null;
+            "workflow_provider"?: string;
+            "workflow_run_id"?: string | null;
+        };
+        Update: {
+            "ai_gateway_provider"?: string | null;
+            "candidate_version"?: number | null;
+            "completed_at"?: string | null;
+            "credit_finalization_key"?: string | null;
+            "credit_reservation_key"?: string | null;
+            "credits_finalized"?: number | null;
+            "credits_reserved"?: number | null;
+            "failure_code"?: string | null;
+            "id"?: string;
+            "mode"?: string;
+            "model"?: string | null;
+            "project_id"?: string;
+            "sandbox_provider"?: string | null;
+            "started_at"?: string;
+            "status"?: string;
+            "user_id"?: string;
+            "verification_passed"?: boolean | null;
+            "workflow_provider"?: string;
+            "workflow_run_id"?: string | null;
+        };
+        Relationships: [];
+      };
       "builtin_skills": {
         Row: {
             "description": string | null;
@@ -757,6 +901,45 @@ export type GeneratedDatabase = {
             "prompt"?: string;
             "sort_order"?: number | null;
             "tags"?: Array<string> | null;
+        };
+        Relationships: [];
+      };
+      "client_telemetry": {
+        Row: {
+            "created_at": string;
+            "id": number;
+            "kind": string;
+            "name": string;
+            "project_hash": string | null;
+            "props": Json;
+            "session_sample": number;
+            "surface": string;
+            "user_hash": string | null;
+            "value": number | null;
+        };
+        Insert: {
+            "created_at"?: string;
+            "id": number;
+            "kind": string;
+            "name": string;
+            "project_hash"?: string | null;
+            "props"?: Json;
+            "session_sample"?: number;
+            "surface": string;
+            "user_hash"?: string | null;
+            "value"?: number | null;
+        };
+        Update: {
+            "created_at"?: string;
+            "id"?: number;
+            "kind"?: string;
+            "name"?: string;
+            "project_hash"?: string | null;
+            "props"?: Json;
+            "session_sample"?: number;
+            "surface"?: string;
+            "user_hash"?: string | null;
+            "value"?: number | null;
         };
         Relationships: [];
       };
@@ -856,6 +1039,36 @@ export type GeneratedDatabase = {
                             ]
                   }
         ];
+      };
+      "controlled_template_versions": {
+        Row: {
+            "active": boolean;
+            "cache_key": string;
+            "created_at": string;
+            "framework": string;
+            "modules": Json;
+            "template_key": string;
+            "version": string;
+        };
+        Insert: {
+            "active"?: boolean;
+            "cache_key": string;
+            "created_at"?: string;
+            "framework": string;
+            "modules"?: Json;
+            "template_key": string;
+            "version": string;
+        };
+        Update: {
+            "active"?: boolean;
+            "cache_key"?: string;
+            "created_at"?: string;
+            "framework"?: string;
+            "modules"?: Json;
+            "template_key"?: string;
+            "version"?: string;
+        };
+        Relationships: [];
       };
       "credit_logs": {
         Row: {
@@ -1434,6 +1647,111 @@ export type GeneratedDatabase = {
         };
         Relationships: [];
       };
+      "generation_files": {
+        Row: {
+            "content": string;
+            "created_at": string;
+            "id": string;
+            "language": string | null;
+            "path": string;
+            "run_id": string;
+        };
+        Insert: {
+            "content": string;
+            "created_at"?: string;
+            "id"?: string;
+            "language"?: string | null;
+            "path": string;
+            "run_id": string;
+        };
+        Update: {
+            "content"?: string;
+            "created_at"?: string;
+            "id"?: string;
+            "language"?: string | null;
+            "path"?: string;
+            "run_id"?: string;
+        };
+        Relationships: [
+                  {
+                            "foreignKeyName": "generation_files_run_id_fkey",
+                            "columns": [
+                                      "run_id"
+                            ],
+                            "isOneToOne": false,
+                            "referencedRelation": "generation_runs",
+                            "referencedColumns": [
+                                      "id"
+                            ]
+                  }
+        ];
+      };
+      "generation_runs": {
+        Row: {
+            "base_revision": number;
+            "committed_at": string | null;
+            "committed_revision": number | null;
+            "created_at": string;
+            "error": string | null;
+            "failure_stage": string | null;
+            "id": string;
+            "project_id": string;
+            "repair_rounds": number;
+            "source": string;
+            "status": string;
+            "template_key": string | null;
+            "template_version": string | null;
+            "user_id": string;
+            "verification_ms": number | null;
+        };
+        Insert: {
+            "base_revision": number;
+            "committed_at"?: string | null;
+            "committed_revision"?: number | null;
+            "created_at"?: string;
+            "error"?: string | null;
+            "failure_stage"?: string | null;
+            "id"?: string;
+            "project_id": string;
+            "repair_rounds"?: number;
+            "source"?: string;
+            "status"?: string;
+            "template_key"?: string | null;
+            "template_version"?: string | null;
+            "user_id": string;
+            "verification_ms"?: number | null;
+        };
+        Update: {
+            "base_revision"?: number;
+            "committed_at"?: string | null;
+            "committed_revision"?: number | null;
+            "created_at"?: string;
+            "error"?: string | null;
+            "failure_stage"?: string | null;
+            "id"?: string;
+            "project_id"?: string;
+            "repair_rounds"?: number;
+            "source"?: string;
+            "status"?: string;
+            "template_key"?: string | null;
+            "template_version"?: string | null;
+            "user_id"?: string;
+            "verification_ms"?: number | null;
+        };
+        Relationships: [
+                  {
+                            "foreignKeyName": "generation_runs_project_id_fkey",
+                            "columns": [
+                                      "project_id"
+                            ],
+                            "isOneToOne": false,
+                            "referencedRelation": "projects",
+                            "referencedColumns": [
+                                      "id"
+                            ]
+                  }
+        ];
+      };
       "health_findings": {
         Row: {
             "category": string;
@@ -1501,6 +1819,39 @@ export type GeneratedDatabase = {
                             ]
                   }
         ];
+      };
+      "job_executions": {
+        Row: {
+            "attempts": number;
+            "claimed_at": string;
+            "completed_at": string | null;
+            "consumer": string;
+            "error": string | null;
+            "idempotency_key": string;
+            "queue_backend": string | null;
+            "status": string;
+        };
+        Insert: {
+            "attempts"?: number;
+            "claimed_at"?: string;
+            "completed_at"?: string | null;
+            "consumer": string;
+            "error"?: string | null;
+            "idempotency_key": string;
+            "queue_backend"?: string | null;
+            "status"?: string;
+        };
+        Update: {
+            "attempts"?: number;
+            "claimed_at"?: string;
+            "completed_at"?: string | null;
+            "consumer"?: string;
+            "error"?: string | null;
+            "idempotency_key"?: string;
+            "queue_backend"?: string | null;
+            "status"?: string;
+        };
+        Relationships: [];
       };
       "job_queue": {
         Row: {
@@ -3091,6 +3442,59 @@ export type GeneratedDatabase = {
                   }
         ];
       };
+      "project_revisions": {
+        Row: {
+            "created_at": string;
+            "created_by": string | null;
+            "files": Json;
+            "id": string;
+            "project_id": string;
+            "revision": number;
+            "run_id": string | null;
+        };
+        Insert: {
+            "created_at"?: string;
+            "created_by"?: string | null;
+            "files": Json;
+            "id"?: string;
+            "project_id": string;
+            "revision": number;
+            "run_id"?: string | null;
+        };
+        Update: {
+            "created_at"?: string;
+            "created_by"?: string | null;
+            "files"?: Json;
+            "id"?: string;
+            "project_id"?: string;
+            "revision"?: number;
+            "run_id"?: string | null;
+        };
+        Relationships: [
+                  {
+                            "foreignKeyName": "project_revisions_project_id_fkey",
+                            "columns": [
+                                      "project_id"
+                            ],
+                            "isOneToOne": false,
+                            "referencedRelation": "projects",
+                            "referencedColumns": [
+                                      "id"
+                            ]
+                  },
+                  {
+                            "foreignKeyName": "project_revisions_run_id_fkey",
+                            "columns": [
+                                      "run_id"
+                            ],
+                            "isOneToOne": false,
+                            "referencedRelation": "generation_runs",
+                            "referencedColumns": [
+                                      "id"
+                            ]
+                  }
+        ];
+      };
       "project_secrets": {
         Row: {
             "created_at": string;
@@ -3572,6 +3976,81 @@ export type GeneratedDatabase = {
             "status"?: string;
         };
         Relationships: [];
+      };
+      "repair_outcomes": {
+        Row: {
+            "before_fingerprints": Array<string>;
+            "created_at": string;
+            "duration_ms": number | null;
+            "files_rejected": Array<string>;
+            "files_written": Array<string>;
+            "fully_resolved": boolean;
+            "id": string;
+            "introduced": Array<string>;
+            "made_worse": boolean;
+            "model": string | null;
+            "project_id": string | null;
+            "remaining": Array<string>;
+            "resolved": Array<string>;
+            "round": number;
+            "sample_label": string | null;
+            "signal": string;
+            "stage": string;
+            "user_id": string | null;
+        };
+        Insert: {
+            "before_fingerprints"?: Array<string>;
+            "created_at"?: string;
+            "duration_ms"?: number | null;
+            "files_rejected"?: Array<string>;
+            "files_written"?: Array<string>;
+            "fully_resolved"?: boolean;
+            "id"?: string;
+            "introduced"?: Array<string>;
+            "made_worse"?: boolean;
+            "model"?: string | null;
+            "project_id"?: string | null;
+            "remaining"?: Array<string>;
+            "resolved"?: Array<string>;
+            "round"?: number;
+            "sample_label"?: string | null;
+            "signal": string;
+            "stage": string;
+            "user_id"?: string | null;
+        };
+        Update: {
+            "before_fingerprints"?: Array<string>;
+            "created_at"?: string;
+            "duration_ms"?: number | null;
+            "files_rejected"?: Array<string>;
+            "files_written"?: Array<string>;
+            "fully_resolved"?: boolean;
+            "id"?: string;
+            "introduced"?: Array<string>;
+            "made_worse"?: boolean;
+            "model"?: string | null;
+            "project_id"?: string | null;
+            "remaining"?: Array<string>;
+            "resolved"?: Array<string>;
+            "round"?: number;
+            "sample_label"?: string | null;
+            "signal"?: string;
+            "stage"?: string;
+            "user_id"?: string | null;
+        };
+        Relationships: [
+                  {
+                            "foreignKeyName": "repair_outcomes_project_id_fkey",
+                            "columns": [
+                                      "project_id"
+                            ],
+                            "isOneToOne": false,
+                            "referencedRelation": "projects",
+                            "referencedColumns": [
+                                      "id"
+                            ]
+                  }
+        ];
       };
       "secret_access_logs": {
         Row: {

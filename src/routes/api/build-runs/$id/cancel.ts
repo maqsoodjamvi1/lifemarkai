@@ -46,6 +46,8 @@ export const Route = createFileRoute("/api/build-runs/$id/cancel")({
           .update({ status: "cancelled", completed_at: new Date().toISOString(), failure_code: "user_cancelled" })
           .eq("id", runId)
           .eq("status", "running");
+        // `build_run_events.id` is GENERATED ALWAYS AS IDENTITY; see the note in
+        // api/telemetry/client.ts for why the generated Insert type needs a cast.
         await (admin.from("build_run_events") as any).insert({
           run_id: runId,
           payload: { cancelled: true, by: "user" },
