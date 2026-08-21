@@ -318,7 +318,25 @@ test("ensureCommonGeneratedSupportFiles normalizes model default imports from th
   assert.match(byPath.get("src/routes/testimonials.tsx") ?? "", /import type \{ Testimonial \} from '..\/lib\/types'/);
   assert.match(byPath.get("src/lib/types.ts") ?? "", /export type Product/);
   assert.match(byPath.get("src/lib/types.ts") ?? "", /export type Testimonial/);
-  assert.ok(!(byPath.get("src/lib/types.ts") ?? "").includes("export default"));
+  assert.match(byPath.get("src/lib/types.ts") ?? "", /export default lifemarkGeneratedTypes;/);
+});
+
+test("ensureCommonGeneratedSupportFiles adds a requested default export to an existing types module", () => {
+  const files = ensureCommonGeneratedSupportFiles([
+    {
+      path: "src/App.tsx",
+      content: 'import Types from "@/lib/types";\nexport default function App() { return <div>{String(Types)}</div>; }',
+      language: "typescriptreact",
+    },
+    {
+      path: "src/lib/types.ts",
+      content: "export type Customer = { id: string };",
+      language: "typescript",
+    },
+  ]);
+  const types = files.find((file) => file.path === "src/lib/types.ts")?.content ?? "";
+
+  assert.match(types, /export default lifemarkGeneratedTypes;/);
 });
 
 test("ensureCommonGeneratedSupportFiles repairs dangling data exports and JSX file extensions", () => {
@@ -584,10 +602,11 @@ test("assessGenerationQuality grades an explicit landing page as one rich route 
     },
     { path: "src/components/layout/Header.tsx", language: "typescriptreact", content: "export function Header() { return <header><nav /></header>; }" },
     { path: "src/components/layout/Footer.tsx", language: "typescriptreact", content: "export function Footer() { return <footer />; }" },
-  ], [], { appType: "marketing-website", minFiles: 1, singlePage: true });
+  ], [], { appType: "marketing-website", minFiles: 12, singlePage: true });
 
   assert.ok(!errors.some((e) => e.type === "too_few_website_pages"), JSON.stringify(errors));
   assert.ok(!errors.some((e) => e.type === "missing_website_data_backing"), JSON.stringify(errors));
+  assert.ok(!errors.some((e) => e.type === "too_few_components"), JSON.stringify(errors));
 });
 
 test("assessGenerationQuality accepts mature database-backed website structure", () => {
@@ -753,4 +772,60 @@ test("validateGeneratedFiles still requires the TanStack home route", () => {
         error.type === "missing_config" && error.file === "src/routes/index.tsx",
     ),
   );
+});
+
+// Regression for a real core-loop failure: a 37-file bakery build was rejected
+// as "a heading and a sentence" because its index.tsx was a 690-byte file that
+// composed six section components. Three repair rounds were spent fattening a
+// file that was already correct.
+test("assessGenerationQuality does not call a route sparse when it composes local sections", () => {
+  const errors = assessGenerationQuality([
+    { path: "src/routes/__root.tsx", language: "typescriptreact", content: "export function Root() { return <div />; }" },
+    {
+      path: "src/routes/index.tsx",
+      language: "typescriptreact",
+      content: [
+        'import { Hero } from "@/components/sections/Hero";',
+        'import { MenuShowcase } from "@/components/sections/MenuShowcase";',
+        'import { AboutStory } from "@/components/sections/AboutStory";',
+        "export function Home() {",
+        "  return <><Hero /><MenuShowcase /><AboutStory /></>;",
+        "}",
+      ].join("\n"),
+    },
+  ], [], { appType: "marketing-website", minFiles: 1, singlePage: true });
+
+  assert.ok(!errors.some((e) => e.type === "sparse_main_page"), JSON.stringify(errors));
+});
+
+test("assessGenerationQuality still rejects a genuinely empty route", () => {
+  const errors = assessGenerationQuality([
+    { path: "src/routes/__root.tsx", language: "typescriptreact", content: "export function Root() { return <div />; }" },
+    {
+      path: "src/routes/index.tsx",
+      language: "typescriptreact",
+      content: "export function Home() { return <h1>Bakery</h1>; }",
+    },
+  ], [], { appType: "marketing-website", minFiles: 1, singlePage: true });
+
+  assert.ok(errors.some((e) => e.type === "sparse_main_page"), JSON.stringify(errors));
+});
+
+// Imports alone must not satisfy the check, or it becomes a formality.
+test("assessGenerationQuality ignores imported utilities that are never rendered", () => {
+  const errors = assessGenerationQuality([
+    { path: "src/routes/__root.tsx", language: "typescriptreact", content: "export function Root() { return <div />; }" },
+    {
+      path: "src/routes/index.tsx",
+      language: "typescriptreact",
+      content: [
+        'import { formatDate } from "@/lib/utils";',
+        'import type { MenuItem } from "@/data/bakery";',
+        'import { Hero } from "@/components/sections/Hero";',
+        "export function Home() { return <h1>Bakery</h1>; }",
+      ].join("\n"),
+    },
+  ], [], { appType: "marketing-website", minFiles: 1, singlePage: true });
+
+  assert.ok(errors.some((e) => e.type === "sparse_main_page"), JSON.stringify(errors));
 });

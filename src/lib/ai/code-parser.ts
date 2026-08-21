@@ -1423,6 +1423,33 @@ export function validateGeneratedFiles(
  * expected size, and returns error-severity issues so the existing auto-fix /
  * enrichment loop kicks in. Works for every app type, not just one.
  */
+/**
+ * How many project-local imports does this file actually RENDER as JSX?
+ *
+ * The rendering requirement is the whole point: a page that imports a helper,
+ * a type or a stylesheet has not composed anything, while one that imports
+ * `Hero` and puts `<Hero />` on the screen plainly has. Counting imports alone
+ * would turn the sparse check into a formality any file could satisfy.
+ */
+function countRenderedLocalComponents(content: string): number {
+  const candidates = new Set<string>();
+  for (const match of content.matchAll(
+    /import\s+([\s\S]*?)\s+from\s*["'](?:\.[^"']*|@\/[^"']*)["']/g,
+  )) {
+    // Component bindings are Capitalised by convention in every framework this
+    // validator sees; lowercase bindings are utilities, not sections.
+    for (const name of (match[1] ?? "").matchAll(/\b([A-Z]\w*)\b/g)) {
+      candidates.add(name[1]);
+    }
+  }
+
+  let rendered = 0;
+  for (const name of candidates) {
+    if (new RegExp(`<${name}[\\s/>]`).test(content)) rendered += 1;
+  }
+  return rendered;
+}
+
 export function assessGenerationQuality(
   files: ParsedFile[],
   existingFiles: ParsedFile[] = [],
@@ -1466,7 +1493,7 @@ export function assessGenerationQuality(
   const featureComponents = all.filter(
     (f) => /(^|\/)(src\/)?components\//.test("/" + f.path) && !/\/components\/ui\//.test("/" + f.path)
   );
-  if (minFiles >= 12 && featureComponents.length < 3) {
+  if (!opts.singlePage && minFiles >= 12 && featureComponents.length < 3) {
     errors.push({
       type: "too_few_components",
       message: `Only ${featureComponents.length} feature component(s) under src/components/. Break the UI into the sections/cards/panels the blueprint calls for (header, hero, cards, etc.).`,
@@ -1515,9 +1542,22 @@ export function assessGenerationQuality(
   if (main && !appIsRouterOnly) {
     const sections = (main.content.match(/<section\b/gi) ?? []).length;
     const jsxTags = (main.content.match(/<[A-Za-z]/g) ?? []).length;
+    // A page that composes its own section components is well-factored, not
+    // empty — the same reasoning as appIsRouterOnly just above, applied to a
+    // route instead of App.tsx. Without this the check graded a real 37-file
+    // bakery build as "a heading and a sentence" because its index.tsx was a
+    // 690-byte file rendering <Hero/>, <MenuShowcase/>, <AboutStory/>,
+    // <Testimonials/>, <ContactForm/> and <LocationHours/>; three repair rounds
+    // were then spent trying to fatten a file that was already correct, and the
+    // build was rejected. Counting only imports that are actually RENDERED
+    // keeps this from being a loophole — importing a util or a type does not
+    // make a page rich, and a genuinely empty page still fails.
+    const delegatedSections = countRenderedLocalComponents(main.content);
     // A page is rich enough if it has several sections, OR lots of markup, OR is
-    // substantial in size. Flag only when it fails ALL three (a heading + a line).
-    const looksRich = sections >= 3 || jsxTags >= 25 || main.content.length >= 1500;
+    // substantial in size, OR delegates to its own components. Flag only when it
+    // fails ALL of them (a heading + a line).
+    const looksRich =
+      sections >= 3 || jsxTags >= 25 || main.content.length >= 1500 || delegatedSections >= 2;
     if (!looksRich) {
       errors.push({
         type: "sparse_main_page",
