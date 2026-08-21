@@ -142,6 +142,10 @@ const INDEX_HTML = (name: string) => `<!doctype html>
     <meta property="og:title" content="${name}" />
     <meta property="og:description" content="${name}" />
     <meta name="twitter:card" content="summary_large_image" />
+    <script>
+      window.addEventListener('error', function (e) { console.error('[lifemark-preview] window error suppressed', e.error || e.message); e.preventDefault(); });
+      window.addEventListener('unhandledrejection', function (e) { console.error('[lifemark-preview] unhandled rejection suppressed', e.reason); e.preventDefault(); });
+    </script>
   </head>
   <body>
     <div id="root"></div>
@@ -397,6 +401,39 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import SiteChrome from "@/components/layout/SiteChrome";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
+import { Component, type ReactNode, type ErrorInfo } from "react";
+
+/**
+ * LifemarkAI preview safety net: guaranteed present regardless of what the
+ * generated app renders. Catches render-time errors from generated
+ * components so the preview iframe shows a fallback instead of a blank or
+ * crashed page. Platform-injected; not something the AI model generates.
+ */
+class PreviewErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    console.error("[lifemark-preview] render error caught by boundary", error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 24, fontFamily: "system-ui, sans-serif", color: "#444" }}>
+          <h2 style={{ margin: "0 0 8px" }}>Preview is having trouble rendering this page</h2>
+          <p style={{ margin: 0, color: "#777" }}>
+            The app hit an error while rendering. Keep editing - this will update automatically once it is fixed.
+          </p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 const queryClient = new QueryClient();
 
@@ -408,7 +445,8 @@ const App = () => (
         {/* SiteChrome shows the site header/footer on PUBLIC routes and
             nothing under /admin/*, so one app serves a public website AND an
             internal admin area. Do not mount Header/Footer directly. */}
-        <SiteChrome>
+        <PreviewErrorBoundary>
+          <SiteChrome>
           <Routes>
             <Route path="/" element={<Index />} />
             {/* Public pages go here. Admin screens go under /admin/* and
@@ -416,6 +454,7 @@ const App = () => (
             <Route path="*" element={<NotFound />} />
           </Routes>
         </SiteChrome>
+          </PreviewErrorBoundary>
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>

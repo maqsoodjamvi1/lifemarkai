@@ -67,7 +67,7 @@ import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   // host + allowedHosts so the preview works behind the sandbox tunnel.
-  server: { host: true, allowedHosts: true, port: 3000 },
+  server: { host: true, allowedHosts: true, port: 3000, hmr: { overlay: false } },
   resolve: {
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
@@ -135,7 +135,7 @@ export function getRouter() {
 }
 `;
 
-const ROOT_TSX = `import type { ReactNode } from "react";
+const ROOT_TSX = `import { Component, type ReactNode, type ErrorInfo } from "react";
 import {
   Outlet,
   createRootRoute,
@@ -157,10 +157,45 @@ export const Route = createRootRoute({
   component: RootComponent,
 });
 
+/**
+ * LifemarkAI preview safety net: guaranteed present regardless of what the
+ * generated app renders. Catches render-time errors from generated
+ * components so the preview iframe shows a fallback instead of a blank or
+ * crashed page. This is injected by the platform template, not something
+ * the AI model is asked to generate correctly.
+ */
+class PreviewErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    console.error("[lifemark-preview] render error caught by boundary", error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 24, fontFamily: "system-ui, sans-serif", color: "#444" }}>
+          <h2 style={{ margin: "0 0 8px" }}>Preview is having trouble rendering this page</h2>
+          <p style={{ margin: 0, color: "#777" }}>
+            The app hit an error while rendering. Keep editing - this will update automatically once it is fixed.
+          </p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function RootComponent() {
   return (
     <RootDocument>
-      <Outlet />
+      <PreviewErrorBoundary>
+        <Outlet />
+      </PreviewErrorBoundary>
     </RootDocument>
   );
 }
@@ -170,6 +205,13 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
     <html lang="en">
       <head>
         <HeadContent />
+        {/* LifemarkAI preview safety net: suppress raw browser-level error noise so a generated app's runtime errors do not surface as visible crash chrome inside the preview iframe. Platform-injected. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "window.addEventListener('error', function (e) { console.error('[lifemark-preview] window error suppressed', e.error || e.message); e.preventDefault(); }); window.addEventListener('unhandledrejection', function (e) { console.error('[lifemark-preview] unhandled rejection suppressed', e.reason); e.preventDefault(); });",
+          }}
+        />
       </head>
       <body>
         <SiteChrome>{children}</SiteChrome>
