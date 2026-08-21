@@ -29,10 +29,47 @@ function loadEnv(path = ".env.local") {
 }
 
 loadEnv();
+loadEnv(".env.core-loop.runtime");
 pinCoreLoopCampaignAiModel();
 
 const firstEnv = (...names: string[]) =>
   names.map((name) => process.env[name]?.trim()).find(Boolean);
+
+function isTransientNetworkError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause =
+    error instanceof Error && error.cause && typeof error.cause === "object"
+      ? String((error.cause as { code?: string; message?: string }).code ?? (error.cause as { message?: string }).message ?? "")
+      : "";
+  const haystack = `${message} ${cause}`;
+  return /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|UND_ERR_|CONNECT_TIMEOUT|socket hang up|network|TLS|aborted/i.test(
+    haystack,
+  );
+}
+
+async function withTransientRetries<T>(
+  label: string,
+  fn: () => Promise<T>,
+  attempts = 5,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientNetworkError(error) || attempt === attempts) throw error;
+      const waitMs = Math.min(8_000, 500 * 2 ** (attempt - 1));
+      console.warn(
+        `${label} transient failure (${attempt}/${attempts}): ${
+          error instanceof Error ? error.message : String(error)
+        }; retrying in ${waitMs}ms`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
 
 const missing: string[] = [];
 const requireOne = (label: string, ...names: string[]) => {
@@ -164,61 +201,77 @@ async function proveFreshRegistration(
     };
   }
 
-  const email = registrationEmail(EMAIL);
-  const password = `CoreLoop-${randomUUID()}-aA1!`;
-  const { data, error } = await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-  });
-  const userId = data.user?.id;
-  if (error || !userId) {
-    return {
-      attempted: true,
-      passed: false,
-      creditsGranted: null,
-      error: error?.message ?? "Supabase admin createUser returned no user",
-    };
-  }
-
   try {
-    const deadline = Date.now() + 15_000;
-    while (Date.now() < deadline) {
-      const { data: profile, error: profileError } = await admin
-        .from("profiles")
-        .select("credits")
-        .eq("id", userId)
-        .maybeSingle();
-      if (profileError) {
+    return await withTransientRetries("registration proof", async () => {
+      const email = registrationEmail(EMAIL);
+      const password = `CoreLoop-${randomUUID()}-aA1!`;
+      const { data, error } = await admin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+      });
+      const userId = data.user?.id;
+      if (error || !userId) {
+        // Auth API reached us with a real error — do not retry forever.
+        if (error && !isTransientNetworkError(error)) {
+          return {
+            attempted: true,
+            passed: false,
+            creditsGranted: null,
+            error: error.message,
+          };
+        }
+        throw new Error(error?.message ?? "Supabase admin createUser returned no user");
+      }
+
+      try {
+        const deadline = Date.now() + 15_000;
+        while (Date.now() < deadline) {
+          const { data: profile, error: profileError } = await admin
+            .from("profiles")
+            .select("credits")
+            .eq("id", userId)
+            .maybeSingle();
+          if (profileError) {
+            if (isTransientNetworkError(profileError)) throw profileError;
+            return {
+              attempted: true,
+              passed: false,
+              creditsGranted: null,
+              error: profileError.message,
+            };
+          }
+          if (profile) {
+            const creditsGranted = Number(profile.credits ?? 0);
+            return {
+              attempted: true,
+              passed: creditsGranted > 0,
+              creditsGranted,
+              ...(creditsGranted > 0 ? {} : { error: "fresh registration received no credits" }),
+            };
+          }
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+        }
         return {
           attempted: true,
           passed: false,
           creditsGranted: null,
-          error: profileError.message,
+          error: "profile trigger did not create a row within 15 seconds",
         };
+      } finally {
+        const { error: cleanupError } = await admin.auth.admin.deleteUser(userId);
+        if (cleanupError) {
+          console.warn(`Registration probe cleanup failed for ${userId}: ${cleanupError.message}`);
+        }
       }
-      if (profile) {
-        const creditsGranted = Number(profile.credits ?? 0);
-        return {
-          attempted: true,
-          passed: creditsGranted > 0,
-          creditsGranted,
-          ...(creditsGranted > 0 ? {} : { error: "fresh registration received no credits" }),
-        };
-      }
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
-    }
+    });
+  } catch (error) {
     return {
       attempted: true,
       passed: false,
       creditsGranted: null,
-      error: "profile trigger did not create a row within 15 seconds",
+      error: error instanceof Error ? error.message : String(error),
     };
-  } finally {
-    const { error: cleanupError } = await admin.auth.admin.deleteUser(userId);
-    if (cleanupError) {
-      console.warn(`Registration probe cleanup failed for ${userId}: ${cleanupError.message}`);
-    }
   }
 }
 
@@ -342,9 +395,19 @@ async function main() {
   if (!registrationProof.passed) {
     console.warn(`Registration proof not completed: ${registrationProof.error ?? "unknown error"}`);
   }
-  const { data: auth, error: authError } = await client.auth.signInWithPassword({ email: EMAIL, password: PASSWORD });
-  if (authError || !auth.session) throw new Error(`test-account sign-in failed: ${authError?.message ?? "no session"}`);
-  const cookie = authCookie(auth.session);
+  const auth = await withTransientRetries("test-account sign-in", async () => {
+    const { data, error: authError } = await client.auth.signInWithPassword({
+      email: EMAIL,
+      password: PASSWORD,
+    });
+    if (authError || !data.session) {
+      const message = authError?.message ?? "no session";
+      if (isTransientNetworkError(authError ?? new Error(message))) throw new Error(message);
+      throw new Error(`test-account sign-in failed: ${message}`);
+    }
+    return data;
+  });
+  const cookie = authCookie(auth.session!);
 
   const profileClient = admin ?? client;
   const { data: profile, error: profileError } = await profileClient
@@ -401,40 +464,45 @@ async function main() {
 
       stage = "generation";
       const generationStarted = Date.now();
-      const generationAbort = new AbortController();
-      const generationTimer = setTimeout(() => generationAbort.abort(), GENERATION_TIMEOUT_MS);
-      generationTimer.unref?.();
-      let done: DoneEvent;
-      try {
-        const generationResponse = await fetch(coreLoopUrl("/api/ai/chat", "POST"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Cookie: cookie },
-          signal: generationAbort.signal,
-          body: JSON.stringify({
-            projectId: project.id,
-            message: prompt,
-            mode: CORE_LOOP_POLICY.mode,
-            framework: CORE_LOOP_POLICY.framework,
-            model: CORE_LOOP_POLICY.primaryModel,
-            modelManuallySelected: true,
-            forceBuild: true,
-            clarifyFirst: false,
-            coreLoop: true,
-            files: [],
-            history: [],
-          }),
-        });
-        done = await readDoneEvent(generationResponse);
-      } catch (error) {
-        if (generationAbort.signal.aborted) {
-          throw new Error(
-            `generation timed out after ${GENERATION_TIMEOUT_MS}ms (model=${CORE_LOOP_POLICY.primaryModel})`,
-          );
-        }
-        throw error;
-      } finally {
-        clearTimeout(generationTimer);
-      }
+      const done = await withTransientRetries(
+        `generation attempt ${index + 1}`,
+        async () => {
+          const generationAbort = new AbortController();
+          const generationTimer = setTimeout(() => generationAbort.abort(), GENERATION_TIMEOUT_MS);
+          generationTimer.unref?.();
+          try {
+            const generationResponse = await fetch(coreLoopUrl("/api/ai/chat", "POST"), {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Cookie: cookie },
+              signal: generationAbort.signal,
+              body: JSON.stringify({
+                projectId: project.id,
+                message: prompt,
+                mode: CORE_LOOP_POLICY.mode,
+                framework: CORE_LOOP_POLICY.framework,
+                model: CORE_LOOP_POLICY.primaryModel,
+                modelManuallySelected: true,
+                forceBuild: true,
+                clarifyFirst: false,
+                coreLoop: true,
+                files: [],
+                history: [],
+              }),
+            });
+            return await readDoneEvent(generationResponse);
+          } catch (error) {
+            if (generationAbort.signal.aborted) {
+              throw new Error(
+                `generation timed out after ${GENERATION_TIMEOUT_MS}ms (model=${CORE_LOOP_POLICY.primaryModel})`,
+              );
+            }
+            throw error;
+          } finally {
+            clearTimeout(generationTimer);
+          }
+        },
+        3,
+      );
       attempt.generationMs = Date.now() - generationStarted;
       attempt.generationPassed = Number(done.fileCount ?? 0) > 0;
       attempt.creditsUsed = typeof done.creditsUsed === "number" ? done.creditsUsed : null;
