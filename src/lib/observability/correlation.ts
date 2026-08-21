@@ -121,12 +121,32 @@ export function runWithCorrelation<T>(
 }
 
 /**
+ * `build_runs.id` is CHECK-constrained to `^run_[A-Za-z0-9_-]+$`, but
+ * sanitizeId() is deliberately looser: it guards LOG LINES, so it also accepts
+ * '.' and ':' and imposes no prefix. An inbound x-lifemark-build-run-id is
+ * client-controlled on the chat/agent entrypoints, so a value like "a.b" — or
+ * any id minted with a different prefix (req_/sbx_/dep_) — passes sanitizeId
+ * and is then REJECTED by the constraint. BuildRunStore.startRun only warns on
+ * a failed insert, so the build would keep running with durability silently
+ * off: no build_runs row, every build_run_events insert failing its foreign
+ * key, and nothing for the reconnect-replay endpoint to return.
+ *
+ * Anything that would not survive the insert is therefore not reused as a
+ * build id.
+ */
+const BUILD_RUN_ID_PATTERN = /^run_[A-Za-z0-9_-]+$/;
+
+export function isBuildRunId(value: string | null | undefined): value is string {
+  return typeof value === "string" && BUILD_RUN_ID_PATTERN.test(value);
+}
+
+/**
  * Mint the build id once and reuse it for the whole build. Chat, self-verify,
  * repair rounds and the deploy that follows all report the same run.
  */
 export function ensureBuildRunId(): string {
   const ctx = getCorrelation();
-  if (ctx?.buildRunId) return ctx.buildRunId;
+  if (isBuildRunId(ctx?.buildRunId)) return ctx.buildRunId;
   const id = newBuildRunId();
   setCorrelation({ buildRunId: id });
   return id;

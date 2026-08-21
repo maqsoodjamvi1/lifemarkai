@@ -4,11 +4,13 @@ import { randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   assessCoreLoopReleaseGate,
+  normalizeCoreLoopFailureSignature,
+  shouldStopCoreLoopCampaign,
   summarizeCoreLoop,
   type CoreLoopAttempt,
   type CoreLoopStage,
 } from "../src/lib/reliability/core-loop-report.ts";
-import { getCoreLoopPolicy } from "../src/lib/reliability/core-loop-policy.ts";
+import { getCoreLoopPolicy, pinCoreLoopCampaignAiModel } from "../src/lib/reliability/core-loop-policy.ts";
 import { assertCoreLoopApiRequest } from "../src/lib/reliability/core-loop-api-surface.ts";
 
 function loadEnv(path = ".env.local") {
@@ -27,6 +29,7 @@ function loadEnv(path = ".env.local") {
 }
 
 loadEnv();
+pinCoreLoopCampaignAiModel();
 
 const firstEnv = (...names: string[]) =>
   names.map((name) => process.env[name]?.trim()).find(Boolean);
@@ -54,6 +57,11 @@ const CORE_LOOP_POLICY = getCoreLoopPolicy();
 const PROVIDER = CORE_LOOP_POLICY.deploymentProvider;
 const ATTEMPTS = Math.max(1, Number.parseInt(process.env.CORE_LOOP_ATTEMPTS ?? "50", 10));
 const DEPLOY_TIMEOUT_MS = Math.max(30_000, Number.parseInt(process.env.CORE_LOOP_DEPLOY_TIMEOUT_MS ?? "180000", 10));
+const GENERATION_TIMEOUT_MS = Math.max(30_000, Number.parseInt(process.env.CORE_LOOP_GENERATION_TIMEOUT_MS ?? "300000", 10));
+const STOP_AFTER_IDENTICAL_FAILURES = Math.max(
+  2,
+  Number.parseInt(process.env.CORE_LOOP_STOP_AFTER_IDENTICAL_FAILURES ?? "3", 10) || 3,
+);
 const PROMPTS_PATH = resolve(process.env.CORE_LOOP_PROMPTS ?? "tests/core-loop-prompts.json");
 const REPORT_DIR = resolve(process.env.CORE_LOOP_REPORT_DIR ?? "artifacts/core-loop");
 const REQUIRE_REGISTRATION_PROOF =
@@ -102,7 +110,10 @@ async function startRemotePreview(projectId: string, cookie: string) {
     if (state.previewUrl && state.sandboxId && state.ok === true && state.phase === "ready") {
       return { previewUrl: state.previewUrl, sandboxId: state.sandboxId };
     }
-    if (state.phase === "error" || state.phase === "unreachable") {
+    // "app_error" = the container is serving but the app answers 5xx (a build
+    // failure in the generated code). Terminal here: polling longer cannot fix
+    // a file that does not compile, and the phaseDetail names the real cause.
+    if (state.phase === "error" || state.phase === "unreachable" || state.phase === "app_error") {
       throw new Error(state.error ?? state.phaseDetail ?? `remote preview entered ${state.phase}`);
     }
     await new Promise((resolvePromise) => setTimeout(resolvePromise, 2_000));
@@ -234,31 +245,52 @@ async function jsonFetch<T>(path: string, cookie: string, init: RequestInit = {}
   return body as T;
 }
 
-async function readDoneEvent(response: Response): Promise<DoneEvent> {
+async function readDoneEvent(response: Response, timeoutMs = GENERATION_TIMEOUT_MS): Promise<DoneEvent> {
   if (!response.ok || !response.body) throw new Error(`generation returned ${response.status}: ${await response.text()}`);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const payload = line.slice(6).trim();
-      if (!payload) continue;
-      let event: DoneEvent;
-      try {
-        event = JSON.parse(payload) as DoneEvent;
-      } catch {
-        // Ignore heartbeats and incomplete/non-JSON events.
-        continue;
-      }
-      if (event.error) throw new Error(event.error);
-      if (event.done) return event;
+  const deadline = Date.now() + timeoutMs;
+  const readBeforeDeadline = async () => {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) throw new Error(`generation timed out after ${timeoutMs}ms`);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`generation timed out after ${timeoutMs}ms`)), remainingMs);
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-    if (done) break;
+  };
+  try {
+    while (true) {
+      const { done, value } = await readBeforeDeadline();
+      buffer += decoder.decode(value, { stream: !done });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const payload = line.slice(6).trim();
+        if (!payload) continue;
+        let event: DoneEvent;
+        try {
+          event = JSON.parse(payload) as DoneEvent;
+        } catch {
+          // Ignore heartbeats and incomplete/non-JSON events.
+          continue;
+        }
+        if (event.error) throw new Error(event.error);
+        if (event.done) return event;
+      }
+      if (done) break;
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
   }
   throw new Error("generation stream ended without a done event");
 }
@@ -326,7 +358,19 @@ async function main() {
   const campaignStartedAt = new Date().toISOString();
   const attempts: CoreLoopAttempt[] = [];
   mkdirSync(REPORT_DIR, { recursive: true });
+  console.log(
+    `Core-loop gate: model=${CORE_LOOP_POLICY.primaryModel} fallback=${CORE_LOOP_POLICY.fallbackModel} ` +
+      `attempts=${ATTEMPTS} generationTimeoutMs=${GENERATION_TIMEOUT_MS} ` +
+      `stopAfterIdenticalFailures=${STOP_AFTER_IDENTICAL_FAILURES}`,
+  );
+  if (/qwen3-coder/i.test(CORE_LOOP_POLICY.primaryModel)) {
+    console.warn(
+      "Warning: core-loop primary model is qwen3-coder, which previously stalled the release gate. " +
+        "Set CORE_LOOP_AI_MODEL=openai/gpt-5.6-luna (or unset it so the campaign default applies).",
+    );
+  }
 
+  let earlyStop: ReturnType<typeof shouldStopCoreLoopCampaign> | null = null;
   for (let index = 0; index < ATTEMPTS; index += 1) {
     const prompt = prompts[index % prompts.length];
     const startedAt = new Date().toISOString();
@@ -357,24 +401,40 @@ async function main() {
 
       stage = "generation";
       const generationStarted = Date.now();
-      const generationResponse = await fetch(coreLoopUrl("/api/ai/chat", "POST"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Cookie: cookie },
-        body: JSON.stringify({
-          projectId: project.id,
-          message: prompt,
-          mode: CORE_LOOP_POLICY.mode,
-          framework: CORE_LOOP_POLICY.framework,
-          model: CORE_LOOP_POLICY.primaryModel,
-          modelManuallySelected: true,
-          forceBuild: true,
-          clarifyFirst: false,
-          coreLoop: true,
-          files: [],
-          history: [],
-        }),
-      });
-      const done = await readDoneEvent(generationResponse);
+      const generationAbort = new AbortController();
+      const generationTimer = setTimeout(() => generationAbort.abort(), GENERATION_TIMEOUT_MS);
+      generationTimer.unref?.();
+      let done: DoneEvent;
+      try {
+        const generationResponse = await fetch(coreLoopUrl("/api/ai/chat", "POST"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Cookie: cookie },
+          signal: generationAbort.signal,
+          body: JSON.stringify({
+            projectId: project.id,
+            message: prompt,
+            mode: CORE_LOOP_POLICY.mode,
+            framework: CORE_LOOP_POLICY.framework,
+            model: CORE_LOOP_POLICY.primaryModel,
+            modelManuallySelected: true,
+            forceBuild: true,
+            clarifyFirst: false,
+            coreLoop: true,
+            files: [],
+            history: [],
+          }),
+        });
+        done = await readDoneEvent(generationResponse);
+      } catch (error) {
+        if (generationAbort.signal.aborted) {
+          throw new Error(
+            `generation timed out after ${GENERATION_TIMEOUT_MS}ms (model=${CORE_LOOP_POLICY.primaryModel})`,
+          );
+        }
+        throw error;
+      } finally {
+        clearTimeout(generationTimer);
+      }
       attempt.generationMs = Date.now() - generationStarted;
       attempt.generationPassed = Number(done.fileCount ?? 0) > 0;
       attempt.creditsUsed = typeof done.creditsUsed === "number" ? done.creditsUsed : null;
@@ -387,7 +447,19 @@ async function main() {
       sandboxId = remotePreview.sandboxId;
       const previewResponse = await fetch(remotePreview.previewUrl, { redirect: "follow" });
       if (!previewResponse.ok) {
-        throw new Error(`remote preview returned ${previewResponse.status}`);
+        // KEEP THE BODY. A bare "remote preview returned 500" is unactionable —
+        // it cannot tell a Traefik 502 (sandbox down) from vite answering its
+        // own 500 (the generated code does not transform), and those have
+        // nothing to do with each other. Vite puts the file, line and message
+        // straight in the response, so a run that throws this away forces the
+        // next debugging pass to be a guess. Truncated because a vite error
+        // page carries the whole module graph after the part that matters.
+        const detail = await previewResponse.text().catch(() => "");
+        const snippet = detail.replace(/\s+/g, " ").trim().slice(0, 600);
+        throw new Error(
+          `remote preview returned ${previewResponse.status}` +
+            (snippet ? ` — ${snippet}` : ""),
+        );
       }
       const preview = await jsonFetch<{ ok?: boolean }>(`/api/projects/${project.id}/preview-verify`, cookie, {
         method: "POST",
@@ -424,22 +496,61 @@ async function main() {
         attempt.sandboxCostCents = costs.sandboxCostCents;
         attempt.repairRounds = Math.max(attempt.repairRounds, costs.repairRounds);
       }
+      attempt.failureSignature = normalizeCoreLoopFailureSignature(attempt);
       attempts.push(attempt);
-      const interim = { campaignStartedAt, baseUrl: BASE_URL, registrationProof, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary: summarizeCoreLoop(attempts), attempts };
+      const interim = {
+        campaignStartedAt,
+        baseUrl: BASE_URL,
+        registrationProof,
+        policy: CORE_LOOP_POLICY,
+        provider: PROVIDER,
+        summary: summarizeCoreLoop(attempts),
+        earlyStop: null,
+        attempts,
+      };
       writeFileSync(resolve(REPORT_DIR, "latest.json"), `${JSON.stringify(interim, null, 2)}\n`);
       console.log(`[${attempt.index}/${ATTEMPTS}] ${attempt.publicUrlPassed ? "PASS" : `FAIL:${attempt.failedStage}`} ${prompt.slice(0, 70)}`);
+      const stopCheck = shouldStopCoreLoopCampaign(attempts, STOP_AFTER_IDENTICAL_FAILURES);
+      if (stopCheck.stop) {
+        earlyStop = stopCheck;
+        console.error(
+          `Stopping campaign early after ${stopCheck.consecutive} identical failures ` +
+            `(${stopCheck.signature}). Fix the systemic defect before resuming.`,
+        );
+        const stopped = {
+          ...interim,
+          earlyStop,
+          summary: summarizeCoreLoop(attempts),
+        };
+        writeFileSync(resolve(REPORT_DIR, "latest.json"), `${JSON.stringify(stopped, null, 2)}\n`);
+        break;
+      }
     }
   }
 
   const summary = summarizeCoreLoop(attempts);
   const releaseGate = assessCoreLoopReleaseGate(summary, registrationProof.passed);
-  const report = { campaignStartedAt, completedAt: new Date().toISOString(), baseUrl: BASE_URL, registrationProof, policy: CORE_LOOP_POLICY, provider: PROVIDER, summary, releaseGate, attempts };
+  const report = {
+    campaignStartedAt,
+    completedAt: new Date().toISOString(),
+    baseUrl: BASE_URL,
+    registrationProof,
+    policy: CORE_LOOP_POLICY,
+    provider: PROVIDER,
+    summary,
+    releaseGate,
+    earlyStop,
+    attempts,
+  };
   const serializedReport = `${JSON.stringify(report, null, 2)}\n`;
   const stampedPath = resolve(REPORT_DIR, `core-loop-${campaignStartedAt.replace(/[:.]/g, "-")}.json`);
   writeFileSync(resolve(REPORT_DIR, "latest.json"), serializedReport);
   writeFileSync(stampedPath, serializedReport);
-  console.log(JSON.stringify({ summary, releaseGate }, null, 2));
+  console.log(JSON.stringify({ summary, releaseGate, earlyStop }, null, 2));
   console.log(`Report: ${stampedPath}`);
+  if (earlyStop?.stop) {
+    process.exit(1);
+  }
   const smokePassed =
     ATTEMPTS < 50 &&
     summary.generationSuccessRate === 1 &&
