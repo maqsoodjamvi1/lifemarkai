@@ -148,6 +148,10 @@ async function main() {
     ...process.env,
     CORE_LOOP_ATTEMPTS: ATTEMPTS,
     CORE_LOOP_ACTIVE: "1",
+    // Explicit campaign tier so OPENROUTER_CODING_MODEL (legacy qwen in some
+    // Codespaces) cannot stall the release gate. Operator override still wins.
+    // Keep in sync with CORE_LOOP_CAMPAIGN_PRIMARY_MODEL in core-loop-policy.ts.
+    CORE_LOOP_AI_MODEL: process.env.CORE_LOOP_AI_MODEL?.trim() || "openai/gpt-5.6-luna",
     SANDBOX_PROVIDER: "docker",
     SANDBOX_PUBLIC_HOST: process.env.SANDBOX_PUBLIC_HOST || coreLoopHost,
     SANDBOX_PUBLIC_SCHEME: process.env.SANDBOX_PUBLIC_SCHEME || "http",

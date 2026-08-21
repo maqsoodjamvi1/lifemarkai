@@ -38,6 +38,7 @@ CORE_LOOP_PASSWORD=use-a-dedicated-secret
 CORE_LOOP_ATTEMPTS=50
 CORE_LOOP_DEPLOY_PROVIDER=netlify
 CORE_LOOP_DEPLOY_TIMEOUT_MS=180000
+CORE_LOOP_GENERATION_TIMEOUT_MS=300000
 
 VITE_SUPABASE_URL=https://example.supabase.co
 VITE_SUPABASE_ANON_KEY=...
@@ -63,12 +64,28 @@ The runner also accepts the legacy `NEXT_PUBLIC_SUPABASE_URL` and
 The release-proof lane is intentionally narrow:
 
 ```dotenv
-CORE_LOOP_AI_MODEL=qwen/qwen3-coder
+CORE_LOOP_AI_MODEL=openai/gpt-5.6-luna
 CORE_LOOP_FALLBACK_MODEL=deepseek/deepseek-v4-flash
 CORE_LOOP_DEPLOY_PROVIDER=netlify
 CORE_LOOP_MAX_REPAIR_ROUNDS=2
 CORE_LOOP_REQUIRE_REGISTRATION_PROOF=true
 ```
+
+The one-flow and campaign runners set `CORE_LOOP_AI_MODEL` to
+`openai/gpt-5.6-luna` when it is unset. That keeps the gate on the production
+coding tier even if the environment has a global
+`OPENROUTER_CODING_MODEL=qwen/qwen3-coder` override. Policy resolution still
+honors `CORE_LOOP_AI_MODEL` first, then other env overrides; the campaign pin
+is intentional so a stalled provider stream cannot hang all 50 attempts.
+Each campaign request also sends that model with `modelManuallySelected: true`,
+and the chat route honors it for `coreLoop` so a long-lived server process
+cannot silently re-select Qwen from process env.
+`CORE_LOOP_GENERATION_TIMEOUT_MS` (default 300000) aborts the generation
+fetch and turns a silent provider stall into a diagnosable attempt failure
+instead of an infinite hang. After
+`CORE_LOOP_STOP_AFTER_IDENTICAL_FAILURES` (default 3) consecutive failures
+with the same normalized signature, the campaign exits early so one systemic
+defect cannot burn the remaining attempts.
 
 These values are embedded in the JSON report. Campaign requests always use
 TanStack Build mode and bypass smart routing, Patch mode, clarification, scope
@@ -114,6 +131,58 @@ The smoke command must pass before starting the paid gate. Use
 defaults to exactly 50 attempts; do not count WebContainer previews or partial
 runs as evidence. Use 100 for extended release evidence. The default prompt suite is
 `tests/core-loop-prompts.json`; override it with `CORE_LOOP_PROMPTS`.
+
+## Where to run it
+
+The gate needs three things at once: a **Docker daemon** (the only supported
+release-gate preview backend), the app itself on `CORE_LOOP_BASE_URL`
+(`verify:core-loop:release` spawns `vite dev` for you), and the private
+Supabase/OpenRouter credentials. A Codespace or your own machine satisfies all
+three; environments without a Docker daemon cannot run it at all, however
+complete the rest of the configuration looks.
+
+Budget the wall-clock before starting: 50 attempts at up to
+`CORE_LOOP_GENERATION_TIMEOUT_MS` (300s) each is several hours in the worst
+case. The runner checkpoints `artifacts/core-loop/latest.json` after every
+attempt, so an interrupted campaign still carries evidence — but a disconnected
+terminal kills the run, so use `tmux`/`screen` on a remote host.
+
+Sequence that avoids paying for a broken harness:
+
+```bash
+git pull
+npm ci                     # not `npm install`
+npm run verify:core-loop:smoke     # 1 attempt, proves the whole path
+npm run verify:core-loop:release   # smoke again, then the 50-run gate
+```
+
+If `npm ci` leaves Rolldown's Linux binding missing — the runner checks for it
+and says so — repair with `npm install --include=optional` rather than
+reinstalling from scratch.
+
+`CORE_LOOP_AI_MODEL` defaults to the campaign tier, so a stray
+`OPENROUTER_CODING_MODEL` in a Codespace cannot quietly downgrade the gate. Set
+it explicitly only to override that tier on purpose.
+
+## When the campaign stops early
+
+After `CORE_LOOP_STOP_AFTER_IDENTICAL_FAILURES` consecutive identical failures
+(default 3, floor 2) the campaign exits non-zero and writes `earlyStop` into
+the report and `latest.json`. This is the circuit breaker working: one systemic
+defect would otherwise consume every remaining attempt and its credits.
+
+Read `earlyStop.signature`. It is `<stage>:<message>`, normalized so volatile
+detail (UUIDs, large numbers, container ids, per-attempt sandbox hosts) cannot
+disguise one root cause as many. Diagnose that single cause, fix it, and rerun
+the full suite. Do not rerun hoping for a better draw, and do not raise the
+threshold to push past it.
+
+One failure mode deserves its own reaction. If a campaign burned many attempts
+on what is obviously the **same** defect and the breaker never fired, the
+signatures were not identical — that is a bug in
+`normalizeCoreLoopFailureSignature`, not a reason to lower the threshold. Add
+the offending pair of errors to `core-loop-report.test.ts` as a case that must
+collapse to one signature, then widen the normalizer until it does.
 
 ## Output
 

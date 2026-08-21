@@ -193,6 +193,8 @@ export {
   isPreviewReachable,
   peekPreviewReachable,
   getPreviewProbeState,
+  appServing,
+  lastServerStatus,
   forgetPreviewProbe,
 } from "./shared.ts";
 export { ModalSandboxProvider } from "./modal.ts";

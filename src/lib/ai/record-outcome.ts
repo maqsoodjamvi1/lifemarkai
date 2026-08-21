@@ -52,7 +52,7 @@ export function recordRepairOutcome(attempt: RepairAttempt): void {
       if (before.length === 0 && score.introduced.length === 0) return;
 
       const supabase = await createAdminClient();
-      await (supabase.from("repair_outcomes") as any).insert({
+      await supabase.from("repair_outcomes").insert({
         project_id: attempt.projectId ?? null,
         user_id: attempt.userId ?? null,
         stage: attempt.stage,
