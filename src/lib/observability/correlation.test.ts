@@ -137,6 +137,35 @@ describe("header propagation", () => {
     assert.equal(seed.buildRunId, undefined);
   });
 
+  /**
+   * The database is stricter than the log sanitizer: build_runs.id is
+   * CHECK ^run_[A-Za-z0-9_-]+$, while sanitizeId also allows '.' and ':' and
+   * any prefix. An id that survives the header but not the constraint would
+   * make startRun's insert fail — and startRun only warns, so the build would
+   * lose durability with nothing surfaced.
+   */
+  it("does not reuse an inbound build id the database would reject", () => {
+    for (const hostile of ["a.b", "req_abc", "sbx_abc", "run", "run_"]) {
+      const seed = correlationFromRequest(
+        new Request("http://localhost/api/ai/agent", {
+          headers: { [CORRELATION_HEADERS.buildRunId]: hostile },
+        }),
+      );
+      const minted = runWithCorrelation(seed, () => ensureBuildRunId());
+      assert.notEqual(minted, hostile);
+      assert.match(minted, /^run_[A-Za-z0-9_-]+$/);
+    }
+  });
+
+  it("still reuses a well-formed inbound build id", () => {
+    const seed = correlationFromRequest(
+      new Request("http://localhost/api/ai/agent", {
+        headers: { [CORRELATION_HEADERS.buildRunId]: "run_from_upstream" },
+      }),
+    );
+    assert.equal(runWithCorrelation(seed, () => ensureBuildRunId()), "run_from_upstream");
+  });
+
   it("stamps outbound headers and clears stale ones", () => {
     runWithCorrelation({ requestId: "req_1", buildRunId: "run_1" }, () => {
       const headers = applyCorrelationHeaders(
