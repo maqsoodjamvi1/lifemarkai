@@ -651,13 +651,14 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
     const typesPath = allInputFiles.some((file) =>
       importRecords(file).some((record) => record.resolved === "lib/types"),
     ) ? "lib/types.ts" : "src/lib/types.ts";
-    const known = findKnownFile(allInputFiles, typesPath);
+    const known = findKnownFile(out, typesPath) ?? findKnownFile(allInputFiles, typesPath);
     const missing = neededTypes.filter((name) => !exportedNames(known?.content ?? "").has(name));
-    if (!known || missing.length > 0) {
+    const lacksDefault = needsTypesDefaultExport && !hasDefaultExport(known?.content ?? "");
+    if (!known || missing.length > 0 || lacksDefault) {
       let content = known
         ? appendTypeExports(known.content ?? "", missing)
         : typesFile(neededTypes);
-      if (needsTypesDefaultExport && !/\bexport\s+default\b/.test(content)) {
+      if (needsTypesDefaultExport && !hasDefaultExport(content)) {
         content = appendBlock(
           content,
           "// LifemarkAI generated default types export",
@@ -730,17 +731,30 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
     }
   }
 
-  // Second pass: default-import a named-only component/page (e.g. ProductList).
+  // Second pass: default-import a named-only module (components/pages AND types).
   for (const file of [...allInputFiles, ...out]) {
     for (const record of importRecords(file)) {
       if (!record.resolved) continue;
       const defaultName = parseDefaultImport(record.clause);
-      if (!defaultName || !isComponentOrPagePath(record.resolved)) continue;
+      if (!defaultName) continue;
+      if (!isComponentOrPagePath(record.resolved) && !isTypesPath(record.resolved)) continue;
       const known = findKnownFile(out, record.resolved) ?? findKnownFile(allInputFiles, record.resolved);
       if (!known) continue;
       if (hasDefaultExport(known.content ?? "")) continue;
-      const next = appendDefaultExport(known.content ?? "", defaultName);
-      upsertSupportFile(out, paths, known.path, known.language ?? "typescriptreact", next);
+      const next = isTypesPath(record.resolved)
+        ? appendBlock(
+            known.content ?? "",
+            "// LifemarkAI generated default types export",
+            "const lifemarkGeneratedTypes = {};\nexport default lifemarkGeneratedTypes;",
+          )
+        : appendDefaultExport(known.content ?? "", defaultName);
+      upsertSupportFile(
+        out,
+        paths,
+        known.path,
+        known.language ?? (isTypesPath(record.resolved) ? "typescript" : "typescriptreact"),
+        next,
+      );
     }
   }
 

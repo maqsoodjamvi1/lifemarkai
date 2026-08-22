@@ -2307,15 +2307,18 @@ The user has expressed frustration. Do the following:
               });
               if (!stagedVerification?.passed) {
                 const reason = stagedVerification?.errors[0] ?? "candidate verification could not complete";
-                await (supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<unknown> }).rpc(
-                  "record_failed_generation",
-                  {
-                    target_project_id: projectId,
-                    run_source: "chat",
-                    staged_files: parsedFiles.map((file) => ({ path: file.path, content: file.content, language: file.language })),
-                    failure_message: reason,
-                  },
-                ).catch(() => undefined);
+                try {
+                  // Supabase's rpc() builder is thenable but not a real Promise —
+                  // chaining .catch() directly threw "is not a function" and
+                  // crashed the stream after verification (same fix as agent.ts).
+                  await (supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<unknown> })
+                    .rpc("record_failed_generation", {
+                      target_project_id: projectId,
+                      run_source: "chat",
+                      staged_files: parsedFiles.map((file) => ({ path: file.path, content: file.content, language: file.language })),
+                      failure_message: reason,
+                    });
+                } catch { /* best-effort logging only */ }
                 throw new Error(`Verification blocked this generation before it replaced your working app: ${reason}`);
               }
               for (const fixed of stagedVerification.fixedFiles) {
