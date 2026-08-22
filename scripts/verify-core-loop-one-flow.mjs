@@ -214,6 +214,11 @@ async function main() {
           SANDBOX_TRAEFIK_ENTRYPOINT: "",
           SANDBOX_PUBLIC_HOST: process.env.SANDBOX_PUBLIC_HOST || "localhost",
           SANDBOX_PUBLIC_SCHEME: "http",
+          // node:http cannot use /var/run/docker.sock on Windows; the Desktop
+          // named pipe is the local Engine API endpoint.
+          ...(process.platform === "win32"
+            ? { DOCKER_SOCKET: process.env.DOCKER_SOCKET || "\\\\.\\pipe\\docker_engine" }
+            : {}),
         }
       : {}),
   };
