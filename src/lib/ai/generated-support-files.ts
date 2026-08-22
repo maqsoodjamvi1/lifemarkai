@@ -769,6 +769,31 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
     }
   }
 
+  // Guaranteed types default: needsTypesDefaultExport is computed from the
+  // pre-normalize import graph. Import rewriting can hide those defaults from
+  // later passes, so re-apply the export here whenever the flag is set.
+  if (needsTypesDefaultExport) {
+    const typesPath = out.some((file) => stripExtension(file.path) === "lib/types")
+      || allInputFiles.some((file) => stripExtension(file.path) === "lib/types")
+      ? "lib/types.ts"
+      : "src/lib/types.ts";
+    const known = findKnownFile(out, typesPath) ?? findKnownFile(allInputFiles, typesPath);
+    const content = known?.content ?? "";
+    if (!hasDefaultExport(content)) {
+      upsertSupportFile(
+        out,
+        paths,
+        known?.path ?? typesPath,
+        "typescript",
+        appendBlock(
+          content || "export {};\n",
+          "// LifemarkAI generated default types export",
+          "const lifemarkGeneratedTypes = {};\nexport default lifemarkGeneratedTypes;",
+        ),
+      );
+    }
+  }
+
   return out;
 }
 

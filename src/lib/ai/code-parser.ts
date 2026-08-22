@@ -1117,6 +1117,8 @@ export function validateGeneratedFiles(
     ];
     for (const match of aliasImports) {
       const importPath = match[1];
+      // Same Vite asset-query exemption as relative imports above.
+      if (/\?(url|raw|inline|worker|sharedworker)\b/.test(importPath)) continue;
       // "@/x" maps to src/x in Vite apps but to ./x (project root) in Next.js
       // App Router apps (tsconfig paths "@/*": ["./*"]) — accept whichever resolves.
       const aliasResolves = (base: string) =>
@@ -1127,8 +1129,9 @@ export function validateGeneratedFiles(
         normPaths.has(base + ".jsx") ||
         normPaths.has(base + "/index.ts") ||
         normPaths.has(base + "/index.tsx");
-      const srcResolved = importPath.replace(/^@\//, "src/");
-      const rootResolved = importPath.replace(/^@\//, "");
+      const bareImportPath = importPath.replace(/\?(url|raw|inline|worker|sharedworker)\b.*$/, "");
+      const srcResolved = bareImportPath.replace(/^@\//, "src/");
+      const rootResolved = bareImportPath.replace(/^@\//, "");
       const resolved = aliasResolves(srcResolved)
         ? srcResolved
         : aliasResolves(rootResolved)
