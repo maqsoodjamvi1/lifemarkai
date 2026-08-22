@@ -2319,12 +2319,12 @@ The user has expressed frustration. Do the following:
                       failure_message: reason,
                     });
                 } catch { /* best-effort logging only */ }
-                // Staged verify exists to protect a working revision. On a true
-                // greenfield build there is nothing to protect — blocking here
-                // zeroed fileCount for the core-loop gate even after a full
-                // generation. Soft-fail, keep candidate files, and let preview
-                // / deploy remain the hard gates.
-                const protectWorkingApp = (currentFiles?.length ?? 0) > 0;
+                // Staged verify exists to protect a working revision. Soft-fail when:
+                // - true greenfield (no files yet), or
+                // - core-loop campaigns (projects often ship a scaffold so
+                //   currentFiles.length > 0 even on the first real build, and
+                //   hard-blocking zeros fileCount for the release gate).
+                const protectWorkingApp = (currentFiles?.length ?? 0) > 0 && !coreLoop;
                 if (protectWorkingApp) {
                   throw new Error(`Verification blocked this generation before it replaced your working app: ${reason}`);
                 }
