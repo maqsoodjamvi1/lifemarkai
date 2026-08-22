@@ -178,6 +178,10 @@ async function main() {
   const viteBin = assertRuntimeDependencies();
   const campaign = fileURLToPath(new URL("./verify-core-loop-campaign.ts", import.meta.url));
   const coreLoopHost = new URL(BASE_URL).hostname;
+  const localCoreLoop =
+    coreLoopHost === "localhost" ||
+    coreLoopHost === "127.0.0.1" ||
+    coreLoopHost === "::1";
   const env = {
     ...process.env,
     CORE_LOOP_ATTEMPTS: ATTEMPTS,
@@ -197,6 +201,21 @@ async function main() {
     SANDBOX_PROVIDER: "docker",
     SANDBOX_PUBLIC_HOST: process.env.SANDBOX_PUBLIC_HOST || coreLoopHost,
     SANDBOX_PUBLIC_SCHEME: process.env.SANDBOX_PUBLIC_SCHEME || "http",
+    // Local Windows/macOS runners often inherit production Coolify docker-proxy
+    // env from .env.local (DOCKER_HOST=http://lifemark-docker-proxy:2375 plus a
+    // Traefik preview domain). Those names do not resolve here and force proxy
+    // mode. Clear them so the gate uses the local Docker engine + published ports.
+    ...(localCoreLoop
+      ? {
+          DOCKER_HOST: "",
+          SANDBOX_PREVIEW_DOMAIN: "",
+          SANDBOX_PROXY_NETWORK: "",
+          SANDBOX_CERT_RESOLVER: "",
+          SANDBOX_TRAEFIK_ENTRYPOINT: "",
+          SANDBOX_PUBLIC_HOST: process.env.SANDBOX_PUBLIC_HOST || "localhost",
+          SANDBOX_PUBLIC_SCHEME: "http",
+        }
+      : {}),
   };
 
   console.log(`Starting LifeMarkAI at ${BASE_URL}...`);
