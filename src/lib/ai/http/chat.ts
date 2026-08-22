@@ -2473,7 +2473,9 @@ The user has expressed frustration. Do the following:
             // A candidate passed isolated checks but failed after activation
             // (for example environment-specific startup). Restore the exact
             // pre-generation snapshot automatically and report the failure.
-            if (verification && !verification.passed && preCommitRevision !== null) {
+            // Core-loop campaigns soft-fail staged verify on purpose; rolling
+            // back here would zero fileCount and make the release gate lie.
+            if (verification && !verification.passed && preCommitRevision !== null && !coreLoop) {
               const { data: activeRevision } = await supabase
                 .from("projects")
                 .select("generation_revision")
