@@ -270,6 +270,41 @@ function injectStaticBridge(html: string, route: string): string {
   return `<!doctype html><html><head>${bridge}</head><body>${html}</body></html>`;
 }
 
+/**
+ * Reports an entry `<script src>` that resolves to a real project file but
+ * needs a bundler (TypeScript/JSX) as a "bundler" preview error, using the
+ * same postMessage contract as PREVIEW_ERROR_BRIDGE_SCRIPT (see
+ * preview-error-bridge.ts) so the existing self-heal / "Preview paused" UI
+ * picks it up.
+ *
+ * Without this, the unrewritten tag keeps its original root-relative src
+ * (e.g. "/src/main.tsx"). The browser then fetches that path against the
+ * PARENT document's origin, not the project's files, which 404s/CORS-fails
+ * silently and leaves the preview permanently blank with no visible error
+ * (see #9). This can happen when a project is pinned to the static runtime
+ * (persisted `runtime: "static"`, which intentionally wins over file-based
+ * re-detection -- see resolveProjectRuntime) but a later edit adds a
+ * framework entry point the static, dependency-free renderer can't execute.
+ */
+function unsupportedEntryScriptBridge(paths: string[]): string {
+  const message = `Failed to compile: entry script${paths.length > 1 ? "s" : ""} ${paths.join(", ")} ${
+    paths.length > 1 ? "are" : "is"
+  } TypeScript/JSX and need a bundler, but this project is currently on the static (no-build) preview engine.`;
+  return `<script data-lifemark-unsupported-entry>(function(){
+try {
+  window.parent.postMessage({
+    source: "lifemark-preview-errors",
+    type: "preview-error",
+    kind: "bundler",
+    message: ${JSON.stringify(message)},
+    extra: { paths: ${JSON.stringify(paths)} },
+    url: location.href,
+    timestamp: Date.now()
+  }, "*");
+} catch (e) {}
+})();</script>`;
+}
+
 /** Compose a dependency-free static project into one srcdoc document. */
 export function buildStaticPreview(
   files: Pick<ProjectFile, "path" | "content">[],
@@ -294,18 +329,32 @@ export function buildStaticPreview(
     return `<style data-lifemark-file="${file.path}">\n${rewriteCssAssets(file.content, file.path, fileByPath)}\n</style>`;
   });
 
+  // Local script references that need a bundler (TypeScript/JSX) can't be
+  // rewritten into a runnable blob import like plain .js/.mjs can -- see
+  // unsupportedEntryScriptBridge for what happens if left as-is.
+  const unsupportedEntryScripts: string[] = [];
   html = html.replace(/<script\b[^>]*\bsrc\s*=\s*(["']).*?\1[^>]*>\s*<\/script>/gis, (tag) => {
     const src = attribute(tag, "src");
     if (!src) return tag;
     const path = resolveLocalReference(src, entry.path);
     const file = path ? fileByPath.get(path) : undefined;
-    if (!file || !/\.(?:m?js)$/i.test(file.path)) return tag;
-    return `<script type="module" data-lifemark-file="${file.path}">import "app:/${file.path}";</script>`;
+    if (!file) return tag;
+    if (/\.(?:m?js)$/i.test(file.path)) {
+      return `<script type="module" data-lifemark-file="${file.path}">import "app:/${file.path}";</script>`;
+    }
+    if (/\.(?:tsx?|jsx)$/i.test(file.path)) {
+      unsupportedEntryScripts.push(file.path);
+      return `<!-- lifemark: ${file.path} needs a bundler; static preview engine can't execute it -->`;
+    }
+    return tag;
   });
   html = rewriteHtmlAssetAttributes(html, entry.path, fileByPath);
   html = rewriteLinkAssets(html, entry.path, fileByPath);
   html = rewriteStaticPageLinks(html, entry.path, fileByPath);
   html = injectIntoHead(html, moduleRegistryScript(normalized));
+  if (unsupportedEntryScripts.length > 0) {
+    html = injectIntoHead(html, unsupportedEntryScriptBridge(unsupportedEntryScripts));
+  }
   // LifemarkData SDK — localStorage mode in the editor preview; published
   // deploys inject the hosted-endpoint variant in build-deploy-files. Runs
   // AFTER the bridge so fragment entries are already wrapped in a full

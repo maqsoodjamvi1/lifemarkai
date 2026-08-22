@@ -129,3 +129,6 @@ __sync_marker__.txt
 __tsc-scope.json
 
 .tmp-docker-run.env
+
+# Backups/copies of local env files are still local env files.
+.env.local.*
