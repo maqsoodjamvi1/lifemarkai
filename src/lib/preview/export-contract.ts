@@ -66,21 +66,22 @@ function resolveModule(
   spec: string,
   byPath: Map<string, ProjectFileLike>
 ): Resolution {
+  const specPath = spec.replace(/\?.*$/, "");
   let base: string;
 
-  if (spec.startsWith("@/")) {
-    base = `src/${spec.slice(2)}`;
-  } else if (spec.startsWith("./") || spec.startsWith("../")) {
+  if (specPath.startsWith("@/")) {
+    base = `src/${specPath.slice(2)}`;
+  } else if (specPath.startsWith("./") || specPath.startsWith("../")) {
     const dir = importerPath.split("/").slice(0, -1);
-    const parts = spec.split("/");
+    const parts = specPath.split("/");
     for (const part of parts) {
       if (part === "." || part === "") continue;
       if (part === "..") dir.pop();
       else dir.push(part);
     }
     base = dir.join("/");
-  } else if (spec.startsWith("src/")) {
-    base = spec;
+  } else if (specPath.startsWith("src/")) {
+    base = specPath;
   } else {
     return { kind: "external" };
   }

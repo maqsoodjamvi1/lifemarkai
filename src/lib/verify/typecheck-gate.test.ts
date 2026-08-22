@@ -166,6 +166,21 @@ describe("bundle gate — unresolved local imports", () => {
     assert.deepEqual(errs, []);
   });
 
+  it("ignores Vite asset query imports like styles.css?url", async () => {
+    const errs = findUnresolvedLocalImports([
+      f("src/routes/__root.tsx", `import appCss from "../styles.css?url";\n`),
+      f("src/styles.css", `body {}\n`),
+    ]);
+    assert.deepEqual(errs, []);
+  });
+
+  it("ignores Vite ?url imports even when the asset file is absent", async () => {
+    const errs = findUnresolvedLocalImports([
+      f("src/routes/__root.tsx", `import appCss from "../styles.css?url";\n`),
+    ]);
+    assert.deepEqual(errs, []);
+  });
+
   it("reports the line number so the repair prompt has a location", async () => {
     const errs = findUnresolvedLocalImports([
       f("src/App.tsx", `import { a } from "react";\n\n\nimport { Missing } from "./Missing";\n`),

@@ -7,7 +7,7 @@
  * (not WebContainer / srcdoc / esbuild).
  */
 import { createFileRoute } from "@tanstack/react-router";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
 import { correlationFromRequest,runWithCorrelation,setCorrelation } from "@/lib/observability/correlation";
@@ -100,6 +100,45 @@ function isSandboxTunnelUrl(value: unknown): value is string {
 /** One cold-boot at a time per project — concurrent POSTs were terminating
  *  each other's fresh Modal sandboxes ("user termination request"). */
 const bootInflight = new Map<string, Promise<Response>>();
+/** Boot work that continues after the HTTP response — npm install can take
+ *  longer than Node's default 5-minute requestTimeout. */
+const detachedBoots = new Set<string>();
+
+/**
+ * In-process boot progress. Detached boots write project metadata to Supabase;
+ * when that write flakes (`fetch failed`), the campaign's phaseOnly poll would
+ * otherwise sit on "creating" forever even though Docker already has a URL.
+ * This map is the source of truth for the lifetime of the Node process.
+ */
+type LiveBootState = {
+  phase: string | null;
+  phaseDetail: string | null;
+  previewUrl: string | null;
+  sandboxId: string | null;
+  ok: boolean;
+  error: string | null;
+  updatedAt: number;
+};
+const liveBootState: Map<string, LiveBootState> =
+  (globalThis as { __lifemarkLiveBoot?: Map<string, LiveBootState> }).__lifemarkLiveBoot ??
+  ((globalThis as { __lifemarkLiveBoot?: Map<string, LiveBootState> }).__lifemarkLiveBoot =
+    new Map());
+
+function rememberBootState(projectId: string, patch: Partial<LiveBootState>) {
+  const prev = liveBootState.get(projectId);
+  liveBootState.set(projectId, {
+    phase: patch.phase !== undefined ? patch.phase : (prev?.phase ?? null),
+    phaseDetail:
+      patch.phaseDetail !== undefined ? patch.phaseDetail : (prev?.phaseDetail ?? null),
+    previewUrl:
+      patch.previewUrl !== undefined ? patch.previewUrl : (prev?.previewUrl ?? null),
+    sandboxId:
+      patch.sandboxId !== undefined ? patch.sandboxId : (prev?.sandboxId ?? null),
+    ok: patch.ok !== undefined ? patch.ok : (prev?.ok ?? false),
+    error: patch.error !== undefined ? patch.error : (prev?.error ?? null),
+    updatedAt: Date.now(),
+  });
+}
 
 async function handlePOST(req: Request, params: { id: string }) {
   const { id: projectId } = params;
@@ -153,6 +192,19 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
   const rl = await rateLimitAsync(`sandbox-preview:${user.id}`, RATE_LIMITS.ai);
   if (!rl.success) {
     return Response.json({ error: "Rate limited" }, { status: 429 });
+  }
+
+  if (detachedBoots.has(projectId)) {
+    return Response.json({
+      enabled: true,
+      ok: true,
+      ready: false,
+      previewUrl: null,
+      phase: "creating",
+      phaseDetail: "Starting your app — the first run takes a moment.",
+      provider: getSandboxProviderId(),
+      sandboxName: sandboxNameForProject(projectId),
+    });
   }
 
   const { data: rows, error } = await supabase
@@ -239,6 +291,12 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
    */
   let liveMeta: Record<string, unknown> = { ...prevMeta };
   let metaWriteChain: Promise<unknown> = Promise.resolve();
+  // Metadata writes continue after a detached POST returns; the request-scoped
+  // cookie client can lose AsyncLocalStorage. Prefer the service-role client.
+  const metaClient = process.env.SUPABASE_SERVICE_ROLE_KEY
+    ? createAdminClient()
+    : supabase;
+  const canDetachBoot = Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
 
   const writeMeta = (
     patch: Record<string, unknown>,
@@ -246,12 +304,63 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
   ): Promise<{ error?: { message?: string } | null }> => {
     liveMeta = { ...liveMeta, ...patch };
     const snapshot = { ...liveMeta };
-    const next = metaWriteChain.then(() =>
-      supabase
-        .from("projects")
-        .update({ ...extraColumns, metadata: snapshot as unknown as Json })
-        .eq("id", projectId),
-    );
+    if (typeof patch.sandbox_phase === "string") {
+      rememberBootState(projectId, {
+        phase: patch.sandbox_phase,
+        phaseDetail:
+          typeof patch.sandbox_phase_detail === "string"
+            ? patch.sandbox_phase_detail
+            : patch.sandbox_phase_detail === null
+              ? null
+              : undefined,
+        sandboxId:
+          typeof patch.sandbox_id === "string"
+            ? patch.sandbox_id
+            : patch.sandbox_id === null
+              ? null
+              : undefined,
+        previewUrl:
+          typeof extraColumns.preview_url === "string"
+            ? extraColumns.preview_url
+            : extraColumns.preview_url === null
+              ? null
+              : undefined,
+        ok: patch.sandbox_phase !== "error",
+        error:
+          patch.sandbox_phase === "error"
+            ? (typeof patch.sandbox_phase_detail === "string"
+                ? patch.sandbox_phase_detail
+                : null)
+            : null,
+      });
+    }
+    const next = metaWriteChain.then(async () => {
+      let lastError: { message?: string } | null = null;
+      for (let attempt = 1; attempt <= 5; attempt += 1) {
+        try {
+          const result = await metaClient
+            .from("projects")
+            .update({ ...extraColumns, metadata: snapshot as unknown as Json })
+            .eq("id", projectId);
+          if (!result.error) return result;
+          lastError = result.error;
+          const msg = result.error.message ?? "";
+          if (!/fetch failed|ECONNRESET|ETIMEDOUT|UND_ERR_|network/i.test(msg) || attempt === 5) {
+            return result;
+          }
+        } catch (err) {
+          lastError = { message: err instanceof Error ? err.message : String(err) };
+          if (
+            !/fetch failed|ECONNRESET|ETIMEDOUT|UND_ERR_|network/i.test(lastError.message ?? "") ||
+            attempt === 5
+          ) {
+            return { error: lastError };
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** (attempt - 1)));
+      }
+      return { error: lastError };
+    });
     // The chain must never reject, or one failed write would strand all the
     // ones behind it.
     metaWriteChain = next.catch(() => undefined);
@@ -269,6 +378,7 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
     });
   };
 
+  const runBoot = async (): Promise<Response> => {
   const provider = getSandboxProvider();
   // Modal-first cloud preview (Lovable parity). Do not pass E2B templates here.
   const result = await provider.runProject({
@@ -387,6 +497,7 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
     }
 
     await writeMeta({
+      sandbox_id: result.sandboxId ?? null,
       sandbox_phase: "error",
       sandbox_phase_detail: result.error ?? null,
       sandbox_provider: getSandboxProviderId(),
@@ -427,6 +538,15 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
     console.warn("[sandbox-preview] failed to persist preview_url:", previewUrlErr.message);
   }
 
+  rememberBootState(projectId, {
+    phase: bootReady ? "ready" : "starting",
+    phaseDetail: bootReady ? null : "Starting your app — the first run takes a moment.",
+    previewUrl: result.previewUrl ?? null,
+    sandboxId: result.sandboxId ?? null,
+    ok: true,
+    error: null,
+  });
+
   return Response.json({
     enabled: true,
     ok: true,
@@ -443,6 +563,48 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
       : "Starting your app — the first run takes a moment.",
     sandboxName: sandboxNameForProject(projectId),
   });
+  };
+
+  // Park the project at "creating" before returning so phaseOnly polls do not
+  // still see a previous boot's "ready". npm install then continues in runBoot.
+  await writeMeta(
+    {
+      sandbox_phase: "creating",
+      sandbox_phase_detail: "Starting sandbox",
+      sandbox_provider: getSandboxProviderId(),
+      sandbox_updated_at: new Date().toISOString(),
+    },
+    { preview_url: null },
+  );
+
+  // This host is a long-lived Node process (Vite / Coolify), not a serverless
+  // isolate that dies after the response. Returning now lets the campaign poll
+  // through a 5–10 minute npm install instead of dying on Node's 300s
+  // requestTimeout ("fetch failed" with the container still installing).
+  if (canDetachBoot) {
+    detachedBoots.add(projectId);
+    void runBoot()
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("[sandbox-preview] detached boot failed:", message);
+        persistPhase("error", message);
+      })
+      .finally(() => {
+        detachedBoots.delete(projectId);
+      });
+    return Response.json({
+      enabled: true,
+      ok: true,
+      ready: false,
+      previewUrl: null,
+      phase: "creating",
+      phaseDetail: "Starting your app — the first run takes a moment.",
+      provider: getSandboxProviderId(),
+      sandboxName: sandboxNameForProject(projectId),
+    });
+  }
+
+  return runBoot();
 }
 
 /** GET — reconnect to a warm sandbox when possible (Lovable parity). */
@@ -480,15 +642,48 @@ async function handleGET(req: Request, params: any) {
   // Lightweight boot-progress poll — never mark ok on a stale preview_url alone
   // (dead Modal tunnels were blanking the iframe while phase stuck at "writing").
   if (phaseOnly) {
-    const phase = typeof meta.sandbox_phase === "string" ? meta.sandbox_phase : null;
+    const live = liveBootState.get(projectId);
+    if (live?.phase === "ready" && isSandboxTunnelUrl(live.previewUrl) && live.sandboxId) {
+      return Response.json({
+        enabled: true,
+        ok: true,
+        previewUrl: live.previewUrl,
+        sandboxId: live.sandboxId,
+        phase: "ready",
+        phaseDetail: null,
+        provider: getSandboxProviderId(),
+      });
+    }
+    if (live?.phase === "error") {
+      return Response.json({
+        enabled: true,
+        ok: false,
+        phase: "error",
+        phaseDetail: live.phaseDetail,
+        error: live.error ?? live.phaseDetail ?? "remote preview failed to start",
+        sandboxId: live.sandboxId,
+        provider: getSandboxProviderId(),
+      });
+    }
+
+    const phase =
+      live?.phase ??
+      (typeof meta.sandbox_phase === "string" ? meta.sandbox_phase : null);
     const phaseDetail =
-      typeof meta.sandbox_phase_detail === "string" ? meta.sandbox_phase_detail : null;
+      live?.phaseDetail ??
+      (typeof meta.sandbox_phase_detail === "string" ? meta.sandbox_phase_detail : null);
     // A thumbnail .jpg in preview_url must NOT count as a live tunnel — see
     // isSandboxTunnelUrl. Treat it as "no stored preview" so the client falls
     // through to the reconnect path, which re-persists the real tunnel URL.
-    const storedTunnelUrl = isSandboxTunnelUrl(project?.preview_url)
-      ? (project!.preview_url as string)
-      : null;
+    const storedTunnelUrl = isSandboxTunnelUrl(live?.previewUrl)
+      ? live!.previewUrl
+      : isSandboxTunnelUrl(project?.preview_url)
+        ? (project!.preview_url as string)
+        : null;
+    const resolvedSandboxId =
+      live?.sandboxId ||
+      queryId ||
+      (typeof meta.sandbox_id === "string" ? meta.sandbox_id : null);
     const claimsReady = phase === "ready" && Boolean(storedTunnelUrl);
 
     // PROMOTION: a boot that returned before its dev server answered is parked
@@ -501,9 +696,14 @@ async function handleGET(req: Request, params: any) {
     // right back to framing a URL nothing has confirmed. getPreviewProbeState
     // distinguishes the two, and the first poll's background probe means the
     // real verdict lands within a poll interval or two.
-    if (!claimsReady && storedTunnelUrl && phase !== "error") {
+    //
+    // Only promote from "starting". A new boot parks at "creating"/"installing"
+    // while npm runs; promoting any live URL in that window would hand back
+    // the PREVIOUS container's address.
+    if (!claimsReady && storedTunnelUrl && phase === "starting") {
       peekPreviewReachable(storedTunnelUrl); // warms the cache in the background
-      if (getPreviewProbeState(storedTunnelUrl).state === "verified") {
+      const probeState = getPreviewProbeState(storedTunnelUrl);
+      if (probeState.state === "verified") {
         void Promise.resolve(supabase
           .from("projects")
           .update({
@@ -517,11 +717,19 @@ async function handleGET(req: Request, params: any) {
           .eq("id", projectId))
           .then(() => {})
           .catch(() => {});
+        rememberBootState(projectId, {
+          phase: "ready",
+          phaseDetail: null,
+          previewUrl: storedTunnelUrl,
+          sandboxId: resolvedSandboxId,
+          ok: true,
+          error: null,
+        });
         return Response.json({
           enabled: true,
           ok: true,
           previewUrl: storedTunnelUrl,
-          sandboxId,
+          sandboxId: resolvedSandboxId,
           previewProbe: "verified",
           phase: "ready",
           phaseDetail: null,
@@ -565,7 +773,7 @@ async function handleGET(req: Request, params: any) {
       enabled: true,
       ok: alive,
       previewUrl: alive ? storedTunnelUrl : null,
-      sandboxId,
+      sandboxId: resolvedSandboxId,
       // Surface the stale-tunnel case distinctly so the UI can offer a restart
       // instead of spinning on a "ready" that will never paint.
       // "reachable" is only asserted when a probe actually succeeded.

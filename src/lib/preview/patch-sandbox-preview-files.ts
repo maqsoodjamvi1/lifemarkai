@@ -2,11 +2,28 @@ import {
 patchFilesForWebContainer,
 type WebContainerPatchOpts,
 } from "./patch-vite-for-webcontainer.ts";
-import { isTanStackStartProject } from "../templates/tanstack-start-scaffold.ts";
+import { isTanStackStartProject, tanstackStartScaffold } from "../templates/tanstack-start-scaffold.ts";
 import { ensureTypecheckToolchain } from "./ensure-toolchain.ts";
 import { LOVABLE_VITE_DEV_DEPENDENCIES } from "../templates/lovable-vite-scaffold.ts";
 import { normalizeProjectImports } from "./normalize-imports.ts";
 import { ensureLifemarkDataSdkInFiles } from "./lifemark-data.ts";
+import { stripGeneratedRouteTree } from "./align-package-json.ts";
+import { sandboxUsesTlsHmr, stripForcedTlsHmr } from "./sandbox-tls-hmr.ts";
+
+/** __root.tsx imports src/styles.css via ?url; incremental saves often omit the file. */
+function ensureTanStackStylesFile<T extends { path: string; content?: string | null }>(
+  files: T[],
+): T[] {
+  if (!isTanStackStartProject(files)) return files;
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (files.some((f) => norm(f.path) === "src/styles.css")) return files;
+  const rootImportsStyles = files.some(
+    (f) => norm(f.path) === "src/routes/__root.tsx" && /styles\.css\?url/.test(f.content ?? ""),
+  );
+  if (!rootImportsStyles) return files;
+  const styles = tanstackStartScaffold({}, undefined).find((f) => f.path === "src/styles.css");
+  return styles ? [...files, styles as T] : files;
+}
 
 /**
  * Synthesize missing Vite entry files. Incremental builds return only CHANGED
@@ -217,32 +234,43 @@ export function ensureViteTunnelHmr<T extends { path: string; content?: string |
   // wss/443 HMR is for Traefik/Modal TLS tunnels. Local Docker port-mode previews
   // are plain http://localhost:42xxx — forcing wss there makes Vite's websocket
   // fail and the browser closes the document connection.
-  const useTlsTunnel =
-    Boolean((process.env.SANDBOX_PREVIEW_DOMAIN || "").trim()) ||
-    (process.env.SANDBOX_PUBLIC_SCHEME || "http").toLowerCase() === "https";
-  if (useTlsTunnel && !/\bclientPort\b/.test(source)) {
+  // Generated scaffolds often already contain that block; skip-if-present is
+  // not enough — rewrite it away unless we are actually on a TLS tunnel.
+  const rewritten = stripForcedTlsHmr(source);
+  const useTlsTunnel = sandboxUsesTlsHmr();
+  if (useTlsTunnel && !/\bclientPort\b/.test(rewritten)) {
     needed.push(`hmr: { protocol: "wss", clientPort: 443, overlay: false },`);
   }
-  if (!/\ballowedHosts\b/.test(source)) needed.push(`allowedHosts: true,`);
-  if (!/\bhost\s*:/.test(source)) needed.push(`host: true,`);
-  if (needed.length === 0) return files;
+  if (!/\ballowedHosts\b/.test(rewritten)) needed.push(`allowedHosts: true,`);
+  if (!/\bhost\s*:/.test(rewritten)) needed.push(`host: true,`);
+  if (needed.length === 0) {
+    if (rewritten === source) return files;
+    const out = [...files];
+    out[idx] = { ...files[idx], content: rewritten } as T;
+    return out;
+  }
 
   const injection = needed.join("\n    ");
   let patched: string | null = null;
   // `server: { … }` present — inject the missing keys at the top of the object.
-  const serverBlock = source.match(/server\s*:\s*\{/);
+  const serverBlock = rewritten.match(/server\s*:\s*\{/);
   if (serverBlock && serverBlock.index !== undefined) {
     const at = serverBlock.index + serverBlock[0].length;
-    patched = `${source.slice(0, at)}\n    ${injection}${source.slice(at)}`;
+    patched = `${rewritten.slice(0, at)}\n    ${injection}${rewritten.slice(at)}`;
   } else {
     // No `server` key — add one to the top-level defineConfig object.
-    const define = source.match(/defineConfig\s*\(\s*(?:\([^)]*\)\s*=>\s*)?\(?\s*\{/);
+    const define = rewritten.match(/defineConfig\s*\(\s*(?:\([^)]*\)\s*=>\s*)?\(?\s*\{/);
     if (define && define.index !== undefined) {
       const at = define.index + define[0].length;
-      patched = `${source.slice(0, at)}\n  server: {\n    ${injection}\n  },${source.slice(at)}`;
+      patched = `${rewritten.slice(0, at)}\n  server: {\n    ${injection}\n  },${rewritten.slice(at)}`;
     }
   }
-  if (!patched) return files;
+  if (!patched) {
+    if (rewritten === source) return files;
+    const out = [...files];
+    out[idx] = { ...files[idx], content: rewritten } as T;
+    return out;
+  }
 
   const out = [...files];
   out[idx] = { ...files[idx], content: patched } as T;
@@ -362,7 +390,14 @@ export function patchSandboxPreviewFiles<T extends { path: string; content?: str
       ensureViteTunnelHmr(
         ensureSupabaseEnv(
           ensureTailwindPluginDeps(
-            ensureTypecheckToolchain(ensureViteEntryFiles(normalizeProjectImports(files)), LOVABLE_VITE_DEV_DEPENDENCIES),
+            ensureTypecheckToolchain(
+              stripGeneratedRouteTree(
+                ensureTanStackStylesFile(
+                  ensureViteEntryFiles(normalizeProjectImports(files)),
+                ),
+              ),
+              LOVABLE_VITE_DEV_DEPENDENCIES,
+            ),
           ),
         ),
       ),

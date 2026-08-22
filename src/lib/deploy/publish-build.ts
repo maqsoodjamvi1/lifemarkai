@@ -14,8 +14,9 @@
  * Server-only: spawns npm/npx and uses the service-role client.
  */
 import { randomUUID } from "crypto";
-import { tryViteBuild,looksLikeViteProject,type BuildFile } from "./build-project.ts";
-import { storeBuild } from "./build-store.ts";
+import { tryViteBuild, looksLikeViteProject, type BuildFile } from "./build-project.ts";
+import { storeBuild, normaliseBuildPath } from "./build-store.ts";
+import { buildDeployIndexHtml } from "./build-deploy-files.ts";
 import { recordEvent } from "../observability/events.ts";
 import { setCorrelation } from "../observability/correlation.ts";
 
@@ -50,6 +51,38 @@ function flattenStatic(files: BuildFile[]): BuildFile[] {
   );
 }
 
+/** TanStack Start and other SSR Vite apps often emit assets without a root index.html. */
+function ensureBuildEntryDocument(
+  output: BuildFile[],
+  sourceFiles: BuildFile[],
+  projectId: string,
+  onLog?: (line: string) => void,
+): BuildFile[] {
+  if (output.some((f) => normaliseBuildPath(f.path) === "index.html")) return output;
+
+  const nested = output.find((f) => {
+    const path = normaliseBuildPath(f.path);
+    return path && path.endsWith("/index.html");
+  });
+  if (nested) {
+    onLog?.(`[publish] hoisting ${nested.path} → index.html`);
+    return [
+      { path: "index.html", content: nested.content, encoding: nested.encoding },
+      ...output.filter((f) => f !== nested),
+    ];
+  }
+
+  onLog?.("[publish] bundling project sources into index.html");
+  return [
+    { path: "index.html", content: buildDeployIndexHtml(sourceFiles, { projectId }) },
+    ...output,
+  ];
+}
+
+function bundledViteFallback(files: BuildFile[], projectId: string): BuildFile[] {
+  return [{ path: "index.html", content: buildDeployIndexHtml(files, { projectId }) }];
+}
+
 export async function publishBuild(
   projectId: string,
   files: BuildFile[],
@@ -74,26 +107,36 @@ export async function publishBuild(
     output = await tryViteBuild(files, onLog);
     compiled = Boolean(output);
     if (!output) {
-      // Be explicit about WHY, because the two causes need opposite responses:
-      // a disabled flag is a config change, a failing build is a code fix.
-      const reason =
-        process.env.ENABLE_SERVER_VITE_BUILD !== "true"
-          ? "ENABLE_SERVER_VITE_BUILD is not 'true' — the server will not compile this project"
-          : "vite build failed — see the build log above";
-      onLog?.(`[publish] ${reason}`);
-      recordEvent("deployment_failed", { reason: "vite_build_failed", durationMs: Date.now() - publishStartedAt });
-    return { ok: false, buildId: null, fileCount: 0, detail: reason, compiled: false };
+      const buildDisabled = process.env.ENABLE_SERVER_VITE_BUILD !== "true";
+      onLog?.(
+        buildDisabled
+          ? "[publish] ENABLE_SERVER_VITE_BUILD is not 'true' — publishing bundled static entry"
+          : "[publish] vite build produced no dist/ — publishing bundled static entry",
+      );
+      output = bundledViteFallback(files, projectId);
+      compiled = false;
     }
   } else if (isPlainStaticSite(files)) {
     onLog?.("[publish] static site — no compile step needed");
     output = flattenStatic(files);
   } else {
-    const detail =
-      "project is neither a Vite app nor a static site with index.html — nothing to publish";
-    onLog?.(`[publish] ${detail}`);
-    recordEvent("deployment_failed", { reason: "unpublishable_project", durationMs: Date.now() - publishStartedAt });
-    return { ok: false, buildId: null, fileCount: 0, detail, compiled: false };
+    // TanStack Start ships vite.config + src/routes but no index.html — still deployable.
+    const hasViteConfig = files.some((f) =>
+      /^vite\.config\.(t|j)sx?$/.test(f.path.replace(/\\/g, "/")),
+    );
+    if (hasViteConfig) {
+      onLog?.("[publish] Vite app without index.html — publishing bundled static entry");
+      output = bundledViteFallback(files, projectId);
+    } else {
+      const detail =
+        "project is neither a Vite app nor a static site with index.html — nothing to publish";
+      onLog?.(`[publish] ${detail}`);
+      recordEvent("deployment_failed", { reason: "unpublishable_project", durationMs: Date.now() - publishStartedAt });
+      return { ok: false, buildId: null, fileCount: 0, detail, compiled: false };
+    }
   }
+
+  output = ensureBuildEntryDocument(output, files, projectId, onLog);
 
   const stored = await storeBuild(projectId, buildId, output);
   if (!stored.ok) {

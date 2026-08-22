@@ -68,13 +68,12 @@ describe("patchViteConfigForWebContainer — preview process isolation", () => {
     assert.equal(countHeader(twice), 1);
   });
 
-  it("leaves the existing host/allowedHosts/hmr patches intact", () => {
+  it("leaves the existing host/allowedHosts patches intact", () => {
     const out = patchViteConfigForWebContainer(
       `import { defineConfig } from "vite";\nexport default defineConfig({ plugins: [] });`,
     );
     assert.match(out, /host:\s*true/);
     assert.match(out, /allowedHosts:\s*true/);
-    assert.match(out, /protocol:\s*"wss"/);
   });
 
   it("does not invent a config out of an empty file", () => {

@@ -52,6 +52,12 @@ import { appServing,DEFAULT_TIMEOUT_MS,trunc,waitForServer } from "./shared.ts";
 import { SYNC_MANIFEST,filesToPrune } from "./prune-files.ts";
 import { parseTscOutput } from "./tsc-diagnostics.ts";
 import { dependenciesAlreadySatisfied } from "./deps-satisfied.ts";
+import {
+  isTransientNpmInstallFailure,
+  NPM_INSTALL_MAX_ATTEMPTS,
+  npmInstallShell,
+  parseNpmInstallExit,
+} from "./npm-install.ts";
 
 /** Vite's port inside the sandbox. The heartbeat has no opts.port to read. */
 const DEFAULT_INNER_PORT = 5173;
@@ -115,9 +121,10 @@ const APP_DIR = "/home/node/app";
  *
  * Ten minutes covers cold installs on slower Docker Desktop / Windows hosts
  * (observed ~5 minutes for ~320 packages). A healthy slow install must not be
- * cut off; wedged registry hangs still get a hard ceiling.
+ * cut off; wedged registry hangs still get a hard ceiling. Fifteen minutes
+ * covers the tanstack-crm lockset when the registry is slow.
  */
-const INSTALL_TIMEOUT_SEC = 600;
+const INSTALL_TIMEOUT_SEC = 900;
 
 /**
  * Written by the image build ONLY after it has verified its own `npm install`
@@ -643,6 +650,10 @@ export class DockerSandboxProvider implements SandboxProvider {
         Env: [
           "HOME=/home/node",
           "npm_config_cache=/home/node/.npm",
+          "npm_config_fetch_retries=5",
+          "npm_config_fetch_retry_mintimeout=20000",
+          "npm_config_fetch_retry_maxtimeout=120000",
+          "npm_config_fetch_timeout=600000",
           "CI=1",
         ],
         ExposedPorts: { [`${innerPort}/tcp`]: {} },
@@ -862,29 +873,13 @@ export class DockerSandboxProvider implements SandboxProvider {
           // install held the whole request open indefinitely, and the 120s
           // readiness budget below does not start until this returns. Same
           // pattern as the typecheck exec.
-          const res = await this.exec(
-            id,
-            `timeout ${INSTALL_TIMEOUT_SEC} npm install --no-audit --no-fund --prefer-offline --progress=false --loglevel=error; echo "LM_NPM_EXIT:$?"`,
-          );
-          logs += res.stdout + res.stderr;
-          const npmExit = Number(/LM_NPM_EXIT:(\d+)/.exec(res.stdout + res.stderr)?.[1] ?? "0");
-          if (npmExit === 124) {
+          const install = await this.installNpmDependencies(id, progress);
+          logs += install.logs;
+          if (!install.ok) {
             return {
               ok: false,
-              error: `Installing dependencies took longer than ${INSTALL_TIMEOUT_SEC}s and was stopped. ${depCheck.reason}.`,
-              logs: trunc(logs),
-            };
-          }
-          if (npmExit !== 0) {
-            const tail = trunc(logs)
-              .split(/\r?\n/)
-              .map((line) => line.trim())
-              .filter(Boolean)
-              .slice(-12)
-              .join(" | ");
-            return {
-              ok: false,
-              error: `npm install failed (exit ${npmExit})${tail ? `: ${tail}` : "."}`,
+              sandboxId: id,
+              error: install.error,
               logs: trunc(logs),
             };
           }
@@ -1095,12 +1090,9 @@ export class DockerSandboxProvider implements SandboxProvider {
       // cold-start cost this path exists to avoid.
       if (written.some((p) => p === "package.json" || p.endsWith("/package.json"))) {
         progress("installing", "Updating dependencies");
-        const res = await this.exec(
-          id,
-          "npm install --no-audit --no-fund --prefer-offline --progress=false --loglevel=error",
-        );
-        logs += res.stdout + res.stderr;
-        if (res.exitCode && res.exitCode !== 0) {
+        const install = await this.installNpmDependencies(id, progress);
+        logs += install.logs;
+        if (!install.ok) {
           // A broken install on a warm container is a real failure, but the
           // cold path may still succeed from a clean tree — let it try.
           return null;
@@ -1250,6 +1242,51 @@ export class DockerSandboxProvider implements SandboxProvider {
       delay = Math.min(delay * 1.5, 2000);
     }
     return false;
+  }
+
+  /**
+   * Cold `npm install` with npm-level fetch retries plus an outer retry on
+   * registry idle/reset errors. Docker Desktop on Windows commonly hits
+   * EIDLETIMEOUT against registry.npmjs.org on the first attempt.
+   */
+  private async installNpmDependencies(
+    sandboxId: string,
+    progress: (phase: string, detail?: string) => void,
+  ): Promise<{ ok: true; logs: string } | { ok: false; error: string; logs: string }> {
+    let logs = "";
+    for (let attempt = 1; attempt <= NPM_INSTALL_MAX_ATTEMPTS; attempt += 1) {
+      if (attempt > 1) {
+        progress("installing", `Retrying npm install (${attempt}/${NPM_INSTALL_MAX_ATTEMPTS})`);
+        await new Promise((resolve) => setTimeout(resolve, 2_000 * attempt));
+      }
+      const res = await this.exec(sandboxId, npmInstallShell(INSTALL_TIMEOUT_SEC));
+      logs += res.stdout + res.stderr;
+      const npmExit = parseNpmInstallExit(res.stdout, res.stderr);
+      if (npmExit === 0) return { ok: true, logs };
+      if (npmExit === 124) {
+        return {
+          ok: false,
+          logs,
+          error: `Installing dependencies took longer than ${INSTALL_TIMEOUT_SEC}s and was stopped.`,
+        };
+      }
+      const combined = `${res.stdout}\n${res.stderr}`;
+      if (attempt < NPM_INSTALL_MAX_ATTEMPTS && isTransientNpmInstallFailure(combined, npmExit)) {
+        continue;
+      }
+      const tail = trunc(logs)
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(-12)
+        .join(" | ");
+      return {
+        ok: false,
+        logs,
+        error: `npm install failed (exit ${npmExit})${tail ? `: ${tail}` : "."}`,
+      };
+    }
+    return { ok: false, logs, error: "npm install failed." };
   }
 
   /**

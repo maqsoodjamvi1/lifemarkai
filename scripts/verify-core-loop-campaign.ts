@@ -47,6 +47,14 @@ function isTransientNetworkError(error: unknown): boolean {
   );
 }
 
+/** TanStack Start dev can return 404 for `/` while still streaming the app shell. */
+function looksLikeServedAppHtml(body: string): boolean {
+  const trimmed = body.trim();
+  if (trimmed.length < 100) return false;
+  const head = trimmed.slice(0, 800).toLowerCase();
+  return head.includes("<!doctype") || head.includes("<html");
+}
+
 async function withTransientRetries<T>(
   label: string,
   fn: () => Promise<T>,
@@ -287,10 +295,20 @@ function coreLoopUrl(path: string, method: string): string {
 
 async function jsonFetch<T>(path: string, cookie: string, init: RequestInit = {}): Promise<T> {
   const method = init.method ?? "GET";
-  const response = await fetch(coreLoopUrl(path, method), {
-    ...init,
-    headers: { "Content-Type": "application/json", Cookie: cookie, ...init.headers },
-  });
+  const timeoutMs =
+    path.includes("/sandbox-preview") && method === "POST" ? DEPLOY_TIMEOUT_MS : undefined;
+  const signal = init.signal ?? (timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined);
+  let response: Response;
+  try {
+    response = await fetch(coreLoopUrl(path, method), {
+      ...init,
+      signal,
+      headers: { "Content-Type": "application/json", Cookie: cookie, ...init.headers },
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${method} ${path} failed: ${reason}`);
+  }
   const text = await response.text();
   let body: unknown;
   try { body = text ? JSON.parse(text) : null; } catch { body = text; }
@@ -523,18 +541,33 @@ async function main() {
         // next debugging pass to be a guess. Truncated because a vite error
         // page carries the whole module graph after the part that matters.
         const detail = await previewResponse.text().catch(() => "");
-        const snippet = detail.replace(/\s+/g, " ").trim().slice(0, 600);
-        throw new Error(
-          `remote preview returned ${previewResponse.status}` +
-            (snippet ? ` — ${snippet}` : ""),
-        );
+        const deferToServerVerify =
+          CORE_LOOP_POLICY.previewStrategy === "server-verified" && looksLikeServedAppHtml(detail);
+        if (!deferToServerVerify) {
+          const snippet = detail.replace(/\s+/g, " ").trim().slice(0, 600);
+          throw new Error(
+            `remote preview returned ${previewResponse.status}` +
+              (snippet ? ` — ${snippet}` : ""),
+          );
+        }
       }
-      const preview = await jsonFetch<{ ok?: boolean }>(`/api/projects/${project.id}/preview-verify`, cookie, {
+      const preview = await jsonFetch<{
+        ok?: boolean;
+        checks?: Array<{ name: string; pass: boolean; detail?: string }>;
+      }>(`/api/projects/${project.id}/preview-verify`, cookie, {
         method: "POST",
         body: JSON.stringify({ previewUrl: remotePreview.previewUrl }),
       });
       attempt.previewPassed = preview.ok === true;
-      if (!attempt.previewPassed) throw new Error("preview verification failed");
+      if (!attempt.previewPassed) {
+        const failed = preview.checks
+          ?.filter((check) => !check.pass)
+          .map((check) => (check.detail ? `${check.name}: ${check.detail}` : check.name))
+          .join("; ");
+        throw new Error(
+          failed ? `preview verification failed — ${failed}` : "preview verification failed",
+        );
+      }
 
       stage = "deployment";
       await jsonFetch<{ deploymentId: string }>("/api/deploy", cookie, {
@@ -555,8 +588,21 @@ async function main() {
       attempt.error = error instanceof Error ? error.message : String(error);
       attempt.manualInterventionRequired = true;
     } finally {
-      if (attempt.projectId && sandboxId) {
-        await stopRemotePreview(attempt.projectId, sandboxId, cookie);
+      if (attempt.projectId) {
+        if (!sandboxId) {
+          try {
+            const state = await jsonFetch<SandboxPreview>(
+              `/api/projects/${attempt.projectId}/sandbox-preview?phaseOnly=1`,
+              cookie,
+            );
+            sandboxId = state.sandboxId ?? null;
+          } catch {
+            // Best-effort cleanup; a leaked container is worse than a noisy GET.
+          }
+        }
+        if (sandboxId) {
+          await stopRemotePreview(attempt.projectId, sandboxId, cookie);
+        }
       }
       if (attempt.projectId) {
         const costs = await projectCosts(admin, attempt.projectId, startedAt);

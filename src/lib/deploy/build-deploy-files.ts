@@ -91,6 +91,19 @@ export function buildNetlifyFileMap(files: DeployFile[], opts: DeployBuildOpts):
   return map;
 }
 
+/** Overlay a real vite build's hashed assets onto a source-derived Netlify map. */
+export function mergeViteBuildAssets(
+  fileMap: Record<string, string>,
+  built: DeployFile[],
+): Record<string, string> {
+  const merged = { ...fileMap };
+  for (const f of built) {
+    const key = f.path.startsWith("/") ? f.path : `/${f.path.replace(/^\/+/, "")}`;
+    if (key !== "/index.html") merged[key] = f.content;
+  }
+  return merged;
+}
+
 /** Vercel static deploy file list. */
 export function buildVercelFilesList(
   files: DeployFile[],

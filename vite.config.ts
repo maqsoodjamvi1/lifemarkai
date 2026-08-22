@@ -148,6 +148,15 @@ export default defineConfig(({ mode }) => {
       allowedHosts: true,
       port: 3001,
       strictPort: true,
+      watch: {
+        // Scratch/report trees must not reload the host SSR graph mid-sandbox
+        // boot — a program reload can tear down in-flight Docker npm installs.
+        ignored: [
+          "**/artifacts/**",
+          "**/.tmp*/**",
+          "**/.tmp-core-loop*",
+        ],
+      },
       fs: {
         // PHASE 2: the Start app no longer serves files from the main repo.
         allow: [rootDir],
@@ -303,7 +312,28 @@ export default defineConfig(({ mode }) => {
     ssr: {
       external: true,
     },
-    plugins: [atAlias(), tanstackStart(), viteReact()],
+    plugins: [
+      {
+        name: "lifemark-long-request-timeout",
+        configureServer(server) {
+          const apply = () => {
+            const httpServer = server.httpServer;
+            if (!httpServer) return;
+            httpServer.setTimeout(0);
+            httpServer.requestTimeout = 0;
+            httpServer.headersTimeout = 0;
+          };
+          // Post-hook: Vite attaches httpServer after configureServer returns.
+          return () => {
+            apply();
+            server.httpServer?.once("listening", apply);
+          };
+        },
+      },
+      atAlias(),
+      tanstackStart(),
+      viteReact(),
+    ],
   };
 });
 

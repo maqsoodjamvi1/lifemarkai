@@ -394,6 +394,12 @@ function normalisePath(path: string): string {
   return parts.join("/");
 }
 
+/** Vite/Rollup suffixes (`?url`, `?raw`, …) are not part of the file path. */
+function stripBundlerImportQuery(spec: string): string {
+  const q = spec.indexOf("?");
+  return q === -1 ? spec : spec.slice(0, q);
+}
+
 export interface UnresolvedImport {
   importer: string;
   specifier: string;
@@ -420,10 +426,11 @@ export function findUnresolvedLocalImports(files: ProjectFile[]): UnresolvedImpo
       re.lastIndex = 0;
       for (const m of file.content.matchAll(re)) {
         const spec = m[1];
-        const base = normalisePath(`${dir}/${spec}`);
+        const specPath = stripBundlerImportQuery(spec);
+        const base = normalisePath(`${dir}/${specPath}`);
         // A specifier resolves if ANY candidate extension exists. Assets the
         // bundler handles (css/svg/json/images) are not our business here.
-        if (/\.(css|scss|sass|less|json|svg|png|jpe?g|gif|webp|avif|woff2?|ttf)$/i.test(spec)) continue;
+        if (/\.(css|scss|sass|less|json|svg|png|jpe?g|gif|webp|avif|woff2?|ttf)$/i.test(specPath)) continue;
         const resolved = RESOLVE_EXTS.some((ext) => known.has(normalisePath(base + ext)));
         if (resolved) continue;
         // Count to the SPECIFIER, not to the match start: the pattern begins

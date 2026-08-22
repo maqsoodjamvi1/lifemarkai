@@ -217,7 +217,7 @@ async function main() {
           // npm install + Vite boot on Docker Desktop often exceeds the default
           // 3-minute deploy/preview poll window used by the campaign runner.
           CORE_LOOP_DEPLOY_TIMEOUT_MS:
-            process.env.CORE_LOOP_DEPLOY_TIMEOUT_MS || "900000",
+            process.env.CORE_LOOP_DEPLOY_TIMEOUT_MS || "2700000",
           // node:http cannot use /var/run/docker.sock on Windows; the Desktop
           // named pipe is the local Engine API endpoint.
           ...(process.platform === "win32"
