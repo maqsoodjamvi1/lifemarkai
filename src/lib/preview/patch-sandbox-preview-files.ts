@@ -214,7 +214,13 @@ export function ensureViteTunnelHmr<T extends { path: string; content?: string |
   // present and only ever injected `hmr`, so a hand-written config was left
   // without `host` or `allowedHosts` in every case.
   const needed: string[] = [];
-  if (!/\bclientPort\b/.test(source)) {
+  // wss/443 HMR is for Traefik/Modal TLS tunnels. Local Docker port-mode previews
+  // are plain http://localhost:42xxx — forcing wss there makes Vite's websocket
+  // fail and the browser closes the document connection.
+  const useTlsTunnel =
+    Boolean((process.env.SANDBOX_PREVIEW_DOMAIN || "").trim()) ||
+    (process.env.SANDBOX_PUBLIC_SCHEME || "http").toLowerCase() === "https";
+  if (useTlsTunnel && !/\bclientPort\b/.test(source)) {
     needed.push(`hmr: { protocol: "wss", clientPort: 443, overlay: false },`);
   }
   if (!/\ballowedHosts\b/.test(source)) needed.push(`allowedHosts: true,`);
