@@ -69,6 +69,24 @@ function isSandboxTunnelUrl(value: unknown): value is string {
     const domain = (process.env.SANDBOX_PREVIEW_DOMAIN || "preview.lifemarkai.com")
       .trim()
       .toLowerCase();
+    const publicHost = (process.env.SANDBOX_PUBLIC_HOST || "")
+      .trim()
+      .toLowerCase()
+      .replace(/^[a-z]+:\/\//i, "")
+      .replace(/\/.*$/, "")
+      .replace(/:\d+$/, "");
+    // Local port-mode previews are http://localhost:42xxx (or 127.0.0.1 / the
+    // configured SANDBOX_PUBLIC_HOST). Without this, phaseOnly polls discard the
+    // live URL as a "thumbnail" and the core-loop gate never sees ready.
+    if (
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host === "[::1]" ||
+      host === "::1" ||
+      (publicHost && (host === publicHost || host.endsWith(`.${publicHost}`)))
+    ) {
+      return true;
+    }
     return (
       host === domain ||
       host.endsWith(`.${domain}`) ||

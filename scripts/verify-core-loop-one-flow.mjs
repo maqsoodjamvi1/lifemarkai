@@ -214,6 +214,10 @@ async function main() {
           SANDBOX_TRAEFIK_ENTRYPOINT: "",
           SANDBOX_PUBLIC_HOST: process.env.SANDBOX_PUBLIC_HOST || "localhost",
           SANDBOX_PUBLIC_SCHEME: "http",
+          // npm install + Vite boot on Docker Desktop often exceeds the default
+          // 3-minute deploy/preview poll window used by the campaign runner.
+          CORE_LOOP_DEPLOY_TIMEOUT_MS:
+            process.env.CORE_LOOP_DEPLOY_TIMEOUT_MS || "900000",
           // node:http cannot use /var/run/docker.sock on Windows; the Desktop
           // named pipe is the local Engine API endpoint.
           ...(process.platform === "win32"
