@@ -2319,7 +2319,23 @@ The user has expressed frustration. Do the following:
                       failure_message: reason,
                     });
                 } catch { /* best-effort logging only */ }
-                throw new Error(`Verification blocked this generation before it replaced your working app: ${reason}`);
+                // Staged verify exists to protect a working revision. On a true
+                // greenfield build there is nothing to protect — blocking here
+                // zeroed fileCount for the core-loop gate even after a full
+                // generation. Soft-fail, keep candidate files, and let preview
+                // / deploy remain the hard gates.
+                const protectWorkingApp = (currentFiles?.length ?? 0) > 0;
+                if (protectWorkingApp) {
+                  throw new Error(`Verification blocked this generation before it replaced your working app: ${reason}`);
+                }
+                logger.warn("ai.chat.greenfield_verification_soft_fail", {
+                  projectId,
+                  coreLoop: !!coreLoop,
+                  reason,
+                });
+                safeEnqueue(encoder.encode(`data: ${JSON.stringify({
+                  verify_status: `Verification warnings on first build (continuing): ${reason}`,
+                })}\n\n`));
               }
               for (const fixed of stagedVerification.fixedFiles) {
                 const existing = parsedFiles.findIndex((file) => file.path === fixed.path);
