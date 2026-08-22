@@ -223,3 +223,18 @@ test("normalization replaces competing TanStack build configuration with one con
   assert.match(tailwind, /import tailwindcssAnimate/);
   assert.doesNotMatch(tailwind, /undefined/);
 });
+
+test("normalization restores src/styles.css when the root route imports it", () => {
+  const generated = tanstackStartScaffold({}, "Bakery").filter((file) => file.path !== "src/styles.css");
+  assert.equal(generated.some((file) => file.path === "src/styles.css"), false);
+
+  const normalized = normalizeGenerationStage(generated, [], {
+    prompt: "Build a bakery website",
+    framework: "tanstack",
+    brand: "Bakery",
+  });
+
+  const styles = normalized.files.find((file) => file.path === "src/styles.css");
+  assert.ok(styles, "controlled TanStack infra must re-inject src/styles.css");
+  assert.match(styles?.content ?? "", /@tailwind/);
+});

@@ -106,7 +106,8 @@ function alignTanStackRuntimeImports(files: ParsedFile[]): ParsedFile[] {
   });
 }
 
-const CONTROLLED_TANSTACK_INFRASTRUCTURE = /^(?:vite\.config\.(?:ts|js|mts|mjs)|tailwind\.config\.(?:ts|js|mts|mjs|cjs)|postcss\.config\.(?:ts|js|mts|mjs|cjs)|tsconfig\.json|src\/router\.(?:ts|tsx|js|jsx))$/;
+const CONTROLLED_TANSTACK_INFRASTRUCTURE =
+  /^(?:vite\.config\.(?:ts|js|mts|mjs)|tailwind\.config\.(?:ts|js|mts|mjs|cjs)|postcss\.config\.(?:ts|js|mts|mjs|cjs)|tsconfig\.json|src\/router\.(?:ts|tsx|js|jsx)|src\/styles\.css)$/;
 
 function applyControlledTanStackInfrastructure(files: ParsedFile[], brand?: string): ParsedFile[] {
   const canonical = tanstackStartScaffold({}, brand).filter((file) =>
