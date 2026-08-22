@@ -760,8 +760,13 @@ function parseNamedImports(clause: string): string[] {
 }
 
 function hasDefaultImport(clause: string): boolean {
-  const withoutNamed = clause.replace(/\{[^}]*\}/g, "").trim();
-  return !!withoutNamed && !withoutNamed.startsWith("*") && withoutNamed !== ",";
+  // After stripping `{ named }`, a leftover `type` from `import type { Foo }`
+  // must NOT count as a default import — that false positive made every
+  // normalized types import look like a missing default export.
+  const withoutNamed = clause.replace(/\{[^}]*\}/g, "").replace(/,/g, " ").trim();
+  const tokens = withoutNamed.split(/\s+/).filter(Boolean);
+  if (tokens[0] === "type") tokens.shift();
+  return tokens.length > 0 && !tokens[0]!.startsWith("*");
 }
 
 function isNextServerComponent(path: string, content: string): boolean {
