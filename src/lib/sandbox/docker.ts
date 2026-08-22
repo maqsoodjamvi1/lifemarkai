@@ -113,10 +113,11 @@ const APP_DIR = "/home/node/app";
  * bound at all. The 120s readiness budget further down does not help: it only
  * starts once the install returns.
  *
- * Four minutes is well past the 40-90s a genuinely cold install takes on this
- * host, so a healthy slow install is never cut off.
+ * Ten minutes covers cold installs on slower Docker Desktop / Windows hosts
+ * (observed ~5 minutes for ~320 packages). A healthy slow install must not be
+ * cut off; wedged registry hangs still get a hard ceiling.
  */
-const INSTALL_TIMEOUT_SEC = 240;
+const INSTALL_TIMEOUT_SEC = 600;
 
 /**
  * Written by the image build ONLY after it has verified its own `npm install`
@@ -875,7 +876,17 @@ export class DockerSandboxProvider implements SandboxProvider {
             };
           }
           if (npmExit !== 0) {
-            return { ok: false, error: `npm install failed (exit ${npmExit}).`, logs: trunc(logs) };
+            const tail = trunc(logs)
+              .split(/\r?\n/)
+              .map((line) => line.trim())
+              .filter(Boolean)
+              .slice(-12)
+              .join(" | ");
+            return {
+              ok: false,
+              error: `npm install failed (exit ${npmExit})${tail ? `: ${tail}` : "."}`,
+              logs: trunc(logs),
+            };
           }
         }
       }
