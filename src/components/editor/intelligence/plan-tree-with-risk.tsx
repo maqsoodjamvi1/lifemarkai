@@ -2,7 +2,7 @@
  * PlanTree with AstRiskBadge summary strip (gap-closure UX).
  */
 import { AstRiskBadge } from "./ast-risk-badge";
-import { PlanTree as BasePlanTree, type ConsoleState } from "../editor-intelligence-console";
+import { PlanTreeBase as BasePlanTree, type ConsoleState } from "./console-core";
 
 export function PlanTreeWithRisk({ state }: { state: ConsoleState }) {
   if (state.epics.length === 0) {
