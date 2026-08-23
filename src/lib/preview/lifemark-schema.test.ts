@@ -23,8 +23,8 @@ const customers: LifemarkCollectionSchema = {
 };
 
 test("valid schema definition passes", () => {
-  const r = validateSchemaDefinition(customers);
-  assert.equal(r.ok, true);
+  const errors = validateSchemaDefinition(customers);
+  assert.equal(errors.length, 0);
 });
 
 test("SCHEMA_MAX_FIELDS is enforced", () => {
@@ -32,103 +32,129 @@ test("SCHEMA_MAX_FIELDS is enforced", () => {
   for (let i = 0; i < SCHEMA_MAX_FIELDS + 1; i++) {
     fields[`f${i}`] = { type: "string" };
   }
-  const r = validateSchemaDefinition({ fields });
-  assert.equal(r.ok, false);
+  const errors = validateSchemaDefinition({ fields });
+  assert.ok(errors.length > 0);
 });
 
 test("required field missing is caught", () => {
-  const r = validateRecordAgainstSchema(customers, { id: "1", email: "a@b.c" });
-  assert.equal(r.ok, false);
+  const errors = validateRecordAgainstSchema({ id: "1", email: "a@b.c" }, customers);
+  assert.ok(errors.some((e) => /name/i.test(e)));
 });
 
 test("valid record passes", () => {
-  const r = validateRecordAgainstSchema(customers, {
-    id: "1",
-    name: "Ada",
-    email: "ada@ex.com",
-    age: 30,
-    active: true,
-    tier: "pro",
-  });
-  assert.equal(r.ok, true);
+  const errors = validateRecordAgainstSchema(
+    {
+      id: "1",
+      name: "Ada",
+      email: "ada@ex.com",
+      age: 30,
+      active: true,
+      tier: "pro",
+    },
+    customers,
+  );
+  assert.equal(errors.length, 0);
 });
 
 test("out-of-enum value is caught", () => {
-  const r = validateRecordAgainstSchema(customers, {
-    id: "1",
-    name: "Ada",
-    email: "ada@ex.com",
-    tier: "enterprise",
-  });
-  assert.equal(r.ok, false);
+  const errors = validateRecordAgainstSchema(
+    {
+      id: "1",
+      name: "Ada",
+      email: "ada@ex.com",
+      tier: "enterprise",
+    },
+    customers,
+  );
+  assert.ok(errors.length > 0);
 });
 
 test("undeclared field is caught - the typo-catcher", () => {
-  const r = validateRecordAgainstSchema(customers, {
-    id: "1",
-    name: "Ada",
-    email: "ada@ex.com",
-    nam: "typo",
-  } as Record<string, unknown>);
-  assert.equal(r.ok, false);
+  const errors = validateRecordAgainstSchema(
+    {
+      id: "1",
+      name: "Ada",
+      email: "ada@ex.com",
+      nam: "typo",
+    } as Record<string, unknown>,
+    customers,
+  );
+  assert.ok(errors.some((e) => /unknown field/i.test(e)));
 });
 
 test("optional fields may be omitted or null", () => {
-  const r = validateRecordAgainstSchema(customers, {
-    id: "1",
-    name: "Ada",
-    email: "ada@ex.com",
-    age: null,
-  });
-  assert.equal(r.ok, true);
+  const errors = validateRecordAgainstSchema(
+    {
+      id: "1",
+      name: "Ada",
+      email: "ada@ex.com",
+      age: null,
+    },
+    customers,
+  );
+  assert.equal(errors.length, 0);
 });
 
 test("invalid schema options are rejected at definition time", () => {
-  const r = validateSchemaDefinition({
+  const errors = validateSchemaDefinition({
     fields: { n: { type: "number", min: 10, max: 5 } },
   });
-  assert.equal(r.ok, false);
+  assert.ok(errors.length > 0);
 });
 
 test("defaults are applied for missing fields", () => {
-  const prepared = prepareRecordForWrite(customers, {
-    id: "1",
-    name: "Ada",
-    email: "ada@ex.com",
-  });
-  assert.equal(prepared.active, true);
+  const prepared = prepareRecordForWrite(
+    {
+      id: "1",
+      name: "Ada",
+      email: "ada@ex.com",
+    },
+    customers,
+  );
+  assert.equal(prepared.data.active, true);
+  assert.equal(prepared.errors.length, 0);
 });
 
 test("form-style string inputs are coerced to number/boolean", () => {
-  const prepared = prepareRecordForWrite(customers, {
-    id: "1",
-    name: "Ada",
-    email: "ada@ex.com",
-    age: "42",
-    active: "true",
-  });
-  assert.equal(prepared.age, 42);
-  assert.equal(prepared.active, true);
+  const prepared = prepareRecordForWrite(
+    {
+      id: "1",
+      name: "Ada",
+      email: "ada@ex.com",
+      age: "42",
+      active: "true",
+    },
+    customers,
+  );
+  assert.equal(prepared.data.age, 42);
+  assert.equal(prepared.data.active, true);
+  assert.equal(prepared.errors.length, 0);
 });
 
 test("uncoercible strings still fail with a type error", () => {
-  const r = validateRecordAgainstSchema(customers, {
-    id: "1",
-    name: "Ada",
-    email: "ada@ex.com",
-    age: "not-a-number",
-  });
-  assert.equal(r.ok, false);
+  const errors = validateRecordAgainstSchema(
+    {
+      id: "1",
+      name: "Ada",
+      email: "ada@ex.com",
+      age: "not-a-number",
+    },
+    customers,
+  );
+  assert.ok(errors.length > 0);
 });
 
 test("min/max are enforced as value range for numbers and length for strings", () => {
-  const r = validateRecordAgainstSchema(customers, {
-    id: "1",
-    name: "Ada",
-    email: "ada@ex.com",
-    age: 200,
-  });
-  assert.equal(r.ok, false);
+  const errors = validateRecordAgainstSchema(
+    {
+      id: "1",
+      name: "Ada",
+      email: "ada@ex.com",
+      age: 200,
+    },
+    customers,
+  );
+  assert.ok(errors.length > 0);
 });
 
 test("uniqueFields lists only unique-declared string/number fields", () => {
@@ -140,13 +166,16 @@ test("uniqueFields lists only unique-declared string/number fields", () => {
 
 test("typesFromSchemas emits interfaces with enums, optionals and globals", () => {
   const dts = typesFromSchemas({ customers });
-  assert.match(dts, /interface Customers/);
+  // interfaceName strips trailing 's' → Customer
+  assert.match(dts, /interface Customer\b/);
   assert.match(dts, /tier\?:/);
+  assert.match(dts, /LifemarkData/);
 });
 
 test("injected SDK carries defineSchema and client-side validation", () => {
-  assert.match(lifemarkDataSdkScript, /defineSchema/);
-  assert.match(lifemarkDataSdkScript, /validate/);
+  const script = lifemarkDataSdkScript();
+  assert.match(script, /defineSchema/);
+  assert.match(script, /validate|required/i);
 });
 
 test("prompt block teaches the schema-first workflow and the d.ts contract", () => {
@@ -155,7 +184,8 @@ test("prompt block teaches the schema-first workflow and the d.ts contract", () 
 });
 
 test("SDK script implements seed, getSchema and filtered list", () => {
-  assert.match(lifemarkDataSdkScript, /\.seed\s*=/);
-  assert.match(lifemarkDataSdkScript, /getSchema/);
-  assert.match(lifemarkDataSdkScript, /where/);
+  const script = lifemarkDataSdkScript();
+  assert.match(script, /async seed\s*\(|seed\s*\(c/);
+  assert.match(script, /getSchema/);
+  assert.match(script, /where/);
 });
