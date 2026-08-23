@@ -5,6 +5,7 @@ listProjectFiles,
 patchProjectFile,
 upsertProjectFile,
 } from "@/lib/server-fns/project-files";
+import { scheduleReindexFile } from "@/lib/intelligence/reindex";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -57,6 +58,22 @@ export const Route = createFileRoute("/api/projects/$id/files")({
         if (result.status === "error") {
           return Response.json({ error: result.message }, { status: 500 });
         }
+        if (result.status === "ok" || result.file) {
+          const f = result.file as { path?: string; content?: string; language?: string } | undefined;
+          if (f?.path) {
+            scheduleReindexFile({
+              path: f.path,
+              content: typeof f.content === "string" ? f.content : (typeof body.content === "string" ? body.content : ""),
+              language: f.language,
+            });
+          } else if (typeof body.path === "string") {
+            scheduleReindexFile({
+              path: body.path,
+              content: typeof body.content === "string" ? body.content : "",
+              language: typeof body.language === "string" ? body.language : undefined,
+            });
+          }
+        }
         return Response.json(result.file, { status: 201 });
       },
       PATCH: async ({ request, params }) => {
@@ -86,6 +103,16 @@ export const Route = createFileRoute("/api/projects/$id/files")({
         }
         if (result.status === "error") {
           return Response.json({ error: result.message }, { status: 500 });
+        }
+        if (result.file) {
+          const f = result.file as { path?: string; content?: string; language?: string };
+          if (f.path) {
+            scheduleReindexFile({
+              path: f.path,
+              content: typeof f.content === "string" ? f.content : (typeof body.content === "string" ? body.content : ""),
+              language: f.language,
+            });
+          }
         }
         return Response.json(result.file);
       },

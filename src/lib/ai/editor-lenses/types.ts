@@ -1,5 +1,5 @@
 /**
- * LifemarkAI editor intelligence — core types for the internal specialist lenses.
+ * LifemarkAI editor intelligence - core types for the internal specialist lenses.
  * These types back LifemarkAI's internal specialist-review flow.
  *
  * These application types mirror the migration-068 tables but stay decoupled
@@ -151,6 +151,14 @@ export interface InitiativeOptions {
     acceptance?: string;
     files: Array<{ path: string; content: string }>;
   }) => Promise<{ files: Array<{ path: string; content: string }>; summary?: string }>;
+  /**
+   * Optional QA hook — route wires this to runSelfVerification() so the final
+   * verify step is the real self-healing loop, not a status-only signal.
+   */
+  onVerify?: (input: {
+    files: Array<{ path: string; content: string }>;
+    filesChanged: string[];
+  }) => Promise<{ ok: boolean; summary?: string; fixedFiles?: Array<{ path: string; content: string }> }>;
 }
 
 /** Streamed events — mirror the SSE contract in doc 07 §3. */

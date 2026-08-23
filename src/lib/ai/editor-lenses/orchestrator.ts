@@ -2,10 +2,10 @@
  * LifemarkAI editor-intelligence orchestrator core.
  * Internal specialist-review runtime used by LifemarkAI build/chat/agent flows.
  *
- * Drives one editor build/review initiative end to end: discovery → planning →
- * debate → wave-based execution → verification, streaming editor-intelligence events as it goes. It depends ONLY on
+ * Drives one editor build/review initiative end to end: discovery -> planning ->
+ * debate -> wave-based execution -> verification, streaming editor-intelligence events as it goes. It depends ONLY on
  * existing LifemarkAI primitives:
- *   - generateAI()         (lib/ai/generate.ts)   — gateway-aware, billed
+ *   - generateAI()         (lib/ai/generate.ts)   - gateway-aware, billed
  *   - MODEL_TIERS          (lib/ai/editor-intelligence.ts)
  *   - the role definitions (lib/ai/editor-lenses/roles.ts)
  *
@@ -26,6 +26,7 @@ InitiativeCheckpoint,
 EditorIntelligenceEvent,
 EditorTask,
 } from "./types.ts";
+import { enrichTasksWithAstRisk } from "./polyglot-hooks.ts";
 
 const DEBATE_MAX_ROUNDS = 2;
 const MAX_PARALLEL_TASKS = 3;
@@ -80,8 +81,6 @@ async function callRole(
   ];
   const res = await generateAI(
     {
-      // Escalated retries use the strongest tier regardless of the role's
-      // normal tier (cost-bounded: at most one escalated attempt per call site).
       model: opts.escalate ? resolveTier("escalation") : resolveTier(def.tier),
       messages,
       jsonMode: opts.jsonMode,
@@ -120,13 +119,7 @@ function normalizeEpics(epics: Epic[]): Epic[] {
 
 /** PM decomposes the goal into epics + a task DAG. */
 async function planInitiative(ctx: RunCtx): Promise<Epic[]> {
-  const prompt = `Goal: ${ctx.opts.goal}
-${ctx.opts.spec ? `Spec:\n${JSON.stringify(ctx.opts.spec).slice(0, 4000)}` : ""}
-
-Decompose into epics and tasks. For each task include: id (kebab), role (one of
-pm,ba,architect,designer,frontend,backend,database,devops,qa,security), title,
-acceptance, dependsOn (array of task ids), risk (0-100). Return JSON:
-{"epics":[{"title":"...","tasks":[{"id":"...","role":"...","title":"...","acceptance":"...","dependsOn":[],"risk":0}]}]}`;
+  const prompt = `Goal: ${ctx.opts.goal}\n${ctx.opts.spec ? `Spec:\n${JSON.stringify(ctx.opts.spec).slice(0, 4000)}` : ""}\n\nDecompose into epics and tasks. For each task include: id (kebab), role (one of\npm,ba,architect,designer,frontend,backend,database,devops,qa,security), title,\nacceptance, dependsOn (array of task ids), risk (0-100). Return JSON:\n{"epics":[{"title":"...","tasks":[{"id":"...","role":"...","title":"...","acceptance":"...","dependsOn":[],"risk":0}]}]}`;
   const raw = await callRole(ctx, "pm", prompt, { jsonMode: true });
   const parsed = safeJson<{ epics: Epic[] }>(raw, { epics: [] });
   return normalizeEpics(parsed.epics);
@@ -160,7 +153,6 @@ async function* debate(
     if (!objection) {
       return { decision: proposal, decidedBy: "consensus" };
     }
-    // Architect revises before the next round.
     proposal = await callRole(
       ctx,
       "architect",
@@ -169,7 +161,6 @@ async function* debate(
     yield { type: "agent_message", from: "architect", channel: "debate", content: proposal };
   }
 
-  // Unresolved → CTO ruling (binding).
   const ruling = await callRole(
     ctx,
     "cto",
@@ -186,7 +177,6 @@ async function* runTask(ctx: RunCtx, task: EditorTask): AsyncGenerator<EditorInt
   const def = getRole(task.role);
   const writes = def.tools.includes("write_file");
 
-  // Live-environment lock (migration 046) for any code-writing role.
   if (writes && ctx.opts.environment === "live") {
     yield { type: "task_status", taskId: task.id, role: task.role, status: "failed" };
     yield { type: "error", message: `environment_locked: ${task.id}` };
@@ -194,7 +184,6 @@ async function* runTask(ctx: RunCtx, task: EditorTask): AsyncGenerator<EditorInt
     return;
   }
 
-  // Code-writing role with a real executor wired (route → agent.ts 10-tool loop).
   if (writes && ctx.opts.executeCodeTask) {
     try {
       const result = await ctx.opts.executeCodeTask({
@@ -221,17 +210,10 @@ async function* runTask(ctx: RunCtx, task: EditorTask): AsyncGenerator<EditorInt
   }
 
   const fileList = [...ctx.files.keys()].slice(0, 60).join("\n");
-  const prompt = `Task: ${task.title}
-Acceptance: ${task.acceptance ?? "n/a"}
-Project files:\n${fileList}
-
-${writes
+  const prompt = `Task: ${task.title}\nAcceptance: ${task.acceptance ?? "n/a"}\nProject files:\n${fileList}\n\n${writes
     ? `Produce the file(s) for this task. Return JSON {"files":[{"path":"...","content":"..."}]}.`
     : `Produce your deliverable as markdown.`}`;
 
-  // Escalation ladder: one retry with the strongest model when the role's
-  // normal tier fails — smarter than adding more models: the same task gets
-  // a genuinely stronger brain only when it's actually needed.
   let raw: string;
   try {
     raw = await callRole(ctx, task.role, prompt, { jsonMode: writes });
@@ -240,7 +222,7 @@ ${writes
       type: "agent_message",
       from: task.role,
       channel: "escalation",
-      content: `Task "${task.title}" failed on the normal tier (${firstErr instanceof Error ? firstErr.message.slice(0, 120) : "error"}) — retrying with the escalation model.`,
+      content: `Task "${task.title}" failed on the normal tier (${firstErr instanceof Error ? firstErr.message.slice(0, 120) : "error"}) - retrying with the escalation model.`,
     };
     raw = await callRole(ctx, task.role, prompt, { jsonMode: writes, escalate: true });
   }
@@ -299,7 +281,6 @@ export async function* runInitiative(opts: InitiativeOptions): AsyncGenerator<Ed
   } else {
     yield { type: "initiative_status", status: "planning" };
 
-    // 1) Discovery (BA) + planning (PM)
     yield { type: "agent_status", role: "ba", state: "running", summary: "Product discovery" };
     await callRole(ctx, "ba", `Run product discovery for: ${opts.goal}. Summarize personas + key features.`);
     yield { type: "agent_status", role: "ba", state: "done" };
@@ -319,6 +300,8 @@ export async function* runInitiative(opts: InitiativeOptions): AsyncGenerator<Ed
   }
 
   // 2) Debate high-risk decisions before execution
+  // Raise risk from Rust AST impact so high-blast-radius edits convene debate.
+  await enrichTasksWithAstRisk(tasks, ctx.files);
   yield { type: "initiative_status", status: "debating" };
   const highRisk = tasks.filter((t) => t.risk >= DEBATE_RISK_THRESHOLD);
   for (const t of highRisk) {
@@ -343,7 +326,6 @@ export async function* runInitiative(opts: InitiativeOptions): AsyncGenerator<Ed
     ctx.wave++;
     yield { type: "wave_start", wave: ctx.wave, taskIds: wave.map((t) => t.id) };
 
-    // Budget gate (doc 02 §5): pause rather than overspend.
     if (
       ctx.gates.spend === "budget" &&
       opts.budgetCredits != null &&
@@ -361,8 +343,29 @@ export async function* runInitiative(opts: InitiativeOptions): AsyncGenerator<Ed
     await saveCheckpoint(ctx, "executing", epics);
   }
 
-  // 4) Verification (QA) — the route handler wires the real self-verify.ts loop.
-  yield { type: "verify_status", ok: tasks.every((t) => t.status !== "failed") };
+  // 4) Verification (QA) - prefer real self-verify via onVerify hook.
+  let verification: unknown;
+  if (opts.onVerify) {
+    try {
+      const qa = await opts.onVerify({
+        files: [...ctx.files.entries()].map(([path, content]) => ({ path, content })),
+        filesChanged: [...ctx.filesChanged],
+      });
+      verification = qa;
+      if (qa.fixedFiles) {
+        for (const f of qa.fixedFiles) {
+          ctx.files.set(f.path, f.content);
+          ctx.filesChanged.add(f.path);
+          yield { type: "file_change", path: f.path };
+        }
+      }
+      yield { type: "verify_status", ok: qa.ok };
+    } catch {
+      yield { type: "verify_status", ok: tasks.every((t) => t.status !== "failed") };
+    }
+  } else {
+    yield { type: "verify_status", ok: tasks.every((t) => t.status !== "failed") };
+  }
   await saveCheckpoint(ctx, "verifying", epics);
 
   yield { type: "initiative_status", status: "done" };
@@ -371,11 +374,12 @@ export async function* runInitiative(opts: InitiativeOptions): AsyncGenerator<Ed
     initiativeId,
     filesChanged: [...ctx.filesChanged],
     creditsUsed: ctx.creditsUsed,
+    verification,
   };
   await saveCheckpoint(ctx, "done", epics);
 }
 
-/** "Act as CTO" — read-only review across five lenses (doc 03 §2). */
+/** "Act as CTO" - read-only review across five lenses (doc 03 section 2). */
 export async function ctoReview(opts: {
   projectId: string;
   userId: string;
@@ -395,9 +399,7 @@ export async function ctoReview(opts: {
   const raw = await callRole(
     ctx,
     "cto",
-    `Review this project across five lenses: architecture, scalability, security,
-code quality, cloud cost. Return JSON {"recommendations":[{"lens":"...","impact":"high|med|low","effort":"high|med|low","finding":"...","action":"..."}]}.
-Files:\n${fileList}`,
+    `Review this project across five lenses: architecture, scalability, security,\ncode quality, cloud cost. Return JSON {"recommendations":[{"lens":"...","impact":"high|med|low","effort":"high|med|low","finding":"...","action":"..."}]}.\nFiles:\n${fileList}`,
     { jsonMode: true },
   );
   const parsed = safeJson<{ recommendations: CtoReport["recommendations"] }>(raw, { recommendations: [] });

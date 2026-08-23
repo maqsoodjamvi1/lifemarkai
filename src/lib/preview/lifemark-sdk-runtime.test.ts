@@ -1,13 +1,13 @@
 /**
  * RUNTIME smoke test for the injected LifemarkData SDK. The SDK is ES5 code
- * inside a template string — string assertions can't prove it executes. This
+ * inside a template string - string assertions can't prove it executes. This
  * evals the real script with stubbed browser APIs and drives the whole
  * surface: schemas, coercion, defaults, uniqueness, seeding, filtered lists,
  * in BOTH localStorage mode and hosted (fetch) mode.
  */
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { lifemarkDataSdkScript } from "./lifemark-data";
+import { lifemarkDataSdkScript } from "./lifemark-data.ts";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -93,9 +93,7 @@ test("local mode: unique enforcement, including on update", async () => {
   const a = await sdk.create("users", { email: "a@x.com" });
   await sdk.create("users", { email: "b@x.com" });
   await assert.rejects(() => sdk.create("users", { email: "a@x.com" }), /must be unique/);
-  // updating a record to ITS OWN value is allowed
   await sdk.update("users", a.id, { email: "a@x.com" });
-  // updating to someone else's value is not
   await assert.rejects(() => sdk.update("users", a.id, { email: "b@x.com" }), /must be unique/);
 });
 
@@ -106,12 +104,10 @@ test("local mode: seed is idempotent and validated", async () => {
   const second = await sdk.seed("items", [{ sku: "C" }]);
   assert.equal(second.seeded, 0);
   assert.equal((await sdk.list("items")).length, 2);
-  // seed rows are schema-validated when a schema exists…
   await assert.rejects(() => sdk.seed("items2", [{ sku: 1 }]).then(async () => {
     await sdk.defineSchema("items3", { sku: { type: "string", required: true } });
     return sdk.seed("items3", [{ nope: "x" }]);
   }), /Missing required field|Unknown field/);
-  // …but a schemaless collection seeds freely (validation is opt-in by design)
   const free = await sdk.seed("scratch", [{ anything: true }]);
   assert.equal(free.seeded, 1);
 });
@@ -160,7 +156,7 @@ test("hosted mode: calls the right endpoints with the right payloads", async () 
 
   await hosted.update("customers", "srv-1", { name: "Vali" });
   assert.equal(calls[2].method, "PATCH");
-  assert.equal(calls[2].body?.collection, "customers"); // server-side validation needs it
+  assert.equal(calls[2].body?.collection, "customers");
 
   const seeded = await hosted.seed("customers", [{ name: "A" }, { name: "B" }, { name: "C" }]);
   assert.equal(seeded.seeded, 3);
@@ -170,12 +166,10 @@ test("hosted mode: calls the right endpoints with the right payloads", async () 
   assert.ok(calls[4].url.includes("where=name%3AAli"));
   assert.ok(calls[4].url.includes("limit=5"));
 
-  // client-side validation fires BEFORE any network call in hosted mode too
   const before = calls.length;
   await assert.rejects(() => hosted.create("customers", { nope: 1 }), /Unknown field/);
   assert.equal(calls.length, before);
 
-  // remote schema lookup through getSchema
   const remote = await hosted.getSchema("remote");
   assert.ok(remote && (remote as { fields: AnyRecord }).fields.x);
 });
