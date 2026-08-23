@@ -1,0 +1,16 @@
+# Optional side services for editor intelligence (Codespace / local).
+#   docker compose -f docker-compose.polyglot.yml up --build
+#   export LIFEMARK_RUST_AST_URL=http://127.0.0.1:8765
+#   export LIFEMARK_PYTHON_AI_URL=http://127.0.0.1:8766
+
+services:
+  rust-ast:
+    build: ./services/rust-ast
+    ports:
+      - "8765:8765"
+  python-ai:
+    build: ./services/python-ai
+    ports:
+      - "8766:8766"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}

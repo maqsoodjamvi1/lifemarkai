@@ -1,5 +1,5 @@
 /**
- * Unit tests for polyglot bridge — offline / no-service paths must be safe.
+ * Unit tests for polyglot bridge - offline / no-service paths must be safe.
  */
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -27,7 +27,10 @@ describe("polyglot-bridge offline", () => {
 
   it("polyglotHealth reports both false without URLs", async () => {
     const h = await polyglotHealth({ rustAstUrl: undefined, pythonAiUrl: undefined, timeoutMs: 300 });
-    assert.deepEqual(h, { rust: false, python: false });
+    assert.equal(h.rust, false);
+    assert.equal(h.python, false);
+    assert.equal(h.rustLive, false);
+    assert.equal(h.rustReady, false);
   });
 
   it("buildStructuralContext returns empty string offline", async () => {
