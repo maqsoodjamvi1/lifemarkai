@@ -1,47 +1,39 @@
 /**
  * POST /api/editor-intelligence/initiative
  *
- * Runs LifemarkAI editor intelligence (lib/ai/editor-lenses/orchestrator.ts)
- * on a goal and STREAMS the run as SSE: lens statuses, the plan, debates,
- * decisions, wave/task progress, file changes, and a final done payload.
- *
- * Code-writing lenses execute through the real agent.ts ReAct loop (the full
- * 10-tool agent), so they actually read/edit/write files. Review chatter
- * and decisions are persisted to the migration-068 tables
- * (project_ai_agents / project_ai_agent_messages / project_ai_agent_decisions).
- *
- * Used by the Editor Intelligence panel and internal vibe-coding flows.
+ * Runs LifemarkAI editor intelligence on a goal and STREAMS the run as SSE.
  */
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canWriteProjectFiles,getProjectAccess } from "@/lib/project/access";
+import { canWriteProjectFiles, getProjectAccess } from "@/lib/project/access";
 import {
-cancelCreditReservation,
-reserveCredits,
-settleCreditReservation,
+  cancelCreditReservation,
+  reserveCredits,
+  settleCreditReservation,
 } from "@/lib/credits";
-import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInitiative } from "@/lib/ai/editor-lenses/orchestrator";
 import { getRole } from "@/lib/ai/editor-lenses/roles";
 import { runAgent } from "@/lib/ai/agent";
-import { runSelfVerification,type SelfVerifyResult } from "@/lib/ai/self-verify";
+import { runSelfVerification, type SelfVerifyResult } from "@/lib/ai/self-verify";
 import { recordVerificationFindings } from "@/lib/ai/self-healing";
-import type { AgentRoleId,AutonomyGates,EditorIntelligenceEvent } from "@/lib/ai/editor-lenses/types";
+import type { AgentRoleId, AutonomyGates, EditorIntelligenceEvent } from "@/lib/ai/editor-lenses/types";
 import {
-appendEditorInitiativeEvent,
-createEditorInitiativeRun,
-ensureEditorLensRoster,
-failEditorInitiativeRun,
-loadEditorInitiativeRun,
-PERSISTED_ROLE_BY_LENS,
-recordEditorIntelligenceBuild,
-updateEditorInitiativeCheckpoint,
+  appendEditorInitiativeEvent,
+  createEditorInitiativeRun,
+  ensureEditorLensRoster,
+  failEditorInitiativeRun,
+  loadEditorInitiativeRun,
+  PERSISTED_ROLE_BY_LENS,
+  recordEditorIntelligenceBuild,
+  updateEditorInitiativeCheckpoint,
 } from "@/lib/ai/editor-lenses/persistence";
+import { KNOWLEDGE_FILE_PATH, parseKnowledgeMarkdown, knowledgeToSystemBlock } from "@/lib/editor/project-knowledge";
+import { INITIATIVE_MAX_CREDITS } from "@/lib/ai/initiative-routing";
 
 const ROUTE_MAX_DURATION_SECONDS = 300;
 const VERIFY_TIME_CUTOFF_MS = (ROUTE_MAX_DURATION_SECONDS - 60) * 1000;
-import { INITIATIVE_MAX_CREDITS } from "@/lib/ai/initiative-routing";
 
 interface Body {
   projectId: string;
@@ -56,15 +48,9 @@ function sanitizeAutonomy(raw: unknown): Partial<AutonomyGates> | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const input = raw as Record<string, unknown>;
   const out: Partial<AutonomyGates> = {};
-  if (input.database === "never" || input.database === "ask" || input.database === "allow") {
-    out.database = input.database;
-  }
-  if (input.deploy === "never" || input.deploy === "ask" || input.deploy === "allow") {
-    out.deploy = input.deploy;
-  }
-  if (input.spend === "budget" || input.spend === "unlimited") {
-    out.spend = input.spend;
-  }
+  if (input.database === "never" || input.database === "ask" || input.database === "allow") out.database = input.database;
+  if (input.deploy === "never" || input.deploy === "ask" || input.deploy === "allow") out.deploy = input.deploy;
+  if (input.spend === "budget" || input.spend === "unlimited") out.spend = input.spend;
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -105,11 +91,7 @@ async function handlePOST(req: Request) {
     return Response.json({ error: "Project not found" }, { status: 404 });
   }
 
-  const { data: project } = await db
-    .from<ProjectRow>("projects")
-    .select("id, name, environment")
-    .eq("id", projectId)
-    .single();
+  const { data: project } = await db.from<ProjectRow>("projects").select("id, name, environment").eq("id", projectId).single();
   if (project?.environment === "live") {
     return Response.json({ environment_locked: true, error: "Project is Live" }, { status: 423 });
   }
@@ -118,27 +100,17 @@ async function handlePOST(req: Request) {
   if (!rl.success) return Response.json({ error: "Rate limited" }, { status: 429 });
 
   const existingRun = runId ? await loadEditorInitiativeRun(supabase, runId) : null;
-  if (runId && !existingRun) {
-    return Response.json({ error: "Initiative run not found" }, { status: 404 });
-  }
+  if (runId && !existingRun) return Response.json({ error: "Initiative run not found" }, { status: 404 });
   if (existingRun && existingRun.project_id !== projectId) {
     return Response.json({ error: "Initiative run belongs to a different project" }, { status: 400 });
   }
 
-  if (
-    budgetCredits != null
-    && (!Number.isFinite(budgetCredits) || budgetCredits < 0.5 || budgetCredits > INITIATIVE_MAX_CREDITS)
-  ) {
-    return Response.json(
-      { error: `budgetCredits must be between 0.5 and ${INITIATIVE_MAX_CREDITS}` },
-      { status: 400 },
-    );
+  if (budgetCredits != null && (!Number.isFinite(budgetCredits) || budgetCredits < 0.5 || budgetCredits > INITIATIVE_MAX_CREDITS)) {
+    return Response.json({ error: `budgetCredits must be between 0.5 and ${INITIATIVE_MAX_CREDITS}` }, { status: 400 });
   }
   const storedBudget = Number(existingRun?.checkpoint?.creditsUsed ?? 0);
   const reservationCap = budgetCredits
-    ?? (Number.isFinite(storedBudget) && storedBudget >= 0.5
-      ? Math.min(storedBudget, INITIATIVE_MAX_CREDITS)
-      : INITIATIVE_MAX_CREDITS);
+    ?? (Number.isFinite(storedBudget) && storedBudget >= 0.5 ? Math.min(storedBudget, INITIATIVE_MAX_CREDITS) : INITIATIVE_MAX_CREDITS);
   let creditReservation: Awaited<ReturnType<typeof reserveCredits>>;
   try {
     creditReservation = await reserveCredits(supabase, {
@@ -152,17 +124,18 @@ async function handlePOST(req: Request) {
     console.error("Unable to reserve initiative credits:", error);
     return Response.json({ error: "Unable to reserve credits" }, { status: 500 });
   }
-  if (!creditReservation) {
-    return Response.json({ error: "Insufficient credits" }, { status: 402 });
-  }
+  if (!creditReservation) return Response.json({ error: "Insufficient credits" }, { status: 402 });
 
-  const { data: fileRows } = await db
-    .from<ProjectFileRow[]>("project_files")
-    .select("path, content")
-    .eq("project_id", projectId);
+  const { data: fileRows } = await db.from<ProjectFileRow[]>("project_files").select("path, content").eq("project_id", projectId);
   const files = (fileRows ?? [])
     .filter((f): f is ProjectFileRow & { path: string } => typeof f.path === "string")
     .map((f) => ({ path: f.path, content: f.content ?? "" }));
+  const knowledgeFile = files.find(
+    (f) => f.path === KNOWLEDGE_FILE_PATH || f.path.endsWith("/KNOWLEDGE.md") || f.path.endsWith("KNOWLEDGE.md"),
+  );
+  const projectKnowledge = knowledgeFile?.content
+    ? knowledgeToSystemBlock(parseKnowledgeMarkdown(knowledgeFile.content))
+    : undefined;
 
   if (seedAgents) try {
     await ensureEditorLensRoster(supabase, projectId, project?.name ?? "Untitled project", { seedKickoff: false });
@@ -171,11 +144,7 @@ async function handlePOST(req: Request) {
   let initiativeRun;
   try {
     initiativeRun = existingRun ?? await createEditorInitiativeRun({
-      supabase,
-      projectId,
-      userId: user.id,
-      goal: requestedGoal,
-      budgetCredits: reservationCap,
+      supabase, projectId, userId: user.id, goal: requestedGoal, budgetCredits: reservationCap,
     });
   } catch (error) {
     await cancelCreditReservation(supabase, creditReservation.id).catch(() => {});
@@ -190,11 +159,8 @@ async function handlePOST(req: Request) {
       let clientGone = false;
       const send = (event: EditorIntelligenceEvent | Record<string, unknown>) => {
         if (clientGone) return;
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-        } catch {
-          clientGone = true;
-        }
+        try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`)); }
+        catch { clientGone = true; }
       };
 
       const agentIdByRole = new Map<string, string | null>();
@@ -203,21 +169,13 @@ async function handlePOST(req: Request) {
           const persistedRole = PERSISTED_ROLE_BY_LENS[fromRole as AgentRoleId] ?? fromRole;
           let agentId = agentIdByRole.get(persistedRole);
           if (!agentIdByRole.has(persistedRole)) {
-            const { data: agent } = await db
-              .from<AgentIdRow>("project_ai_agents")
-              .select("id")
-              .eq("project_id", projectId)
-              .eq("role", persistedRole)
-              .maybeSingle();
+            const { data: agent } = await db.from<AgentIdRow>("project_ai_agents").select("id").eq("project_id", projectId).eq("role", persistedRole).maybeSingle();
             const loadedAgentId = typeof agent?.id === "string" ? agent.id : null;
             agentId = loadedAgentId;
             agentIdByRole.set(persistedRole, loadedAgentId);
           }
           await db.from("project_ai_agent_messages").insert({
-            project_id: projectId,
-            agent_id: agentId ?? null,
-            phase: channel,
-            content,
+            project_id: projectId, agent_id: agentId ?? null, phase: channel, content,
             metadata: { from_role: fromRole, persisted_role: persistedRole, to_role: toRole ?? null },
           });
         } catch { /* non-fatal */ }
@@ -225,11 +183,7 @@ async function handlePOST(req: Request) {
       const persistDecision = async (topic: string, decision: string, decidedBy: string) => {
         try {
           await db.from("project_ai_agent_decisions").insert({
-            project_id: projectId,
-            title: topic,
-            summary: decision,
-            status: "accepted",
-            metadata: { decided_by: decidedBy },
+            project_id: projectId, title: topic, summary: decision, status: "accepted", metadata: { decided_by: decidedBy },
           });
         } catch { /* non-fatal */ }
       };
@@ -238,9 +192,7 @@ async function handlePOST(req: Request) {
         if (filesChanged.length === 0) return null;
         if (Date.now() - routeStartedAt > VERIFY_TIME_CUTOFF_MS) {
           const skipped: EditorIntelligenceEvent = {
-            type: "agent_message",
-            from: "qa",
-            channel: "verification",
+            type: "agent_message", from: "qa", channel: "verification",
             content: "Skipping browser verification - not enough time left in this run.",
           };
           send(skipped);
@@ -249,9 +201,7 @@ async function handlePOST(req: Request) {
         }
         try {
           const verification = await runSelfVerification({
-            supabase,
-            projectId,
-            userId: user.id,
+            supabase, projectId, userId: user.id,
             emit: (status) => {
               const progress: EditorIntelligenceEvent = { type: "agent_message", from: "qa", channel: "verification", content: status };
               send(progress);
@@ -271,9 +221,7 @@ async function handlePOST(req: Request) {
             await recordVerificationFindings({ supabase, projectId, userId: user.id, verification });
           }
           return verification;
-        } catch {
-          return null;
-        }
+        } catch { return null; }
       };
 
       let creditsUsed = startingCreditsUsed;
@@ -306,7 +254,7 @@ async function handlePOST(req: Request) {
               projectId,
               userId: user.id,
               files: taskFiles,
-              knowledge: getRole(role).systemPrompt,
+              knowledge: [getRole(role).systemPrompt, projectKnowledge].filter(Boolean).join("\n\n"),
               maxIterations: 12,
               onStep: () => {},
               onFileChange: (p, c) => changed.set(p, c),
@@ -382,10 +330,7 @@ async function handlePOST(req: Request) {
         if (billableWorkReturned) {
           const roleCreditsThisRequest = Math.max(0, creditsUsed - startingCreditsUsed);
           const rawActual = roleCreditsThisRequest + agentCreditsThisRequest;
-          const actual = Math.min(
-            creditReservation.amount,
-            Math.max(0.5, Math.ceil(rawActual * 20) / 20),
-          );
+          const actual = Math.min(creditReservation.amount, Math.max(0.5, Math.ceil(rawActual * 20) / 20));
           await settleCreditReservation(supabase, creditReservation.id, actual);
         } else {
           await cancelCreditReservation(supabase, creditReservation.id);
