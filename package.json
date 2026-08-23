@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite dev",
+    "dev": "vite dev --port 3001",
     "build": "vite build",
     "start": "node .output/server/index.mjs",
     "lint": "eslint src",
@@ -12,5 +12,9 @@
     "verify:preview-smoke": "node --experimental-strip-types scripts/smoke-preview-50.mjs",
     "verify:polyglot": "node scripts/verify-polyglot-codespace.mjs",
     "verify:gap-closure": "node --import tsx --test src/lib/editor/*.test.ts src/lib/intelligence/polyglot-bridge.test.ts && node --experimental-strip-types scripts/smoke-preview-50.mjs"
+  },
+  "dependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   }
 }
