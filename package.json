@@ -42,7 +42,8 @@
     "verify:private-infrastructure": "node scripts/verify-private-infrastructure.mjs --strict --run-core-loop",
     "worker:deploy": "node --import tsx scripts/deploy-worker.mjs",
     "backup:database": "node scripts/backup-database.mjs",
-    "recovery:drill": "node scripts/restore-drill.mjs"
+    "recovery:drill": "node scripts/restore-drill.mjs",
+    "verify:preview-smoke": "node --experimental-strip-types scripts/smoke-preview-50.mjs"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.42",
