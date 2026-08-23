@@ -18,8 +18,7 @@ export type AstSymbolKind =
   | "type"
   | "variable"
   | "import"
-  | "export"
-  | "unknown";
+  | "export";
 
 export interface AstSymbol {
   name: string;
@@ -28,6 +27,7 @@ export interface AstSymbol {
   line: number;
   endLine?: number;
   signature?: string;
+  docs?: string;
 }
 
 export interface CallEdge {
@@ -119,14 +119,9 @@ export async function indexFiles(
   cfg: PolyglotConfig = envConfig(),
 ): Promise<{ indexed: number; symbols: number } | null> {
   if (!cfg.rustAstUrl || files.length === 0) return null;
-  return fetchJson(
-    `${cfg.rustAstUrl}/index`,
-    { files },
-    cfg.timeoutMs ?? DEFAULT_TIMEOUT,
-  );
+  return fetchJson(`${cfg.rustAstUrl}/index`, { files }, cfg.timeoutMs ?? DEFAULT_TIMEOUT);
 }
 
-/** Resolve a symbol definition via the Rust AST service. */
 export async function findDefinition(
   symbol: string,
   cfg: PolyglotConfig = envConfig(),
@@ -135,60 +130,38 @@ export async function findDefinition(
   return fetchJson(`${cfg.rustAstUrl}/definition`, { symbol }, cfg.timeoutMs ?? DEFAULT_TIMEOUT);
 }
 
-/** Find callers of a symbol. */
 export async function findCallers(
   symbol: string,
   cfg: PolyglotConfig = envConfig(),
-): Promise<CallEdge[] | null> {
+): Promise<{ callers: CallEdge[] } | null> {
   if (!cfg.rustAstUrl) return null;
-  const res = await fetchJson<{ callers: CallEdge[] }>(
-    `${cfg.rustAstUrl}/callers`,
-    { symbol },
-    cfg.timeoutMs ?? DEFAULT_TIMEOUT,
-  );
-  return res?.callers ?? null;
+  return fetchJson(`${cfg.rustAstUrl}/callers`, { symbol }, cfg.timeoutMs ?? DEFAULT_TIMEOUT);
 }
 
-/** Impact analysis for a symbol (callers + files + risk score). */
 export async function impactAnalysis(
   symbol: string,
   cfg: PolyglotConfig = envConfig(),
 ): Promise<ImpactReport | null> {
   if (!cfg.rustAstUrl) return null;
-  const raw = await fetchJson<Record<string, unknown>>(
-    `${cfg.rustAstUrl}/impact`,
-    { symbol },
-    cfg.timeoutMs ?? DEFAULT_TIMEOUT,
-  );
-  if (!raw) return null;
-  return {
-    symbol: String(raw.symbol ?? symbol),
-    directCallers: (raw.directCallers ?? raw.direct_callers ?? []) as string[],
-    transitiveCallers: (raw.transitiveCallers ?? raw.transitive_callers ?? []) as string[],
-    filesAffected: (raw.filesAffected ?? raw.files_affected ?? []) as string[],
-    riskScore: Number(raw.riskScore ?? raw.risk_score ?? 0),
-  };
+  return fetchJson(`${cfg.rustAstUrl}/impact`, { symbol }, cfg.timeoutMs ?? DEFAULT_TIMEOUT);
 }
 
-/** Embedding-based semantic search over the codebase (Python service). */
 export async function semanticSearch(
   query: string,
   opts: { topK?: number; projectId?: string } = {},
   cfg: PolyglotConfig = envConfig(),
-): Promise<SemanticHit[] | null> {
+): Promise<{ hits: SemanticHit[] } | null> {
   if (!cfg.pythonAiUrl) return null;
-  const res = await fetchJson<{ hits: SemanticHit[] }>(
+  return fetchJson(
     `${cfg.pythonAiUrl}/semantic-search`,
     { query, top_k: opts.topK ?? 8, project_id: opts.projectId },
     cfg.timeoutMs ?? DEFAULT_TIMEOUT,
   );
-  return res?.hits ?? null;
 }
 
-/** Ask the Python agent for a structured multi-step plan. */
 export async function planWithPythonAgent(
   goal: string,
-  context: Record<string, unknown> = {},
+  context: { files?: string[]; constraints?: string[] } = {},
   cfg: PolyglotConfig = envConfig(),
 ): Promise<{ steps: PlanStep[]; planner: string } | null> {
   if (!cfg.pythonAiUrl) return null;
@@ -199,24 +172,24 @@ export async function planWithPythonAgent(
   );
 }
 
-/**
- * Build a compact structural context string for LLM prompts:
- * index files, then summarize impact of key symbols.
- */
+/** Build a short structural context string for LLM system prompts. */
 export async function buildStructuralContext(
-  files: Map<string, string> | Array<{ path: string; content: string }>,
-  symbols: string[] = [],
-  cfg: PolyglotConfig = envConfig(),
+  files: Map<string, string>,
+  focusSymbols: string[] = [],
 ): Promise<string> {
-  const list = Array.isArray(files)
-    ? files
-    : [...files.entries()].map(([path, content]) => ({ path, content }));
-
-  await indexFiles(list, cfg);
-
   const snippets: string[] = [];
-  for (const sym of symbols.slice(0, 12)) {
-    const impact = await impactAnalysis(sym, cfg);
+  const indexResult = await indexFiles(
+    [...files.entries()].map(([path, content]) => ({
+      path,
+      content,
+      language: path.split(".").pop(),
+    })),
+  );
+  if (indexResult) {
+    snippets.push(`AST index: ${indexResult.indexed} files, ${indexResult.symbols} symbols.`);
+  }
+  for (const sym of focusSymbols.slice(0, 5)) {
+    const impact = await impactAnalysis(sym);
     if (impact) {
       snippets.push(
         `Impact of changing \`${sym}\`: risk=${impact.riskScore}, ` +
@@ -228,16 +201,44 @@ export async function buildStructuralContext(
   return snippets.join("\n");
 }
 
+/** Detailed health: liveness + optional readiness telemetry from Rust. */
+export interface PolyglotHealthDetail {
+  rust: boolean;
+  python: boolean;
+  rustSymbols?: number;
+  rustEdges?: number;
+  rustLive?: boolean;
+  rustReady?: boolean;
+}
+
 /** Health check for both side services (for editor intelligence console). */
 export async function polyglotHealth(
   cfg: PolyglotConfig = envConfig(),
-): Promise<{ rust: boolean; python: boolean }> {
+): Promise<PolyglotHealthDetail> {
   const timeout = 2_000;
-  const rust = cfg.rustAstUrl
-    ? (await fetchGet(`${cfg.rustAstUrl}/health`, timeout)) !== null
-    : false;
+  let rust = false;
+  let rustSymbols: number | undefined;
+  let rustEdges: number | undefined;
+  if (cfg.rustAstUrl) {
+    const body = await fetchGet<{ status?: string; symbols?: number; edges?: number }>(
+      `${cfg.rustAstUrl}/health`,
+      timeout,
+    );
+    rust = body !== null;
+    if (body) {
+      if (typeof body.symbols === "number") rustSymbols = body.symbols;
+      if (typeof body.edges === "number") rustEdges = body.edges;
+    }
+  }
   const python = cfg.pythonAiUrl
     ? (await fetchGet(`${cfg.pythonAiUrl}/health`, timeout)) !== null
     : false;
-  return { rust, python };
+  return {
+    rust,
+    python,
+    rustSymbols,
+    rustEdges,
+    rustLive: rust,
+    rustReady: rust && (rustSymbols ?? 0) > 0,
+  };
 }
