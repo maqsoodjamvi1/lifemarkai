@@ -1,0 +1,13 @@
+[package]
+name = "lifemark-ast"
+version = "0.1.0"
+edition = "2021"
+description = "Fast AST index + call-graph for LifemarkAI editor intelligence"
+
+[dependencies]
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tower-http = { version = "0.5", features = ["cors"] }
+once_cell = "1"
