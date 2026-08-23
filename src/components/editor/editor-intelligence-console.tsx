@@ -1,7 +1,5 @@
 /**
- * Editor Intelligence Console - RESTORED.
- * Full implementation: apply patch from artifacts or re-pull from 4ff883c.
- * Temporary thin re-export so the app builds while full file is restored.
+ * Editor Intelligence Console views - public entry.
  */
 export {
   ROLE_META,
@@ -15,6 +13,7 @@ export {
   GateApprovalCard,
   RunFooter,
   groupFeed,
+  PlanTreeBase,
 } from "./intelligence/console-core";
 
 export type {
@@ -24,5 +23,5 @@ export type {
   ConsoleState,
 } from "./intelligence/console-core";
 
-// Prefer risk-aware plan tree
+/** Default plan view includes AST risk strip. */
 export { PlanTreeWithRisk as PlanTree } from "./intelligence/plan-tree-with-risk";
