@@ -930,12 +930,74 @@ src/routes/__root.tsx wires the document + shared shell; it must NOT contain the
 whole app. src/routes/index.tsx is the home page — a real page with MULTIPLE
 substantial sections, never just a heading and one sentence.`;
 
+/**
+ * SECURITY CONTRACT — non-negotiable rules for any generated code that touches
+ * credentials, sessions, user data, or SQL.
+ *
+ * Why this block exists: the build prompt had a persona, an engineering
+ * standard, an operating discipline and a response contract — and said nothing
+ * about security. An LLM asked for "a login page" with no constraint reliably
+ * produces the textbook-insecure version: the password compared as plaintext,
+ * the session in localStorage, the query built by string concatenation. None
+ * of that fails a build, none of it shows up in a preview, and the self-verify
+ * loop passes it — so nothing downstream catches it. The only place it can be
+ * prevented is before the code is written.
+ *
+ * Rules are stated as absolutes with the specific correct primitive named.
+ * "Handle passwords securely" gets ignored; "hash with bcrypt (cost >= 12) or
+ * Argon2id, never compare plaintext" gets followed, because there is no
+ * judgement left to make.
+ *
+ * Scope note: this is about the code we GENERATE for the user's app. It is not
+ * a claim about the platform's own posture, and it does not replace the
+ * post-generation scan (lib/security/static-scan.ts) — that is the backstop
+ * for when a model ignores this anyway.
+ */
+const SECURITY_CONTRACT = `## Security (non-negotiable)
+
+**Secrets.** Never hardcode an API key, token, password, or connection string —
+not as a fallback, not "for now", not in a comment. Read them from the
+environment. Anything reaching the browser bundle is public: only ever expose
+publishable/anon keys client-side, never a service-role key or provider secret.
+
+**Passwords.** Hash with bcrypt (cost >= 12) or Argon2id before storage. Never
+store, log, echo, or compare plaintext. Compare with the library's own verify
+function, never with the === operator.
+
+**SQL.** Every query is parameterized ($1, ?) or built through the ORM/query
+builder. Never interpolate user input into SQL — no template literals, no
+concatenation, not even for a column or table name. Where row ownership matters,
+enforce it in the query (or RLS), not in the UI.
+
+**Sessions & cookies.** Auth cookies are httpOnly, secure, and
+sameSite "lax" (or "strict"), with an explicit expiry. Never put a
+session token, JWT, or API key in localStorage or sessionStorage — any XSS on
+the page reads it.
+
+**Input & output.** Validate every request body, query param, and route param at
+the boundary with a schema (Zod), and reject on failure. Return generic error
+messages to the client; never leak a raw database error, stack trace, or SQL
+string. Escape or sanitize any user-supplied HTML before rendering, and treat
+dangerouslySetInnerHTML as requiring sanitization (DOMPurify) at the call site.
+
+**Authorization.** Check on the server for every mutating route and every read
+of another user's data. A hidden button is not access control, and neither is a
+client-side role check.
+
+If the user explicitly asks for something insecure (plaintext passwords, a
+disabled auth check, a secret in the client), build the secure version instead
+and say in one line what you changed and why.`;
+
 /** Blocks that are shared, with the one framework-dependent slot filled in. */
 function frameworkNeutralBlocks(framework: string): string {
   const SCAFFOLD_FILE_LIST_PLACEHOLDER = TANSTACK_FRAMEWORKS.has(framework)
     ? TANSTACK_SCAFFOLD_LIST
     : VITE_SCAFFOLD_LIST;
   return `${DESIGN_SYSTEM}
+
+---
+
+${SECURITY_CONTRACT}
 
 ---
 

@@ -4,7 +4,7 @@ import type { AIMessage,ToolDefinition,ToolCall } from "./provider.ts";
 import { DEFAULT_CODING_MODEL } from "./model-defaults.ts";
 import { selectModelChain,applyModelAdapter } from "./model-catalog.ts";
 import { AGENT_SYSTEM_PROMPT } from "./system-prompts.ts";
-import { summarizeFile,findDefinition } from "./code-analyzer.ts";
+import { summarizeFileSmart,findDefinitionSmart } from "./code-analyzer.ts";
 import { generateAndStoreImage } from "./image-asset.ts";
 import { formatPreviewConsole,formatPreviewNetwork,loadPreviewTelemetryFromDb } from "../preview/preview-telemetry.ts";
 import { createAdminClient } from "../supabase/server.ts";
@@ -266,7 +266,9 @@ function buildTools(
         const p = path as string;
         const content = fileMap.get(p);
         if (content === undefined) return `File not found: ${p}`;
-        return summarizeFile(p, content);
+        // AST-precise via the Python intelligence service when configured;
+        // falls back internally to the regex heuristics on any failure.
+        return summarizeFileSmart(p, content);
       },
     },
     find_definition: {
@@ -275,7 +277,7 @@ function buildTools(
         "Locate where a symbol (function, component, class, type, const) is defined across the whole project. Returns file:line and a signature for each match.",
       execute: async ({ symbol }: Record<string, unknown>) => {
         const files = Array.from(fileMap.entries()).map(([path, content]) => ({ path, content }));
-        return findDefinition(files, String(symbol ?? ""));
+        return findDefinitionSmart(files, String(symbol ?? ""));
       },
     },
     generate_image: {

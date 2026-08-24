@@ -512,6 +512,53 @@ ${bigFile()}\`\`\``,
       return { pass: true };
     },
   },
+  {
+    id: "tanstack-start-route",
+    max: 5000,
+    prompt: `Create a TanStack Start route file at \`src/routes/app/dashboard.tsx\` with:
+- A loader that fetches user data from Supabase (use createServerFn)
+- A component that renders the user's name and email
+- Proper TypeScript types for the loader data
+- Export the route with createFileRoute
+Return ONLY the complete file in one tsx code block.`,
+    async check(text) {
+      const code = extractCode(text);
+      const err = await tsxParseError(code);
+      if (err) return { pass: false, why: `no parse: ${err}` };
+      const checks = [
+        { pattern: /createFileRoute/, msg: "missing createFileRoute" },
+        { pattern: /createServerFn/, msg: "missing createServerFn" },
+        { pattern: /loader/, msg: "missing loader" },
+        { pattern: /Supabase|supabase/, msg: "no Supabase reference" },
+        { pattern: /interface\s+\w+LoaderData|type\s+\w+LoaderData/, msg: "no loader data type" },
+        { pattern: /export\s+default.*Route/, msg: "no route export" },
+      ];
+      for (const { pattern, msg } of checks) {
+        if (!pattern.test(code)) return { pass: false, why: msg };
+      }
+      return { pass: true };
+    },
+  },
+  {
+    id: "tanstack-router-link",
+    max: 3000,
+    prompt: `Write a TanStack Router Link component that:
+- Uses \`Link\` from \`@tanstack/react-router\`
+- Has an active style (underline when active)
+- Accepts \`to\` and \`children\` props
+- Returns a typed component with proper interface
+Return ONLY the complete file in one tsx code block.`,
+    async check(text) {
+      const code = extractCode(text);
+      const err = await tsxParseError(code);
+      if (err) return { pass: false, why: `no parse: ${err}` };
+      if (!/@tanstack\/react-router/.test(code)) return { pass: false, why: "missing import" };
+      if (!/Link/.test(code)) return { pass: false, why: "no Link" };
+      if (!/active.*style|isActive/.test(code)) return { pass: false, why: "no active style" };
+      if (!/interface\s+\w+Props|type\s+\w+Props/.test(code)) return { pass: false, why: "no props type" };
+      return { pass: true };
+    },
+  },
 ];
 
 /** A model that ran out of budget mid-file is TRUNCATED, not broken — scoring

@@ -6,6 +6,7 @@ import type { SyntaxHighlighterProps } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Check,ChevronDown,ChevronUp,Copy,Download,FileCode2,Loader2 } from "lucide-react";
 import { sanitizeSvg } from "@/lib/security/sanitize";
+import { linkifySourceRefs, mightContainRef, parseRefHref } from "@/lib/editor/line-refs";
 import dynamic from "@/lib/lazy-component";
 import { importWithRetry } from "@/lib/import-with-retry";
 
@@ -301,20 +302,6 @@ function LovableChatCodeBlock({ language, code }: { language: string; code: stri
   );
 }
 
-function linkifyLineRefs(content: string): string {
-  const REF = /@([\w./\-]+\.\w{1,8}):(\d+)(?:-(\d+))?/g;
-  const SECURITY = /@security-memory\b|Security Memory/g;
-  return content
-    .split(/(```[\s\S]*?```)/)
-    .map((seg, i) => {
-      if (i % 2 === 1) return seg;
-      return seg
-        .replace(SECURITY, () => `[Security Memory](#lm-security-memory)`)
-        .replace(REF, (m, path, start) => `[${m}](#lm-ref/${encodeURIComponent(path)}/${start})`);
-    })
-    .join("");
-}
-
 export const LovableMessageContent = React.memo(function LovableMessageContent({
   content,
   mode: _mode,
@@ -322,7 +309,14 @@ export const LovableMessageContent = React.memo(function LovableMessageContent({
   content: string;
   mode: string;
 }) {
-  const processed = useMemo(() => (content.includes("@") ? linkifyLineRefs(content) : content), [content]);
+  // Ref linkification moved to lib/editor/line-refs.ts, which additionally
+  // recognizes BARE refs (`Button.tsx:42`, no `@`) — the form models write
+  // naturally — while keeping `localhost:3000`, `12:30`, URLs-with-ports and
+  // anything inside code fences or backticks out. It is unit-tested there.
+  const processed = useMemo(
+    () => (mightContainRef(content) ? linkifySourceRefs(content) : content),
+    [content],
+  );
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -365,20 +359,22 @@ export const LovableMessageContent = React.memo(function LovableMessageContent({
             );
           }
           if (href?.startsWith("#lm-ref/")) {
-            const [, encodedPath, lineStr] = href.split("/");
+            const ref = parseRefHref(href);
+            if (!ref) return <>{children}</>;
             return (
               <button
                 onClick={(e) => {
                   e.preventDefault();
                   window.dispatchEvent(
                     new CustomEvent("lifemark-open-file-at-line", {
-                      detail: { path: decodeURIComponent(encodedPath ?? ""), line: parseInt(lineStr ?? "0", 10) },
+                      detail: { path: ref.path, line: ref.line, endLine: ref.endLine },
                     }),
                   );
                 }}
-                className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded-md bg-violet-500/10 border border-violet-500/25 text-violet-400 hover:bg-violet-500/20 font-mono text-[0.85em] align-baseline transition-colors"
-                title="Open in editor at this line"
+                className="inline-flex items-center gap-1 px-1.5 py-0 rounded-md bg-violet-500/10 border border-violet-500/25 text-violet-400 hover:bg-violet-500/20 font-mono text-[0.85em] align-baseline transition-colors"
+                title={`Open ${ref.path} at line ${ref.line}`}
               >
+                <FileCode2 className="w-3 h-3 shrink-0 opacity-70" aria-hidden />
                 {children}
               </button>
             );

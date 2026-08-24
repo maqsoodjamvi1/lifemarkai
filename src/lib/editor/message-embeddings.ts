@@ -1,11 +1,17 @@
 /**
  * Persist + reuse chat message embeddings for semantic search.
- * Embeddings are stored as JSONB float arrays (text-embedding-3-small).
+ * Embeddings are stored as JSONB float arrays; the `model` column records
+ * which embedding source actually produced each row (OpenAI vs. the local
+ * Python service — see src/lib/ai/embed-text.ts), since embed-text.ts can
+ * fall back between sources per-call depending on config. A cached row
+ * whose model doesn't match the model embedTexts() would use right now is
+ * treated as stale and re-embedded — this is what keeps mixed-dimension
+ * vectors out of the table in the first place (cosineSimilarity in
+ * search-chat-messages.ts is the second, independent guard against them).
  */
 import { createHash } from "crypto";
-import { embedTexts } from "../ai/embed-text.ts";
+import { embedTexts, getExpectedEmbedModel } from "../ai/embed-text.ts";
 
-export const MESSAGE_EMBED_MODEL = "text-embedding-3-small";
 export const MESSAGE_EMBED_EXCERPT_LEN = 800;
 
 export function messageEmbedExcerpt(content: string): string {
@@ -19,6 +25,7 @@ export function hashEmbedContent(excerpt: string): string {
 type EmbedRow = {
   message_id: string;
   content_hash: string;
+  model: string | null;
   embedding: number[] | unknown;
 };
 
@@ -38,8 +45,10 @@ function asVector(raw: unknown): number[] | null {
 }
 
 /**
- * Load cached vectors for messages; embed + upsert any that are missing or stale.
- * Returns a Map messageId → vector (only for messages that have a usable vector).
+ * Load cached vectors for messages; embed + upsert any that are missing,
+ * content-stale, or from a different embedding model than embedTexts()
+ * would use right now. Returns a Map messageId → vector (only for messages
+ * that have a usable, current-model vector).
  */
 export async function getOrCreateMessageEmbeddings(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -53,13 +62,20 @@ export async function getOrCreateMessageEmbeddings(
   const ids = messages.map((m) => m.id);
   const { data: cached } = await supabase
     .from("message_embeddings")
-    .select("message_id, content_hash, embedding")
+    .select("message_id, content_hash, model, embedding")
     .eq("project_id", projectId)
     .in("message_id", ids);
 
   const byId = new Map<string, EmbedRow>(
     ((cached ?? []) as EmbedRow[]).map((r) => [r.message_id, r]),
   );
+
+  // Cheap, no-network check of which model embedTexts() would use right
+  // now, so a cached row from a since-retired model gets treated as stale
+  // rather than reused. See getExpectedEmbedModel()'s doc comment for why
+  // this is a best-effort hint, not the correctness guarantee — that's
+  // cosineSimilarity's dimension check in search-chat-messages.ts.
+  const activeModel = getExpectedEmbedModel();
 
   const needEmbed: Array<{ id: string; excerpt: string; hash: string }> = [];
   for (const m of messages) {
@@ -68,7 +84,8 @@ export async function getOrCreateMessageEmbeddings(
     const hash = hashEmbedContent(excerpt);
     const row = byId.get(m.id);
     const vec = row ? asVector(row.embedding) : null;
-    if (row && row.content_hash === hash && vec) {
+    const modelMatches = !activeModel || !row?.model || row.model === activeModel;
+    if (row && row.content_hash === hash && vec && modelMatches) {
       out.set(m.id, vec);
     } else {
       needEmbed.push({ id: m.id, excerpt, hash });
@@ -81,15 +98,15 @@ export async function getOrCreateMessageEmbeddings(
   const BATCH = 64;
   for (let i = 0; i < needEmbed.length; i += BATCH) {
     const batch = needEmbed.slice(i, i + BATCH);
-    const vectors = await embedTexts(batch.map((b) => b.excerpt));
-    if (!vectors || vectors.length !== batch.length) continue;
+    const result = await embedTexts(batch.map((b) => b.excerpt));
+    if (!result || result.vectors.length !== batch.length) continue;
 
     const upserts = batch.map((b, idx) => ({
       message_id: b.id,
       project_id: projectId,
       content_hash: b.hash,
-      model: MESSAGE_EMBED_MODEL,
-      embedding: vectors[idx]!,
+      model: result.model,
+      embedding: result.vectors[idx]!,
       updated_at: new Date().toISOString(),
     }));
 
@@ -97,7 +114,7 @@ export async function getOrCreateMessageEmbeddings(
       onConflict: "message_id",
     });
 
-    batch.forEach((b, idx) => out.set(b.id, vectors[idx]!));
+    batch.forEach((b, idx) => out.set(b.id, result.vectors[idx]!));
   }
 
   return out;
@@ -113,15 +130,15 @@ export async function upsertMessageEmbedding(
 ): Promise<void> {
   const excerpt = messageEmbedExcerpt(content);
   if (!excerpt.trim()) return;
-  const vectors = await embedTexts([excerpt]);
-  if (!vectors?.[0]) return;
+  const result = await embedTexts([excerpt]);
+  if (!result?.vectors[0]) return;
   await supabase.from("message_embeddings").upsert(
     {
       message_id: messageId,
       project_id: projectId,
       content_hash: hashEmbedContent(excerpt),
-      model: MESSAGE_EMBED_MODEL,
-      embedding: vectors[0],
+      model: result.model,
+      embedding: result.vectors[0],
       updated_at: new Date().toISOString(),
     },
     { onConflict: "message_id" },

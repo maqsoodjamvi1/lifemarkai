@@ -172,6 +172,64 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
     return cur;
   }
 
+  // ── Click → source file:line mapping ───────────────────────────────────
+  // Two mechanisms, best-effort, in order:
+  //  1. React dev Fibers: jsxDEV attaches _debugSource {fileName, lineNumber}
+  //     to every element in React <=18 development builds. Walk the fiber
+  //     chain upward until a node carries it. React 19 removed _debugSource,
+  //     so this returns null there.
+  //  2. data-source-file / data-source-line attributes on the element or an
+  //     ancestor — a build-time tagger (vite plugin) can stamp these, which
+  //     works on every React version including 19.
+  // Returns {file, line|null} or null. Callers must treat this as a HINT:
+  // selection payloads carry it alongside the xpath, never instead of it.
+  function normalizeSourcePath(fileName) {
+    var p = String(fileName).split('\\\\').join('/');
+    var idx = p.lastIndexOf('/src/');
+    if (idx >= 0) return p.slice(idx + 1);
+    // Strip absolute prefixes we can't map (container paths, URLs).
+    var lastSeg = p.lastIndexOf('/');
+    return p.charAt(0) === '/' && lastSeg > 0 ? p.slice(lastSeg + 1) : p;
+  }
+
+  function sourceHint(el) {
+    try {
+      var keys = Object.keys(el);
+      var fiberKey = null;
+      for (var i = 0; i < keys.length; i++) {
+        if (keys[i].indexOf('__reactFiber$') === 0 || keys[i].indexOf('__reactInternalInstance$') === 0) {
+          fiberKey = keys[i];
+          break;
+        }
+      }
+      if (fiberKey && el[fiberKey]) {
+        var inst = el[fiberKey];
+        var hops = 0;
+        while (inst && hops < 50) {
+          var dbg = inst._debugSource ||
+            (inst.elementType && inst.elementType._debugSource) || null;
+          if (dbg && dbg.fileName) {
+            return {
+              file: normalizeSourcePath(dbg.fileName),
+              line: typeof dbg.lineNumber === 'number' && dbg.lineNumber > 0 ? dbg.lineNumber : null
+            };
+          }
+          inst = inst.return;
+          hops++;
+        }
+      }
+    } catch (e) {}
+    try {
+      var host = el && el.closest ? el.closest('[data-source-file]') : null;
+      if (host) {
+        var f = host.getAttribute('data-source-file');
+        var ln = parseInt(host.getAttribute('data-source-line') || '', 10);
+        if (f) return { file: normalizeSourcePath(f), line: ln > 0 ? ln : null };
+      }
+    } catch (e) {}
+    return null;
+  }
+
   function clearMarks() {
     document.querySelectorAll('.lm-hover').forEach(function(n){ n.classList.remove('lm-hover'); });
     document.querySelectorAll('.lm-selected').forEach(function(n){ n.classList.remove('lm-selected'); });
@@ -192,6 +250,7 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
 
   function startInlineEdit(el) {
     var original = (el.textContent || '').trim();
+    var editSrc = sourceHint(el);
     var snapshot = {
       tagName: el.tagName.toLowerCase(),
       textContent: original,
@@ -221,7 +280,9 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
         tagName: snapshot.tagName,
         textContent: original,
         classList: snapshot.classList,
-        xpath: snapshot.xpath
+        xpath: snapshot.xpath,
+        sourceFile: editSrc ? editSrc.file : null,
+        sourceLine: editSrc ? editSrc.line : null
       }, '*');
     }
     function onBlur() { finish(true); }
@@ -239,13 +300,16 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
       var el = e.target;
       if (!el || el === document.body) return;
       var rect = el.getBoundingClientRect();
+      var pinSrc = sourceHint(el);
       window.parent.postMessage({
         source: 'lifemark-comment-pin',
         tagName: el.tagName.toLowerCase(),
         textContent: (el.textContent || '').trim().slice(0, 80),
         classList: Array.prototype.filter.call(el.classList, function(c){ return c.indexOf('lm-') !== 0; }),
         xpath: getXPath(el),
-        rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
+        rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
+        sourceFile: pinSrc ? pinSrc.file : null,
+        sourceLine: pinSrc ? pinSrc.line : null
       }, '*');
       return;
     }
@@ -270,6 +334,7 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
       el.classList.add('lm-selected');
       el.classList.add('lm-multi');
     }
+    var selSrc = sourceHint(el);
     window.parent.postMessage({
       source: 'lifemark-veb',
       additive: additive,
@@ -277,7 +342,9 @@ export const VEB_BRIDGE_SCRIPT = `(function() {
       textContent: (el.textContent || '').trim(),
       classList: Array.prototype.filter.call(el.classList, function(c){ return c.indexOf('lm-') !== 0; }),
       xpath: getXPath(el),
-      rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
+      rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
+      sourceFile: selSrc ? selSrc.file : null,
+      sourceLine: selSrc ? selSrc.line : null
     }, '*');
   }
 

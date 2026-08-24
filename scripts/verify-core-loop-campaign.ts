@@ -129,31 +129,70 @@ type SandboxPreview = {
   sandboxId?: string | null;
   phase?: string | null;
   phaseDetail?: string | null;
+  previewProbe?: string | null;
   error?: string;
 };
 
+const PREVIEW_FETCH_TIMEOUT_MS = 30_000;
+const PREVIEW_VERIFY_TIMEOUT_MS = 180_000;
+
+async function fetchPreviewUrl(url: string): Promise<Response> {
+  return fetch(url, { redirect: "follow", signal: AbortSignal.timeout(PREVIEW_FETCH_TIMEOUT_MS) });
+}
+
+/** Confirm the Docker/Modal tunnel accepts HTTP before handing the URL to later gates. */
+async function confirmPreviewTunnel(url: string): Promise<void> {
+  await withTransientRetries(
+    `preview tunnel ${url}`,
+    async () => {
+      const response = await fetchPreviewUrl(url);
+      if (CORE_LOOP_POLICY.previewStrategy === "server-verified") return response;
+      if (response.ok) return response;
+      const detail = await response.text().catch(() => "");
+      if (looksLikeServedAppHtml(detail)) return response;
+      throw new Error(`remote preview returned ${response.status}`);
+    },
+    8,
+  );
+}
+
+async function sandboxPreviewReady(state: SandboxPreview): Promise<boolean> {
+  if (!state.previewUrl || !state.sandboxId || state.ok !== true || state.phase !== "ready") {
+    return false;
+  }
+  if (state.previewProbe === "verified") return true;
+  if (state.previewProbe === "unverified" || state.previewProbe === "unknown") return false;
+  try {
+    await confirmPreviewTunnel(state.previewUrl);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function startRemotePreview(projectId: string, cookie: string) {
-  const start = await jsonFetch<SandboxPreview>(
-    `/api/projects/${projectId}/sandbox-preview`,
-    cookie,
-    { method: "POST", body: "{}" },
+  const start = await withTransientRetries("sandbox-preview POST", () =>
+    jsonFetch<SandboxPreview>(`/api/projects/${projectId}/sandbox-preview`, cookie, {
+      method: "POST",
+      body: "{}",
+    }),
   );
   if (start.enabled === false) throw new Error("remote sandbox preview is not configured");
   if (start.ok === false && start.phase === "error") {
     throw new Error(start.error ?? start.phaseDetail ?? "remote preview failed to start");
   }
-  if (start.previewUrl && start.sandboxId && start.ready !== false) {
-    return { previewUrl: start.previewUrl, sandboxId: start.sandboxId };
+  if (await sandboxPreviewReady(start)) {
+    return { previewUrl: start.previewUrl!, sandboxId: start.sandboxId! };
   }
 
   const deadline = Date.now() + DEPLOY_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const state = await jsonFetch<SandboxPreview>(
-      `/api/projects/${projectId}/sandbox-preview?phaseOnly=1`,
-      cookie,
+    const state = await withTransientRetries("sandbox-preview poll", () =>
+      jsonFetch<SandboxPreview>(`/api/projects/${projectId}/sandbox-preview?phaseOnly=1`, cookie),
+      3,
     );
-    if (state.previewUrl && state.sandboxId && state.ok === true && state.phase === "ready") {
-      return { previewUrl: state.previewUrl, sandboxId: state.sandboxId };
+    if (await sandboxPreviewReady(state)) {
+      return { previewUrl: state.previewUrl!, sandboxId: state.sandboxId! };
     }
     // "app_error" = the container is serving but the app answers 5xx (a build
     // failure in the generated code). Terminal here: polling longer cannot fix
@@ -296,7 +335,13 @@ function coreLoopUrl(path: string, method: string): string {
 async function jsonFetch<T>(path: string, cookie: string, init: RequestInit = {}): Promise<T> {
   const method = init.method ?? "GET";
   const timeoutMs =
-    path.includes("/sandbox-preview") && method === "POST" ? DEPLOY_TIMEOUT_MS : undefined;
+    init.signal
+      ? undefined
+      : path.includes("/sandbox-preview") && method === "POST"
+        ? DEPLOY_TIMEOUT_MS
+        : path.includes("/preview-verify") && method === "POST"
+          ? PREVIEW_VERIFY_TIMEOUT_MS
+          : undefined;
   const signal = init.signal ?? (timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined);
   let response: Response;
   try {
@@ -531,33 +576,36 @@ async function main() {
       stage = "preview";
       const remotePreview = await startRemotePreview(project.id, cookie);
       sandboxId = remotePreview.sandboxId;
-      const previewResponse = await fetch(remotePreview.previewUrl, { redirect: "follow" });
-      if (!previewResponse.ok) {
-        // KEEP THE BODY. A bare "remote preview returned 500" is unactionable —
-        // it cannot tell a Traefik 502 (sandbox down) from vite answering its
-        // own 500 (the generated code does not transform), and those have
-        // nothing to do with each other. Vite puts the file, line and message
-        // straight in the response, so a run that throws this away forces the
-        // next debugging pass to be a guess. Truncated because a vite error
-        // page carries the whole module graph after the part that matters.
-        const detail = await previewResponse.text().catch(() => "");
-        const deferToServerVerify =
-          CORE_LOOP_POLICY.previewStrategy === "server-verified" && looksLikeServedAppHtml(detail);
-        if (!deferToServerVerify) {
-          const snippet = detail.replace(/\s+/g, " ").trim().slice(0, 600);
-          throw new Error(
-            `remote preview returned ${previewResponse.status}` +
-              (snippet ? ` — ${snippet}` : ""),
-          );
+      if (CORE_LOOP_POLICY.previewStrategy !== "server-verified") {
+        const previewResponse = await withTransientRetries(
+          "preview URL",
+          () => fetchPreviewUrl(remotePreview.previewUrl),
+          5,
+        );
+        if (!previewResponse.ok) {
+          const detail = await previewResponse.text().catch(() => "");
+          const deferToServerVerify = looksLikeServedAppHtml(detail);
+          if (!deferToServerVerify) {
+            const snippet = detail.replace(/\s+/g, " ").trim().slice(0, 600);
+            throw new Error(
+              `remote preview returned ${previewResponse.status}` +
+                (snippet ? ` — ${snippet}` : ""),
+            );
+          }
         }
       }
-      const preview = await jsonFetch<{
-        ok?: boolean;
-        checks?: Array<{ name: string; pass: boolean; detail?: string }>;
-      }>(`/api/projects/${project.id}/preview-verify`, cookie, {
-        method: "POST",
-        body: JSON.stringify({ previewUrl: remotePreview.previewUrl }),
-      });
+      const preview = await withTransientRetries(
+        "preview-verify",
+        () =>
+          jsonFetch<{
+            ok?: boolean;
+            checks?: Array<{ name: string; pass: boolean; detail?: string }>;
+          }>(`/api/projects/${project.id}/preview-verify`, cookie, {
+            method: "POST",
+            body: JSON.stringify({ previewUrl: remotePreview.previewUrl }),
+          }),
+        3,
+      );
       attempt.previewPassed = preview.ok === true;
       if (!attempt.previewPassed) {
         const failed = preview.checks

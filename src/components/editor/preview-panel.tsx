@@ -913,6 +913,26 @@ export function PreviewPanel({
         typeof o.width === "number" && typeof o.height === "number"
       );
     }
+    // Source hints ride along on selection messages (bridge sourceHint()).
+    // Same trust posture as everything else here: the preview runs
+    // user-generated code, so the values are shape-validated and length-capped
+    // before touching state. A hostile preview can lie about the file, but the
+    // lie only redirects which of the USER'S OWN project files an edit
+    // targets — something their code could do anyway.
+    function sourceHintOf(d: Record<string, unknown>): {
+      sourceFile: string | null;
+      sourceLine: number | null;
+    } {
+      const file =
+        typeof d.sourceFile === "string" && d.sourceFile.length > 0 && d.sourceFile.length <= 512
+          ? d.sourceFile
+          : null;
+      const line =
+        typeof d.sourceLine === "number" && Number.isFinite(d.sourceLine) && d.sourceLine > 0
+          ? Math.floor(d.sourceLine)
+          : null;
+      return { sourceFile: file, sourceLine: file ? line : null };
+    }
     function asVebElement(d: Record<string, unknown>): VebElement | null {
       if (typeof d.tagName !== "string" || typeof d.xpath !== "string" || !isRect(d.rect)) return null;
       return {
@@ -923,6 +943,7 @@ export function PreviewPanel({
           : [],
         xpath: d.xpath,
         rect: d.rect,
+        ...sourceHintOf(d),
       };
     }
     function asVebInlineElement(d: Record<string, unknown>): VebElement | null {
@@ -935,6 +956,7 @@ export function PreviewPanel({
           : [],
         xpath: d.xpath,
         rect: { top: 0, left: 0, width: 0, height: 0 },
+        ...sourceHintOf(d),
       };
     }
     function handler(e: MessageEvent) {
@@ -2855,9 +2877,14 @@ MODAL_TOKEN_SECRET=...
               if (vebSelectedList.length === 0) return;
               const lines = vebSelectedList.map((el, i) => {
                 const text = el.textContent.trim().slice(0, 80);
+                // Source hint from the bridge — lets the AI open the exact
+                // file instead of hunting for the element by its text.
+                const src = el.sourceFile
+                  ? ` (source: ${el.sourceFile}${el.sourceLine ? `:${el.sourceLine}` : ""})`
+                  : "";
                 return `${i + 1}. <${el.tagName}>${text ? ` "${text}"` : ""}${
                   el.classList.length ? ` class="${el.classList.slice(0, 4).join(" ")}"` : ""
-                }`;
+                }${src}`;
               });
               onSendPromptToChat?.(
                 `I selected ${vebSelectedList.length} element${vebSelectedList.length === 1 ? "" : "s"} in the preview:\n${lines.join("\n")}\n\nPlease improve or fix these elements.`,
