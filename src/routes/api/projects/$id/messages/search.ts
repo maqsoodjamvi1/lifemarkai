@@ -36,8 +36,8 @@ async function handleGET(req: Request, params: any) {
   const messages = (rows ?? []).reverse();
 
   if (mode === "semantic") {
-    const queryVectors = await embedTexts([q]);
-    if (!queryVectors?.[0]) {
+    const queryResult = await embedTexts([q]);
+    if (!queryResult?.vectors[0]) {
       const hits = rankMessagesByKeyword(messages, q, 40);
       return Response.json({ hits, mode: "keyword" as const, fallback: true });
     }
@@ -48,7 +48,7 @@ async function handleGET(req: Request, params: any) {
       return Response.json({ hits, mode: "keyword" as const, fallback: true });
     }
 
-    const hits = rankMessagesByEmbedding(messages, queryVectors[0], map, 40);
+    const hits = rankMessagesByEmbedding(messages, queryResult.vectors[0], map, 40);
     return Response.json({
       hits,
       mode: "semantic" as const,
