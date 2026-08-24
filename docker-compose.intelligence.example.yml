@@ -1,0 +1,24 @@
+# Example Compose fragment for the Python Intelligence Service.
+# Merge this service into your existing compose setup (or create the
+# equivalent as a second Coolify resource in the same project so it shares
+# the internal network with the main app container).
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.intelligence.example.yml up
+
+services:
+  intelligence:
+    build: ./services/intelligence
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
