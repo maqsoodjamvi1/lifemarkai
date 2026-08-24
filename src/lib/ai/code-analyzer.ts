@@ -8,9 +8,15 @@
  * Dependency-free by design: `typescript` is a devDependency, so importing the
  * compiler at runtime would risk production builds and bundle bloat. This uses
  * resilient line/brace heuristics instead — precise enough for navigation and
- * summarization, and safe in any build. Upgrade path: swap the internals for the
- * TS compiler API if `typescript` is moved to dependencies.
+ * summarization, and safe in any build.
+ *
+ * Upgrade path (now built): summarizeFileSmart / findDefinitionSmart below use
+ * the Python intelligence service's tree-sitter parser when
+ * INTELLIGENCE_SERVICE_URL is set, and fall back to these heuristics on any
+ * failure. The sync originals remain for callers that cannot await.
  */
+
+import { analyzeFileRemote, findDefinitionRemote } from "./intelligence-client.ts";
 
 export interface SymbolInfo {
   kind: "function" | "component" | "class" | "const" | "type" | "interface" | "hook";
@@ -168,4 +174,69 @@ export function findDefinition(
     }
   }
   return hits.length ? hits.join("\n") : `No definition found for "${symbol}".`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Remote-first variants — the upgrade path the header comment promised.
+//
+// When INTELLIGENCE_SERVICE_URL is set, these use the Python service's
+// tree-sitter parser (services/intelligence/), which parses precisely where
+// the line/brace heuristics above can misfire (multi-line signatures, nested
+// braces, template literals containing code-like text). On ANY failure —
+// env unset, service down, unsupported extension, timeout — they fall back
+// to the sync heuristics, so agent behavior never regresses. Callers that
+// can await should prefer these; the sync originals stay for sync contexts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** summarizeFile, but AST-precise when the intelligence service is reachable. */
+export async function summarizeFileSmart(path: string, content: string): Promise<string> {
+  const remote = await analyzeFileRemote(path, content);
+  // Empty symbol+import result for a code file usually means the remote
+  // parser didn't support the extension — trust the heuristic instead.
+  if (!remote || (remote.symbols.length === 0 && remote.imports.length === 0)) {
+    return summarizeFile(path, content);
+  }
+
+  const out: string[] = [`${path} (${remote.loc} lines)`];
+  if (remote.imports.length) {
+    out.push(`\nImports (${remote.imports.length}):`);
+    for (const im of remote.imports.slice(0, 40)) out.push(`  L${im.line}: ${im.what} ← ${im.source}`);
+  }
+  const groups: Array<[string, string]> = [
+    ["Components", "component"],
+    ["Functions", "function"],
+    ["Hooks", "hook"],
+    ["Classes", "class"],
+    ["Interfaces", "interface"],
+    ["Types", "type"],
+    ["Consts", "const"],
+  ];
+  for (const [label, kind] of groups) {
+    const items = remote.symbols.filter((s) => s.kind === kind);
+    if (!items.length) continue;
+    out.push(`\n${label} (${items.length}):`);
+    for (const s of items.slice(0, 60)) {
+      out.push(`  L${s.line}: ${s.exported ? "export " : ""}${s.name}${s.signature ? ` — ${s.signature}` : ""}`);
+    }
+  }
+  if (remote.default_export) out.push(`\nDefault export: ${remote.default_export}`);
+  return out.join("\n");
+}
+
+/** findDefinition, but AST-precise when the intelligence service is reachable. */
+export async function findDefinitionSmart(
+  files: Array<{ path: string; content: string }>,
+  symbol: string,
+): Promise<string> {
+  const remote = await findDefinitionRemote(files, symbol);
+  if (remote === null) return findDefinition(files, symbol);
+  if (!remote.length) {
+    // The remote parser found nothing — cross-check with the heuristic
+    // before reporting "not found": files with extensions the remote parser
+    // skips (e.g. .vue, .svelte) are invisible to it but not to the regex.
+    return findDefinition(files, symbol);
+  }
+  return remote
+    .map((h) => `${h.file}:${h.line}  [${h.kind}${h.exported ? ", exported" : ""}]  ${h.signature ?? symbol}`)
+    .join("\n");
 }
