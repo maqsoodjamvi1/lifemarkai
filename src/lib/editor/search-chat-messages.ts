@@ -84,12 +84,20 @@ export function rankMessagesByKeyword(
   return hits.sort((a, b) => b.score - a.score).slice(0, limit);
 }
 
-export function cosineSimilarity(a: number[], b: number[]): number {
+/**
+ * Returns null (not 0) when the vectors have different lengths. Different
+ * embedding models (e.g. OpenAI's 1536-dim vs. the local service's 384-dim)
+ * produce incompatible vector spaces — silently comparing a truncated
+ * prefix of the longer one produces a meaningless score, not a smaller-but-
+ * valid one. Callers must treat null as "skip this pair", not as "no
+ * similarity" (0 would still rank it, just last, which is still wrong).
+ */
+export function cosineSimilarity(a: number[], b: number[]): number | null {
+  if (a.length !== b.length) return null;
   let dot = 0;
   let na = 0;
   let nb = 0;
-  const len = Math.min(a.length, b.length);
-  for (let i = 0; i < len; i++) {
+  for (let i = 0; i < a.length; i++) {
     dot += a[i]! * b[i]!;
     na += a[i]! * a[i]!;
     nb += b[i]! * b[i]!;
@@ -110,7 +118,12 @@ export function rankMessagesByEmbedding(
     const vec = vectors.get(msg.id);
     if (!vec) continue;
     const score = cosineSimilarity(queryVector, vec);
-    if (score < 0.25) continue;
+    // score === null means a dimension mismatch — a cached vector from a
+    // different embedding model than today's live query vector. Skip it
+    // rather than compare incompatible vector spaces; message-embeddings.ts
+    // re-embeds stale-model rows on next write, but this guard is what
+    // actually stops a wrong ranking from reaching the user in the meantime.
+    if (score === null || score < 0.25) continue;
     hits.push({
       id: msg.id,
       score,
