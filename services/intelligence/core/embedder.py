@@ -1,28 +1,40 @@
 """
 Local embedding model wrapper.
 
-Uses sentence-transformers/all-MiniLM-L6-v2 by default: 384-dim, ~80MB,
-fast enough on CPU for interactive use, no API key, no per-call cost.
+Default model: jinaai/jina-embeddings-v2-base-code — a CODE-trained
+embedding model (768-dim, ~160M params, 8192-token context) that
+substantially outperforms generic text models like all-MiniLM-L6-v2 on
+code retrieval. Runs fine on CPU; no API key, no per-call cost.
 
-IMPORTANT — dimensionality: this model outputs 384-dim vectors.
-OpenAI's text-embedding-3-small (the model embed-text.ts calls) outputs
-1536-dim vectors. If LifemarkAI stores embeddings in a fixed-width pgvector
-column sized for 1536, switching the *source* of embeddings requires either:
-  (a) a new pgvector column sized 384, with existing rows backfilled, or
-  (b) padding/truncation (lossy — not recommended), or
-  (c) picking a 1536-dim sentence-transformers model instead (slower, bigger).
-Check `supabase/migrations` for any `vector(1536)` column before wiring this
-in as a drop-in replacement rather than a new code path.
+Override with EMBED_MODEL (and optionally EMBED_MODEL_REVISION to pin the
+exact HF revision — recommended in production because the jina code model
+loads custom modeling code via trust_remote_code).
+
+Dimensionality note: this model outputs 768-dim vectors; OpenAI's
+text-embedding-3-small outputs 1536-dim; the old MiniLM default output
+384-dim. LifemarkAI stores embeddings as JSONB with a `model` column and
+re-embeds rows whose model doesn't match the active one (see
+message-embeddings.ts / code-index.ts), so switching models is safe:
+mixed-model rows are treated as stale, never compared cross-dimension
+(cosineSimilarity returns null on dimension mismatch as the final guard).
 """
 
 from __future__ import annotations
 
+import os
 import threading
 from functools import lru_cache
 
 from sentence_transformers import SentenceTransformer
 
-_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+_MODEL_NAME = os.environ.get("EMBED_MODEL", "jinaai/jina-embeddings-v2-base-code")
+_MODEL_REVISION = os.environ.get("EMBED_MODEL_REVISION") or None
+# The jina v2 code model ships custom modeling code (ALiBi attention);
+# loading it requires trust_remote_code. Allow opting out for stock models.
+_TRUST_REMOTE_CODE = os.environ.get("EMBED_TRUST_REMOTE_CODE", "1") not in ("0", "false", "no")
+# Code chunks benefit from more context than chat excerpts; jina handles
+# 8192 tokens, so a 6000-char cap (~1500 tokens) is comfortably safe.
+_MAX_CHARS = int(os.environ.get("EMBED_MAX_CHARS", "6000"))
 _lock = threading.Lock()
 
 
@@ -30,12 +42,20 @@ _lock = threading.Lock()
 def _get_model() -> SentenceTransformer:
     # Loaded once per process, lazily, so the service boots fast and only
     # pays the model-load cost on first request.
-    return SentenceTransformer(_MODEL_NAME)
+    return SentenceTransformer(
+        _MODEL_NAME,
+        revision=_MODEL_REVISION,
+        trust_remote_code=_TRUST_REMOTE_CODE,
+    )
+
+
+def model_name() -> str:
+    return _MODEL_NAME
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts. Truncates each to 2000 chars, same cap embed-text.ts uses."""
-    clean = [t.strip()[:2000] for t in texts if t and t.strip()]
+    """Embed a batch of texts, each truncated to EMBED_MAX_CHARS chars."""
+    clean = [t.strip()[:_MAX_CHARS] for t in texts if t and t.strip()]
     if not clean:
         return []
     with _lock:

@@ -18,7 +18,10 @@
 import { embedTextsLocal } from "@/lib/ai/intelligence-client";
 
 export const OPENAI_EMBED_MODEL = "text-embedding-3-small";
-export const LOCAL_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2";
+// Code-trained model (768-dim) — see services/intelligence/core/embedder.py.
+// Must match the service's EMBED_MODEL default; the service reports its actual
+// model per-response, and that reported name is what gets persisted per row.
+export const LOCAL_EMBED_MODEL = "jinaai/jina-embeddings-v2-base-code";
 
 export interface EmbedResult {
   vectors: number[][];

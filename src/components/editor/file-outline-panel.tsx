@@ -1,19 +1,32 @@
 
-import { useMemo,useState } from "react";
-import { ChevronRight,ChevronDown,Box,FunctionSquare,Type,Hash,Component } from "lucide-react";
+import { useEffect,useMemo,useState } from "react";
+import { ChevronRight,ChevronDown,Box,FunctionSquare,Type,Hash,Component,Braces } from "lucide-react";
 import type { ProjectFile } from "@/types/database";
 
 // ── Symbol types ──────────────────────────────────────────────────────────────
 
-type SymbolKind = "component" | "function" | "interface" | "type" | "class" | "const" | "hook";
+type SymbolKind =
+  | "component"
+  | "function"
+  | "method"
+  | "interface"
+  | "type"
+  | "enum"
+  | "class"
+  | "const"
+  | "hook";
 
 interface OutlineSymbol {
   name: string;
   kind: SymbolKind;
   line: number; // 1-based
+  depth: number; // 0 = top level (regex fallback is always 0)
 }
 
-// ── Parser ────────────────────────────────────────────────────────────────────
+// ── Regex fallback parser ─────────────────────────────────────────────────────
+// Used when the tree-sitter WASM engine is unavailable (old browser, asset
+// missing). The engine path below is strictly better: real AST, nesting,
+// no false positives inside strings/comments.
 
 const PATTERNS: Array<{ kind: SymbolKind; re: RegExp }> = [
   // React components: export default function Foo / export function Foo / const Foo = () =>
@@ -94,14 +107,12 @@ function parseSymbols(content: string): OutlineSymbol[] {
       const key = `${line}:${name}`;
       if (!seen.has(key)) {
         seen.add(key);
-        symbols.push({ name, kind, line });
+        symbols.push({ name, kind, line, depth: 0 });
       }
     }
   }
 
-  // Sort by line number
   symbols.sort((a, b) => a.line - b.line);
-
   return symbols;
 }
 
@@ -111,8 +122,10 @@ const KIND_META: Record<SymbolKind, { label: string; color: string; Icon: React.
   component: { label: "C", color: "text-[#61dafb]", Icon: Component },
   hook:      { label: "H", color: "text-[#c792ea]", Icon: FunctionSquare },
   function:  { label: "f", color: "text-[#82aaff]", Icon: FunctionSquare },
+  method:    { label: "m", color: "text-[#89b4fa]", Icon: FunctionSquare },
   interface: { label: "I", color: "text-[#a3e635]", Icon: Type },
   type:      { label: "T", color: "text-[#fbbf24]", Icon: Type },
+  enum:      { label: "E", color: "text-[#f5c2e7]", Icon: Braces },
   class:     { label: "Cl", color: "text-[#f97316]", Icon: Box },
   const:     { label: "K", color: "text-[#94a3b8]", Icon: Hash },
 };
@@ -123,15 +136,48 @@ interface FileOutlinePanelProps {
   file: ProjectFile | null;
 }
 
+const CODE_EXTS = ["ts", "tsx", "js", "jsx"];
+
 export function FileOutlinePanel({ file }: FileOutlinePanelProps) {
   const [open, setOpen] = useState(true);
+  const [astSymbols, setAstSymbols] = useState<OutlineSymbol[] | null>(null);
 
-  const symbols = useMemo(() => {
-    if (!file?.content) return [];
-    const ext = file.path.split(".").pop()?.toLowerCase() ?? "";
-    if (!["ts", "tsx", "js", "jsx"].includes(ext)) return [];
+  const ext = file?.path.split(".").pop()?.toLowerCase() ?? "";
+  const isCode = CODE_EXTS.includes(ext);
+
+  // Precise outline via the tree-sitter WASM engine; regex fallback below.
+  useEffect(() => {
+    let cancelled = false;
+    setAstSymbols(null);
+    if (!file?.content || !isCode) return;
+    (async () => {
+      try {
+        const { extractOutline } = await import("@/lib/editor/tree-sitter-engine");
+        const entries = await extractOutline(file.path, file.content ?? "");
+        if (cancelled || !entries) return;
+        setAstSymbols(
+          entries.map((e) => ({
+            name: e.name,
+            kind: e.kind as SymbolKind,
+            line: e.line,
+            depth: e.depth,
+          })),
+        );
+      } catch {
+        // engine unavailable — regex fallback renders instead
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [file?.content, file?.path, isCode]);
+
+  const regexSymbols = useMemo(() => {
+    if (!file?.content || !isCode) return [];
     return parseSymbols(file.content);
-  }, [file?.content, file?.path]);
+  }, [file?.content, isCode]);
+
+  const symbols = astSymbols ?? regexSymbols;
 
   if (!file || symbols.length === 0) return null;
 
@@ -152,6 +198,14 @@ export function FileOutlinePanel({ file }: FileOutlinePanelProps) {
           {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
         </span>
         Outline
+        {astSymbols && (
+          <span
+            className="text-[8px] normal-case font-normal text-[#585b70] border border-[#313244] rounded px-1"
+            title="Precise AST outline (tree-sitter)"
+          >
+            AST
+          </span>
+        )}
         <span className="ml-auto text-[9px] normal-case font-normal text-[#45475a]">
           {symbols.length}
         </span>
@@ -160,13 +214,14 @@ export function FileOutlinePanel({ file }: FileOutlinePanelProps) {
       {open && (
         <div className="overflow-y-auto max-h-48 pb-1">
           {symbols.map((sym, idx) => {
-            const meta = KIND_META[sym.kind];
+            const meta = KIND_META[sym.kind] ?? KIND_META.const;
             return (
               <button
                 key={idx}
                 onClick={() => handleClick(sym.line)}
                 title={`${sym.kind} — line ${sym.line}`}
                 className="flex items-center gap-1.5 w-full px-3 py-0.5 text-left hover:bg-[#313244]/60 transition-colors group"
+                style={sym.depth > 0 ? { paddingLeft: `${12 + sym.depth * 14}px` } : undefined}
               >
                 <span className={`text-[9px] font-bold w-4 shrink-0 text-center font-mono ${meta.color}`}>
                   {meta.label}

@@ -8,6 +8,8 @@ import { summarizeFileSmart,findDefinitionSmart } from "./code-analyzer.ts";
 import { generateAndStoreImage } from "./image-asset.ts";
 import { formatPreviewConsole,formatPreviewNetwork,loadPreviewTelemetryFromDb } from "../preview/preview-telemetry.ts";
 import { createAdminClient } from "../supabase/server.ts";
+import { formatSearchResult,runStructuralRewrite,runStructuralSearch } from "./structural-tools.ts";
+import { ensureProjectCodeIndex,formatCodeSearch,searchProjectCode } from "./code-index.ts";
 
 export interface AgentTool {
   name: string;
@@ -280,6 +282,60 @@ function buildTools(
         return findDefinitionSmart(files, String(symbol ?? ""));
       },
     },
+    structural_search: {
+      name: "structural_search",
+      description:
+        "AST-pattern search across the project (ast-grep). Matches code STRUCTURE, never strings/comments. Metavariables: $X = one node, $$$XS = any number. Example patterns: 'console.log($$$A)', 'fetch($URL)', 'useEffect($$$A)', '<img $$$ATTRS />'.",
+      execute: async ({ pattern }: Record<string, unknown>) => {
+        const pat = String(pattern ?? "").trim();
+        if (!pat) return "Error: pattern is required.";
+        const fileList = Array.from(fileMap.entries()).map(([path, content]) => ({ path, content }));
+        const res = await runStructuralSearch(fileList, pat);
+        return formatSearchResult(res, pat);
+      },
+    },
+    structural_rewrite: {
+      name: "structural_rewrite",
+      description:
+        "AST-pattern rewrite across the WHOLE project in one call (ast-grep). Applies immediately to every match — use for mechanical multi-file changes (rename a call, add a prop to every <img>, swap an API). Metavariables from the pattern interpolate into the rewrite: pattern 'console.log($$$A)' + rewrite 'logger.debug($$$A)'. Verify afterwards with structural_search.",
+      execute: async ({ pattern, rewrite }: Record<string, unknown>) => {
+        const pat = String(pattern ?? "").trim();
+        const rw = String(rewrite ?? "");
+        if (!pat) return "Error: pattern is required.";
+        const fileList = Array.from(fileMap.entries()).map(([path, content]) => ({ path, content }));
+        const res = await runStructuralRewrite(fileList, pat, rw);
+        if (!res.available) {
+          return "structural_rewrite unavailable on this platform — use edit_file per occurrence instead.";
+        }
+        if (!res.changes.length) return `No matches for pattern: ${pat} — nothing changed.`;
+        for (const change of res.changes) {
+          fileMap.set(change.path, change.newContent);
+          onFileChange(change.path, change.newContent);
+        }
+        const perFile = res.changes.map((c) => `${c.path} (${c.count})`).join(", ");
+        return `Rewrote ${res.totalMatches} match(es) across ${res.changes.length} file(s): ${perFile}`;
+      },
+    },
+    code_search: {
+      name: "code_search",
+      description:
+        "SEMANTIC search over the project's code index — finds code by MEANING ('where is auth handled', 'payment flow', 'dark mode toggle') even when the words don't appear literally. Keeps its index fresh automatically (only changed files re-embed). Use search_code for exact text, structural_search for AST patterns, this for concepts.",
+      execute: async ({ query }: Record<string, unknown>) => {
+        const q = String(query ?? "").trim();
+        if (!q) return "Error: query is required.";
+        if (!projectId) return "code_search unavailable: no project context.";
+        try {
+          const supabase = createAdminClient();
+          const fileList = Array.from(fileMap.entries()).map(([path, content]) => ({ path, content }));
+          const stats = await ensureProjectCodeIndex(supabase, projectId, fileList);
+          const hits = await searchProjectCode(supabase, projectId, q);
+          return formatCodeSearch(stats, hits, q);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "unknown error";
+          return `code_search failed (${msg}) — fall back to search_code.`;
+        }
+      },
+    },
     generate_image: {
       name: "generate_image",
       description:
@@ -473,6 +529,39 @@ function buildToolDefinitions(): ToolDefinition[] {
         type: "object",
         properties: { symbol: { type: "string", description: "Symbol name to locate" } },
         required: ["symbol"],
+      },
+    },
+    {
+      name: "structural_search",
+      description:
+        "AST-pattern search (ast-grep): matches code structure, never strings/comments. $X = one node, $$$XS = many. E.g. 'console.log($$$A)', '<img $$$ATTRS />'.",
+      parameters: {
+        type: "object",
+        properties: { pattern: { type: "string", description: "ast-grep pattern" } },
+        required: ["pattern"],
+      },
+    },
+    {
+      name: "structural_rewrite",
+      description:
+        "AST-pattern rewrite applied to EVERY match project-wide in one call. Pattern metavariables interpolate into the rewrite. Use for mechanical multi-file changes; verify with structural_search afterwards.",
+      parameters: {
+        type: "object",
+        properties: {
+          pattern: { type: "string", description: "ast-grep pattern to match" },
+          rewrite: { type: "string", description: "replacement template (may use the pattern's metavariables)" },
+        },
+        required: ["pattern", "rewrite"],
+      },
+    },
+    {
+      name: "code_search",
+      description:
+        "Semantic code search by MEANING ('where is auth handled') over an auto-maintained embedding index. Use search_code for exact text, structural_search for AST patterns.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string", description: "Natural-language description of the code you need" } },
+        required: ["query"],
       },
     },
     {

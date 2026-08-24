@@ -1731,6 +1731,73 @@ export function CodePanel({
                       }));
                     },
                   });
+                  // Syntax-aware selection expand/shrink via the tree-sitter
+                  // WASM engine (Alt+Shift+Right / Alt+Shift+Left). Fail-soft:
+                  // if the engine can't load, the actions simply do nothing.
+                  editor.addAction({
+                    id: "lifemarkai.syntaxExpandSelection",
+                    label: "Expand Selection (Syntax-Aware)",
+                    keybindings: [monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.RightArrow],
+                    contextMenuGroupId: "navigation",
+                    contextMenuOrder: 1.5,
+                    async run(ed) {
+                      const model = ed.getModel();
+                      const sel = ed.getSelection();
+                      const path = activeTabRef.current?.path ?? "";
+                      if (!model || !sel || !path) return;
+                      try {
+                        const { syntaxExpandRange } = await import("@/lib/editor/tree-sitter-engine");
+                        const range = await syntaxExpandRange(path, model.getValue(), {
+                          start: model.getOffsetAt(sel.getStartPosition()),
+                          end: model.getOffsetAt(sel.getEndPosition()),
+                        });
+                        if (!range) return;
+                        const s2 = model.getPositionAt(range.start);
+                        const e2 = model.getPositionAt(range.end);
+                        ed.setSelection({
+                          selectionStartLineNumber: s2.lineNumber,
+                          selectionStartColumn: s2.column,
+                          positionLineNumber: e2.lineNumber,
+                          positionColumn: e2.column,
+                        });
+                        ed.revealRangeInCenterIfOutsideViewport({
+                          startLineNumber: s2.lineNumber,
+                          startColumn: s2.column,
+                          endLineNumber: e2.lineNumber,
+                          endColumn: e2.column,
+                        });
+                      } catch { /* engine unavailable */ }
+                    },
+                  });
+                  editor.addAction({
+                    id: "lifemarkai.syntaxShrinkSelection",
+                    label: "Shrink Selection (Syntax-Aware)",
+                    keybindings: [monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.LeftArrow],
+                    contextMenuGroupId: "navigation",
+                    contextMenuOrder: 1.6,
+                    async run(ed) {
+                      const model = ed.getModel();
+                      const sel = ed.getSelection();
+                      const path = activeTabRef.current?.path ?? "";
+                      if (!model || !sel || !path) return;
+                      try {
+                        const { syntaxShrinkRange } = await import("@/lib/editor/tree-sitter-engine");
+                        const range = await syntaxShrinkRange(path, model.getValue(), {
+                          start: model.getOffsetAt(sel.getStartPosition()),
+                          end: model.getOffsetAt(sel.getEndPosition()),
+                        });
+                        if (!range) return;
+                        const s2 = model.getPositionAt(range.start);
+                        const e2 = model.getPositionAt(range.end);
+                        ed.setSelection({
+                          selectionStartLineNumber: s2.lineNumber,
+                          selectionStartColumn: s2.column,
+                          positionLineNumber: e2.lineNumber,
+                          positionColumn: e2.column,
+                        });
+                      } catch { /* engine unavailable */ }
+                    },
+                  });
                   // Register duplicate-line actions so they appear in command palette
                   editor.addAction({
                     id: "lifemarkai.duplicateLineDown",
