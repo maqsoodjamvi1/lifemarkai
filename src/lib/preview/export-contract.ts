@@ -243,6 +243,10 @@ export function findMissingModules(files: ProjectFileLike[]): MissingModule[] {
     }
 
     for (const spec of new Set(collectAllSpecs(file.content))) {
+      // Vite resource queries (?url, ?raw, ?worker) and the dev-time route
+      // tree are not TS modules - same exemptions as normalize-imports.ts.
+      if (spec.includes("?")) continue;
+      if (/routeTree\.gen$/.test(spec.replace(/\.(ts|tsx|js|jsx)$/, ""))) continue;
       const res = resolveModule(file.path, spec, byPath);
       if (res.kind !== "missing") continue;
 

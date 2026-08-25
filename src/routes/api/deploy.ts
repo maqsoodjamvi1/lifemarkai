@@ -91,7 +91,8 @@ async function deployToNetlify(
   });
 
   // Poll until ready (max 60s)
-  const deadline = Date.now() + 60_000;
+  const buildBudgetMs = Math.max(60_000, Number.parseInt(process.env.NETLIFY_BUILD_TIMEOUT_MS ?? "240000", 10));
+  const deadline = Date.now() + buildBudgetMs;
   let liveUrl = deploy.ssl_url || deploy.url || "";
 
   // Falling out of this loop on the DEADLINE is not success. `liveUrl` was
@@ -118,7 +119,7 @@ async function deployToNetlify(
 
   if (!ready) {
     throw new Error(
-      "Netlify is still building after 60 seconds. The deploy may still finish — check your Netlify dashboard before publishing again.",
+      `Netlify is still building after ${Math.round(buildBudgetMs / 1000)} seconds. The deploy may still finish - check your Netlify dashboard before publishing again.`,
     );
   }
 

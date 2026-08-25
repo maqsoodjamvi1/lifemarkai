@@ -320,8 +320,11 @@ export default defineConfig(({ mode }) => {
             const httpServer = server.httpServer;
             if (!httpServer) return;
             httpServer.setTimeout(0);
-            httpServer.requestTimeout = 0;
-            httpServer.headersTimeout = 0;
+            // node:http servers have these; the Vite type is a union with
+            // Http2SecureServer, which doesn't — structural cast, no behavior change.
+            const timeouts = httpServer as { requestTimeout?: number; headersTimeout?: number };
+            timeouts.requestTimeout = 0;
+            timeouts.headersTimeout = 0;
           };
           // Post-hook: Vite attaches httpServer after configureServer returns.
           return () => {

@@ -2337,7 +2337,7 @@ The user has expressed frustration. Do the following:
                   verify_status: `Verification warnings on first build (continuing): ${reason}`,
                 })}\n\n`));
               }
-              for (const fixed of stagedVerification.fixedFiles) {
+              for (const fixed of stagedVerification?.fixedFiles ?? []) {
                 const existing = parsedFiles.findIndex((file) => file.path === fixed.path);
                 if (existing >= 0) parsedFiles[existing] = { ...parsedFiles[existing], content: fixed.content };
                 else parsedFiles.push({ path: fixed.path, content: fixed.content, language: fixed.language });

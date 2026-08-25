@@ -22,7 +22,7 @@ function ensureTanStackStylesFile<T extends { path: string; content?: string | n
   );
   if (!rootImportsStyles) return files;
   const styles = tanstackStartScaffold({}, undefined).find((f) => f.path === "src/styles.css");
-  return styles ? [...files, styles as T] : files;
+  return styles ? [...files, styles as unknown as T] : files;
 }
 
 /**
