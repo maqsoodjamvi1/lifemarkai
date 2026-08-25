@@ -20,6 +20,16 @@ ENV NODE_OPTIONS=--max-old-space-size=4096
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund --legacy-peer-deps
 
+# Chromium for src/lib/ai/self-verify.ts's real-browser render pass (see
+# PLAYWRIGHT_ENABLED below) — without it self-verify silently falls back to
+# much weaker static HTML checks and never catches a runtime crash before the
+# user sees it. Installed here, as root, so both the browser binary and its
+# apt-level shared libraries land in one place; the runner stage only needs
+# to re-install the libraries (a COPY can't carry OS packages across stages)
+# against the binary copied over from here.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npx playwright install --with-deps chromium
+
 # Copy the repo and build:
 #  1. AI HTTP bundles (.tmp/ai-http) for the SSE worker
 #  2. Vite production build (.output) — VITE_*/NEXT_PUBLIC_* are inlined here;
@@ -75,12 +85,26 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3000
+# Same browsers path as the build stage, so the binary COPYed below is found
+# at runtime by src/lib/ai/self-verify.ts (via PLAYWRIGHT_ENABLED).
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+
+# Runtime dependencies, application manifest, and the Chromium binary fetched
+# in the build stage. Left owned by root for now — installing Chromium's
+# shared-library dependencies below needs apt, which needs root — and
+# chowned to node right before switching USER.
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /ms-playwright /ms-playwright
+
+# The browser binary crossed stages via COPY above; its OS-level shared
+# libraries (libnss3, libatk, libgbm, …) are apt packages and cannot cross a
+# COPY, so re-resolve and install just those against the copied browser.
+RUN npx playwright install-deps chromium \
+  && rm -rf /var/lib/apt/lists/* \
+  && chown -R node:node /ms-playwright ./node_modules ./package.json
 
 USER node
-
-# Runtime dependencies and application manifest.
-COPY --chown=node:node --from=build /app/node_modules ./node_modules
-COPY --chown=node:node --from=build /app/package.json ./package.json
 
 # Start server output and isolated AI worker bundle.
 COPY --chown=node:node --from=build /app/.output ./.output
