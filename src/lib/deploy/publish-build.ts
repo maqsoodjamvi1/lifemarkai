@@ -17,6 +17,7 @@ import { randomUUID } from "crypto";
 import { tryViteBuild, looksLikeViteProject, type BuildFile } from "./build-project.ts";
 import { storeBuild, normaliseBuildPath } from "./build-store.ts";
 import { buildDeployIndexHtml } from "./build-deploy-files.ts";
+import { rerootClientBuild } from "./tss-publish.ts";
 import { recordEvent } from "../observability/events.ts";
 import { setCorrelation } from "../observability/correlation.ts";
 
@@ -136,6 +137,14 @@ export async function publishBuild(
     }
   }
 
+  // TSS SPA-mode builds land under dist/client/ — re-root the client dir
+  // (and drop server output) so asset references survive. Falls through to
+  // the hoist/bundle repair for any other layout.
+  const rerooted = rerootClientBuild(output);
+  if (rerooted) {
+    onLog?.("[publish] re-rooted client/ build output");
+    output = rerooted;
+  }
   output = ensureBuildEntryDocument(output, files, projectId, onLog);
 
   const stored = await storeBuild(projectId, buildId, output);
