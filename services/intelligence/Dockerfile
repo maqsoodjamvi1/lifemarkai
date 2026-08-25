@@ -1,5 +1,10 @@
 FROM python:3.11-slim
 
+# curl exists solely for the container healthcheck (Coolify execs
+# `curl -f http://localhost:8001/health` inside the container; python:slim
+# ships neither curl nor wget, which reads as "Degraded" forever).
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # tree-sitter-languages ships prebuilt wheels for linux x86_64/arm64, so no
