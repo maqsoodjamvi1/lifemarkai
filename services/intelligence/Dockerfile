@@ -31,4 +31,9 @@ RUN python -c "from core.embedder import _get_model; _get_model()"
 
 EXPOSE 8001
 
+# Docker-level healthcheck so the container reports health regardless of the
+# orchestrator's own probe wiring (Coolify's badge reads this).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8001/health || exit 1
+
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]

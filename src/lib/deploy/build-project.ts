@@ -16,6 +16,7 @@
  */
 
 import { spawn } from "child_process";
+import { ensureTssSpaPublishHook } from "./tss-publish.ts";
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -69,6 +70,9 @@ function run(
         // "Cannot find module '@rollup/rollup-linux-x64-gnu'". A publish build
         // is a dev-tooling run, so force a dev install.
         NODE_ENV: "development",
+        // TanStack Start projects publish as SPA builds (static hosting has no
+        // Node server) — their vite configs read this. See tss-publish.ts.
+        LM_PUBLISH_SPA: "1",
         CI: "1",
         npm_config_audit: "false",
         npm_config_fund: "false",
@@ -149,6 +153,9 @@ export async function tryViteBuild(
       if (!rel) continue;
       let content = f.content ?? "";
       if (/^(public\/)?index\.html$/.test(rel)) content = fixHtmlEntry(content, entry);
+      // Legacy TSS configs (generated before the scaffold shipped the hook)
+      // get the LM_PUBLISH_SPA switch injected here, in the temp copy only.
+      if (/^vite\.config\.(t|j)sx?$/.test(rel)) content = ensureTssSpaPublishHook(content);
       const dest = path.join(tmp, rel);
       await fs.mkdir(path.dirname(dest), { recursive: true });
       await fs.writeFile(dest, content, "utf-8");

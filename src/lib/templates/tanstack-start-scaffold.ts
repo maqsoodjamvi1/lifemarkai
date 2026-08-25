@@ -72,7 +72,12 @@ export default defineConfig({
     alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
   },
   plugins: [
-    tanstackStart(),
+    tanstackStart({
+      // Publish builds run on static hosting (no Node server). LM_PUBLISH_SPA=1
+      // (set only by the platform's publish build) switches to SPA mode with a
+      // real /index.html shell; dev + preview keep full SSR.
+      spa: { enabled: process.env.LM_PUBLISH_SPA === "1", prerender: { outputPath: "/index.html" } },
+    }),
     // react's Vite plugin MUST come after TanStack Start's plugin.
     viteReact(),
   ],

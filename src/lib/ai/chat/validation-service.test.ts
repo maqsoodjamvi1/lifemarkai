@@ -219,7 +219,10 @@ test("normalization replaces competing TanStack build configuration with one con
   const tailwind = normalized.files.find((file) => file.path === "tailwind.config.js")?.content ?? "";
 
   assert.equal(configs.filter((file) => file.path.startsWith("tailwind.config.")).length, 1);
-  assert.match(vite, /tanstackStart\(\)/);
+  assert.match(vite, /tanstackStart\(/);
+  // Publish builds flip TSS to SPA mode via this env hook — it must survive
+  // normalization or TSS projects go back to being unpublishable.
+  assert.match(vite, /LM_PUBLISH_SPA/);
   assert.match(tailwind, /import tailwindcssAnimate/);
   assert.doesNotMatch(tailwind, /undefined/);
 });
