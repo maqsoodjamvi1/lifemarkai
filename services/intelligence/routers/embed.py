@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from core.embedder import embed_texts, embedding_dim
+from core.embedder import embed_texts, embedding_dim, model_name
 
 router = APIRouter()
 
@@ -13,10 +13,10 @@ class EmbedRequest(BaseModel):
 class EmbedResponse(BaseModel):
     embeddings: list[list[float]]
     dim: int
-    model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    model: str
 
 
 @router.post("", response_model=EmbedResponse)
 async def embed(req: EmbedRequest) -> EmbedResponse:
     vectors = embed_texts(req.texts)
-    return EmbedResponse(embeddings=vectors, dim=embedding_dim())
+    return EmbedResponse(embeddings=vectors, dim=embedding_dim(), model=model_name())

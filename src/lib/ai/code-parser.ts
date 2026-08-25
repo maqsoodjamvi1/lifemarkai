@@ -760,8 +760,13 @@ function parseNamedImports(clause: string): string[] {
 }
 
 function hasDefaultImport(clause: string): boolean {
-  const withoutNamed = clause.replace(/\{[^}]*\}/g, "").trim();
-  return !!withoutNamed && !withoutNamed.startsWith("*") && withoutNamed !== ",";
+  // After stripping `{ named }`, a leftover `type` from `import type { Foo }`
+  // must NOT count as a default import — that false positive made every
+  // normalized types import look like a missing default export.
+  const withoutNamed = clause.replace(/\{[^}]*\}/g, "").replace(/,/g, " ").trim();
+  const tokens = withoutNamed.split(/\s+/).filter(Boolean);
+  if (tokens[0] === "type") tokens.shift();
+  return tokens.length > 0 && !tokens[0]!.startsWith("*");
 }
 
 function isNextServerComponent(path: string, content: string): boolean {
@@ -1117,6 +1122,8 @@ export function validateGeneratedFiles(
     ];
     for (const match of aliasImports) {
       const importPath = match[1];
+      // Same Vite asset-query exemption as relative imports above.
+      if (/\?(url|raw|inline|worker|sharedworker)\b/.test(importPath)) continue;
       // "@/x" maps to src/x in Vite apps but to ./x (project root) in Next.js
       // App Router apps (tsconfig paths "@/*": ["./*"]) — accept whichever resolves.
       const aliasResolves = (base: string) =>
@@ -1127,8 +1134,9 @@ export function validateGeneratedFiles(
         normPaths.has(base + ".jsx") ||
         normPaths.has(base + "/index.ts") ||
         normPaths.has(base + "/index.tsx");
-      const srcResolved = importPath.replace(/^@\//, "src/");
-      const rootResolved = importPath.replace(/^@\//, "");
+      const bareImportPath = importPath.replace(/\?(url|raw|inline|worker|sharedworker)\b.*$/, "");
+      const srcResolved = bareImportPath.replace(/^@\//, "src/");
+      const rootResolved = bareImportPath.replace(/^@\//, "");
       const resolved = aliasResolves(srcResolved)
         ? srcResolved
         : aliasResolves(rootResolved)
@@ -1493,7 +1501,7 @@ export function assessGenerationQuality(
   const featureComponents = all.filter(
     (f) => /(^|\/)(src\/)?components\//.test("/" + f.path) && !/\/components\/ui\//.test("/" + f.path)
   );
-  if (minFiles >= 12 && featureComponents.length < 3) {
+  if (!opts.singlePage && minFiles >= 12 && featureComponents.length < 3) {
     errors.push({
       type: "too_few_components",
       message: `Only ${featureComponents.length} feature component(s) under src/components/. Break the UI into the sections/cards/panels the blueprint calls for (header, hero, cards, etc.).`,

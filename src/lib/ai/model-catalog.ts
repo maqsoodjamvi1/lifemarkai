@@ -61,188 +61,76 @@ function envSlug(envKey: string, fallback: string): AIModel {
  * FAMILIES (for diversity) matters more than count.
  */
 const RAW_MODEL_CATALOG: CatalogModel[] = [
+  // ───────────────────────────────────────────────────────────────────────────
+  // THE LADDER — four models, one job each. See model-defaults.ts for the
+  // pipeline this implements and the measured prices behind it.
+  //
+  //   classify -> generate -> (verify) -> diagnose -> repair -> (verify) -> escalate
+  //
+  // Three vendors across four slots, on purpose: the diagnosis model and the
+  // model it briefs are never the same lab, which is the whole point of asking
+  // one model why another one's code broke.
+  // ───────────────────────────────────────────────────────────────────────────
   {
+    // Free-user tier, SMALL EDITS ONLY — never a full production build.
+    // See the warning in model-defaults.ts: this slug currently 429s on every
+    // call, so provider.ts silently serves the paid tier instead.
     id: envSlug("FREE_CODER", FREE_CODING_MODEL),
-    label: "Qwen3 Coder Free",
-    family: "qwen-free",
-    strengths: ["code", "fixes", "cheap", "fast", "longContext"],
+    label: "GLM 5.2 (Free)",
+    family: "z-ai",
+    strengths: ["code", "fixes", "cheap", "fast"],
     tier: "fast",
     cost: 0,
     envKey: "FREE_CODER",
   },
   {
-    id: envSlug("ECONOMY_CODER", ECONOMY_CODING_MODEL),
-    label: "Economy Coder",
-    family: "economy-code",
-    strengths: ["code", "fixes", "cheap", "fast", "longContext"],
-    tier: "balanced",
-    cost: 1,
-    envKey: "ECONOMY_CODER",
-  },
-  {
-    id: envSlug("ECONOMY_CHAT", ECONOMY_CHAT_MODEL),
-    label: "Economy Chat",
-    family: "economy-chat",
-    strengths: ["fast", "cheap", "content", "reasoning"],
+    // 1. CLASSIFY — request classification and chat turns.
+    // Measured: ~1.7s on short prompts, but 175s on a 250-line file edit. It is
+    // scoped to short work for exactly that reason; never route a build here.
+    id: envSlug("CLASSIFY", "deepseek/deepseek-v4-flash"),
+    label: "DeepSeek V4 Flash",
+    family: "deepseek-flash",
+    strengths: ["fast", "cheap", "content"],
     tier: "fast",
     cost: 1,
-    envKey: "ECONOMY_CHAT",
+    envKey: "CLASSIFY",
   },
   {
-    id: envSlug("CLAUDE_OPUS", "anthropic/claude-opus-4.8"),
-    label: "Claude Opus 4.8",
-    family: "anthropic",
-    strengths: ["code", "reasoning", "fixes", "longContext", "design"],
-    tier: "frontier",
-    cost: 5,
-    envKey: "CLAUDE_OPUS",
-  },
-  {
-    // Sonnet 5 replaces Sonnet 4.6 (2026-07-30): newer generation at $2/$10 vs
-    // $3/$15, same 1M context, 99.95% uptime. Another version bump that costs
-    // less, so `cost` drops from 3 to 2.
-    id: envSlug("CLAUDE_SONNET", "anthropic/claude-sonnet-5"),
-    label: "Claude Sonnet 5",
-    family: "anthropic",
-    strengths: ["code", "design", "reasoning", "content", "fixes"],
-    tier: "balanced",
-    cost: 2,
-    envKey: "CLAUDE_SONNET",
-  },
-  {
-    id: envSlug("CLAUDE_HAIKU", "anthropic/claude-haiku-4.5"),
-    label: "Claude Haiku 4.5",
-    family: "anthropic",
-    strengths: ["fast", "cheap", "code", "content"],
-    tier: "fast",
-    cost: 1,
-    envKey: "CLAUDE_HAIKU",
-  },
-  {
-    // GPT-5.6 Terra replaces GPT-5.5 as the OpenAI frontier entry (2026-07-30).
-    // 5.5 was $5/$30 with no endpoint above 99% uptime; Terra is $1.25/$7.50 at
-    // 99.7% on a 1.05M context — a generation newer and ~4x cheaper, so `cost`
-    // drops from 5 to 2.
-    id: envSlug("GPT", "openai/gpt-5.6-terra"),
-    label: "GPT-5.6 Terra",
-    family: "openai",
-    strengths: ["reasoning", "code", "content", "vision", "longContext"],
-    tier: "frontier",
-    cost: 2,
-    envKey: "GPT",
-  },
-  {
-    // Cheapest of the 5.6 family at $0.50/$3.00 — frontier-generation quality on
-    // an economy budget, which is exactly the tier this product defaults to.
-    id: envSlug("GPT_5_6_LUNA", "openai/gpt-5.6-luna"),
+    // 2. GENERATE — writes the project, and performs the FIRST repair.
+    // 7/7 on the objective suite at 1.7s median — the fastest coder tested —
+    // and the best design output per dollar in a rendered side-by-side against
+    // Sonnet 5, Gemini 3.6 Flash, GLM 5.2, Haiku 4.5 and Mistral Small.
+    id: envSlug("GENERATE", DEFAULT_CODING_MODEL),
     label: "GPT-5.6 Luna",
     family: "openai-luna",
-    strengths: ["reasoning", "code", "content", "vision", "longContext"],
+    strengths: ["code", "fixes", "design", "content", "longContext", "cheap"],
     tier: "balanced",
     cost: 1,
-    envKey: "GPT_5_6_LUNA",
+    envKey: "GENERATE",
   },
   {
-    id: envSlug("GPT_5_2", "openai/gpt-5.2"),
-    label: "GPT-5.2",
-    family: "openai-gpt52",
-    strengths: ["reasoning", "code", "content", "vision", "longContext"],
-    tier: "frontier",
-    cost: 4,
-    envKey: "GPT_5_2",
-  },
-  {
-    id: envSlug("GPT_5_2_CODEX", "openai/gpt-5.2-codex"),
-    label: "GPT-5.2 Codex",
-    family: "openai-codex",
-    strengths: ["code", "fixes", "reasoning", "longContext", "vision"],
-    tier: "frontier",
-    cost: 4,
-    envKey: "GPT_5_2_CODEX",
-  },
-  {
-    id: envSlug("GEMINI_PRO", "google/gemini-3.5-flash"),
-    label: "Gemini 3.5 Flash",
-    family: "google",
-    strengths: ["reasoning", "vision", "longContext", "design", "content"],
-    tier: "balanced",
-    cost: 2,
-    envKey: "GEMINI_PRO",
-  },
-  {
-    // Newest Gemini flash tier ($0.75/$3.75, 1M context, 99.92% uptime). This is
-    // what Lovable defaults its app AI to; we offer it but do NOT default to it,
-    // because gemini-3.1-flash-lite below is 3x cheaper for the same job.
-    id: envSlug("GEMINI_FLASH_LATEST", "google/gemini-3.6-flash"),
-    label: "Gemini 3.6 Flash",
-    family: "google-36",
-    strengths: ["fast", "reasoning", "vision", "longContext", "content"],
-    tier: "balanced",
-    cost: 2,
-    envKey: "GEMINI_FLASH_LATEST",
-  },
-  {
-    id: envSlug("GEMINI_FLASH", "google/gemini-3.1-flash-lite"),
-    label: "Gemini 3.1 Flash Lite",
-    family: "google",
-    strengths: ["fast", "cheap", "vision", "content"],
-    tier: "fast",
-    cost: 1,
-    envKey: "GEMINI_FLASH",
-  },
-  {
-    id: envSlug("DEEPSEEK", "deepseek/deepseek-v4-pro"),
+    // 3. DIAGNOSE — explains why the build failed. Prose, never code.
+    // Cross-vendor from the generator by design; there is a test on it.
+    id: envSlug("DIAGNOSE", "deepseek/deepseek-v4-pro"),
     label: "DeepSeek V4 Pro",
     family: "deepseek",
-    strengths: ["code", "reasoning", "fixes", "cheap"],
+    strengths: ["reasoning", "fixes", "code", "longContext"],
     tier: "balanced",
     cost: 2,
-    envKey: "DEEPSEEK",
+    envKey: "DIAGNOSE",
   },
   {
-    id: envSlug("DEEPSEEK_FLASH", "deepseek/deepseek-v4-flash"),
-    label: "DeepSeek V4 Flash",
-    family: "deepseek",
-    strengths: ["fast", "cheap", "code"],
-    tier: "fast",
-    cost: 1,
-    envKey: "DEEPSEEK_FLASH",
-  },
-  {
-    id: envSlug("QWEN_CODER", "qwen/qwen3-coder"),
-    label: "Qwen3 Coder",
-    family: "qwen",
-    strengths: ["code", "fixes", "cheap", "longContext"],
-    tier: "balanced",
-    cost: 2,
-    envKey: "QWEN_CODER",
-  },
-  {
-    id: envSlug("KIMI_CODE", "moonshotai/kimi-k2.7-code"),
-    label: "Kimi K2.7 Code",
-    family: "moonshotai",
-    strengths: ["code", "fixes", "longContext"],
-    tier: "balanced",
-    cost: 2,
-    envKey: "KIMI_CODE",
-  },
-  {
-    id: envSlug("DEVSTRAL", "mistralai/devstral-2512"),
-    label: "Devstral 2",
-    family: "mistralai",
-    strengths: ["fast", "cheap", "code", "fixes"],
-    tier: "fast",
-    cost: 1,
-    envKey: "DEVSTRAL",
-  },
-  {
-    id: envSlug("GLM_TURBO", "z-ai/glm-5-turbo"),
-    label: "GLM 5 Turbo",
-    family: "z-ai",
-    strengths: ["fast", "cheap", "content", "reasoning"],
-    tier: "fast",
-    cost: 1,
-    envKey: "GLM_TURBO",
+    // 4. ESCALATE — complex builds and the FINAL repair, nothing else.
+    // ~36x the price of the classify tier per build, so it is gated behind a
+    // VERIFIED failure: a real browser render that still errors after GLM's
+    // repair. If this fires on most builds, the repair prompt is the bug.
+    id: envSlug("ESCALATE", "openai/gpt-5.6-terra"),
+    label: "GPT-5.6 Terra",
+    family: "openai",
+    strengths: ["code", "reasoning", "fixes", "design", "content", "longContext", "vision"],
+    tier: "frontier",
+    cost: 3,
+    envKey: "ESCALATE",
   },
 ];
 
@@ -251,39 +139,72 @@ const RAW_MODEL_CATALOG: CatalogModel[] = [
  * set is filtered out SILENTLY — so any slug added above must be added here too,
  * or the model simply never appears and nothing says why.
  *
- * Every id was verified live against openrouter.ai/api/v1/models/<slug>/endpoints
- * on 2026-07-30. Two notes from that check:
- *   - `z-ai/glm-5.2` was NOT adopted: it is listed in OpenRouter's catalog but
- *     returns an empty `endpoints` array, so no provider serves it. glm-5-turbo
- *     stays.
- *   - `openai/gpt-5.6-codex` does not exist; gpt-5.2-codex stays as the
- *     codex-branded option.
+ * Every id was RE-VERIFIED live against openrouter.ai/api/v1/models and
+ * /models/<slug>/endpoints on 2026-08-19. Changes from the 2026-07-30 pass:
+ *   - `qwen/qwen3-coder:free` is GONE from OpenRouter's catalog. It was still
+ *     approved here, so it stayed selectable and would now hard-fail. Removed.
+ *   - `mistralai/devstral-2512` is GONE too. Replaced with codestral-2508.
+ *   - `z-ai/glm-5.2` was previously rejected for having an empty `endpoints`
+ *     array. It now has 31 provider endpoints at 99.8-99.9% uptime, so it is
+ *     adopted. Its `:free` variant is NOT: live calls returned HTTP 429 on
+ *     every attempt, so it is listed nowhere. Free pools have to be called,
+ *     not read off a catalog.
+ *   - `nvidia/nemotron-3-super-120b-a12b:free` adopted as the free tier after
+ *     benchmarking (see model-defaults.ts): 3-6x faster than the Cohere free
+ *     model and correct on 3/3 small edits vs 1/3.
+ *   - `openai/gpt-5.6-codex` still does not exist; gpt-5.2-codex stays.
  */
 const APPROVED_SMART_MODEL_IDS = new Set<string>([
-  // Economy tier — the default path. Cheapest credible models, deliberately kept.
-  "cohere/north-mini-code:free",
-  "qwen/qwen3-coder:free",
-  "qwen/qwen3-coder",
-  "moonshotai/kimi-k2.7-code",
+  "z-ai/glm-5.2:free",
   "deepseek/deepseek-v4-flash",
-  "deepseek/deepseek-v4-pro",
-  "google/gemini-3.1-flash-lite",
-  "z-ai/glm-5-turbo",
-  "mistralai/devstral-2512",
-  // Current generation.
-  "anthropic/claude-haiku-4.5",
-  "anthropic/claude-sonnet-5",
-  "anthropic/claude-opus-4.8",
-  "openai/gpt-5.6-terra",
   "openai/gpt-5.6-luna",
-  "google/gemini-3.5-flash",
-  "google/gemini-3.6-flash",
-  // Previous generation, still resolving — kept selectable, no longer defaults.
-  "openai/gpt-5.2",
-  "openai/gpt-5.2-codex",
+  "deepseek/deepseek-v4-pro",
+  "openai/gpt-5.6-terra",
 ]);
 
-export const MODEL_CATALOG: CatalogModel[] = RAW_MODEL_CATALOG.filter((model) =>
+/**
+ * The three alias entries at the top (FREE_CODER / ECONOMY_CODER / ECONOMY_CHAT)
+ * resolve through model-defaults.ts, so they normally land on a slug that is
+ * ALSO listed explicitly further down — "Economy Coder" and "Qwen3 Coder" were
+ * both qwen/qwen3-coder, and "Economy Chat" and "DeepSeek V4 Flash" were both
+ * deepseek-v4-flash. Two problems (found 2026-08-19): the model picker showed
+ * the same model twice, and — worse — the two copies carry DIFFERENT `family`
+ * strings ("economy-code" vs "qwen"), so selectModelChain's cross-family
+ * cascade could "escalate" from a failed model to the exact same model while
+ * believing it had switched vendors. Same echo-chamber bug the REVIEW_MODEL
+ * comment in model-defaults.ts describes.
+ *
+ * Dedupe by id, keeping the LAST occurrence so the picker shows the specific
+ * label ("Qwen3 Coder") rather than the alias ("Economy Coder"). When an alias
+ * is pointed somewhere unique by env, it survives as its own entry as before.
+ */
+/**
+ * The alias entries carried HARDCODED family strings ("free-coder",
+ * "economy-code", "economy-chat") while their `id` follows model-defaults.ts.
+ * So an alias resolving to a slug that is also listed explicitly looked like a
+ * different vendor to the cascade even when it was the same model — and the
+ * `:free`/paid pair of one model (e.g. z-ai/glm-5.2:free and z-ai/glm-5.2) is
+ * the worst case: escalating between them re-runs the identical model. Point
+ * each alias at the family of whatever it actually resolves to.
+ */
+const ALIAS_ENV_KEYS = new Set(["FREE_CODER", "ECONOMY_CODER", "ECONOMY_CHAT"]);
+const baseSlug = (id: string) => id.replace(/:free$/, "");
+const explicitFamilyBySlug = new Map(
+  RAW_MODEL_CATALOG.filter((m) => !ALIAS_ENV_KEYS.has(m.envKey)).map((m) => [
+    baseSlug(m.id),
+    m.family,
+  ]),
+);
+for (const model of RAW_MODEL_CATALOG) {
+  if (!ALIAS_ENV_KEYS.has(model.envKey)) continue;
+  model.family = explicitFamilyBySlug.get(baseSlug(model.id)) ?? familyFromSlug(model.id);
+}
+
+const dedupedByLastId = Array.from(
+  new Map(RAW_MODEL_CATALOG.map((model) => [model.id, model])).values(),
+);
+
+export const MODEL_CATALOG: CatalogModel[] = dedupedByLastId.filter((model) =>
   APPROVED_SMART_MODEL_IDS.has(model.id),
 );
 
@@ -363,6 +284,18 @@ export function scorePromptStrengths(prompt: string): Set<ModelStrength> {
   return out;
 }
 
+/**
+ * TINY = a handful of words, no room for hidden complexity. Deliberately much
+ * stricter than isLightweight() below, which allows up to 160 characters — long
+ * enough to hold a real request like "fix the authentication flow so refresh
+ * tokens rotate correctly". Only this tighter bar is allowed to override an
+ * inferred "fixes" strength.
+ */
+function isTiny(prompt: string): boolean {
+  const p = (prompt ?? "").trim();
+  return p.length <= 60 && p.split(/\s+/).filter(Boolean).length <= 8;
+}
+
 /** Is this a small/trivial prompt where a cheaper, faster model is fine? */
 function isLightweight(prompt: string): boolean {
   const p = (prompt ?? "").trim();
@@ -387,14 +320,40 @@ interface Scored {
   score: number;
 }
 
+/**
+ * Capabilities that justify skipping the cheap tier.
+ *
+ * "fixes" is deliberately NOT in here — see HEAVY_UNLESS_TINY below.
+ */
+const HEAVY_STRENGTHS: ModelStrength[] = ["design", "reasoning", "longContext", "vision"];
+
+/**
+ * "fixes" is heavy only when the request is not trivially small.
+ *
+ * Measured 2026-08-19: "fix typo" routed to openai/gpt-5.6-terra — the frontier
+ * tier — while "add a comma" correctly routed to the free tier. The ONLY
+ * difference was the word "fix" tripping the fixes strength, which was on the
+ * heavy list and therefore vetoed the cheap path outright. "fix" is one of the
+ * most common words users type at this product, so this quietly pushed a large
+ * share of two-word edits onto a model that costs ~$1 per build-equivalent
+ * instead of $0.
+ *
+ * A caller that genuinely needs repair strength (self-verify's fix cascade)
+ * passes `require: ["fixes"]`, and that still forces the heavy path — the point
+ * is only that INFERRING "fixes" from a five-character prompt shouldn't.
+ */
+const HEAVY_UNLESS_TINY: ModelStrength[] = ["fixes"];
+
 /** Score one model against the desired strengths + cost/tier preference. */
-function scoreModel(model: CatalogModel, desired: Set<ModelStrength>, preferCheap: boolean): number {
+function scoreModel(
+  model: CatalogModel,
+  desired: Set<ModelStrength>,
+  preferCheap: boolean,
+  heavyDesired: boolean,
+): number {
   let score = 0;
   for (const s of desired) if (model.strengths.includes(s)) score += 3;
 
-  const heavyDesired = ["design", "fixes", "reasoning", "longContext", "vision"].some((s) =>
-    desired.has(s as ModelStrength),
-  );
 
   // Tier preference: heavy work wants frontier, lightweight wants fast.
   if (preferCheap) {
@@ -402,15 +361,18 @@ function scoreModel(model: CatalogModel, desired: Set<ModelStrength>, preferChea
     if (model.tier === "balanced") score += 1;
     score -= model.cost; // cheaper is better
   } else {
-    if (model.tier === "frontier") score += 3;
-    if (model.tier === "balanced") score += 1;
+    // Frontier is the ESCALATION target, not the default lead. It used to get
+    // +3 here plus a further +2 for being Anthropic-or-OpenAI, which stacked to
+    // +5 and meant the single most expensive model in the catalog led every
+    // substantial request — the opposite of this product's cost policy. The
+    // "cheap first, strong safety net on retry" rule further down already
+    // guarantees a frontier model is reachable in the chain, so it does not
+    // need to win the lead as well.
+    if (model.tier === "frontier") score += 1;
+    if (model.tier === "balanced") score += 2;
     if (heavyDesired && model.tier === "fast") score -= 2;
-    if (heavyDesired && model.cost === 0) score -= 2;
-    score -= Math.max(0, model.cost - 3); // mild penalty only for premium
-    // Quality tier = OpenAI + Claude (Lovable-style). On real work (non-cheap),
-    // prefer these two families so they lead and are the escalation targets;
-    // trivial tasks stay on the free tier (the preferCheap branch above).
-    if (model.family === "anthropic" || model.family.startsWith("openai")) score += 2;
+    if (heavyDesired && model.cost === 0) score -= 3;
+    score -= Math.max(0, model.cost - 1); // every step above the budget tier costs a point
   }
   return score;
 }
@@ -430,33 +392,50 @@ export function selectModelChain(prompt: string, opts: SelectOpts = {}): AIModel
   // Auto cost-preference only when the work is genuinely lightweight — never when
   // a demanding capability (design/fixes/reasoning/long-context/vision) is needed,
   // so e.g. the self-verify fix cascade doesn't fall back to a weak model.
-  const HEAVY: ModelStrength[] = ["design", "fixes", "reasoning", "longContext", "vision"];
-  const hasHeavy = HEAVY.some((s) => desired.has(s));
-  const preferCheap = opts.preferCheap ?? (isLightweight(prompt) && !hasHeavy);
+  const light = isLightweight(prompt);
+  const tiny = isTiny(prompt);
+  const required = new Set<ModelStrength>(opts.require ?? []);
+  const hasHeavy =
+    HEAVY_STRENGTHS.some((s) => desired.has(s)) ||
+    // Explicitly-required repair strength still counts as heavy; merely
+    // *inferring* it from a five-word prompt does not.
+    HEAVY_UNLESS_TINY.some((s) => desired.has(s) && (!tiny || required.has(s)));
+  const preferCheap = opts.preferCheap ?? (light && !hasHeavy);
   const claudeAutoModel = selectClaudeAutoModel(prompt, desired);
   const effectivePreferCheap = claudeAutoModel ? false : preferCheap;
 
   const ranked: Scored[] = MODEL_CATALOG.map((model) => ({
     model,
-    score: scoreModel(model, desired, effectivePreferCheap),
+    score: scoreModel(model, desired, effectivePreferCheap, hasHeavy),
   })).sort((a, b) => b.score - a.score || a.model.cost - b.model.cost);
 
-  // Build the chain, preferring family diversity so escalation hits a different lab.
+  // Build the chain, preferring VENDOR diversity so escalation hits a different
+  // lab. This used to key on `family`, but families are variant buckets, not
+  // vendors: "openai", "openai-codex", "openai-gpt52", "openai-luna" are four
+  // families and one lab. A cascade of terra -> gpt-5.2-codex -> gpt-5.2 passed
+  // the diversity check while being entirely OpenAI — so "escalate to a
+  // different model for cross-model verification" escalated to the same lab's
+  // house style and the same blind spots. Caught by scripts/eval-routing.mjs
+  // (qualitySpansBoth) once that harness was resynced on 2026-08-19.
+  //
+  // `family` is still what buildModelPromptHints() keys on, so it stays as-is
+  // on each entry; only the diversity rule changes.
   const chain: AIModel[] = [];
-  const seenFamilies = new Set<string>();
+  const seenVendors = new Set<string>();
+  const vendorOf = (model: CatalogModel) => familyFromSlug(model.id);
   if (claudeAutoModel) {
     const model = MODEL_CATALOG.find((entry) => entry.id === claudeAutoModel);
     if (model) {
       chain.push(model.id);
-      seenFamilies.add(model.family);
+      seenVendors.add(vendorOf(model));
     }
   }
   for (const { model } of ranked) {
     if (chain.length >= maxChain) break;
     if (chain.includes(model.id)) continue;
-    if (seenFamilies.has(model.family)) continue;
+    if (seenVendors.has(vendorOf(model))) continue;
     chain.push(model.id);
-    seenFamilies.add(model.family);
+    seenVendors.add(vendorOf(model));
   }
   // Top up from remaining high scorers if diversity left us short.
   if (chain.length < maxChain) {
@@ -512,7 +491,17 @@ function familyFromSlug(id: string): string {
   if (s.includes("deepseek")) return "deepseek";
   if (s.includes("qwen")) return "qwen";
   if (s.includes("mistral")) return "mistralai";
-  return "router";
+  if (s.includes("glm") || s.startsWith("z-ai/")) return "z-ai";
+  if (s.includes("kimi") || s.startsWith("moonshotai/")) return "moonshotai";
+  if (s.startsWith("cohere/")) return "cohere";
+  if (s.startsWith("nvidia/") || s.includes("nemotron")) return "nvidia";
+  if (s.startsWith("xiaomi/") || s.includes("mimo")) return "xiaomi";
+  if (s.startsWith("upstage/") || s.includes("solar")) return "upstage";
+  // Falling through to "router" means the cascade cannot tell this model's lab
+  // apart from any other unknown one, so vendor-diversity silently stops
+  // working for it. Add new vendors here when they enter the catalog.
+  const prefix = s.split("/")[0];
+  return prefix && prefix !== s ? prefix : "router";
 }
 
 /**

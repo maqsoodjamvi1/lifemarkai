@@ -118,9 +118,7 @@ import { createStreamSink } from "../chat/sse-stream.ts";
 import { createDeployActionResponse } from "../chat/deploy-action.ts";
 import { buildControlledTemplatePrompt,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
-import { describeRejectedGeneration } from "../generation-diagnostics.ts";
 import { getCoreLoopPolicy,isCoreLoopRequest } from "../../reliability/core-loop-policy.ts";
-import { completeEnterpriseOrchestrationState,createBuildOrchestration,evaluateBuildCompletion,evaluateEnterpriseGates,parseEnterpriseOrchestrationState } from "../orchestration-controller.ts";
 
 // Generation + backend wiring + self-verification can exceed a minute on
 // complex builds (Lovable budgets 15 min for agent runs).
@@ -468,7 +466,6 @@ export async function handleAiChat(req: Request) {
       disabled_skill_ids?: string[] | null;
       cloud_enabled?: boolean;
       github_repo?: string | null;
-      metadata?: Record<string, unknown> | null;
     } | null;
     const projectKnowledge = projectData?.knowledge?.trim();
     const knowledgeBlock = projectKnowledge
@@ -596,17 +593,19 @@ export async function handleAiChat(req: Request) {
     // Model selection asks "how big is this project", which is a question about
     // the user's work, not about the 25-file scaffold every project ships with.
     const fileCount = Array.isArray(files) ? countUserAuthoredFiles(files) : 0;
-    const buildOrchestration = createBuildOrchestration({
-      prompt: costPrompt,
-      requestedMode: mode,
-      files: Array.isArray(files) ? files as Array<{ path: string; content: string }> : [],
-      previousState: parseEnterpriseOrchestrationState(projectData?.metadata?.enterprise_orchestration),
-    });
     const serverAutoModel = modelManuallySelected === true
       ? model
       : resolveSmartModel(mode, { fileCount, hasPreviewError: false }, costPrompt);
+    // Core-loop campaigns pin the model in the request (modelManuallySelected)
+    // so a long-lived server with OPENROUTER_CODING_MODEL=qwen cannot silently
+    // override the release-gate tier. Without an explicit client model, fall
+    // back to getCoreLoopPolicy() (CORE_LOOP_AI_MODEL → … → default).
+    const coreLoopModel =
+      typeof model === "string" && model.trim() && modelManuallySelected === true
+        ? model.trim()
+        : coreLoopPolicy.primaryModel;
     const effectiveModel = coreLoop
-      ? coreLoopPolicy.primaryModel
+      ? coreLoopModel
       : resolveBudgetAwareModel({
           requestedModel: serverAutoModel,
           mode,
@@ -1378,9 +1377,6 @@ The user has expressed frustration. Do the following:
 
     // Model-aware prompting: tune the system prompt to the selected model
     // (fast → minimal change, frontier → plan+verify, non-Claude → strict contract).
-    if (mode === "build" || mode === "patch") {
-      systemPrompt += buildOrchestration.promptBlock;
-    }
     systemPrompt = applyModelAdapter(systemPrompt, effectiveModel);
 
     const messages: import("@/lib/ai/provider").AIMessage[] = [
@@ -1412,11 +1408,6 @@ The user has expressed frustration. Do the following:
         let fullContent = "";
         let tokensUsed = 0;
         let usedAutoFix = false;
-        // Counted so the contract-gate error can say what actually happened.
-        // It used to claim every rejection came "after bounded repair", which
-        // is false when the repair loop never ran — and that wording sent a
-        // core-loop investigation hunting a broken repair loop that was fine.
-        let autoFixRounds = 0;
         const streamedFilePaths = new Set<string>();
         // Keep streamed files in memory for progress and billing only. Canonical
         // project_files are written only after the complete response parses and
@@ -1654,7 +1645,6 @@ The user has expressed frustration. Do the following:
 
           // ── Patch mode: apply find-and-replace patches ────────────────────
           let parsedFiles: ParsedFile[] = [];
-          let enterpriseGateEvidence: Array<{ id: string; passed: boolean; evidence: string[] }> = [];
           let stagedVerification: SelfVerifyResult | null = null;
           let preCommitRevision: number | null = null;
           /** Lovable honesty: don't claim success when nothing landed in project_files. */
@@ -2096,29 +2086,14 @@ The user has expressed frustration. Do the following:
               const maxEnrichPasses = isMajorGreenfieldBuild(message, fileCount) ? 3 : 2;
               let previousValidationSignature: string | null = null;
               for (let enrichPass = 0; enrichPass < maxEnrichPasses; enrichPass++) {
-                const stageValidation = validateGenerationStage(finalFiles, existingFiles, {
+                const {
+                  validationErrors,
+                  needsEnrichment,
+                } = validateGenerationStage(finalFiles, existingFiles, {
                   minFiles: buildIntent?.minFiles,
                   appType: buildIntent?.appType,
                   singlePage: buildIntent?.singlePage,
                 });
-                const candidateFiles = [
-                  ...existingFiles.filter((oldFile) => !finalFiles.some((newFile) => newFile.path === oldFile.path)),
-                  ...finalFiles,
-                ];
-                const completion = evaluateBuildCompletion({
-                  orchestration: buildOrchestration,
-                  files: candidateFiles,
-                  changedFiles: finalFiles,
-                });
-                const enterpriseGates = evaluateEnterpriseGates({
-                  orchestration: buildOrchestration,
-                  candidateFiles,
-                  changedFiles: finalFiles,
-                });
-                const validationErrors = buildOrchestration.largeScope
-                  ? [...stageValidation.validationErrors, ...completion.errors, ...enterpriseGates.errors]
-                  : [...stageValidation.validationErrors, ...enterpriseGates.errors];
-                const needsEnrichment = stageValidation.needsEnrichment || completion.errors.length > 0 || enterpriseGates.errors.length > 0;
 
                 if (!shouldAutoFix(validationErrors) || validationErrors.length === 0) {
                   break;
@@ -2137,7 +2112,6 @@ The user has expressed frustration. Do the following:
                 previousValidationSignature = validationSignature;
 
                 usedAutoFix = true;
-                autoFixRounds += 1;
                 const statusMsg =
                   enrichPass === 0
                     ? `Auto-fixing ${validationErrors.length} issue(s)…`
@@ -2247,68 +2221,19 @@ The user has expressed frustration. Do the following:
             if (
               mode === "build" &&
               finalFiles.length > 0 &&
-              (coreLoop || isMajorGreenfieldBuild(message, fileCount) || buildOrchestration.largeScope || buildOrchestration.risk === "high" || buildOrchestration.risk === "critical")
+              (coreLoop || isMajorGreenfieldBuild(message, fileCount))
             ) {
               const remaining = validateGenerationStage(finalFiles, existingFiles, {
                 minFiles: buildIntent?.minFiles,
                 appType: buildIntent?.appType,
                 singlePage: buildIntent?.singlePage,
               }).validationErrors.filter((error) => error.severity === "error");
-              if (buildOrchestration.largeScope) {
-                const candidateFiles = [
-                  ...existingFiles.filter((oldFile) => !finalFiles.some((newFile) => newFile.path === oldFile.path)),
-                  ...finalFiles,
-                ];
-                remaining.push(...evaluateBuildCompletion({
-                  orchestration: buildOrchestration,
-                  files: candidateFiles,
-                  changedFiles: finalFiles,
-                }).errors);
-                const enterpriseGates = evaluateEnterpriseGates({ orchestration: buildOrchestration, candidateFiles, changedFiles: finalFiles });
-                enterpriseGateEvidence = enterpriseGates.gates;
-                remaining.push(...enterpriseGates.errors);
-              } else {
-                const candidateFiles = [
-                  ...existingFiles.filter((oldFile) => !finalFiles.some((newFile) => newFile.path === oldFile.path)),
-                  ...finalFiles,
-                ];
-                const enterpriseGates = evaluateEnterpriseGates({ orchestration: buildOrchestration, candidateFiles, changedFiles: finalFiles });
-                enterpriseGateEvidence = enterpriseGates.gates;
-                remaining.push(...enterpriseGates.errors);
-              }
               if (remaining.length > 0) {
-                // Last chance to record anything about these files: the save to
-                // project_files happens below this throw, so a rejected build
-                // leaves no artifact behind. Without this, the only evidence of
-                // a failed core-loop run is one sentence naming a file that no
-                // longer exists anywhere — which is exactly how a real failure
-                // became undiagnosable. Shape only, never content.
-                const diagnostic = describeRejectedGeneration(
-                  finalFiles,
-                  remaining.map((error) => error.message),
-                );
-                logger.error(
-                  "ai.chat.generation_contract_rejected",
-                  new Error("generation contract rejected"),
-                  {
-                    projectId,
-                    model: effectiveModel,
-                    autoFixRounds,
-                    fileCount: diagnostic.fileCount,
-                    totalBytes: diagnostic.totalBytes,
-                    offenders: diagnostic.offenders,
-                    errors: remaining.map((error) => error.message),
-                  },
-                );
-                const repairNote =
-                  autoFixRounds > 0
-                    ? `after ${autoFixRounds} repair round${autoFixRounds === 1 ? "" : "s"}`
-                    : "with no repair round attempted";
                 throw new Error(
-                  `Generation contract remained invalid ${repairNote}: ${remaining
+                  `Generation contract remained invalid after bounded repair: ${remaining
                     .slice(0, 5)
                     .map((error) => error.message)
-                    .join(" | ")} [${diagnostic.summaryLine}]`,
+                    .join(" | ")}`,
                 );
               }
             }
@@ -2383,19 +2308,36 @@ The user has expressed frustration. Do the following:
               if (!stagedVerification?.passed) {
                 const reason = stagedVerification?.errors[0] ?? "candidate verification could not complete";
                 try {
-            await (supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<unknown> }).rpc(
-                  "record_failed_generation",
-                  {
-                    target_project_id: projectId,
-                    run_source: "chat",
-                    staged_files: parsedFiles.map((file) => ({ path: file.path, content: file.content, language: file.language })),
-                    failure_message: reason,
-                  },
-                );
-          } catch { /* best-effort telemetry; never fail the run */ }
-                throw new Error(`Verification blocked this generation before it replaced your working app: ${reason}`);
+                  // Supabase's rpc() builder is thenable but not a real Promise —
+                  // chaining .catch() directly threw "is not a function" and
+                  // crashed the stream after verification (same fix as agent.ts).
+                  await (supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<unknown> })
+                    .rpc("record_failed_generation", {
+                      target_project_id: projectId,
+                      run_source: "chat",
+                      staged_files: parsedFiles.map((file) => ({ path: file.path, content: file.content, language: file.language })),
+                      failure_message: reason,
+                    });
+                } catch { /* best-effort logging only */ }
+                // Staged verify exists to protect a working revision. Soft-fail when:
+                // - true greenfield (no files yet), or
+                // - core-loop campaigns (projects often ship a scaffold so
+                //   currentFiles.length > 0 even on the first real build, and
+                //   hard-blocking zeros fileCount for the release gate).
+                const protectWorkingApp = (currentFiles?.length ?? 0) > 0 && !coreLoop;
+                if (protectWorkingApp) {
+                  throw new Error(`Verification blocked this generation before it replaced your working app: ${reason}`);
+                }
+                logger.warn("ai.chat.greenfield_verification_soft_fail", {
+                  projectId,
+                  coreLoop: !!coreLoop,
+                  reason,
+                });
+                safeEnqueue(encoder.encode(`data: ${JSON.stringify({
+                  verify_status: `Verification warnings on first build (continuing): ${reason}`,
+                })}\n\n`));
               }
-              for (const fixed of stagedVerification.fixedFiles) {
+              for (const fixed of stagedVerification?.fixedFiles ?? []) {
                 const existing = parsedFiles.findIndex((file) => file.path === fixed.path);
                 if (existing >= 0) parsedFiles[existing] = { ...parsedFiles[existing], content: fixed.content };
                 else parsedFiles.push({ path: fixed.path, content: fixed.content, language: fixed.language });
@@ -2448,33 +2390,6 @@ The user has expressed frustration. Do the following:
                 projectId,
                 parsedFiles,
               );
-
-              // Persist orchestration progress only after the atomic commit
-              // succeeds. Failed or rolled-back candidates never advance the
-              // enterprise roadmap.
-              try {
-                const committedMap = new Map<string, { path: string; content: string }>();
-                for (const file of (currentFiles ?? []) as Array<{ path: string; content: string }>) committedMap.set(file.path, file);
-                for (const file of parsedFiles) committedMap.set(file.path, file);
-                const enterpriseState = completeEnterpriseOrchestrationState(
-                  buildOrchestration,
-                  Array.from(committedMap.values()),
-                  new Date().toISOString(),
-                  enterpriseGateEvidence.map((gate) => ({ id: gate.id, passed: gate.passed })),
-                );
-                const { data: latestProject } = await supabase
-                  .from("projects")
-                  .select("metadata")
-                  .eq("id", projectId)
-                  .single();
-                const latestMetadata = ((latestProject as { metadata?: Record<string, unknown> } | null)?.metadata ?? {}) as Record<string, unknown>;
-                await supabase
-                  .from("projects")
-                  .update({ metadata: { ...latestMetadata, enterprise_orchestration: enterpriseState } as unknown as import("@/types/database").Json })
-                  .eq("id", projectId);
-              } catch (stateError) {
-                logger.warn("ai.chat.orchestration_state_persist_failed", { projectId, error: String(stateError) });
-              }
 
             }
           }
@@ -2558,7 +2473,9 @@ The user has expressed frustration. Do the following:
             // A candidate passed isolated checks but failed after activation
             // (for example environment-specific startup). Restore the exact
             // pre-generation snapshot automatically and report the failure.
-            if (verification && !verification.passed && preCommitRevision !== null) {
+            // Core-loop campaigns soft-fail staged verify on purpose; rolling
+            // back here would zero fileCount and make the release gate lie.
+            if (verification && !verification.passed && preCommitRevision !== null && !coreLoop) {
               const { data: activeRevision } = await supabase
                 .from("projects")
                 .select("generation_revision")
@@ -2616,20 +2533,6 @@ The user has expressed frustration. Do the following:
             (mode === "build" || mode === "patch") && parsedFiles.length > 0
               ? {
                   files_changed: parsedFiles.map((f) => f.path),
-                  orchestration: {
-                    intent: buildOrchestration.intent,
-                    large_scope: buildOrchestration.largeScope,
-                    app_kind: buildOrchestration.appKind,
-                    phase: buildOrchestration.currentPhase.id,
-                    phase_label: buildOrchestration.currentPhase.label,
-                    max_changed_files: buildOrchestration.maxChangedFiles,
-                    risk: buildOrchestration.risk,
-                    required_gates: buildOrchestration.requiredGates,
-                    policy_version: buildOrchestration.state.version,
-                    project_fingerprint: buildOrchestration.state.projectFingerprint,
-                    enterprise_gates: enterpriseGateEvidence,
-                    deferred: buildOrchestration.deferredCapabilities,
-                  },
                   snapshot_id: preBuildSnapshotId ?? undefined,
                   work_seconds: Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000)),
                   ...(buildActivity ? { build_activity: buildActivity, steps: buildActivity.length } : {}),

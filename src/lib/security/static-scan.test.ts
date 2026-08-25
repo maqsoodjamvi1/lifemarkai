@@ -35,17 +35,24 @@ test("detects exposed OpenAI key as critical", () => {
   ] as never);
   assert.equal(findings.length, 1);
   assert.equal(findings[0].severity, "critical");
-  assert.equal(findings[0].title, "Exposed OpenAI API Key");
+  assert.equal(findings[0].title, "Exposed OpenAI API key");
   assert.equal(findings[0].file, "config.ts");
   assert.equal(findings[0].line, 1);
+  // The credential itself must never survive into a persisted finding.
+  assert.ok(!findings[0].snippet?.includes("sk-abcdefghij"), findings[0].snippet);
+  assert.match(findings[0].snippet ?? "", /\[redacted\]/);
 });
 
 test("detects exposed Anthropic key as critical", () => {
+  // 32+ chars after the prefix: the shared catalog is deliberately stricter
+  // than the old inline regex (20+), because short random-looking strings in
+  // fixtures and docs were the main source of false positives. Real Anthropic
+  // keys run ~100 characters, so nothing genuine is missed.
   const findings = staticScan([
-    f("ai.ts", `const k = "sk-ant-aaaaaaaaaaaaaaaaaaaaaa";`),
+    f("ai.ts", `const k = "sk-ant-api03-${"a".repeat(40)}";`),
   ] as never);
   assert.equal(findings[0].severity, "critical");
-  assert.equal(findings[0].title, "Exposed Anthropic API Key");
+  assert.equal(findings[0].title, "Exposed Anthropic API key");
 });
 
 test("detects Stripe live secret key as critical", () => {
@@ -54,7 +61,7 @@ test("detects Stripe live secret key as critical", () => {
   ] as never);
   // The live-secret pattern is the one we care about; it must be present.
   const titles = findings.map((x) => x.title);
-  assert.ok(titles.includes("Exposed Stripe Live Secret Key"), `Got: ${titles.join(", ")}`);
+  assert.ok(titles.includes("Exposed Stripe live secret key"), `Got: ${titles.join(", ")}`);
 });
 
 test("flags dangerouslySetInnerHTML as high", () => {
@@ -129,7 +136,7 @@ test("findings are sorted critical → high → medium → low → info", () => 
     f("a.ts", `fetch("http://api.example.com");`),                  // low
     f("b.ts", `localStorage.setItem("authToken", t);`),             // medium
     f("c.tsx", `<div dangerouslySetInnerHTML={{ __html: x }} />`),  // high
-    f("d.ts", `const k = "sk-aaaaaaaaaaaaaaaaaaaaaa";`),            // critical
+    f("d.ts", `const k = "sk-${"a".repeat(32)}";`),                  // critical
   ] as never);
   const order = findings.map((x) => x.severity);
   // Each severity must appear; critical first, info-or-low last.
@@ -174,4 +181,54 @@ test("SECURITY_PATTERNS export is non-empty and unique by title", () => {
   assert.ok(SECURITY_PATTERNS.length > 0);
   const titles = SECURITY_PATTERNS.map((p) => p.title);
   assert.equal(new Set(titles).size, titles.length, "pattern titles must be unique");
+});
+
+// ── Credentials the scanner used to miss entirely ──────────────────────────
+// Before the shared catalog, staticScan carried four hand-written key regexes.
+// Every format below was caught by the chat composer and invisible here.
+
+test("catches provider formats the old four-pattern list missed", () => {
+  const cases: Array<[string, string, string]> = [
+    ["gh.ts", `const t = "ghp_${"a".repeat(36)}";`, "Exposed GitHub personal access token"],
+    ["aws.ts", `const k = "AKIAIOSFODNN7EXAMPLE";`, "Exposed AWS access key ID"],
+    ["slack.ts", `const s = "xoxb-${"1".repeat(24)}";`, "Exposed Slack bot token"],
+    ["g.ts", `const g = "AIza${"b".repeat(35)}";`, "Exposed Google API key"],
+  ];
+  for (const [path, content, title] of cases) {
+    const titles = staticScan([f(path, content)] as never).map((x) => x.title);
+    assert.ok(titles.includes(title), `${path}: got ${titles.join(", ") || "nothing"}`);
+  }
+});
+
+test("credential findings carry a revocation link", () => {
+  const finding = staticScan([
+    f("config.ts", `const key = "sk-abcdefghijklmnopqrstuvwxyz123456";`),
+  ] as never)[0];
+  assert.equal(finding.provider, "openai");
+  assert.equal(finding.revokeUrl, "https://platform.openai.com/api-keys");
+  assert.match(finding.fix ?? "", /Revoke/i);
+});
+
+test("publishing escalates the remediation to assume-compromised", () => {
+  const files = [f("config.ts", `const key = "sk-abcdefghijklmnopqrstuvwxyz123456";`)] as never;
+  const priv = staticScan(files)[0];
+  const pub = staticScan(files, { published: true })[0];
+  assert.doesNotMatch(priv.fix ?? "", /already harvested/);
+  assert.match(pub.fix ?? "", /already harvested/);
+});
+
+test("does not flag secrets living in .env files", () => {
+  // .env.local is the sanctioned store. Flagging it trains people to ignore
+  // the panel, which costs more than it saves.
+  const findings = staticScan([
+    f(".env.local", `OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz123456`),
+  ] as never);
+  assert.deepEqual(findings.filter((x) => x.title.startsWith("Exposed")), []);
+});
+
+test("one finding per credential type per file, not per occurrence", () => {
+  const findings = staticScan([
+    f("a.ts", `const a = "sk-abcdefghijklmnopqrstuvwxyz123456";\nconst b = "sk-zyxwvutsrqponmlkjihgfedcba654321";`),
+  ] as never);
+  assert.equal(findings.filter((x) => x.title === "Exposed OpenAI API key").length, 1);
 });

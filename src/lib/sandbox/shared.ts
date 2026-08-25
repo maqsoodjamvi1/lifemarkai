@@ -51,14 +51,161 @@ function backendResponding(status: number): boolean {
   return status > 0 && status !== 502 && status !== 503 && status !== 504;
 }
 
+/**
+ * Does this status prove the app is SERVING — not merely listening?
+ *
+ * backendResponding() answers "is there a process on the other end of the
+ * proxy", which is the right question during boot and the wrong one for
+ * readiness. Vite answers its OWN 500 when the code it was handed does not
+ * transform (a syntax error, an unresolvable import specifier, a plugin
+ * throw). The socket is open, Traefik is happy, backendResponding() says up —
+ * and the editor frames a page whose entire body is a compile-error overlay.
+ * That is exactly the "untrusted AI-generated code must never show an error in
+ * the preview" case, and counting it as ready is what let it through.
+ *
+ * A 5xx FROM THE APP is not readiness. 4xx still is: a dev-server 404 means
+ * routing, not a broken build, and blanking a preview over a missing favicon
+ * would be strictly worse than the bug this fixes.
+ */
+export function appServing(status: number): boolean {
+  return backendResponding(status) && status < 500;
+}
+
+/**
+ * The last status seen by waitForServer for a URL, whether or not it settled.
+ *
+ * A boolean "did it come up" cannot distinguish "nothing is listening" from
+ * "vite is listening and answering a compile-error 500", and those need very
+ * different handling: the first is a boot problem, the second is a code
+ * problem that a repair round can actually fix. Callers read this to report
+ * WHY readiness was withheld instead of just that it was.
+ */
+const lastWaitStatus = new Map<string, number>();
+const MAX_PROBE_CACHE_ENTRIES = 500;
+
+function boundedSet<T>(map: Map<string, T>, key: string, value: T): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > MAX_PROBE_CACHE_ENTRIES) {
+    const oldest = map.keys().next().value as string | undefined;
+    if (!oldest) break;
+    map.delete(oldest);
+  }
+}
+
+export function lastServerStatus(url: string): number {
+  return lastWaitStatus.get(url) ?? 0;
+}
+
+const MODULE_BLOCK_RE = /<script\b([^>]*)\btype=["']module["']([^>]*)>([\s\S]*?)<\/script>/gi;
+const SRC_RE = /\bsrc=["']([^"']+)["']/i;
+const IMPORT_RE = /(?:\bimport\s*(?:[^"'()]*?\sfrom\s*)?|\bexport\s+[^"']*?\sfrom\s*|\bimport\s*\(\s*)["']([^"']+)["']/g;
+
+function sameOriginAsset(base: URL, specifier: string): URL | null {
+  if (!specifier || specifier.startsWith("data:") || specifier.startsWith("blob:")) return null;
+  try {
+    const resolved = new URL(specifier, base);
+    return resolved.origin === base.origin ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load the HTML entry and its static Vite module graph.
+ *
+ * Vite can return 200 for index.html while src/main.tsx (or one of its imports)
+ * returns a transform-error 500. Walking the same-origin imports catches that
+ * before the iframe is declared ready, without launching a browser.
+ */
+export async function probeServedModuleGraph(
+  url: string,
+  timeoutMs = 8_000,
+): Promise<{ serving: boolean; status: number; failedUrl?: string }> {
+  const root = new URL(url);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const htmlResponse = await fetch(root, { signal: controller.signal });
+    if (!appServing(htmlResponse.status)) {
+      return { serving: false, status: htmlResponse.status, failedUrl: root.href };
+    }
+    const contentType = htmlResponse.headers.get("content-type") ?? "";
+    if (!contentType.includes("html")) return { serving: true, status: htmlResponse.status };
+
+    const html = await htmlResponse.text();
+    const queue: URL[] = [];
+    const queued = new Set<string>();
+    MODULE_BLOCK_RE.lastIndex = 0;
+    let scriptMatch: RegExpExecArray | null;
+    while ((scriptMatch = MODULE_BLOCK_RE.exec(html))) {
+      const attributes = `${scriptMatch[1]} ${scriptMatch[2]}`;
+      const src = SRC_RE.exec(attributes)?.[1];
+      const asset = src ? sameOriginAsset(root, src) : null;
+      if (asset && !queued.has(asset.href)) {
+        queued.add(asset.href);
+        queue.push(asset);
+      }
+      if (!src && scriptMatch[3]) {
+        IMPORT_RE.lastIndex = 0;
+        let inlineImport: RegExpExecArray | null;
+        while ((inlineImport = IMPORT_RE.exec(scriptMatch[3]))) {
+          const child = sameOriginAsset(root, inlineImport[1]);
+          if (child && !queued.has(child.href)) {
+            queued.add(child.href);
+            queue.push(child);
+          }
+        }
+      }
+    }
+
+    while (queue.length > 0) {
+      const moduleUrl = queue.shift()!;
+      const response = await fetch(moduleUrl, { signal: controller.signal });
+      if (!appServing(response.status)) {
+        return { serving: false, status: response.status, failedUrl: moduleUrl.href };
+      }
+      const source = await response.text();
+      IMPORT_RE.lastIndex = 0;
+      let match: RegExpExecArray | null;
+      while ((match = IMPORT_RE.exec(source))) {
+        const child = sameOriginAsset(moduleUrl, match[1]);
+        if (child && !queued.has(child.href)) {
+          queued.add(child.href);
+          queue.push(child);
+        }
+      }
+    }
+    return { serving: true, status: htmlResponse.status };
+  } catch {
+    return { serving: false, status: 0, failedUrl: root.href };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Wait until the app at `url` is SERVING.
+ *
+ * Deliberately `appServing`, not `backendResponding`: a vite that answers its
+ * own 500 (a transform error in generated code) is listening but is not ready,
+ * and returning true for it is what framed compile-error overlays in the
+ * preview pane and handed 500-ing tunnel URLs to the verification harness.
+ *
+ * A 5xx does NOT short-circuit the wait — vite recovers on its own once a
+ * pending install finishes or HMR settles — so a healthy-but-slow app is
+ * unaffected. Only an app still 5xx-ing at the deadline is reported not ready.
+ */
 export async function waitForServer(url: string, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(url, { method: "GET", signal: AbortSignal.timeout(5000) });
-      if (backendResponding(res.status)) return true;
+      const probe = await probeServedModuleGraph(url, Math.min(8_000, Math.max(1, deadline - Date.now())));
+      boundedSet(lastWaitStatus, url, probe.status);
+      if (probe.serving) return true;
     } catch {
       /* not listening yet */
+      boundedSet(lastWaitStatus, url, 0);
     }
     await new Promise((r) => setTimeout(r, 1500));
   }
@@ -104,6 +251,8 @@ type ProbeEntry = {
   at: number;
   fails: number;
   everOk: boolean;
+  /** Last HTTP status the tunnel answered with; 0 = no HTTP response at all. */
+  lastStatus: number;
   inflight: Promise<boolean> | null;
 };
 const previewProbeCache = new Map<string, ProbeEntry>();
@@ -119,24 +268,24 @@ export async function isPreviewReachable(url: string, timeoutMs = 8000): Promise
     at: 0,
     fails: 0,
     everOk: false,
+    lastStatus: 0,
     inflight: null,
   };
 
   const run = (async () => {
     let reached = false;
+    let status = 0;
     try {
       // Follow redirects (default). `redirect: "manual"` was a bug here — a
       // tunnel that 30x's could surface a status we'd misread as dead.
-      const res = await fetch(url, {
-        method: "GET",
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      // The app must actually answer — see backendResponding: behind Traefik a
-      // dead vite still yields an HTTP response (502), which must read as DOWN
-      // or the "unreachable" self-heal can never fire. A dev-server 404 is up.
-      reached = backendResponding(res.status);
+      const probe = await probeServedModuleGraph(url, timeoutMs);
+      // Probe the imported module graph too. A Vite HTML shell can be 200 while
+      // src/main.tsx or a nested import returns a transform-error 500.
+      status = probe.status;
+      reached = probe.serving;
     } catch {
       reached = false;
+      status = 0;
     }
 
     const fails = reached ? 0 : prev.fails + 1;
@@ -148,17 +297,18 @@ export async function isPreviewReachable(url: string, timeoutMs = 8000): Promise
     // to prefer a cold reboot over a permanently blank iframe.
     const ok = reached ? true : fails < PREVIEW_PROBE_FAILURES_BEFORE_DEAD;
 
-    previewProbeCache.set(url, {
+    boundedSet(previewProbeCache, url, {
       ok,
       at: Date.now(),
       fails,
       everOk: prev.everOk || reached,
+      lastStatus: status,
       inflight: null,
     });
     return ok;
   })();
 
-  previewProbeCache.set(url, { ...prev, inflight: run });
+  boundedSet(previewProbeCache, url, { ...prev, inflight: run });
   return run;
 }
 
@@ -204,11 +354,20 @@ export function peekPreviewReachable(url: string, timeoutMs = 8000): boolean {
  */
 export function getPreviewProbeState(
   url: string,
-): { state: "verified" | "unverified" | "failing" | "unknown"; fails: number } {
+): {
+  state: "verified" | "unverified" | "failing" | "unknown";
+  fails: number;
+  /** Last status the tunnel answered with; 0 = no HTTP response at all. */
+  lastStatus: number;
+} {
   const hit = previewProbeCache.get(url);
-  if (!hit) return { state: "unknown", fails: 0 };
-  if (!hit.everOk) return { state: "unverified", fails: hit.fails };
-  return { state: hit.fails > 0 ? "failing" : "verified", fails: hit.fails };
+  if (!hit) return { state: "unknown", fails: 0, lastStatus: 0 };
+  if (!hit.everOk) return { state: "unverified", fails: hit.fails, lastStatus: hit.lastStatus };
+  return {
+    state: hit.fails > 0 ? "failing" : "verified",
+    fails: hit.fails,
+    lastStatus: hit.lastStatus,
+  };
 }
 
 /** Drop a cached probe verdict — call after (re)starting a sandbox. */

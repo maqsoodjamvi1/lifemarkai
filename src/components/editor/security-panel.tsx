@@ -4,7 +4,7 @@ import { motion,AnimatePresence } from "framer-motion";
 import {
 Shield,ShieldAlert,ShieldCheck,Loader2,
 AlertTriangle,XCircle,Info,ChevronDown,ChevronRight,
-Wand2,Eye,EyeOff,
+Wand2,Eye,EyeOff,ExternalLink,KeyRound,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -215,6 +215,24 @@ export function SecurityPanel({ project, files, onFilesUpdate }: SecurityPanelPr
                               <p className="text-xs text-emerald-400 font-medium mb-1">💡 Fix</p>
                               <p className="text-xs text-slate-400 leading-relaxed">{finding.fix}</p>
                             </div>
+                            {/* Leaked credential: the only useful first action
+                                is revoking it at the provider. Auto-Fix below
+                                edits the code, which does NOT make an exposed
+                                key safe — it stays valid until revoked. */}
+                            {finding.revokeUrl && (
+                              <a
+                                href={finding.revokeUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="flex items-center gap-2 p-2.5 rounded-lg bg-red-500/10 border border-red-500/25 hover:bg-red-500/15 transition-colors group"
+                              >
+                                <KeyRound className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                                <span className="text-xs text-red-300 font-medium flex-1">
+                                  Revoke this key at the provider first
+                                </span>
+                                <ExternalLink className="w-3 h-3 text-red-400/70 group-hover:text-red-300 shrink-0" />
+                              </a>
+                            )}
                             {finding.severity !== "info" && (
                               <Button
                                 size="sm"

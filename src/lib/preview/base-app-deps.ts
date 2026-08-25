@@ -5,13 +5,22 @@
  *   - lib/sandbox/modal.ts        → pre-baked into the Modal preview image so
  *                                    cold `npm install` is near-instant
  *
- * React-18-safe versions. Keep these two in sync — a version bump here flows to
- * both the scaffold and the baked image automatically.
+ * React-19 stack (matches the platform and the sandbox warm image, which was
+ * already baking React 19 — this file lagging on 18 meant every preview's
+ * "delta reconcile" install downgraded React per project). Keep these two in
+ * sync — a version bump here flows to both the scaffold and the baked image
+ * automatically; run `npm run sandbox:base-pkg` and rebuild the warm image
+ * after changing versions here.
+ *
+ * React-19 peer notes (installs run WITHOUT --legacy-peer-deps, so peers must
+ * genuinely allow 19): react-day-picker needed v9 (v8 peers stop at 18),
+ * next-themes needed 0.4.x, vaul needed 1.x. Everything else on a caret
+ * resolves to a release that already declares a React 19 peer.
  */
 
 export const BASE_APP_DEPENDENCIES: Record<string, string> = {
-  react: "^18.3.1",
-  "react-dom": "^18.3.1",
+  react: "^19.2.0",
+  "react-dom": "^19.2.0",
   "react-router-dom": "^6.26.2",
   "@tanstack/react-query": "^5.59.0",
   "react-hook-form": "^7.53.0",
@@ -25,13 +34,13 @@ export const BASE_APP_DEPENDENCIES: Record<string, string> = {
   "framer-motion": "^11.5.4",
   sonner: "^1.5.0",
   cmdk: "^1.0.0",
-  vaul: "^0.9.4",
+  vaul: "^1.1.2",
   "embla-carousel-react": "^8.3.0",
   "input-otp": "^1.2.4",
-  "react-day-picker": "^8.10.1",
+  "react-day-picker": "^9.14.0",
   "date-fns": "^3.6.0",
   "react-resizable-panels": "^2.1.4",
-  "next-themes": "^0.3.0",
+  "next-themes": "^0.4.6",
   recharts: "^2.12.7",
   "@radix-ui/react-accordion": "^1.2.1",
   "@radix-ui/react-alert-dialog": "^1.1.2",
@@ -52,8 +61,8 @@ export const BASE_APP_DEPENDENCIES: Record<string, string> = {
 };
 
 export const BASE_APP_DEV_DEPENDENCIES: Record<string, string> = {
-  "@types/react": "^18.3.1",
-  "@types/react-dom": "^18.3.1",
+  "@types/react": "^19.2.0",
+  "@types/react-dom": "^19.2.0",
   "@vitejs/plugin-react": "^4.3.0",
   typescript: "^5.5.0",
   vite: "^5.4.0",

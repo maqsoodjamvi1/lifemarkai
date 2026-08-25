@@ -18,6 +18,16 @@ function loadEnv(path = ".env.local") {
 }
 
 loadEnv();
+// Optional gitignored file for ephemeral campaign logins (see docs).
+loadEnv(".env.core-loop.runtime");
+
+// Vite server reads import.meta.env.VITE_*; many operator envs only set NEXT_PUBLIC_*.
+if (!process.env.VITE_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_URL) {
+  process.env.VITE_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+}
+if (!process.env.VITE_SUPABASE_ANON_KEY && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+  process.env.VITE_SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+}
 
 const BASE_URL = (process.env.CORE_LOOP_BASE_URL ?? "http://localhost:3001").replace(/\/$/, "");
 const STARTUP_TIMEOUT_MS = Math.max(
@@ -62,20 +72,44 @@ async function assertCampaignConfiguration() {
     throw new Error("VITE_SUPABASE_URL is invalid: " + (error instanceof Error ? error.message : String(error)));
   }
 
-  try {
-    const response = await fetch(new URL("/auth/v1/health", supabaseUrl), {
-      headers: { apikey: anonKey },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, 300);
-      throw new Error("HTTP " + response.status + (detail ? ": " + detail : ""));
+  // /auth/v1/health is intermittently slow or blocked on some networks while
+  // token + GoTrue still work. Probe with retries, then fall back to a token
+  // request that must return an auth HTTP status (not a TCP failure).
+  const authHeaders = { apikey: anonKey, Authorization: "Bearer " + anonKey };
+  let lastError = "unknown";
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    try {
+      const health = await fetch(new URL("/auth/v1/health", supabaseUrl), {
+        headers: authHeaders,
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (health.ok) return;
+      lastError = "health HTTP " + health.status;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
     }
-  } catch (error) {
-    const rawCause = error instanceof Error ? error.cause : null;
-    const cause = rawCause && typeof rawCause === "object" ? " (" + String(rawCause.code ?? rawCause.message ?? "") + ")" : "";
-    throw new Error("Cannot reach Supabase Auth at " + supabaseUrl.origin + ": " + (error instanceof Error ? error.message : String(error)) + cause + ". Verify the project URL, that the Supabase project is active, and that Codespaces can access it.");
+    try {
+      const token = await fetch(new URL("/auth/v1/token?grant_type=password", supabaseUrl), {
+        method: "POST",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({ email: "core-loop-preflight@invalid", password: "preflight-check" }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      // Any HTTP response from GoTrue proves Auth is reachable.
+      if (token.status > 0) return;
+      lastError = "token HTTP " + token.status;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    await delay(1_000 * attempt);
   }
+  throw new Error(
+    "Cannot reach Supabase Auth at " +
+      supabaseUrl.origin +
+      ": " +
+      lastError +
+      ". Verify the project URL, that the Supabase project is active, and that this host can reach *.supabase.co.",
+  );
 }
 function assertRuntimeDependencies() {
   const viteBin = fileURLToPath(new URL("../node_modules/vite/bin/vite.js", import.meta.url));
@@ -144,6 +178,10 @@ async function main() {
   const viteBin = assertRuntimeDependencies();
   const campaign = fileURLToPath(new URL("./verify-core-loop-campaign.ts", import.meta.url));
   const coreLoopHost = new URL(BASE_URL).hostname;
+  const localCoreLoop =
+    coreLoopHost === "localhost" ||
+    coreLoopHost === "127.0.0.1" ||
+    coreLoopHost === "::1";
   const env = {
     ...process.env,
     CORE_LOOP_ATTEMPTS: ATTEMPTS,
@@ -152,9 +190,41 @@ async function main() {
     // Codespaces) cannot stall the release gate. Operator override still wins.
     // Keep in sync with CORE_LOOP_CAMPAIGN_PRIMARY_MODEL in core-loop-policy.ts.
     CORE_LOOP_AI_MODEL: process.env.CORE_LOOP_AI_MODEL?.trim() || "openai/gpt-5.6-luna",
+    VITE_SUPABASE_URL:
+      process.env.VITE_SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    VITE_SUPABASE_ANON_KEY:
+      process.env.VITE_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "",
+    NEXT_PUBLIC_SUPABASE_URL:
+      process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || "",
+    NEXT_PUBLIC_SUPABASE_ANON_KEY:
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "",
     SANDBOX_PROVIDER: "docker",
     SANDBOX_PUBLIC_HOST: process.env.SANDBOX_PUBLIC_HOST || coreLoopHost,
     SANDBOX_PUBLIC_SCHEME: process.env.SANDBOX_PUBLIC_SCHEME || "http",
+    // Local Windows/macOS runners often inherit production Coolify docker-proxy
+    // env from .env.local (DOCKER_HOST=http://lifemark-docker-proxy:2375 plus a
+    // Traefik preview domain). Those names do not resolve here and force proxy
+    // mode. Clear them so the gate uses the local Docker engine + published ports.
+    ...(localCoreLoop
+      ? {
+          DOCKER_HOST: "",
+          SANDBOX_PREVIEW_DOMAIN: "",
+          SANDBOX_PROXY_NETWORK: "",
+          SANDBOX_CERT_RESOLVER: "",
+          SANDBOX_TRAEFIK_ENTRYPOINT: "",
+          SANDBOX_PUBLIC_HOST: process.env.SANDBOX_PUBLIC_HOST || "localhost",
+          SANDBOX_PUBLIC_SCHEME: "http",
+          // npm install + Vite boot on Docker Desktop often exceeds the default
+          // 3-minute deploy/preview poll window used by the campaign runner.
+          CORE_LOOP_DEPLOY_TIMEOUT_MS:
+            process.env.CORE_LOOP_DEPLOY_TIMEOUT_MS || "2700000",
+          // node:http cannot use /var/run/docker.sock on Windows; the Desktop
+          // named pipe is the local Engine API endpoint.
+          ...(process.platform === "win32"
+            ? { DOCKER_SOCKET: process.env.DOCKER_SOCKET || "\\\\.\\pipe\\docker_engine" }
+            : {}),
+        }
+      : {}),
   };
 
   console.log(`Starting LifeMarkAI at ${BASE_URL}...`);

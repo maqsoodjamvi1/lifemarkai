@@ -69,7 +69,44 @@ const INDEX_CSS: TemplateFile = {
 const VITE_CONFIG: TemplateFile = {
   path: "vite.config.ts",
   language: "typescript",
-  content: `import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\nexport default defineConfig({ plugins: [react({ babel: { plugins: [] } })] })`,
+  // The inline babel plugin stamps data-source-file/-line onto DOM-level JSX
+  // elements in dev builds only. The editor's visual tools (veb-bridge
+  // sourceHint) read those attributes to map a clicked preview element back to
+  // its source file:line — React 19 removed the Fiber _debugSource that used
+  // to carry this, so the tagger is now the only source-mapping mechanism.
+  // Keep this template in sync with the vite.config.ts sample in
+  // lib/ai/system-prompts.ts.
+  content: `import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+// Dev-only: stamps data-source-file/-line on JSX DOM elements so the editor
+// can map clicked preview elements to source. Removed from production builds.
+const sourceTagger = ({ types: t }: any) => ({
+  name: 'lm-source-tagger',
+  visitor: {
+    JSXOpeningElement(p: any, state: any) {
+      const n = p.node.name
+      if (!n || n.type !== 'JSXIdentifier' || !/^[a-z]/.test(n.name)) return
+      if (!p.node.loc) return
+      let file = String(state.file.opts.filename || '')
+      const i = file.lastIndexOf('/src/')
+      if (i < 0 || file.includes('node_modules')) return
+      file = file.slice(i + 1)
+      const has = p.node.attributes.some(
+        (a: any) => a.type === 'JSXAttribute' && a.name && a.name.name === 'data-source-file'
+      )
+      if (has) return
+      p.node.attributes.push(
+        t.jsxAttribute(t.jsxIdentifier('data-source-file'), t.stringLiteral(file)),
+        t.jsxAttribute(t.jsxIdentifier('data-source-line'), t.stringLiteral(String(p.node.loc.start.line)))
+      )
+    },
+  },
+})
+
+export default defineConfig(({ command }) => ({
+  plugins: [react({ babel: { plugins: command === 'serve' ? [sourceTagger] : [] } })],
+}))`,
 };
 
 const INDEX_HTML: TemplateFile = {

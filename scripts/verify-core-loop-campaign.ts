@@ -29,10 +29,55 @@ function loadEnv(path = ".env.local") {
 }
 
 loadEnv();
+loadEnv(".env.core-loop.runtime");
 pinCoreLoopCampaignAiModel();
 
 const firstEnv = (...names: string[]) =>
   names.map((name) => process.env[name]?.trim()).find(Boolean);
+
+function isTransientNetworkError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause =
+    error instanceof Error && error.cause && typeof error.cause === "object"
+      ? String((error.cause as { code?: string; message?: string }).code ?? (error.cause as { message?: string }).message ?? "")
+      : "";
+  const haystack = `${message} ${cause}`;
+  return /fetch failed|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|UND_ERR_|CONNECT_TIMEOUT|socket hang up|network|TLS/i.test(
+    haystack,
+  );
+}
+
+/** TanStack Start dev can return 404 for `/` while still streaming the app shell. */
+function looksLikeServedAppHtml(body: string): boolean {
+  const trimmed = body.trim();
+  if (trimmed.length < 100) return false;
+  const head = trimmed.slice(0, 800).toLowerCase();
+  return head.includes("<!doctype") || head.includes("<html");
+}
+
+async function withTransientRetries<T>(
+  label: string,
+  fn: () => Promise<T>,
+  attempts = 5,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (!isTransientNetworkError(error) || attempt === attempts) throw error;
+      const waitMs = Math.min(8_000, 500 * 2 ** (attempt - 1));
+      console.warn(
+        `${label} transient failure (${attempt}/${attempts}): ${
+          error instanceof Error ? error.message : String(error)
+        }; retrying in ${waitMs}ms`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
 
 const missing: string[] = [];
 const requireOne = (label: string, ...names: string[]) => {
@@ -84,31 +129,70 @@ type SandboxPreview = {
   sandboxId?: string | null;
   phase?: string | null;
   phaseDetail?: string | null;
+  previewProbe?: string | null;
   error?: string;
 };
 
+const PREVIEW_FETCH_TIMEOUT_MS = 30_000;
+const PREVIEW_VERIFY_TIMEOUT_MS = 180_000;
+
+async function fetchPreviewUrl(url: string): Promise<Response> {
+  return fetch(url, { redirect: "follow", signal: AbortSignal.timeout(PREVIEW_FETCH_TIMEOUT_MS) });
+}
+
+/** Confirm the Docker/Modal tunnel accepts HTTP before handing the URL to later gates. */
+async function confirmPreviewTunnel(url: string): Promise<void> {
+  await withTransientRetries(
+    `preview tunnel ${url}`,
+    async () => {
+      const response = await fetchPreviewUrl(url);
+      if (CORE_LOOP_POLICY.previewStrategy === "server-verified") return response;
+      if (response.ok) return response;
+      const detail = await response.text().catch(() => "");
+      if (looksLikeServedAppHtml(detail)) return response;
+      throw new Error(`remote preview returned ${response.status}`);
+    },
+    8,
+  );
+}
+
+async function sandboxPreviewReady(state: SandboxPreview): Promise<boolean> {
+  if (!state.previewUrl || !state.sandboxId || state.ok !== true || state.phase !== "ready") {
+    return false;
+  }
+  if (state.previewProbe === "verified") return true;
+  if (state.previewProbe === "unverified" || state.previewProbe === "unknown") return false;
+  try {
+    await confirmPreviewTunnel(state.previewUrl);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function startRemotePreview(projectId: string, cookie: string) {
-  const start = await jsonFetch<SandboxPreview>(
-    `/api/projects/${projectId}/sandbox-preview`,
-    cookie,
-    { method: "POST", body: "{}" },
+  const start = await withTransientRetries("sandbox-preview POST", () =>
+    jsonFetch<SandboxPreview>(`/api/projects/${projectId}/sandbox-preview`, cookie, {
+      method: "POST",
+      body: "{}",
+    }),
   );
   if (start.enabled === false) throw new Error("remote sandbox preview is not configured");
   if (start.ok === false && start.phase === "error") {
     throw new Error(start.error ?? start.phaseDetail ?? "remote preview failed to start");
   }
-  if (start.previewUrl && start.sandboxId && start.ready !== false) {
-    return { previewUrl: start.previewUrl, sandboxId: start.sandboxId };
+  if (await sandboxPreviewReady(start)) {
+    return { previewUrl: start.previewUrl!, sandboxId: start.sandboxId! };
   }
 
   const deadline = Date.now() + DEPLOY_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const state = await jsonFetch<SandboxPreview>(
-      `/api/projects/${projectId}/sandbox-preview?phaseOnly=1`,
-      cookie,
+    const state = await withTransientRetries("sandbox-preview poll", () =>
+      jsonFetch<SandboxPreview>(`/api/projects/${projectId}/sandbox-preview?phaseOnly=1`, cookie),
+      3,
     );
-    if (state.previewUrl && state.sandboxId && state.ok === true && state.phase === "ready") {
-      return { previewUrl: state.previewUrl, sandboxId: state.sandboxId };
+    if (await sandboxPreviewReady(state)) {
+      return { previewUrl: state.previewUrl!, sandboxId: state.sandboxId! };
     }
     // "app_error" = the container is serving but the app answers 5xx (a build
     // failure in the generated code). Terminal here: polling longer cannot fix
@@ -164,61 +248,77 @@ async function proveFreshRegistration(
     };
   }
 
-  const email = registrationEmail(EMAIL);
-  const password = `CoreLoop-${randomUUID()}-aA1!`;
-  const { data, error } = await admin.auth.admin.createUser({
-    email,
-    password,
-    email_confirm: true,
-  });
-  const userId = data.user?.id;
-  if (error || !userId) {
-    return {
-      attempted: true,
-      passed: false,
-      creditsGranted: null,
-      error: error?.message ?? "Supabase admin createUser returned no user",
-    };
-  }
-
   try {
-    const deadline = Date.now() + 15_000;
-    while (Date.now() < deadline) {
-      const { data: profile, error: profileError } = await admin
-        .from("profiles")
-        .select("credits")
-        .eq("id", userId)
-        .maybeSingle();
-      if (profileError) {
+    return await withTransientRetries("registration proof", async () => {
+      const email = registrationEmail(EMAIL);
+      const password = `CoreLoop-${randomUUID()}-aA1!`;
+      const { data, error } = await admin.auth.admin.createUser({
+        email,
+        password,
+        email_confirm: true,
+      });
+      const userId = data.user?.id;
+      if (error || !userId) {
+        // Auth API reached us with a real error — do not retry forever.
+        if (error && !isTransientNetworkError(error)) {
+          return {
+            attempted: true,
+            passed: false,
+            creditsGranted: null,
+            error: error.message,
+          };
+        }
+        throw new Error(error?.message ?? "Supabase admin createUser returned no user");
+      }
+
+      try {
+        const deadline = Date.now() + 15_000;
+        while (Date.now() < deadline) {
+          const { data: profile, error: profileError } = await admin
+            .from("profiles")
+            .select("credits")
+            .eq("id", userId)
+            .maybeSingle();
+          if (profileError) {
+            if (isTransientNetworkError(profileError)) throw profileError;
+            return {
+              attempted: true,
+              passed: false,
+              creditsGranted: null,
+              error: profileError.message,
+            };
+          }
+          if (profile) {
+            const creditsGranted = Number(profile.credits ?? 0);
+            return {
+              attempted: true,
+              passed: creditsGranted > 0,
+              creditsGranted,
+              ...(creditsGranted > 0 ? {} : { error: "fresh registration received no credits" }),
+            };
+          }
+          await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+        }
         return {
           attempted: true,
           passed: false,
           creditsGranted: null,
-          error: profileError.message,
+          error: "profile trigger did not create a row within 15 seconds",
         };
+      } finally {
+        const { error: cleanupError } = await admin.auth.admin.deleteUser(userId);
+        if (cleanupError) {
+          console.warn(`Registration probe cleanup failed for ${userId}: ${cleanupError.message}`);
+        }
       }
-      if (profile) {
-        const creditsGranted = Number(profile.credits ?? 0);
-        return {
-          attempted: true,
-          passed: creditsGranted > 0,
-          creditsGranted,
-          ...(creditsGranted > 0 ? {} : { error: "fresh registration received no credits" }),
-        };
-      }
-      await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
-    }
+    });
+  } catch (error) {
     return {
       attempted: true,
       passed: false,
       creditsGranted: null,
-      error: "profile trigger did not create a row within 15 seconds",
+      error: error instanceof Error ? error.message : String(error),
     };
-  } finally {
-    const { error: cleanupError } = await admin.auth.admin.deleteUser(userId);
-    if (cleanupError) {
-      console.warn(`Registration probe cleanup failed for ${userId}: ${cleanupError.message}`);
-    }
   }
 }
 
@@ -234,10 +334,26 @@ function coreLoopUrl(path: string, method: string): string {
 
 async function jsonFetch<T>(path: string, cookie: string, init: RequestInit = {}): Promise<T> {
   const method = init.method ?? "GET";
-  const response = await fetch(coreLoopUrl(path, method), {
-    ...init,
-    headers: { "Content-Type": "application/json", Cookie: cookie, ...init.headers },
-  });
+  const timeoutMs =
+    init.signal
+      ? undefined
+      : path.includes("/sandbox-preview") && method === "POST"
+        ? DEPLOY_TIMEOUT_MS
+        : path.includes("/preview-verify") && method === "POST"
+          ? PREVIEW_VERIFY_TIMEOUT_MS
+          : undefined;
+  const signal = init.signal ?? (timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined);
+  let response: Response;
+  try {
+    response = await fetch(coreLoopUrl(path, method), {
+      ...init,
+      signal,
+      headers: { "Content-Type": "application/json", Cookie: cookie, ...init.headers },
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`${method} ${path} failed: ${reason}`);
+  }
   const text = await response.text();
   let body: unknown;
   try { body = text ? JSON.parse(text) : null; } catch { body = text; }
@@ -342,9 +458,19 @@ async function main() {
   if (!registrationProof.passed) {
     console.warn(`Registration proof not completed: ${registrationProof.error ?? "unknown error"}`);
   }
-  const { data: auth, error: authError } = await client.auth.signInWithPassword({ email: EMAIL, password: PASSWORD });
-  if (authError || !auth.session) throw new Error(`test-account sign-in failed: ${authError?.message ?? "no session"}`);
-  const cookie = authCookie(auth.session);
+  const auth = await withTransientRetries("test-account sign-in", async () => {
+    const { data, error: authError } = await client.auth.signInWithPassword({
+      email: EMAIL,
+      password: PASSWORD,
+    });
+    if (authError || !data.session) {
+      const message = authError?.message ?? "no session";
+      if (isTransientNetworkError(authError ?? new Error(message))) throw new Error(message);
+      throw new Error(`test-account sign-in failed: ${message}`);
+    }
+    return data;
+  });
+  const cookie = authCookie(auth.session!);
 
   const profileClient = admin ?? client;
   const { data: profile, error: profileError } = await profileClient
@@ -401,40 +527,45 @@ async function main() {
 
       stage = "generation";
       const generationStarted = Date.now();
-      const generationAbort = new AbortController();
-      const generationTimer = setTimeout(() => generationAbort.abort(), GENERATION_TIMEOUT_MS);
-      generationTimer.unref?.();
-      let done: DoneEvent;
-      try {
-        const generationResponse = await fetch(coreLoopUrl("/api/ai/chat", "POST"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Cookie: cookie },
-          signal: generationAbort.signal,
-          body: JSON.stringify({
-            projectId: project.id,
-            message: prompt,
-            mode: CORE_LOOP_POLICY.mode,
-            framework: CORE_LOOP_POLICY.framework,
-            model: CORE_LOOP_POLICY.primaryModel,
-            modelManuallySelected: true,
-            forceBuild: true,
-            clarifyFirst: false,
-            coreLoop: true,
-            files: [],
-            history: [],
-          }),
-        });
-        done = await readDoneEvent(generationResponse);
-      } catch (error) {
-        if (generationAbort.signal.aborted) {
-          throw new Error(
-            `generation timed out after ${GENERATION_TIMEOUT_MS}ms (model=${CORE_LOOP_POLICY.primaryModel})`,
-          );
-        }
-        throw error;
-      } finally {
-        clearTimeout(generationTimer);
-      }
+      const done = await withTransientRetries(
+        `generation attempt ${index + 1}`,
+        async () => {
+          const generationAbort = new AbortController();
+          const generationTimer = setTimeout(() => generationAbort.abort(), GENERATION_TIMEOUT_MS);
+          generationTimer.unref?.();
+          try {
+            const generationResponse = await fetch(coreLoopUrl("/api/ai/chat", "POST"), {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Cookie: cookie },
+              signal: generationAbort.signal,
+              body: JSON.stringify({
+                projectId: project.id,
+                message: prompt,
+                mode: CORE_LOOP_POLICY.mode,
+                framework: CORE_LOOP_POLICY.framework,
+                model: CORE_LOOP_POLICY.primaryModel,
+                modelManuallySelected: true,
+                forceBuild: true,
+                clarifyFirst: false,
+                coreLoop: true,
+                files: [],
+                history: [],
+              }),
+            });
+            return await readDoneEvent(generationResponse);
+          } catch (error) {
+            if (generationAbort.signal.aborted) {
+              throw new Error(
+                `generation timed out after ${GENERATION_TIMEOUT_MS}ms (model=${CORE_LOOP_POLICY.primaryModel})`,
+              );
+            }
+            throw error;
+          } finally {
+            clearTimeout(generationTimer);
+          }
+        },
+        3,
+      );
       attempt.generationMs = Date.now() - generationStarted;
       attempt.generationPassed = Number(done.fileCount ?? 0) > 0;
       attempt.creditsUsed = typeof done.creditsUsed === "number" ? done.creditsUsed : null;
@@ -445,28 +576,46 @@ async function main() {
       stage = "preview";
       const remotePreview = await startRemotePreview(project.id, cookie);
       sandboxId = remotePreview.sandboxId;
-      const previewResponse = await fetch(remotePreview.previewUrl, { redirect: "follow" });
-      if (!previewResponse.ok) {
-        // KEEP THE BODY. A bare "remote preview returned 500" is unactionable —
-        // it cannot tell a Traefik 502 (sandbox down) from vite answering its
-        // own 500 (the generated code does not transform), and those have
-        // nothing to do with each other. Vite puts the file, line and message
-        // straight in the response, so a run that throws this away forces the
-        // next debugging pass to be a guess. Truncated because a vite error
-        // page carries the whole module graph after the part that matters.
-        const detail = await previewResponse.text().catch(() => "");
-        const snippet = detail.replace(/\s+/g, " ").trim().slice(0, 600);
+      if (CORE_LOOP_POLICY.previewStrategy !== "server-verified") {
+        const previewResponse = await withTransientRetries(
+          "preview URL",
+          () => fetchPreviewUrl(remotePreview.previewUrl),
+          5,
+        );
+        if (!previewResponse.ok) {
+          const detail = await previewResponse.text().catch(() => "");
+          const deferToServerVerify = looksLikeServedAppHtml(detail);
+          if (!deferToServerVerify) {
+            const snippet = detail.replace(/\s+/g, " ").trim().slice(0, 600);
+            throw new Error(
+              `remote preview returned ${previewResponse.status}` +
+                (snippet ? ` — ${snippet}` : ""),
+            );
+          }
+        }
+      }
+      const preview = await withTransientRetries(
+        "preview-verify",
+        () =>
+          jsonFetch<{
+            ok?: boolean;
+            checks?: Array<{ name: string; pass: boolean; detail?: string }>;
+          }>(`/api/projects/${project.id}/preview-verify`, cookie, {
+            method: "POST",
+            body: JSON.stringify({ previewUrl: remotePreview.previewUrl }),
+          }),
+        3,
+      );
+      attempt.previewPassed = preview.ok === true;
+      if (!attempt.previewPassed) {
+        const failed = preview.checks
+          ?.filter((check) => !check.pass)
+          .map((check) => (check.detail ? `${check.name}: ${check.detail}` : check.name))
+          .join("; ");
         throw new Error(
-          `remote preview returned ${previewResponse.status}` +
-            (snippet ? ` — ${snippet}` : ""),
+          failed ? `preview verification failed — ${failed}` : "preview verification failed",
         );
       }
-      const preview = await jsonFetch<{ ok?: boolean }>(`/api/projects/${project.id}/preview-verify`, cookie, {
-        method: "POST",
-        body: JSON.stringify({ previewUrl: remotePreview.previewUrl }),
-      });
-      attempt.previewPassed = preview.ok === true;
-      if (!attempt.previewPassed) throw new Error("preview verification failed");
 
       stage = "deployment";
       await jsonFetch<{ deploymentId: string }>("/api/deploy", cookie, {
@@ -487,8 +636,21 @@ async function main() {
       attempt.error = error instanceof Error ? error.message : String(error);
       attempt.manualInterventionRequired = true;
     } finally {
-      if (attempt.projectId && sandboxId) {
-        await stopRemotePreview(attempt.projectId, sandboxId, cookie);
+      if (attempt.projectId) {
+        if (!sandboxId) {
+          try {
+            const state = await jsonFetch<SandboxPreview>(
+              `/api/projects/${attempt.projectId}/sandbox-preview?phaseOnly=1`,
+              cookie,
+            );
+            sandboxId = state.sandboxId ?? null;
+          } catch {
+            // Best-effort cleanup; a leaked container is worse than a noisy GET.
+          }
+        }
+        if (sandboxId) {
+          await stopRemotePreview(attempt.projectId, sandboxId, cookie);
+        }
       }
       if (attempt.projectId) {
         const costs = await projectCosts(admin, attempt.projectId, startedAt);

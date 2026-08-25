@@ -82,3 +82,22 @@ meantime.
 Unset `INTELLIGENCE_SERVICE_URL` and redeploy the main app. Everything
 returns to the prior behavior (keyword-search fallback, regex analyzer).
 The service container can stay up or be deleted; nothing else references it.
+
+## Embedding model (updated Aug 24 2026)
+
+The default model is now **jinaai/jina-embeddings-v2-base-code** (768-dim,
+code-trained — categorically better retrieval on code than the old MiniLM
+text model). First request after deploy downloads ~320MB of weights, so the
+first /embed call can take 1–3 minutes on the VPS; subsequent calls are
+fast. Override with env:
+
+- `EMBED_MODEL` — HF model id (default jinaai/jina-embeddings-v2-base-code)
+- `EMBED_MODEL_REVISION` — pin an exact HF revision (recommended in prod;
+  the jina code model loads custom modeling code via trust_remote_code)
+- `EMBED_TRUST_REMOTE_CODE=0` — disable for stock sentence-transformers models
+- `EMBED_MAX_CHARS` — per-text truncation (default 6000)
+
+Existing stored embeddings (384-dim MiniLM rows) are handled automatically:
+every row records its producing model, mismatched rows count as stale and
+re-embed on next touch, and cosineSimilarity dimension-guards as backstop.
+No manual backfill needed.

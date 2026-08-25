@@ -10,6 +10,9 @@
 
 import type { ProjectFile } from "../../types/database.ts";
 
+import { SECRET_PATTERNS, type SecretProvider } from "./detect-secret.ts";
+import { remediationSummary, revocationFor } from "./secret-revocation.ts";
+
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
 
 export interface SecurityFinding {
@@ -20,6 +23,10 @@ export interface SecurityFinding {
   line?: number;
   snippet?: string;
   fix?: string;
+  /** Set on leaked-credential findings — keys into SECRET_REVOCATION. */
+  provider?: SecretProvider;
+  /** Direct link to the provider page where the key is revoked. */
+  revokeUrl?: string;
 }
 
 interface Pattern {
@@ -30,35 +37,12 @@ interface Pattern {
   fix: string;
 }
 
+/**
+ * Non-credential patterns. Leaked API keys are NOT here — credentialFindings()
+ * above sweeps all 25 provider formats from the shared catalog, so keeping
+ * hand-written key regexes in this list would double-report every hit.
+ */
 export const SECURITY_PATTERNS: Pattern[] = [
-  {
-    pattern: /sk-[a-zA-Z0-9]{20,}/,
-    severity: "critical",
-    title: "Exposed OpenAI API Key",
-    description: "An OpenAI API key was found in your source code. Anyone who sees this code can use your API key.",
-    fix: "Move this key to .env.local and use process.env.OPENAI_API_KEY instead.",
-  },
-  {
-    pattern: /sk-ant-[a-zA-Z0-9\-_]{20,}/,
-    severity: "critical",
-    title: "Exposed Anthropic API Key",
-    description: "An Anthropic API key was found in source code.",
-    fix: "Move to .env.local and use process.env.ANTHROPIC_API_KEY.",
-  },
-  {
-    pattern: /pk_live_[a-zA-Z0-9]{20,}/,
-    severity: "critical",
-    title: "Exposed Stripe Live Publishable Key",
-    description: "A live Stripe publishable key is hardcoded. While publishable keys have limited scope, they should still be in environment variables.",
-    fix: "Use process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY.",
-  },
-  {
-    pattern: /sk_live_[a-zA-Z0-9]{20,}/,
-    severity: "critical",
-    title: "Exposed Stripe Live Secret Key",
-    description: "A live Stripe secret key is hardcoded. This gives full access to your Stripe account.",
-    fix: "Move immediately to .env.local as STRIPE_SECRET_KEY and never commit this file.",
-  },
   {
     pattern: /password\s*=\s*["'][^"']{4,}["']/i,
     severity: "high",
@@ -119,12 +103,76 @@ export const SECURITY_PATTERNS: Pattern[] = [
 
 const SEVERITY_ORDER: Record<Severity, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
 
-export function staticScan(files: ProjectFile[]): SecurityFinding[] {
+export interface StaticScanOptions {
+  /**
+   * The project is deployed publicly or pushed to a public repo. A leaked key
+   * in a published project is not "should be moved to env" — it is "assume it
+   * has already been collected", so credential findings escalate to critical
+   * and their remediation leads with revocation.
+   */
+  published?: boolean;
+}
+
+/**
+ * Sweep for leaked credentials using the SAME 25-provider catalog the chat
+ * composer uses (detect-secret.ts).
+ *
+ * Before this, SECURITY_PATTERNS below carried its own four hand-written key
+ * regexes, so a committed GitHub token, AWS access key, Supabase service-role
+ * JWT, Slack token — twenty-one formats in all — were invisible here while the
+ * identical string pasted into chat was caught immediately. One catalog, one
+ * behaviour.
+ *
+ * Skips .env* files: those are the sanctioned place to hold a secret, and
+ * flagging them trains people to ignore the panel.
+ */
+function credentialFindings(
+  file: ProjectFile,
+  lines: string[],
+  published: boolean,
+): SecurityFinding[] {
+  if (/(^|\/)\.env(\.|$)/.test(file.path)) return [];
+  const out: SecurityFinding[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i < lines.length; i++) {
+    for (const spec of SECRET_PATTERNS) {
+      if (!spec.re.test(lines[i])) continue;
+      if (seen.has(spec.name)) continue;
+      seen.add(spec.name);
+      const g = revocationFor(spec.provider);
+      out.push({
+        severity: published && spec.live ? "critical" : spec.live ? "critical" : "medium",
+        title: `Exposed ${spec.label}`,
+        description:
+          `A ${spec.label} is hardcoded in ${file.path}.` +
+          (published && spec.live
+            ? " This project is published, so treat the credential as already compromised."
+            : ""),
+        file: file.path,
+        line: i + 1,
+        // Never echo the credential itself into a finding — findings are
+        // persisted, rendered, and can be exported.
+        snippet: lines[i].replace(spec.re, "[redacted]").trim().slice(0, 120),
+        fix: remediationSummary(spec.provider, { live: spec.live, published }),
+        provider: spec.provider,
+        revokeUrl: g?.consoleUrl,
+      });
+    }
+  }
+  return out;
+}
+
+export function staticScan(
+  files: ProjectFile[],
+  options: StaticScanOptions = {},
+): SecurityFinding[] {
   const findings: SecurityFinding[] = [];
+  const published = options.published === true;
 
   for (const file of files) {
     if (!file?.content) continue;
     const lines = file.content.split("\n");
+    findings.push(...credentialFindings(file, lines, published));
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       for (const { pattern, severity, title, description, fix } of SECURITY_PATTERNS) {

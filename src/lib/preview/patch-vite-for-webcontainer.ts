@@ -38,6 +38,8 @@
  * touch. Nothing in the codebase uses `document.domain`, the one API that
  * origin-keying actually disables.
  */
+import { sandboxUsesTlsHmr, stripForcedTlsHmr } from "./sandbox-tls-hmr.ts";
+
 const ORIGIN_KEYED_HEADERS = 'headers: { "Origin-Agent-Cluster": "?1" },';
 
 export function patchViteConfigForWebContainer(content: string): string {
@@ -62,7 +64,8 @@ export function patchViteConfigForWebContainer(content: string): string {
       !hasHost ? "host: true," : "",
       !hasAllowedHosts ? "allowedHosts: true," : "",
       // Modal TLS tunnels terminate on 443 — Vite HMR client must use wss.
-      !hasHmr ? 'hmr: { protocol: "wss", clientPort: 443 },' : "",
+      // Local Docker port-mode is plain HTTP; injecting wss there blanks the preview.
+      !hasHmr && sandboxUsesTlsHmr() ? 'hmr: { protocol: "wss", clientPort: 443 },' : "",
       // Own process for the preview — see ORIGIN_KEYED_HEADERS above.
       !hasOriginKeying && !hasHeaders ? ORIGIN_KEYED_HEADERS : "",
     ]
@@ -81,20 +84,29 @@ export function patchViteConfigForWebContainer(content: string): string {
         'headers: {\n      "Origin-Agent-Cluster": "?1",',
       );
     }
-    return patched;
+    return stripForcedTlsHmr(patched);
   }
 
   const defineConfig = /defineConfig\s*\(\s*\{/;
   if (defineConfig.test(patched)) {
-    return patched.replace(
-      defineConfig,
-      "defineConfig({\n  server: {\n    host: true,\n    allowedHosts: true,\n    hmr: { protocol: \"wss\", clientPort: 443 },\n    " +
-        ORIGIN_KEYED_HEADERS +
-        "\n  },",
+    const hmrLine = sandboxUsesTlsHmr()
+      ? '    hmr: { protocol: "wss", clientPort: 443 },\n'
+      : "";
+    return stripForcedTlsHmr(
+      patched.replace(
+        defineConfig,
+        "defineConfig({\n  server: {\n    host: true,\n    allowedHosts: true,\n" +
+          hmrLine +
+          "    " +
+          ORIGIN_KEYED_HEADERS +
+          "\n  },",
+      ),
     );
   }
 
-  return `${patched.trim()}\n// Added for cloud/WebContainer preview\nexport const __webcontainerHost = true;\n`;
+  return stripForcedTlsHmr(
+    `${patched.trim()}\n// Added for cloud/WebContainer preview\nexport const __webcontainerHost = true;\n`,
+  );
 }
 
 /**

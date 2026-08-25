@@ -318,7 +318,25 @@ test("ensureCommonGeneratedSupportFiles normalizes model default imports from th
   assert.match(byPath.get("src/routes/testimonials.tsx") ?? "", /import type \{ Testimonial \} from '..\/lib\/types'/);
   assert.match(byPath.get("src/lib/types.ts") ?? "", /export type Product/);
   assert.match(byPath.get("src/lib/types.ts") ?? "", /export type Testimonial/);
-  assert.ok(!(byPath.get("src/lib/types.ts") ?? "").includes("export default"));
+  assert.match(byPath.get("src/lib/types.ts") ?? "", /export default lifemarkGeneratedTypes;/);
+});
+
+test("ensureCommonGeneratedSupportFiles adds a requested default export to an existing types module", () => {
+  const files = ensureCommonGeneratedSupportFiles([
+    {
+      path: "src/App.tsx",
+      content: 'import Types from "@/lib/types";\nexport default function App() { return <div>{String(Types)}</div>; }',
+      language: "typescriptreact",
+    },
+    {
+      path: "src/lib/types.ts",
+      content: "export type Customer = { id: string };",
+      language: "typescript",
+    },
+  ]);
+  const types = files.find((file) => file.path === "src/lib/types.ts")?.content ?? "";
+
+  assert.match(types, /export default lifemarkGeneratedTypes;/);
 });
 
 test("ensureCommonGeneratedSupportFiles repairs dangling data exports and JSX file extensions", () => {
@@ -584,10 +602,11 @@ test("assessGenerationQuality grades an explicit landing page as one rich route 
     },
     { path: "src/components/layout/Header.tsx", language: "typescriptreact", content: "export function Header() { return <header><nav /></header>; }" },
     { path: "src/components/layout/Footer.tsx", language: "typescriptreact", content: "export function Footer() { return <footer />; }" },
-  ], [], { appType: "marketing-website", minFiles: 1, singlePage: true });
+  ], [], { appType: "marketing-website", minFiles: 12, singlePage: true });
 
   assert.ok(!errors.some((e) => e.type === "too_few_website_pages"), JSON.stringify(errors));
   assert.ok(!errors.some((e) => e.type === "missing_website_data_backing"), JSON.stringify(errors));
+  assert.ok(!errors.some((e) => e.type === "too_few_components"), JSON.stringify(errors));
 });
 
 test("assessGenerationQuality accepts mature database-backed website structure", () => {

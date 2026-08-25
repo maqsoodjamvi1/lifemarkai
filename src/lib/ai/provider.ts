@@ -56,6 +56,17 @@ export interface GenerateOptions {
 export interface GenerateResult {
   content: string;
   tokensUsed: number;
+  /**
+   * Input/output split. Every provider path already had these numbers and threw
+   * them away by summing into `tokensUsed` — which made cost impossible to
+   * compute after the fact, because input and output differ by up to 6x in
+   * price (gpt-5.6-terra is $2 in, $12 out). Optional so an unusual path that
+   * genuinely cannot report a split stays valid.
+   */
+  promptTokens?: number;
+  completionTokens?: number;
+  /** Prompt tokens served from cache, when the provider reports it. */
+  cachedTokens?: number;
   model: string;
   /** Populated when the model chose to invoke tool(s) instead of generating text */
   toolCalls?: ToolCall[];
@@ -440,6 +451,9 @@ async function generateOpenAI(options: GenerateOptions & { model: AIModel }): Pr
     return {
       content: msg?.content ?? "",
       tokensUsed: response.usage?.total_tokens ?? 0,
+      promptTokens: response.usage?.prompt_tokens ?? 0,
+      completionTokens: response.usage?.completion_tokens ?? 0,
+      cachedTokens: (response.usage as { prompt_tokens_details?: { cached_tokens?: number } } | undefined)?.prompt_tokens_details?.cached_tokens ?? 0,
       model: options.model,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     };
@@ -477,6 +491,8 @@ async function generateOpenAI(options: GenerateOptions & { model: AIModel }): Pr
     return {
       content: fullContent,
       tokensUsed: promptTokens + completionTokens,
+      promptTokens,
+      completionTokens,
       model: options.model,
     };
   }
@@ -492,6 +508,9 @@ async function generateOpenAI(options: GenerateOptions & { model: AIModel }): Pr
   return {
     content: response.choices[0]?.message?.content ?? "",
     tokensUsed: response.usage?.total_tokens ?? 0,
+    promptTokens: response.usage?.prompt_tokens ?? 0,
+    completionTokens: response.usage?.completion_tokens ?? 0,
+    cachedTokens: (response.usage as { prompt_tokens_details?: { cached_tokens?: number } } | undefined)?.prompt_tokens_details?.cached_tokens ?? 0,
     model: options.model,
   };
 }
@@ -588,10 +607,28 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
   // (Unknown body fields pass through the OpenAI SDK untouched; OpenRouter
   // reads `provider` and non-OpenRouter backends never see it.)
   const providerSort = process.env.OPENROUTER_PROVIDER_SORT ?? "throughput";
+
+  // Tool-heavy calls need RELIABILITY, not raw speed. OpenRouter serves one
+  // model from many backends and they do not all implement the same request
+  // parameters — a backend without tool support will happily accept the request
+  // and return ordinary prose, so the agent sees "the model chose not to call a
+  // tool" when the truth is the provider never offered it. That failure is
+  // invisible in the response and shows up only as a mysteriously useless turn.
+  //
+  // `require_parameters: true` makes OpenRouter route only to backends that
+  // actually support every parameter sent — which, for a request carrying
+  // `tools`, means tool-calling support. Applied only when tools are present,
+  // so plain text generation keeps the wider (and faster) provider pool.
+  const isToolCall = Boolean(options.tools && options.tools.length > 0);
   const orProviderPrefs =
     providerSort === "off" || model.endsWith(":free")
       ? {}
-      : ({ provider: { sort: providerSort } } as Record<string, unknown>);
+      : ({
+          provider: {
+            sort: providerSort,
+            ...(isToolCall ? { require_parameters: true } : {}),
+          },
+        } as Record<string, unknown>);
 
   // One structured line per call: model, tokens in/out, CACHED tokens (proves
   // the cache_control work is hitting in production — watch for cached>0 from
@@ -639,6 +676,9 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
     return {
       content: msg?.content ?? "",
       tokensUsed: response.usage?.total_tokens ?? 0,
+      promptTokens: response.usage?.prompt_tokens ?? 0,
+      completionTokens: response.usage?.completion_tokens ?? 0,
+      cachedTokens: (response.usage as { prompt_tokens_details?: { cached_tokens?: number } } | undefined)?.prompt_tokens_details?.cached_tokens ?? 0,
       model,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     };
@@ -681,6 +721,8 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
     return {
       content: fullContent,
       tokensUsed: promptTokens + completionTokens,
+      promptTokens,
+      completionTokens,
       model: model,
     };
   }
@@ -698,6 +740,9 @@ async function generateOpenRouter(options: GenerateOptions & { model: AIModel })
   return {
     content: response.choices[0]?.message?.content ?? "",
     tokensUsed: response.usage?.total_tokens ?? 0,
+    promptTokens: response.usage?.prompt_tokens ?? 0,
+    completionTokens: response.usage?.completion_tokens ?? 0,
+    cachedTokens: (response.usage as { prompt_tokens_details?: { cached_tokens?: number } } | undefined)?.prompt_tokens_details?.cached_tokens ?? 0,
     model: model,
   };
 }
@@ -742,7 +787,7 @@ async function generateGoogle(options: GenerateOptions & { model: AIModel }): Pr
       }
     }
 
-    return { content: fullContent, tokensUsed: promptTokens + completionTokens, model: options.model };
+    return { content: fullContent, tokensUsed: promptTokens + completionTokens, promptTokens, completionTokens, model: options.model };
   }
 
   const response = await client.chat.completions.create({
@@ -755,6 +800,9 @@ async function generateGoogle(options: GenerateOptions & { model: AIModel }): Pr
   return {
     content: response.choices[0]?.message?.content ?? "",
     tokensUsed: response.usage?.total_tokens ?? 0,
+    promptTokens: response.usage?.prompt_tokens ?? 0,
+    completionTokens: response.usage?.completion_tokens ?? 0,
+    cachedTokens: (response.usage as { prompt_tokens_details?: { cached_tokens?: number } } | undefined)?.prompt_tokens_details?.cached_tokens ?? 0,
     model: options.model,
   };
 }
@@ -840,6 +888,8 @@ async function generateAnthropic(options: GenerateOptions & { model: AIModel }):
     return {
       content: textContent,
       tokensUsed: response.usage.input_tokens + response.usage.output_tokens,
+      promptTokens: response.usage.input_tokens,
+      completionTokens: response.usage.output_tokens,
       model: options.model,
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     };
@@ -882,7 +932,7 @@ async function generateAnthropic(options: GenerateOptions & { model: AIModel }):
     }
 
 
-    return { content: fullContent, tokensUsed: inputTokens + outputTokens, model: options.model };
+    return { content: fullContent, tokensUsed: inputTokens + outputTokens, promptTokens: inputTokens, completionTokens: outputTokens, model: options.model };
   }
 
   const response = await anthropicClient.messages.create({

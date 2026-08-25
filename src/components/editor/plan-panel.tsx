@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { saveApprovedPlan } from "@/lib/editor/save-approved-plan";
+import { applyExcerptRevision, findExcerptInSource } from "@/lib/editor/plan-diff";
+import { PlanRevisionPopover, type PlanRevisionTarget } from "./plan-revision-popover";
 import type { Project,ProjectFile } from "@/types/database";
 
 interface PlanMessage {
@@ -50,6 +52,10 @@ export function PlanPanel({ project, files, onApprovePlan }: PlanPanelProps) {
   const [approvedPlan, setApprovedPlan] = useState<string | null>(null);
   const [editingPlan, setEditingPlan] = useState<string | null>(null);  // when editing
   const [planMsgId, setPlanMsgId] = useState<string | null>(null);
+  // Inline revision (Lovable parity Aug 3 2026): highlight part of a rendered
+  // plan -> revise just that excerpt -> approve via word-level diff.
+  const [revisionTarget, setRevisionTarget] = useState<PlanRevisionTarget | null>(null);
+  const [revisionMsgId, setRevisionMsgId] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -208,6 +214,69 @@ Based on your request, here's a structured approach for implementing this featur
     toast({ title: "Plan approved — switching to Agent mode" });
   }
 
+  /**
+   * Turn a text selection inside a rendered plan into a revision target.
+   *
+   * The selection comes from rendered markdown, so it carries collapsed
+   * whitespace and no syntax characters. findExcerptInSource maps it back to
+   * the VERBATIM source slice; when that fails (selection spans list markers,
+   * or crosses block boundaries that do not appear contiguously in source)
+   * there is nothing safe to splice, so the gesture is ignored rather than
+   * guessed at.
+   */
+  function handlePlanSelection(msg: PlanMessage) {
+    if (editingPlan !== null) return;
+    const sel = window.getSelection();
+    const raw = sel?.toString() ?? "";
+    if (!sel || sel.isCollapsed || raw.trim().length < 3) {
+      setRevisionTarget(null);
+      return;
+    }
+    const source = extractPlanMarkdown(msg.content) ?? msg.content;
+    const excerpt = findExcerptInSource(source, raw);
+    if (!excerpt) {
+      toast({
+        title: "Can't revise that selection",
+        description: "Select text inside a single paragraph or bullet.",
+      });
+      return;
+    }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    setRevisionMsgId(msg.id);
+    setRevisionTarget({
+      excerpt,
+      rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height },
+    });
+  }
+
+  /** Splice an approved revision back into the plan message. */
+  function applyRevision(revised: string) {
+    const msgId = revisionMsgId;
+    const target = revisionTarget;
+    if (!msgId || !target) return;
+    let applied = false;
+    setMessages((prev) =>
+      prev.map((m) => {
+        if (m.id !== msgId) return m;
+        const next = applyExcerptRevision(m.content, target.excerpt, revised);
+        if (next === null) return m;
+        applied = true;
+        return { ...m, content: next };
+      }),
+    );
+    setRevisionTarget(null);
+    setRevisionMsgId(null);
+    window.getSelection()?.removeAllRanges();
+    toast(
+      applied
+        ? { title: "Plan updated" }
+        : {
+            title: "Revision not applied",
+            description: "The plan changed since you selected that text.",
+          },
+    );
+  }
+
   function startEditPlan(content: string) {
     setEditingPlan(extractPlanMarkdown(content) ?? content);
   }
@@ -315,7 +384,9 @@ Based on your request, here's a structured approach for implementing this featur
                           </div>
                         </div>
                       ) : (
-                        <div className="px-4 py-3 prose prose-sm prose-invert max-w-none text-sm leading-relaxed
+                        <div
+                          onMouseUp={() => handlePlanSelection(msg)}
+                          className="px-4 py-3 prose prose-sm prose-invert max-w-none text-sm leading-relaxed selection:bg-violet-500/30
                           [&_h1]:text-base [&_h1]:font-bold [&_h1]:mb-2 [&_h1]:mt-1
                           [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-foreground
                           [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:mb-1 [&_h3]:mt-2
@@ -341,6 +412,9 @@ Based on your request, here's a structured approach for implementing this featur
                             <Pencil className="w-3 h-3" />
                             Edit plan
                           </Button>
+                          <span className="text-[10px] text-muted-foreground hidden sm:inline">
+                            or highlight any text to revise it
+                          </span>
                           <Button
                             size="sm"
                             className="ml-auto h-7 text-xs gap-1.5 bg-[#1F55F1] hover:bg-[#1142DE] text-white"
@@ -402,6 +476,22 @@ Based on your request, here's a structured approach for implementing this featur
 
         <div ref={messagesEndRef} />
       </div>
+
+      {/* Inline revision popover (anchored to the highlighted plan text) */}
+      {revisionTarget && (
+        <PlanRevisionPopover
+          target={revisionTarget}
+          projectId={project.id}
+          planContext={
+            messages.find((m) => m.id === revisionMsgId)?.content ?? ""
+          }
+          onApply={applyRevision}
+          onClose={() => {
+            setRevisionTarget(null);
+            setRevisionMsgId(null);
+          }}
+        />
+      )}
 
       {/* Approved plan banner */}
       {approvedPlan && (

@@ -7,7 +7,7 @@
  * - Optional persistence hook (PATCH /api/projects/…/files)
  */
 
-import { useCallback,useRef,useState } from "react";
+import { useCallback,useEffect,useRef,useState } from "react";
 import type { ProjectFile } from "@/types/database";
 import {
 applySearchReplace,
@@ -100,7 +100,12 @@ export function usePreviewFileSync(options: PreviewFileSyncOptions): PreviewFile
   } = options;
 
   const filesRef = useRef(files);
-  filesRef.current = files;
+  const [filesSnapshot, setFilesSnapshot] = useState<ProjectFile[]>(files);
+
+  useEffect(() => {
+    filesRef.current = files;
+    setFilesSnapshot(files);
+  }, [files]);
 
   const pendingRef = useRef<Map<string, ProjectFile>>(new Map());
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -125,6 +130,7 @@ export function usePreviewFileSync(options: PreviewFileSyncOptions): PreviewFile
     }
 
     filesRef.current = merged;
+    setFilesSnapshot(merged);
     onFilesChange(merged);
 
     if (persist) {
@@ -183,7 +189,7 @@ export function usePreviewFileSync(options: PreviewFileSyncOptions): PreviewFile
   }, [commit]);
 
   return {
-    files: filesRef.current,
+    files: filesSnapshot,
     pendingPaths,
     apply,
     flush,

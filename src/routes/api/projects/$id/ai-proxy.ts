@@ -118,7 +118,11 @@ function createOpenAiCompatibleClient(kind: "embedding" | "audio"): OpenAI | nul
 }
 
 function defaultEmbeddingModel() {
-  return process.env.OPENAI_API_KEY ? "text-embedding-3-small" : "openai/text-embedding-3-small";
+  // The fallback used to be "openai/text-embedding-3-small" via OpenRouter, which
+  // cannot work: OpenRouter serves no embeddings endpoint and does not list that
+  // slug. Returning null makes the caller's no-embeddings path run instead of
+  // issuing a request that always fails.
+  return process.env.OPENAI_API_KEY ? "text-embedding-3-small" : null;
 }
 
 async function readRequestBody(req: Request): Promise<{ body: ProxyRequest; file: File | null; isMultipart: boolean }> {
@@ -160,7 +164,7 @@ async function logAiRequest(
 ): Promise<void> {
   try {
     const admin = await createAdminClient();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     await admin.from("ai_request_logs").insert({
       project_id: projectId,
       capability: entry.capability,
@@ -196,7 +200,7 @@ export async function POST(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const { data: project } = await supabase
     .from("projects")
     .select("id, user_id, ai_integration_enabled, ai_integration_model, ai_credits_used, ai_credit_limit, is_public")
@@ -212,7 +216,7 @@ export async function POST(
 
   // Auth: project owner, collaborator, or any request if the generated app is public.
   if (!project.is_public && user?.id !== project.user_id) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+     
     const { data: collab } = await supabase
       .from("collaborators")
       .select("role")
@@ -302,10 +306,20 @@ export async function POST(
 
       const openai = createOpenAiCompatibleClient("embedding");
       if (!openai) {
-        return json(origin, { error: "No embeddings provider configured (set OPENAI_API_KEY or OPENROUTER_API_KEY)" }, 502);
+        return json(origin, { error: "No embeddings provider configured (set OPENAI_API_KEY)" }, 502);
       }
 
       const model = body.model ?? defaultEmbeddingModel();
+      if (!model) {
+        // Refuse BEFORE charging credits. Previously this fell through to an
+        // OpenRouter embeddings call that cannot succeed, and the user was
+        // metered for it anyway.
+        return json(
+          origin,
+          { error: "Embeddings require OPENAI_API_KEY — OpenRouter does not serve an embeddings endpoint" },
+          502,
+        );
+      }
       const creditsUsed = await consumeProjectAiCredits(projectId, cost);
       meteredCost = cost;
       const result = await openai.embeddings.create({

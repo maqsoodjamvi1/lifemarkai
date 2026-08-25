@@ -58,17 +58,33 @@ jobs:
       # Placeholders are enough because every check asserts a REJECTION.
       - name: Deploy-safety smoke tests
         run: |
-          node scripts/start-production.mjs &
+          node scripts/start-production.mjs > /tmp/start-production.log 2>&1 &
           SERVER_PID=$!
+          READY=0
           for i in $(seq 1 60); do
-            if curl -sf http://localhost:3001/health >/dev/null 2>&1; then break; fi
+            if curl -sf http://localhost:3001/health >/dev/null 2>&1; then READY=1; break; fi
             sleep 2
           done
+          # Without this branch a server that never binds looks exactly like a
+          # server that rejects every request: the loop just expires and all
+          # twelve checks report "fetch failed", which is what hid a missing
+          # PORT. Say which of the two happened, and show the server log.
+          if [ "$READY" -ne 1 ]; then
+            echo "::error::start-production.mjs never answered on http://localhost:3001/health"
+            cat /tmp/start-production.log
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+          fi
           node scripts/verify-deploy-smoke.mjs http://localhost:3001
           STATUS=$?
+          if [ "$STATUS" -ne 0 ]; then cat /tmp/start-production.log; fi
           kill $SERVER_PID 2>/dev/null || true
           exit $STATUS
         env:
+          # start-production.mjs listens on PORT (default 3000); every URL in
+          # this step is 3001. Without this the server comes up healthy on the
+          # wrong port and all twelve checks fail with "fetch failed".
+          PORT: "3001"
           VITE_SUPABASE_URL: https://placeholder.supabase.co
           VITE_SUPABASE_ANON_KEY: ci-placeholder
           NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co

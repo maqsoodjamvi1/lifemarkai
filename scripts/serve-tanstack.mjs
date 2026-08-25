@@ -186,6 +186,10 @@ const server = createServer(async (req, res) => {
   }
 });
 
+server.requestTimeout = 0;
+server.headersTimeout = 0;
+server.setTimeout(0);
+
 server.listen(PORT, HOST, () => {
   console.log(`[serve-tanstack] listening on http://${HOST}:${PORT}`);
 });

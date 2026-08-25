@@ -46,6 +46,33 @@ export interface VebElement {
   classList: string[];
   xpath: string;
   rect: { top: number; left: number; width: number; height: number };
+  /**
+   * Source hint from the preview bridge (React Fiber _debugSource on
+   * React <=18 dev builds, or data-source-file attributes from a build
+   * tagger). Normalized to a project-relative path like "src/App.tsx"
+   * when possible. null/absent when the preview couldn't map the element —
+   * always a hint, never a guarantee.
+   */
+  sourceFile?: string | null;
+  sourceLine?: number | null;
+}
+
+/**
+ * Resolve a bridge source hint against the project's actual files.
+ * Tries exact match, then suffix matches in both directions (the hint may
+ * be "src/App.tsx" while the file is stored as "app/src/App.tsx" or vice
+ * versa). Returns undefined when nothing matches confidently.
+ */
+export function resolveSourceFile<T extends { path: string }>(
+  files: T[],
+  sourceFile: string | null | undefined,
+): T | undefined {
+  if (!sourceFile) return undefined;
+  return (
+    files.find((f) => f.path === sourceFile) ??
+    files.find((f) => f.path.endsWith("/" + sourceFile)) ??
+    files.find((f) => sourceFile.endsWith("/" + f.path))
+  );
 }
 
 /** Focused renderer for visual-edit selection and source updates. */
@@ -70,7 +97,12 @@ export function PreviewVisualEditPopover({
   const top = Math.min(selected.rect.top + selected.rect.height + 8, window.innerHeight - 420);
 
   function applyFileChange({ textContent, classes }: { textContent?: string; classes?: string }) {
+    // Prefer the exact file the bridge mapped the clicked element to
+    // (React Fiber _debugSource / data-source-file). The App.tsx guess below
+    // predates source mapping and silently edited the wrong file whenever the
+    // clicked element lived in any other component.
     const appFile =
+      resolveSourceFile(files, selected.sourceFile) ??
       files.find((f) => f.path.endsWith("App.tsx") || f.path.endsWith("App.jsx")) ??
       files.find((f) => f.path.endsWith("index.tsx") || f.path.endsWith("index.jsx")) ??
       files[0];
@@ -124,9 +156,18 @@ export function PreviewVisualEditPopover({
 
         {/* Header */}
         <div className="flex items-center justify-between px-3 py-2 border-b border-border">
-          <div className="flex items-center gap-2">
-            <Wand2 className="w-4 h-4 text-violet-400" />
-            <span className="text-sm font-medium">&lt;{selected.tagName}&gt;</span>
+          <div className="flex items-center gap-2 min-w-0">
+            <Wand2 className="w-4 h-4 text-violet-400 shrink-0" />
+            <span className="text-sm font-medium shrink-0">&lt;{selected.tagName}&gt;</span>
+            {selected.sourceFile && (
+              <span
+                className="text-[10px] text-muted-foreground truncate"
+                title={`${selected.sourceFile}${selected.sourceLine ? `:${selected.sourceLine}` : ""}`}
+              >
+                {selected.sourceFile.split("/").pop()}
+                {selected.sourceLine ? `:${selected.sourceLine}` : ""}
+              </span>
+            )}
           </div>
           <Button variant="ghost" size="icon" className="w-6 h-6" onClick={onClose}>
             <X className="w-3.5 h-3.5" />

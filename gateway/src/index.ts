@@ -68,50 +68,70 @@ interface UsagePayload {
   model: string;
 }
 
-// ── Token cost table (USD per 1M tokens, as of 2025-05) ──────────────────────
-// Values are [input_per_1M_usd, output_per_1M_usd]
+// ── Token cost table (USD per 1M tokens) ────────────────────────────────────
+// Values are [input_per_1M_usd, output_per_1M_usd].
+//
+// REBUILT 2026-08-19 from openrouter.ai/api/v1/models, live. The previous table
+// was stamped "as of 2025-05" and self-described as "rough estimates"; it was
+// over a year stale and wrong in both directions on real money:
+//   deepseek-v4-pro  was [0.55, 2.19]  actually [1.32, 3.96]   under by ~2.4x
+//   gemini-3.5-flash was [0.50, 3.00]  actually [1.50, 9.00]   under by 3x
+//   z-ai/glm-5-turbo was [0.20, 0.80]  actually [1.20, 4.00]   under by 5-6x
+//   qwen3-coder      was [0.20, 0.80]  actually [0.30, 1.00]   under
+//   kimi-k2.7-code   was [0.60, 2.50]  actually [0.71, 3.50]   under
+//   haiku-4.5        was [0.80, 4.00]  actually [1.00, 5.00]   under
+// Worse, EVERY model this deployment actually runs by default today
+// (gpt-5.6-terra/luna, sonnet-5, gemini-3.6-flash, codestral, the free tiers)
+// was ABSENT, so it silently billed at DEFAULT_COST [1.00, 5.00] — which for
+// deepseek-v4-flash is a 12x overcharge and for an Opus-class model a 5x
+// undercharge.
+//
+// Dead slugs removed (absent from the OpenRouter catalog on 2026-08-19):
+// qwen/qwen3-coder:free, mistralai/devstral-2512,
+// meta-llama/llama-3.3-70b-instruct:free.
 const TOKEN_COST_MAP: Record<string, [number, number]> = {
-  // OpenAI
-  "gpt-5.2":                  [1.75,  14.00],
-  "openai/gpt-5.2":           [1.75,  14.00],
-  "openai/gpt-5.2-codex":     [1.75,  14.00],
-  "openai/gpt-5.5":           [5.00,  30.00],
-  // Anthropic — native API IDs use hyphens, OpenRouter slugs use DOTS.
-  // Tiers route via OpenRouter (dot slugs); native keys kept for direct calls.
-  "claude-opus-4-8":            [5.00,  25.00],
-  "anthropic/claude-opus-4.8":  [5.00,  25.00],
-  "claude-opus-4-6":            [15.00, 75.00],
-  "claude-sonnet-4-6":          [3.00,  15.00],
-  "anthropic/claude-sonnet-4.6":[3.00,  15.00],
-  "claude-haiku-4-5-20251001":  [0.80,   4.00],
-  "claude-haiku-4-5":           [0.80,   4.00],
-  "anthropic/claude-haiku-4.5": [0.80,   4.00],
-  // Google
-  "gemini-3.1-pro":      [2.00,  12.00],
-  "google/gemini-3.5-flash":[0.50, 3.00],
-  "google/gemini-3.1-flash-lite":[0.25, 1.50],
-  "gemini-3-flash-preview":[0.50,  3.00],
-  "gemini-3.1-flash-lite":[0.25,   1.50],
-  "gemini-3.1-flash-image":[0.50,  3.00], // image output billed per-image upstream
-  "gemini-2.0-flash":    [0.10,   0.40],
-  "gemini-2.0-flash-lite":[0.075, 0.30],
-  "gemini-1.5-pro":      [1.25,   5.00],
-  // OpenRouter models — rough estimates
-  "deepseek/deepseek-v4-pro":             [0.55, 2.19],
-  "deepseek/deepseek-v4-flash":           [0.10, 0.40],
-  "qwen/qwen3-coder":                     [0.20, 0.80],
-  "qwen/qwen3-coder:free":                [0.00, 0.00],
-  "meta-llama/llama-3.3-70b-instruct:free": [0.00, 0.00],
-  "mistralai/devstral-2512":            [0.10, 0.30],
-  "z-ai/glm-5-turbo":                   [0.20, 0.80],
-  "moonshotai/kimi-k2.7-code":          [0.60, 2.50],
-  // Embeddings (input-only; output rate 0) — for semantic search / RAG in
-  // generated apps via POST /v1/embeddings.
-  "text-embedding-3-small":  [0.02, 0.00],
-  "text-embedding-3-large":  [0.13, 0.00],
-  "text-embedding-ada-002":  [0.10, 0.00],
-  "gemini-embedding-001":    [0.15, 0.00],
-  "google/gemini-embedding-001": [0.15, 0.00],
+  "openai/gpt-5.6-luna": [  0.200,   1.200],
+  "openai/gpt-5.1-codex-mini": [  0.250,   2.000],
+  "openai/gpt-5.2": [  1.750,  14.000],
+  "gpt-5.2": [  1.750,  14.000],
+  "openai/gpt-5.2-codex": [  1.750,  14.000],
+  "openai/gpt-5.5": [  5.000,  30.000],
+  "openai/gpt-4o-mini": [  0.150,   0.600],
+  "anthropic/claude-opus-4.8": [  5.000,  25.000],
+  "claude-opus-4-8": [  5.000,  25.000],
+  "anthropic/claude-opus-4.6": [  5.000,  25.000],
+  "claude-opus-4-6": [  5.000,  25.000],
+  "anthropic/claude-sonnet-5": [  2.000,  10.000],
+  "anthropic/claude-sonnet-4.6": [  3.000,  15.000],
+  "claude-sonnet-4-6": [  3.000,  15.000],
+  "anthropic/claude-haiku-4.5": [  1.000,   5.000],
+  "claude-haiku-4-5": [  1.000,   5.000],
+  "claude-haiku-4-5-20251001": [  1.000,   5.000],
+  "google/gemini-3.6-flash": [  0.750,   3.750],
+  "google/gemini-3.5-flash": [  1.500,   9.000],
+  "google/gemini-3.1-flash-lite": [  0.250,   1.500],
+  "gemini-3.1-flash-lite": [  0.250,   1.500],
+  "google/gemini-3.1-flash-image": [  0.500,   3.000],
+  "gemini-3.1-flash-image": [  0.500,   3.000],
+  "qwen/qwen3-coder": [  0.300,   1.000],
+  "moonshotai/kimi-k2.7-code": [  0.710,   3.500],
+  "mistralai/codestral-2508": [  0.300,   0.900],
+  "z-ai/glm-5-turbo": [  1.200,   4.000],
+  "xiaomi/mimo-v2.5": [  0.140,   0.280],
+  "mistralai/mistral-small-3.2-24b-instruct": [  0.094,   0.250],
+  "upstage/solar-pro4": [  0.030,   0.120],
+  "qwen/qwen3-coder-30b-a3b-instruct": [  0.070,   0.280],
+  "z-ai/glm-5.2:free": [  0.000,   0.000],
+  "deepseek/deepseek-v4-flash": [  0.083,   0.165],
+  "z-ai/glm-5.2": [  0.966,   3.036],
+  "deepseek/deepseek-v4-pro": [  1.440,   2.880],
+  "openai/gpt-5.6-terra": [  2.000,  12.000],
+  "nvidia/nemotron-3-super-120b-a12b:free": [  0.000,   0.000],
+  "cohere/north-mini-code:free": [  0.000,   0.000],
+  "text-embedding-3-small": [  0.020,   0.000],
+  "text-embedding-3-large": [  0.130,   0.000],
+  "text-embedding-ada-002": [  0.100,   0.000],
+  "gemini-embedding-001": [  0.150,   0.000],
 };
 
 // Fallback cost when model is unknown

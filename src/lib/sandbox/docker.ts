@@ -48,10 +48,16 @@ SandboxProvider,
 SandboxRunResult,
 TypecheckResult,
 } from "./index.ts";
-import { DEFAULT_TIMEOUT_MS,trunc,waitForServer } from "./shared.ts";
+import { appServing,DEFAULT_TIMEOUT_MS,trunc,waitForServer } from "./shared.ts";
 import { SYNC_MANIFEST,filesToPrune } from "./prune-files.ts";
 import { parseTscOutput } from "./tsc-diagnostics.ts";
 import { dependenciesAlreadySatisfied } from "./deps-satisfied.ts";
+import {
+  isTransientNpmInstallFailure,
+  NPM_INSTALL_MAX_ATTEMPTS,
+  npmInstallShell,
+  parseNpmInstallExit,
+} from "./npm-install.ts";
 
 /** Vite's port inside the sandbox. The heartbeat has no opts.port to read. */
 const DEFAULT_INNER_PORT = 5173;
@@ -113,10 +119,12 @@ const APP_DIR = "/home/node/app";
  * bound at all. The 120s readiness budget further down does not help: it only
  * starts once the install returns.
  *
- * Four minutes is well past the 40-90s a genuinely cold install takes on this
- * host, so a healthy slow install is never cut off.
+ * Ten minutes covers cold installs on slower Docker Desktop / Windows hosts
+ * (observed ~5 minutes for ~320 packages). A healthy slow install must not be
+ * cut off; wedged registry hangs still get a hard ceiling. Fifteen minutes
+ * covers the tanstack-crm lockset when the registry is slow.
  */
-const INSTALL_TIMEOUT_SEC = 240;
+const INSTALL_TIMEOUT_SEC = 900;
 
 /**
  * Written by the image build ONLY after it has verified its own `npm install`
@@ -460,6 +468,48 @@ async function claimPort(): Promise<number | null> {
   return null;
 }
 
+/**
+ * Is the app inside the container SERVING?
+ *
+ * THE `nc -z` TRAP (this is where "remote preview returned 500" came from).
+ * The old probe was three fallbacks OR'd together, and the last one was
+ * `nc -z`, a bare TCP connect. It succeeds the instant vite binds the port
+ * and says nothing whatsoever about what vite then serves. So when generated
+ * code failed to transform — a syntax error, an unresolvable import — vite
+ * came up and answered every request with its own 500 error overlay, `nc -z`
+ * reported UP, boot returned `ready: true`, the route persisted phase
+ * "ready" and handed the tunnel URL to the editor and to the verification
+ * harness. The harness fetched it and got 500. Reproducibly, because a
+ * transform error is deterministic: same prompt, same broken file, same 500.
+ *
+ * The OR-chain hid it twice over. `curl -fsS` does fail on 5xx and `wget`
+ * exits non-zero on it too — but a failure in either one just fell through
+ * to `nc -z`, which passed. The chain could only ever be as strict as its
+ * most permissive link.
+ *
+ * So: ask for the STATUS CODE, once, from whichever client the image has,
+ * and judge it. `nc` survives only as a last resort for an image carrying
+ * neither curl nor wget, where a socket check is genuinely all we can do.
+ */
+export function buildLocalProbeScript(port: number): string {
+  const url = `http://127.0.0.1:${port}/`;
+  return [
+    `if command -v curl >/dev/null 2>&1; then`,
+    // -w '%{http_code}' reports 000 on a refused/timed-out connection, which
+    // is exactly the "not listening yet" signal we want — and unlike -f it
+    // still reports 500 rather than collapsing it into a generic failure.
+    `  S=$(curl -sS -o /dev/null -m 3 -w '%{http_code}' ${url} 2>/dev/null);`,
+    `elif command -v wget >/dev/null 2>&1; then`,
+    // -S prints the response headers to stderr even for a 5xx, so the status
+    // survives wget's non-zero exit.
+    `  S=$(wget -q -S -O /dev/null -T 3 ${url} 2>&1 | awk '/HTTP\//{c=$2} END{print c}');`,
+    `else`,
+    `  nc -z 127.0.0.1 ${port} 2>/dev/null && S=socket || S=000;`,
+    `fi;`,
+    `echo "LM_STATUS=\${S:-000}"`,
+  ].join(" ");
+}
+
 export class DockerSandboxProvider implements SandboxProvider {
   readonly id = "docker" as const;
 
@@ -600,6 +650,10 @@ export class DockerSandboxProvider implements SandboxProvider {
         Env: [
           "HOME=/home/node",
           "npm_config_cache=/home/node/.npm",
+          "npm_config_fetch_retries=5",
+          "npm_config_fetch_retry_mintimeout=20000",
+          "npm_config_fetch_retry_maxtimeout=120000",
+          "npm_config_fetch_timeout=600000",
           "CI=1",
         ],
         ExposedPorts: { [`${innerPort}/tcp`]: {} },
@@ -819,21 +873,15 @@ export class DockerSandboxProvider implements SandboxProvider {
           // install held the whole request open indefinitely, and the 120s
           // readiness budget below does not start until this returns. Same
           // pattern as the typecheck exec.
-          const res = await this.exec(
-            id,
-            `timeout ${INSTALL_TIMEOUT_SEC} npm install --no-audit --no-fund --prefer-offline --progress=false --loglevel=error; echo "LM_NPM_EXIT:$?"`,
-          );
-          logs += res.stdout + res.stderr;
-          const npmExit = Number(/LM_NPM_EXIT:(\d+)/.exec(res.stdout + res.stderr)?.[1] ?? "0");
-          if (npmExit === 124) {
+          const install = await this.installNpmDependencies(id, progress);
+          logs += install.logs;
+          if (!install.ok) {
             return {
               ok: false,
-              error: `Installing dependencies took longer than ${INSTALL_TIMEOUT_SEC}s and was stopped. ${depCheck.reason}.`,
+              sandboxId: id,
+              error: install.error,
               logs: trunc(logs),
             };
-          }
-          if (npmExit !== 0) {
-            return { ok: false, error: `npm install failed (exit ${npmExit}): ${trunc(logs).slice(-600)}`, logs: trunc(logs) };
           }
         }
       }
@@ -1042,12 +1090,9 @@ export class DockerSandboxProvider implements SandboxProvider {
       // cold-start cost this path exists to avoid.
       if (written.some((p) => p === "package.json" || p.endsWith("/package.json"))) {
         progress("installing", "Updating dependencies");
-        const res = await this.exec(
-          id,
-          "npm install --no-audit --no-fund --prefer-offline --progress=false --loglevel=error",
-        );
-        logs += res.stdout + res.stderr;
-        if (res.exitCode && res.exitCode !== 0) {
+        const install = await this.installNpmDependencies(id, progress);
+        logs += install.logs;
+        if (!install.ok) {
           // A broken install on a warm container is a real failure, but the
           // cold path may still succeed from a clean tree — let it try.
           return null;
@@ -1140,42 +1185,108 @@ export class DockerSandboxProvider implements SandboxProvider {
    * report readiness within a second of vite binding the port, rather than up
    * to a full poll interval late.
    *
-   * `wget -q -O /dev/null -T 3` (busybox, ships in node:*-alpine) exits
-   * non-zero on a 4xx/5xx response same as `curl -f` does - that is
-   * deliberate: a listening-but-erroring dev server (a crash loop, a build
-   * that fails to serve `/`) must NOT read as ready. `curl` is the fallback
-   * for a Debian-based image; see the comment on `probe` below for why
-   * `nc -z` is gated to only run when neither tool exists.
+   * `wget -q -O /dev/null -T 3` treats any HTTP response as success, including
+   * a 404: the question is whether the server is accepting requests, and the
+   * dev server answering *anything* proves that. Busybox wget ships in
+   * node:*-alpine; on a Debian-based image `curl` is the fallback and the
+   * `nc -z` third branch covers an image with neither.
    */
+  /**
+   * Last in-container HTTP status this probe saw, per sandbox.
+   *
+   * `false` from waitForLocalServer cannot distinguish "nothing is listening"
+   * from "vite is listening and answering 500", and those need opposite
+   * responses: the first is a boot problem (wait / reboot), the second is a
+   * code problem that only a repair round fixes. Callers read this to say
+   * which one happened instead of just that readiness was withheld.
+   */
+  private lastLocalStatus = new Map<string, number>();
+
+  localStatusFor(sandboxId: string): number {
+    return this.lastLocalStatus.get(sandboxId) ?? 0;
+  }
+
+
   private async waitForLocalServer(
     sandboxId: string,
     port: number,
     timeoutMs: number,
   ): Promise<boolean> {
-    // `nc -z` is a bare TCP check - it says nothing about whether the HTTP
-    // layer is answering, only that something is listening. It must ONLY run
-    // when neither wget nor curl exist, never as a catch-all for "the HTTP
-    // tool ran and got a non-2xx status": both wget and curl exit non-zero on
-    // a 4xx/5xx response, and a container mid-crash-loop (Vite up, app
-    // throwing 500 on every request) still has its port open. Falling
-    // through to `nc -z` in that case reports readiness for a server that
-    // cannot actually serve a page - which is exactly the bug this guards.
-    const probe =
-      `if command -v wget >/dev/null 2>&1; then wget -q -O /dev/null -T 3 http://127.0.0.1:${port}/ 2>/dev/null; ` +
-      `elif command -v curl >/dev/null 2>&1; then curl -fsS -m 3 -o /dev/null http://127.0.0.1:${port}/ 2>/dev/null; ` +
-      `else nc -z 127.0.0.1 ${port} 2>/dev/null; fi`;
+    const probe = buildLocalProbeScript(port);
     const deadline = Date.now() + timeoutMs;
     // Back off from 250ms to 2s: a warm boot answers almost immediately and
     // shouldn't pay a fixed poll interval, while a cold npm-install boot
     // shouldn't hammer the socket for two minutes.
     let delay = 250;
     while (Date.now() < deadline) {
-      const res = await this.exec(sandboxId, `${probe} && echo LM_UP`);
-      if (res.stdout.includes("LM_UP")) return true;
+      const res = await this.exec(sandboxId, probe);
+      const m = /LM_STATUS=(\S+)/.exec(res.stdout ?? "");
+      const raw = m?.[1] ?? "000";
+      if (raw === "socket") {
+        // No HTTP client in the image. A socket check is all we have, so keep
+        // the old permissive behaviour rather than failing every boot — but
+        // record 0 so nothing downstream reports this as a verified 200.
+        this.lastLocalStatus.set(sandboxId, 0);
+        return true;
+      }
+      const status = Number.parseInt(raw, 10);
+      if (Number.isFinite(status) && status > 0) {
+        this.lastLocalStatus.set(sandboxId, status);
+      }
+      // A 5xx does NOT end the wait: vite recovers on its own once a pending
+      // install finishes or the next HMR pass lands, and a healthy-but-slow
+      // app is unaffected because it returns the moment it serves. Only an app
+      // still 5xx-ing at the deadline is reported not ready.
+      if (appServing(status)) return true;
       await new Promise((r) => setTimeout(r, delay));
       delay = Math.min(delay * 1.5, 2000);
     }
     return false;
+  }
+
+  /**
+   * Cold `npm install` with npm-level fetch retries plus an outer retry on
+   * registry idle/reset errors. Docker Desktop on Windows commonly hits
+   * EIDLETIMEOUT against registry.npmjs.org on the first attempt.
+   */
+  private async installNpmDependencies(
+    sandboxId: string,
+    progress: (phase: string, detail?: string) => void,
+  ): Promise<{ ok: true; logs: string } | { ok: false; error: string; logs: string }> {
+    let logs = "";
+    for (let attempt = 1; attempt <= NPM_INSTALL_MAX_ATTEMPTS; attempt += 1) {
+      if (attempt > 1) {
+        progress("installing", `Retrying npm install (${attempt}/${NPM_INSTALL_MAX_ATTEMPTS})`);
+        await new Promise((resolve) => setTimeout(resolve, 2_000 * attempt));
+      }
+      const res = await this.exec(sandboxId, npmInstallShell(INSTALL_TIMEOUT_SEC));
+      logs += res.stdout + res.stderr;
+      const npmExit = parseNpmInstallExit(res.stdout, res.stderr);
+      if (npmExit === 0) return { ok: true, logs };
+      if (npmExit === 124) {
+        return {
+          ok: false,
+          logs,
+          error: `Installing dependencies took longer than ${INSTALL_TIMEOUT_SEC}s and was stopped.`,
+        };
+      }
+      const combined = `${res.stdout}\n${res.stderr}`;
+      if (attempt < NPM_INSTALL_MAX_ATTEMPTS && isTransientNpmInstallFailure(combined, npmExit)) {
+        continue;
+      }
+      const tail = trunc(logs)
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(-12)
+        .join(" | ");
+      return {
+        ok: false,
+        logs,
+        error: `npm install failed (exit ${npmExit})${tail ? `: ${tail}` : "."}`,
+      };
+    }
+    return { ok: false, logs, error: "npm install failed." };
   }
 
   /**

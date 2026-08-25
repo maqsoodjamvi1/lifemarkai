@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { buildNetlifyFileMap,buildVercelFilesList } from "@/lib/deploy/build-deploy-files";
+import { buildNetlifyFileMap, buildVercelFilesList, mergeViteBuildAssets } from "@/lib/deploy/build-deploy-files";
 import { buildLifemarkDeployUrl } from "@/lib/deploy/branded-deploy-url";
 import { sendDeploymentEmail } from "@/lib/email/resend";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
@@ -404,16 +404,15 @@ async function handlePOST(req: Request) {
 
       // Phase 4 — preview == deploy: try a real `vite build` (opt-in via
       // ENABLE_SERVER_VITE_BUILD); on success deploy the production dist/.
-      let deployProjectFiles = projectFiles;
+      let viteBuilt: Array<{ path: string; content: string }> | null = null;
       try {
         const { tryViteBuild } = await import("@/lib/deploy/build-project");
         const built = await tryViteBuild(projectFiles);
-        if (built && built.length > 0) deployProjectFiles = built as typeof projectFiles;
+        if (built && built.length > 0) viteBuilt = built;
       } catch { /* fall back to static files */ }
 
       if (provider === "vercel" && VERCEL_TOKEN) {
-        // ── Real Vercel deployment ──
-        deployedUrl = await deployToVercel(project.name as string, projectId, deployProjectFiles);
+        deployedUrl = await deployToVercel(project.name as string, projectId, projectFiles);
       } else if (provider === "netlify" && NETLIFY_TOKEN) {
         // ── Real Netlify deployment ──
         const site = await getOrCreateSite(projectId, project.name as string);
@@ -422,13 +421,15 @@ async function handlePOST(req: Request) {
           .select("referral_code")
           .eq("id", user.id)
           .single();
-        const fileMap = buildNetlifyFileMap(deployProjectFiles, {
+        const netlifyOpts = {
           projectId,
           projectName: project.name as string,
           badgeHidden: (project as any).badge_hidden ?? false,
           referralCode: ownerProfile?.referral_code ?? null,
           appSlug,
-        });
+        };
+        let fileMap = buildNetlifyFileMap(projectFiles, netlifyOpts);
+        if (viteBuilt?.length) fileMap = mergeViteBuildAssets(fileMap, viteBuilt);
         deployedUrl = await deployToNetlify(site.id, fileMap);
       } else {
         // ── Self-hosted deployment (lifemarkai provider) ──

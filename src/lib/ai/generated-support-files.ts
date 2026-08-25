@@ -590,6 +590,11 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
   files: T[],
   existingFiles: MinimalGeneratedFile[] = [],
 ): T[] {
+  const needsTypesDefaultExport = [...existingFiles, ...files].some((file) =>
+    importRecords(file).some((record) =>
+      !!parseDefaultImport(record.clause) && !!record.resolved && isTypesPath(record.resolved),
+    ),
+  );
   const normalizedFiles = normalizeGeneratedJsxExtensions(files.map(normalizeTypeDefaultImports));
   const out = [...normalizedFiles];
   const paths = new Set<string>();
@@ -646,12 +651,20 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
     const typesPath = allInputFiles.some((file) =>
       importRecords(file).some((record) => record.resolved === "lib/types"),
     ) ? "lib/types.ts" : "src/lib/types.ts";
-    const known = findKnownFile(allInputFiles, typesPath);
+    const known = findKnownFile(out, typesPath) ?? findKnownFile(allInputFiles, typesPath);
     const missing = neededTypes.filter((name) => !exportedNames(known?.content ?? "").has(name));
-    if (!known || missing.length > 0) {
-      const content = known
+    const lacksDefault = needsTypesDefaultExport && !hasDefaultExport(known?.content ?? "");
+    if (!known || missing.length > 0 || lacksDefault) {
+      let content = known
         ? appendTypeExports(known.content ?? "", missing)
         : typesFile(neededTypes);
+      if (needsTypesDefaultExport && !hasDefaultExport(content)) {
+        content = appendBlock(
+          content,
+          "// LifemarkAI generated default types export",
+          "const lifemarkGeneratedTypes = {};\nexport default lifemarkGeneratedTypes;",
+        );
+      }
       upsertSupportFile(out, paths, known?.path ?? typesPath, "typescript", content);
     }
   }
@@ -718,17 +731,30 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
     }
   }
 
-  // Second pass: default-import a named-only component/page (e.g. ProductList).
+  // Second pass: default-import a named-only module (components/pages AND types).
   for (const file of [...allInputFiles, ...out]) {
     for (const record of importRecords(file)) {
       if (!record.resolved) continue;
       const defaultName = parseDefaultImport(record.clause);
-      if (!defaultName || !isComponentOrPagePath(record.resolved)) continue;
+      if (!defaultName) continue;
+      if (!isComponentOrPagePath(record.resolved) && !isTypesPath(record.resolved)) continue;
       const known = findKnownFile(out, record.resolved) ?? findKnownFile(allInputFiles, record.resolved);
       if (!known) continue;
       if (hasDefaultExport(known.content ?? "")) continue;
-      const next = appendDefaultExport(known.content ?? "", defaultName);
-      upsertSupportFile(out, paths, known.path, known.language ?? "typescriptreact", next);
+      const next = isTypesPath(record.resolved)
+        ? appendBlock(
+            known.content ?? "",
+            "// LifemarkAI generated default types export",
+            "const lifemarkGeneratedTypes = {};\nexport default lifemarkGeneratedTypes;",
+          )
+        : appendDefaultExport(known.content ?? "", defaultName);
+      upsertSupportFile(
+        out,
+        paths,
+        known.path,
+        known.language ?? (isTypesPath(record.resolved) ? "typescript" : "typescriptreact"),
+        next,
+      );
     }
   }
 
@@ -740,6 +766,31 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
     const cleaned = stripRedundantNamedReExports(content);
     if (cleaned !== content) {
       out[i] = { ...file, content: cleaned };
+    }
+  }
+
+  // Guaranteed types default: needsTypesDefaultExport is computed from the
+  // pre-normalize import graph. Import rewriting can hide those defaults from
+  // later passes, so re-apply the export here whenever the flag is set.
+  if (needsTypesDefaultExport) {
+    const typesPath = out.some((file) => stripExtension(file.path) === "lib/types")
+      || allInputFiles.some((file) => stripExtension(file.path) === "lib/types")
+      ? "lib/types.ts"
+      : "src/lib/types.ts";
+    const known = findKnownFile(out, typesPath) ?? findKnownFile(allInputFiles, typesPath);
+    const content = known?.content ?? "";
+    if (!hasDefaultExport(content)) {
+      upsertSupportFile(
+        out,
+        paths,
+        known?.path ?? typesPath,
+        "typescript",
+        appendBlock(
+          content || "export {};\n",
+          "// LifemarkAI generated default types export",
+          "const lifemarkGeneratedTypes = {};\nexport default lifemarkGeneratedTypes;",
+        ),
+      );
     }
   }
 

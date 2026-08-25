@@ -20,7 +20,7 @@
  */
 
 import { evaluatePublishGate } from "../security/publish-gate.ts";
-import { buildNetlifyFileMap } from "./build-deploy-files.ts";
+import { buildNetlifyFileMap, mergeViteBuildAssets } from "./build-deploy-files.ts";
 import { buildLifemarkDeployUrl } from "./branded-deploy-url.ts";
 import { sendDeploymentEmail } from "../email/resend.ts";
 import { logger } from "../logger.ts";
@@ -267,11 +267,11 @@ export async function publishProjectFromChat(
     deploymentId = deployment.id as string;
 
     // Preview == deploy: try a real `vite build` when opted in (same as deploy route)
-    let deployProjectFiles = projectFiles;
+    let viteBuilt: typeof projectFiles | null = null;
     try {
       const { tryViteBuild } = await import("@/lib/deploy/build-project");
       const built = await tryViteBuild(projectFiles);
-      if (built && built.length > 0) deployProjectFiles = built as typeof projectFiles;
+      if (built && built.length > 0) viteBuilt = built as typeof projectFiles;
     } catch {
       /* fall back to static files */
     }
@@ -280,13 +280,15 @@ export async function publishProjectFromChat(
     if (provider === "netlify") {
       emit("Uploading to Netlify…");
       const site = await getOrCreateSite(projectId);
-      const fileMap = buildNetlifyFileMap(deployProjectFiles, {
+      const netlifyOpts = {
         projectId,
         projectName: project.name as string,
         badgeHidden: (project as { badge_hidden?: boolean }).badge_hidden ?? false,
         referralCode: ownerProfile?.referral_code ?? null,
         appSlug: (project as { app_slug?: string | null }).app_slug ?? null,
-      });
+      };
+      let fileMap = buildNetlifyFileMap(projectFiles, netlifyOpts);
+      if (viteBuilt?.length) fileMap = mergeViteBuildAssets(fileMap, viteBuilt);
       emit("Waiting for the site to go live…");
       deployedUrl = await deployToNetlify(site.id, fileMap);
     } else {
