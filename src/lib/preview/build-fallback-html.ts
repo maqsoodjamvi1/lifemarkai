@@ -136,11 +136,26 @@ export function buildFallbackHtml(files: ProjectFile[]): string {
   const indexHtml = files.find(
     (f) => f.path === "index.html" || f.path === "/index.html"
   );
-  if (
-    indexHtml?.content &&
-    !indexHtml.content.includes("src/main.tsx") &&
-    !indexHtml.content.includes('type="module"')
-  ) {
+  // A plain `<script type="module" src="app.js">` is completely normal in a
+  // vanilla HTML/CSS/JS app — native ES modules are how such apps avoid
+  // global-scope collisions, with no framework involved at all. The old check
+  // treated ANY type="module" script as proof this was a Vite/React-style
+  // bundler entry and routed it into the JSX-bundling pipeline below, which
+  // synthesizes a React bootstrap HTML template (always containing its own
+  // `<div id="root"></div>`) and tries to render `mainFile`'s default export
+  // into it. A vanilla app has no App.tsx and exports no React component, so
+  // nothing ever mounts — #root stays empty and the app is reported as a
+  // blank page, even though the real index.html/app.js pair works fine.
+  // Only route to the bundler when the entry script actually looks like a
+  // bundler entry point (main/index.{tsx,jsx,ts} — Vite's own convention —
+  // or an explicit src/main.tsx reference).
+  const scriptSrcs = Array.from(
+    indexHtml?.content?.matchAll(/<script[^>]*\ssrc=["']([^"']+)["']/gi) ?? []
+  ).map((m) => m[1]);
+  const looksLikeBundlerEntry =
+    !!indexHtml?.content?.includes("src/main.tsx") ||
+    scriptSrcs.some((src) => /\/(main|index)\.(tsx|jsx|ts)(\?|$)/i.test(src));
+  if (indexHtml?.content && !looksLikeBundlerEntry) {
     return indexHtml.content;
   }
 
