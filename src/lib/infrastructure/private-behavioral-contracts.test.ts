@@ -136,3 +136,44 @@ test("generation validation exposes correctness failures to the repair stage", (
     result.correctnessErrors.length + result.richnessErrors.length,
   );
 });
+
+test("a live sandbox outranks the static srcdoc renderer", () => {
+  // Regression: static won outright, so a vanilla HTML app rendered in the
+  // srcdoc iframe even while its own sandbox was live. That iframe has no
+  // allow-same-origin (correctly — srcdoc inherits the embedder's origin), so
+  // its opaque origin makes localStorage throw and the LifemarkData SDK
+  // silently reads back nothing: the editor showed an empty app that persisted
+  // nothing while the preview subdomain showed the same app fully populated.
+  const staticProject = {
+    hasFiles: true,
+    staticRuntime: true,
+    webContainerEnabled: false,
+    explicitWebContainerFallback: false,
+  };
+  assert.equal(
+    selectPreviewEngine({ ...staticProject, sandboxEnabled: true }),
+    "sandbox",
+    "a static project must use the real-origin sandbox when one is available",
+  );
+  // …but with no sandbox, srcdoc is still the right (and only) renderer.
+  assert.equal(
+    selectPreviewEngine({ ...staticProject, sandboxEnabled: false }),
+    "static",
+  );
+  // An empty project never renders anything, sandbox or not.
+  assert.equal(
+    selectPreviewEngine({ ...staticProject, hasFiles: false, sandboxEnabled: true }),
+    "unavailable",
+  );
+  // WebContainer stays strictly behind the sandbox for static projects too.
+  assert.equal(
+    selectPreviewEngine({
+      ...staticProject,
+      sandboxEnabled: false,
+      webContainerEnabled: true,
+      explicitWebContainerFallback: true,
+    }),
+    "static",
+    "static rendering beats the WebContainer fallback when no sandbox exists",
+  );
+});
