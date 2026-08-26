@@ -757,6 +757,14 @@ export async function handleAiAgent(req: Request) {
           if (!stagedVerification?.passed) {
             const reason = stagedVerification?.errors[0] ?? "candidate verification could not complete";
             try {
+              // Same reasoning as the chat route: overlay stagedVerification's
+              // accumulated repair-round writes onto the original candidate so
+              // the audit trail reflects what the final (failing) render
+              // actually saw, not the pre-repair snapshot.
+              const finalByPath = new Map(candidateFiles.map((file) => [file.path, file]));
+              for (const fixed of stagedVerification?.fixedFiles ?? []) {
+                finalByPath.set(fixed.path, fixed);
+              }
               // Supabase's rpc() builder is thenable but not a real Promise —
               // chaining .catch() directly threw "is not a function" and
               // crashed the whole agent run before it could even report the
@@ -766,7 +774,7 @@ export async function handleAiAgent(req: Request) {
                 .rpc("record_failed_generation", {
                   target_project_id: projectId,
                   run_source: "agent",
-                  staged_files: candidateFiles,
+                  staged_files: Array.from(finalByPath.values()),
                   failure_message: reason,
                 });
             } catch { /* best-effort logging only, never fails the run */ }

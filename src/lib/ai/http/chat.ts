@@ -2308,6 +2308,21 @@ The user has expressed frustration. Do the following:
               if (!stagedVerification?.passed) {
                 const reason = stagedVerification?.errors[0] ?? "candidate verification could not complete";
                 try {
+                  // Record what was ACTUALLY rendered and rejected, not just the
+                  // pre-repair generator output. self-verify's repair ladder
+                  // (round 0 DEFAULT_CODING_MODEL, round 1 ESCALATION_MODEL) can
+                  // rewrite files between the original candidate and the final
+                  // failing render — stagedVerification.fixedFiles accumulates
+                  // every repair round's applied writes, in order, so overlaying
+                  // it on the original candidate reconstructs the exact file set
+                  // the last (failing) render actually saw. Logging parsedFiles
+                  // alone left this audit trail showing stale, already-superseded
+                  // content whenever a repair round had run — undiagnosable from
+                  // the DB alone.
+                  const finalByPath = new Map(candidateByPath);
+                  for (const fixed of stagedVerification?.fixedFiles ?? []) {
+                    finalByPath.set(fixed.path, fixed);
+                  }
                   // Supabase's rpc() builder is thenable but not a real Promise —
                   // chaining .catch() directly threw "is not a function" and
                   // crashed the stream after verification (same fix as agent.ts).
@@ -2315,7 +2330,7 @@ The user has expressed frustration. Do the following:
                     .rpc("record_failed_generation", {
                       target_project_id: projectId,
                       run_source: "chat",
-                      staged_files: parsedFiles.map((file) => ({ path: file.path, content: file.content, language: file.language })),
+                      staged_files: Array.from(finalByPath.values()),
                       failure_message: reason,
                     });
                 } catch { /* best-effort logging only */ }
