@@ -3844,6 +3844,19 @@ ${(f.content ?? "").slice(0, 8000)}
             }
           },
           onEvent: (data) => { void processChatStreamEvent(data); },
+          // handleAIStream special-cases a `{ error }` SSE frame: it routes it
+          // to onError instead of onEvent (see dispatchSseEvent in
+          // lib/ai/handle-ai-stream.ts) and returns without ever calling
+          // onEvent for that frame. Without this handler, a mid-stream failure
+          // (e.g. self-verify blocking a broken generation) was dispatched to
+          // nothing — no toast, no in-chat message, the thread just went
+          // quiet with the last "Writing files…" status stuck on screen.
+          // processChatStreamEvent's own `data.error` branch (which calls
+          // failInChat) is unreachable for this frame shape, so call
+          // failInChat directly here instead.
+          onError: (err) => {
+            failInChat({ rawError: err.message });
+          },
         },
       });
 
