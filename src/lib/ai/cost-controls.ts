@@ -20,6 +20,30 @@ const WHOLE_APP_RE =
 
 const FIX_RE = /\b(fix|debug|resolve|repair|error|bug|broken|not working|crash|runtime|module not found)\b/i;
 
+// A prompt can be short and keyword-free (no auth/database/payment terms
+// COMPLEX_REQUEST_RE looks for) while still bundling several substantial,
+// separately-implemented features into one request — e.g. "Add filter by
+// completed/active status, due dates with a calendar picker, tags/categories
+// with color coding, drag-and-drop reordering, and a dark mode toggle, all in
+// one pass." is 174 characters and touches ~10 files, but nothing in it trips
+// COMPLEX_REQUEST_RE or WHOLE_APP_RE. Treating that as "simple" starves it of
+// both output budget (simple build requests cap at 6,000 tokens) and model
+// quality (simple build requests with fileCount>=4 get routed to the free
+// tier) — under-resourcing a multi-feature generation is exactly what makes
+// it likely to come back incomplete or broken. An explicit bundling phrase,
+// or enough distinct comma/"and"-separated items, is a reliable enough signal
+// to opt a request out of the simple/cheap path even when it's short.
+const ONE_PASS_BUNDLE_RE = /\ball in one (?:pass|go|shot)\b|\ball at once\b|\bin a single (?:pass|shot|go)\b/i;
+
+const MULTI_FEATURE_ITEM_THRESHOLD = 4;
+
+function countListedItems(prompt: string): number {
+  return prompt
+    .split(/,| and /i)
+    .map((part) => part.trim())
+    .filter(Boolean).length;
+}
+
 const PREMIUM_MODEL_RE = /opus|sonnet|gpt-5/i;
 
 const APPROVED_MODEL_IDS = new Set<string>(OPENROUTER_MODEL_IDS);
@@ -69,6 +93,8 @@ export function isSimpleEditorRequest(params: {
   if (prompt.length > 220) return false;
   if (WHOLE_APP_RE.test(prompt)) return false;
   if (COMPLEX_REQUEST_RE.test(prompt) && !FIX_RE.test(prompt)) return false;
+  if (ONE_PASS_BUNDLE_RE.test(prompt)) return false;
+  if (countListedItems(prompt) >= MULTI_FEATURE_ITEM_THRESHOLD) return false;
   return params.mode === "chat" || params.mode === "patch" || params.mode === "build" || params.mode === "agent";
 }
 
