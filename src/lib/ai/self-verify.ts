@@ -212,8 +212,17 @@ async function renderAndCollectErrors(
         if (diag.textLen < 3 && diag.childCount === 0) {
           errors.push("Live preview appears blank — no visible content after mount.");
         }
-      } else if (!diag.hasRoot || diag.childCount === 0) {
-        errors.push("App rendered an empty page — #root has no children after mount.");
+      } else if (diag.childCount === 0) {
+        // childCount already falls back to document.body.children.length when
+        // no #root/#__next/[data-reactroot] element exists (see diagnostic
+        // collection above), so it's a valid empty-page signal on its own —
+        // short-circuiting on !diag.hasRoot rejected every vanilla HTML/CSS/JS
+        // app (no root element by design) regardless of real body content.
+        errors.push(
+          diag.hasRoot
+            ? "App rendered an empty page — #root has no children after mount."
+            : "App rendered an empty page — no visible content in <body> after mount."
+        );
       } else if (diag.textLen < 3 && diag.childCount <= 1) {
         errors.push("App appears to render a blank screen — no visible content after mount.");
       }
