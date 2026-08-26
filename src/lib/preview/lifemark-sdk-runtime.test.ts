@@ -116,6 +116,37 @@ test("local mode: seed is idempotent and validated", async () => {
   assert.equal(free.seeded, 1);
 });
 
+test("local mode: re-seeding a collection with a unique field is a no-op, not a throw", async () => {
+  // Regression: seed() validated every row BEFORE the "already seeded" check,
+  // and prep()'s unique check compares against rows already in the collection —
+  // so the second boot of any app that seeds a unique field threw
+  // 'must be unique — "…" is already taken' against its OWN seed row.
+  // Generated apps call defineSchema + seed unconditionally on startup (exactly
+  // as the SDK docs instruct), so this white-screened them on every reload while
+  // a fresh store rendered fine.
+  await sdk.defineSchema("settings", {
+    key: { type: "string", required: true, unique: true },
+    value: { type: "string" },
+  });
+  const rows = [
+    { key: "appearance", value: "dark" },
+    { key: "locale", value: "en" },
+  ];
+  const first = await sdk.seed("settings", rows);
+  assert.equal(first.seeded, 2);
+
+  // Same call the app makes on its next boot — must be a silent no-op.
+  const second = await sdk.seed("settings", rows);
+  assert.equal(second.seeded, 0);
+  assert.equal((await sdk.list("settings")).length, 2);
+
+  // The unique constraint itself must still be enforced for real writes.
+  await assert.rejects(
+    () => sdk.create("settings", { key: "appearance", value: "light" }),
+    /must be unique/,
+  );
+});
+
 test("local mode: list where/limit filtering", async () => {
   await sdk.create("deals", { stage: "won", amount: 10 });
   await sdk.create("deals", { stage: "lost", amount: 5 });

@@ -68,7 +68,18 @@ window.LifemarkData={
   async defineSchema(c,fields){var s={fields:fields};try{localStorage.setItem(skey(c),JSON.stringify(s));}catch(e){}if(E)await req("POST","",{collection:c,schema:s});},
   async getSchema(c){var s=schema(c);if(s)return s;if(!E)return null;var j=await req("GET","?collection=__schema__");var m=(j.records||[]).map(function(r){return r.data;}).filter(function(d){return d&&d.collection===c;})[0];return m?{fields:m.fields}:null;},
   async list(c,o){o=o||{};if(!E){var rs=local(c);if(o.where){rs=rs.filter(function(r){for(var k in o.where){if(String((r.data||{})[k])!==String(o.where[k]))return false;}return true;});}if(o.limit)rs=rs.slice(0,o.limit);return rs;}var q="?collection="+encodeURIComponent(c);if(o.where){var wk=Object.keys(o.where)[0];if(wk)q+="&where="+encodeURIComponent(wk+":"+String(o.where[wk]));}if(o.limit)q+="&limit="+encodeURIComponent(o.limit);var j=await req("GET",q);return j.records||[];},
-  async seed(c,rows){var prepped=rows.map(function(r){return prep(c,r);});if(!E){if(local(c).length)return {seeded:0};save(c,prepped.map(function(d){return {id:uid(),data:d,created_at:new Date().toISOString()};}));return {seeded:prepped.length};}var j=await req("POST","",{collection:c,seed:prepped});return {seeded:j.seeded||0};},
+  // The "already seeded" short-circuit MUST come before prep(). prep() runs the
+  // unique-field check against the rows already in local(c), so validating first
+  // meant the second boot of any app that seeds a collection with a unique field
+  // threw "must be unique — X is already taken" against its OWN seed row, before
+  // the no-op return could be reached. The app then white-screened on reload
+  // while rendering perfectly on a fresh store — and self-verify only ever renders
+  // once, into empty storage, so it never saw it. The documented contract ("inserts
+  // ONLY if the collection is empty", "a no-op when data already exists, so never
+  // guard it with a manual list check") was always the intended behaviour; only the
+  // ordering was wrong. Hosted mode is unaffected: prep() skips the unique check
+  // when E is set, and the server owns seed idempotency there.
+  async seed(c,rows){if(!E&&local(c).length)return {seeded:0};var prepped=rows.map(function(r){return prep(c,r);});if(!E){save(c,prepped.map(function(d){return {id:uid(),data:d,created_at:new Date().toISOString()};}));return {seeded:prepped.length};}var j=await req("POST","",{collection:c,seed:prepped});return {seeded:j.seeded||0};},
   async create(c,d){d=prep(c,d);if(!E){var rs=local(c);var rec={id:uid(),data:d,created_at:new Date().toISOString()};rs.unshift(rec);save(c,rs);return rec;}var j=await req("POST","",{collection:c,data:d});return j.record;},
   async update(c,id,d){d=prep(c,d,id);if(!E){var rs=local(c).map(function(x){return x.id===id?{id:x.id,data:d,created_at:x.created_at}:x;});save(c,rs);return rs.find(function(x){return x.id===id;});}var j=await req("PATCH","",{id:id,collection:c,data:d});return j.record;},
   async remove(c,id){if(!E){save(c,local(c).filter(function(x){return x.id!==id;}));return {ok:true};}return req("DELETE","?id="+encodeURIComponent(id));}
