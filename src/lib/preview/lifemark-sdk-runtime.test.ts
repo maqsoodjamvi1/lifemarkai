@@ -7,7 +7,7 @@
  */
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { lifemarkDataSdkScript } from "./lifemark-data";
+import { injectLifemarkDataSdk, lifemarkDataSdkRev, lifemarkDataSdkScript } from "./lifemark-data";
 
 type AnyRecord = Record<string, unknown>;
 
@@ -217,4 +217,48 @@ test("hosted mode: server error surfaces as a thrown message", async () => {
   ) as unknown as typeof fetch;
   const hosted = bootSdk({ slug: "demo", apiBase: "https://lifemarkai.com", fetch: failFetch });
   await assert.rejects(() => hosted.create("x", { a: 1 }), /Schema validation failed/);
+});
+
+// ── SDK injection / propagation ──────────────────────────────────────────────
+
+test("injection: stamps a revision and is a true no-op for the same revision", () => {
+  const html = "<html><head></head><body>hi</body></html>";
+  const once = injectLifemarkDataSdk(html);
+  assert.ok(once.includes(`data-lifemark-data-sdk="${lifemarkDataSdkRev()}"`));
+  // Byte-identical on re-injection: the sandbox content-hashes files, so any
+  // gratuitous change here would cause a pointless re-push of every index.html.
+  assert.equal(injectLifemarkDataSdk(once), once);
+});
+
+test("injection: an OLDER baked-in SDK is replaced, not left in place", () => {
+  // Regression: the old guard bailed on the mere presence of the marker, so an
+  // app kept whatever SDK was injected when its index.html was last rewritten
+  // and SDK fixes never reached it. Both the legacy attribute-less marker and a
+  // stale revision stamp must be upgraded.
+  for (const stale of [
+    `<script data-lifemark-data-sdk>(function(){/* ancient */})();</script>`,
+    `<script data-lifemark-data-sdk="deadbeef">(function(){/* stale */})();</script>`,
+  ]) {
+    const html = `<html><head>${stale}</head><body>hi</body></html>`;
+    const out = injectLifemarkDataSdk(html);
+    assert.ok(!out.includes("ancient") && !out.includes("stale"), "old SDK body must be gone");
+    assert.ok(out.includes(`data-lifemark-data-sdk="${lifemarkDataSdkRev()}"`));
+    // Exactly one SDK block survives — no duplicate registration of window.LifemarkData.
+    assert.equal(out.match(/data-lifemark-data-sdk/g)?.length, 1);
+    // The replacement carries the REAL SDK, and the rest of the page is intact.
+    assert.ok(out.includes("window.LifemarkData"));
+    assert.ok(out.includes("<body>hi</body>"));
+  }
+});
+
+test("injection: the revision actually tracks the SDK source", () => {
+  // A fingerprint that ignored the body would defeat the whole mechanism.
+  assert.match(lifemarkDataSdkRev(), /^[a-z0-9]+$/);
+  // Endpoint differences must NOT change the revision, or every published app
+  // would churn its index.html on each push purely because its slug differs.
+  const local = lifemarkDataSdkScript({});
+  const hosted = lifemarkDataSdkScript({ slug: "demo", apiBase: "https://lifemarkai.com" });
+  const rev = (s: string) => s.match(/data-lifemark-data-sdk="([^"]+)"/)?.[1];
+  assert.equal(rev(local), rev(hosted));
+  assert.notEqual(local, hosted);
 });

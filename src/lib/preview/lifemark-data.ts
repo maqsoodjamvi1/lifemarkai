@@ -24,10 +24,25 @@ export function appDataEndpoint(options: LifemarkDataOptions): string | null {
   return `${options.apiBase.replace(/\/$/, "")}/api/public/app-data/${options.slug}`;
 }
 
-/** The <script> tag to inject into a generated app's <head>. */
-export function lifemarkDataSdkScript(options: LifemarkDataOptions = {}): string {
-  const endpoint = JSON.stringify(appDataEndpoint(options));
-  return `<script data-lifemark-data-sdk>(function(){
+/**
+ * Short, stable fingerprint of the SDK source, stamped into the marker
+ * attribute so a CHANGED SDK re-injects into apps that already carry an older
+ * copy (see injectLifemarkDataSdk). Derived from the source itself rather than
+ * a hand-maintained constant, so an SDK fix can never silently fail to reach
+ * existing apps because someone forgot to bump a version number.
+ */
+function fingerprint(source: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < source.length; i++) {
+    h ^= source.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(36);
+}
+
+/** The SDK body, parameterised only by its endpoint. */
+function lifemarkDataSdkBody(endpoint: string): string {
+  return `(function(){
 var E=${endpoint};
 function key(c){return "lifemarkdata:"+c;}
 function skey(c){return "lifemarkdata:__schema__:"+c;}
@@ -84,12 +99,45 @@ window.LifemarkData={
   async update(c,id,d){d=prep(c,d,id);if(!E){var rs=local(c).map(function(x){return x.id===id?{id:x.id,data:d,created_at:x.created_at}:x;});save(c,rs);return rs.find(function(x){return x.id===id;});}var j=await req("PATCH","",{id:id,collection:c,data:d});return j.record;},
   async remove(c,id){if(!E){save(c,local(c).filter(function(x){return x.id!==id;}));return {ok:true};}return req("DELETE","?id="+encodeURIComponent(id));}
 };
-})();</script>`;
+})();`;
 }
 
-/** Inject the SDK into an HTML document's <head> (idempotent). */
+/** Fingerprint of the current SDK source (independent of the endpoint). */
+export function lifemarkDataSdkRev(): string {
+  return fingerprint(lifemarkDataSdkBody('"__rev__"'));
+}
+
+/** The <script> tag to inject into a generated app's <head>. */
+export function lifemarkDataSdkScript(options: LifemarkDataOptions = {}): string {
+  const endpoint = JSON.stringify(appDataEndpoint(options));
+  return `<script data-lifemark-data-sdk="${lifemarkDataSdkRev()}">${lifemarkDataSdkBody(endpoint)}</script>`;
+}
+
+/** Matches an already-injected SDK block, with or without a revision stamp. */
+const SDK_SCRIPT_RE = /<script\s+data-lifemark-data-sdk(?:="[^"]*")?\s*>[\s\S]*?<\/script>/i;
+
+/**
+ * Inject the SDK into an HTML document's <head>, replacing an older copy.
+ *
+ * This used to bail out on the mere PRESENCE of the marker, which made SDK
+ * updates unreachable for every app that already had one: the SDK is baked into
+ * index.html when files are pushed to a sandbox, and the Docker provider
+ * content-hashes files, so an unchanged index.html is a no-op push. An app
+ * therefore kept whatever SDK version was injected the last time its
+ * index.html happened to be rewritten — deploying an SDK bug fix did not reach
+ * it at all. (Observed: the seed() unique-collision fix stayed invisible to a
+ * live app across a redeploy and two preview refreshes.) Comparing the stamped
+ * revision instead means a changed SDK rewrites the block, which changes the
+ * file's content hash and so actually propagates on the next push. An
+ * unchanged SDK still returns the html untouched, keeping that hash stable so
+ * no pointless re-push happens.
+ */
 export function injectLifemarkDataSdk(html: string, options: LifemarkDataOptions = {}): string {
-  if (html.includes("data-lifemark-data-sdk")) return html;
+  const existing = html.match(SDK_SCRIPT_RE);
+  if (existing) {
+    if (existing[0].includes(`data-lifemark-data-sdk="${lifemarkDataSdkRev()}"`)) return html;
+    return html.replace(SDK_SCRIPT_RE, () => lifemarkDataSdkScript(options));
+  }
   const sdk = lifemarkDataSdkScript(options);
   if (/<head[^>]*>/i.test(html)) {
     return html.replace(/<head[^>]*>/i, (tag) => `${tag}\n${sdk}`);
