@@ -328,6 +328,30 @@ const fixFilesSchema = z.object({
   files: z.array(z.object({ path: z.string().min(1), content: z.string() })).default([]),
 });
 
+// A repair round asks the model to return complete file contents as JSON.
+// Models occasionally emit "smart" typography — curly quotes, em/en dashes,
+// zero-width joiners, a stray BOM — where a straight ASCII character belongs,
+// most often near the top of a file (an opening string, an import path).
+// Those characters are valid inside a JSON string, so they survive JSON.parse
+// untouched, but they are not valid inside the *source code* that string
+// contains: tsc lexes them as TS1127 "Invalid character" and the repair gets
+// rejected as corrupt even though the JSON itself parsed cleanly. Normalizing
+// the handful of characters a model actually substitutes closes that class of
+// self-inflicted corruption without touching anything else in the file.
+const SMART_CHAR_MAP: Record<string, string> = {
+  "‘": "'", "’": "'", "‚": "'", "‛": "'",
+  "“": '"', "”": '"', "„": '"', "‟": '"',
+  "–": "-", "—": "-",
+  " ": " ",
+  "﻿": "",
+  "​": "", "‌": "", "‍": "",
+};
+const SMART_CHAR_RE = new RegExp(`[${Object.keys(SMART_CHAR_MAP).join("")}]`, "g");
+
+function sanitizeRepairedSource(content: string): string {
+  return content.replace(SMART_CHAR_RE, (ch) => SMART_CHAR_MAP[ch] ?? ch);
+}
+
 function parseFixFiles(raw: string): Array<{ path: string; content: string }> {
   const trimmed = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
   const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
@@ -336,7 +360,8 @@ function parseFixFiles(raw: string): Array<{ path: string; content: string }> {
     // Improvement #2: schema-validate instead of trusting the cast — a model
     // quirk (files as object, numeric content) can no longer slip through.
     const parsed = fixFilesSchema.safeParse(JSON.parse(jsonMatch[0]));
-    return parsed.success ? parsed.data.files : [];
+    if (!parsed.success) return [];
+    return parsed.data.files.map((f) => ({ ...f, content: sanitizeRepairedSource(f.content) }));
   } catch {
     return [];
   }
@@ -835,7 +860,15 @@ export async function runSelfVerification(opts: {
             },
           ],
           temperature: 0.1,
-          maxTokens: 6_000,
+          // Was a flat 6,000 tokens — well under the 16,000 the sibling
+          // standalone repair route (src/lib/ai/http/fix.ts, AUTO_FIX_MAX_TOKENS)
+          // allows for the same "return complete, never-truncated files" prompt.
+          // A tight ceiling here doesn't fail loudly: the response is valid JSON
+          // that closes cleanly at the cap, but the *file content* inside it is
+          // cut short, which reads to the syntax checker as corruption and gets
+          // rejected below. Matching the sibling route's budget/override gives a
+          // multi-file repair the same room to actually finish.
+          maxTokens: Number(process.env.AUTO_FIX_MAX_TOKENS) || 16_000,
           jsonMode: true,
         },
         { projectId, userId: opts.userId, task: "self_verify.autofix" },
