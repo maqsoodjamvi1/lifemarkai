@@ -9,6 +9,7 @@
 import { MODEL_TIERS } from "../editor-intelligence.ts";
 import type { AIModel } from "../provider.ts";
 import type { AgentRole,AgentRoleId,ModelTierName,ResolvedModel } from "./types.ts";
+import { ROLE_TITLES } from "./role-titles.ts";
 
 /** Resolve a tier name to a concrete provider model. */
 export function resolveTier(tier: ModelTierName): ResolvedModel {
@@ -23,7 +24,7 @@ Be concise, implementation-oriented, and record any architecturally significant 
 export const ROLES: Record<AgentRoleId, AgentRole> = {
   pm: {
     id: "pm",
-    title: "Product Manager",
+    title: ROLE_TITLES.pm,
     tier: "reasoning",
     systemPrompt: `${SHARED_PREAMBLE}
 ROLE: Product Manager. Turn the user's goal into epics and tasks with clear
@@ -35,7 +36,7 @@ Output structured epics/tasks the orchestrator can schedule.`,
   },
   ba: {
     id: "ba",
-    title: "Business Analyst",
+    title: ROLE_TITLES.ba,
     tier: "reasoning",
     systemPrompt: `${SHARED_PREAMBLE}
 ROLE: Business Analyst. Produce product discovery: market & competitor analysis,
@@ -47,7 +48,7 @@ grounded and actionable; this feeds the PM's planning.`,
   },
   architect: {
     id: "architect",
-    title: "Technical Architect",
+    title: ROLE_TITLES.architect,
     tier: "reasoning",
     systemPrompt: `${SHARED_PREAMBLE}
 ROLE: Technical Architect. Define the system design, service boundaries, and
@@ -59,7 +60,7 @@ You may veto on architecture grounds.`,
   },
   designer: {
     id: "designer",
-    title: "UI Designer",
+    title: ROLE_TITLES.designer,
     tier: "design",
     systemPrompt: `${SHARED_PREAMBLE}
 ROLE: UI Designer. Establish design tokens (color, spacing, typography) and
@@ -71,7 +72,7 @@ memory so every screen reuses them. You may veto on UX consistency grounds.`,
   },
   frontend: {
     id: "frontend",
-    title: "Frontend Engineer",
+    title: ROLE_TITLES.frontend,
     tier: "coding",
     systemPrompt: `${SHARED_PREAMBLE}
 ROLE: Frontend Engineer. Implement React/TypeScript components, routing, and
@@ -83,7 +84,7 @@ accessible, responsive.`,
   },
   backend: {
     id: "backend",
-    title: "Backend Engineer",
+    title: ROLE_TITLES.backend,
     tier: "coding",
     systemPrompt: `${SHARED_PREAMBLE}
 ROLE: Backend Engineer. Implement API routes and business logic against the
@@ -95,7 +96,7 @@ Never expose secrets to the client.`,
   },
   database: {
     id: "database",
-    title: "Database Engineer",
+    title: ROLE_TITLES.database,
     tier: "coding",
     systemPrompt: `${SHARED_PREAMBLE}
 ROLE: Database Engineer. Design the ERD and write migrations, indexes, and RLS
@@ -107,7 +108,7 @@ data-integrity grounds.`,
   },
   devops: {
     id: "devops",
-    title: "DevOps Engineer",
+    title: ROLE_TITLES.devops,
     tier: "coding",
     systemPrompt: `${SHARED_PREAMBLE}
 ROLE: DevOps Engineer. Own CI/CD, infrastructure-as-code, env wiring, and the
@@ -119,7 +120,7 @@ deployability grounds.`,
   },
   qa: {
     id: "qa",
-    title: "QA Engineer",
+    title: ROLE_TITLES.qa,
     tier: "balanced",
     systemPrompt: `${SHARED_PREAMBLE}
 ROLE: QA Engineer. Write test plans and unit/integration/E2E tests from the
@@ -131,7 +132,7 @@ on release-readiness grounds.`,
   },
   security: {
     id: "security",
-    title: "Security Engineer",
+    title: ROLE_TITLES.security,
     tier: "reasoning",
     systemPrompt: `${SHARED_PREAMBLE}
 ROLE: Security Engineer. Maintain the threat model; scan dependencies, code, and
@@ -142,7 +143,7 @@ APIs; propose fixes. Keep secrets server-side. You may veto on security grounds.
   },
   cto: {
     id: "cto",
-    title: "AI CTO",
+    title: ROLE_TITLES.cto,
     // Cross-vendor `review` tier on purpose: the CTO adjudicates work produced
     // by the Claude coding tier, so a different model family catches blind
     // spots a same-family reviewer would share (echo-chamber prevention).

@@ -11,7 +11,6 @@ import { createAdminClient } from "../supabase/admin.ts";
 import type { Json } from "../../types/database.ts";
 
 /** Canonical audit action names use a `category.verb` shape. */
-export type AuditCategory = "auth" | "member" | "project" | "billing" | "config" | "security" | "other";
 
 export interface AuditEventInput {
   userId: string | null;
@@ -25,17 +24,8 @@ export interface AuditEventInput {
   userAgent?: string | null;
 }
 
-/** Derive the coarse category from an `action` string ("project.create" → "project"). */
-export function auditCategory(action: string): AuditCategory {
-  const head = (action.split(".")[0] || "").toLowerCase();
-  if (head === "auth" || head === "sso" || head === "scim" || head === "session") return "auth";
-  if (head === "member" || head === "invite" || head === "collaborator" || head === "team") return "member";
-  if (head === "project" || head === "file" || head === "deploy" || head === "build") return "project";
-  if (head === "billing" || head === "subscription" || head === "credit" || head === "plan") return "billing";
-  if (head === "config" || head === "settings" || head === "flag" || head === "env") return "config";
-  if (head === "security" || head === "scan") return "security";
-  return "other";
-}
+export { auditCategory } from "./category.ts";
+export type { AuditCategory } from "./category.ts";
 
 /** Pull best-effort client IP + user agent from request headers. */
 export function auditContextFromHeaders(headers: Headers): { ip: string | null; userAgent: string | null } {

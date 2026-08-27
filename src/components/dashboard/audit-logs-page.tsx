@@ -1,4 +1,5 @@
 
+import { auditCategory } from "@/lib/audit/category";
 import { useState,useEffect,useCallback } from "react";
 import {
 ClipboardList,ChevronDown,ChevronUp,Clock,Globe,
@@ -32,20 +33,15 @@ const TIME_RANGES = [
 ];
 
 // Coarse event categories, derived from the `action` prefix
-// (e.g. "project.create" → project). Keep in sync with lib/audit/log.ts.
+// (e.g. "project.create" → project). The MAPPING is not duplicated here any
+// more: lib/audit/log.ts is server-only (admin client), so the pure
+// categoriser was split into lib/audit/category.ts and both sides import it.
+// Two copies of this decided which events a filter shows — drift meant events
+// silently missing from a view, on a page that still looked correct.
 const CATEGORIES = ["all", "auth", "member", "project", "billing", "config", "security"] as const;
 type Category = typeof CATEGORIES[number];
 
-function categoryOf(action: string): Exclude<Category, "all"> | "other" {
-  const head = (action.split(".")[0] || "").toLowerCase();
-  if (["auth", "sso", "scim", "session"].includes(head)) return "auth";
-  if (["member", "invite", "collaborator", "team"].includes(head)) return "member";
-  if (["project", "file", "deploy", "build"].includes(head)) return "project";
-  if (["billing", "subscription", "credit", "plan"].includes(head)) return "billing";
-  if (["config", "settings", "flag", "env"].includes(head)) return "config";
-  if (["security", "scan"].includes(head)) return "security";
-  return "other";
-}
+const categoryOf = auditCategory;
 
 const FAQ = [
   { q: "Who can access audit logs?",            a: "Audit logs are visible to workspace owners and admins on Enterprise plans." },
