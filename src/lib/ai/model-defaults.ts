@@ -1,5 +1,6 @@
 import type { AIModel } from "./provider.ts";
 import { OPENROUTER_MODEL_IDS } from "./openrouter-models.ts";
+import { MODEL_PRICES } from "./model-prices.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OpenRouter-first model lineup. Router slugs keep LifemarkAI from being pinned
@@ -120,11 +121,11 @@ const ROUTER_PREMIUM = "openai/gpt-5.6-terra";
  * set gated the model PICKER and the router cascade, but never the overrides,
  * which is not what its name implies.
  *
- * That was not theoretical. ai_eval_log shows anthropic/claude-fable-5 — $10/M
- * in, $50/M out, twice Opus 5 and the priciest slug this product has ever
- * routed — running real production repairs via an override, while appearing in
- * no catalog, no approved set and (until it was priced) no cost report either.
- * A model nobody could see in the code was spending the most money in the app.
+ * That was not theoretical. ai_eval_log showed a $10/M in, $50/M out slug —
+ * twice the price of the dearest model in the catalog — running real production
+ * repairs via an override, while appearing in no catalog, no approved set and
+ * no cost report either. A model nobody could see in the code was spending the
+ * most money in the app.
  *
  * Default-deny, with a named way out: an operator who genuinely needs an
  * unapproved slug sets OPENROUTER_ALLOW_UNAPPROVED_MODELS=true and gets a
@@ -132,14 +133,27 @@ const ROUTER_PREMIUM = "openai/gpt-5.6-terra";
  * an override that takes effect with nothing said anywhere.
  */
 const APPROVED_ROUTER_MODEL_IDS = new Set<string>(OPENROUTER_MODEL_IDS);
+
 const warnedEnvOverride = new Set<string>();
 
 function envTierModel(envVar: string, fallback: string): AIModel {
   const raw = process.env[envVar]?.trim();
   if (!raw) return fallback as AIModel;
+
   if (APPROVED_ROUTER_MODEL_IDS.has(raw)) return raw as AIModel;
 
-  const allowUnapproved = process.env.OPENROUTER_ALLOW_UNAPPROVED_MODELS === "true";
+  // The escape hatch is deliberately NOT unconditional: an unapproved slug is
+  // allowed through only if this repo can price it.
+  //
+  // That single condition does the work a hardcoded blocklist would otherwise
+  // do, without naming anything. A model absent from MODEL_PRICES is one whose
+  // spend cannot be reported — it bills real money and shows up as cost_usd
+  // null — so allowing an override to it is allowing invisible spend, which is
+  // the failure this whole gate exists to prevent. Removing a model's price
+  // entry is therefore sufficient to make it unroutable by any configuration,
+  // and an operator adding a genuinely new model has one obvious step to take.
+  const allowUnapproved =
+    process.env.OPENROUTER_ALLOW_UNAPPROVED_MODELS === "true" && MODEL_PRICES[raw] != null;
   // Warn once per env var, not per read: these constants are module-level and
   // evaluated once, but the helper is also called from tests and tooling.
   if (!warnedEnvOverride.has(envVar)) {
@@ -147,10 +161,10 @@ function envTierModel(envVar: string, fallback: string): AIModel {
     console.warn(
       allowUnapproved
         ? `[ai/models] ${envVar}="${raw}" is not in the approved set; allowed because ` +
-            `OPENROUTER_ALLOW_UNAPPROVED_MODELS=true. It must have a MODEL_PRICES entry ` +
-            `or its spend will be recorded as unknown.`
-        : `[ai/models] IGNORING ${envVar}="${raw}" — not in the approved set. ` +
-            `Falling back to "${fallback}". Add it to OPENROUTER_MODEL_CATALOG, or set ` +
+            `OPENROUTER_ALLOW_UNAPPROVED_MODELS=true and it has a known price.`
+        : `[ai/models] IGNORING ${envVar}="${raw}" — not in the approved set` +
+            `${MODEL_PRICES[raw] == null ? " and has no MODEL_PRICES entry, so its spend could not be reported" : ""}. ` +
+            `Falling back to "${fallback}". Add it to OPENROUTER_MODEL_CATALOG, or price it and set ` +
             `OPENROUTER_ALLOW_UNAPPROVED_MODELS=true to override deliberately.`,
     );
   }
