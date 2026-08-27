@@ -34,6 +34,7 @@ import type { ProjectFile } from "../../types/database.ts";
 import { loadOptionalPlaywright } from "../optional-playwright.ts";
 import { isLadderExhausted,resolveRepairTier,shouldPromoteRepairTier } from "./repair-ladder.ts";
 import { buildPriorAttemptsBlock,lookupPriorAttempts,suggestedStartingTier } from "./repair-memory.ts";
+import { applyEditBlocks,type EditBlock } from "./edit-blocks.ts";
 
 export interface SelfVerifyResult {
   engine: "browser" | "static";
@@ -434,6 +435,57 @@ const SMART_CHAR_RE = new RegExp(`[${Object.keys(SMART_CHAR_MAP).join("")}]`, "g
 
 function sanitizeRepairedSource(content: string): string {
   return content.replace(SMART_CHAR_RE, (ch) => SMART_CHAR_MAP[ch] ?? ch);
+}
+
+/**
+ * Resolve a repair response into concrete file contents.
+ *
+ * The repair prompt now offers TWO output shapes, cheapest first:
+ *
+ *   {"edits":[{"path","search","replace"}]}   anchored edits — a one-line fix
+ *                                             bills ~a dozen output tokens
+ *   {"files":[{"path","content"}]}            whole files — the old contract,
+ *                                             still required for new files and
+ *                                             near-total rewrites
+ *
+ * Edits are applied ALL-OR-NOTHING by applyEditBlocks: a search that is absent
+ * or ambiguous rejects the batch, the failure reasons are surfaced, and the
+ * round scores as failed exactly like a corrupt whole-file repair — which the
+ * progress-gated ladder then treats as evidence. A bad edit can therefore
+ * never half-land, and the worst case is precisely the old behaviour.
+ */
+function resolveRepairResponse(
+  raw: string,
+  current: ReadonlyMap<string, string>,
+): { files: Array<{ path: string; content: string }>; editFailures: string[] } {
+  const trimmed = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as { edits?: EditBlock[] };
+      if (Array.isArray(parsed.edits) && parsed.edits.length > 0) {
+        const blocks = parsed.edits.filter(
+          (e): e is EditBlock =>
+            !!e && typeof e.path === "string" && typeof e.search === "string" &&
+            typeof e.replace === "string",
+        );
+        const applied = applyEditBlocks(blocks, current);
+        if (applied.ok) {
+          return {
+            files: [...applied.files].map(([path, content]) => ({
+              path,
+              content: sanitizeRepairedSource(content),
+            })),
+            editFailures: [],
+          };
+        }
+        return { files: [], editFailures: applied.failures };
+      }
+    } catch {
+      /* fall through to the whole-file parser */
+    }
+  }
+  return { files: parseFixFiles(raw), editFailures: [] };
 }
 
 function parseFixFiles(raw: string): Array<{ path: string; content: string }> {
@@ -1038,7 +1090,7 @@ export async function runSelfVerification(opts: {
                 .map((e) => `- ${e}`)
                 .join("\n")}${diagnosis ? `\n\nPreview diagnosis (fix these first):\n${diagnosis}` : ""}${
                 aiDiagnosis ? `\n\nRoot-cause analysis from a second model — treat this as the brief, not a suggestion:\n${aiDiagnosis}` : ""
-              }${buildPriorAttemptsBlock(priorAttempts)}\n\nRelevant files:\n${context}\n\nReturn the fixed files as JSON.`,
+              }${buildPriorAttemptsBlock(priorAttempts)}\n\nRelevant files:\n${context}\n\nPREFERRED: return targeted edits as {"edits":[{"path":"...","search":"<exact current lines, copied verbatim, unique in the file>","replace":"<replacement lines>"}]} — several small edits beat one large one, and search text must be copied exactly from the files above. Return whole files as {"files":[{"path":"...","content":"..."}]} ONLY for a file that must be created or almost entirely rewritten.`,
             },
           ],
           temperature: 0.1,
@@ -1056,7 +1108,17 @@ export async function runSelfVerification(opts: {
         { projectId, userId: opts.userId, task: "self_verify.autofix" },
       );
 
-      const fixedFiles = parseFixFiles(fix?.content ?? "");
+      const currentByPath = new Map(files.map((f) => [f.path, f.content ?? ""]));
+      const resolved = resolveRepairResponse(fix?.content ?? "", currentByPath);
+      if (resolved.editFailures.length > 0) {
+        // The model proposed anchored edits and they did not apply cleanly.
+        // Refusing outright (rather than guessing) is the contract that makes
+        // cheap edits safe; the round scores as failed and the ladder reacts.
+        console.warn(
+          `[self-verify] rejected edit batch: ${resolved.editFailures.join("; ")}`,
+        );
+      }
+      const fixedFiles = resolved.files;
       if (fixedFiles.length === 0) {
         emit("Couldn't auto-fix — open the preview to review the error.");
         return result;
