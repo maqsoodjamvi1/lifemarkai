@@ -31,13 +31,29 @@ function makeLocalStorage() {
   };
 }
 
+/**
+ * A localStorage that THROWS on every access — exactly what a sandboxed srcdoc
+ * iframe without allow-same-origin hands the page (opaque origin).
+ */
+function makeOpaqueOriginStorage() {
+  const boom = () => {
+    throw new DOMException("The operation is insecure.", "SecurityError");
+  };
+  return { getItem: boom, setItem: boom, removeItem: boom };
+}
+
 /** Eval the SDK script and return the LifemarkData global it installs. */
-function bootSdk(opts: { slug?: string; apiBase?: string; fetch?: typeof fetch }): SdkGlobal {
+function bootSdk(opts: {
+  slug?: string;
+  apiBase?: string;
+  fetch?: typeof fetch;
+  storage?: unknown;
+}): SdkGlobal {
   const script = lifemarkDataSdkScript({ slug: opts.slug ?? null, apiBase: opts.apiBase ?? null });
   const js = script.replace(/^<script[^>]*>/, "").replace(/<\/script>$/, "");
   const windowObj: AnyRecord = {};
   const fn = new Function("window", "localStorage", "crypto", "fetch", js);
-  fn(windowObj, makeLocalStorage(), { randomUUID: () => `id-${Math.random().toString(36).slice(2)}` }, opts.fetch);
+  fn(windowObj, opts.storage ?? makeLocalStorage(), { randomUUID: () => `id-${Math.random().toString(36).slice(2)}` }, opts.fetch);
   return windowObj.LifemarkData as SdkGlobal;
 }
 
@@ -261,4 +277,66 @@ test("injection: the revision actually tracks the SDK source", () => {
   const rev = (s: string) => s.match(/data-lifemark-data-sdk="([^"]+)"/)?.[1];
   assert.equal(rev(local), rev(hosted));
   assert.notEqual(local, hosted);
+});
+
+// ── Opaque origin (sandboxed srcdoc, no allow-same-origin) ───────────────────
+
+test("opaque origin: the SDK stays fully usable when localStorage throws", async () => {
+  // Regression: every localStorage access was individually try/caught, so a
+  // throwing store was swallowed on write and became [] on read. An app would
+  // seed "successfully" into nothing and render permanently empty with no error
+  // anywhere — precisely how the editor's static preview behaved while the same
+  // app on its preview subdomain (a real origin) showed a full dataset.
+  const opaque = bootSdk({ storage: makeOpaqueOriginStorage() });
+  assert.equal(opaque.hosted, false);
+
+  // Schemas survive, so validation still works rather than silently going away.
+  await opaque.defineSchema("settings", {
+    key: { type: "string", required: true, unique: true },
+    value: { type: "string" },
+  });
+  const s = await opaque.getSchema("settings");
+  assert.ok(s && (s as { fields: AnyRecord }).fields.key, "schema must round-trip in memory");
+
+  // Seeded demo data actually renders instead of showing an empty app.
+  const seeded = await opaque.seed("settings", [
+    { key: "appearance", value: "dark" },
+    { key: "locale", value: "en" },
+  ]);
+  assert.equal(seeded.seeded, 2);
+  assert.equal((await opaque.list("settings")).length, 2);
+
+  // Writes stick and read back within the page's lifetime.
+  const rec = await opaque.create("settings", { key: "density", value: "compact" });
+  assert.equal((await opaque.list("settings")).length, 3);
+  await opaque.update("settings", rec.id, { key: "density", value: "cosy" });
+  assert.equal(
+    (await opaque.list("settings", { where: { key: "density" } }))[0].data.value,
+    "cosy",
+  );
+  await opaque.remove("settings", rec.id);
+  assert.equal((await opaque.list("settings")).length, 2);
+
+  // Constraints are still enforced — the fallback is a real store, not a stub.
+  await assert.rejects(
+    () => opaque.create("settings", { key: "appearance" }),
+    /must be unique/,
+  );
+  // …and re-seeding is still the documented no-op.
+  assert.equal((await opaque.seed("settings", [{ key: "appearance", value: "dark" }])).seeded, 0);
+});
+
+test("opaque origin: memory is per-page, and real origins still use localStorage", async () => {
+  // Two opaque pages must not share state — MEM is scoped to one SDK instance,
+  // mirroring the fact that nothing CAN persist on an opaque origin.
+  const pageA = bootSdk({ storage: makeOpaqueOriginStorage() });
+  await pageA.create("notes", { text: "a" });
+  const pageB = bootSdk({ storage: makeOpaqueOriginStorage() });
+  assert.equal((await pageB.list("notes")).length, 0, "a fresh page starts empty");
+
+  // A working store is still written through, so real origins keep persisting.
+  const store = makeLocalStorage();
+  const real = bootSdk({ storage: store });
+  await real.create("notes", { text: "persisted" });
+  assert.equal(store.getItem("lifemarkdata:notes") !== null, true, "must hit localStorage");
 });
