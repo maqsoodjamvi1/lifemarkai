@@ -43,6 +43,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
+import { BUNDLER_ASSET_RE } from "./bundler-assets.ts";
 
 import type { ProjectFile } from "../../types/database.ts";
 
@@ -471,7 +472,7 @@ export function findUnresolvedLocalImports(files: ProjectFile[]): UnresolvedImpo
         const base = normalisePath(`${dir}/${specPath}`);
         // A specifier resolves if ANY candidate extension exists. Assets the
         // bundler handles (css/svg/json/images) are not our business here.
-        if (/\.(css|scss|sass|less|json|svg|png|jpe?g|gif|webp|avif|woff2?|ttf)$/i.test(specPath)) continue;
+        if (BUNDLER_ASSET_RE.test(specPath)) continue;
         const resolved = RESOLVE_EXTS.some((ext) => known.has(normalisePath(base + ext)));
         if (resolved) continue;
         // Count to the SPECIFIER, not to the match start: the pattern begins

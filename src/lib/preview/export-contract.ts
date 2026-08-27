@@ -25,6 +25,8 @@
  * false positive can never block a build.
  */
 
+import { BUNDLER_ASSET_RE } from "../verify/bundler-assets.ts";
+
 export interface ProjectFileLike {
   path: string;
   content: string;
@@ -45,7 +47,8 @@ const CODE_RE = /\.(tsx|ts|jsx|js|mjs)$/;
 const EXTS = ["", ".ts", ".tsx", ".js", ".jsx", ".mjs"];
 
 /** Non-code assets — a missing one is not a module-resolution bug worth reporting. */
-const ASSET_RE = /\.(css|scss|sass|less|svg|png|jpe?g|gif|webp|avif|ico|json|txt|md)$/i;
+// One shared list — see bundler-assets.ts for why this is not a local copy.
+const ASSET_RE = BUNDLER_ASSET_RE;
 
 type Resolution =
   | { kind: "external" }                 // bare package (react, lucide-react…) — not ours
