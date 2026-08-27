@@ -23,7 +23,7 @@ import { filesWithSyntaxErrors, findMissingListKeys, findUnresolvedLocalImports,
 import { typecheckRunningSandbox } from "../preview/typecheck-project.ts";
 import { pushFileToRunningSandbox } from "../preview/push-to-sandbox.ts";
 import { generateAI } from "./generate.ts";
-import { DEFAULT_CODING_MODEL,DIAGNOSIS_MODEL,ECONOMY_CODING_MODEL,ESCALATION_MODEL,FAST_CODING_MODEL,getDefaultAiModel } from "./model-defaults.ts";
+import { DEFAULT_CODING_MODEL,DIAGNOSIS_MODEL,ECONOMY_CODING_MODEL,envPricedModel,ESCALATION_MODEL,FAST_CODING_MODEL,getDefaultAiModel } from "./model-defaults.ts";
 import { applyModelAdapter } from "./model-catalog.ts";
 import { AUTO_FIX_SYSTEM_PROMPT } from "./system-prompts.ts";
 import { buildPreviewDiagnosis } from "../preview/diagnose-preview.ts";
@@ -67,7 +67,7 @@ async function visionDesignReview(screenshotBase64: string): Promise<string[]> {
   // 2026-08-19; gemini-3.1-flash-lite is the same price ($0.25/$1.50), two
   // generations newer, vision-capable, and has 7 provider endpoints against
   // gpt-4o-mini's fewer. Still overridable via VISION_REVIEW_MODEL.
-  const model = process.env.VISION_REVIEW_MODEL || "google/gemini-3.1-flash-lite";
+  const model = envPricedModel("VISION_REVIEW_MODEL", "google/gemini-3.1-flash-lite");
   const res = await generateAI({
     model,
     maxTokens: 300,

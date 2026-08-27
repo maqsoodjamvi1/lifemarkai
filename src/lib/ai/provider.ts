@@ -1,6 +1,7 @@
 import { sanitizeApiKey } from "./key-hygiene.ts";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
+import { envTierModel } from "./model-defaults.ts";
 import { getDefaultAiModel,shouldRouteAllAiViaOpenRouter,resolveOpenRouterModelId } from "./model-defaults.ts";
 
 // OpenRouter has a large and fast-moving catalog. Keep this as string so users
@@ -144,10 +145,10 @@ function isFallbackableError(err: unknown): boolean {
  * A known-good OpenRouter slug to fall back to when a configured/selected model
  * ID is rejected. Env-overridable. gpt-4o is broadly available and cheap.
  */
-const OPENROUTER_SAFE_MODEL: string =
-  process.env.CORE_LOOP_FALLBACK_MODEL ||
-  process.env.OPENROUTER_SAFE_FALLBACK_MODEL ||
-  "deepseek/deepseek-v4-flash";
+const OPENROUTER_SAFE_MODEL: string = envTierModel(
+  "CORE_LOOP_FALLBACK_MODEL",
+  envTierModel("OPENROUTER_SAFE_FALLBACK_MODEL", "deepseek/deepseek-v4-flash"),
+);
 
 /**
  * True when OpenRouter rejected the request because the model slug itself is
