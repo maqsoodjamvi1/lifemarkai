@@ -28,7 +28,28 @@ RUN npm ci --no-audit --no-fund --legacy-peer-deps
 # to re-install the libraries (a COPY can't carry OS packages across stages)
 # against the binary copied over from here.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN npx playwright install --with-deps chromium
+
+# Split deliberately into apt-deps and browser-download, and BOUND the download.
+#
+# `playwright install --with-deps chromium` did both in one layer: the apt part
+# logs every package, then the ~150MB Chromium fetch from Playwright's CDN runs
+# with NO output until it completes. When that fetch stalls the build hangs
+# forever, silently, with the last log line being an unrelated `npm notice` —
+# observed twice on the same commit (33min and 15min of dead air before manual
+# cancellation), which reads like a wedged builder rather than a slow download.
+# `timeout` turns an indefinite stall into a bounded failure, the retry rides
+# out a transient CDN blip on its own, and the final `exit 1` makes a genuine
+# outage fail fast and legibly instead of burning a deploy slot. Splitting the
+# layers also means a CDN retry no longer re-runs the (slow, working) apt step.
+RUN npx playwright install-deps chromium
+RUN for attempt in 1 2 3; do \
+      echo "playwright: downloading chromium (attempt $attempt/3)"; \
+      if timeout 600 npx playwright install chromium; then exit 0; fi; \
+      echo "playwright: attempt $attempt failed or timed out after 600s; retrying" >&2; \
+      sleep 15; \
+    done; \
+    echo "ERROR: playwright chromium download failed after 3 bounded attempts" >&2; \
+    exit 1
 
 # Copy the repo and build:
 #  1. AI HTTP bundles (.tmp/ai-http) for the SSE worker
