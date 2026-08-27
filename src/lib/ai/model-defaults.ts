@@ -136,7 +136,7 @@ const APPROVED_ROUTER_MODEL_IDS = new Set<string>(OPENROUTER_MODEL_IDS);
 
 const warnedEnvOverride = new Set<string>();
 
-function envTierModel(envVar: string, fallback: string): AIModel {
+export function envTierModel(envVar: string, fallback: string): AIModel {
   const raw = process.env[envVar]?.trim();
   if (!raw) return fallback as AIModel;
 
@@ -169,6 +169,27 @@ function envTierModel(envVar: string, fallback: string): AIModel {
     );
   }
   return (allowUnapproved ? raw : fallback) as AIModel;
+}
+
+/**
+ * Weaker sibling of envTierModel for a tier whose legitimate default is NOT in
+ * the approved catalog — the vision reviewer runs on a Google slug on purpose.
+ * Requiring approval there would break a working feature, so this enforces only
+ * the rule that actually protects the bill: an override must be priceable, or
+ * its spend cannot be reported.
+ */
+export function envPricedModel(envVar: string, fallback: string): string {
+  const raw = process.env[envVar]?.trim();
+  if (!raw) return fallback;
+  if (MODEL_PRICES[raw] != null) return raw;
+  if (!warnedEnvOverride.has(envVar)) {
+    warnedEnvOverride.add(envVar);
+    console.warn(
+      `[ai/models] IGNORING ${envVar}="${raw}" — no MODEL_PRICES entry, so its spend ` +
+        `could not be reported. Falling back to "${fallback}".`,
+    );
+  }
+  return fallback;
 }
 
 // Back-compat aliases: the rest of the file speaks in CODER/FRONTIER terms.
@@ -453,14 +474,26 @@ export function resolveOpenRouterModelId(model: string): AIModel {
   return bare as AIModel;
 }
 
-/** Env-aware default — falls back to the coding tier. */
+/**
+ * Env-aware default — falls back to the coding tier.
+ *
+ * These two were missed when the OPENROUTER_*_MODEL overrides were gated: they
+ * do not follow that naming convention, so they kept the old raw
+ * `process.env.X as AIModel` read. getDefaultAiModel() in particular is the
+ * LAST-RESORT model for the whole app, which made it the most valuable
+ * ungated var in the file.
+ *
+ * The `??` was a second, quieter bug: it only catches undefined and null, so
+ * DEFAULT_AI_MODEL="" resolved to the empty string and was passed to the
+ * provider as a model id. envTierModel trims and treats blank as unset.
+ */
 export function getDefaultAiModel(): AIModel {
-  return (process.env.DEFAULT_AI_MODEL as AIModel) ?? DEFAULT_CODING_MODEL;
+  return envTierModel("DEFAULT_AI_MODEL", DEFAULT_CODING_MODEL);
 }
 
 /** Env-aware fast model — falls back to the fast tier. */
 export function getFastAiModel(): AIModel {
-  return (process.env.FAST_AI_MODEL as AIModel) ?? FAST_CODING_MODEL;
+  return envTierModel("FAST_AI_MODEL", FAST_CODING_MODEL);
 }
 
 /**

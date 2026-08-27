@@ -136,3 +136,69 @@ describe("an unpriced model cannot be routed by any configuration", () => {
     }
   });
 });
+
+describe("the non-OPENROUTER_ model vars are gated too", () => {
+  // These were missed the first time because they do not follow the
+  // OPENROUTER_*_MODEL naming convention the gate was written around, so they
+  // kept a raw `process.env.X as AIModel` read. All three are set in the
+  // production environment, and getDefaultAiModel() is the LAST-RESORT model
+  // for the entire app — the single most valuable var to leave ungated.
+  function resolve(expr: string, env: Record<string, string>): string {
+    return execFileSync(
+      process.execPath,
+      [
+        "--experimental-strip-types",
+        "-e",
+        `import("./src/lib/ai/model-defaults.ts").then((m) => process.stdout.write(String(${expr})));`,
+      ],
+      { env: { ...process.env, ...env }, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+  }
+
+  it("DEFAULT_AI_MODEL cannot name an unapproved, unpriced model", () => {
+    assert.equal(
+      resolve("m.getDefaultAiModel()", { DEFAULT_AI_MODEL: UNAPPROVED_AND_UNPRICED }),
+      "openai/gpt-5.6-luna",
+    );
+  });
+
+  it("FAST_AI_MODEL cannot either", () => {
+    assert.equal(
+      resolve("m.getFastAiModel()", { FAST_AI_MODEL: UNAPPROVED_AND_UNPRICED }),
+      "deepseek/deepseek-v4-flash",
+    );
+  });
+
+  it("an EMPTY value falls back instead of resolving to the empty string", () => {
+    // A second, quieter bug in the same two lines: `??` only catches undefined
+    // and null, so DEFAULT_AI_MODEL="" resolved to "" and was handed to the
+    // provider as a model id.
+    assert.equal(resolve("m.getDefaultAiModel()", { DEFAULT_AI_MODEL: "" }), "openai/gpt-5.6-luna");
+    assert.equal(resolve("m.getFastAiModel()", { FAST_AI_MODEL: "   " }), "deepseek/deepseek-v4-flash");
+  });
+
+  it("still honours an approved value", () => {
+    assert.equal(
+      resolve("m.getDefaultAiModel()", { DEFAULT_AI_MODEL: "deepseek/deepseek-v4-pro" }),
+      "deepseek/deepseek-v4-pro",
+    );
+  });
+
+  it("VISION_REVIEW_MODEL requires only a price, not approval", () => {
+    // Its legitimate default is a Google slug that is deliberately outside the
+    // approved catalog, so requiring approval would break a working feature.
+    // The rule that protects the bill still applies.
+    assert.equal(
+      resolve("m.envPricedModel('VISION_REVIEW_MODEL', 'google/gemini-3.1-flash-lite')", {
+        VISION_REVIEW_MODEL: UNAPPROVED_AND_UNPRICED,
+      }),
+      "google/gemini-3.1-flash-lite",
+    );
+    assert.equal(
+      resolve("m.envPricedModel('VISION_REVIEW_MODEL', 'google/gemini-3.1-flash-lite')", {
+        VISION_REVIEW_MODEL: "anthropic/claude-haiku-4.5",
+      }),
+      "anthropic/claude-haiku-4.5",
+    );
+  });
+});
