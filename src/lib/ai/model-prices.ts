@@ -21,12 +21,24 @@ export const MODEL_PRICES: Record<string, ModelPrice> = {
   "openai/gpt-5.6-luna": [0.2, 1.2],
   "deepseek/deepseek-v4-pro": [1.44, 2.88],
   "openai/gpt-5.6-terra": [2.0, 12.0],
+  // Escalation, from 2026-08-27. Verified against
+  // openrouter.ai/api/v1/models/anthropic/claude-sonnet-5/endpoints the same
+  // day: $2/M in, $10/M out across 9 endpoints (regional Bedrock/Vertex
+  // endpoints price ~10% higher; the headline rate is what the router bills).
+  // Note this row ALREADY EXISTED further down at [2.0, 10.0] under
+  // "previously routed" — the slug was priced correctly the whole time; what
+  // was wrong was the claim, in the test comments, that it had been delisted.
+  "anthropic/claude-sonnet-5": [2.0, 10.0],
+  // Opus 5 is deliberately NOT in the catalog (see model-catalog.ts). Priced
+  // here anyway so an operator who sets OPENROUTER_ESCALATION_MODEL to it gets
+  // real accounting rather than a silent zero.
+  "anthropic/claude-sonnet-4.6": [3.0, 15.0],
+  "anthropic/claude-opus-5": [5.0, 25.0],
   "z-ai/glm-5.2:free": [0, 0],
   // Previously routed / still selectable elsewhere.
   "z-ai/glm-5.2": [0.966, 3.036],
   "qwen/qwen3-coder": [0.3, 1.0],
   "qwen/qwen3-coder-flash": [0.195, 0.975],
-  "anthropic/claude-sonnet-5": [2.0, 10.0],
   "anthropic/claude-haiku-4.5": [1.0, 5.0],
   "anthropic/claude-opus-4.8": [5.0, 25.0],
   "google/gemini-3.6-flash": [0.75, 3.75],

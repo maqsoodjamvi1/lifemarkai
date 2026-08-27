@@ -20,6 +20,8 @@ import {
   FREE_CODING_MODEL,
   AUTOCOMPLETE_MODEL,
   ESCALATION_MODEL,
+  PREMIUM_CODING_MODEL,
+  PREMIUM_REASONING_MODEL,
   REVIEW_MODEL,
   DESIGN_MODEL,
 } from "./model-defaults.ts";
@@ -49,12 +51,21 @@ describe("model catalog — structural invariants", () => {
     }
   });
 
-  it("is exactly the four ladder models", () => {
+  it("is exactly the configured ladder, plus the premium tier", () => {
     // Pins the exact set rather than a count: MODEL_CATALOG filters against the
     // allowlist SILENTLY, so a typo drops a model with no error anywhere.
+    //
+    // gpt-5.6-terra is still here after escalation moved to Anthropic — it did
+    // not leave the product, it stopped being the escalation step and became
+    // the premium/complex-build tier (ROUTER_PREMIUM in model-defaults.ts).
+    //
+    // anthropic/claude-opus-5 is deliberately absent. It resolves live and is
+    // priced in model-prices.ts, but approving it here makes it selectable and
+    // routable at 2.5x Sonnet 5 for the same cross-vendor property.
     assert.deepEqual(
       [...MODEL_CATALOG.map((m) => m.id)].sort(),
       [
+        "anthropic/claude-sonnet-5",
         "deepseek/deepseek-v4-flash",
         "deepseek/deepseek-v4-pro",
         "openai/gpt-5.6-luna",
@@ -208,20 +219,30 @@ describe("selectModelChain — cascades must cross vendors", () => {
     );
   });
 
-  it("keeps the expensive OpenAI model out of the hot path", () => {
-    // Narrowed twice. It began as "no OpenAI model is routable at all", became
-    // "OpenAI only in the escalation slot" when Terra was named, and now the
-    // generator is gpt-5.6-luna — which is also OpenAI, but at $0.20/$1.20 is
-    // one of the cheapest models in the catalog and was chosen on measurements.
+  it("keeps the expensive models out of the hot path", () => {
+    // Narrowed three times. It began as "no OpenAI model is routable at all",
+    // became "OpenAI only in the escalation slot" when Terra was named, then
+    // the generator became gpt-5.6-luna — also OpenAI, but at $0.20/$1.20 one
+    // of the cheapest models here and chosen on measurements.
     //
-    // The risk still worth guarding is unchanged: an EXPENSIVE model drifting
-    // into a tier that every single request touches. Terra is ~36x the classify
-    // tier per build, so it must stay pinned to escalation.
-    assert.equal(
-      MODEL_CATALOG.filter((m) => (m.cost ?? 0) >= 3).map((m) => m.id).join(","),
-      ESCALATION_MODEL,
-      "the most expensive tier must be the escalation model and nothing else",
+    // The risk being guarded has never changed: an EXPENSIVE model drifting
+    // into a tier that every single request touches. What changed on
+    // 2026-08-27 is that there are now legitimately TWO costly entries — the
+    // premium tier (Terra) and the escalation tier (Sonnet 5) — so pinning the
+    // set to a single id no longer expresses the rule.
+    //
+    // Note what is NOT asserted: that escalation is the priciest slug. It is
+    // not — Sonnet 5 ($2/$10) undercuts the Terra it escalates past ($2/$12).
+    // Escalation earns its place by changing LAB, not by costing more, and an
+    // assertion that it must be the most expensive entry would quietly forbid
+    // exactly the cheap-and-cross-vendor choice that is wanted here.
+    const costly = MODEL_CATALOG.filter((m) => (m.cost ?? 0) >= 3);
+    assert.deepEqual(
+      costly.map((m) => m.id).sort(),
+      [ESCALATION_MODEL, PREMIUM_CODING_MODEL].sort(),
+      "an expensive model appeared outside the escalation and premium tiers",
     );
+
     const generator = getCatalogModel(DEFAULT_CODING_MODEL);
     assert.ok((generator?.cost ?? 9) <= 1, `generator costs ${generator?.cost}; it must be a cheap tier`);
   });
@@ -337,17 +358,42 @@ describe("the ladder — each step is a different lab from the one it checks", (
   });
 
   it("the diagnosis model differs from BOTH the generator and the escalation model", () => {
-    // The generator and the escalation model are now both OpenAI
-    // (gpt-5.6-luna -> gpt-5.6-terra), so the escalation hop no longer crosses
-    // labs. That is a genuine weakening, recorded here rather than hidden: if
-    // Luna's reading of a problem is wrong, Terra plausibly shares it.
-    //
-    // The diagnosis step is what still guarantees an outside opinion, so that is
-    // the invariant enforced now. anthropic/claude-sonnet-5 would restore
-    // cross-vendor escalation and is both cheaper ($0.90 vs $0.98 per build) and
-    // faster (14.8s vs 24.4s on a large-file edit) than Terra — one env var.
     assert.notEqual(vendorOf(DIAGNOSIS_MODEL), vendorOf(DEFAULT_CODING_MODEL));
     assert.notEqual(vendorOf(DIAGNOSIS_MODEL), vendorOf(ESCALATION_MODEL));
+  });
+
+  it("the escalation model is a different vendor from the generator", () => {
+    // This is the invariant the ladder LOST between 2026-08-19 and 2026-08-27:
+    // generate and escalate were both OpenAI (gpt-5.6-luna -> gpt-5.6-terra),
+    // so the final repair was the same lab re-reading code its own house style
+    // had just failed to fix. Escalation now goes to Anthropic, which restores
+    // it — and this test is what stops a future "cheaper escalation" swap from
+    // silently collapsing the hop back onto the generator's vendor.
+    assert.notEqual(vendorOf(ESCALATION_MODEL), vendorOf(DEFAULT_CODING_MODEL));
+  });
+
+  it("the escalation slug is in the approved set, so it is not silently dropped", () => {
+    // MODEL_CATALOG filters unapproved ids SILENTLY. An escalation slug that
+    // never made it into APPROVED_SMART_MODEL_IDS would vanish from the catalog
+    // with no log, and the ladder would degrade to whatever the fallback picks
+    // while every comment in the repo still claimed it escalated.
+    assert.ok(
+      getCatalogModel(ESCALATION_MODEL),
+      `escalation model ${ESCALATION_MODEL} is not in MODEL_CATALOG`,
+    );
+    assert.ok(
+      OPENROUTER_MODEL_CATALOG.some((m) => m.id === ESCALATION_MODEL),
+      `escalation model ${ESCALATION_MODEL} is missing from the user-facing catalog`,
+    );
+  });
+
+  it("the premium tier is not the escalation tier", () => {
+    // They were ONE constant (ROUTER_ESCALATE fed PREMIUM_CODING_MODEL too), so
+    // repointing escalation at the priciest model in the product would have
+    // repriced every premium build as a side effect — five happy-path calls
+    // instead of one gated retry.
+    assert.notEqual(PREMIUM_CODING_MODEL, ESCALATION_MODEL);
+    assert.notEqual(PREMIUM_REASONING_MODEL, ESCALATION_MODEL);
   });
 
   it("escalation is the most expensive tier, and generation is not", () => {
@@ -367,10 +413,10 @@ describe("model-defaults — cross-vendor review is real", () => {
   });
 
   it("SOMETHING in the repair path is a different vendor from the builder", () => {
-    // Generator and escalation are both OpenAI now (luna -> terra), so the
-    // escalation hop alone no longer crosses labs. The property that must
-    // survive is that the repair path as a whole still contains an outside
-    // opinion — which it does, via the diagnosis model.
+    // Weaker than the two per-step assertions above and kept deliberately: this
+    // is the floor. Even if a future cost cut collapses one step back onto the
+    // builder's vendor, the repair path must never become a single lab talking
+    // to itself.
     const builder = vendorOf(DEFAULT_CODING_MODEL);
     const repairPath = [DIAGNOSIS_MODEL, ESCALATION_MODEL].map(vendorOf);
     assert.ok(
