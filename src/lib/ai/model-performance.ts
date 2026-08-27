@@ -16,6 +16,18 @@
  * alternatives) and never changes which models are in it. Tier constants stay
  * authoritative; humans change them, with this module's numbers in hand.
  *
+ * WHAT THE SIGNAL MEANS — a framing correction from external review. The
+ * `success` column records whether the PROVIDER CALL returned, not whether the
+ * generated code worked: models here sit at 98-100% "success" while only about
+ * half of builds avoid a repair. So this module measures AVAILABILITY, and it
+ * is wired into the one place availability is the right signal — the agent's
+ * provider-failure cascade, whose documented job is escaping rate limits and
+ * outages. It must NOT be used for quality routing: optimising on this column
+ * would select for reliable APIs serving broken code. Quality routing needs
+ * verified build outcomes (build_runs joined to calls via the build
+ * correlation id), which is follow-up work gated on build_runs actually being
+ * populated in production.
+ *
  * Statistical humility is enforced, not advised:
  *   - below MIN_SAMPLE calls for a (model, task) pair, no opinion;
  *   - only failure rates >= DEMOTE_THRESHOLD demote — routine noise never

@@ -34,7 +34,7 @@ import type { ProjectFile } from "../../types/database.ts";
 import { loadOptionalPlaywright } from "../optional-playwright.ts";
 import { isLadderExhausted,resolveRepairTier,shouldPromoteRepairTier } from "./repair-ladder.ts";
 import { buildPriorAttemptsBlock,lookupPriorAttempts,suggestedStartingTier } from "./repair-memory.ts";
-import { applyEditBlocks,type EditBlock } from "./edit-blocks.ts";
+import { applyEditBlocks,validateEditBatch } from "./edit-blocks.ts";
 
 export interface SelfVerifyResult {
   engine: "browser" | "static";
@@ -93,9 +93,25 @@ async function settleRender(page: any): Promise<void> {
           document.querySelector("[data-reactroot]") ||
           document.body;
         const mounted = !!root && root.children.length > 0;
-        const w = window as unknown as { __lmPendingFetches?: number };
+        const w = window as unknown as {
+          __lmPendingFetches?: number;
+          __lmLastMutation?: number;
+        };
         const quiet = (w.__lmPendingFetches ?? 0) === 0;
-        return mounted && quiet && document.readyState !== "loading";
+        // Review-caught gap: mounted+quiet passes a setTimeout-driven spinner
+        // that never touches fetch. Two further conditions close it:
+        //   - the DOM has been STILL for 400ms (MutationObserver timestamp —
+        //     absent counter means the init script did not run; treat "no
+        //     record" as still, since the fetch counter degrades the same way);
+        //   - something VISIBLE actually rendered (text or a sized element),
+        //     so a bare container div is not "content".
+        const lastMutation = w.__lmLastMutation ?? 0;
+        const domStill = Date.now() - lastMutation > 400;
+        const hasVisibleContent =
+          !!root &&
+          ((root.textContent ?? "").trim().length > 0 ||
+            root.getBoundingClientRect().height > 8);
+        return mounted && quiet && domStill && hasVisibleContent && document.readyState !== "loading";
       });
     } catch {
       await page.waitForTimeout(RENDER_SETTLE_MS - Math.max(0, deadline - Date.now() - RENDER_SETTLE_MS));
@@ -110,6 +126,13 @@ async function settleRender(page: any): Promise<void> {
 /** Injected before any page script: counts in-flight fetch/XHR for settleRender. */
 const PENDING_FETCH_COUNTER = `(() => {
   let n = 0;
+  try {
+    let last = Date.now();
+    Object.defineProperty(window, "__lmLastMutation", { get: () => last, configurable: true });
+    const mo = new MutationObserver(() => { last = Date.now(); });
+    const arm = () => { try { mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true }); } catch {} };
+    if (document.documentElement) arm(); else document.addEventListener("DOMContentLoaded", arm, { once: true });
+  } catch {}
   Object.defineProperty(window, "__lmPendingFetches", { get: () => n, configurable: true });
   const f = window.fetch?.bind(window);
   if (f) window.fetch = (...a) => { n++; return f(...a).finally(() => { n--; }); };
@@ -462,14 +485,16 @@ function resolveRepairResponse(
   const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
   if (jsonMatch) {
     try {
-      const parsed = JSON.parse(jsonMatch[0]) as { edits?: EditBlock[] };
+      const parsed = JSON.parse(jsonMatch[0]) as { edits?: unknown };
       if (Array.isArray(parsed.edits) && parsed.edits.length > 0) {
-        const blocks = parsed.edits.filter(
-          (e): e is EditBlock =>
-            !!e && typeof e.path === "string" && typeof e.search === "string" &&
-            typeof e.replace === "string",
-        );
-        const applied = applyEditBlocks(blocks, current);
+        // STRICT: one malformed edit rejects the whole batch. Filtering the
+        // bad ones and applying the rest is a half-applied repair — the exact
+        // thing the all-or-nothing contract exists to prevent.
+        const batch = validateEditBatch(parsed.edits);
+        if (!batch.ok) {
+          return { files: [], editFailures: [batch.reason] };
+        }
+        const applied = applyEditBlocks(batch.blocks, current);
         if (applied.ok) {
           return {
             files: [...applied.files].map(([path, content]) => ({

@@ -39,6 +39,34 @@ export interface EditBlock {
   replace: string;
 }
 
+/**
+ * Validate a raw edits array from a model response. STRICT: one malformed
+ * entry rejects the whole batch. The first integration filtered bad entries
+ * and applied the survivors, which quietly violated the all-or-nothing
+ * contract this module advertises — three proposed edits, one malformed, two
+ * applied is exactly the half-applied repair the design exists to prevent.
+ * Caught in external review.
+ */
+export function validateEditBatch(
+  edits: unknown,
+): { ok: true; blocks: EditBlock[] } | { ok: false; reason: string } {
+  if (!Array.isArray(edits) || edits.length === 0) {
+    return { ok: false, reason: "edits is not a non-empty array" };
+  }
+  const blocks: EditBlock[] = [];
+  for (let i = 0; i < edits.length; i++) {
+    const e = edits[i] as Partial<EditBlock> | null;
+    if (
+      !e || typeof e.path !== "string" || !e.path.trim() ||
+      typeof e.search !== "string" || typeof e.replace !== "string"
+    ) {
+      return { ok: false, reason: `edit ${i} is malformed — rejecting the whole batch` };
+    }
+    blocks.push({ path: e.path, search: e.search, replace: e.replace });
+  }
+  return { ok: true, blocks };
+}
+
 export interface ApplyResult {
   ok: boolean;
   /** path -> new content, only when ok. */
@@ -80,6 +108,46 @@ export function parseEditBlocks(response: string): EditBlock[] {
 const stripTrail = (s: string) =>
   s.split("\n").map((l) => l.replace(/[ \t\r]+$/, "")).join("\n");
 
+/**
+ * Whitespace-tolerant match that PRESERVES the original file.
+ *
+ * The first version of this fallback normalised the whole source and saved the
+ * normalised text — so a one-line repair silently rewrote every line ending
+ * and trailing space in the file. In a repo that genuinely contains CRLF files
+ * (this one), that is a full-file rewrite wearing a one-line disguise, and it
+ * would have re-created the exact line-ending churn this session spent hours
+ * digging out of. Caught in external review before it shipped.
+ *
+ * Instead: compare line-by-line under normalisation to FIND the unique match,
+ * then splice the replacement into the ORIGINAL lines. Every byte outside the
+ * matched span survives untouched, including its whitespace sins.
+ */
+function spliceNormalized(
+  source: string,
+  search: string,
+  replace: string,
+): string | "absent" | "ambiguous" {
+  const srcLines = source.split("\n");
+  const needle = stripTrail(search).split("\n");
+  if (needle.length === 0) return "absent";
+  const matches: number[] = [];
+  for (let i = 0; i + needle.length <= srcLines.length; i++) {
+    let hit = true;
+    for (let j = 0; j < needle.length; j++) {
+      if (srcLines[i + j].replace(/[ \t\r]+$/, "") !== needle[j]) { hit = false; break; }
+    }
+    if (hit) matches.push(i);
+  }
+  if (matches.length === 0) return "absent";
+  if (matches.length > 1) return "ambiguous";
+  const at = matches[0];
+  return [
+    ...srcLines.slice(0, at),
+    ...replace.split("\n"),
+    ...srcLines.slice(at + needle.length),
+  ].join("\n");
+}
+
 /** Count non-overlapping occurrences of needle in haystack. */
 function occurrences(haystack: string, needle: string): number {
   if (!needle) return 0;
@@ -114,28 +182,28 @@ export function applyEditBlocks(
       failures.push(`${b.path}: file not in the project`);
       continue;
     }
-    let source = original;
-    let needle = b.search;
-    let count = occurrences(source, needle);
-    if (count === 0) {
-      // Whitespace-tolerant second pass: trailing space/CR drift is noise.
-      const relaxedSource = stripTrail(source);
-      const relaxedNeedle = stripTrail(needle);
-      if (occurrences(relaxedSource, relaxedNeedle) === 1) {
-        source = relaxedSource;
-        needle = relaxedNeedle;
-        count = 1;
-      }
-    }
-    if (count === 0) {
-      failures.push(`${b.path}: SEARCH text not found — the file does not contain that code`);
-      continue;
-    }
+    const count = occurrences(original, b.search);
     if (count > 1) {
       failures.push(`${b.path}: SEARCH text appears ${count} times — ambiguous, widen the anchor`);
       continue;
     }
-    working.set(b.path, source.replace(needle, b.replace));
+    if (count === 1) {
+      working.set(b.path, original.replace(b.search, b.replace));
+      continue;
+    }
+    // Whitespace-tolerant second pass: trailing space/CR drift is noise. The
+    // splice preserves every untouched byte of the original — see
+    // spliceNormalized for why that property is non-negotiable here.
+    const spliced = spliceNormalized(original, b.search, b.replace);
+    if (spliced === "absent") {
+      failures.push(`${b.path}: SEARCH text not found — the file does not contain that code`);
+      continue;
+    }
+    if (spliced === "ambiguous") {
+      failures.push(`${b.path}: SEARCH text appears more than once — ambiguous, widen the anchor`);
+      continue;
+    }
+    working.set(b.path, spliced);
   }
 
   if (failures.length > 0) return { ok: false, files: new Map(), failures };

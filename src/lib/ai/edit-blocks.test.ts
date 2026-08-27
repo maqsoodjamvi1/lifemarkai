@@ -8,7 +8,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
-import { applyEditBlocks, parseEditBlocks } from "./edit-blocks.ts";
+import { applyEditBlocks, parseEditBlocks, validateEditBatch } from "./edit-blocks.ts";
 
 const FILE = `import { useState } from "react";
 
@@ -114,5 +114,59 @@ describe("application — exactly-once or not at all", () => {
     const r = applyEditBlocks([{ path: "src/New.tsx", search: "a", replace: "b" }], files);
     assert.equal(r.ok, false);
     assert.match(r.failures[0], /not in the project/);
+  });
+});
+
+describe("strict batch validation — review-caught bug #1", () => {
+  // The first integration FILTERED malformed edits and applied the survivors:
+  // three proposed, one malformed, two applied — a half-applied repair from
+  // the module whose whole contract is all-or-nothing.
+  it("one malformed entry rejects the entire batch", () => {
+    const r = validateEditBatch([
+      { path: "a.ts", search: "x", replace: "y" },
+      { path: "b.ts", search: 42, replace: "y" },
+    ]);
+    assert.equal(r.ok, false);
+  });
+
+  it("an empty or non-array payload is rejected, never treated as zero edits", () => {
+    assert.equal(validateEditBatch([]).ok, false);
+    assert.equal(validateEditBatch("edits").ok, false);
+    assert.equal(validateEditBatch(null).ok, false);
+  });
+
+  it("a fully well-formed batch passes intact and in order", () => {
+    const r = validateEditBatch([
+      { path: "a.ts", search: "1", replace: "2" },
+      { path: "b.ts", search: "3", replace: "4" },
+    ]);
+    assert.equal(r.ok, true);
+    if (r.ok) assert.deepEqual(r.blocks.map((b) => b.path), ["a.ts", "b.ts"]);
+  });
+});
+
+describe("whitespace fallback preserves the file — review-caught bug #2", () => {
+  // The first fallback normalised the WHOLE source and saved it, so a one-line
+  // repair silently stripped every trailing space and CR in the file — a
+  // full-file rewrite wearing a one-line disguise, in a repo that genuinely
+  // contains CRLF files.
+  it("bytes outside the matched span survive untouched, whitespace sins included", () => {
+    const messy = "const a = 1;   \nconst target = 2;\nconst c = 3;\t\n";
+    const files = new Map([["a.ts", messy]]);
+    const r = applyEditBlocks(
+      [{ path: "a.ts", search: "const target = 2;   ", replace: "const target = 9;" }],
+      files,
+    );
+    assert.equal(r.ok, true);
+    const out = r.files.get("a.ts")!;
+    assert.match(out, /const target = 9;/);
+    assert.match(out, /const a = 1;   \n/, "trailing spaces on untouched line 1 must survive");
+    assert.match(out, /const c = 3;\t\n/, "trailing tab on untouched line 3 must survive");
+  });
+
+  it("normalized matching still rejects ambiguity instead of picking one", () => {
+    const files = new Map([["a.ts", "let x = 1;  \nlet x = 1;\n"]]);
+    const r = applyEditBlocks([{ path: "a.ts", search: "let x = 1;", replace: "let x = 2;" }], files);
+    assert.equal(r.ok, false);
   });
 });
