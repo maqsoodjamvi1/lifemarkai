@@ -7,6 +7,7 @@ import { selectRelevantFiles } from "./context-selector.ts";
 import { type BuildAppType, classifyBuildIntent, isAppShellAppType } from "./build-intent.ts";
 import { renderWebsiteFooterContract, renderWebsiteHeaderContract } from "./website-header-contract.ts";
 import { type SiteArchetype, type SiteChromeSpec, siteArchetypeForAppType, siteArchetypeForBuild, siteChromeSpec } from "../templates/site-archetype.ts";
+import { type AdminShellSpec, adminArchetypeForAppType, adminShellSpec } from "../templates/admin-archetype.ts";
 import { NEXTJS_RULES } from "./prompts/nextjs-rules.ts";
 import { renderPackageAllowlistPrompt } from "./package-allowlist.ts";
 import { renderViteSetupPrompt } from "../templates/lovable-vite-scaffold.ts";
@@ -244,20 +245,24 @@ If \`src/lib/ai.ts\` is not yet present, you may create it, but prefer the helpe
 over raw fetch. Use stock CDN images for product grids (fast, free) and
 \`aiImage\` only for the one or two hero/brand images that should feel bespoke.`;
 
-/** Data-density language for staff-only tools. Explicitly anti-marketing. */
-const ADMIN_DENSITY_LANGUAGE = `### Admin / ERP / Dashboard Apps — data-dense design language
-(Use INSTEAD of hero/marketing patterns when building admin panels, ERP, POS, CRM, dashboards.)
+/**
+ * Data-density language for staff-only tools, composed for the SHAPE of tool.
+ *
+ * This was one block for all twelve app-shell types, mandating a `w-64` nav
+ * sidebar, "Data table — the core ERP surface" and compact padding. Their
+ * blueprints disagree: CRM, project management and logistics are board-first,
+ * healthcare and hotel are schedule-first, and POS is a touch terminal whose
+ * cart sidebar collides with the mandated nav sidebar and whose targets must be
+ * LARGER, not compact. See templates/admin-archetype.ts.
+ */
+function adminDensityLanguage(spec: AdminShellSpec): string {
+  return `### ${spec.label} — operational design language
+(Use INSTEAD of hero/marketing patterns. This is a staff-only tool.)
 
-**Shell** — fixed sidebar (w-64, collapsible to w-16 on toggle, drawer on mobile):
-\`\`\`tsx
-<aside className="w-64 shrink-0 h-screen sticky top-0 border-r border-white/[0.06] bg-[#0c0c14]
-                  flex flex-col">
-  {/* logo row, nav sections with uppercase text-[11px] text-slate-500 group labels,
-      items: flex gap-3 px-3 py-2 rounded-lg text-sm text-slate-400
-      active: bg-violet-600/15 text-violet-300 border-l-2 border-violet-500 */}
-</aside>
-\`\`\`
+**Shell** — ${spec.sidebar}
 Top bar inside content: h-14, breadcrumb left, search (⌘K) center, avatar/notifications right.
+
+**Primary surface** — ${spec.primarySurface}
 
 **KPI stat card** (dashboard rows of 4):
 \`\`\`tsx
@@ -268,18 +273,14 @@ Top bar inside content: h-14, breadcrumb left, search (⌘K) center, avatar/noti
 </div>
 \`\`\`
 
-**Data table** — the core ERP surface. Always: sticky header row (text-xs uppercase text-slate-500),
-row hover bg-white/[0.03], tabular-nums for numbers, right-aligned amounts, per-row action menu (⋯),
-toolbar above with search input + filter dropdowns + primary action button, pagination footer
-("1–20 of 240"), and selection checkboxes when bulk actions make sense.
-
 **Status badges** — px-2 py-0.5 rounded-full text-[11px] font-medium:
 paid/active/delivered = bg-emerald-500/15 text-emerald-400 · pending/processing = bg-amber-500/15 text-amber-400 ·
 failed/overdue = bg-red-500/15 text-red-400 · draft/inactive = bg-slate-500/15 text-slate-400
 
 **Charts** — recharts AreaChart/BarChart inside cards, violet/indigo gradients, CartesianGrid stroke="rgba(255,255,255,0.04)".
-**Forms** — right-side Sheet/drawer (not page navigation) for create/edit; labeled inputs bg-white/[0.04] border-white/[0.08].
-**Density** — compact paddings (p-4 cards, py-2 rows), no hero sections, no ambient blobs, no marketing CTAs.`;
+**Forms** — ${spec.detailPattern}
+**Density** — ${spec.density}`;
+}
 
 const DESIGN_SYSTEM_TAIL = `### Shared UI Kit — generate ONCE, reuse everywhere
 Every multi-page app must include \`src/components/ui/\` with these primitives, then import them
@@ -312,7 +313,7 @@ export function buildDesignSystem(appType?: BuildAppType, archetype?: SiteArchet
     designSystemHead(siteChrome ? siteChromeBulletFor(chromeSpec) : APP_SHELL_CHROME_BULLET),
     storefront ? ECOMMERCE_IMAGE_MANDATE : "",
     DESIGN_SYSTEM_MID,
-    appShell ? ADMIN_DENSITY_LANGUAGE : "",
+    appShell ? adminDensityLanguage(adminShellSpec(adminArchetypeForAppType(appType))) : "",
     DESIGN_SYSTEM_TAIL,
     // Chrome for the SHAPE of site this is — a product page is never told a
     // phone number is mandatory, a storefront is told about search and cart.

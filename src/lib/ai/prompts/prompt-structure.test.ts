@@ -78,7 +78,7 @@ test("no prompt reopens the package allowlist it sits next to", () => {
 // storefront image mandate ("a store without images is a FAILED build") and the
 // website header contract — ~7% of the prompt instructing two products the user
 // never asked for, contradicting the marketing blueprint beside it.
-const ADMIN_BLOCK = /Admin \/ ERP \/ Dashboard Apps/;
+const ADMIN_BLOCK = /— operational design language/;
 const SHOP_BLOCK = /images are MANDATORY/;
 const HEADER_BODY = /WEBSITE HEADER CONTRACT — /;
 const SHELL_BULLET = /staff-only tool: use the sidebar/;
