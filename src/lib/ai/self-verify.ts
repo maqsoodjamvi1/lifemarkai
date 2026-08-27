@@ -25,7 +25,7 @@ import { pushFileToRunningSandbox } from "../preview/push-to-sandbox.ts";
 import { generateAI } from "./generate.ts";
 import { DEFAULT_CODING_MODEL,DIAGNOSIS_MODEL,ECONOMY_CODING_MODEL,envPricedModel,ESCALATION_MODEL,FAST_CODING_MODEL,getDefaultAiModel } from "./model-defaults.ts";
 import { applyModelAdapter } from "./model-catalog.ts";
-import { AUTO_FIX_SYSTEM_PROMPT } from "./system-prompts.ts";
+import { AUTO_FIX_EDITS_SYSTEM_PROMPT } from "./prompts/auto-fix.ts";
 import { buildPreviewDiagnosis } from "../preview/diagnose-preview.ts";
 import { guardFileWrite } from "./guard-file-write.ts";
 import { deterministicRepair } from "./deterministic-repair.ts";
@@ -1235,10 +1235,19 @@ export async function runSelfVerification(opts: {
         {
           model: fixModel,
           messages: [
-            { role: "system", content: applyModelAdapter(AUTO_FIX_SYSTEM_PROMPT, fixModel) },
+            { role: "system", content: applyModelAdapter(AUTO_FIX_EDITS_SYSTEM_PROMPT, fixModel) },
             {
               role: "user",
-              content: `Fix these runtime errors found while rendering the app in a browser:\n\n${errors
+              // Name the errors' actual provenance. Most rounds now carry
+              // compiler/static-gate errors that were caught BEFORE any render,
+              // and telling the model they were "found while rendering in a
+              // browser" pointed it at runtime hypotheses (state, effects,
+              // timing) for what is a mechanical compile-time defect.
+              content: `${
+                roundSignal === "typecheck"
+                  ? "Fix these errors found by static checks (compiler, import resolution, module contracts) before the app was rendered:"
+                  : "Fix these runtime errors found while rendering the app in a browser:"
+              }\n\n${errors
                 .map((e) => `- ${e}`)
                 .join("\n")}${diagnosis ? `\n\nPreview diagnosis (fix these first):\n${diagnosis}` : ""}${
                 aiDiagnosis ? `\n\nRoot-cause analysis from a second model — treat this as the brief, not a suggestion:\n${aiDiagnosis}` : ""

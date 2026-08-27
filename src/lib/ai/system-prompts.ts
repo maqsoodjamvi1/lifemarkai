@@ -8,6 +8,7 @@ import { classifyBuildIntent } from "./build-intent.ts";
 import { WEBSITE_HEADER_CONTRACT } from "./website-header-contract.ts";
 import { NEXTJS_RULES } from "./prompts/nextjs-rules.ts";
 import { renderPackageAllowlistPrompt } from "./package-allowlist.ts";
+import { renderViteSetupPrompt } from "../templates/lovable-vite-scaffold.ts";
 import { AUTO_FIX_SYSTEM_PROMPT } from "./prompts/auto-fix.ts";
 
 // ─── ALLOWED PACKAGES ALLOWLIST ───────────────────────────────────────────────
@@ -406,143 +407,13 @@ export function formatCurrency(cents: number): string {
 `.trim();
 
 // ─── VITE SETUP RULES ────────────────────────────────────────────────────────
-const VITE_RULES = `
-## Vite + React Setup — Mandatory
-
-### index.html (always generate this)
-\`\`\`html
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>App</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
-\`\`\`
-
-### src/main.tsx (always generate this)
-\`\`\`tsx
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import './index.css'
-import App from './App'
-
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
-\`\`\`
-
-### vite.config.ts (always generate this)
-\`\`\`ts
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-
-export default defineConfig({
-  plugins: [react({ babel: { plugins: [] } })],
-})
-\`\`\`
-
-### package.json — REQUIRED structure
-\`\`\`json
-{
-  "name": "app",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-router-dom": "^6.26.1"
-  },
-  "devDependencies": {
-    "@types/react": "^18.3.5",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.45",
-    "tailwindcss": "^3.4.11",
-    "typescript": "^5.5.3",
-    "vite": "^5.4.2"
-  }
-}
-\`\`\`
-Add extra packages to dependencies as needed. devDependencies stay fixed.
-
-### tsconfig.json (always generate this)
-\`\`\`json
-{
-  "compilerOptions": {
-    "target": "ES2020",
-    "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "strict": true,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false
-  },
-  "include": ["src"]
-}
-\`\`\`
-
-### tailwind.config.js (always generate this)
-\`\`\`js
-/** @type {import('tailwindcss').Config} */
-export default {
-  darkMode: ["class"],
-  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
-  theme: {
-    extend: {
-      colors: {
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
-        primary: { DEFAULT: "hsl(var(--primary))", foreground: "hsl(var(--primary-foreground))" },
-        secondary: { DEFAULT: "hsl(var(--secondary))", foreground: "hsl(var(--secondary-foreground))" },
-        destructive: { DEFAULT: "hsl(var(--destructive))", foreground: "hsl(var(--destructive-foreground))" },
-        muted: { DEFAULT: "hsl(var(--muted))", foreground: "hsl(var(--muted-foreground))" },
-        accent: { DEFAULT: "hsl(var(--accent))", foreground: "hsl(var(--accent-foreground))" },
-        card: { DEFAULT: "hsl(var(--card))", foreground: "hsl(var(--card-foreground))" },
-        popover: { DEFAULT: "hsl(var(--popover))", foreground: "hsl(var(--popover-foreground))" },
-      },
-      borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
-      },
-    },
-  },
-  plugins: [],
-}
-\`\`\`
-
-### postcss.config.js (always generate this)
-\`\`\`js
-export default {
-  plugins: { tailwindcss: {}, autoprefixer: {} },
-}
-\`\`\`
-`.trim();
+// Rendered from lovable-vite-scaffold.ts — the same files project creation
+// actually writes — so this section can no longer drift from the platform.
+// (The previous hand-written copy had: React 18 against the scaffold's 19,
+// plugin-react against plugin-react-swc, a vite.config missing the "@" alias
+// this prompt's own import rules mandate, a flat tsconfig without paths, and
+// tailwind.config.js against the .ts the import rules demand.)
+const VITE_RULES = renderViteSetupPrompt();
 
 // ─── IMPORT RESOLUTION RULES ──────────────────────────────────────────────────
 const IMPORT_RULES = `
@@ -594,11 +465,10 @@ Every npm package import (e.g. \`import { motion } from 'framer-motion'\`) MUST 
 /**
  * TanStack Start counterpart to IMPORT_RULES.
  *
- * IMPORT_RULES above is Vite/CRA-shaped: it forbids `@/` aliases, and its
- * checklist demands src/main.tsx + index.html + vite.config with
- * @vitejs/plugin-react. Every one of those is WRONG for TanStack Start, whose
- * blueprint mandates `@/* -> src/*` and forbids emitting index.html or
- * src/main.tsx at all (the plugin owns the document).
+ * IMPORT_RULES above is Vite/CRA-shaped: its checklist demands src/main.tsx +
+ * index.html + a vite.config, all of which are WRONG for TanStack Start, whose
+ * blueprint forbids emitting index.html or src/main.tsx at all (the plugin
+ * owns the document).
  *
  * Both blocks used to be concatenated into the same build prompt, so the model
  * was told to use aliases and not to use them, and to always generate an
@@ -1799,7 +1669,7 @@ export const NEXT_APP_GENERATION_SYSTEM_PROMPT = `You are LifemarkAI Build Engin
 
 ${PACKAGE_ALLOWLIST}
 
-NOTE for Next.js apps: react-router-dom is FORBIDDEN — routing is file-based (app/<route>/page.tsx + next/link). Any npm package may be added to package.json, but every import must be listed there.
+NOTE for Next.js apps: react-router-dom is FORBIDDEN — routing is file-based (app/<route>/page.tsx + next/link). The package allowlist above is ENFORCED here too: the installer refuses anything outside it, so never import an unlisted package — and every allowed package you import must appear in package.json.
 
 ---
 
