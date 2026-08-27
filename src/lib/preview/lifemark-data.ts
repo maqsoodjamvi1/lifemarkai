@@ -46,9 +46,29 @@ function lifemarkDataSdkBody(endpoint: string): string {
 var E=${endpoint};
 function key(c){return "lifemarkdata:"+c;}
 function skey(c){return "lifemarkdata:__schema__:"+c;}
-function local(c){try{return JSON.parse(localStorage.getItem(key(c))||"[]");}catch(e){return [];}}
-function save(c,r){try{localStorage.setItem(key(c),JSON.stringify(r));}catch(e){}}
-function schema(c){try{return JSON.parse(localStorage.getItem(skey(c))||"null");}catch(e){return null;}}
+// Storage with an in-memory fallback for opaque origins.
+//
+// A sandboxed srcdoc iframe WITHOUT allow-same-origin gets an opaque origin,
+// where touching localStorage THROWS rather than returning empty. Every access
+// here was individually try/caught, so the throw was swallowed on write and
+// turned into [] on read: an app would seed "successfully" into nothing and
+// render permanently empty, silently, with no error anywhere. That is exactly
+// how the editor's static preview behaved while the same app on its preview
+// subdomain (a real origin) showed a full dataset.
+//
+// Probing ONCE up front and falling back to a module-level object keeps such a
+// preview working for the life of the page — seeded data renders, writes stick,
+// reads round-trip — instead of silently showing an empty app. It is not a
+// persistence guarantee: MEM dies with the page, which is honest, because on an
+// opaque origin nothing CAN persist. Real origins are untouched and still use
+// localStorage.
+var MEM={};
+var LS=(function(){try{var p="__lifemarkdata_probe";localStorage.setItem(p,"1");localStorage.removeItem(p);return localStorage;}catch(e){return null;}})();
+function getItem(k){if(LS){try{return LS.getItem(k);}catch(e){}}return Object.prototype.hasOwnProperty.call(MEM,k)?MEM[k]:null;}
+function setItem(k,v){if(LS){try{LS.setItem(k,v);return;}catch(e){}}MEM[k]=v;}
+function local(c){try{return JSON.parse(getItem(key(c))||"[]");}catch(e){return [];}}
+function save(c,r){try{setItem(key(c),JSON.stringify(r));}catch(e){}}
+function schema(c){try{return JSON.parse(getItem(skey(c))||"null");}catch(e){return null;}}
 function uid(){return (crypto.randomUUID?crypto.randomUUID():String(Date.now()+Math.random()));}
 function typeOk(v,t){
 if(t==="string")return typeof v==="string";
@@ -80,7 +100,7 @@ return out;}
 async function req(m,p,b){var r=await fetch(E+p,{method:m,headers:{"Content-Type":"application/json"},body:b?JSON.stringify(b):undefined});var j=await r.json().catch(function(){return {};});if(!r.ok)throw new Error(j.error||("Request failed "+r.status));return j;}
 window.LifemarkData={
   hosted:!!E,
-  async defineSchema(c,fields){var s={fields:fields};try{localStorage.setItem(skey(c),JSON.stringify(s));}catch(e){}if(E)await req("POST","",{collection:c,schema:s});},
+  async defineSchema(c,fields){var s={fields:fields};try{setItem(skey(c),JSON.stringify(s));}catch(e){}if(E)await req("POST","",{collection:c,schema:s});},
   async getSchema(c){var s=schema(c);if(s)return s;if(!E)return null;var j=await req("GET","?collection=__schema__");var m=(j.records||[]).map(function(r){return r.data;}).filter(function(d){return d&&d.collection===c;})[0];return m?{fields:m.fields}:null;},
   async list(c,o){o=o||{};if(!E){var rs=local(c);if(o.where){rs=rs.filter(function(r){for(var k in o.where){if(String((r.data||{})[k])!==String(o.where[k]))return false;}return true;});}if(o.limit)rs=rs.slice(0,o.limit);return rs;}var q="?collection="+encodeURIComponent(c);if(o.where){var wk=Object.keys(o.where)[0];if(wk)q+="&where="+encodeURIComponent(wk+":"+String(o.where[wk]));}if(o.limit)q+="&limit="+encodeURIComponent(o.limit);var j=await req("GET",q);return j.records||[];},
   // The "already seeded" short-circuit MUST come before prep(). prep() runs the
