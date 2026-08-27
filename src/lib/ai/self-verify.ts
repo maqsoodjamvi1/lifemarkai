@@ -33,6 +33,7 @@ import { recordRepairOutcome } from "./record-outcome.ts";
 import type { ProjectFile } from "../../types/database.ts";
 import { loadOptionalPlaywright } from "../optional-playwright.ts";
 import { isLadderExhausted,resolveRepairTier,shouldPromoteRepairTier } from "./repair-ladder.ts";
+import { buildPriorAttemptsBlock,lookupPriorAttempts,suggestedStartingTier } from "./repair-memory.ts";
 
 export interface SelfVerifyResult {
   engine: "browser" | "static";
@@ -867,7 +868,35 @@ export async function runSelfVerification(opts: {
       // moves upward, so the floor can raise the tier for a round but never
       // lower it back.
       const tierFloor = cheapRepairEligible ? 0 : 1;
-      const tier = resolveRepairTier(repairTier, tierFloor, repairTiers.length);
+      // ── What has already been tried on THIS failure? ──────────────────────
+      // repair_outcomes has graded every prior attempt since migration 161 and
+      // nothing read one back, so the ladder would re-run an approach that had
+      // already failed on the identical fingerprint. Memory raises the floor by
+      // at most one tier (see suggestedStartingTier) and, more usefully, tells
+      // the repair model what not to repeat.
+      //
+      // Best-effort throughout: a lookup failure yields [] and the round runs
+      // exactly as before. Memory improves a repair; it is never a precondition
+      // for one — the same rule record-outcome.ts follows on the write side.
+      const priorAttempts = await lookupPriorAttempts(
+        supabase,
+        errors.map((message) => fingerprintError(message, roundSignal)),
+        { projectId, signal: roundSignal },
+      );
+      const memoryFloor = suggestedStartingTier(
+        priorAttempts,
+        (model) => {
+          const i = model ? repairTiers.indexOf(model) : -1;
+          return i >= 0 ? i : null;
+        },
+        repairTiers.length,
+      );
+
+      const tier = resolveRepairTier(
+        repairTier,
+        Math.max(tierFloor, memoryFloor),
+        repairTiers.length,
+      );
       const fixModel = repairTiers[tier] ?? ECONOMY_CODING_MODEL ?? getDefaultAiModel();
 
       // ── AI diagnosis, round 0 only ────────────────────────────────────────
@@ -940,7 +969,7 @@ export async function runSelfVerification(opts: {
                 .map((e) => `- ${e}`)
                 .join("\n")}${diagnosis ? `\n\nPreview diagnosis (fix these first):\n${diagnosis}` : ""}${
                 aiDiagnosis ? `\n\nRoot-cause analysis from a second model — treat this as the brief, not a suggestion:\n${aiDiagnosis}` : ""
-              }\n\nRelevant files:\n${context}\n\nReturn the fixed files as JSON.`,
+              }${buildPriorAttemptsBlock(priorAttempts)}\n\nRelevant files:\n${context}\n\nReturn the fixed files as JSON.`,
             },
           ],
           temperature: 0.1,
