@@ -28,6 +28,7 @@ import { applyModelAdapter } from "./model-catalog.ts";
 import { AUTO_FIX_SYSTEM_PROMPT } from "./system-prompts.ts";
 import { buildPreviewDiagnosis } from "../preview/diagnose-preview.ts";
 import { guardFileWrite } from "./guard-file-write.ts";
+import { deterministicRepair } from "./deterministic-repair.ts";
 import { fingerprintError } from "./failure-fingerprint.ts";
 import { recordRepairOutcome } from "./record-outcome.ts";
 import type { ProjectFile } from "../../types/database.ts";
@@ -787,7 +788,15 @@ export async function runSelfVerification(opts: {
       pending = null;
     };
 
-    for (let round = 0; round <= maxRounds; round++) {
+    // Rounds absorbed by the FREE deterministic pass do not spend the model
+    // budget: a string rewrite that fixes an import costs nothing, and charging
+    // it against maxRounds would mean a free fix REDUCES how many paid attempts
+    // the build gets. Capped so the loop stays bounded even if a later paid
+    // round keeps introducing deterministically-fixable breakage.
+    let freeRounds = 0;
+    const MAX_FREE_ROUNDS = 2;
+
+    for (let round = 0; round <= maxRounds + freeRounds; round++) {
       result.rounds = round + 1;
       const roundStartedAt = Date.now();
       const html = buildFallbackHtml(files);
@@ -984,9 +993,86 @@ export async function runSelfVerification(opts: {
       // simply burned its remaining rounds.
       const ladderExhausted = isLadderExhausted(repairTier, repairTiers.length);
 
-      if (round === maxRounds || ladderExhausted || Date.now() - startedAt > TIME_BUDGET_MS) {
+      if (round - freeRounds === maxRounds || ladderExhausted || Date.now() - startedAt > TIME_BUDGET_MS) {
         emit(`Verification found ${errors.length} issue${errors.length === 1 ? "" : "s"} — open the preview to review.`);
         return result;
+      }
+
+      // ── Deterministic repair — the free tier, before any model ────────────
+      // The same fixers the build path runs (import repointing + generated
+      // support files), applied to the CURRENT file set. A broken import that
+      // slipped through — or that a previous paid round introduced — is fixed
+      // here as a string rewrite: no tokens, no latency, no model variance.
+      // Only fires on the error classes it can address; everything else falls
+      // through to the ladder untouched. See deterministic-repair.ts.
+      if (freeRounds < MAX_FREE_ROUNDS) {
+        const det = deterministicRepair(files, errors);
+        const detTouched = [...det.changedPaths, ...det.createdPaths];
+        if (detTouched.length > 0) {
+          const written: string[] = [];
+          const rejected: string[] = [];
+          const persistFixes = opts.persistFixes ?? !opts.candidateFiles;
+          const nextByPath = new Map(det.files.map((f) => [f.path, f]));
+          for (const path of detTouched) {
+            const nf = nextByPath.get(path);
+            if (!nf || typeof nf.content !== "string") continue;
+            // Same write guard as the paid path: this loop is driven by a
+            // failing preview, and "deterministic" is not a licence to blank a
+            // working file if a fixer ever misbehaves.
+            const verdict = guardFileWrite({
+              path,
+              next: nf.content,
+              previous: files.find((pf) => pf.path === path)?.content ?? null,
+            });
+            if (!verdict.ok) {
+              rejected.push(path);
+              continue;
+            }
+            written.push(path);
+            const language =
+              nf.language ??
+              (path.endsWith(".tsx") ? "typescriptreact"
+                : path.endsWith(".ts") ? "typescript"
+                : path.endsWith(".css") ? "css"
+                : path.endsWith(".html") ? "html"
+                : "javascript");
+            if (persistFixes) {
+              await supabase.from("project_files").upsert(
+                { project_id: projectId, path, content: nf.content, language },
+                { onConflict: "project_id,path" },
+              );
+              pushFileToRunningSandbox(supabase, projectId, path, nf.content);
+            }
+            result.fixedFiles.push({ path, content: nf.content, language });
+            const idx = files.findIndex((pf) => pf.path === path);
+            files = idx >= 0
+              ? files.map((pf, i) => (i === idx ? { ...pf, content: nf.content } : pf))
+              : [...files, { path, content: nf.content, language } as ProjectFile];
+          }
+          if (written.length > 0) {
+            result.fixesApplied += 1;
+            freeRounds += 1;
+            emit(`Fixed ${written.length} file${written.length === 1 ? "" : "s"} locally (no AI) — re-verifying…`);
+            // Scored exactly like a paid attempt: held open and settled against
+            // what the NEXT round's checks observe, under model "deterministic",
+            // so the fingerprint report shows what the free tier absorbed.
+            pending = {
+              before: errors.map((message) => fingerprintError(message, roundSignal)),
+              round: round + 1,
+              signal: roundSignal,
+              model: "deterministic",
+              written,
+              rejected,
+              startedAt: roundStartedAt,
+            };
+            // A deterministic round must not move the LADDER: if the rewrite
+            // did not help, the fast tier still deserves its first turn — the
+            // null baseline never promotes (repair-ladder contract).
+            lastErrorCount = null;
+            if (!opts.candidateFiles) await new Promise((resolve) => setTimeout(resolve, 4_000));
+            continue;
+          }
+        }
       }
 
       // ── Fix round ───────────────────────────────────────────────────────────
