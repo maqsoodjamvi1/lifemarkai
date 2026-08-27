@@ -9,7 +9,7 @@ import { ensureWebsiteChrome } from "../website-chrome.ts";
 import { alignGeneratedPackageJson, stripGeneratedRouteTree } from "../../preview/align-package-json.ts";
 import { normalizeProjectImports } from "../../preview/normalize-imports.ts";
 import { syncProjectDependencies } from "../../verify/dependency-gate.ts";
-import { lockControlledDependencyVersions, resolveControlledTemplate } from "../../templates/controlled-registry.ts";
+import { lockControlledDependencyVersions, resolveControlledTemplateForPrompt } from "../../templates/controlled-registry.ts";
 import { tanstackStartScaffold } from "../../templates/tanstack-start-scaffold.ts";
 
 export type GenerationValidationOptions = {
@@ -158,7 +158,7 @@ export function normalizeGenerationStage(
     normalized[packageIndex] = { ...normalized[packageIndex], content: aligned.content };
     alignedDependencies.push(...aligned.changed);
 
-    const template = resolveControlledTemplate(options.prompt, options.framework);
+    const template = resolveControlledTemplateForPrompt(options.prompt, options.framework);
     const locked = lockControlledDependencyVersions(normalized[packageIndex].content, template);
     normalized[packageIndex] = { ...normalized[packageIndex], content: locked.content };
     const lockedPackage = JSON.parse(locked.content) as {

@@ -140,6 +140,39 @@ const SITE_FUNCTIONAL_OVERRIDE =
   /\b(order online|online ordering|order food|add to cart|shopping cart|checkout|admin (?:panel|dashboard)|dashboard|back ?office|inventory|manage (?:my |our |the )?(?:orders?|bookings?|patients?|employees?|projects?|inventory|listings?|members?)|point[- ]of[- ]sale|\berp\b|\bcrm\b|\bpos\b)\b/i;
 
 /**
+ * "A landing page for a CRM consultancy" is a LANDING PAGE.
+ *
+ * SITE_FUNCTIONAL_OVERRIDE lists `crm`/`erp`/`pos` because "a website where I
+ * manage my CRM" really does want the app. But it fired on any mention at all,
+ * so naming the CLIENT'S INDUSTRY cancelled the site guard and the classifier
+ * built the consultancy's own CRM instead of the page advertising it. Both of
+ * ChatGPT's adversarial cases ("landing page for a CRM consultancy", "website
+ * for an ERP company") failed this way, and so did every agency, vendor and
+ * software-house variant.
+ *
+ * The tell is grammatical: in a client mention the system name is a MODIFIER
+ * on a business noun ("CRM consultancy", "ERP software company"). In a build
+ * request it is the head noun and what follows is a preposition or a feature
+ * list ("CRM for a real-estate agency", "CRM with leads and deals"). So an
+ * intervening preposition or conjunction disqualifies the match — "CRM for a
+ * real-estate agency" keeps classifying as a CRM, which is correct.
+ */
+/**
+ * "Build a booking app WITH a public landing page" is a booking app.
+ *
+ * The site guard fires on the phrase "landing page" wherever it appears, so a
+ * marketing surface requested as an ADDITION to an app turned the whole build
+ * into a brochure site with no booking in it. The tell is the connective: a
+ * site named after "with"/"plus"/"including"/"and" is a surface OF the
+ * product, while a site named first ("a landing page for X") IS the product.
+ */
+const SITE_AS_SECONDARY_SURFACE =
+  /\b(?:with|plus|including|and)\s+(?:an?\s+)?(?:\w+\s+){0,2}(?:landing page|marketing site|marketing page|homepage|one[- ]pager)\b/i;
+
+const SYSTEM_NAME_AS_CLIENT_INDUSTRY =
+  /\b(?:crm|erp|pos|point[- ]of[- ]sale|accounting|logistics)\s+(?!(?:for|of|with|to|that|which|and|in|on)\b)(?:[a-z]+\s+){0,2}(?:consultanc(?:y|ies)|consultant|compan(?:y|ies)|agency|agencies|firm|vendor|provider|reseller|integrator|studio|startup|business|practice|house)\b/i;
+
+/**
  * Reduce a raw capture to the INDUSTRY phrase.
  *
  * The capture patterns are greedy about what follows the preposition, so
@@ -905,12 +938,22 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
   // "website") is a stronger signal than naming the INDUSTRY, so "a landing
   // page for a dental clinic" is a website, not an EMR — unless the same
   // prompt also asks for transactional or back-office behaviour.
+  // A system name that is only describing the customer's line of business is
+  // not a request to build that system — see SYSTEM_NAME_AS_CLIENT_INDUSTRY.
+  // Scoped to prompts that already named the artifact as a site/landing page,
+  // so this can only ever rescue the site guard, never suppress a real app.
+  const namesClientIndustry =
+    SITE_INTENT_KEYWORDS.test(prompt) && SYSTEM_NAME_AS_CLIENT_INDUSTRY.test(prompt);
+
+  // A marketing surface requested as an addition to an app does not make the
+  // build a marketing site — see SITE_AS_SECONDARY_SURFACE.
+  const siteIsSecondary = SITE_AS_SECONDARY_SURFACE.test(prompt);
+
   const wantsPlainSite =
+    !siteIsSecondary &&
     SITE_INTENT_KEYWORDS.test(prompt) &&
-    !SITE_FUNCTIONAL_OVERRIDE.test(prompt) &&
-    !explicitErp &&
-    !explicitCrm &&
-    !POS_KEYWORDS.test(prompt);
+    (namesClientIndustry || !SITE_FUNCTIONAL_OVERRIDE.test(prompt)) &&
+    (namesClientIndustry || (!explicitErp && !explicitCrm && !POS_KEYWORDS.test(prompt)));
 
   if (wantsPlainSite && PORTFOLIO_KEYWORDS.test(prompt)) appType = "portfolio";
   else if (wantsPlainSite) appType = "marketing-website";
