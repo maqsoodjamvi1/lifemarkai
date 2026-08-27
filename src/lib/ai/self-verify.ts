@@ -56,7 +56,69 @@ type SupabaseClient = any;
 // out mid-improvement" — but latency is a real cost too, so this stays a hard
 // wall and is env-overridable for tuning without a deploy.
 const TIME_BUDGET_MS = Number(process.env.SELF_VERIFY_TIME_BUDGET_MS) || 150_000;
+// Ceiling, not a sleep. This was a FIXED 3.5s wait per render — and the
+// verification sweep renders every route, so ~8 routes spent ~28 seconds of
+// every failed build waiting for pages that had finished painting in 300ms.
+// settleRender() below polls for actual readiness (content in the mount node,
+// no pending fetches) and returns as soon as the page is genuinely settled;
+// this constant is now only the worst-case bound for a page that never stops
+// loading, which is exactly the page the empty-render check should then see.
 const RENDER_SETTLE_MS = 3_500;
+const SETTLE_POLL_MS = 150;
+
+/**
+ * Wait until the page is actually ready to be judged, up to RENDER_SETTLE_MS.
+ *
+ * "Ready" = a mount node has children AND no fetch/XHR started by the page is
+ * still in flight (tracked via an init-script counter, so it works on live
+ * URLs and srcdoc alike). Two consecutive ready polls are required so a page
+ * that mounts a spinner and immediately fetches does not pass between the
+ * mount and the fetch.
+ *
+ * Fail-open by design: if evaluate() throws (navigation race, CSP), fall back
+ * to the old fixed sleep — a slower verdict beats a wrong one.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function settleRender(page: any): Promise<void> {
+  const deadline = Date.now() + RENDER_SETTLE_MS;
+  let readyStreak = 0;
+  while (Date.now() < deadline) {
+    let ready = false;
+    try {
+      ready = await page.evaluate(() => {
+        const root =
+          document.getElementById("root") ||
+          document.getElementById("__next") ||
+          document.querySelector("[data-reactroot]") ||
+          document.body;
+        const mounted = !!root && root.children.length > 0;
+        const w = window as unknown as { __lmPendingFetches?: number };
+        const quiet = (w.__lmPendingFetches ?? 0) === 0;
+        return mounted && quiet && document.readyState !== "loading";
+      });
+    } catch {
+      await page.waitForTimeout(RENDER_SETTLE_MS - Math.max(0, deadline - Date.now() - RENDER_SETTLE_MS));
+      return;
+    }
+    readyStreak = ready ? readyStreak + 1 : 0;
+    if (readyStreak >= 2) return;
+    await page.waitForTimeout(SETTLE_POLL_MS);
+  }
+}
+
+/** Injected before any page script: counts in-flight fetch/XHR for settleRender. */
+const PENDING_FETCH_COUNTER = `(() => {
+  let n = 0;
+  Object.defineProperty(window, "__lmPendingFetches", { get: () => n, configurable: true });
+  const f = window.fetch?.bind(window);
+  if (f) window.fetch = (...a) => { n++; return f(...a).finally(() => { n--; }); };
+  const send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function (...a) {
+    n++;
+    this.addEventListener("loadend", () => { n--; }, { once: true });
+    return send.apply(this, a);
+  };
+})();`;
 
 /**
  * Vision QA — send the rendered screenshot to a vision-capable model and get
@@ -129,7 +191,9 @@ function extractAppRoutes(files: ProjectFile[]): string[] {
   return [...routes].slice(0, 8);
 }
 
+// Superseded by settleRender() — kept only if a future call site needs a raw bound.
 const ROUTE_SETTLE_MS = 1_500;
+void ROUTE_SETTLE_MS;
 
 /**
  * Placeholder copy a half-finished page renders instead of its module.
@@ -178,12 +242,17 @@ async function renderAndCollectErrors(
       errors.push(tag(text));
     });
 
+    try {
+      await page.addInitScript(PENDING_FETCH_COUNTER);
+    } catch {
+      /* settleRender degrades to mount-only readiness without the counter */
+    }
     if (liveUrl && /^https?:\/\//i.test(liveUrl)) {
       await page.goto(liveUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
     } else {
       await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15_000 });
     }
-    await page.waitForTimeout(RENDER_SETTLE_MS);
+    await settleRender(page);
 
     // Deeper blank-screen / undefined-component detection: not just "is #root
     // empty" but "did anything meaningful actually render". Live Modal/Next
@@ -265,7 +334,7 @@ async function renderAndCollectErrors(
         } catch {
           continue;
         }
-        await page.waitForTimeout(ROUTE_SETTLE_MS);
+        await settleRender(page);
         const before = errors.length;
         const routeDiag = await page
           .evaluate(() => {
@@ -318,7 +387,7 @@ async function renderAndCollectErrors(
         if (isLive && routes.length > 0) {
           // The route sweep navigated away — return to the app's front door.
           await page.goto(liveUrl as string, { waitUntil: "domcontentloaded", timeout: 12_000 }).catch(() => {});
-          await page.waitForTimeout(ROUTE_SETTLE_MS);
+          await settleRender(page);
         }
         const buf = await page.screenshot({ type: "png", fullPage: false });
         screenshot = Buffer.from(buf).toString("base64");

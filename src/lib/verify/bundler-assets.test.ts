@@ -126,3 +126,26 @@ describe("the third copy is consolidated without losing coverage", () => {
     assert.match(out, /components\/Card/);
   });
 });
+
+describe("the plugin-generated route tree is never a missing module", () => {
+  // repair_outcomes: "src/router.tsx imports './routeTree.gen', but no such
+  // file exists" recurs across production repairs. The file is written by the
+  // tanstackStart Vite plugin at dev time; a generated file set legitimately
+  // never contains it. Two other checks already exempted it — this pins the
+  // one that did not.
+  it("unresolved-import gate exempts ./routeTree.gen", () => {
+    const files = [
+      { path: "src/router.tsx", content: `import { routeTree } from "./routeTree.gen";\nexport const r = routeTree;\n` },
+    ];
+    assert.deepEqual(findUnresolvedLocalImports(files as never), []);
+  });
+
+  it("a genuinely missing module beside it is still caught", () => {
+    const files = [
+      { path: "src/router.tsx", content: `import { routeTree } from "./routeTree.gen";\nimport { X } from "./missing-thing";\nexport const r = { routeTree, X };\n` },
+    ];
+    const out = findUnresolvedLocalImports(files as never);
+    assert.equal(out.length, 1);
+    assert.match(out[0].formatted, /missing-thing/);
+  });
+});
