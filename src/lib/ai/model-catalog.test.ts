@@ -406,6 +406,44 @@ describe("the ladder — each step is a different lab from the one it checks", (
   });
 });
 
+describe("the two approved lists must not drift apart", () => {
+  // There are TWO approved sets: OPENROUTER_MODEL_CATALOG (what a user can pick)
+  // and APPROVED_SMART_MODEL_IDS (what the router may cascade into, via the
+  // MODEL_CATALOG filter). openrouter-models.ts has said "keep this list and
+  // APPROVED_SMART_MODEL_IDS in step" for a while, with nothing enforcing it.
+  //
+  // That became load-bearing on 2026-08-27, when env-var tier overrides started
+  // being validated against OPENROUTER_MODEL_IDS (see envTierModel in
+  // model-defaults.ts). A duplicate source of truth is survivable while it only
+  // decides menu contents; it is not once it decides which models can run.
+  const pickerIds = new Set(OPENROUTER_MODEL_CATALOG.map((m) => m.id));
+  const routerIds = new Set(MODEL_CATALOG.map((m) => m.id));
+
+  it("every routable model is also accepted by the env-override gate", () => {
+    // The failure this prevents is the nasty direction: the router cascades
+    // into a model that an operator is then FORBIDDEN from pinning a tier to,
+    // with a warning telling them it is unapproved — while the router uses it
+    // anyway. Same model, two answers.
+    for (const id of routerIds) {
+      assert.ok(
+        pickerIds.has(id),
+        `${id} is routable but missing from OPENROUTER_MODEL_CATALOG, so an env override naming it would be refused`,
+      );
+    }
+  });
+
+  it("every user-pickable model is actually routable", () => {
+    // The other direction is a dead menu entry: selectable in the UI, silently
+    // filtered out of MODEL_CATALOG, and nothing says why.
+    for (const id of pickerIds) {
+      assert.ok(
+        routerIds.has(id),
+        `${id} is user-selectable but filtered out of MODEL_CATALOG — a dead menu entry`,
+      );
+    }
+  });
+});
+
 describe("model-defaults — cross-vendor review is real", () => {
   it("the reviewer is a different vendor from the builder", () => {
     // This was once literally the same model reviewing its own output.
