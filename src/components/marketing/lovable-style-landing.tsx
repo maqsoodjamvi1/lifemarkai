@@ -106,7 +106,22 @@ function Hero() {
         <div className="flex justify-center mb-6">
           <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground border border-border/60 rounded-full px-3 py-1 bg-card/40">
             <Sparkles className="w-3 h-3" />
-            Powered by Claude Fable, Opus &amp; Sonnet, Codex &amp; GPT-5
+            {/* Keep in step with THE LADDER in src/lib/ai/model-defaults.ts.
+                This badge named Claude Fable, Opus and Codex until 2026-08-27,
+                by which point none of the three were in the stack — Fable and
+                Opus had been removed on cost, and Codex was never on a hot
+                path. A visitor reading it was being told the product ran models
+                it did not run.
+
+                Deliberately names LABS rather than exact slugs: the ladder's
+                versions move (sonnet-4.6 -> sonnet-5 in a single afternoon)
+                while the vendors behind it are stable, so this is the phrasing
+                least likely to go stale again. It is NOT derived from the
+                catalog on purpose — these are server-side env-configurable
+                tiers, and a client bundle can only see the code defaults, so
+                deriving it would confidently display the wrong thing whenever
+                an env override is in play. */}
+            Powered by GPT-5.6, Claude Sonnet &amp; DeepSeek V4
           </span>
         </div>
 

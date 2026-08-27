@@ -45,7 +45,13 @@ const PLANS = [
       "Unlimited private projects",
       "1 custom domain",
       "GitHub two-way sync",
-      "Claude Fable, Opus & Sonnet + GPT-5 Codex",
+      // Named Claude Fable, Opus and GPT-5 Codex until 2026-08-27, by which
+      // point the product ran none of them — Fable ($10/$50) and Opus ($5/$25)
+      // had been dropped on cost and Codex was never on a hot path. On a
+      // marketing badge that is embarrassing; on a PAID PLAN's feature list it
+      // is a promise taken at checkout, which is why this line is worth keeping
+      // honest. Labs, not slugs — see the note in lovable-style-landing.tsx.
+      "GPT-5.6, Claude Sonnet & DeepSeek V4",
       "Agent Mode + Visual Edit",
       "Image generation (Gemini Image)",
       "Monaco code editor",
