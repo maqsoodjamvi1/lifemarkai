@@ -80,7 +80,7 @@ test("no prompt reopens the package allowlist it sits next to", () => {
 // never asked for, contradicting the marketing blueprint beside it.
 const ADMIN_BLOCK = /Admin \/ ERP \/ Dashboard Apps/;
 const SHOP_BLOCK = /images are MANDATORY/;
-const HEADER_BODY = /Do NOT use a single-row-only header/;
+const HEADER_BODY = /WEBSITE HEADER CONTRACT — /;
 const SHELL_BULLET = /staff-only tool: use the sidebar/;
 
 const promptFor = (request: string) => buildGenerationPrompt(request, [], 80000, "tanstack-start");

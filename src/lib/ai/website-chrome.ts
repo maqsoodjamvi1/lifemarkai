@@ -36,6 +36,7 @@ siteHeaderSource as headerSource,
 } from "../templates/site-chrome.ts";
 
 import { type BuildAppType, isAppShellAppType } from "./build-intent.ts";
+import { siteArchetypeForAppType } from "../templates/site-archetype.ts";
 
 export interface ChromeFile {
   path: string;
@@ -392,6 +393,10 @@ export function ensureWebsiteChrome<T extends ChromeFile>(
   if (!mounted) return files;
 
   const brand = brandFrom(all, opts.brand);
+  // Which SHAPE of site this is. Without it every synthesised header carried a
+  // phone/email/social strip and Home/About/Services/Contact links — correct
+  // for a restaurant, an unedited template on a developer tool.
+  const archetype = siteArchetypeForAppType(opts.appType);
   const out = [...files];
 
   const put = (path: string, content: string) => {
@@ -405,10 +410,10 @@ export function ensureWebsiteChrome<T extends ChromeFile>(
   // project whose Header.tsx the model styled must keep that file — the bug we
   // are fixing is the missing MOUNT, not missing markup.
   if (need.header && !hasChromeComponentFile(all, HEADER_FILE_RE)) {
-    put(SITE_HEADER_PATH, headerSource(brand));
+    put(SITE_HEADER_PATH, headerSource(brand, archetype));
   }
   if (need.footer && !hasChromeComponentFile(all, FOOTER_FILE_RE)) {
-    put(SITE_FOOTER_PATH, footerSource(brand));
+    put(SITE_FOOTER_PATH, footerSource(brand, archetype));
   }
 
   const shellIndex = out.findIndex((f) => norm(f.path) === norm(target.path));

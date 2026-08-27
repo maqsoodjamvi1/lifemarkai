@@ -5,7 +5,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { selectRelevantFiles } from "./context-selector.ts";
 import { type BuildAppType, classifyBuildIntent, isAppShellAppType } from "./build-intent.ts";
-import { WEBSITE_FOOTER_CONTRACT, WEBSITE_HEADER_CONTRACT } from "./website-header-contract.ts";
+import { renderWebsiteFooterContract, renderWebsiteHeaderContract } from "./website-header-contract.ts";
+import { type SiteArchetype, type SiteChromeSpec, siteArchetypeForAppType, siteArchetypeForBuild, siteChromeSpec } from "../templates/site-archetype.ts";
 import { NEXTJS_RULES } from "./prompts/nextjs-rules.ts";
 import { renderPackageAllowlistPrompt } from "./package-allowlist.ts";
 import { renderViteSetupPrompt } from "../templates/lovable-vite-scaffold.ts";
@@ -104,8 +105,12 @@ the TanStack Start Vite plugin owns the entry.
  * ships exactly as before — gating only ever narrows a known product.
  */
 /** The header bullet points at a contract only site builds receive. */
-const SITE_CHROME_BULLET = `- Website/marketing/storefront headers MUST follow the two-tier WEBSITE HEADER CONTRACT
-  (top bar: phone + email + social icons; main row: logo + menu on one row). See below.`;
+const siteChromeBulletFor = (spec: SiteChromeSpec) =>
+  `- Site header/footer MUST follow the WEBSITE HEADER + FOOTER CONTRACT below for a ${spec.label.toLowerCase()}${
+    spec.contactTopBar
+      ? " (top bar: phone + email + social icons; main row: logo + menu on one row)"
+      : " (single header row: logo + menu; NO phone/email/social top bar)"
+  }. See below.`;
 const APP_SHELL_CHROME_BULLET =
   "- This is a staff-only tool: use the sidebar + topbar shell below, NOT a marketing website header.";
 
@@ -295,23 +300,25 @@ const ECOMMERCE_IMAGE_APP_TYPES = new Set<BuildAppType>([
   "pos",
 ]);
 
-export function buildDesignSystem(appType?: BuildAppType): string {
+export function buildDesignSystem(appType?: BuildAppType, archetype?: SiteArchetype): string {
   const appShell = appType ? isAppShellAppType(appType) : true;
   const storefront = appType ? ECOMMERCE_IMAGE_APP_TYPES.has(appType) : true;
   // The header contract's own docblock excludes admin shells; it was shipping
   // to them anyway, telling an ERP that "every public website MUST" carry a
   // phone/email/social top bar while the block above forbids marketing chrome.
   const siteChrome = appType ? !isAppShellAppType(appType) : true;
+  const chromeSpec = siteChromeSpec(archetype ?? siteArchetypeForAppType(appType));
   return [
-    designSystemHead(siteChrome ? SITE_CHROME_BULLET : APP_SHELL_CHROME_BULLET),
+    designSystemHead(siteChrome ? siteChromeBulletFor(chromeSpec) : APP_SHELL_CHROME_BULLET),
     storefront ? ECOMMERCE_IMAGE_MANDATE : "",
     DESIGN_SYSTEM_MID,
     appShell ? ADMIN_DENSITY_LANGUAGE : "",
     DESIGN_SYSTEM_TAIL,
-    siteChrome ? WEBSITE_HEADER_CONTRACT : "",
-    // The footer half. It shipped with no contract at all while the injector
-    // stood ready to synthesise a very specific one — see WEBSITE_FOOTER_CONTRACT.
-    siteChrome ? WEBSITE_FOOTER_CONTRACT : "",
+    // Chrome for the SHAPE of site this is — a product page is never told a
+    // phone number is mandatory, a storefront is told about search and cart.
+    // Both contracts render from the same spec the injector builds from.
+    siteChrome ? renderWebsiteHeaderContract(chromeSpec) : "",
+    siteChrome ? renderWebsiteFooterContract(chromeSpec) : "",
   ]
     .filter(Boolean)
     .join("\n\n")
@@ -382,10 +389,28 @@ const BUG_FREE_GENERATION_CONTRACT = `
 - After edits, summarize in at most two short sentences — what changed and where. The diff is the documentation; prose beyond that wastes the user's time.
 `.trim();
 
-const PRODUCT_MATURITY_CONTRACT = `
+/**
+ * The site-chrome line inside the maturity contract. This was a FOURTH
+ * hardcoded copy of the two-tier header mandate — after the header contract,
+ * the design-system bullet and the injected component — so a product site was
+ * still told a phone/email top bar was mandatory even once the contract itself
+ * had been made archetype-aware. Rendered from the spec now, like the rest.
+ */
+const siteChromeRuleFor = (spec: SiteChromeSpec | null): string =>
+  spec === null
+    ? "- This build is a staff-only tool: use a sidebar + content topbar shell. Do NOT add a marketing website header or footer."
+    : `- Every page of this ${spec.label.toLowerCase()} MUST carry the same header and footer: ${
+        spec.contactTopBar
+          ? "a contact top bar (phone + email + social) above a main row with logo + menu links"
+          : "a single main row with logo + menu links and NO phone/email/social top bar"
+      }${spec.search || spec.cart ? `, plus ${[spec.search && "search", spec.cart && "cart"].filter(Boolean).join(" and ")}` : ""}. Admin/dashboard apps keep sidebar + content topbar instead.`;
+
+const SITE_CHROME_RULE_DEFAULT = siteChromeRuleFor(siteChromeSpec("local-business"));
+
+const productMaturityContract = (siteChromeRule: string) => `
 ## Product Maturity Contract
 - "Create a website" means a complete 5-10 page routed website by default: Home, Services/Solutions, About, Portfolio/Case Studies/Gallery, Blog/Resources, Contact, plus optional Pricing/FAQ/Careers/Industries when useful. An explicit "landing page", "one-page", or "single-page" request is the exception: build one rich anchor-linked page with reusable section components and no filler routes.
-- Every marketing / landing / storefront / portfolio website MUST use the two-tier header: top bar (phone + email + social icons) and a main row with logo + menu links on one row. Admin/dashboard apps keep sidebar + content topbar instead.
+${siteChromeRule}
 - Full multi-page websites, stores, ERP, CRM, booking, marketplace, and admin systems must be data-backed by default. Generate Supabase migration SQL under supabase/migrations/, an env-based Supabase client, and a data-access layer/hooks. Keep seeded local fallback data so preview works before credentials are connected. An explicit single-page landing request may stay preview-safe/local unless the user asks for persistence, authentication, or a connected backend.
 - Supabase migrations must enable RLS and include only the explicit anon/authenticated grants needed by the intended Data API surface; never put a service-role secret in generated browser code.
 - E-commerce stores must include storefront pages, cart/checkout, account/orders, admin products, admin orders, products/categories/customers/orders/order_items/inventory schema, and working data-layer actions.
@@ -909,11 +934,15 @@ disabled auth check, a secret in the client), build the secure version instead
 and say in one line what you changed and why.`;
 
 /** Blocks that are shared, with the one framework-dependent slot filled in. */
-function frameworkNeutralBlocks(framework: string, appType?: BuildAppType): string {
+function frameworkNeutralBlocks(framework: string, appType?: BuildAppType, archetype?: SiteArchetype): string {
+  const isShell = appType ? isAppShellAppType(appType) : false;
+  const siteChromeRule = siteChromeRuleFor(
+    isShell ? null : siteChromeSpec(archetype ?? siteArchetypeForAppType(appType)),
+  );
   const SCAFFOLD_FILE_LIST_PLACEHOLDER = TANSTACK_FRAMEWORKS.has(framework)
     ? TANSTACK_SCAFFOLD_LIST
     : VITE_SCAFFOLD_LIST;
-  return `${buildDesignSystem(appType)}
+  return `${buildDesignSystem(appType, archetype)}
 
 ---
 
@@ -929,7 +958,7 @@ ${BUG_FREE_GENERATION_CONTRACT}
 
 ---
 
-${PRODUCT_MATURITY_CONTRACT}
+${productMaturityContract(siteChromeRule)}
 
 ---
 
@@ -1009,6 +1038,7 @@ When the user asks to create a website, app, ERP, POS, CRM, or management system
 export function buildAppGenerationSystemPrompt(
   framework: string = "react",
   appType?: BuildAppType,
+  archetype?: SiteArchetype,
 ): string {
   const engine = TANSTACK_FRAMEWORKS.has(framework)
     ? "TanStack Start (React + TypeScript, SSR)"
@@ -1023,7 +1053,7 @@ ${buildFrameworkContract(framework)}
 
 ---
 
-${frameworkNeutralBlocks(framework, appType)}`;
+${frameworkNeutralBlocks(framework, appType, archetype)}`;
 }
 
 /**
@@ -1524,7 +1554,7 @@ export function buildGenerationPrompt(
   // files it isn't going to generate or that aren't already present
   const existingPaths = projectFiles.map((f) => `  • ${f.path}`).join("\n");
 
-  return `${buildAppGenerationSystemPrompt(framework, intent.appType)}
+  return `${buildAppGenerationSystemPrompt(framework, intent.appType, siteArchetypeForBuild(userPrompt, intent.appType))}
 
 ${intent.blueprint}
 
@@ -1740,7 +1770,7 @@ ${BUG_FREE_GENERATION_CONTRACT}
 
 ---
 
-${PRODUCT_MATURITY_CONTRACT}
+${productMaturityContract(SITE_CHROME_RULE_DEFAULT)}
 
 ---
 
