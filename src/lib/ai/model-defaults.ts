@@ -1,4 +1,5 @@
 import type { AIModel } from "./provider.ts";
+import { OPENROUTER_MODEL_IDS } from "./openrouter-models.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // OpenRouter-first model lineup. Router slugs keep LifemarkAI from being pinned
@@ -111,6 +112,51 @@ const ROUTER_ESCALATE = "anthropic/claude-sonnet-5";
 // the price of every premium build as well.
 const ROUTER_PREMIUM = "openai/gpt-5.6-terra";
 
+/**
+ * Resolve one tier from its env override, REFUSING a slug that is not approved.
+ *
+ * Every tier below used to read `process.env.X || DEFAULT` directly, so an env
+ * var could put any slug on any tier with nothing checking it — the approved
+ * set gated the model PICKER and the router cascade, but never the overrides,
+ * which is not what its name implies.
+ *
+ * That was not theoretical. ai_eval_log shows anthropic/claude-fable-5 — $10/M
+ * in, $50/M out, twice Opus 5 and the priciest slug this product has ever
+ * routed — running real production repairs via an override, while appearing in
+ * no catalog, no approved set and (until it was priced) no cost report either.
+ * A model nobody could see in the code was spending the most money in the app.
+ *
+ * Default-deny, with a named way out: an operator who genuinely needs an
+ * unapproved slug sets OPENROUTER_ALLOW_UNAPPROVED_MODELS=true and gets a
+ * warning per model instead of a block. What is removed is the SILENT path —
+ * an override that takes effect with nothing said anywhere.
+ */
+const APPROVED_ROUTER_MODEL_IDS = new Set<string>(OPENROUTER_MODEL_IDS);
+const warnedEnvOverride = new Set<string>();
+
+function envTierModel(envVar: string, fallback: string): AIModel {
+  const raw = process.env[envVar]?.trim();
+  if (!raw) return fallback as AIModel;
+  if (APPROVED_ROUTER_MODEL_IDS.has(raw)) return raw as AIModel;
+
+  const allowUnapproved = process.env.OPENROUTER_ALLOW_UNAPPROVED_MODELS === "true";
+  // Warn once per env var, not per read: these constants are module-level and
+  // evaluated once, but the helper is also called from tests and tooling.
+  if (!warnedEnvOverride.has(envVar)) {
+    warnedEnvOverride.add(envVar);
+    console.warn(
+      allowUnapproved
+        ? `[ai/models] ${envVar}="${raw}" is not in the approved set; allowed because ` +
+            `OPENROUTER_ALLOW_UNAPPROVED_MODELS=true. It must have a MODEL_PRICES entry ` +
+            `or its spend will be recorded as unknown.`
+        : `[ai/models] IGNORING ${envVar}="${raw}" — not in the approved set. ` +
+            `Falling back to "${fallback}". Add it to OPENROUTER_MODEL_CATALOG, or set ` +
+            `OPENROUTER_ALLOW_UNAPPROVED_MODELS=true to override deliberately.`,
+    );
+  }
+  return (allowUnapproved ? raw : fallback) as AIModel;
+}
+
 // Back-compat aliases: the rest of the file speaks in CODER/FRONTIER terms.
 const ROUTER_CODER = ROUTER_GENERATE;
 const ROUTER_FRONTIER = ROUTER_PREMIUM;
@@ -129,18 +175,18 @@ const ROUTER_FREE_SMALL_EDIT = "z-ai/glm-5.2:free";
 
 
 export const PREMIUM_CODING_MODEL: AIModel =
-  (process.env.OPENROUTER_PREMIUM_CODING_MODEL || ROUTER_PREMIUM) as AIModel;
+  envTierModel("OPENROUTER_PREMIUM_CODING_MODEL", ROUTER_PREMIUM);
 
 export const PREMIUM_REASONING_MODEL: AIModel =
-  (process.env.OPENROUTER_PREMIUM_REASONING_MODEL || ROUTER_PREMIUM) as AIModel;
+  envTierModel("OPENROUTER_PREMIUM_REASONING_MODEL", ROUTER_PREMIUM);
 
 /** Premium-ish work on a budget — the fastest of the benchmarked 7/7 models. */
 export const PREMIUM_ECONOMY_MODEL: AIModel =
-  (process.env.OPENROUTER_PREMIUM_ECONOMY_MODEL || ROUTER_GENERATE) as AIModel;
+  envTierModel("OPENROUTER_PREMIUM_ECONOMY_MODEL", ROUTER_GENERATE);
 
 /** Primary model for coding. */
 export const DEFAULT_CODING_MODEL: AIModel =
-  (process.env.OPENROUTER_CODING_MODEL || ROUTER_GENERATE) as AIModel;
+  envTierModel("OPENROUTER_CODING_MODEL", ROUTER_GENERATE);
 
 /**
  * Fast/cheap model for lightweight tasks (reviews, small chat turns, etc.).
@@ -157,27 +203,27 @@ export const DEFAULT_CODING_MODEL: AIModel =
  * ECONOMY_CODING_MODEL instead.
  */
 export const FAST_CODING_MODEL: AIModel =
-  (process.env.OPENROUTER_FAST_MODEL || ROUTER_CLASSIFY) as AIModel;
+  envTierModel("OPENROUTER_FAST_MODEL", ROUTER_CLASSIFY);
 
 /** Balanced model for planning and medium-complexity chat. */
 export const BALANCED_CODING_MODEL: AIModel =
-  (process.env.OPENROUTER_BALANCED_MODEL || ROUTER_GENERATE) as AIModel;
+  envTierModel("OPENROUTER_BALANCED_MODEL", ROUTER_GENERATE);
 
 /** UI / design-heavy work. */
 export const DESIGN_MODEL: AIModel =
-  (process.env.OPENROUTER_DESIGN_MODEL || ROUTER_GENERATE) as AIModel;
+  envTierModel("OPENROUTER_DESIGN_MODEL", ROUTER_GENERATE);
 
 /** Copywriting / marketing content. */
 export const CONTENT_MODEL: AIModel =
-  (process.env.OPENROUTER_CONTENT_MODEL || ROUTER_GENERATE) as AIModel;
+  envTierModel("OPENROUTER_CONTENT_MODEL", ROUTER_GENERATE);
 
 /** Default conversational model. */
 export const DEFAULT_CHAT_MODEL: AIModel =
-  (process.env.OPENROUTER_CHAT_MODEL || ROUTER_CLASSIFY) as AIModel;
+  envTierModel("OPENROUTER_CHAT_MODEL", ROUTER_CLASSIFY);
 
 /** Strong general-reasoning model for planning. */
 export const REASONING_MODEL: AIModel =
-  (process.env.OPENROUTER_REASONING_MODEL || ROUTER_DIAGNOSE) as AIModel;
+  envTierModel("OPENROUTER_REASONING_MODEL", ROUTER_DIAGNOSE);
 
 /**
  * FREE coding model for work that doesn't need a paid coder: simple
@@ -221,15 +267,15 @@ export const REASONING_MODEL: AIModel =
 // Still best-effort-free by design: provider.ts falls back to the paid economy
 // model when a free pool is congested.
 export const FREE_CODING_MODEL: AIModel =
-  (process.env.OPENROUTER_FREE_CODING_MODEL || ROUTER_FREE_SMALL_EDIT) as AIModel;
+  envTierModel("OPENROUTER_FREE_CODING_MODEL", ROUTER_FREE_SMALL_EDIT);
 
 /** Cheap paid fallback when a free pool is busy or a small Auto request needs reliability. */
 export const ECONOMY_CODING_MODEL: AIModel =
-  (process.env.OPENROUTER_ECONOMY_CODING_MODEL || ROUTER_GENERATE) as AIModel;
+  envTierModel("OPENROUTER_ECONOMY_CODING_MODEL", ROUTER_GENERATE);
 
 /** Cheap model for simple chat/patch turns. */
 export const ECONOMY_CHAT_MODEL: AIModel =
-  (process.env.OPENROUTER_ECONOMY_CHAT_MODEL || ROUTER_CLASSIFY) as AIModel;
+  envTierModel("OPENROUTER_ECONOMY_CHAT_MODEL", ROUTER_CLASSIFY);
 
 /**
  * Cross-vendor REVIEW model (CTO reviews, debate adjudication). Intentionally
@@ -243,7 +289,7 @@ export const ECONOMY_CHAT_MODEL: AIModel =
  * independent when the user-facing generation default changes vendors.
  */
 export const REVIEW_MODEL: AIModel =
-  (process.env.OPENROUTER_REVIEW_MODEL || ROUTER_DIAGNOSE) as AIModel;
+  envTierModel("OPENROUTER_REVIEW_MODEL", ROUTER_DIAGNOSE);
 
 /**
  * DIAGNOSIS model — explains WHY a build failed. Returns prose, not code.
@@ -260,7 +306,7 @@ export const REVIEW_MODEL: AIModel =
  * runs on the small call and the cheaper generator does the token-heavy writing.
  */
 export const DIAGNOSIS_MODEL: AIModel =
-  (process.env.OPENROUTER_DIAGNOSIS_MODEL || ROUTER_DIAGNOSE) as AIModel;
+  envTierModel("OPENROUTER_DIAGNOSIS_MODEL", ROUTER_DIAGNOSE);
 
 /**
  * ESCALATION model — the FINAL repair, and only that. Reached after a real
@@ -320,7 +366,7 @@ export const DIAGNOSIS_MODEL: AIModel =
  * live, if a future measurement justifies paying more).
  */
 export const ESCALATION_MODEL: AIModel =
-  (process.env.OPENROUTER_ESCALATION_MODEL || ROUTER_ESCALATE) as AIModel;
+  envTierModel("OPENROUTER_ESCALATION_MODEL", ROUTER_ESCALATE);
 
 /**
  * Native image generation.
@@ -431,4 +477,4 @@ export function getFastAiModel(): AIModel {
  * so it is no longer selectable even as an override target.
  */
 export const AUTOCOMPLETE_MODEL: AIModel =
-  (process.env.OPENROUTER_AUTOCOMPLETE_MODEL || ROUTER_CLASSIFY) as AIModel;
+  envTierModel("OPENROUTER_AUTOCOMPLETE_MODEL", ROUTER_CLASSIFY);
