@@ -11,7 +11,7 @@
 import { resolveAllowedPackage } from "./package-allowlist.ts";
 
 // Packages that are built-in to Node.js / browser / React and never need installing
-const BUILTIN_PACKAGES = new Set([
+export const BUILTIN_PACKAGES = new Set([
   "react",
   "react-dom",
   "next",

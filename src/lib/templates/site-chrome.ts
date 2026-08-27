@@ -38,10 +38,13 @@ export interface ChromeSourceFile {
   language: string;
 }
 
+import { type SiteArchetype, type SiteChromeSpec, siteChromeSpec } from "./site-archetype.ts";
+
 export const SITE_HEADER_PATH = "src/components/layout/Header.tsx";
 export const SITE_FOOTER_PATH = "src/components/layout/Footer.tsx";
 
 /** Menu entries the starter chrome links to. Anchors, so they never 404. */
+/** Legacy default nav; per-archetype nav now comes from SiteChromeSpec. */
 const NAV_LINKS = ["Home", "About", "Services", "Contact"] as const;
 
 /** `Rye and Salt` → `ryeandsalt`, for placeholder contact addresses. */
@@ -91,7 +94,12 @@ export function deriveBrand(raw?: string | null, fallback = "Your Brand"): strin
   return fallback;
 }
 
-export function siteHeaderSource(brand: string): string {
+export function siteHeaderSource(
+  brand: string,
+  archetype: SiteArchetype = "local-business",
+): string {
+  const spec = siteChromeSpec(archetype);
+  const NAV_LINKS = spec.nav;
   const links = NAV_LINKS.map(
     (l) =>
       `            <a href="#${l.toLowerCase()}" className="text-sm font-medium text-neutral-600 transition-colors hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-white">${l}</a>`,
@@ -101,6 +109,46 @@ export function siteHeaderSource(brand: string): string {
       `              <a href="#${l.toLowerCase()}" onClick={() => setOpen(false)} className="rounded-md px-2 py-2 text-sm font-medium text-neutral-600 hover:bg-neutral-100 hover:text-neutral-900 dark:text-neutral-300 dark:hover:bg-white/5 dark:hover:text-white">${l}</a>`,
   ).join("\n");
   const mail = `hello@${slug(brand)}.com`;
+  // A phone/email/social strip belongs on a site people call. On a product,
+  // storefront or editorial site it reads as an unedited template, so the spec
+  // decides whether it exists at all rather than it being unconditional.
+  // Header actions follow the spec: a product site signs people in and starts
+  // them, a storefront opens an account, a local business asks for a call.
+  const secondary = spec.secondaryCta
+    ? `          <a href="${spec.secondaryCta.href}" className="hidden text-sm font-medium text-neutral-600 transition-colors hover:text-neutral-900 dark:text-neutral-300 dark:hover:text-white md:inline-flex">${spec.secondaryCta.label}</a>\n`
+    : "";
+  const primary = spec.cta
+    ? `          <a
+            href="${spec.cta.href}"
+            className="hidden rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-neutral-700 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200 md:inline-flex"
+          >
+            ${spec.cta.label}
+          </a>`
+    : "";
+  const headerActions = `${secondary}${primary}`.replace(/\n$/, "");
+  const topBar = spec.contactTopBar
+    ? `      <div className="hidden border-b border-neutral-200 bg-neutral-50 dark:border-white/5 dark:bg-white/[0.03] md:block">
+        <div className="mx-auto flex h-9 max-w-6xl items-center justify-between px-4 text-xs text-neutral-500 dark:text-neutral-400">
+          <div className="flex items-center gap-4">
+            <a href="tel:+15550143927" className="flex items-center gap-1.5 hover:text-neutral-900 dark:hover:text-white">
+              <Phone className="h-3.5 w-3.5" aria-hidden="true" />
+              (555) 014-3927
+            </a>
+            <a href="mailto:\${mail}" className="flex items-center gap-1.5 hover:text-neutral-900 dark:hover:text-white">
+              <Mail className="h-3.5 w-3.5" aria-hidden="true" />
+              \${mail}
+            </a>
+          </div>
+          <div className="flex items-center gap-3">
+            <a href="#" aria-label="Facebook" className="hover:text-neutral-900 dark:hover:text-white"><Facebook className="h-4 w-4" /></a>
+            <a href="#" aria-label="Instagram" className="hover:text-neutral-900 dark:hover:text-white"><Instagram className="h-4 w-4" /></a>
+            <a href="#" aria-label="LinkedIn" className="hover:text-neutral-900 dark:hover:text-white"><Linkedin className="h-4 w-4" /></a>
+          </div>
+        </div>
+      </div>
+
+`
+    : "";
 
   return `import { useState } from "react";
 import { Facebook, Instagram, Linkedin, Mail, Menu as MenuIcon, Phone, X } from "lucide-react";
@@ -115,27 +163,7 @@ export function Header() {
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-neutral-200 bg-white/85 backdrop-blur dark:border-white/10 dark:bg-neutral-950/85">
-      <div className="hidden border-b border-neutral-200 bg-neutral-50 dark:border-white/5 dark:bg-white/[0.03] md:block">
-        <div className="mx-auto flex h-9 max-w-6xl items-center justify-between px-4 text-xs text-neutral-500 dark:text-neutral-400">
-          <div className="flex items-center gap-4">
-            <a href="tel:+15550143927" className="flex items-center gap-1.5 hover:text-neutral-900 dark:hover:text-white">
-              <Phone className="h-3.5 w-3.5" aria-hidden="true" />
-              (555) 014-3927
-            </a>
-            <a href="mailto:${mail}" className="flex items-center gap-1.5 hover:text-neutral-900 dark:hover:text-white">
-              <Mail className="h-3.5 w-3.5" aria-hidden="true" />
-              ${mail}
-            </a>
-          </div>
-          <div className="flex items-center gap-3">
-            <a href="#" aria-label="Facebook" className="hover:text-neutral-900 dark:hover:text-white"><Facebook className="h-4 w-4" /></a>
-            <a href="#" aria-label="Instagram" className="hover:text-neutral-900 dark:hover:text-white"><Instagram className="h-4 w-4" /></a>
-            <a href="#" aria-label="LinkedIn" className="hover:text-neutral-900 dark:hover:text-white"><Linkedin className="h-4 w-4" /></a>
-          </div>
-        </div>
-      </div>
-
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
+${topBar}      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4">
         <a href="#home" className="text-lg font-bold tracking-tight text-neutral-900 dark:text-white">
           ${brand}
         </a>
@@ -145,12 +173,7 @@ ${links}
         </nav>
 
         <div className="flex items-center gap-2">
-          <a
-            href="#contact"
-            className="hidden rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-neutral-700 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200 md:inline-flex"
-          >
-            Get in touch
-          </a>
+${headerActions}
           <button
             type="button"
             aria-label={open ? "Close menu" : "Open menu"}
@@ -178,10 +201,56 @@ export default Header;
 `;
 }
 
-export function siteFooterSource(brand: string): string {
+export function siteFooterSource(
+  brand: string,
+  archetype: SiteArchetype = "local-business",
+): string {
+  const spec = siteChromeSpec(archetype);
   const mail = `hello@${slug(brand)}.com`;
+  const linkItem = (label: string) =>
+    `            <li><a href="#${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}" className="hover:text-neutral-900 dark:hover:text-white">${label}</a></li>`;
+  // Columns and the contact block come from the archetype spec, so the footer
+  // the injector writes matches the contract the model was given.
+  const columns = spec.footerColumns
+    .map(
+      (col) => `        <div>
+          <p className="mb-3 text-sm font-semibold text-neutral-900 dark:text-white">${col.heading}</p>
+          <ul className="space-y-2 text-sm">
+${col.links.map(linkItem).join("\n")}
+          </ul>
+        </div>`,
+    )
+    .join("\n\n");
+  const contactColumn = spec.footerContact
+    ? `        <div>
+          <p className="mb-3 text-sm font-semibold text-neutral-900 dark:text-white">Get in touch</p>
+          <ul className="space-y-2 text-sm">
+            <li className="flex items-start gap-2">
+              <MapPin className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+              128 Harbour Lane, Portland, OR
+            </li>
+            <li className="flex items-center gap-2">
+              <Phone className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <a href="tel:+15550143927" className="hover:text-neutral-900 dark:hover:text-white">(555) 014-3927</a>
+            </li>
+            <li className="flex items-center gap-2">
+              <Mail className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <a href="mailto:${mail}" className="hover:text-neutral-900 dark:hover:text-white">${mail}</a>
+            </li>
+          </ul>
+        </div>`
+    : `        <div>
+          <p className="mb-3 text-sm font-semibold text-neutral-900 dark:text-white">Contact</p>
+          <ul className="space-y-2 text-sm">
+            <li className="flex items-center gap-2">
+              <Mail className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <a href="mailto:${mail}" className="hover:text-neutral-900 dark:hover:text-white">${mail}</a>
+            </li>
+          </ul>
+        </div>`;
+  const icons = spec.footerContact ? "Facebook, Instagram, Linkedin, Mail, MapPin, Phone" : "Facebook, Instagram, Linkedin, Mail";
 
-  return `import { Facebook, Instagram, Linkedin, Mail, MapPin, Phone } from "lucide-react";
+  return `import { ${icons} } from "lucide-react";
 
 /** Site footer — brand blurb, link columns, contact details, copyright. */
 export function Footer() {
@@ -203,43 +272,9 @@ export function Footer() {
           </div>
         </div>
 
-        <div>
-          <p className="mb-3 text-sm font-semibold text-neutral-900 dark:text-white">Explore</p>
-          <ul className="space-y-2 text-sm">
-            <li><a href="#home" className="hover:text-neutral-900 dark:hover:text-white">Home</a></li>
-            <li><a href="#about" className="hover:text-neutral-900 dark:hover:text-white">About</a></li>
-            <li><a href="#services" className="hover:text-neutral-900 dark:hover:text-white">Services</a></li>
-            <li><a href="#contact" className="hover:text-neutral-900 dark:hover:text-white">Contact</a></li>
-          </ul>
-        </div>
+${columns}
 
-        <div>
-          <p className="mb-3 text-sm font-semibold text-neutral-900 dark:text-white">Company</p>
-          <ul className="space-y-2 text-sm">
-            <li><a href="#" className="hover:text-neutral-900 dark:hover:text-white">Careers</a></li>
-            <li><a href="#" className="hover:text-neutral-900 dark:hover:text-white">Press</a></li>
-            <li><a href="#" className="hover:text-neutral-900 dark:hover:text-white">Privacy</a></li>
-            <li><a href="#" className="hover:text-neutral-900 dark:hover:text-white">Terms</a></li>
-          </ul>
-        </div>
-
-        <div>
-          <p className="mb-3 text-sm font-semibold text-neutral-900 dark:text-white">Get in touch</p>
-          <ul className="space-y-2 text-sm">
-            <li className="flex items-start gap-2">
-              <MapPin className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-              128 Harbour Lane, Portland, OR
-            </li>
-            <li className="flex items-center gap-2">
-              <Phone className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <a href="tel:+15550143927" className="hover:text-neutral-900 dark:hover:text-white">(555) 014-3927</a>
-            </li>
-            <li className="flex items-center gap-2">
-              <Mail className="h-4 w-4 shrink-0" aria-hidden="true" />
-              <a href="mailto:${mail}" className="hover:text-neutral-900 dark:hover:text-white">${mail}</a>
-            </li>
-          </ul>
-        </div>
+${contactColumn}
       </div>
 
       <div className="border-t border-neutral-200 dark:border-white/10">

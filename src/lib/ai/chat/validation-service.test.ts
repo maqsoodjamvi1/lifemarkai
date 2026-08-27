@@ -241,3 +241,39 @@ test("normalization restores src/styles.css when the root route imports it", () 
   assert.ok(styles, "controlled TanStack infra must re-inject src/styles.css");
   assert.match(styles?.content ?? "", /@tailwind/);
 });
+
+test("normalization declares imported allowed libraries and repoints misplaced imports at creation", () => {
+  const generated = tanstackStartScaffold({}, "Metrics").map((file) => {
+    if (file.path === "src/routes/index.tsx") {
+      return {
+        ...file,
+        // zustand is allowed but not in the scaffold's package.json; the Card
+        // import points at the wrong directory but the file exists elsewhere.
+        content:
+          'import { create } from "zustand";\n' +
+          'import Card from "./Card";\n' +
+          "export function Home() { return <Card>{String(create)}</Card>; }",
+      };
+    }
+    return file;
+  });
+  generated.push({
+    path: "src/components/Card.tsx",
+    content: "export default function Card(p: { children?: unknown }) { return <div>{p.children}</div>; }",
+    language: "typescriptreact",
+  } as (typeof generated)[number]);
+
+  const normalized = normalizeGenerationStage(generated, [], {
+    prompt: "Build a metrics dashboard",
+    framework: "tanstack",
+    appType: "web-app",
+    brand: "Metrics",
+  });
+
+  const pkg = JSON.parse(normalized.files.find((f) => f.path === "package.json")?.content ?? "{}");
+  assert.equal(pkg.dependencies.zustand, "^4.5.2"); // allowlist pin, not "latest"
+  assert.ok(normalized.addedDependencies.includes("zustand"));
+
+  const index = normalized.files.find((f) => f.path === "src/routes/index.tsx");
+  assert.match(index?.content ?? "", /from "\.\.\/components\/Card"/);
+});

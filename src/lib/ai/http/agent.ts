@@ -15,6 +15,7 @@ settleCreditReservation,
 } from "@/lib/credits";
 import { computeCreditCost,maxCreditCostForMode,AGENT_MIN_CREDITS } from "../credit-cost.ts";
 import { ensureCommonGeneratedSupportFiles } from "../generated-support-files.ts";
+import { classifyBuildIntent } from "../build-intent.ts";
 import { ensureWebsiteChrome } from "../website-chrome.ts";
 import { alignGeneratedPackageJson } from "../../preview/align-package-json.ts";
 import { autoWireAi } from "../auto-wire-ai.ts";
@@ -37,7 +38,7 @@ import { resolveSmartModel } from "../editor-intelligence.ts";
 import { persistChatTurnMessages } from "../persist-chat-turn.ts";
 import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 import { commitGenerationSnapshot } from "../chat/commit-generation-snapshot.ts";
-import { checkTemplateCompatibility,lockControlledDependencyVersions,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
+import { checkTemplateCompatibility,lockControlledDependencyVersions,resolveControlledTemplateForPrompt } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
 import { setCorrelation } from "../../observability/correlation.ts";
 import { ensureBuildRunId,getCorrelation } from "../../observability/correlation.ts";
@@ -701,14 +702,21 @@ export async function handleAiAgent(req: Request) {
             content: file.content ?? "",
             language: (file as { language?: string }).language ?? detectLanguage(file.path),
           }));
+          // appType is REQUIRED here, not optional decoration: without it the
+          // app-shell exemption never runs, and this path — the PRIMARY build
+          // path for new projects — mounted a marketing header and footer into
+          // every ERP, CRM and POS it produced. The structural fallbacks
+          // (sidebar file, <aside> in the root shell) only catch a shell the
+          // model already built, which is precisely not the failing case.
           const withChrome = ensureWebsiteChrome(current, [], {
+            appType: classifyBuildIntent(task).appType,
             brand: (projectRow as { name?: string } | null)?.name ?? undefined,
           });
           for (const file of withChrome) {
             if (file.path === "package.json") {
               const aligned = alignGeneratedPackageJson(file.content);
               if (aligned.changed.length > 0) file.content = aligned.content;
-              const template = resolveControlledTemplate(task, String((projectRow as { framework?: string } | null)?.framework ?? "react"));
+              const template = resolveControlledTemplateForPrompt(task, String((projectRow as { framework?: string } | null)?.framework ?? "react"));
               const locked = lockControlledDependencyVersions(file.content, template);
               if (locked.changed.length > 0) file.content = locked.content;
             }
@@ -736,7 +744,7 @@ export async function handleAiAgent(req: Request) {
             ...file,
             language: file.language ?? detectLanguage(file.path),
           }));
-          const template = resolveControlledTemplate(task, String((projectRow as { framework?: string } | null)?.framework ?? "react"));
+          const template = resolveControlledTemplateForPrompt(task, String((projectRow as { framework?: string } | null)?.framework ?? "react"));
           const compatibility = checkTemplateCompatibility(template, candidateFiles);
           if (!compatibility.compatible) {
             send({ template_status: {
@@ -950,7 +958,7 @@ export async function handleAiAgent(req: Request) {
           await recordGenerationVerification(
             supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<unknown> },
             projectId,
-            resolveControlledTemplate(task, String((projectRow as { framework?: string } | null)?.framework ?? "react")),
+            resolveControlledTemplateForPrompt(task, String((projectRow as { framework?: string } | null)?.framework ?? "react")),
             verification,
             verification?.passed ? "verification" : "post-activation",
           );

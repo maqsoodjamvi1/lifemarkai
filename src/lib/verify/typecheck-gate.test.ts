@@ -99,6 +99,76 @@ describe("typecheck gate — does not invent errors", () => {
   });
 });
 
+describe("typecheck gate — stylesheet imports are not errors", () => {
+  // generation_runs recorded real builds failed on this: a generated app does
+  // the most ordinary thing in a Vite project, imports its stylesheet, and the
+  // gate reported TS2882 because it typechecks with no node_modules and so no
+  // ambient Vite asset types. Correct code, failed build, and a paid diagnosis
+  // + repair round spent "fixing" it.
+  it("accepts a side-effect stylesheet import", async () => {
+    const r = await runTypecheckGate([
+      f("src/styles.css", "body{margin:0}"),
+      f("src/routes/__root.tsx", `import "../styles.css";\nexport function Root() {\n  return <div>hi</div>;\n}\n`),
+    ]);
+    assert.equal(r.available, true);
+    assert.deepEqual(r.errors ?? [], [], "a stylesheet import must not be a build error");
+  });
+
+  it("accepts one even when the stylesheet file is absent from the candidate", async () => {
+    // The unresolved-import gate owns "this file does not exist" and reports it
+    // with a path the repair model can act on. tsc reporting the same thing as
+    // TS2882 adds no information and costs a round.
+    const r = await runTypecheckGate([
+      f("src/routes/__root.tsx", `import "../styles.css";\nexport function Root() {\n  return <div>hi</div>;\n}\n`),
+    ]);
+    assert.deepEqual(r.errors ?? [], []);
+  });
+
+  it("accepts the other preprocessor extensions", async () => {
+    for (const ext of ["scss", "sass", "less", "styl", "pcss"]) {
+      const r = await runTypecheckGate([
+        f("src/routes/__root.tsx", `import "../a.${ext}";\nexport function Root() {\n  return <div>hi</div>;\n}\n`),
+      ]);
+      assert.deepEqual(r.errors ?? [], [], `.${ext} import should not be an error`);
+    }
+  });
+
+  it("still catches a REAL error in a file that also imports a stylesheet", async () => {
+    // The point of the shim is to stop ONE false positive, not to widen the net
+    // until nothing is caught. If this ever passes clean, the gate has been
+    // silenced rather than corrected.
+    const r = await runTypecheckGate([
+      f("src/styles.css", "body{}"),
+      f("src/routes/__root.tsx", `import "../styles.css";\nexport function Root() {\n  return <div>{missingName}</div>;\n}\n`),
+    ]);
+    assert.ok((r.errors ?? []).length > 0, "an undefined identifier must still be reported");
+    assert.ok(
+      (r.errors ?? []).some((e) => /missingName/.test(e.message)),
+      `expected the undefined name, got ${JSON.stringify(r.errors)}`,
+    );
+  });
+
+  it("leaves the missing-file report to the gate that owns it", async () => {
+    // The division of labour, pinned because the shim looks like it could blur
+    // it. tsc never reported unresolved modules here even before the shim was
+    // added (measured) — findUnresolvedLocalImports does, and it names the file
+    // and line, which is what a repair round can actually act on. So silencing
+    // TS2882 costs no coverage: the same missing stylesheet is still reported,
+    // once, by the check that describes it usefully.
+    const files = [
+      f("src/routes/__root.tsx", `import "../styles.css";\nexport function Root() {\n  return <div>hi</div>;\n}\n`),
+    ];
+    assert.deepEqual((await runTypecheckGate(files)).errors ?? [], []);
+
+    const withCss = [f("src/styles.css", "body{}"), ...files];
+    assert.equal(
+      findUnresolvedLocalImports(withCss).length,
+      0,
+      "a stylesheet that IS present must not be reported as missing",
+    );
+  });
+});
+
 describe("typecheck gate — safety", () => {
   it("refuses path traversal in a generated filename", async () => {
     const r = await runTypecheckGate([f("../../../etc/evil.ts", `export const x = 1;`)]);

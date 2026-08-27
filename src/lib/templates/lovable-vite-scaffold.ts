@@ -667,3 +667,52 @@ export function isLovableViteProject(
     (paths.has("src/main.tsx") || paths.has("index.html"))
   );
 }
+
+/**
+ * The prompt's "Vite + React Setup" section, rendered from THIS scaffold.
+ *
+ * The old VITE_RULES block in system-prompts.ts was a second, hand-written
+ * copy of these files, and it had drifted badly: React ^18.3.1 against the
+ * scaffold's ^19.2.0 (so every generated package.json tripped the React-19
+ * version floor), `@vitejs/plugin-react` + babel against the real
+ * plugin-react-swc, a vite.config with NO "@" alias in the same prompt whose
+ * import rules mandate the alias (a model copying that template broke every
+ * `@/` import it was simultaneously told to write), one flat tsconfig without
+ * `paths` against the split non-strict trio, and `tailwind.config.js` against
+ * the `tailwind.config.ts` the import rules demand two sections later.
+ *
+ * Same cure as package-allowlist.ts: one machine-readable source renders the
+ * prompt, so the prompt and the platform cannot disagree. Edit the scaffold
+ * and the prompt follows.
+ */
+export function renderViteSetupPrompt(): string {
+  return `## Vite + React Setup — the platform scaffold (source of truth)
+
+Every new react project starts FROM this exact scaffold (mirrored from a real
+Lovable export). These files usually ALREADY EXIST in the project: do NOT
+regenerate or rewrite them unless the request is specifically about them, and
+never emit a variant that disagrees with what is below. Only when a build
+genuinely starts from an empty file set do you emit them, exactly as shown.
+
+### package.json — already present. Add new runtime packages to "dependencies"; never rewrite the file wholesale, never downgrade the scaffold's versions.
+\`\`\`json
+${PACKAGE_JSON("app")}
+\`\`\`
+
+### vite.config.ts — already present (plugin-react-swc, the "@" alias, react dedupe). Do not regenerate.
+\`\`\`ts
+${VITE_CONFIG.trim()}
+\`\`\`
+
+### index.html — already present; <div id="root"> + /src/main.tsx module script.
+### src/main.tsx — already present:
+\`\`\`tsx
+${MAIN_TSX.trim()}
+\`\`\`
+
+### TypeScript & CSS tooling — already present, do not regenerate:
+- Split tsconfigs: tsconfig.json (project references + \`"@/*": ["./src/*"]\` paths) with tsconfig.app.json and tsconfig.node.json — all non-strict.
+- \`tailwind.config.ts\` — TypeScript with shadcn HSL token colors (NOT tailwind.config.js).
+- \`postcss.config.js\` with tailwindcss + autoprefixer.
+- \`components.json\` — shadcn config declaring the @/ aliases.`;
+}

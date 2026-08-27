@@ -35,6 +35,9 @@ siteFooterSource as footerSource,
 siteHeaderSource as headerSource,
 } from "../templates/site-chrome.ts";
 
+import { type BuildAppType, isAppShellAppType } from "./build-intent.ts";
+import { siteArchetypeForAppType } from "../templates/site-archetype.ts";
+
 export interface ChromeFile {
   path: string;
   content: string;
@@ -55,8 +58,26 @@ export interface EnsureChromeOptions {
   brand?: string;
 }
 
-/** App types that use a sidebar shell, not marketing header/footer chrome. */
-const APP_SHELL_TYPES = new Set(["admin-dashboard", "erp", "pos", "crm"]);
+/**
+ * Which app types use a sidebar shell rather than marketing chrome is decided
+ * ONCE, in build-intent.ts. This module used to keep its own four-name copy
+ * (admin-dashboard, erp, pos, crm) while the classifier's list had grown to
+ * twelve, so eight staff-only product types were silently outside the
+ * exemption: a school gradebook, a clinic's patient records, an HR portal, a
+ * logistics dispatch board, a helpdesk queue, a hotel desk, an accounting
+ * ledger and a project board each had a marketing header and a four-column
+ * marketing footer — phone/email/social, "Careers · Press · Privacy · Terms",
+ * "Built for people who care about the details. Come say hello" — mounted into
+ * their root shell as real source files.
+ *
+ * That is not a prompt smell; it is generated code the user then has to delete.
+ * Same lesson as controlled-registry.ts: a second copy of a decision is a
+ * decision that will drift.
+ */
+const isAppShellType = (appType: string | undefined): boolean =>
+  // The value is a BuildAppType at runtime; the option is typed `string`
+  // because code-parser threads it through a generic options bag.
+  !!appType && isAppShellAppType(appType as BuildAppType);
 
 const norm = (p: string): string => p.replace(/\\/g, "/");
 
@@ -150,7 +171,7 @@ export function needsWebsiteChrome(
   all: ChromeFile[],
   opts: EnsureChromeOptions = {},
 ): boolean {
-  if (opts.appType && APP_SHELL_TYPES.has(opts.appType)) return false;
+  if (isAppShellType(opts.appType)) return false;
   // A dedicated sidebar component means this is an app shell, not a site.
   if (all.some((f) => APP_SHELL_PATH_RE.test(norm(f.path)))) return false;
   // An `<aside>` in the ROOT SHELL is a layout sidebar. An `<aside>` anywhere
@@ -372,6 +393,10 @@ export function ensureWebsiteChrome<T extends ChromeFile>(
   if (!mounted) return files;
 
   const brand = brandFrom(all, opts.brand);
+  // Which SHAPE of site this is. Without it every synthesised header carried a
+  // phone/email/social strip and Home/About/Services/Contact links — correct
+  // for a restaurant, an unedited template on a developer tool.
+  const archetype = siteArchetypeForAppType(opts.appType);
   const out = [...files];
 
   const put = (path: string, content: string) => {
@@ -385,10 +410,10 @@ export function ensureWebsiteChrome<T extends ChromeFile>(
   // project whose Header.tsx the model styled must keep that file — the bug we
   // are fixing is the missing MOUNT, not missing markup.
   if (need.header && !hasChromeComponentFile(all, HEADER_FILE_RE)) {
-    put(SITE_HEADER_PATH, headerSource(brand));
+    put(SITE_HEADER_PATH, headerSource(brand, archetype));
   }
   if (need.footer && !hasChromeComponentFile(all, FOOTER_FILE_RE)) {
-    put(SITE_FOOTER_PATH, footerSource(brand));
+    put(SITE_FOOTER_PATH, footerSource(brand, archetype));
   }
 
   const shellIndex = out.findIndex((f) => norm(f.path) === norm(target.path));

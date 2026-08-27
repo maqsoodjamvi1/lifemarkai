@@ -14,7 +14,7 @@ getProjectAccess,
 } from "@/lib/project/access";
 import { tanstackStartScaffold } from "../templates/tanstack-start-scaffold.ts";
 import { lovableViteScaffold } from "../templates/lovable-vite-scaffold.ts";
-import { controlledTemplateMetadata,resolveControlledTemplate,stampControlledTemplateFiles } from "../templates/controlled-registry.ts";
+import { controlledTemplateMetadata,resolveControlledTemplateForPrompt,stampControlledTemplateFiles } from "../templates/controlled-registry.ts";
 import { getTemplateById,type TemplateFile } from "../templates/built-in.ts";
 import type { Database,Json } from "../../types/database.ts";
 
@@ -224,7 +224,7 @@ export async function createProject(data: any) {
     // Coerce rather than insert something projects_framework_check will reject:
     // a constraint violation surfaces as an opaque 500 on the create path.
     const framework = ALLOWED_FRAMEWORKS.has(requested) ? requested : "tanstack-start";
-    const controlledTemplate = resolveControlledTemplate(`${data.name ?? ""} ${data.description ?? ""}`, framework);
+    const controlledTemplate = resolveControlledTemplateForPrompt(`${data.name ?? ""} ${data.description ?? ""}`, framework);
 
     const { data: project, error } = await supabase
       .from("projects")

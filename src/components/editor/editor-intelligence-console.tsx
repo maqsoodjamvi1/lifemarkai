@@ -13,8 +13,10 @@
  *
  * NOTE: only `import type` from lib/ai/editor-lenses — importing roles.ts at
  * runtime would pull the server AI SDKs (openai/@anthropic-ai/sdk via
- * MODEL_TIERS → provider.ts) into the client bundle. ROLE_META below mirrors
- * the display titles in lib/ai/editor-lenses/roles.ts — keep them in sync.
+ * MODEL_TIERS → provider.ts) into the client bundle. The TITLES are no longer
+ * duplicated for that reason — they live in editor-lenses/role-titles.ts, a
+ * dependency-free leaf both sides import. Only the accent classes, which are
+ * presentation and belong here, are local.
  */
 
 import {
@@ -27,26 +29,27 @@ ShieldQuestion,
 XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ROLE_TITLES } from "@/lib/ai/editor-lenses/role-titles";
 import type {
 AgentRoleId,
 Epic,
 TaskStatus,
 } from "@/lib/ai/editor-lenses/types";
 
-/* ── Role metadata (mirrors lib/ai/editor-lenses/roles.ts titles) ─────────── */
+/* ── Role metadata — titles shared, accents local ─────────────────────────── */
 
 export const ROLE_META: Record<AgentRoleId, { title: string; accent: string }> = {
-  pm:        { title: "Product Manager",     accent: "border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300" },
-  ba:        { title: "Business Analyst",    accent: "border-blue-500/25 bg-blue-500/10 text-blue-700 dark:text-blue-300" },
-  architect: { title: "Technical Architect", accent: "border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300" },
-  designer:  { title: "UI Designer",         accent: "border-pink-500/25 bg-pink-500/10 text-pink-700 dark:text-pink-300" },
-  frontend:  { title: "Frontend Engineer",   accent: "border-cyan-500/25 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300" },
-  backend:   { title: "Backend Engineer",    accent: "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
-  database:  { title: "Database Engineer",   accent: "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300" },
-  devops:    { title: "DevOps Engineer",     accent: "border-orange-500/25 bg-orange-500/10 text-orange-700 dark:text-orange-300" },
-  qa:        { title: "QA Engineer",         accent: "border-lime-500/25 bg-lime-500/10 text-lime-700 dark:text-lime-300" },
-  security:  { title: "Security Engineer",   accent: "border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300" },
-  cto:       { title: "AI CTO",              accent: "border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300" },
+  pm:        { title: ROLE_TITLES.pm,     accent: "border-sky-500/25 bg-sky-500/10 text-sky-700 dark:text-sky-300" },
+  ba:        { title: ROLE_TITLES.ba,    accent: "border-blue-500/25 bg-blue-500/10 text-blue-700 dark:text-blue-300" },
+  architect: { title: ROLE_TITLES.architect, accent: "border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300" },
+  designer:  { title: ROLE_TITLES.designer,         accent: "border-pink-500/25 bg-pink-500/10 text-pink-700 dark:text-pink-300" },
+  frontend:  { title: ROLE_TITLES.frontend,   accent: "border-cyan-500/25 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300" },
+  backend:   { title: ROLE_TITLES.backend,    accent: "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
+  database:  { title: ROLE_TITLES.database,   accent: "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300" },
+  devops:    { title: ROLE_TITLES.devops,     accent: "border-orange-500/25 bg-orange-500/10 text-orange-700 dark:text-orange-300" },
+  qa:        { title: ROLE_TITLES.qa,         accent: "border-lime-500/25 bg-lime-500/10 text-lime-700 dark:text-lime-300" },
+  security:  { title: ROLE_TITLES.security,   accent: "border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300" },
+  cto:       { title: ROLE_TITLES.cto,              accent: "border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-700 dark:text-fuchsia-300" },
 };
 
 export const CONSOLE_ROLE_IDS = Object.keys(ROLE_META) as AgentRoleId[];

@@ -121,6 +121,8 @@ const TOKEN_COST_MAP: Record<string, [number, number]> = {
   "mistralai/mistral-small-3.2-24b-instruct": [  0.094,   0.250],
   "upstage/solar-pro4": [  0.030,   0.120],
   "qwen/qwen3-coder-30b-a3b-instruct": [  0.070,   0.280],
+  "qwen/qwen3-coder-flash": [  0.195,   0.975],
+  "nvidia/nemotron-3-ultra-550b-a55b:free": [  0.000,   0.000],
   "z-ai/glm-5.2:free": [  0.000,   0.000],
   "deepseek/deepseek-v4-flash": [  0.083,   0.165],
   "z-ai/glm-5.2": [  0.966,   3.036],

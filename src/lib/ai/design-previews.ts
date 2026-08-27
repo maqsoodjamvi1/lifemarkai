@@ -1,4 +1,4 @@
-import { classifyBuildIntent,shouldAutoBuildMode } from "./build-intent.ts";
+import { classifyBuildIntent,isAppShellAppType,shouldAutoBuildMode } from "./build-intent.ts";
 
 export interface DesignPreviewDirection {
   id: string;
@@ -39,8 +39,14 @@ export function shouldOfferDesignPreviews(prompt: string, fileCount: number): bo
     return false;
   }
   const { appType } = classifyBuildIntent(prompt);
-  // Skip pure backend/admin prompts where visual direction is low-value
-  if (appType === "erp" || appType === "pos" || appType === "crm") return false;
+  // Skip staff-only operational tools where visual direction is low-value —
+  // the same 12-type app-shell set site-chrome and admin-shell already gate
+  // on, not a local 3-type stand-in that misses 9 of them (healthcare, hr,
+  // accounting, logistics, helpdesk, school, hotel, project-management,
+  // admin-dashboard) and would offer a "bold vs warm editorial" picker meant
+  // for public-facing pages to a school administration or hospital scheduling
+  // build.
+  if (isAppShellAppType(appType)) return false;
   return true;
 }
 
@@ -156,9 +162,6 @@ export const STYLE_ARCHETYPES: StyleArchetype[] = [
   },
 ];
 
-/** App types that use the admin/ERP design language — auto styling would fight it. */
-const ADMIN_APP_TYPES = new Set(["erp", "pos", "crm"]);
-
 /** Words that indicate the user already has a visual direction in mind. */
 const EXPLICIT_STYLE_RE =
   /\b(dark|light|black|white|minimal(ist)?|colou?rful|neon|pastel|brutalis[tm]|glassmorph\w*|gradient|retro|vintage|futuristic|elegant|luxur\w+|playful|corporate|monochrome|theme|palette|colou?r scheme|looks? like|style (of|like)|inspired by)\b/i;
@@ -181,7 +184,10 @@ export function buildAutoStyleBrief(prompt: string, seedKey: string): string | n
   if (prompt.includes("Selected design direction")) return null;
   if (EXPLICIT_STYLE_RE.test(prompt)) return null;
   const { appType } = classifyBuildIntent(prompt);
-  if (ADMIN_APP_TYPES.has(appType)) return null;
+  // Same 12-type app-shell set as shouldOfferDesignPreviews above — a bright
+  // "Playful Pop" or "Mono Brutalist" auto-style would fight the operational
+  // density language every app-shell type gets from adminDensityLanguage().
+  if (isAppShellAppType(appType)) return null;
 
   const archetype = STYLE_ARCHETYPES[hashSeed(seedKey) % STYLE_ARCHETYPES.length];
   return [

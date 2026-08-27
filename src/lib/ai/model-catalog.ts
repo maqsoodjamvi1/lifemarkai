@@ -120,13 +120,37 @@ const RAW_MODEL_CATALOG: CatalogModel[] = [
     envKey: "DIAGNOSE",
   },
   {
-    // 4. ESCALATE — complex builds and the FINAL repair, nothing else.
-    // ~36x the price of the classify tier per build, so it is gated behind a
-    // VERIFIED failure: a real browser render that still errors after GLM's
-    // repair. If this fires on most builds, the repair prompt is the bug.
-    id: envSlug("ESCALATE", "openai/gpt-5.6-terra"),
+    // PREMIUM — paid-tier complex builds. NOT the escalation step any more.
+    // It shares a lab with the generator (luna -> terra), so escalating here
+    // after Luna failed buys a second attempt from the same house style. Kept
+    // as the premium/frontier safety net, where cost matters more than
+    // vendor diversity.
+    id: envSlug("PREMIUM", "openai/gpt-5.6-terra"),
     label: "GPT-5.6 Terra",
     family: "openai",
+    strengths: ["code", "reasoning", "fixes", "design", "content", "longContext", "vision"],
+    tier: "frontier",
+    cost: 3,
+    envKey: "PREMIUM",
+  },
+  {
+    // 4. ESCALATE — the FINAL repair, and nothing else.
+    // $2/M in, $10/M out — verified live against
+    // /models/anthropic/claude-sonnet-5/endpoints (2026-08-27: 9 endpoints,
+    // 1M context). That is ~$0.18 on a 50k-in/8k-out repair, which is CHEAPER
+    // than the openai/gpt-5.6-terra it replaces (~$0.196) and 2.5x cheaper
+    // than claude-opus-5 (~$0.45).
+    //
+    // Deliberately NOT Opus. Opus 5 was the obvious reading of "escalate to
+    // the strongest model", and it is a real option (priced in
+    // model-prices.ts, one env var away), but it costs 2.5x for a step that
+    // already gets its leverage from CHANGING LAB, not from adding
+    // parameters. Luna (openai) writes the code, DeepSeek diagnoses it,
+    // Anthropic repairs it — that hop is the product of this tier, and Sonnet
+    // buys the whole hop while cutting the bill.
+    id: envSlug("ESCALATE", "anthropic/claude-sonnet-5"),
+    label: "Claude Sonnet 5",
+    family: "anthropic",
     strengths: ["code", "reasoning", "fixes", "design", "content", "longContext", "vision"],
     tier: "frontier",
     cost: 3,
@@ -160,6 +184,17 @@ const APPROVED_SMART_MODEL_IDS = new Set<string>([
   "openai/gpt-5.6-luna",
   "deepseek/deepseek-v4-pro",
   "openai/gpt-5.6-terra",
+  // Verified live 2026-08-27 against /models/anthropic/claude-sonnet-5/endpoints:
+  // resolves, 9 provider endpoints, 1M context, $2/$10 per M.
+  //
+  // A prior pass in this repo recorded this slug as delisted and removed it on
+  // that basis. It was not: a bulk read of /api/v1/models came back incomplete
+  // and the absence was taken as a delisting. Per-slug /endpoints is the check
+  // that actually answers the question — the bulk list is not evidence of
+  // absence. anthropic/claude-opus-5 also resolves (9 endpoints, $5/$25) and is
+  // deliberately left OUT of this set: approving it makes it user-selectable
+  // and routable, at 2.5x the price for the same cross-vendor property.
+  "anthropic/claude-sonnet-5",
 ]);
 
 /**
@@ -234,9 +269,6 @@ const CLAUDE_REQUIRED_SIGNAL_RE =
 const CLAUDE_REQUIRED_ACTION_RE =
   /\b(fix|debug|diagnose|investigate|analy[sz]e|architect|plan|review|refactor|rewrite|stabilize|harden|secure|optimi[sz]e|improve|complete|wire|integrate)\b/i;
 
-const CLAUDE_OPUS_RE =
-  /\b(claude\s+opus|opus|security audit|production outage|critical outage|whole codebase|entire codebase|architecture review|root cause across)\b/i;
-
 function asStrengthArray(strengths?: Iterable<ModelStrength>): ModelStrength[] {
   return strengths ? Array.from(strengths) : [];
 }
@@ -263,9 +295,12 @@ export function shouldAutoSelectClaude(
 
 function selectClaudeAutoModel(prompt: string, desired: Iterable<ModelStrength>): AIModel | null {
   if (!shouldAutoSelectClaude(prompt, { desired })) return null;
-  const preferred = CLAUDE_OPUS_RE.test(prompt)
-    ? "anthropic/claude-opus-4.8"
-    : "anthropic/claude-sonnet-5";
+  // Both arms used to name anthropic/claude-opus-4.8 and anthropic/claude-sonnet-5
+  // while the catalog approved NEITHER, so the MODEL_CATALOG guard below made
+  // this function unconditionally return null — an entire auto-select path that
+  // silently did nothing. Point it at the one Anthropic slug the catalog
+  // actually approves, which is the escalation tier.
+  const preferred = "anthropic/claude-sonnet-5";
   return MODEL_CATALOG.some((model) => model.id === preferred) ? (preferred as AIModel) : null;
 }
 

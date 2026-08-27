@@ -116,7 +116,7 @@ import { buildClarificationPrompt,parseClarifyingQuestions } from "../chat/clari
 import { resolveChatRequestContext } from "../chat/request-context.ts";
 import { createStreamSink } from "../chat/sse-stream.ts";
 import { createDeployActionResponse } from "../chat/deploy-action.ts";
-import { buildControlledTemplatePrompt,resolveControlledTemplate } from "../../templates/controlled-registry.ts";
+import { buildControlledTemplatePrompt,resolveControlledTemplateForPrompt } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
 import { getCoreLoopPolicy,isCoreLoopRequest } from "../../reliability/core-loop-policy.ts";
 
@@ -888,7 +888,7 @@ export async function handleAiChat(req: Request) {
           ? buildTanStackGenerationPrompt(message, contextFiles, buildContextBudget)
           : buildReactGenerationPrompt(message, contextFiles, buildContextBudget, effectiveFramework)) + suffix;
       }
-      systemPrompt += buildControlledTemplatePrompt(resolveControlledTemplate(message, effectiveFramework));
+      systemPrompt += buildControlledTemplatePrompt(resolveControlledTemplateForPrompt(message, effectiveFramework));
       if (simpleEconomyRequest) {
         systemPrompt += `\n\n---\n# Economy Small Edit Mode\nThis is a small edit/debug turn on an existing project. Keep the response minimal:\n- Return ONLY files that must change.\n- Prefer surgical changes over rewriting whole files.\n- Do not regenerate the whole app, create new pages, restyle unrelated UI, or expand product scope.\n- Keep existing imports, data, assets, and routes unless the user explicitly asked to change them.\n---`;
       }
@@ -2136,6 +2136,7 @@ The user has expressed frustration. Do the following:
                     needsEnrichment,
                     majorGreenfield: isMajorGreenfieldBuild(message, fileCount),
                     simpleEconomyRequest,
+                    round: enrichPass,
                     maxTokens: outputMaxTokens,
                     projectId,
                     userId,
@@ -2517,7 +2518,7 @@ The user has expressed frustration. Do the following:
             await recordGenerationVerification(
               supabase as unknown as { rpc: (name: string, args: Record<string, unknown>) => Promise<unknown> },
               projectId,
-              resolveControlledTemplate(message, framework),
+              resolveControlledTemplateForPrompt(message, framework),
               verification,
               verification?.passed ? "verification" : "post-activation",
             );

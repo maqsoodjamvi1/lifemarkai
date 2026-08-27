@@ -4,10 +4,13 @@
 // proper multi-file decomposition, richer context injection
 // ─────────────────────────────────────────────────────────────────────────────
 import { selectRelevantFiles } from "./context-selector.ts";
-import { classifyBuildIntent } from "./build-intent.ts";
-import { WEBSITE_HEADER_CONTRACT } from "./website-header-contract.ts";
+import { type BuildAppType, classifyBuildIntent, isAppShellAppType } from "./build-intent.ts";
+import { renderWebsiteFooterContract, renderWebsiteHeaderContract } from "./website-header-contract.ts";
+import { type SiteArchetype, type SiteChromeSpec, siteArchetypeForAppType, siteArchetypeForBuild, siteChromeSpec } from "../templates/site-archetype.ts";
+import { type AdminShellSpec, adminArchetypeForAppType, adminShellSpec } from "../templates/admin-archetype.ts";
 import { NEXTJS_RULES } from "./prompts/nextjs-rules.ts";
 import { renderPackageAllowlistPrompt } from "./package-allowlist.ts";
+import { renderViteSetupPrompt } from "../templates/lovable-vite-scaffold.ts";
 import { AUTO_FIX_SYSTEM_PROMPT } from "./prompts/auto-fix.ts";
 
 // ─── ALLOWED PACKAGES ALLOWLIST ───────────────────────────────────────────────
@@ -87,7 +90,32 @@ the TanStack Start Vite plugin owns the entry.
 `.trim();
 
 // ─── SHARED DESIGN SYSTEM ────────────────────────────────────────────────────
-const DESIGN_SYSTEM = `
+/**
+ * The design system, composed for the PRODUCT being built.
+ *
+ * This block used to ship whole to every build, so a "landing page for a
+ * bakery" received the admin/ERP data-density language ("no hero sections, no
+ * marketing CTAs"), the storefront image mandate ("a store without images is a
+ * FAILED build") AND the website header contract — roughly 7% of the prompt
+ * spent on two products the user did not ask for, giving instructions that
+ * contradict the marketing blueprint sitting beside them. The classifier
+ * already knows which product this is; the prompt just never asked it.
+ *
+ * A missing appType means the caller genuinely does not know the product (the
+ * screenshot-to-code path, the standalone Next prompt), and then EVERYTHING
+ * ships exactly as before — gating only ever narrows a known product.
+ */
+/** The header bullet points at a contract only site builds receive. */
+const siteChromeBulletFor = (spec: SiteChromeSpec) =>
+  `- Site header/footer MUST follow the WEBSITE HEADER + FOOTER CONTRACT below for a ${spec.label.toLowerCase()}${
+    spec.contactTopBar
+      ? " (top bar: phone + email + social icons; main row: logo + menu on one row)"
+      : " (single header row: logo + menu; NO phone/email/social top bar)"
+  }. See below.`;
+const APP_SHELL_CHROME_BULLET =
+  "- This is a staff-only tool: use the sidebar + topbar shell below, NOT a marketing website header.";
+
+const designSystemHead = (siteChromeBullet: string) => `
 ## Design System — Apply to Every Generated App
 
 ### Color Palette by Domain
@@ -149,8 +177,7 @@ either. Don't mix a dark hero with light cards.
 \`\`\`
 
 ### MANDATORY for every app (theme-aware):
-- Website/marketing/storefront headers MUST follow the two-tier WEBSITE HEADER CONTRACT
-  (top bar: phone + email + social icons; main row: logo + menu on one row). See below.
+${siteChromeBullet}
 - Fixed/sticky main header row: backdrop-blur + a subtle bottom border, colored to MATCH the theme
   (light: bg-white/80 border-slate-200; dark: bg-[#0a0a0f]/80 border-white/[0.06]).
 - Framer Motion on page entry: initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
@@ -185,9 +212,10 @@ gradient fallback so a slow or failed image never leaves a blank box:
 </div>
 \`\`\`
 A real hero image + real product/content photos are what separate a professional
-app from a wireframe. Use them on every storefront, landing page, blog, and gallery.
+app from a wireframe. Use them on every storefront, landing page, blog, and gallery.`;
 
-### E-COMMERCE / STOREFRONT — images are MANDATORY (not optional)
+/** Storefront image rules — only where a product grid is the point. */
+const ECOMMERCE_IMAGE_MANDATE = `### E-COMMERCE / STOREFRONT — images are MANDATORY (not optional)
 A store without images is a FAILED build. For any e-commerce / shop / catalog page:
 - EVERY product object in your mock data MUST have an \`image\` URL — never omit it,
   never leave a grey box. Use \`https://loremflickr.com/600/600/<product-keyword>?lock=<n>\`
@@ -196,9 +224,9 @@ A store without images is a FAILED build. For any e-commerce / shop / catalog pa
 - The hero/banner MUST have a real background image (a wide lifestyle/category shot):
   \`https://loremflickr.com/1600/600/<category>\` or a picsum seed — with the gradient
   fallback layer behind it. Overlay the headline + CTA on top.
-- Category tiles and promo banners also get images. Aim for an image-rich page.
+- Category tiles and promo banners also get images. Aim for an image-rich page.`;
 
-### Managed in-app AI (no keys) — use the auto-provided helper \`src/lib/ai.ts\`
+const DESIGN_SYSTEM_MID = `### Managed in-app AI (no keys) — use the auto-provided helper \`src/lib/ai.ts\`
 For ANY runtime AI feature in the generated app (chatbot, summary, semantic
 search, custom images, voice), import the managed helper. LifemarkAI scaffolds
 \`src/lib/ai.ts\` and injects the real, project-scoped proxy URL automatically —
@@ -215,21 +243,26 @@ const text = await aiListen(audioBlob);                       // speech-to-text
 \`\`\`
 If \`src/lib/ai.ts\` is not yet present, you may create it, but prefer the helper
 over raw fetch. Use stock CDN images for product grids (fast, free) and
-\`aiImage\` only for the one or two hero/brand images that should feel bespoke.
+\`aiImage\` only for the one or two hero/brand images that should feel bespoke.`;
 
-### Admin / ERP / Dashboard Apps — data-dense design language
-(Use INSTEAD of hero/marketing patterns when building admin panels, ERP, POS, CRM, dashboards.)
+/**
+ * Data-density language for staff-only tools, composed for the SHAPE of tool.
+ *
+ * This was one block for all twelve app-shell types, mandating a `w-64` nav
+ * sidebar, "Data table — the core ERP surface" and compact padding. Their
+ * blueprints disagree: CRM, project management and logistics are board-first,
+ * healthcare and hotel are schedule-first, and POS is a touch terminal whose
+ * cart sidebar collides with the mandated nav sidebar and whose targets must be
+ * LARGER, not compact. See templates/admin-archetype.ts.
+ */
+function adminDensityLanguage(spec: AdminShellSpec): string {
+  return `### ${spec.label} — operational design language
+(Use INSTEAD of hero/marketing patterns. This is a staff-only tool.)
 
-**Shell** — fixed sidebar (w-64, collapsible to w-16 on toggle, drawer on mobile):
-\`\`\`tsx
-<aside className="w-64 shrink-0 h-screen sticky top-0 border-r border-white/[0.06] bg-[#0c0c14]
-                  flex flex-col">
-  {/* logo row, nav sections with uppercase text-[11px] text-slate-500 group labels,
-      items: flex gap-3 px-3 py-2 rounded-lg text-sm text-slate-400
-      active: bg-violet-600/15 text-violet-300 border-l-2 border-violet-500 */}
-</aside>
-\`\`\`
+**Shell** — ${spec.sidebar}
 Top bar inside content: h-14, breadcrumb left, search (⌘K) center, avatar/notifications right.
+
+**Primary surface** — ${spec.primarySurface}
 
 **KPI stat card** (dashboard rows of 4):
 \`\`\`tsx
@@ -240,20 +273,16 @@ Top bar inside content: h-14, breadcrumb left, search (⌘K) center, avatar/noti
 </div>
 \`\`\`
 
-**Data table** — the core ERP surface. Always: sticky header row (text-xs uppercase text-slate-500),
-row hover bg-white/[0.03], tabular-nums for numbers, right-aligned amounts, per-row action menu (⋯),
-toolbar above with search input + filter dropdowns + primary action button, pagination footer
-("1–20 of 240"), and selection checkboxes when bulk actions make sense.
-
 **Status badges** — px-2 py-0.5 rounded-full text-[11px] font-medium:
 paid/active/delivered = bg-emerald-500/15 text-emerald-400 · pending/processing = bg-amber-500/15 text-amber-400 ·
 failed/overdue = bg-red-500/15 text-red-400 · draft/inactive = bg-slate-500/15 text-slate-400
 
 **Charts** — recharts AreaChart/BarChart inside cards, violet/indigo gradients, CartesianGrid stroke="rgba(255,255,255,0.04)".
-**Forms** — right-side Sheet/drawer (not page navigation) for create/edit; labeled inputs bg-white/[0.04] border-white/[0.08].
-**Density** — compact paddings (p-4 cards, py-2 rows), no hero sections, no ambient blobs, no marketing CTAs.
+**Forms** — ${spec.detailPattern}
+**Density** — ${spec.density}`;
+}
 
-### Shared UI Kit — generate ONCE, reuse everywhere
+const DESIGN_SYSTEM_TAIL = `### Shared UI Kit — generate ONCE, reuse everywhere
 Every multi-page app must include \`src/components/ui/\` with these primitives, then import them
 instead of re-styling raw elements per page (consistency is what makes apps look professional):
 - \`Button.tsx\` — variants: primary | secondary | ghost | destructive; sizes sm | md; loading state
@@ -262,10 +291,40 @@ instead of re-styling raw elements per page (consistency is what makes apps look
 - \`Input.tsx\` + \`Select.tsx\` — labeled, with error-message slot
 - \`Dialog.tsx\` — overlay modal (fixed inset-0 bg-black/60 backdrop-blur-sm) with title + footer slots
 - \`Table.tsx\` — Table / THead / TRow / TCell implementing the data-table treatment above
-Pages compose these primitives; never duplicate their styles inline.
+Pages compose these primitives; never duplicate their styles inline.`;
 
-${WEBSITE_HEADER_CONTRACT}
-`.trim();
+/** App types whose product grid is the point of the page. */
+const ECOMMERCE_IMAGE_APP_TYPES = new Set<BuildAppType>([
+  "ecommerce",
+  "marketplace",
+  "restaurant",
+  "pos",
+]);
+
+export function buildDesignSystem(appType?: BuildAppType, archetype?: SiteArchetype): string {
+  const appShell = appType ? isAppShellAppType(appType) : true;
+  const storefront = appType ? ECOMMERCE_IMAGE_APP_TYPES.has(appType) : true;
+  // The header contract's own docblock excludes admin shells; it was shipping
+  // to them anyway, telling an ERP that "every public website MUST" carry a
+  // phone/email/social top bar while the block above forbids marketing chrome.
+  const siteChrome = appType ? !isAppShellAppType(appType) : true;
+  const chromeSpec = siteChromeSpec(archetype ?? siteArchetypeForAppType(appType));
+  return [
+    designSystemHead(siteChrome ? siteChromeBulletFor(chromeSpec) : APP_SHELL_CHROME_BULLET),
+    storefront ? ECOMMERCE_IMAGE_MANDATE : "",
+    DESIGN_SYSTEM_MID,
+    appShell ? adminDensityLanguage(adminShellSpec(adminArchetypeForAppType(appType))) : "",
+    DESIGN_SYSTEM_TAIL,
+    // Chrome for the SHAPE of site this is — a product page is never told a
+    // phone number is mandatory, a storefront is told about search and cart.
+    // Both contracts render from the same spec the injector builds from.
+    siteChrome ? renderWebsiteHeaderContract(chromeSpec) : "",
+    siteChrome ? renderWebsiteFooterContract(chromeSpec) : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
 
 // ─── CODE QUALITY RULES ───────────────────────────────────────────────────────
 const CODE_QUALITY_RULES = `
@@ -331,10 +390,28 @@ const BUG_FREE_GENERATION_CONTRACT = `
 - After edits, summarize in at most two short sentences — what changed and where. The diff is the documentation; prose beyond that wastes the user's time.
 `.trim();
 
-const PRODUCT_MATURITY_CONTRACT = `
+/**
+ * The site-chrome line inside the maturity contract. This was a FOURTH
+ * hardcoded copy of the two-tier header mandate — after the header contract,
+ * the design-system bullet and the injected component — so a product site was
+ * still told a phone/email top bar was mandatory even once the contract itself
+ * had been made archetype-aware. Rendered from the spec now, like the rest.
+ */
+const siteChromeRuleFor = (spec: SiteChromeSpec | null): string =>
+  spec === null
+    ? "- This build is a staff-only tool: use a sidebar + content topbar shell. Do NOT add a marketing website header or footer."
+    : `- Every page of this ${spec.label.toLowerCase()} MUST carry the same header and footer: ${
+        spec.contactTopBar
+          ? "a contact top bar (phone + email + social) above a main row with logo + menu links"
+          : "a single main row with logo + menu links and NO phone/email/social top bar"
+      }${spec.search || spec.cart ? `, plus ${[spec.search && "search", spec.cart && "cart"].filter(Boolean).join(" and ")}` : ""}. Admin/dashboard apps keep sidebar + content topbar instead.`;
+
+const SITE_CHROME_RULE_DEFAULT = siteChromeRuleFor(siteChromeSpec("local-business"));
+
+const productMaturityContract = (siteChromeRule: string) => `
 ## Product Maturity Contract
 - "Create a website" means a complete 5-10 page routed website by default: Home, Services/Solutions, About, Portfolio/Case Studies/Gallery, Blog/Resources, Contact, plus optional Pricing/FAQ/Careers/Industries when useful. An explicit "landing page", "one-page", or "single-page" request is the exception: build one rich anchor-linked page with reusable section components and no filler routes.
-- Every marketing / landing / storefront / portfolio website MUST use the two-tier header: top bar (phone + email + social icons) and a main row with logo + menu links on one row. Admin/dashboard apps keep sidebar + content topbar instead.
+${siteChromeRule}
 - Full multi-page websites, stores, ERP, CRM, booking, marketplace, and admin systems must be data-backed by default. Generate Supabase migration SQL under supabase/migrations/, an env-based Supabase client, and a data-access layer/hooks. Keep seeded local fallback data so preview works before credentials are connected. An explicit single-page landing request may stay preview-safe/local unless the user asks for persistence, authentication, or a connected backend.
 - Supabase migrations must enable RLS and include only the explicit anon/authenticated grants needed by the intended Data API surface; never put a service-role secret in generated browser code.
 - E-commerce stores must include storefront pages, cart/checkout, account/orders, admin products, admin orders, products/categories/customers/orders/order_items/inventory schema, and working data-layer actions.
@@ -406,143 +483,13 @@ export function formatCurrency(cents: number): string {
 `.trim();
 
 // ─── VITE SETUP RULES ────────────────────────────────────────────────────────
-const VITE_RULES = `
-## Vite + React Setup — Mandatory
-
-### index.html (always generate this)
-\`\`\`html
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>App</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
-\`\`\`
-
-### src/main.tsx (always generate this)
-\`\`\`tsx
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import './index.css'
-import App from './App'
-
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
-\`\`\`
-
-### vite.config.ts (always generate this)
-\`\`\`ts
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-
-export default defineConfig({
-  plugins: [react({ babel: { plugins: [] } })],
-})
-\`\`\`
-
-### package.json — REQUIRED structure
-\`\`\`json
-{
-  "name": "app",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "react-router-dom": "^6.26.1"
-  },
-  "devDependencies": {
-    "@types/react": "^18.3.5",
-    "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.1",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.45",
-    "tailwindcss": "^3.4.11",
-    "typescript": "^5.5.3",
-    "vite": "^5.4.2"
-  }
-}
-\`\`\`
-Add extra packages to dependencies as needed. devDependencies stay fixed.
-
-### tsconfig.json (always generate this)
-\`\`\`json
-{
-  "compilerOptions": {
-    "target": "ES2020",
-    "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-    "strict": true,
-    "noUnusedLocals": false,
-    "noUnusedParameters": false
-  },
-  "include": ["src"]
-}
-\`\`\`
-
-### tailwind.config.js (always generate this)
-\`\`\`js
-/** @type {import('tailwindcss').Config} */
-export default {
-  darkMode: ["class"],
-  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
-  theme: {
-    extend: {
-      colors: {
-        border: "hsl(var(--border))",
-        input: "hsl(var(--input))",
-        ring: "hsl(var(--ring))",
-        background: "hsl(var(--background))",
-        foreground: "hsl(var(--foreground))",
-        primary: { DEFAULT: "hsl(var(--primary))", foreground: "hsl(var(--primary-foreground))" },
-        secondary: { DEFAULT: "hsl(var(--secondary))", foreground: "hsl(var(--secondary-foreground))" },
-        destructive: { DEFAULT: "hsl(var(--destructive))", foreground: "hsl(var(--destructive-foreground))" },
-        muted: { DEFAULT: "hsl(var(--muted))", foreground: "hsl(var(--muted-foreground))" },
-        accent: { DEFAULT: "hsl(var(--accent))", foreground: "hsl(var(--accent-foreground))" },
-        card: { DEFAULT: "hsl(var(--card))", foreground: "hsl(var(--card-foreground))" },
-        popover: { DEFAULT: "hsl(var(--popover))", foreground: "hsl(var(--popover-foreground))" },
-      },
-      borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
-      },
-    },
-  },
-  plugins: [],
-}
-\`\`\`
-
-### postcss.config.js (always generate this)
-\`\`\`js
-export default {
-  plugins: { tailwindcss: {}, autoprefixer: {} },
-}
-\`\`\`
-`.trim();
+// Rendered from lovable-vite-scaffold.ts — the same files project creation
+// actually writes — so this section can no longer drift from the platform.
+// (The previous hand-written copy had: React 18 against the scaffold's 19,
+// plugin-react against plugin-react-swc, a vite.config missing the "@" alias
+// this prompt's own import rules mandate, a flat tsconfig without paths, and
+// tailwind.config.js against the .ts the import rules demand.)
+const VITE_RULES = renderViteSetupPrompt();
 
 // ─── IMPORT RESOLUTION RULES ──────────────────────────────────────────────────
 const IMPORT_RULES = `
@@ -594,11 +541,10 @@ Every npm package import (e.g. \`import { motion } from 'framer-motion'\`) MUST 
 /**
  * TanStack Start counterpart to IMPORT_RULES.
  *
- * IMPORT_RULES above is Vite/CRA-shaped: it forbids `@/` aliases, and its
- * checklist demands src/main.tsx + index.html + vite.config with
- * @vitejs/plugin-react. Every one of those is WRONG for TanStack Start, whose
- * blueprint mandates `@/* -> src/*` and forbids emitting index.html or
- * src/main.tsx at all (the plugin owns the document).
+ * IMPORT_RULES above is Vite/CRA-shaped: its checklist demands src/main.tsx +
+ * index.html + a vite.config, all of which are WRONG for TanStack Start, whose
+ * blueprint forbids emitting index.html or src/main.tsx at all (the plugin
+ * owns the document).
  *
  * Both blocks used to be concatenated into the same build prompt, so the model
  * was told to use aliases and not to use them, and to always generate an
@@ -989,11 +935,15 @@ disabled auth check, a secret in the client), build the secure version instead
 and say in one line what you changed and why.`;
 
 /** Blocks that are shared, with the one framework-dependent slot filled in. */
-function frameworkNeutralBlocks(framework: string): string {
+function frameworkNeutralBlocks(framework: string, appType?: BuildAppType, archetype?: SiteArchetype): string {
+  const isShell = appType ? isAppShellAppType(appType) : false;
+  const siteChromeRule = siteChromeRuleFor(
+    isShell ? null : siteChromeSpec(archetype ?? siteArchetypeForAppType(appType)),
+  );
   const SCAFFOLD_FILE_LIST_PLACEHOLDER = TANSTACK_FRAMEWORKS.has(framework)
     ? TANSTACK_SCAFFOLD_LIST
     : VITE_SCAFFOLD_LIST;
-  return `${DESIGN_SYSTEM}
+  return `${buildDesignSystem(appType, archetype)}
 
 ---
 
@@ -1009,7 +959,7 @@ ${BUG_FREE_GENERATION_CONTRACT}
 
 ---
 
-${PRODUCT_MATURITY_CONTRACT}
+${productMaturityContract(siteChromeRule)}
 
 ---
 
@@ -1088,6 +1038,8 @@ When the user asks to create a website, app, ERP, POS, CRM, or management system
  */
 export function buildAppGenerationSystemPrompt(
   framework: string = "react",
+  appType?: BuildAppType,
+  archetype?: SiteArchetype,
 ): string {
   const engine = TANSTACK_FRAMEWORKS.has(framework)
     ? "TanStack Start (React + TypeScript, SSR)"
@@ -1102,7 +1054,7 @@ ${buildFrameworkContract(framework)}
 
 ---
 
-${frameworkNeutralBlocks(framework)}`;
+${frameworkNeutralBlocks(framework, appType, archetype)}`;
 }
 
 /**
@@ -1353,7 +1305,7 @@ Before generating code, mentally note:
 - For any logos/icons visible, substitute with appropriate lucide-react icons
 - For any images, use placeholder divs with matching aspect ratios and background colors
 
-${DESIGN_SYSTEM}
+${buildDesignSystem()}
 
 ---
 
@@ -1603,7 +1555,7 @@ export function buildGenerationPrompt(
   // files it isn't going to generate or that aren't already present
   const existingPaths = projectFiles.map((f) => `  • ${f.path}`).join("\n");
 
-  return `${buildAppGenerationSystemPrompt(framework)}
+  return `${buildAppGenerationSystemPrompt(framework, intent.appType, siteArchetypeForBuild(userPrompt, intent.appType))}
 
 ${intent.blueprint}
 
@@ -1799,7 +1751,7 @@ export const NEXT_APP_GENERATION_SYSTEM_PROMPT = `You are LifemarkAI Build Engin
 
 ${PACKAGE_ALLOWLIST}
 
-NOTE for Next.js apps: react-router-dom is FORBIDDEN — routing is file-based (app/<route>/page.tsx + next/link). Any npm package may be added to package.json, but every import must be listed there.
+NOTE for Next.js apps: react-router-dom is FORBIDDEN — routing is file-based (app/<route>/page.tsx + next/link). The package allowlist above is ENFORCED here too: the installer refuses anything outside it, so never import an unlisted package — and every allowed package you import must appear in package.json.
 
 ---
 
@@ -1807,7 +1759,7 @@ ${NEXTJS_RULES}
 
 ---
 
-${DESIGN_SYSTEM}
+${buildDesignSystem()}
 
 ---
 
@@ -1819,7 +1771,7 @@ ${BUG_FREE_GENERATION_CONTRACT}
 
 ---
 
-${PRODUCT_MATURITY_CONTRACT}
+${productMaturityContract(SITE_CHROME_RULE_DEFAULT)}
 
 ---
 

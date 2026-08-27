@@ -23,15 +23,20 @@ import { filesWithSyntaxErrors, findMissingListKeys, findUnresolvedLocalImports,
 import { typecheckRunningSandbox } from "../preview/typecheck-project.ts";
 import { pushFileToRunningSandbox } from "../preview/push-to-sandbox.ts";
 import { generateAI } from "./generate.ts";
-import { DEFAULT_CODING_MODEL,DIAGNOSIS_MODEL,ECONOMY_CODING_MODEL,ESCALATION_MODEL,FAST_CODING_MODEL,getDefaultAiModel } from "./model-defaults.ts";
+import { DEFAULT_CODING_MODEL,DIAGNOSIS_MODEL,ECONOMY_CODING_MODEL,envPricedModel,ESCALATION_MODEL,FAST_CODING_MODEL,getDefaultAiModel } from "./model-defaults.ts";
 import { applyModelAdapter } from "./model-catalog.ts";
-import { AUTO_FIX_SYSTEM_PROMPT } from "./system-prompts.ts";
+import { AUTO_FIX_EDITS_SYSTEM_PROMPT } from "./prompts/auto-fix.ts";
 import { buildPreviewDiagnosis } from "../preview/diagnose-preview.ts";
 import { guardFileWrite } from "./guard-file-write.ts";
+import { deterministicRepair } from "./deterministic-repair.ts";
+import { findDependencyIssues } from "../verify/dependency-gate.ts";
 import { fingerprintError } from "./failure-fingerprint.ts";
 import { recordRepairOutcome } from "./record-outcome.ts";
 import type { ProjectFile } from "../../types/database.ts";
 import { loadOptionalPlaywright } from "../optional-playwright.ts";
+import { isLadderExhausted,resolveRepairTier,shouldPromoteRepairTier } from "./repair-ladder.ts";
+import { buildPriorAttemptsBlock,lookupPriorAttempts,suggestedStartingTier } from "./repair-memory.ts";
+import { applyEditBlocks,validateEditBatch } from "./edit-blocks.ts";
 
 export interface SelfVerifyResult {
   engine: "browser" | "static";
@@ -49,8 +54,127 @@ type SupabaseClient = any;
 // Raised from 55s when verification became a per-route sweep: 8 extra route
 // loads (~2s each) plus a fix round must fit, or the sweep gets cut off right
 // before the re-verify that would confirm the fix.
-const TIME_BUDGET_MS = 90_000;
+// Raised from 90s when the ladder became progress-gated (below). The cap that
+// ends a repair sequence should be "it stopped helping", not "the clock ran
+// out mid-improvement" — but latency is a real cost too, so this stays a hard
+// wall and is env-overridable for tuning without a deploy.
+const TIME_BUDGET_MS = Number(process.env.SELF_VERIFY_TIME_BUDGET_MS) || 150_000;
+// Ceiling, not a sleep. This was a FIXED 3.5s wait per render — and the
+// verification sweep renders every route, so ~8 routes spent ~28 seconds of
+// every failed build waiting for pages that had finished painting in 300ms.
+// settleRender() below polls for actual readiness (content in the mount node,
+// no pending fetches) and returns as soon as the page is genuinely settled;
+// this constant is now only the worst-case bound for a page that never stops
+// loading, which is exactly the page the empty-render check should then see.
 const RENDER_SETTLE_MS = 3_500;
+const SETTLE_POLL_MS = 150;
+
+/**
+ * Wait until the page is actually ready to be judged, up to RENDER_SETTLE_MS.
+ *
+ * "Ready" = a mount node has children AND no fetch/XHR started by the page is
+ * still in flight (tracked via an init-script counter, so it works on live
+ * URLs and srcdoc alike). Two consecutive ready polls are required so a page
+ * that mounts a spinner and immediately fetches does not pass between the
+ * mount and the fetch.
+ *
+ * Fail-open by design: if evaluate() throws (navigation race, CSP), fall back
+ * to the old fixed sleep — a slower verdict beats a wrong one.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function settleRender(page: any): Promise<void> {
+  const deadline = Date.now() + RENDER_SETTLE_MS;
+  let readyStreak = 0;
+  while (Date.now() < deadline) {
+    let ready = false;
+    try {
+      ready = await page.evaluate(() => {
+        const root =
+          document.getElementById("root") ||
+          document.getElementById("__next") ||
+          document.querySelector("[data-reactroot]") ||
+          document.body;
+        const mounted = !!root && root.children.length > 0;
+        const w = window as unknown as {
+          __lmPendingFetches?: number;
+          __lmLastMutation?: number;
+        };
+        const quiet = (w.__lmPendingFetches ?? 0) === 0;
+        // Review-caught gap: mounted+quiet passes a setTimeout-driven spinner
+        // that never touches fetch. Two further conditions close it:
+        //   - the DOM has been STILL for 400ms (MutationObserver timestamp —
+        //     absent counter means the init script did not run; treat "no
+        //     record" as still, since the fetch counter degrades the same way);
+        //   - something VISIBLE actually rendered (text or a sized element),
+        //     so a bare container div is not "content".
+        const lastMutation = w.__lmLastMutation ?? 0;
+        const domStill = Date.now() - lastMutation > 400;
+        const hasVisibleContent =
+          !!root &&
+          ((root.textContent ?? "").trim().length > 0 ||
+            root.getBoundingClientRect().height > 8);
+        // Second review round: a STABLE spinner defeats the mutation window —
+        // render a static "Loading…" shell, schedule the real content with a
+        // 1s setTimeout, and mounted+still+visible all pass ~500ms early. So a
+        // page ADVERTISING busyness is not ready, whatever else looks settled.
+        // Heuristic and best-effort — the first-party signal below is the
+        // reliable path.
+        const el = root as Element | null;
+        const busy =
+          !!el &&
+          (el.matches?.('[aria-busy="true"]') === true ||
+            !!el.querySelector?.(
+              '[aria-busy="true"], [role="progressbar"], .animate-spin, [data-loading="true"]',
+            ) ||
+            /^\s*(loading|please wait|initializing|starting)[.\u2026\s]*$/i.test(
+              (el.textContent ?? "").trim(),
+            ));
+        // First-party bridge: a generated app ends the guessing by dispatching
+        // window.dispatchEvent(new Event("lifemark:ready")) when its content is
+        // genuinely up. Recorded by the init script; once seen it overrides the
+        // busy heuristic (the app knows best) but never the mounted/quiet
+        // checks (a lying app still has to have painted).
+        const appSaysReady = (w as { __lmAppReady?: boolean }).__lmAppReady === true;
+        return (
+          mounted && quiet && domStill && hasVisibleContent &&
+          (appSaysReady || !busy) &&
+          document.readyState !== "loading"
+        );
+      });
+    } catch {
+      await page.waitForTimeout(RENDER_SETTLE_MS - Math.max(0, deadline - Date.now() - RENDER_SETTLE_MS));
+      return;
+    }
+    readyStreak = ready ? readyStreak + 1 : 0;
+    if (readyStreak >= 2) return;
+    await page.waitForTimeout(SETTLE_POLL_MS);
+  }
+}
+
+/** Injected before any page script: counts in-flight fetch/XHR for settleRender. */
+const PENDING_FETCH_COUNTER = `(() => {
+  let n = 0;
+  try {
+    Object.defineProperty(window, "__lmAppReady", { value: false, writable: true, configurable: true });
+    window.addEventListener("lifemark:ready", () => { window.__lmAppReady = true; }, { once: true });
+  } catch {}
+  try {
+    let last = Date.now();
+    Object.defineProperty(window, "__lmLastMutation", { get: () => last, configurable: true });
+    const mo = new MutationObserver(() => { last = Date.now(); });
+    const arm = () => { try { mo.observe(document.documentElement, { childList: true, subtree: true, characterData: true, attributes: true }); } catch {} };
+    if (document.documentElement) arm(); else document.addEventListener("DOMContentLoaded", arm, { once: true });
+  } catch {}
+  Object.defineProperty(window, "__lmPendingFetches", { get: () => n, configurable: true });
+  const f = window.fetch?.bind(window);
+  if (f) window.fetch = (...a) => { n++; return f(...a).finally(() => { n--; }); };
+  const send = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function (...a) {
+    n++;
+    this.addEventListener("loadend", () => { n--; }, { once: true });
+    return send.apply(this, a);
+  };
+})();`;
 
 /**
  * Vision QA — send the rendered screenshot to a vision-capable model and get
@@ -62,7 +186,7 @@ async function visionDesignReview(screenshotBase64: string): Promise<string[]> {
   // 2026-08-19; gemini-3.1-flash-lite is the same price ($0.25/$1.50), two
   // generations newer, vision-capable, and has 7 provider endpoints against
   // gpt-4o-mini's fewer. Still overridable via VISION_REVIEW_MODEL.
-  const model = process.env.VISION_REVIEW_MODEL || "google/gemini-3.1-flash-lite";
+  const model = envPricedModel("VISION_REVIEW_MODEL", "google/gemini-3.1-flash-lite");
   const res = await generateAI({
     model,
     maxTokens: 300,
@@ -123,7 +247,9 @@ function extractAppRoutes(files: ProjectFile[]): string[] {
   return [...routes].slice(0, 8);
 }
 
+// Superseded by settleRender() — kept only if a future call site needs a raw bound.
 const ROUTE_SETTLE_MS = 1_500;
+void ROUTE_SETTLE_MS;
 
 /**
  * Placeholder copy a half-finished page renders instead of its module.
@@ -172,12 +298,17 @@ async function renderAndCollectErrors(
       errors.push(tag(text));
     });
 
+    try {
+      await page.addInitScript(PENDING_FETCH_COUNTER);
+    } catch {
+      /* settleRender degrades to mount-only readiness without the counter */
+    }
     if (liveUrl && /^https?:\/\//i.test(liveUrl)) {
       await page.goto(liveUrl, { waitUntil: "domcontentloaded", timeout: 20_000 });
     } else {
       await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15_000 });
     }
-    await page.waitForTimeout(RENDER_SETTLE_MS);
+    await settleRender(page);
 
     // Deeper blank-screen / undefined-component detection: not just "is #root
     // empty" but "did anything meaningful actually render". Live Modal/Next
@@ -259,7 +390,7 @@ async function renderAndCollectErrors(
         } catch {
           continue;
         }
-        await page.waitForTimeout(ROUTE_SETTLE_MS);
+        await settleRender(page);
         const before = errors.length;
         const routeDiag = await page
           .evaluate(() => {
@@ -312,7 +443,7 @@ async function renderAndCollectErrors(
         if (isLive && routes.length > 0) {
           // The route sweep navigated away — return to the app's front door.
           await page.goto(liveUrl as string, { waitUntil: "domcontentloaded", timeout: 12_000 }).catch(() => {});
-          await page.waitForTimeout(ROUTE_SETTLE_MS);
+          await settleRender(page);
         }
         const buf = await page.screenshot({ type: "png", fullPage: false });
         screenshot = Buffer.from(buf).toString("base64");
@@ -359,6 +490,59 @@ const SMART_CHAR_RE = new RegExp(`[${Object.keys(SMART_CHAR_MAP).join("")}]`, "g
 
 function sanitizeRepairedSource(content: string): string {
   return content.replace(SMART_CHAR_RE, (ch) => SMART_CHAR_MAP[ch] ?? ch);
+}
+
+/**
+ * Resolve a repair response into concrete file contents.
+ *
+ * The repair prompt now offers TWO output shapes, cheapest first:
+ *
+ *   {"edits":[{"path","search","replace"}]}   anchored edits — a one-line fix
+ *                                             bills ~a dozen output tokens
+ *   {"files":[{"path","content"}]}            whole files — the old contract,
+ *                                             still required for new files and
+ *                                             near-total rewrites
+ *
+ * Edits are applied ALL-OR-NOTHING by applyEditBlocks: a search that is absent
+ * or ambiguous rejects the batch, the failure reasons are surfaced, and the
+ * round scores as failed exactly like a corrupt whole-file repair — which the
+ * progress-gated ladder then treats as evidence. A bad edit can therefore
+ * never half-land, and the worst case is precisely the old behaviour.
+ */
+function resolveRepairResponse(
+  raw: string,
+  current: ReadonlyMap<string, string>,
+): { files: Array<{ path: string; content: string }>; editFailures: string[] } {
+  const trimmed = raw.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
+  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try {
+      const parsed = JSON.parse(jsonMatch[0]) as { edits?: unknown };
+      if (Array.isArray(parsed.edits) && parsed.edits.length > 0) {
+        // STRICT: one malformed edit rejects the whole batch. Filtering the
+        // bad ones and applying the rest is a half-applied repair — the exact
+        // thing the all-or-nothing contract exists to prevent.
+        const batch = validateEditBatch(parsed.edits);
+        if (!batch.ok) {
+          return { files: [], editFailures: [batch.reason] };
+        }
+        const applied = applyEditBlocks(batch.blocks, current);
+        if (applied.ok) {
+          return {
+            files: [...applied.files].map(([path, content]) => ({
+              path,
+              content: sanitizeRepairedSource(content),
+            })),
+            editFailures: [],
+          };
+        }
+        return { files: [], editFailures: applied.failures };
+      }
+    } catch {
+      /* fall through to the whole-file parser */
+    }
+  }
+  return { files: parseFixFiles(raw), editFailures: [] };
 }
 
 function parseFixFiles(raw: string): Array<{ path: string; content: string }> {
@@ -455,11 +639,29 @@ export async function runSelfVerification(opts: {
 }): Promise<SelfVerifyResult | null> {
   const { supabase, projectId } = opts;
   const emit = opts.emit ?? (() => {});
-  // HARD CAP at two repair rounds. `opts.maxRounds ?? 2` was only a default, so
-  // any caller could raise it — and each extra round is a full render plus a
-  // repair generation, i.e. real latency and real money, on a build that has
-  // already failed twice. Two verified attempts then stop and report.
-  const MAX_REPAIR_ROUNDS = 2;
+  // HARD CAP on repair rounds. `opts.maxRounds ?? 2` was only a default, so any
+  // caller could raise it; the Math.min below keeps it a ceiling.
+  //
+  // Raised 2 -> 4 on 2026-08-27, on measured behaviour rather than taste.
+  // repair_outcomes over 11 days (n=46 typecheck attempts):
+  //
+  //   round 1  deepseek-v4-flash  138 errors in -> 97 resolved, 43 introduced,
+  //                               41 remaining
+  //   round 2  gpt-5.6-terra       82 errors in -> 34 resolved,  9 introduced,
+  //                               48 remaining
+  //
+  // Two things fall out of that. The cheap tier is NOT failing — it clears ~70%
+  // of the errors it is handed. And two rounds does not converge: the sequence
+  // hit the cap with 48 errors still standing and shipped a broken build
+  // anyway. So the cap was ending runs that were still making progress, and the
+  // escalation it forced (92% of repairs reached round 2) was buying a WORSE
+  // resolution rate than the tier it escalated past, at ~200x the price
+  // ($0.104 vs $0.0005 per call).
+  //
+  // The fix is not more escalation, it is more turns for whatever is working —
+  // see repairTiers below, which now promotes on lack of progress rather than
+  // on round number. TIME_BUDGET_MS remains the real backstop.
+  const MAX_REPAIR_ROUNDS = 4;
   const maxRounds = Math.min(opts.maxRounds ?? MAX_REPAIR_ROUNDS, MAX_REPAIR_ROUNDS);
   const startedAt = Date.now();
 
@@ -515,22 +717,37 @@ export async function runSelfVerification(opts: {
     // ── The repair ladder ───────────────────────────────────────────────────
     // Explicit, not inferred. selectModelChain() used to pick these by scoring
     // a synthetic prompt, which meant the models doing your repairs changed
-    // whenever the scoring heuristics were tuned. The ladder is now fixed:
+    // whenever the scoring heuristics were tuned.
     //
-    //   round 0  DEFAULT_CODING_MODEL   the generator repairs its own build,
-    //                                   but ONLY after DIAGNOSIS_MODEL has told
-    //                                   it what actually went wrong
-    //   round 1  ESCALATION_MODEL       the expensive model, and only here —
-    //                                   reached solely after a real browser
-    //                                   render has confirmed round 0 failed
+    //   tier 0  FAST_CODING_MODEL      mechanical, precisely-located defects
+    //   tier 1  DEFAULT_CODING_MODEL   the generator repairs its own build,
+    //                                  briefed by DIAGNOSIS_MODEL
+    //   tier 2  ESCALATION_MODEL       a different lab entirely, last resort
     //
-    // Two repair rounds, hard-capped. Round 2 exists only to render and report;
-    // it never repairs (see the `round === maxRounds` return below). Anything
-    // still broken after two verified attempts is a bug report, not a third bill.
-    const fixLadder: string[] = [
+    // THE PROMOTION RULE IS THE POINT. A tier used to be chosen by round index,
+    // so round 1 escalated unconditionally — including when round 0 had just
+    // resolved 70% of the errors and was plainly working. Promotion is now
+    // driven by OBSERVED PROGRESS: a tier that reduced the error count keeps
+    // the next turn, and only a tier that stalled (or made things worse) hands
+    // off to the one above it.
+    //
+    // That inverts the economics. The old shape paid $0.104 to escalate away
+    // from a tier that costs $0.0005 and was succeeding; the new shape spends
+    // ~$0.0015 on three cheap turns and escalates only against evidence. It is
+    // also strictly safer: a stalled tier still escalates, just on a real
+    // signal instead of a counter.
+    //
+    // `repairTier` only ever moves UP — a tier that stalled once does not get
+    // re-tried after a more capable one unsticks the build, because the thing
+    // it stalled on is still in the file.
+    const repairTiers: string[] = [
+      FAST_CODING_MODEL,
       DEFAULT_CODING_MODEL,
       ESCALATION_MODEL,
     ];
+    let repairTier = 0;
+    /** Error count seen at the START of the previous round, or null on round 0. */
+    let lastErrorCount: number | null = null;
 
     // A repair attempt cannot be scored at the moment it is made — only the
     // next render says whether it worked. So each attempt is held here and
@@ -572,7 +789,15 @@ export async function runSelfVerification(opts: {
       pending = null;
     };
 
-    for (let round = 0; round <= maxRounds; round++) {
+    // Rounds absorbed by the FREE deterministic pass do not spend the model
+    // budget: a string rewrite that fixes an import costs nothing, and charging
+    // it against maxRounds would mean a free fix REDUCES how many paid attempts
+    // the build gets. Capped so the loop stays bounded even if a later paid
+    // round keeps introducing deterministically-fixable breakage.
+    let freeRounds = 0;
+    const MAX_FREE_ROUNDS = 2;
+
+    for (let round = 0; round <= maxRounds + freeRounds; round++) {
       result.rounds = round + 1;
       const roundStartedAt = Date.now();
       const html = buildFallbackHtml(files);
@@ -615,6 +840,16 @@ export async function runSelfVerification(opts: {
       // that is imported but not exported, and explicitly skips modules it
       // cannot resolve. This covers precisely that skipped case.
       const importErrors = findUnresolvedLocalImports(files).map((u) => u.formatted);
+
+      // The npm twin of the check above, and just as free. An import of a
+      // package the allowlist REFUSES will never install, so it can only be
+      // fixed by rewriting the code — but until now nothing said so anywhere:
+      // the installer refused silently and the repair model was left to infer
+      // "this library does not exist here" from an opaque resolve error. Each
+      // one is now a located, self-explanatory instruction. (Allowed-but-
+      // missing packages are the deterministic tier's job — it writes them
+      // into package.json at pinned versions before any model is called.)
+      const dependencyErrors = findDependencyIssues(files).disallowed.map((d) => d.formatted);
 
       // React logs a missing list `key` through console.error, so it reaches the
       // preview's error stream and the user sees a red console on an app that
@@ -672,7 +907,7 @@ export async function runSelfVerification(opts: {
         }
       }
 
-      const typeErrors = [...importErrors, ...typeErrorList, ...keyWarnings];
+      const typeErrors = [...importErrors, ...dependencyErrors, ...typeErrorList, ...keyWarnings];
 
       // Which compiler ran is worth knowing in production. "local" on a live
       // build means the sandbox check silently returned null — no container,
@@ -750,9 +985,105 @@ export async function runSelfVerification(opts: {
       }
 
       result.errors = errors;
-      if (round === maxRounds || Date.now() - startedAt > TIME_BUDGET_MS) {
+
+      // ── Did the previous round actually help? ─────────────────────────────
+      // `errors` here is the state AFTER the previous round's repair, freshly
+      // observed by this round's typecheck/render — not the repair model's own
+      // opinion of its work. That is what makes this a measurement.
+      //
+      // Strictly fewer errors = progress = the current tier keeps its turn.
+      // Equal or more = stalled = promote. Note that "made things worse" lands
+      // in the same bucket as "changed nothing", which is deliberate: both mean
+      // this tier has stopped being the right tool, and both should escalate.
+      if (shouldPromoteRepairTier(errors.length, lastErrorCount)) repairTier += 1;
+      lastErrorCount = errors.length;
+
+      // Running out of LADDER is a real stop condition, not just a cap. Once the
+      // most capable tier has itself stalled, another round buys another bill
+      // and the same errors — the old shape had no way to express this and
+      // simply burned its remaining rounds.
+      const ladderExhausted = isLadderExhausted(repairTier, repairTiers.length);
+
+      if (round - freeRounds === maxRounds || ladderExhausted || Date.now() - startedAt > TIME_BUDGET_MS) {
         emit(`Verification found ${errors.length} issue${errors.length === 1 ? "" : "s"} — open the preview to review.`);
         return result;
+      }
+
+      // ── Deterministic repair — the free tier, before any model ────────────
+      // The same fixers the build path runs (import repointing + generated
+      // support files), applied to the CURRENT file set. A broken import that
+      // slipped through — or that a previous paid round introduced — is fixed
+      // here as a string rewrite: no tokens, no latency, no model variance.
+      // Only fires on the error classes it can address; everything else falls
+      // through to the ladder untouched. See deterministic-repair.ts.
+      if (freeRounds < MAX_FREE_ROUNDS) {
+        const det = deterministicRepair(files, errors);
+        const detTouched = [...det.changedPaths, ...det.createdPaths];
+        if (detTouched.length > 0) {
+          const written: string[] = [];
+          const rejected: string[] = [];
+          const persistFixes = opts.persistFixes ?? !opts.candidateFiles;
+          const nextByPath = new Map(det.files.map((f) => [f.path, f]));
+          for (const path of detTouched) {
+            const nf = nextByPath.get(path);
+            if (!nf || typeof nf.content !== "string") continue;
+            // Same write guard as the paid path: this loop is driven by a
+            // failing preview, and "deterministic" is not a licence to blank a
+            // working file if a fixer ever misbehaves.
+            const verdict = guardFileWrite({
+              path,
+              next: nf.content,
+              previous: files.find((pf) => pf.path === path)?.content ?? null,
+            });
+            if (!verdict.ok) {
+              rejected.push(path);
+              continue;
+            }
+            written.push(path);
+            const language =
+              nf.language ??
+              (path.endsWith(".tsx") ? "typescriptreact"
+                : path.endsWith(".ts") ? "typescript"
+                : path.endsWith(".css") ? "css"
+                : path.endsWith(".html") ? "html"
+                : "javascript");
+            if (persistFixes) {
+              await supabase.from("project_files").upsert(
+                { project_id: projectId, path, content: nf.content, language },
+                { onConflict: "project_id,path" },
+              );
+              pushFileToRunningSandbox(supabase, projectId, path, nf.content);
+            }
+            result.fixedFiles.push({ path, content: nf.content, language });
+            const idx = files.findIndex((pf) => pf.path === path);
+            files = idx >= 0
+              ? files.map((pf, i) => (i === idx ? { ...pf, content: nf.content } : pf))
+              : [...files, { path, content: nf.content, language } as ProjectFile];
+          }
+          if (written.length > 0) {
+            result.fixesApplied += 1;
+            freeRounds += 1;
+            emit(`Fixed ${written.length} file${written.length === 1 ? "" : "s"} locally (no AI) — re-verifying…`);
+            // Scored exactly like a paid attempt: held open and settled against
+            // what the NEXT round's checks observe, under model "deterministic",
+            // so the fingerprint report shows what the free tier absorbed.
+            pending = {
+              before: errors.map((message) => fingerprintError(message, roundSignal)),
+              round: round + 1,
+              signal: roundSignal,
+              model: "deterministic",
+              written,
+              rejected,
+              startedAt: roundStartedAt,
+            };
+            // A deterministic round must not move the LADDER: if the rewrite
+            // did not help, the fast tier still deserves its first turn — the
+            // null baseline never promotes (repair-ladder contract).
+            lastErrorCount = null;
+            if (!opts.candidateFiles) await new Promise((resolve) => setTimeout(resolve, 4_000));
+            continue;
+          }
+        }
       }
 
       // ── Fix round ───────────────────────────────────────────────────────────
@@ -793,13 +1124,53 @@ export async function runSelfVerification(opts: {
       // The fast tier is used ONLY when the context is genuinely small. It
       // collapses on large inputs — measured 175s on a 250-line file against
       // 16s for the generator — so a big context must never land here.
+      //
+      // The `round === 0` clause is GONE, and that is the behavioural change.
+      // It meant a small, precisely-located compile error was handed to the
+      // fast tier once and then, whatever the outcome, escalated — so a tier
+      // that was resolving ~70% of what it saw never got a second turn on the
+      // remainder. Eligibility is now about the SHAPE of the work (located,
+      // small) rather than about which round happens to be running.
       const PRECISE_CONTEXT_CHAR_BUDGET = 12_000;
       const cheapRepairEligible =
-        round === 0 && usePreciseContext && context.length <= PRECISE_CONTEXT_CHAR_BUDGET;
+        usePreciseContext && context.length <= PRECISE_CONTEXT_CHAR_BUDGET;
 
-      const fixModel = cheapRepairEligible
-        ? FAST_CODING_MODEL
-        : (fixLadder[Math.min(round, fixLadder.length - 1)] ?? ECONOMY_CODING_MODEL ?? getDefaultAiModel());
+      // A tier floor, not a tier choice: a broad or bulky context must never
+      // reach the fast tier however well the ladder is going, because that is
+      // the regime it is measured to collapse in. Promotion still only ever
+      // moves upward, so the floor can raise the tier for a round but never
+      // lower it back.
+      const tierFloor = cheapRepairEligible ? 0 : 1;
+      // ── What has already been tried on THIS failure? ──────────────────────
+      // repair_outcomes has graded every prior attempt since migration 161 and
+      // nothing read one back, so the ladder would re-run an approach that had
+      // already failed on the identical fingerprint. Memory raises the floor by
+      // at most one tier (see suggestedStartingTier) and, more usefully, tells
+      // the repair model what not to repeat.
+      //
+      // Best-effort throughout: a lookup failure yields [] and the round runs
+      // exactly as before. Memory improves a repair; it is never a precondition
+      // for one — the same rule record-outcome.ts follows on the write side.
+      const priorAttempts = await lookupPriorAttempts(
+        supabase,
+        errors.map((message) => fingerprintError(message, roundSignal)),
+        { projectId, signal: roundSignal },
+      );
+      const memoryFloor = suggestedStartingTier(
+        priorAttempts,
+        (model) => {
+          const i = model ? repairTiers.indexOf(model) : -1;
+          return i >= 0 ? i : null;
+        },
+        repairTiers.length,
+      );
+
+      const tier = resolveRepairTier(
+        repairTier,
+        Math.max(tierFloor, memoryFloor),
+        repairTiers.length,
+      );
+      const fixModel = repairTiers[tier] ?? ECONOMY_CODING_MODEL ?? getDefaultAiModel();
 
       // ── AI diagnosis, round 0 only ────────────────────────────────────────
       // buildPreviewDiagnosis() above is a DETERMINISTIC reading of the error
@@ -853,19 +1224,34 @@ export async function runSelfVerification(opts: {
         aiDiagnosis = (diag?.content ?? "").trim();
       }
 
-      if (round > 0) emit("First fix didn't hold — escalating…");
+      // Message follows the TIER, not the round — the two came apart when
+      // promotion stopped being keyed on round number. A round that is still on
+      // the same tier is another attempt, not an escalation, and saying
+      // "escalating" there would be a lie to the user about what they are being
+      // charged for.
+      if (tier > 0 && round > 0) emit("Previous fix didn't hold — escalating…");
+      else if (round > 0) emit("Still fixing…");
       const fix = await generateAI(
         {
           model: fixModel,
           messages: [
-            { role: "system", content: applyModelAdapter(AUTO_FIX_SYSTEM_PROMPT, fixModel) },
+            { role: "system", content: applyModelAdapter(AUTO_FIX_EDITS_SYSTEM_PROMPT, fixModel) },
             {
               role: "user",
-              content: `Fix these runtime errors found while rendering the app in a browser:\n\n${errors
+              // Name the errors' actual provenance. Most rounds now carry
+              // compiler/static-gate errors that were caught BEFORE any render,
+              // and telling the model they were "found while rendering in a
+              // browser" pointed it at runtime hypotheses (state, effects,
+              // timing) for what is a mechanical compile-time defect.
+              content: `${
+                roundSignal === "typecheck"
+                  ? "Fix these errors found by static checks (compiler, import resolution, module contracts) before the app was rendered:"
+                  : "Fix these runtime errors found while rendering the app in a browser:"
+              }\n\n${errors
                 .map((e) => `- ${e}`)
                 .join("\n")}${diagnosis ? `\n\nPreview diagnosis (fix these first):\n${diagnosis}` : ""}${
                 aiDiagnosis ? `\n\nRoot-cause analysis from a second model — treat this as the brief, not a suggestion:\n${aiDiagnosis}` : ""
-              }\n\nRelevant files:\n${context}\n\nReturn the fixed files as JSON.`,
+              }${buildPriorAttemptsBlock(priorAttempts)}\n\nRelevant files:\n${context}\n\nPREFERRED: return targeted edits as {"edits":[{"path":"...","search":"<exact current lines, copied verbatim, unique in the file>","replace":"<replacement lines>"}]} — several small edits beat one large one, and search text must be copied exactly from the files above. Return whole files as {"files":[{"path":"...","content":"..."}]} ONLY for a file that must be created or almost entirely rewritten.`,
             },
           ],
           temperature: 0.1,
@@ -883,7 +1269,17 @@ export async function runSelfVerification(opts: {
         { projectId, userId: opts.userId, task: "self_verify.autofix" },
       );
 
-      const fixedFiles = parseFixFiles(fix?.content ?? "");
+      const currentByPath = new Map(files.map((f) => [f.path, f.content ?? ""]));
+      const resolved = resolveRepairResponse(fix?.content ?? "", currentByPath);
+      if (resolved.editFailures.length > 0) {
+        // The model proposed anchored edits and they did not apply cleanly.
+        // Refusing outright (rather than guessing) is the contract that makes
+        // cheap edits safe; the round scores as failed and the ladder reacts.
+        console.warn(
+          `[self-verify] rejected edit batch: ${resolved.editFailures.join("; ")}`,
+        );
+      }
+      const fixedFiles = resolved.files;
       if (fixedFiles.length === 0) {
         emit("Couldn't auto-fix — open the preview to review the error.");
         return result;
