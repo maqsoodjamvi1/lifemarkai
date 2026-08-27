@@ -32,6 +32,7 @@ import { fingerprintError } from "./failure-fingerprint.ts";
 import { recordRepairOutcome } from "./record-outcome.ts";
 import type { ProjectFile } from "../../types/database.ts";
 import { loadOptionalPlaywright } from "../optional-playwright.ts";
+import { isLadderExhausted,resolveRepairTier,shouldPromoteRepairTier } from "./repair-ladder.ts";
 
 export interface SelfVerifyResult {
   engine: "browser" | "static";
@@ -49,7 +50,11 @@ type SupabaseClient = any;
 // Raised from 55s when verification became a per-route sweep: 8 extra route
 // loads (~2s each) plus a fix round must fit, or the sweep gets cut off right
 // before the re-verify that would confirm the fix.
-const TIME_BUDGET_MS = 90_000;
+// Raised from 90s when the ladder became progress-gated (below). The cap that
+// ends a repair sequence should be "it stopped helping", not "the clock ran
+// out mid-improvement" — but latency is a real cost too, so this stays a hard
+// wall and is env-overridable for tuning without a deploy.
+const TIME_BUDGET_MS = Number(process.env.SELF_VERIFY_TIME_BUDGET_MS) || 150_000;
 const RENDER_SETTLE_MS = 3_500;
 
 /**
@@ -455,11 +460,29 @@ export async function runSelfVerification(opts: {
 }): Promise<SelfVerifyResult | null> {
   const { supabase, projectId } = opts;
   const emit = opts.emit ?? (() => {});
-  // HARD CAP at two repair rounds. `opts.maxRounds ?? 2` was only a default, so
-  // any caller could raise it — and each extra round is a full render plus a
-  // repair generation, i.e. real latency and real money, on a build that has
-  // already failed twice. Two verified attempts then stop and report.
-  const MAX_REPAIR_ROUNDS = 2;
+  // HARD CAP on repair rounds. `opts.maxRounds ?? 2` was only a default, so any
+  // caller could raise it; the Math.min below keeps it a ceiling.
+  //
+  // Raised 2 -> 4 on 2026-08-27, on measured behaviour rather than taste.
+  // repair_outcomes over 11 days (n=46 typecheck attempts):
+  //
+  //   round 1  deepseek-v4-flash  138 errors in -> 97 resolved, 43 introduced,
+  //                               41 remaining
+  //   round 2  gpt-5.6-terra       82 errors in -> 34 resolved,  9 introduced,
+  //                               48 remaining
+  //
+  // Two things fall out of that. The cheap tier is NOT failing — it clears ~70%
+  // of the errors it is handed. And two rounds does not converge: the sequence
+  // hit the cap with 48 errors still standing and shipped a broken build
+  // anyway. So the cap was ending runs that were still making progress, and the
+  // escalation it forced (92% of repairs reached round 2) was buying a WORSE
+  // resolution rate than the tier it escalated past, at ~200x the price
+  // ($0.104 vs $0.0005 per call).
+  //
+  // The fix is not more escalation, it is more turns for whatever is working —
+  // see repairTiers below, which now promotes on lack of progress rather than
+  // on round number. TIME_BUDGET_MS remains the real backstop.
+  const MAX_REPAIR_ROUNDS = 4;
   const maxRounds = Math.min(opts.maxRounds ?? MAX_REPAIR_ROUNDS, MAX_REPAIR_ROUNDS);
   const startedAt = Date.now();
 
@@ -515,22 +538,37 @@ export async function runSelfVerification(opts: {
     // ── The repair ladder ───────────────────────────────────────────────────
     // Explicit, not inferred. selectModelChain() used to pick these by scoring
     // a synthetic prompt, which meant the models doing your repairs changed
-    // whenever the scoring heuristics were tuned. The ladder is now fixed:
+    // whenever the scoring heuristics were tuned.
     //
-    //   round 0  DEFAULT_CODING_MODEL   the generator repairs its own build,
-    //                                   but ONLY after DIAGNOSIS_MODEL has told
-    //                                   it what actually went wrong
-    //   round 1  ESCALATION_MODEL       the expensive model, and only here —
-    //                                   reached solely after a real browser
-    //                                   render has confirmed round 0 failed
+    //   tier 0  FAST_CODING_MODEL      mechanical, precisely-located defects
+    //   tier 1  DEFAULT_CODING_MODEL   the generator repairs its own build,
+    //                                  briefed by DIAGNOSIS_MODEL
+    //   tier 2  ESCALATION_MODEL       a different lab entirely, last resort
     //
-    // Two repair rounds, hard-capped. Round 2 exists only to render and report;
-    // it never repairs (see the `round === maxRounds` return below). Anything
-    // still broken after two verified attempts is a bug report, not a third bill.
-    const fixLadder: string[] = [
+    // THE PROMOTION RULE IS THE POINT. A tier used to be chosen by round index,
+    // so round 1 escalated unconditionally — including when round 0 had just
+    // resolved 70% of the errors and was plainly working. Promotion is now
+    // driven by OBSERVED PROGRESS: a tier that reduced the error count keeps
+    // the next turn, and only a tier that stalled (or made things worse) hands
+    // off to the one above it.
+    //
+    // That inverts the economics. The old shape paid $0.104 to escalate away
+    // from a tier that costs $0.0005 and was succeeding; the new shape spends
+    // ~$0.0015 on three cheap turns and escalates only against evidence. It is
+    // also strictly safer: a stalled tier still escalates, just on a real
+    // signal instead of a counter.
+    //
+    // `repairTier` only ever moves UP — a tier that stalled once does not get
+    // re-tried after a more capable one unsticks the build, because the thing
+    // it stalled on is still in the file.
+    const repairTiers: string[] = [
+      FAST_CODING_MODEL,
       DEFAULT_CODING_MODEL,
       ESCALATION_MODEL,
     ];
+    let repairTier = 0;
+    /** Error count seen at the START of the previous round, or null on round 0. */
+    let lastErrorCount: number | null = null;
 
     // A repair attempt cannot be scored at the moment it is made — only the
     // next render says whether it worked. So each attempt is held here and
@@ -750,7 +788,26 @@ export async function runSelfVerification(opts: {
       }
 
       result.errors = errors;
-      if (round === maxRounds || Date.now() - startedAt > TIME_BUDGET_MS) {
+
+      // ── Did the previous round actually help? ─────────────────────────────
+      // `errors` here is the state AFTER the previous round's repair, freshly
+      // observed by this round's typecheck/render — not the repair model's own
+      // opinion of its work. That is what makes this a measurement.
+      //
+      // Strictly fewer errors = progress = the current tier keeps its turn.
+      // Equal or more = stalled = promote. Note that "made things worse" lands
+      // in the same bucket as "changed nothing", which is deliberate: both mean
+      // this tier has stopped being the right tool, and both should escalate.
+      if (shouldPromoteRepairTier(errors.length, lastErrorCount)) repairTier += 1;
+      lastErrorCount = errors.length;
+
+      // Running out of LADDER is a real stop condition, not just a cap. Once the
+      // most capable tier has itself stalled, another round buys another bill
+      // and the same errors — the old shape had no way to express this and
+      // simply burned its remaining rounds.
+      const ladderExhausted = isLadderExhausted(repairTier, repairTiers.length);
+
+      if (round === maxRounds || ladderExhausted || Date.now() - startedAt > TIME_BUDGET_MS) {
         emit(`Verification found ${errors.length} issue${errors.length === 1 ? "" : "s"} — open the preview to review.`);
         return result;
       }
@@ -793,13 +850,25 @@ export async function runSelfVerification(opts: {
       // The fast tier is used ONLY when the context is genuinely small. It
       // collapses on large inputs — measured 175s on a 250-line file against
       // 16s for the generator — so a big context must never land here.
+      //
+      // The `round === 0` clause is GONE, and that is the behavioural change.
+      // It meant a small, precisely-located compile error was handed to the
+      // fast tier once and then, whatever the outcome, escalated — so a tier
+      // that was resolving ~70% of what it saw never got a second turn on the
+      // remainder. Eligibility is now about the SHAPE of the work (located,
+      // small) rather than about which round happens to be running.
       const PRECISE_CONTEXT_CHAR_BUDGET = 12_000;
       const cheapRepairEligible =
-        round === 0 && usePreciseContext && context.length <= PRECISE_CONTEXT_CHAR_BUDGET;
+        usePreciseContext && context.length <= PRECISE_CONTEXT_CHAR_BUDGET;
 
-      const fixModel = cheapRepairEligible
-        ? FAST_CODING_MODEL
-        : (fixLadder[Math.min(round, fixLadder.length - 1)] ?? ECONOMY_CODING_MODEL ?? getDefaultAiModel());
+      // A tier floor, not a tier choice: a broad or bulky context must never
+      // reach the fast tier however well the ladder is going, because that is
+      // the regime it is measured to collapse in. Promotion still only ever
+      // moves upward, so the floor can raise the tier for a round but never
+      // lower it back.
+      const tierFloor = cheapRepairEligible ? 0 : 1;
+      const tier = resolveRepairTier(repairTier, tierFloor, repairTiers.length);
+      const fixModel = repairTiers[tier] ?? ECONOMY_CODING_MODEL ?? getDefaultAiModel();
 
       // ── AI diagnosis, round 0 only ────────────────────────────────────────
       // buildPreviewDiagnosis() above is a DETERMINISTIC reading of the error
@@ -853,7 +922,13 @@ export async function runSelfVerification(opts: {
         aiDiagnosis = (diag?.content ?? "").trim();
       }
 
-      if (round > 0) emit("First fix didn't hold — escalating…");
+      // Message follows the TIER, not the round — the two came apart when
+      // promotion stopped being keyed on round number. A round that is still on
+      // the same tier is another attempt, not an escalation, and saying
+      // "escalating" there would be a lie to the user about what they are being
+      // charged for.
+      if (tier > 0 && round > 0) emit("Previous fix didn't hold — escalating…");
+      else if (round > 0) emit("Still fixing…");
       const fix = await generateAI(
         {
           model: fixModel,
