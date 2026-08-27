@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { selectRelevantFiles } from "./context-selector.ts";
 import { type BuildAppType, classifyBuildIntent, isAppShellAppType } from "./build-intent.ts";
-import { WEBSITE_HEADER_CONTRACT } from "./website-header-contract.ts";
+import { WEBSITE_FOOTER_CONTRACT, WEBSITE_HEADER_CONTRACT } from "./website-header-contract.ts";
 import { NEXTJS_RULES } from "./prompts/nextjs-rules.ts";
 import { renderPackageAllowlistPrompt } from "./package-allowlist.ts";
 import { renderViteSetupPrompt } from "../templates/lovable-vite-scaffold.ts";
@@ -309,6 +309,9 @@ export function buildDesignSystem(appType?: BuildAppType): string {
     appShell ? ADMIN_DENSITY_LANGUAGE : "",
     DESIGN_SYSTEM_TAIL,
     siteChrome ? WEBSITE_HEADER_CONTRACT : "",
+    // The footer half. It shipped with no contract at all while the injector
+    // stood ready to synthesise a very specific one — see WEBSITE_FOOTER_CONTRACT.
+    siteChrome ? WEBSITE_FOOTER_CONTRACT : "",
   ]
     .filter(Boolean)
     .join("\n\n")

@@ -96,3 +96,43 @@ Do NOT put contact/social only in the footer — they belong in the top bar as w
 
 Admin/dashboard apps are exempt (use sidebar + content topbar instead).
 `.trim();
+
+/**
+ * The footer half of the site chrome contract.
+ *
+ * The header had a mandatory, detailed contract; the footer had NOTHING — the
+ * header contract's only mention was one line telling the model to "pair it
+ * with Footer.tsx". So the shape of a footer was left entirely to the model
+ * while `ensureWebsiteChrome` stood ready to synthesise a very specific
+ * four-column one, and the two had no reason to agree. A model-authored footer
+ * satisfied `hasSiteFooter()` and shipped whatever it happened to be — most
+ * often a single centred copyright line under a page full of real content.
+ *
+ * The sections below describe the SAME shape `siteFooterSource()` builds
+ * (templates/site-chrome.ts), so a model-authored footer and a synthesised one
+ * are interchangeable. A test pins that correspondence.
+ */
+export const WEBSITE_FOOTER_CONTRACT = `
+### WEBSITE FOOTER CONTRACT (mandatory for every marketing / landing / storefront / portfolio site)
+A single centred copyright line is NOT a footer. Every public site ships a multi-column footer:
+
+1. **Brand column** — wordmark/brand name, one or two sentences of real positioning copy
+   (never Lorem ipsum), and at least 3 social icons (lucide-react).
+2. **Link columns** — two or three, each with a bold heading and 3-5 real links:
+   navigation ("Home, About, Services, Contact") and company ("Careers, Press, Privacy, Terms").
+   Anchor links (\`#about\`) are fine on a one-page site; multi-page sites use real routes.
+3. **Contact column** — address, phone (\`tel:\` link) and email (\`mailto:\` link), each with a
+   lucide icon. Use realistic values for the brand, never "123 Main St" or "email@example.com".
+4. **Bottom bar** — separated by a top border: \`© {new Date().getFullYear()} Brand. All rights
+   reserved.\` on one side, secondary note on the other.
+
+Layout: \`grid gap-10 sm:grid-cols-2 lg:grid-cols-4\` inside a \`max-w-6xl\` container, generous
+vertical padding (\`py-14\`), a top border separating it from the page, and a surface that
+contrasts with the page background. Theme-aware in both light and dark.
+
+Implement as \`src/components/layout/Footer.tsx\` and mount it in the ROOT LAYOUT beside the
+header — \`src/routes/__root.tsx\` for TanStack Start, \`src/App.tsx\` for Vite SPA — so every page
+gets it. A site with a header and no footer is an incomplete build.
+
+Admin/dashboard apps are exempt (a staff tool needs no marketing footer).
+`.trim();
