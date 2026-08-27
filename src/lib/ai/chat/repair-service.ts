@@ -1,4 +1,4 @@
-import { ECONOMY_CODING_MODEL,ESCALATION_MODEL } from "../model-defaults.ts";
+import { selectRepairModel } from "./repair-model-ladder.ts";
 import { parseAIResponse,type ParsedFile } from "../code-parser.ts";
 import { AUTO_FIX_SYSTEM_PROMPT,buildRepairPrompt } from "../system-prompts.ts";
 import { prepareGeneratedFiles } from "./validation-service.ts";
@@ -12,6 +12,12 @@ export type RepairStageOptions = {
   needsEnrichment: boolean;
   majorGreenfield: boolean;
   simpleEconomyRequest: boolean;
+  /**
+   * 0-based index of this repair attempt within the caller's autofix loop.
+   * Round 0 is the generator repairing its own build; only a round that
+   * follows a failed round escalates. Omitted means 0.
+   */
+  round?: number;
   maxTokens: number;
   projectId: string;
   userId: string;
@@ -35,12 +41,7 @@ export async function runRepairStage(
     options.errors,
     options.needsEnrichment ? options.blueprint : undefined,
   );
-  const repairModel =
-    options.needsEnrichment || options.majorGreenfield
-      ? ESCALATION_MODEL
-      : options.simpleEconomyRequest
-        ? ECONOMY_CODING_MODEL
-        : ESCALATION_MODEL;
+  const repairModel = selectRepairModel(options);
   let repairContent = "";
 
   await runGenerationStage(

@@ -37,7 +37,8 @@ export const OPENROUTER_MODEL_CATALOG: readonly OpenRouterModelOption[] = [
   { id: "deepseek/deepseek-v4-flash", label: "DeepSeek V4 Flash", provider: "DeepSeek", badge: "Fast", category: "fast", fast: true, description: "Classification and chat. Very quick on short prompts; not for file edits." },
   { id: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna", provider: "OpenAI", badge: "Coder", category: "coding", best: true, new: true, fast: true, compare: true, description: "Writes the project and performs the first repair. Fastest coder tested (1.7s) and the strongest design output per dollar." },
   { id: "deepseek/deepseek-v4-pro", label: "DeepSeek V4 Pro", provider: "DeepSeek", badge: "Reasoning", category: "reasoning", compare: true, description: "Diagnoses failed builds and handles hard reasoning." },
-  { id: "openai/gpt-5.6-terra", label: "GPT-5.6 Terra", provider: "OpenAI", badge: "Escalation", category: "frontier", best: true, compare: true, creditMultiplier: 2, description: "Complex builds and the final repair, after a verified failure." },
+  { id: "openai/gpt-5.6-terra", label: "GPT-5.6 Terra", provider: "OpenAI", badge: "Premium", category: "frontier", best: true, compare: true, creditMultiplier: 2, description: "Premium tier for complex builds. Same lab as the coder, so it is no longer the escalation step." },
+  { id: "anthropic/claude-sonnet-5", label: "Claude Sonnet 5", provider: "Anthropic", badge: "Escalation", category: "frontier", best: true, new: true, compare: true, creditMultiplier: 2, description: "The final repair, after a real browser render confirms the first repair failed. Cheaper than the premium tier it escalates past, and a different lab from the coder. Verified live 2026-08-27 (9 endpoints, 1M context)." },
 ] as const;
 
 export type OpenRouterModelId = string;

@@ -2136,6 +2136,7 @@ The user has expressed frustration. Do the following:
                     needsEnrichment,
                     majorGreenfield: isMajorGreenfieldBuild(message, fileCount),
                     simpleEconomyRequest,
+                    round: enrichPass,
                     maxTokens: outputMaxTokens,
                     projectId,
                     userId,

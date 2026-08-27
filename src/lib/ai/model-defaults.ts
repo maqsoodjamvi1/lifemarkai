@@ -28,10 +28,18 @@ import type { AIModel } from "./provider.ts";
 // so that each step only runs when the cheaper step below it has demonstrably
 // failed, not on a guess.
 //
-//   1. CLASSIFY   deepseek-v4-flash   classify the request, chat turns
-//   2. GENERATE   z-ai/glm-5.2        write the project; perform the FIRST repair
-//   3. DIAGNOSE   deepseek-v4-pro     explain WHY the build failed (no code)
-//   4. ESCALATE   openai/gpt-5.6-terra complex builds and the FINAL repair only
+//   1. CLASSIFY   deepseek-v4-flash    classify the request, chat turns
+//   2. GENERATE   openai/gpt-5.6-luna  write the project; perform the FIRST repair
+//   3. DIAGNOSE   deepseek-v4-pro      explain WHY the build failed (no code)
+//   4. ESCALATE   anthropic/claude-sonnet-5 the FINAL repair only
+//
+// Three labs, four slots, and — since 2026-08-27 — the escalation step is the
+// one that crosses labs again: OpenAI writes, DeepSeek diagnoses, Anthropic
+// repairs. The premium/complex-build tier is a SEPARATE constant
+// (ROUTER_PREMIUM, still Terra) precisely so that pointing escalation at the
+// most expensive model in the product does not also reprice every premium
+// build. Escalation is one call behind a verified failure; premium is five
+// calls on the happy path, and they must not share a slug.
 //
 // The split at steps 2/3 is the point of the design: the model that explains
 // the failure is NOT the model that fixes it. A model that just failed to
@@ -44,12 +52,36 @@ import type { AIModel } from "./provider.ts";
 //   z-ai/glm-5.2       $0.966/$3.036  $0.363   1.05M ctx  (31 endpoints, 99.9%)
 //   deepseek-v4-pro    $1.440/$2.880  $0.475   1.05M ctx
 //   openai/gpt-5.6-terra $2.00/$12.00 $0.980   1.05M ctx
+//   anthropic/claude-sonnet-5 $2.00/$10.00    1.0M ctx  (9 endpoints, live 2026-08-27)
+//   anthropic/claude-sonnet-4.6 $3.00/$15.00  1.0M ctx  (not used — see below)
+//   anthropic/claude-opus-5   $5.00/$25.00    1.0M ctx  (not used — see below)
 //
-// NOTE ON COST: Terra is ~36x the price of Flash per build. It is gated behind
-// a VERIFIED failure (a real browser render that still errors after GLM's
-// repair), not behind a guess about difficulty — that gate is what keeps it
-// affordable. If it starts firing on most builds, the repair prompt is the bug,
-// not the ladder.
+// NOTE ON COST — read the unit, it is the whole argument. The $ column above is
+// a FIVE-CALL BUILD; escalation is not five calls, it is ONE, and only after a
+// real browser render has confirmed the generator's own repair still errors.
+// Priced per that one call at 50k in / 8k out:
+//
+//   anthropic/claude-sonnet-5    $0.180   <- chosen
+//   openai/gpt-5.6-terra         $0.196   (the previous escalation slug)
+//   anthropic/claude-sonnet-4.6  $0.270
+//   anthropic/claude-opus-5      $0.450
+//
+// So escalation got CHEAPER, not more expensive, while buying back the thing
+// the old ladder had lost: a repair from a different lab than the one that
+// wrote the broken code. Luna -> Terra was OpenAI escalating to OpenAI, the
+// same reader of the same mistake.
+//
+// Two ordering surprises worth writing down, because both invert the guess:
+//   - Sonnet 5 is cheaper than Sonnet 4.6 ($2/$10 vs $3/$15). The newer model
+//     is the cheaper one; picking "the older Sonnet to save money" costs 50%
+//     more per escalation.
+//   - Opus 5 is 2.5x Sonnet 5 for the same cross-vendor hop, which is where
+//     this tier's leverage actually comes from.
+// Both are priced in model-prices.ts and one env var away if that changes.
+//
+// The gate is what makes it affordable, not the price. If escalation starts
+// firing on most builds, the repair prompt is the bug, not the ladder — and
+// OPENROUTER_ESCALATION_MODEL puts a cheaper slug back without a deploy.
 const ROUTER_CLASSIFY = "deepseek/deepseek-v4-flash";
 // GENERATE was z-ai/glm-5.2 until 2026-08-19. Swapped to gpt-5.6-luna after a
 // rendered design comparison plus the coding suite:
@@ -67,11 +99,21 @@ const ROUTER_CLASSIFY = "deepseek/deepseek-v4-flash";
 // cannot have a silent, provider-dependent zero-output mode.
 const ROUTER_GENERATE = "openai/gpt-5.6-luna";
 const ROUTER_DIAGNOSE = "deepseek/deepseek-v4-pro";
-const ROUTER_ESCALATE = "openai/gpt-5.6-terra";
+// ESCALATE was openai/gpt-5.6-terra until 2026-08-27. Moved to Anthropic for
+// vendor diversity on the one step where it actually pays: the final repair,
+// which by definition runs on code an OpenAI model has already failed to fix
+// once. Slug verified live the same day (9 endpoints, 1M context, $2/$10) —
+// and it is CHEAPER per call than the Terra it replaces, so this hop costs
+// nothing. See the per-call table above.
+const ROUTER_ESCALATE = "anthropic/claude-sonnet-5";
+// Premium/complex-build tier, deliberately SEPARATE from ROUTER_ESCALATE. These
+// were the same constant, so repointing escalation would have silently doubled
+// the price of every premium build as well.
+const ROUTER_PREMIUM = "openai/gpt-5.6-terra";
 
 // Back-compat aliases: the rest of the file speaks in CODER/FRONTIER terms.
 const ROUTER_CODER = ROUTER_GENERATE;
-const ROUTER_FRONTIER = ROUTER_ESCALATE;
+const ROUTER_FRONTIER = ROUTER_PREMIUM;
 
 /**
  * FREE-user tier. Scoped deliberately: small edits only, never a full build.
@@ -87,10 +129,10 @@ const ROUTER_FREE_SMALL_EDIT = "z-ai/glm-5.2:free";
 
 
 export const PREMIUM_CODING_MODEL: AIModel =
-  (process.env.OPENROUTER_PREMIUM_CODING_MODEL || ROUTER_ESCALATE) as AIModel;
+  (process.env.OPENROUTER_PREMIUM_CODING_MODEL || ROUTER_PREMIUM) as AIModel;
 
 export const PREMIUM_REASONING_MODEL: AIModel =
-  (process.env.OPENROUTER_PREMIUM_REASONING_MODEL || ROUTER_ESCALATE) as AIModel;
+  (process.env.OPENROUTER_PREMIUM_REASONING_MODEL || ROUTER_PREMIUM) as AIModel;
 
 /** Premium-ish work on a budget — the fastest of the benchmarked 7/7 models. */
 export const PREMIUM_ECONOMY_MODEL: AIModel =
@@ -221,26 +263,61 @@ export const DIAGNOSIS_MODEL: AIModel =
   (process.env.OPENROUTER_DIAGNOSIS_MODEL || ROUTER_DIAGNOSE) as AIModel;
 
 /**
- * ESCALATION model — used only on retry after a task failed with the normal
- * tier (cost-bounded: one escalated attempt per task).
+ * ESCALATION model — the FINAL repair, and only that. Reached after a real
+ * browser render confirms the generator's own repair still errors, one
+ * escalated attempt per task (MAX_REPAIR_ROUNDS = 2 in self-verify.ts).
  *
- * Was anthropic/claude-opus-4.8 at $5/M in, $25/M out. On a representative
- * build request (50k in, 8k out) that is $0.45 — against $0.012 for the coding
- * tier. One escalation cost as much as ~36 normal builds, and more than
- * Lovable's most expensive message ($0.50 at Pro list price), which put the
- * "5x cheaper than Lovable" target out of reach on its own.
+ * HISTORY, because this slug has moved twice and the reasoning matters more
+ * than the destination:
  *
- * deepseek-v4-pro is $0.435/M in, $0.87/M out — verified live against
- * openrouter.ai/api/v1/models/deepseek/deepseek-v4-pro/endpoints (2026-08-06).
- * That is $0.029 on the same request: 94% cheaper, a 15x cut.
+ *   anthropic/claude-opus-4.8  removed 2026-08-06, purely on price ($5/$25M).
+ *   deepseek/deepseek-v4-pro   the cheap replacement ($0.435/$0.87M) — but it
+ *                              is also DIAGNOSIS_MODEL, so diagnose and repair
+ *                              collapsed onto one model.
+ *   openai/gpt-5.6-terra       cheaper than Opus, but the same lab as the
+ *                              generator: Luna writes the broken code, Terra
+ *                              re-reads it with the same house assumptions.
+ *   anthropic/claude-sonnet-5  here now (2026-08-27). $2/M in, $10/M out;
+ *                              verified live against
+ *                              /models/anthropic/claude-sonnet-5/endpoints —
+ *                              resolves, 9 endpoints, 1M context.
  *
- * It is a real escalation and not just a cheaper slug: 1M context against
- * Opus's 1M, 384k max output, native reasoning support, and a ~120x cache-read
- * discount ($0.0036/M) — which matters most here, because escalation retries
- * the SAME codebase that just failed, so almost all of its input is cache hits.
+ * This slug was previously recorded in the tests as delisted from OpenRouter.
+ * It never was. That claim came from a bulk read of /api/v1/models that came
+ * back incomplete; the absence was read as a delisting instead of as a bad
+ * read. Per-slug /endpoints is what actually answers "does this exist" — a
+ * missing row in a truncated list is not evidence of anything.
  *
- * Still overridable: set OPENROUTER_ESCALATION_MODEL to put a frontier model
- * back on this tier without a deploy.
+ * The cost objection that removed Opus 4.8 was real but was priced in the wrong
+ * unit: it compared an escalation to a BUILD ("~36 normal builds"), when
+ * escalation is ONE call that most builds never make. Per call at 50k in /
+ * 8k out, escalation candidates rank:
+ *
+ *   anthropic/claude-sonnet-5    $0.180   <- chosen; cheaper than what it replaced
+ *   openai/gpt-5.6-terra         $0.196
+ *   anthropic/claude-sonnet-4.6  $0.270
+ *   anthropic/claude-opus-5      $0.450
+ *
+ * So this restores the cross-lab hop AND takes ~8% off the escalation bill.
+ * Note the ordering: Sonnet 5 undercuts Sonnet 4.6, so reaching for the older
+ * model to save money costs 50% more. Opus 5 is 2.5x for the same hop.
+ *
+ * What the hop buys is the property the ladder had quietly lost: the model that
+ * repairs the code is not from the lab that wrote it. Same argument
+ * DIAGNOSIS_MODEL rests on, applied to the step that writes the fix. There are
+ * tests asserting both.
+ *
+ * $0.180 is also an upper bound. provider.ts applies OpenRouter cache_control
+ * breakpoints to `anthropic/*` slugs ONLY (see withOpenRouterCacheControl), and
+ * escalation re-sends the SAME codebase that just failed — so most of its input
+ * bills as a cache read. Terra got no such discount on this path; moving
+ * escalation to Anthropic is the only reason that machinery does anything.
+ *
+ * The gate is the cost control, not the slug. If this fires on most builds the
+ * repair prompt is the bug. Still overridable with no deploy: set
+ * OPENROUTER_ESCALATION_MODEL (openai/gpt-5.6-terra to revert exactly; anthropic/claude-opus-5 and
+ * anthropic/claude-sonnet-4.6 are both priced in model-prices.ts and resolve
+ * live, if a future measurement justifies paying more).
  */
 export const ESCALATION_MODEL: AIModel =
   (process.env.OPENROUTER_ESCALATION_MODEL || ROUTER_ESCALATE) as AIModel;
