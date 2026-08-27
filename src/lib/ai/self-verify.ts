@@ -29,6 +29,7 @@ import { AUTO_FIX_SYSTEM_PROMPT } from "./system-prompts.ts";
 import { buildPreviewDiagnosis } from "../preview/diagnose-preview.ts";
 import { guardFileWrite } from "./guard-file-write.ts";
 import { deterministicRepair } from "./deterministic-repair.ts";
+import { findDependencyIssues } from "../verify/dependency-gate.ts";
 import { fingerprintError } from "./failure-fingerprint.ts";
 import { recordRepairOutcome } from "./record-outcome.ts";
 import type { ProjectFile } from "../../types/database.ts";
@@ -840,6 +841,16 @@ export async function runSelfVerification(opts: {
       // cannot resolve. This covers precisely that skipped case.
       const importErrors = findUnresolvedLocalImports(files).map((u) => u.formatted);
 
+      // The npm twin of the check above, and just as free. An import of a
+      // package the allowlist REFUSES will never install, so it can only be
+      // fixed by rewriting the code — but until now nothing said so anywhere:
+      // the installer refused silently and the repair model was left to infer
+      // "this library does not exist here" from an opaque resolve error. Each
+      // one is now a located, self-explanatory instruction. (Allowed-but-
+      // missing packages are the deterministic tier's job — it writes them
+      // into package.json at pinned versions before any model is called.)
+      const dependencyErrors = findDependencyIssues(files).disallowed.map((d) => d.formatted);
+
       // React logs a missing list `key` through console.error, so it reaches the
       // preview's error stream and the user sees a red console on an app that
       // otherwise works fine. Measured once in a 50-build smoke run — the only
@@ -896,7 +907,7 @@ export async function runSelfVerification(opts: {
         }
       }
 
-      const typeErrors = [...importErrors, ...typeErrorList, ...keyWarnings];
+      const typeErrors = [...importErrors, ...dependencyErrors, ...typeErrorList, ...keyWarnings];
 
       // Which compiler ran is worth knowing in production. "local" on a live
       // build means the sandbox check silently returned null — no container,

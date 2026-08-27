@@ -103,3 +103,32 @@ describe("support-file creation", () => {
     );
   });
 });
+
+describe("library maturity", () => {
+  const PKG = JSON.stringify({ name: "app", dependencies: { react: "^19.0.0" } });
+  const SANDBOX_TS2307 =
+    "src/Chart.tsx:1:28 — TS2307: Cannot find module 'recharts' or its corresponding type declarations.";
+
+  it("declares an allowed npm package in package.json instead of calling a model", () => {
+    const files = [
+      f("package.json", PKG),
+      f("src/Chart.tsx", 'import { LineChart } from "recharts";\nexport default () => <LineChart/>;'),
+    ];
+    const out = deterministicRepair(files, [SANDBOX_TS2307]);
+    assert.deepEqual(out.changedPaths, ["package.json"]);
+    const pkg = JSON.parse(out.files.find((x) => x.path === "package.json")!.content!);
+    assert.equal(pkg.dependencies.recharts, "^2.12.7"); // the allowlist pin
+  });
+
+  it("never adds a refused package — that error must reach the model as a rewrite", () => {
+    const files = [
+      f("package.json", PKG),
+      f("src/a.ts", 'import m from "moment";\nexport const x = m;'),
+    ];
+    const out = deterministicRepair(files, [
+      "src/a.ts:1:15 — TS2307: Cannot find module 'moment' or its corresponding type declarations.",
+    ]);
+    assert.deepEqual(out.changedPaths, []);
+    assert.deepEqual(out.createdPaths, []);
+  });
+});

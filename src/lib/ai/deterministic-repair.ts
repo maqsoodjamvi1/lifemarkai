@@ -42,6 +42,7 @@
 
 import { normalizeProjectImports } from "../preview/normalize-imports.ts";
 import { ensureCommonGeneratedSupportFiles } from "./generated-support-files.ts";
+import { syncProjectDependencies } from "../verify/dependency-gate.ts";
 
 export interface RepairableFile {
   path: string;
@@ -58,7 +59,7 @@ export interface RepairableFile {
  *   - sandbox tsc:     `TS2307: Cannot find module './X'` / `TS2305: … has no exported member`
  */
 const FIXABLE_ERROR_RE =
-  /imports "|is imported by .+ but is not exported|TS2307|TS2305|Cannot find module/;
+  /imports "|is imported by .+ but is not exported|TS2307|TS2305|Cannot find module|Failed to resolve import/;
 
 export function hasDeterministicallyFixableErrors(errors: readonly string[]): boolean {
   return errors.some((e) => FIXABLE_ERROR_RE.test(e));
@@ -100,6 +101,16 @@ export function deterministicRepair<T extends RepairableFile>(
   const supportedPaths = new Set(supported.map((f) => f.path));
   const renamed = eligible.some((f) => !supportedPaths.has(f.path));
   if (!renamed) out = [...supported, ...rest];
+
+  // Pass 3 — libraries. An import of an ALLOWED npm package (recharts, a Radix
+  // primitive, zustand…) that is missing from package.json is the library
+  // twin of a missing local file: the sandbox reports it as TS2307 / "Failed
+  // to resolve import" and a paid round used to rediscover it. Written at the
+  // allowlist's pinned version — the same pins the preview image is built
+  // from. Refused packages are NOT touched here: their fix is a code rewrite,
+  // and findDependencyIssues turns each into a precise, located error for the
+  // model instead. (dependency-gate.ts)
+  out = syncProjectDependencies(out).files;
 
   const changedPaths: string[] = [];
   const createdPaths: string[] = [];

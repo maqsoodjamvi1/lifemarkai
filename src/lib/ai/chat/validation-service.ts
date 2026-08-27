@@ -7,6 +7,8 @@ import {
 import { ensureCommonGeneratedSupportFiles } from "../generated-support-files.ts";
 import { ensureWebsiteChrome } from "../website-chrome.ts";
 import { alignGeneratedPackageJson, stripGeneratedRouteTree } from "../../preview/align-package-json.ts";
+import { normalizeProjectImports } from "../../preview/normalize-imports.ts";
+import { syncProjectDependencies } from "../../verify/dependency-gate.ts";
 import { lockControlledDependencyVersions, resolveControlledTemplate } from "../../templates/controlled-registry.ts";
 import { tanstackStartScaffold } from "../../templates/tanstack-start-scaffold.ts";
 
@@ -35,6 +37,9 @@ export type GenerationNormalizationResult = {
   alignedDependencies: string[];
   controlledDependencies: string[];
   controlledTemplate: string | null;
+  /** Allowed packages imported by the generation but absent from package.json,
+   * written in at their allowlist-pinned versions. */
+  addedDependencies: string[];
 };
 
 function alignTanStackRuntimeImports(files: ParsedFile[]): ParsedFile[] {
@@ -171,7 +176,28 @@ export function normalizeGenerationStage(
     controlledTemplate = template.key;
   }
 
-  return { files: normalized, alignedDependencies, controlledDependencies, controlledTemplate };
+  // ── Files must not be missing at creation ─────────────────────────────────
+  // Both fixers below used to run only on later paths (sandbox sync, repair),
+  // so a build could leave generation already broken and pay to rediscover it.
+  //
+  // Import repointing: a specifier aimed at the wrong directory is corrected
+  // against the ACTUAL file set the generation is shipping, before validation
+  // ever sees it.
+  normalized = normalizeProjectImports(normalized);
+
+  // Library contract: every ALLOWED npm package the code imports is written
+  // into package.json at its allowlist-pinned version — the same pins the
+  // preview image installs, so the sandbox cannot hit TS2307 on a legitimate
+  // library. Refused packages are deliberately NOT added (their fix is a code
+  // rewrite; findDependencyIssues reports them precisely on the verify path).
+  const addedDependencies: string[] = [];
+  if (packageIndex >= 0) {
+    const synced = syncProjectDependencies(normalized);
+    normalized = synced.files;
+    addedDependencies.push(...synced.added);
+  }
+
+  return { files: normalized, alignedDependencies, controlledDependencies, controlledTemplate, addedDependencies };
 }
 
 /** Validate correctness and product completeness as one deterministic stage. */
