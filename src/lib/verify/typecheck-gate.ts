@@ -231,6 +231,46 @@ const JSX_SHIM = `declare namespace JSX {
 }
 `;
 
+/**
+ * Ambient declarations for the stylesheet imports Vite handles natively.
+ *
+ * Same failure mode as JSX_SHIM above, found the same way. A generated app that
+ * does the single most ordinary thing in a Vite project —
+ *
+ *   import "../styles.css";
+ *
+ * — was reported as a build error, because this gate typechecks in an isolated
+ * directory with no node_modules, so none of Vite's ambient asset types exist:
+ *
+ *   TS2882: Cannot find module or type declarations for side-effect import
+ *           of '../styles.css'.
+ *
+ * The code is correct. The gate was wrong, and generation_runs shows it failing
+ * real builds on it. Each one then paid a diagnosis and a repair round to "fix"
+ * a stylesheet import that never needed fixing.
+ *
+ * Shipping `src/vite-env.d.ts` in the scaffold does NOT solve this, which is
+ * worth recording because it is the obvious guess: that file works by
+ * `/// <reference types="vite/client" />`, and `vite` is not resolvable in this
+ * sandbox either, so the reference resolves to nothing. Measured — the error is
+ * identical with and without it. A dependency-free ambient declaration is the
+ * only thing that works here.
+ *
+ * Scoped to STYLE extensions on purpose. Measured across the asset types a
+ * generated app actually imports, only side-effect style imports false-fail;
+ * `import logo from "./logo.svg"` and friends already pass, so widening this
+ * further would trade real coverage for nothing.
+ */
+const ASSET_SHIM = `declare module "*.css";
+declare module "*.scss";
+declare module "*.sass";
+declare module "*.less";
+declare module "*.styl";
+declare module "*.stylus";
+declare module "*.pcss";
+declare module "*.postcss";
+`;
+
 const TSCONFIG = {
   compilerOptions: {
     noEmit: true,
@@ -300,6 +340,7 @@ export async function runTypecheckGate(
     );
     await writeFile(join(dir, "tsconfig.json"), JSON.stringify(TSCONFIG, null, 2), "utf8");
     await writeFile(join(dir, "__jsx-shim.d.ts"), JSX_SHIM, "utf8");
+    await writeFile(join(dir, "__asset-shim.d.ts"), ASSET_SHIM, "utf8");
 
     let stdout = "";
     try {
