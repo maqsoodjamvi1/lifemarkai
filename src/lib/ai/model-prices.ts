@@ -34,6 +34,20 @@ export const MODEL_PRICES: Record<string, ModelPrice> = {
   // real accounting rather than a silent zero.
   "anthropic/claude-sonnet-4.6": [3.0, 15.0],
   "anthropic/claude-opus-5": [5.0, 25.0],
+  // $10/M in, $50/M out — the most expensive slug this product has ever routed,
+  // 2x Opus 5. Verified live 2026-08-27
+  // (/models/anthropic/claude-fable-5/endpoints: 6 endpoints, 1M context).
+  //
+  // It was already being called in production — self_verify.autofix and
+  // chat.build.autofix rows in ai_eval_log — while absent from this table, so
+  // every one of those calls recorded cost_usd = null. The single priciest
+  // model in the system was the one model invisible in the spend log.
+  //
+  // It reaches the router through an OPENROUTER_*_MODEL env override, which
+  // bypasses APPROVED_SMART_MODEL_IDS entirely (model-defaults.ts reads
+  // process.env directly with no approval check). Pricing it here does not
+  // approve it — it only stops it looking free.
+  "anthropic/claude-fable-5": [10.0, 50.0],
   "z-ai/glm-5.2:free": [0, 0],
   // Previously routed / still selectable elsewhere.
   "z-ai/glm-5.2": [0.966, 3.036],
@@ -61,9 +75,31 @@ export const MODEL_PRICES: Record<string, ModelPrice> = {
  * error the stale gateway table used to make. Null is honest: it means "we do
  * not know", and the reporting query can count those separately.
  */
+/**
+ * Models already reported as unpriced. Warned ONCE per model per process, not
+ * per call: this sits on the hot path of every generation, and a per-call warn
+ * would bury the signal it exists to raise.
+ */
+const warnedUnpriced = new Set<string>();
+
 export function computeCostUsd(model: string, promptTokens: number, completionTokens: number): number | null {
   const price = MODEL_PRICES[model];
-  if (!price) return null;
+  if (!price) {
+    // Null is the honest value, but SILENCE is not. anthropic/claude-fable-5
+    // billed at $10/$50 through this branch for days with nothing said: the
+    // null was correct and completely invisible, because the only place it
+    // surfaced was a column in a table nobody queries. One warn per model makes
+    // an unpriced route something an operator trips over on the first call,
+    // instead of discovering during a spend reconciliation weeks later.
+    if (!warnedUnpriced.has(model)) {
+      warnedUnpriced.add(model);
+      console.warn(
+        `[ai/cost] no price for "${model}" — its spend will be recorded as unknown. ` +
+          `Add it to MODEL_PRICES in src/lib/ai/model-prices.ts.`,
+      );
+    }
+    return null;
+  }
   const [inPerM, outPerM] = price;
   return (promptTokens * inPerM + completionTokens * outPerM) / 1_000_000;
 }

@@ -9,9 +9,15 @@ import {
   DEFAULT_CODING_MODEL,
   DIAGNOSIS_MODEL,
   ESCALATION_MODEL,
+  PREMIUM_CODING_MODEL,
   FREE_CODING_MODEL,
   DEFAULT_CHAT_MODEL,
+  FAST_CODING_MODEL,
+  ECONOMY_CODING_MODEL,
+  REVIEW_MODEL,
 } from "./model-defaults.ts";
+import { OPENROUTER_MODEL_CATALOG } from "./openrouter-models.ts";
+import { MODEL_CATALOG } from "./model-catalog.ts";
 
 describe("model prices", () => {
   it("prices every model the app can route to", () => {
@@ -21,10 +27,40 @@ describe("model prices", () => {
       DEFAULT_CODING_MODEL,
       DIAGNOSIS_MODEL,
       ESCALATION_MODEL,
+      PREMIUM_CODING_MODEL,
       FREE_CODING_MODEL,
       DEFAULT_CHAT_MODEL,
+      FAST_CODING_MODEL,
+      ECONOMY_CODING_MODEL,
+      REVIEW_MODEL,
     })) {
       assert.ok(MODEL_PRICES[model], `${name} (${model}) has no price`);
+    }
+  });
+
+  it("prices every model a USER can pick, not just the configured tiers", () => {
+    // The check above only ever covered tier CONSTANTS, and that is exactly how
+    // an unpriced model reached production: ai_eval_log shows
+    // anthropic/claude-fable-5 ($10/$50, the priciest slug this product has
+    // routed) billing real money with cost_usd = null, because it was never a
+    // tier constant. A model does not have to be a default to cost money — it
+    // only has to be reachable.
+    for (const model of OPENROUTER_MODEL_CATALOG) {
+      assert.ok(
+        MODEL_PRICES[model.id],
+        `${model.label} (${model.id}) is user-selectable but has no price`,
+      );
+    }
+  });
+
+  it("prices every model the router can cascade into", () => {
+    // selectModelChain() returns catalog entries the user never chose. An
+    // unpriced one is spend that appears nowhere.
+    for (const model of MODEL_CATALOG) {
+      assert.ok(
+        MODEL_PRICES[model.id],
+        `${model.label} (${model.id}) is routable but has no price`,
+      );
     }
   });
 
