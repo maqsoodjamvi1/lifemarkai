@@ -1,3 +1,49 @@
+# Line endings — declared here so they do NOT depend on each developer's
+# core.autocrlf setting.
+#
+# Without this the repository held a mix: 24 of 1271 tracked files were stored
+# with CRLF and the rest with LF, purely according to which machine last touched
+# them. Every checkout on Windows then re-converted files git considered
+# unchanged, so `git checkout -b` aborted with "your local changes would be
+# overwritten" across hundreds of files that contained no actual edit — and a
+# `git diff --stat` of pure line-ending churn is easy to mistake for real work,
+# because it looks like one. (The tell is that every line count is EVEN: each
+# line reports once as a deletion and once as an insertion.)
+#
+# It also broke patch transfer: `git am` rejects a patch whose CRLF files do not
+# match the working tree unless it is given --keep-cr, which is not a flag
+# anyone remembers.
+#
+# `text=auto eol=lf` means: git decides what is text, stores it as LF, and
+# checks it out as LF everywhere. Modern Windows tooling — VS Code, the
+# TypeScript toolchain, MINGW git — all handle LF natively.
+* text=auto eol=lf
+
+# Files that must keep CRLF regardless of platform.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binaries git must never touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.avif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.mp4 binary
+*.webm binary
+*.mp3 binary
+*.wav binary
+*.pdf binary
+*.wasm binary
+
+# Large-file storage.
 *.tar.gz filter=lfs diff=lfs merge=lfs -text
 *.iso filter=lfs diff=lfs merge=lfs -text
 *.apk filter=lfs diff=lfs merge=lfs -text
