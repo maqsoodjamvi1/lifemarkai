@@ -2,6 +2,7 @@ import { generateAI } from "./generate.ts";
 import { recordAiEval } from "./eval-log.ts";
 import type { AIMessage,ToolDefinition,ToolCall } from "./provider.ts";
 import { DEFAULT_CODING_MODEL } from "./model-defaults.ts";
+import { demoteByEvidence,fetchRecentStats } from "./model-performance.ts";
 import { selectModelChain,applyModelAdapter } from "./model-catalog.ts";
 import { AGENT_SYSTEM_PROMPT } from "./system-prompts.ts";
 import { summarizeFileSmart,findDefinitionSmart } from "./code-analyzer.ts";
@@ -662,7 +663,16 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
   // Hybrid cascade: if a provider call fails (rate limit / outage / bad
   // response), escalate to a different, family-diverse model rather than giving
   // up. A manually-selected model stays primary; the catalog supplies fallbacks.
-  const baseChain = selectModelChain(task, { require: ["code", "fixes"] });
+  // Measured demotion: the static cascade is reordered by what ai_eval_log has
+  // actually observed for agent iterations in the last week. A model with a
+  // proven bad recent run (>=8 calls, >=35% failures — see model-performance.ts
+  // for why both floors exist) moves to the BACK of the cascade; nothing is
+  // ever removed, an explicit user selection stays primary, and any lookup
+  // failure leaves the static order untouched. This is the same
+  // read-your-own-telemetry loop as repair-memory, applied to routing.
+  const staticChain = selectModelChain(task, { require: ["code", "fixes"] });
+  const evalStats = await fetchRecentStats(createAdminClient(), { task: "agent.iteration" }).catch(() => []);
+  const baseChain = demoteByEvidence(staticChain, "agent.iteration", evalStats);
   const chain = options.modelChain?.length
     ? options.modelChain
     : model && model !== DEFAULT_CODING_MODEL
