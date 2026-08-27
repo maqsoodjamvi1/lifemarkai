@@ -40,11 +40,10 @@ describe("model prices", () => {
 
   it("prices every model a USER can pick, not just the configured tiers", () => {
     // The check above only ever covered tier CONSTANTS, and that is exactly how
-    // an unpriced model reached production: ai_eval_log shows
-    // anthropic/claude-fable-5 ($10/$50, the priciest slug this product has
-    // routed) billing real money with cost_usd = null, because it was never a
-    // tier constant. A model does not have to be a default to cost money — it
-    // only has to be reachable.
+    // an unpriced model reached production: ai_eval_log showed a $10/$50 slug
+    // — the priciest this product has routed — billing real money with
+    // cost_usd = null, because it was never a tier constant. A model does not
+    // have to be a default to cost money; it only has to be reachable.
     for (const model of OPENROUTER_MODEL_CATALOG) {
       assert.ok(
         MODEL_PRICES[model.id],
