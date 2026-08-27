@@ -112,23 +112,62 @@ export function demoteByEvidence(
  * Fetch recent stats. Best-effort like every observability read in this repo:
  * any failure returns [] and routing proceeds on its static order.
  */
+/**
+ * Failures that are LifemarkAI's own fault, not the provider's. A model must
+ * be demoted for instability — rate limits, outages, timeouts — and never
+ * because our gateway secret expired or the OpenRouter balance ran dry, which
+ * would demote every model at once for a problem no cascade can route around.
+ */
+const CONFIG_FAILURE_RE =
+  /\b(401|403|invalid[_ ]?api[_ ]?key|unauthorized|insufficient|balance|quota exceeded|payment|gateway secret|misconfigur)\b/i;
+
+export function isProviderFailure(error: string | null | undefined): boolean {
+  if (!error) return true; // failure with no detail: assume provider, the safe read
+  return !CONFIG_FAILURE_RE.test(error);
+}
+
+/**
+ * In-process TTL cache. fetchRecentStats sat on the agent-start path pulling
+ * up to 5,000 rows per run — availability moves on the scale of minutes, so a
+ * 2-minute cache keeps startup at zero queries in the steady state. (External
+ * review; correct.) A shared aggregate table is the better end-state once
+ * build_runs correlation lands; this removes the per-run cost today.
+ */
+const STATS_TTL_MS = 120_000;
+const statsCache = new Map<string, { at: number; stats: ModelTaskStats[] }>();
+
 export async function fetchRecentStats(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any,
   opts: { days?: number; task?: string } = {},
 ): Promise<ModelTaskStats[]> {
+  const cacheKey = `${opts.task ?? "*"}:${opts.days ?? 7}`;
+  const hit = statsCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < STATS_TTL_MS) return hit.stats;
   try {
     const since = new Date(Date.now() - (opts.days ?? 7) * 86_400_000).toISOString();
     let q = supabase
       .from("ai_eval_log")
-      .select("model, task, success, latency_ms")
+      .select("model, task, success, latency_ms, error")
       .gte("created_at", since)
       .limit(5_000);
     if (opts.task) q = q.eq("task", opts.task);
     const { data, error } = await q;
     if (error || !Array.isArray(data)) return [];
-    return aggregateStats(data);
+    // Reclassify config-class failures as non-failures BEFORE aggregation, so
+    // a misconfigured secret cannot demote the whole catalogue.
+    const rows = (data as Array<{ model: string | null; task: string | null; success: boolean | null; latency_ms: number | null; error?: string | null }>).map(
+      (r) => (r.success === false && !isProviderFailure(r.error) ? { ...r, success: true } : r),
+    );
+    const stats = aggregateStats(rows);
+    statsCache.set(cacheKey, { at: Date.now(), stats });
+    return stats;
   } catch {
     return [];
   }
+}
+
+/** Test hook: clear the TTL cache. */
+export function __clearStatsCache(): void {
+  statsCache.clear();
 }

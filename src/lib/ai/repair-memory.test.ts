@@ -122,14 +122,33 @@ describe("prompt block", () => {
     assert.equal(buildPriorAttemptsBlock([]), "");
   });
 
-  it("tells the model not to repeat approaches that all failed", () => {
+  it("tells the model not to repeat approaches that failed at high coverage", () => {
     const out = buildPriorAttemptsBlock([
       attempt({ model: "a/1", introduced: 2, madeWorse: true }),
       attempt({ model: "b/2", resolved: 0 }),
     ]);
-    assert.match(out, /Do NOT repeat them/);
+    assert.match(out, /Do NOT repeat/);
     assert.match(out, /a\/1/);
     assert.match(out, /b\/2/);
+  });
+
+  it("related-only history never generates a prohibition", () => {
+    // A prohibition earned on a NEIGHBOUR'S failure could forbid the right
+    // approach for this one. Low-coverage rows are context, not law.
+    const out = buildPriorAttemptsBlock([
+      attempt({ resolved: 0, coverage: 0.2 }),
+      attempt({ madeWorse: true, introduced: 2, coverage: 0.3 }),
+    ]);
+    assert.doesNotMatch(out, /Do NOT repeat/);
+    assert.match(out, /weak context/);
+  });
+
+  it("a related success does not soften a high-coverage prohibition", () => {
+    const out = buildPriorAttemptsBlock([
+      attempt({ fullyResolved: true, resolved: 3, coverage: 0.2 }),
+      attempt({ resolved: 0, coverage: 1 }),
+    ]);
+    assert.match(out, /Do NOT repeat/);
   });
 
   it("points at what worked when something did", () => {

@@ -150,10 +150,20 @@ export function buildPriorAttemptsBlock(attempts: readonly PriorAttempt[]): stri
     return `- ${who} ${outcome}${where}${relation}.`;
   });
 
-  const anyWorked = ranked.some((a) => a.fullyResolved);
+  // The prohibition must be earned by evidence about THIS failure. The first
+  // wording said "None of these worked. Do NOT repeat them" over the whole
+  // list — including low-coverage rows about merely related failures, so a
+  // valid approach could be forbidden on a neighbour's record. (External
+  // review; correct.) Only high-coverage history prohibits; related rows are
+  // explicitly weak context, and a related success cannot soften an
+  // exact-match prohibition.
+  const exact = ranked.filter((a) => a.coverage >= TIER_EVIDENCE_MIN_COVERAGE);
+  const anyWorked = exact.some((a) => a.fullyResolved);
   const guidance = anyWorked
     ? "One earlier attempt did resolve this. Prefer that shape of change."
-    : "None of these worked. Do NOT repeat them — change your approach, not just your wording.";
+    : exact.length > 0
+      ? "The high-coverage attempts above failed on this same failure. Do NOT repeat those approaches — change the approach, not just the wording."
+      : "These are related attempts only — weak context, not evidence that the same approach fails here.";
 
   return [
     "",

@@ -111,7 +111,33 @@ async function settleRender(page: any): Promise<void> {
           !!root &&
           ((root.textContent ?? "").trim().length > 0 ||
             root.getBoundingClientRect().height > 8);
-        return mounted && quiet && domStill && hasVisibleContent && document.readyState !== "loading";
+        // Second review round: a STABLE spinner defeats the mutation window —
+        // render a static "Loading…" shell, schedule the real content with a
+        // 1s setTimeout, and mounted+still+visible all pass ~500ms early. So a
+        // page ADVERTISING busyness is not ready, whatever else looks settled.
+        // Heuristic and best-effort — the first-party signal below is the
+        // reliable path.
+        const el = root as Element | null;
+        const busy =
+          !!el &&
+          (el.matches?.('[aria-busy="true"]') === true ||
+            !!el.querySelector?.(
+              '[aria-busy="true"], [role="progressbar"], .animate-spin, [data-loading="true"]',
+            ) ||
+            /^\s*(loading|please wait|initializing|starting)[.\u2026\s]*$/i.test(
+              (el.textContent ?? "").trim(),
+            ));
+        // First-party bridge: a generated app ends the guessing by dispatching
+        // window.dispatchEvent(new Event("lifemark:ready")) when its content is
+        // genuinely up. Recorded by the init script; once seen it overrides the
+        // busy heuristic (the app knows best) but never the mounted/quiet
+        // checks (a lying app still has to have painted).
+        const appSaysReady = (w as { __lmAppReady?: boolean }).__lmAppReady === true;
+        return (
+          mounted && quiet && domStill && hasVisibleContent &&
+          (appSaysReady || !busy) &&
+          document.readyState !== "loading"
+        );
       });
     } catch {
       await page.waitForTimeout(RENDER_SETTLE_MS - Math.max(0, deadline - Date.now() - RENDER_SETTLE_MS));
@@ -126,6 +152,10 @@ async function settleRender(page: any): Promise<void> {
 /** Injected before any page script: counts in-flight fetch/XHR for settleRender. */
 const PENDING_FETCH_COUNTER = `(() => {
   let n = 0;
+  try {
+    Object.defineProperty(window, "__lmAppReady", { value: false, writable: true, configurable: true });
+    window.addEventListener("lifemark:ready", () => { window.__lmAppReady = true; }, { once: true });
+  } catch {}
   try {
     let last = Date.now();
     Object.defineProperty(window, "__lmLastMutation", { get: () => last, configurable: true });
