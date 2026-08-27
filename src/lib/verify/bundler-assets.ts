@@ -23,13 +23,20 @@
  * Keeping two lists in step by hand is what already failed, so the fix is one
  * list and no second copy. Adding an extension here fixes it everywhere at once.
  *
+ * A THIRD copy lived in preview/normalize-imports.ts, which the export-contract
+ * comment openly referenced ("same exemptions as normalize-imports.ts") without
+ * anything enforcing it. It was the most complete of the three and uniquely
+ * carried `.glsl`, so consolidating naively would have introduced a NEW false
+ * positive on shader imports — the sets were diffed before merging, not
+ * assumed.
+ *
  * Covers Vite's default assetsInclude plus the stylesheet dialects. It is
  * deliberately generous: a missed extension fails a real build, while an extra
  * one only means a genuinely missing asset is caught by the render instead of
  * by a static check — a much cheaper mistake.
  */
 export const BUNDLER_ASSET_RE =
-  /\.(css|scss|sass|less|styl|stylus|pcss|postcss|svg|png|jpe?g|gif|webp|avif|bmp|ico|json|txt|md|woff2?|ttf|otf|eot|mp4|webm|ogv|mov|mp3|wav|flac|aac|ogg|opus|pdf|wasm|glb|gltf)$/i;
+  /\.(css|scss|sass|less|styl|stylus|pcss|postcss|svg|png|jpe?g|gif|webp|avif|bmp|ico|json|txt|md|woff2?|ttf|otf|eot|mp4|webm|ogv|mov|mp3|wav|flac|aac|ogg|opus|pdf|wasm|glsl|glb|gltf)$/i;
 
 /** True when a specifier points at something the bundler handles, not a JS module. */
 export function isBundlerAsset(specifier: string): boolean {

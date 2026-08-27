@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { isBundlerAsset } from "./bundler-assets.ts";
 import { findUnresolvedLocalImports } from "./typecheck-gate.ts";
 import { findMissingModules } from "../preview/export-contract.ts";
+import { repairImportsInFile } from "../preview/normalize-imports.ts";
 
 /** Every extension measured as false-failing on one or both checks. */
 const REGRESSIONS = [
@@ -82,5 +83,46 @@ describe("the exemption is not a silencer", () => {
     assert.equal(isBundlerAsset("../styles.css/index"), false);
     assert.equal(isBundlerAsset("../a.png.ts"), false);
     assert.equal(isBundlerAsset("../a.png"), true);
+  });
+});
+
+describe("the third copy is consolidated without losing coverage", () => {
+  // normalize-imports.ts held its own copy, which export-contract's comment
+  // referenced by name with nothing enforcing it. It was the MOST complete of
+  // the three and uniquely carried .glsl, so merging naively would have created
+  // a new false positive on shader imports rather than removing one.
+  it("still exempts .glsl, which only the third copy had", () => {
+    assert.equal(isBundlerAsset("../shaders/wave.glsl"), true);
+  });
+
+  it("all three checks now agree on every extension", () => {
+    const every = [...REGRESSIONS, ...ALREADY_FINE, "glsl", "wasm", "bmp", "styl"];
+    for (const ext of every) {
+      const spec = `../asset.${ext}`;
+      assert.equal(isBundlerAsset(spec), true, `shared list rejects .${ext}`);
+      assert.deepEqual(findUnresolvedLocalImports(importing(spec) as never), [], `typecheck-gate reports .${ext}`);
+      assert.deepEqual(findMissingModules(importing(spec) as never), [], `export-contract reports .${ext}`);
+      // normalize-imports is exercised through its public API: an asset import
+      // must be left EXACTLY as written, never "repaired" toward a code file.
+      const src = `import a from "${spec}";\n`;
+      assert.equal(
+        repairImportsInFile("src/routes/__root.tsx", src, ["src/routes/__root.tsx"]),
+        src,
+        `normalize-imports rewrote .${ext}`,
+      );
+    }
+  });
+
+  it("normalize-imports still repairs a genuinely misplaced code import", () => {
+    // The counterpart: widening the asset list must not stop real repairs.
+    // Misplaced, not merely missing: written as a sibling, actually one folder
+    // over. That is the case this module exists to repair.
+    const src = `import { Card } from "./Card";\n`;
+    const out = repairImportsInFile("src/routes/__root.tsx", src, [
+      "src/routes/__root.tsx",
+      "src/components/Card.tsx",
+    ]);
+    assert.notEqual(out, src, "a misplaced code import should have been repointed");
+    assert.match(out, /components\/Card/);
   });
 });

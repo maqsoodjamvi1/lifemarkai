@@ -40,6 +40,8 @@
  * still shows the user's real code.
  */
 
+import { BUNDLER_ASSET_RE } from "../verify/bundler-assets.ts";
+
 const SOURCE_RE = /\.(tsx?|jsx?|mts|cts)$/i;
 
 /**
@@ -47,9 +49,9 @@ const SOURCE_RE = /\.(tsx?|jsx?|mts|cts)$/i;
  * `diagnose-imports.ts` — a stylesheet or `?url` import must never be
  * "repaired" into a source module.
  */
-const ASSET_EXTENSION_RE =
-  /\.(css|scss|sass|less|styl|svg|png|jpe?g|gif|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp4|webm|mp3|wav|json|txt|md|glsl|wasm)$/i;
-
+// One shared list — see verify/bundler-assets.ts for why this is not a local
+// copy. This module held the most complete of the three, including .glsl.
+const ASSET_EXTENSION_RE = BUNDLER_ASSET_RE;
 /** `from "x"` / `import "x"` / `import("x")` / `require("x")`. */
 const SPECIFIER_RE =
   /(\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bimport\s+)(['"])([^'"\n]+)\2/g;
