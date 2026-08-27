@@ -4,7 +4,7 @@
 // proper multi-file decomposition, richer context injection
 // ─────────────────────────────────────────────────────────────────────────────
 import { selectRelevantFiles } from "./context-selector.ts";
-import { classifyBuildIntent } from "./build-intent.ts";
+import { type BuildAppType, classifyBuildIntent, isAppShellAppType } from "./build-intent.ts";
 import { WEBSITE_HEADER_CONTRACT } from "./website-header-contract.ts";
 import { NEXTJS_RULES } from "./prompts/nextjs-rules.ts";
 import { renderPackageAllowlistPrompt } from "./package-allowlist.ts";
@@ -88,7 +88,28 @@ the TanStack Start Vite plugin owns the entry.
 `.trim();
 
 // ─── SHARED DESIGN SYSTEM ────────────────────────────────────────────────────
-const DESIGN_SYSTEM = `
+/**
+ * The design system, composed for the PRODUCT being built.
+ *
+ * This block used to ship whole to every build, so a "landing page for a
+ * bakery" received the admin/ERP data-density language ("no hero sections, no
+ * marketing CTAs"), the storefront image mandate ("a store without images is a
+ * FAILED build") AND the website header contract — roughly 7% of the prompt
+ * spent on two products the user did not ask for, giving instructions that
+ * contradict the marketing blueprint sitting beside them. The classifier
+ * already knows which product this is; the prompt just never asked it.
+ *
+ * A missing appType means the caller genuinely does not know the product (the
+ * screenshot-to-code path, the standalone Next prompt), and then EVERYTHING
+ * ships exactly as before — gating only ever narrows a known product.
+ */
+/** The header bullet points at a contract only site builds receive. */
+const SITE_CHROME_BULLET = `- Website/marketing/storefront headers MUST follow the two-tier WEBSITE HEADER CONTRACT
+  (top bar: phone + email + social icons; main row: logo + menu on one row). See below.`;
+const APP_SHELL_CHROME_BULLET =
+  "- This is a staff-only tool: use the sidebar + topbar shell below, NOT a marketing website header.";
+
+const designSystemHead = (siteChromeBullet: string) => `
 ## Design System — Apply to Every Generated App
 
 ### Color Palette by Domain
@@ -150,8 +171,7 @@ either. Don't mix a dark hero with light cards.
 \`\`\`
 
 ### MANDATORY for every app (theme-aware):
-- Website/marketing/storefront headers MUST follow the two-tier WEBSITE HEADER CONTRACT
-  (top bar: phone + email + social icons; main row: logo + menu on one row). See below.
+${siteChromeBullet}
 - Fixed/sticky main header row: backdrop-blur + a subtle bottom border, colored to MATCH the theme
   (light: bg-white/80 border-slate-200; dark: bg-[#0a0a0f]/80 border-white/[0.06]).
 - Framer Motion on page entry: initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
@@ -186,9 +206,10 @@ gradient fallback so a slow or failed image never leaves a blank box:
 </div>
 \`\`\`
 A real hero image + real product/content photos are what separate a professional
-app from a wireframe. Use them on every storefront, landing page, blog, and gallery.
+app from a wireframe. Use them on every storefront, landing page, blog, and gallery.`;
 
-### E-COMMERCE / STOREFRONT — images are MANDATORY (not optional)
+/** Storefront image rules — only where a product grid is the point. */
+const ECOMMERCE_IMAGE_MANDATE = `### E-COMMERCE / STOREFRONT — images are MANDATORY (not optional)
 A store without images is a FAILED build. For any e-commerce / shop / catalog page:
 - EVERY product object in your mock data MUST have an \`image\` URL — never omit it,
   never leave a grey box. Use \`https://loremflickr.com/600/600/<product-keyword>?lock=<n>\`
@@ -197,9 +218,9 @@ A store without images is a FAILED build. For any e-commerce / shop / catalog pa
 - The hero/banner MUST have a real background image (a wide lifestyle/category shot):
   \`https://loremflickr.com/1600/600/<category>\` or a picsum seed — with the gradient
   fallback layer behind it. Overlay the headline + CTA on top.
-- Category tiles and promo banners also get images. Aim for an image-rich page.
+- Category tiles and promo banners also get images. Aim for an image-rich page.`;
 
-### Managed in-app AI (no keys) — use the auto-provided helper \`src/lib/ai.ts\`
+const DESIGN_SYSTEM_MID = `### Managed in-app AI (no keys) — use the auto-provided helper \`src/lib/ai.ts\`
 For ANY runtime AI feature in the generated app (chatbot, summary, semantic
 search, custom images, voice), import the managed helper. LifemarkAI scaffolds
 \`src/lib/ai.ts\` and injects the real, project-scoped proxy URL automatically —
@@ -216,9 +237,10 @@ const text = await aiListen(audioBlob);                       // speech-to-text
 \`\`\`
 If \`src/lib/ai.ts\` is not yet present, you may create it, but prefer the helper
 over raw fetch. Use stock CDN images for product grids (fast, free) and
-\`aiImage\` only for the one or two hero/brand images that should feel bespoke.
+\`aiImage\` only for the one or two hero/brand images that should feel bespoke.`;
 
-### Admin / ERP / Dashboard Apps — data-dense design language
+/** Data-density language for staff-only tools. Explicitly anti-marketing. */
+const ADMIN_DENSITY_LANGUAGE = `### Admin / ERP / Dashboard Apps — data-dense design language
 (Use INSTEAD of hero/marketing patterns when building admin panels, ERP, POS, CRM, dashboards.)
 
 **Shell** — fixed sidebar (w-64, collapsible to w-16 on toggle, drawer on mobile):
@@ -252,9 +274,9 @@ failed/overdue = bg-red-500/15 text-red-400 · draft/inactive = bg-slate-500/15 
 
 **Charts** — recharts AreaChart/BarChart inside cards, violet/indigo gradients, CartesianGrid stroke="rgba(255,255,255,0.04)".
 **Forms** — right-side Sheet/drawer (not page navigation) for create/edit; labeled inputs bg-white/[0.04] border-white/[0.08].
-**Density** — compact paddings (p-4 cards, py-2 rows), no hero sections, no ambient blobs, no marketing CTAs.
+**Density** — compact paddings (p-4 cards, py-2 rows), no hero sections, no ambient blobs, no marketing CTAs.`;
 
-### Shared UI Kit — generate ONCE, reuse everywhere
+const DESIGN_SYSTEM_TAIL = `### Shared UI Kit — generate ONCE, reuse everywhere
 Every multi-page app must include \`src/components/ui/\` with these primitives, then import them
 instead of re-styling raw elements per page (consistency is what makes apps look professional):
 - \`Button.tsx\` — variants: primary | secondary | ghost | destructive; sizes sm | md; loading state
@@ -263,10 +285,35 @@ instead of re-styling raw elements per page (consistency is what makes apps look
 - \`Input.tsx\` + \`Select.tsx\` — labeled, with error-message slot
 - \`Dialog.tsx\` — overlay modal (fixed inset-0 bg-black/60 backdrop-blur-sm) with title + footer slots
 - \`Table.tsx\` — Table / THead / TRow / TCell implementing the data-table treatment above
-Pages compose these primitives; never duplicate their styles inline.
+Pages compose these primitives; never duplicate their styles inline.`;
 
-${WEBSITE_HEADER_CONTRACT}
-`.trim();
+/** App types whose product grid is the point of the page. */
+const ECOMMERCE_IMAGE_APP_TYPES = new Set<BuildAppType>([
+  "ecommerce",
+  "marketplace",
+  "restaurant",
+  "pos",
+]);
+
+export function buildDesignSystem(appType?: BuildAppType): string {
+  const appShell = appType ? isAppShellAppType(appType) : true;
+  const storefront = appType ? ECOMMERCE_IMAGE_APP_TYPES.has(appType) : true;
+  // The header contract's own docblock excludes admin shells; it was shipping
+  // to them anyway, telling an ERP that "every public website MUST" carry a
+  // phone/email/social top bar while the block above forbids marketing chrome.
+  const siteChrome = appType ? !isAppShellAppType(appType) : true;
+  return [
+    designSystemHead(siteChrome ? SITE_CHROME_BULLET : APP_SHELL_CHROME_BULLET),
+    storefront ? ECOMMERCE_IMAGE_MANDATE : "",
+    DESIGN_SYSTEM_MID,
+    appShell ? ADMIN_DENSITY_LANGUAGE : "",
+    DESIGN_SYSTEM_TAIL,
+    siteChrome ? WEBSITE_HEADER_CONTRACT : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+}
 
 // ─── CODE QUALITY RULES ───────────────────────────────────────────────────────
 const CODE_QUALITY_RULES = `
@@ -859,11 +906,11 @@ disabled auth check, a secret in the client), build the secure version instead
 and say in one line what you changed and why.`;
 
 /** Blocks that are shared, with the one framework-dependent slot filled in. */
-function frameworkNeutralBlocks(framework: string): string {
+function frameworkNeutralBlocks(framework: string, appType?: BuildAppType): string {
   const SCAFFOLD_FILE_LIST_PLACEHOLDER = TANSTACK_FRAMEWORKS.has(framework)
     ? TANSTACK_SCAFFOLD_LIST
     : VITE_SCAFFOLD_LIST;
-  return `${DESIGN_SYSTEM}
+  return `${buildDesignSystem(appType)}
 
 ---
 
@@ -958,6 +1005,7 @@ When the user asks to create a website, app, ERP, POS, CRM, or management system
  */
 export function buildAppGenerationSystemPrompt(
   framework: string = "react",
+  appType?: BuildAppType,
 ): string {
   const engine = TANSTACK_FRAMEWORKS.has(framework)
     ? "TanStack Start (React + TypeScript, SSR)"
@@ -972,7 +1020,7 @@ ${buildFrameworkContract(framework)}
 
 ---
 
-${frameworkNeutralBlocks(framework)}`;
+${frameworkNeutralBlocks(framework, appType)}`;
 }
 
 /**
@@ -1223,7 +1271,7 @@ Before generating code, mentally note:
 - For any logos/icons visible, substitute with appropriate lucide-react icons
 - For any images, use placeholder divs with matching aspect ratios and background colors
 
-${DESIGN_SYSTEM}
+${buildDesignSystem()}
 
 ---
 
@@ -1473,7 +1521,7 @@ export function buildGenerationPrompt(
   // files it isn't going to generate or that aren't already present
   const existingPaths = projectFiles.map((f) => `  • ${f.path}`).join("\n");
 
-  return `${buildAppGenerationSystemPrompt(framework)}
+  return `${buildAppGenerationSystemPrompt(framework, intent.appType)}
 
 ${intent.blueprint}
 
@@ -1677,7 +1725,7 @@ ${NEXTJS_RULES}
 
 ---
 
-${DESIGN_SYSTEM}
+${buildDesignSystem()}
 
 ---
 
