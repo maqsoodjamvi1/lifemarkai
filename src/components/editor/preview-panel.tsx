@@ -1779,9 +1779,32 @@ export function PreviewPanel({
     getPreviewContentWindow()?.postMessage({ type: "lifemark-preview-perf-request" }, "*");
   }
 
-  // Inject element-pick script when comment pin mode is active (srcDoc iframe)
+  // Inject element-pick script when comment pin mode is active (srcDoc iframe).
+  // The listener installed below used to never be removed: toggling
+  // commentPinMode back off left every click in the preview intercepted and
+  // cancelled (preventDefault/stopPropagation on every click, document-wide)
+  // until the iframe fully remounted via refreshKey — the previewed app
+  // became permanently non-interactive. Turning the mode off now injects a
+  // teardown script that removes the listener from the still-live document.
   useEffect(() => {
-    if (!commentPinMode || !staticHtml) return;
+    if (!staticHtml) return;
+
+    if (!commentPinMode) {
+      const doc = iframeRef.current?.contentDocument;
+      if (doc?.body) {
+        const teardown = doc.createElement("script");
+        teardown.textContent = `(function(){
+          if (window.__lmCommentPin && window.__lmCommentPinHandler) {
+            document.removeEventListener('click', window.__lmCommentPinHandler, true);
+          }
+          window.__lmCommentPin = false;
+          window.__lmCommentPinHandler = null;
+        })();`;
+        doc.body.appendChild(teardown);
+      }
+      return;
+    }
+
     const timer = window.setTimeout(() => {
       const iframe = iframeRef.current;
       const doc = iframe?.contentDocument;
@@ -1790,13 +1813,15 @@ export function PreviewPanel({
       script.textContent = `(function(){
         if(window.__lmCommentPin) return;
         window.__lmCommentPin = true;
-        document.addEventListener('click', function(e) {
+        var handler = function(e) {
           e.preventDefault(); e.stopPropagation();
           var el = e.target;
           function xp(n){var p=[],c=n;while(c&&c!==document.body){var t=c.tagName.toLowerCase();var s=c.parentElement?Array.from(c.parentElement.children).filter(function(x){return x.tagName===c.tagName}):[c];p.unshift(s.length>1?t+'['+(s.indexOf(c)+1)+']':t);c=c.parentElement;}return '//'+p.join('/');}
           var r = el.getBoundingClientRect();
           window.parent.postMessage({source:'lifemark-comment-pin',tagName:el.tagName.toLowerCase(),textContent:(el.textContent||'').trim().slice(0,80),classList:Array.from(el.classList),xpath:xp(el),rect:{top:r.top,left:r.left,width:r.width,height:r.height}},'*');
-        }, true);
+        };
+        window.__lmCommentPinHandler = handler;
+        document.addEventListener('click', handler, true);
       })();`;
       doc.body.appendChild(script);
     }, 300);
@@ -1990,9 +2015,13 @@ export function PreviewPanel({
                   setRouteNav((prev) => ({ ...prev, idx }));
                   navSuppressRef.current = true;
                   setTimeout(() => { navSuppressRef.current = false; }, 1000);
-                  const targetWin = previewEngine === "webcontainer"
-                    ? runtimeContainerRef.current?.querySelector("iframe")?.contentWindow
-                    : iframeRef.current?.contentWindow;
+                  // Was: previewEngine === "webcontainer" ? runtimeContainerRef... : iframeRef...
+                  // — with no branch for "sandbox", the default/primary engine. The
+                  // sandbox iframe is a different ref (sandboxIframeRef) than the
+                  // static/srcdoc iframe (iframeRef), so on that engine this posted
+                  // to a stale/undefined window while the address bar and history
+                  // state updated as if navigation had succeeded.
+                  const targetWin = getPreviewContentWindow();
                   targetWin?.postMessage({ type: "lifemark-preview-navigate", pathname: target }, "*");
                   setPreviewPath(target);
                   setUrlInput(target);
@@ -2011,9 +2040,8 @@ export function PreviewPanel({
                   setRouteNav((prev) => ({ ...prev, idx }));
                   navSuppressRef.current = true;
                   setTimeout(() => { navSuppressRef.current = false; }, 1000);
-                  const targetWin = previewEngine === "webcontainer"
-                    ? runtimeContainerRef.current?.querySelector("iframe")?.contentWindow
-                    : iframeRef.current?.contentWindow;
+                  // See the Back button above — same missing-sandbox-branch bug.
+                  const targetWin = getPreviewContentWindow();
                   targetWin?.postMessage({ type: "lifemark-preview-navigate", pathname: target }, "*");
                   setPreviewPath(target);
                   setUrlInput(target);

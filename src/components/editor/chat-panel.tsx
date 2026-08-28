@@ -1044,6 +1044,13 @@ export function ChatPanel({
     return () => {
       unmountedRef.current = true;
       if (patchFallbackTimerRef.current) clearTimeout(patchFallbackTimerRef.current);
+      if (scrapeDebounceRef.current) clearTimeout(scrapeDebounceRef.current);
+      // Read-aloud (toggleReadAloud) starts window.speechSynthesis speaking
+      // and nothing previously stopped it when this panel unmounted — e.g.
+      // navigating away from the project, or the mobile/desktop layout swap
+      // in editor-layout.tsx mounting a different ChatPanel tree. Speech kept
+      // playing after the panel and its stop button were gone.
+      window.speechSynthesis?.cancel();
     };
   }, []);
 
@@ -5079,7 +5086,12 @@ ${(f.content ?? "").slice(0, 8000)}
   async function copyMessage(msg: Message) {
     const role = msg.role === "user" ? "You" : "LifemarkAI";
     const body = getDisplayMessageContent(msg);
-    await navigator.clipboard.writeText(`**${role}:**\n\n${body}`);
+    try {
+      await navigator.clipboard.writeText(`**${role}:**\n\n${body}`);
+    } catch {
+      toast({ title: "Could not copy", description: "Clipboard access was denied or unavailable.", variant: "destructive" });
+      return;
+    }
     setCopiedId(msg.id);
     setTimeout(() => setCopiedId(null), 2000);
     toast({ description: "Copied as Markdown" });
@@ -5087,7 +5099,12 @@ ${(f.content ?? "").slice(0, 8000)}
 
   async function copyMessageLink(messageId: string) {
     const url = `${window.location.origin}/editor/${project.id}?message=${encodeURIComponent(messageId)}`;
-    await navigator.clipboard.writeText(url);
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      toast({ title: "Could not copy link", variant: "destructive" });
+      return;
+    }
     setCopiedLinkId(messageId);
     setTimeout(() => setCopiedLinkId(null), 2000);
     toast({ description: "Message link copied" });
@@ -5592,7 +5609,12 @@ ${(f.content ?? "").slice(0, 8000)}
         case "copy-all":
           void (async () => {
             const text = visibleMessages.map((m) => `${m.role === "user" ? "You" : "AI"}: ${m.content}`).join("\n\n");
-            await navigator.clipboard.writeText(text);
+            try {
+              await navigator.clipboard.writeText(text);
+            } catch {
+              toast({ title: "Could not copy", variant: "destructive" });
+              return;
+            }
             setCopiedAll(true);
             setTimeout(() => setCopiedAll(false), 2000);
             toast({ description: "All messages copied" });
@@ -5875,7 +5897,12 @@ ${(f.content ?? "").slice(0, 8000)}
         onPrintChat={printChat}
         onCopyAll={async () => {
           const text = visibleMessages.map((m) => `${m.role === "user" ? "You" : "AI"}: ${m.content}`).join("\n\n");
-          await navigator.clipboard.writeText(text);
+          try {
+            await navigator.clipboard.writeText(text);
+          } catch {
+            toast({ title: "Could not copy", variant: "destructive" });
+            return;
+          }
           setCopiedAll(true);
           setTimeout(() => setCopiedAll(false), 2000);
           toast({ description: "All messages copied" });
@@ -6051,15 +6078,22 @@ ${(f.content ?? "").slice(0, 8000)}
                 if (next) scrollToMessage(next.messageId);
                 return;
               }
-              void navigator.clipboard.writeText(new Date(msg.created_at).toLocaleString()).then(() => {
+              navigator.clipboard.writeText(new Date(msg.created_at).toLocaleString()).then(() => {
                 toast({ description: "Date copied" });
+              }).catch(() => {
+                toast({ title: "Could not copy", variant: "destructive" });
               });
             }}
             onCopyThread={async (thread) => {
               const text = thread
                 .map((m) => `**${m.role === "user" ? "You" : "LifemarkAI"}:**\n\n${getDisplayMessageContent(m)}`)
                 .join("\n\n---\n\n");
-              await navigator.clipboard.writeText(text);
+              try {
+                await navigator.clipboard.writeText(text);
+              } catch {
+                toast({ title: "Could not copy", variant: "destructive" });
+                return;
+              }
               toast({ description: "Turn copied" });
             }}
             getMessageProps={getMessageProps}

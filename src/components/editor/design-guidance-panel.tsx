@@ -235,6 +235,13 @@ export function DesignGuidancePanel({ projectId, files, onApplyFix }: DesignGuid
 
       const data: GuidanceResult = await res.json();
       setResult(data);
+    } catch {
+      // fetch() rejecting (offline, DNS failure, CORS, aborted) or res.json()
+      // throwing on a malformed 200 body used to have no catch here — the
+      // exception propagated as an unhandled rejection while `finally` still
+      // cleared the spinner, so the UI silently dropped back to the
+      // pre-analysis screen with no indication anything failed.
+      toast({ title: "Analysis failed", description: "Could not reach the analysis service.", variant: "destructive" });
     } finally {
       setAnalysing(false);
     }

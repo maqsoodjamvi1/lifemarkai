@@ -36,9 +36,13 @@ export function CloudSlowQueries({ projectId }: { projectId: string }) {
   const [available, setAvailable] = useState(true);
   const [reason, setReason] = useState<string | null>(null);
   const [queries, setQueries] = useState<SlowQuery[]>([]);
-  // Keyed by query index — only one suggestion box open at a time keeps it simple.
-  const [suggestions, setSuggestions] = useState<Record<number, SuggestionState>>({});
-  const [suggestingIdx, setSuggestingIdx] = useState<number | null>(null);
+  // Keyed by the query's own SQL text, not its array position. pg_stat_statements
+  // doesn't return queries in a stable order across calls (it rotates/evicts), so
+  // an index-keyed suggestion could survive a refresh and render — including its
+  // clickable "Apply index" button — under an entirely different query than the
+  // one it was actually generated for.
+  const [suggestions, setSuggestions] = useState<Record<string, SuggestionState>>({});
+  const [suggestingKey, setSuggestingKey] = useState<string | null>(null);
   const [applyingSql, setApplyingSql] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -54,6 +58,10 @@ export function CloudSlowQueries({ projectId }: { projectId: string }) {
       setAvailable(data.available !== false);
       setReason(data.reason ?? null);
       setQueries(data.queries ?? []);
+      // Old suggestions are keyed against queries that may no longer be in
+      // this refreshed list at all — drop them rather than risk a stale
+      // match against a coincidentally-identical query text.
+      setSuggestions({});
     } finally {
       setLoading(false);
     }
@@ -61,29 +69,29 @@ export function CloudSlowQueries({ projectId }: { projectId: string }) {
 
   useEffect(() => { void load(); }, [load]);
 
-  async function suggestIndex(idx: number) {
-    setSuggestingIdx(idx);
+  async function suggestIndex(query: string) {
+    setSuggestingKey(query);
     try {
       const res = await fetch("/api/cloud/slow-queries", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId, query: queries[idx].query }),
+        body: JSON.stringify({ projectId, query }),
       });
       const data = await res.json();
       if (!res.ok) {
         toast({ title: "Suggestion failed", description: data.error, variant: "destructive" });
         return;
       }
-      setSuggestions((s) => ({ ...s, [idx]: data }));
+      setSuggestions((s) => ({ ...s, [query]: data }));
       if ((data.indexes ?? []).length === 0) {
         toast({ title: "No index needed", description: data.analysis || "The AI found no index that would help this query." });
       }
     } finally {
-      setSuggestingIdx(null);
+      setSuggestingKey(null);
     }
   }
 
-  async function applyIndex(idx: number, sql: string) {
+  async function applyIndex(query: string, sql: string) {
     setApplyingSql(sql);
     try {
       const res = await fetch("/api/cloud/slow-queries", {
@@ -99,9 +107,9 @@ export function CloudSlowQueries({ projectId }: { projectId: string }) {
       toast({ title: "Index created", description: "The index was applied to your backend." });
       setSuggestions((s) => ({
         ...s,
-        [idx]: {
-          ...s[idx],
-          indexes: s[idx].indexes.map((i) => (i.sql === sql ? { ...i, applied: true } : i)),
+        [query]: {
+          ...s[query],
+          indexes: s[query].indexes.map((i) => (i.sql === sql ? { ...i, applied: true } : i)),
         },
       }));
     } finally {
@@ -136,7 +144,7 @@ export function CloudSlowQueries({ projectId }: { projectId: string }) {
         ) : (
           <ul className="space-y-2">
             {queries.map((q, idx) => {
-              const sug = suggestions[idx];
+              const sug = suggestions[q.query];
               return (
                 <li key={idx} className="rounded-lg border border-border bg-muted/10 p-2.5">
                   <pre className="text-[10px] font-mono whitespace-pre-wrap break-all text-foreground/90 max-h-24 overflow-y-auto">
@@ -151,10 +159,10 @@ export function CloudSlowQueries({ projectId }: { projectId: string }) {
                       size="sm"
                       variant="outline"
                       className="h-6 text-[10px] gap-1 ml-auto"
-                      onClick={() => void suggestIndex(idx)}
-                      disabled={suggestingIdx !== null}
+                      onClick={() => void suggestIndex(q.query)}
+                      disabled={suggestingKey !== null}
                     >
-                      {suggestingIdx === idx ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                      {suggestingKey === q.query ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
                       Suggest index
                     </Button>
                   </div>
@@ -180,7 +188,7 @@ export function CloudSlowQueries({ projectId }: { projectId: string }) {
                                 size="sm"
                                 variant="outline"
                                 className="h-6 text-[10px] gap-1 border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10"
-                                onClick={() => void applyIndex(idx, i.sql)}
+                                onClick={() => void applyIndex(q.query, i.sql)}
                                 disabled={applyingSql !== null}
                               >
                                 {applyingSql === i.sql ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />}

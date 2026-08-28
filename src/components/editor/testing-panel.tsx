@@ -208,27 +208,37 @@ export function TestingPanel({ projectId, files, onFilesUpdate, onOpenFile }: Te
     if (!selectedSource) return;
     setGenerating(true);
 
-    const res = await fetch("/api/ai/generate-tests", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        projectId,
-        filePath: selectedSource.path,
-        fileContent: selectedSource.content ?? "",
-      }),
-    });
+    // This had no try/catch/finally: a thrown fetch (network drop, DNS
+    // failure) or a res.json() throw on a malformed 200 body skipped
+    // setGenerating(false) below entirely, leaving the Generate button
+    // (disabled while generating) permanently stuck until a full reload.
+    try {
+      const res = await fetch("/api/ai/generate-tests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          projectId,
+          filePath: selectedSource.path,
+          fileContent: selectedSource.content ?? "",
+        }),
+      });
 
-    if (res.ok) {
-      const { file } = await res.json();
-      onFilesUpdate([file]);
-      toast({ title: "Tests generated!", description: file.path });
-      setView("tests");
-      setSelectedSource(null);
-    } else {
-      const { error } = await res.json().catch(() => ({ error: "Unknown error" }));
-      toast({ title: "Generation failed", description: error, variant: "destructive" });
+      if (res.ok) {
+        const { file } = await res.json();
+        onFilesUpdate([file]);
+        toast({ title: "Tests generated!", description: file.path });
+        setView("tests");
+        setSelectedSource(null);
+      } else {
+        const { error } = await res.json().catch(() => ({ error: "Unknown error" }));
+        toast({ title: "Generation failed", description: error, variant: "destructive" });
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      toast({ title: "Generation failed", description: msg, variant: "destructive" });
+    } finally {
+      setGenerating(false);
     }
-    setGenerating(false);
   }
 
   function toggleSuite(path: string) {

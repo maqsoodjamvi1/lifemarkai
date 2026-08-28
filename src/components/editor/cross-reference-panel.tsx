@@ -1,5 +1,5 @@
 
-import { useState,useEffect,useCallback } from "react";
+import { useState,useEffect,useCallback,useRef } from "react";
 import {
 FolderOpen,Search,ChevronRight,ChevronDown,
 Download,Sparkles,Loader2,Check,X,ArrowLeft
@@ -109,7 +109,14 @@ export function CrossReferencePanel({
       .catch(() => setLoadingProjects(false));
   }, [currentProjectId]);
 
+  // Guards against a project-switch race: clicking project A then project B
+  // before A's /files request resolves could let A's response land after
+  // B's and overwrite B's already-correct file list — activeProject would
+  // correctly show B while projectFiles silently held A's contents.
+  const filesRequestRef = useRef(0);
+
   const openProject = useCallback(async (project: SlimProject) => {
+    const requestId = ++filesRequestRef.current;
     setActiveProject(project);
     setSelected(new Set());
     setPreview(null);
@@ -118,8 +125,10 @@ export function CrossReferencePanel({
     setLoadingFiles(true);
 
     const res = await fetch(`/api/projects/${project.id}/files`);
+    if (requestId !== filesRequestRef.current) return; // superseded by a newer switch
     if (res.ok) {
       const files: SlimFile[] = await res.json();
+      if (requestId !== filesRequestRef.current) return;
       setProjectFiles(files);
       // Auto-expand first folder
       const groups = groupByFolder(files);
@@ -128,7 +137,7 @@ export function CrossReferencePanel({
     } else {
       toast({ title: "Failed to load files", variant: "destructive" });
     }
-    setLoadingFiles(false);
+    if (requestId === filesRequestRef.current) setLoadingFiles(false);
   }, [toast]);
 
   const toggleSelect = (path: string) => {

@@ -57,15 +57,31 @@ export function CollabCursors({ editor, collaborators, currentFile }: CollabCurs
 }
 
 // ── Style injection helpers ───────────────────────────────────────────────────
-// Inject <style> tags at most once per cursor ID to avoid thrashing the DOM.
+// Inject <style> tags per cursor ID, skipping re-injection only when the
+// actual content (color/initials) hasn't changed — not just because a tag
+// for this ID exists. The old version tracked presence alone in a
+// module-scope Set that outlives every render and every mounted
+// CollabCursors instance, so a peer whose color/name changed after the
+// first render (a reconnect assigning a new presence color, a display-name
+// update) kept showing the stale value for the rest of the page's lifetime.
 
-const injectedStyles = new Set<string>();
+const injectedStyleContent = new Map<string, string>();
+const injectedStyleEls = new Map<string, HTMLStyleElement>();
+
+function upsertStyle(key: string, css: string) {
+  if (injectedStyleContent.get(key) === css) return; // unchanged — nothing to do
+  injectedStyleContent.set(key, css);
+  let el = injectedStyleEls.get(key);
+  if (!el) {
+    el = document.createElement("style");
+    document.head.appendChild(el);
+    injectedStyleEls.set(key, el);
+  }
+  el.textContent = css;
+}
 
 function injectCursorStyle(styleId: string, color: string, initials: string) {
   const cursorKey = `cursor-${styleId}`;
-  if (injectedStyles.has(cursorKey)) return;
-  injectedStyles.add(cursorKey);
-
   const css = `
 .collab-cursor-${styleId} {
   border-left: 2px solid ${color};
@@ -89,23 +105,14 @@ function injectCursorStyle(styleId: string, color: string, initials: string) {
   pointer-events: none;
   line-height: 16px;
 }`;
-
-  const el = document.createElement("style");
-  el.textContent = css;
-  document.head.appendChild(el);
+  upsertStyle(cursorKey, css);
 }
 
 function injectSelectionStyle(styleId: string, color: string) {
   const selKey = `sel-${styleId}`;
-  if (injectedStyles.has(selKey)) return;
-  injectedStyles.add(selKey);
-
   const css = `
 .collab-selection-${styleId} {
   background: ${color}33;
 }`;
-
-  const el = document.createElement("style");
-  el.textContent = css;
-  document.head.appendChild(el);
+  upsertStyle(selKey, css);
 }

@@ -1,5 +1,5 @@
 
-import { useEffect,useState } from "react";
+import { useEffect,useState,useRef } from "react";
 import { Loader2,Palette,X,Sparkles } from "lucide-react";
 import type { DesignPreviewDirection } from "@/lib/ai/design-previews";
 import { DesignPreviewCards } from "./design-preview-cards";
@@ -28,25 +28,25 @@ export function DesignPreviewPicker({
   const [directions, setDirections] = useState<DesignPreviewDirection[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
+  // Shared staleness guard for BOTH the initial load effect and the "Try
+  // again" retry button. The retry button used to fire its own duplicate
+  // fetch with no guard at all — if the modal was closed/reopened with a
+  // new prompt while a stale retry was still in flight, that stale response
+  // could land afterward and overwrite the newer, correct state.
+  const requestSeq = useRef(0);
+
+  function loadPreviews(force: boolean) {
+    const seq = ++requestSeq.current;
     setLoading(true);
     setError(null);
-    setDirections([]);
-    setSelectedId(null);
-
-    // Without this guard a request from a previous open (or an earlier prompt)
-    // can resolve after the modal has been closed or reopened — worst case it
-    // fires onSkip() and silently dismisses a picker the user is looking at.
-    let cancelled = false;
     void fetch("/api/ai/design-previews", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, projectId, fileCount }),
+      body: JSON.stringify(force ? { prompt, projectId, fileCount, force: true } : { prompt, projectId, fileCount }),
     })
       .then(async (res) => {
         const data = await res.json();
-        if (cancelled) return;
+        if (seq !== requestSeq.current) return;
         if (!res.ok) throw new Error(data.error ?? "Failed to load previews");
         if (data.skip) {
           onSkip();
@@ -55,13 +55,22 @@ export function DesignPreviewPicker({
         setDirections(data.directions ?? []);
       })
       .catch((e: Error) => {
-        if (!cancelled) setError(e.message);
+        if (seq === requestSeq.current) setError(e.message);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (seq === requestSeq.current) setLoading(false);
       });
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    setDirections([]);
+    setSelectedId(null);
+    loadPreviews(false);
     return () => {
-      cancelled = true;
+      // Invalidate any request this open started so it can never apply
+      // stale state after the modal closes or reopens with a new prompt.
+      requestSeq.current++;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, prompt, projectId, fileCount]);
@@ -105,26 +114,7 @@ export function DesignPreviewPicker({
               <div className="flex items-center justify-center gap-3">
                 <button
                   type="button"
-                  onClick={() => {
-                    setError(null);
-                    setLoading(true);
-                    void fetch("/api/ai/design-previews", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ prompt, projectId, fileCount, force: true }),
-                    })
-                      .then(async (res) => {
-                        const data = await res.json();
-                        if (!res.ok) throw new Error(data.error ?? "Failed to load previews");
-                        if (data.skip) {
-                          onSkip();
-                          return;
-                        }
-                        setDirections(data.directions ?? []);
-                      })
-                      .catch((e: Error) => setError(e.message))
-                      .finally(() => setLoading(false));
-                  }}
+                  onClick={() => loadPreviews(true)}
                   className="text-xs text-foreground hover:underline"
                 >
                   Try again

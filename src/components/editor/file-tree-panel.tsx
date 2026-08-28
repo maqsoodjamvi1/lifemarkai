@@ -576,8 +576,24 @@ export function FileTreePanel({
     });
     if (!res.ok) { toast({ title: "Failed to move file", variant: "destructive" }); return; }
     const updated = await res.json() as ProjectFile;
+    // The pre-flight check above only guards against a collision visible in
+    // this client's state at the moment the request was sent. Two moves
+    // fired in quick succession (or a move racing a concurrent create at the
+    // same target path from another tab/session) can both pass that check;
+    // the server just applies them in whatever order it receives them. Warn
+    // here if the response reveals a same-path collision the pre-flight
+    // check couldn't have caught, rather than silently accepting it.
+    const collided = files.some((f) => f.id !== updated.id && f.path === updated.path);
     onFilesChange(files.map((f) => (f.id === updated.id ? updated : f)));
-    toast({ title: `Moved to ${targetFolder || "project root"}` });
+    if (collided) {
+      toast({
+        title: "Two files now share this path",
+        description: `${updated.path} — this move raced another change. Check the file tree.`,
+        variant: "destructive",
+      });
+    } else {
+      toast({ title: `Moved to ${targetFolder || "project root"}` });
+    }
   }, [files, apiBase, onFilesChange, toast]);
 
   const nodeActions: NodeActions = {

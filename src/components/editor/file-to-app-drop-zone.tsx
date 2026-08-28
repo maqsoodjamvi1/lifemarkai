@@ -60,10 +60,19 @@ async function buildPrompt(file: File): Promise<{ prompt: string; imageBase64?: 
   }
 
   if (kind === "json") {
-    const text = await readAsText(file, 6000);
+    // Read the WHOLE file before parsing, not a truncated slice — truncating
+    // first (as this used to) chops valid JSON mid-structure, so JSON.parse
+    // reliably throws for any file over ~6000 chars, and the "preview" the
+    // user sees is just the literal string "null" with no indication that
+    // parsing failed. Truncate only the already-parsed, re-stringified
+    // preview, after parsing has had a chance to succeed.
+    const text = await readAsText(file, 2_000_000);
     let parsed: unknown;
-    try { parsed = JSON.parse(text); } catch { parsed = null; }
-    const preview = JSON.stringify(parsed, null, 2).slice(0, 1200);
+    let parseFailed = false;
+    try { parsed = JSON.parse(text); } catch { parsed = null; parseFailed = true; }
+    const preview = parseFailed
+      ? text.slice(0, 1200)
+      : JSON.stringify(parsed, null, 2).slice(0, 1200);
     return {
       prompt: `Here is a JSON file named "${file.name}":\n\`\`\`json\n${preview}\n...\n\`\`\`\n\nBuild an interactive React web app to display and explore this data. If it's an array, show a searchable/filterable table. If it's a config/object, show a well-formatted editor or viewer. Use Tailwind CSS.`,
     };

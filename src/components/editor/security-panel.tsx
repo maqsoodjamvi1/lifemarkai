@@ -57,11 +57,21 @@ export function SecurityPanel({ project, files, onFilesUpdate }: SecurityPanelPr
         }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        // Previously unchecked: a non-200 response (429/500, or a JSON error
+        // body with no `files`) just fell through this if-branch with no
+        // feedback at all — the button stopped spinning and the user had no
+        // way to tell the fix hadn't actually happened.
+        toast({ title: "Auto-fix failed", description: data.error ?? "Please fix manually.", variant: "destructive" });
+        return;
+      }
       if (data.files?.length) {
         onFilesUpdate(data.files);
         toast({ title: "Fix applied", description: `${finding.title} has been addressed.` });
         // Re-scan
         await runScan();
+      } else {
+        toast({ title: "No fix produced", description: "The AI didn't return a change. Please fix manually.", variant: "destructive" });
       }
     } catch {
       toast({ title: "Auto-fix failed", description: "Please fix manually.", variant: "destructive" });

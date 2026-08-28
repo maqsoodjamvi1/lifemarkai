@@ -687,26 +687,54 @@ export function CodePanel({
   // ── Tab session key ───────────────────────────────────────────────────────
   const sessionKey = projectId ? `lifemark-tabs-${projectId}` : null;
 
-  // Restore open tabs from localStorage when files become available
-  const restoredRef = useRef(false);
+  // Restore open tabs from localStorage when files become available.
+  //
+  // This used to be a one-shot: the first time `files` was non-empty, any
+  // saved tabId that didn't resolve yet (files arriving in more than one
+  // batch — a cached/partial list first, then the full list) was dropped
+  // for good via `.filter(Boolean)`, and the ref gate meant the effect never
+  // ran again. Now it keeps retrying the still-missing ids on every `files`
+  // update until they're all found (or the id list itself is exhausted).
+  const pendingRestoreIds = useRef<Set<string> | null>(null);
   useEffect(() => {
-    if (restoredRef.current || !sessionKey || !files?.length) return;
-    restoredRef.current = true;
+    if (!sessionKey || !files?.length) return;
+    if (pendingRestoreIds.current?.size === 0) return; // nothing left to restore
+
     try {
+      if (pendingRestoreIds.current === null) {
+        const saved = localStorage.getItem(sessionKey);
+        if (!saved) { pendingRestoreIds.current = new Set(); return; }
+        const { tabIds } = JSON.parse(saved) as { tabIds: string[]; activeTabId: string | null };
+        pendingRestoreIds.current = new Set(tabIds);
+      }
+
       const saved = localStorage.getItem(sessionKey);
-      if (!saved) return;
+      if (!saved) { pendingRestoreIds.current = new Set(); return; }
       const { tabIds, activeTabId: savedActiveId } = JSON.parse(saved) as {
         tabIds: string[];
         activeTabId: string | null;
       };
-      const restoredTabs = tabIds
+
+      const newlyResolved = tabIds
+        .filter((id) => pendingRestoreIds.current!.has(id))
         .map((id) => files.find((f) => f.id === id))
         .filter(Boolean) as typeof files;
-      if (restoredTabs.length === 0) return;
-      setOpenTabs(restoredTabs);
-      const activeExists = restoredTabs.find((t) => t.id === savedActiveId);
-      setActiveTabId(activeExists ? savedActiveId : restoredTabs[0].id);
+      if (newlyResolved.length === 0) return;
+
+      newlyResolved.forEach((f) => pendingRestoreIds.current!.delete(f.id));
+
+      setOpenTabs((prev) => {
+        const existingIds = new Set(prev.map((t) => t.id));
+        const toAdd = newlyResolved.filter((f) => !existingIds.has(f.id));
+        return toAdd.length ? [...prev, ...toAdd] : prev;
+      });
+      setActiveTabId((prev) => {
+        if (prev) return prev; // a tab is already active — don't override the user
+        const activeMatch = newlyResolved.find((f) => f.id === savedActiveId);
+        return activeMatch ? activeMatch.id : (newlyResolved[0]?.id ?? prev);
+      });
     } catch {
+      pendingRestoreIds.current = new Set();
       // Ignore corrupt session data
     }
   }, [sessionKey, files]);  

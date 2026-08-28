@@ -154,8 +154,12 @@ export function CodeReviewPanel({ activeFile, onJumpToLine, onFixWithAI }: CodeR
           </div>
         )}
 
-        {/* Results */}
-        {result && !loading && (
+        {/* Results — gated on !stale too: previously this rendered whenever
+            `result` existed regardless of `stale`, so opening file B after
+            reviewing file A kept showing A's full issue list (with working
+            "Jump to line" / "Fix with AI" buttons that acted on A) while only
+            a small "changed" label hinted anything was wrong. */}
+        {result && !loading && !stale && (
           <div className="pb-4">
             {/* Summary */}
             <div className="mx-4 mb-3 px-3 py-2 rounded-md bg-muted/20 border border-border/50 text-xs text-muted-foreground leading-relaxed">
