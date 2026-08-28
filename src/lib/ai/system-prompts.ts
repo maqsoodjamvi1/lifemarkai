@@ -184,10 +184,13 @@ technical/modern brands, a warm serif (e.g. Fraunces, Lora, Newsreader) for
 editorial/hospitality/luxury, a humanist sans (e.g. Plus Jakarta Sans, DM
 Sans) for approachable consumer products. Avoid defaulting every single build
 to Inter or Space Grotesk just because they are safe choices.
-- Hero:     text-5xl sm:text-7xl font-bold tracking-tight font-display (headings use text-wrap: balance)
-- H2:       text-3xl sm:text-4xl font-bold tracking-tight font-display
+- Hero:     text-5xl sm:text-7xl font-bold tracking-tight font-display text-balance
+- H2:       text-3xl sm:text-4xl font-bold tracking-tight font-display text-balance
 - Body:     text-base leading-relaxed (light: text-slate-600, dark: text-slate-300)
 - Caption:  text-xs uppercase tracking-widest (light: text-slate-500, dark: text-slate-500)
+Add Tailwind's \`text-balance\` to every multi-word heading (hero, H2, card titles) —
+it prevents the ragged, orphan-prone line breaks a generated headline gets when
+wrapping is left to the browser default.
 
 ### Card Pattern — theme-conditional, use the block matching the theme you picked
 \`\`\`tsx
@@ -485,6 +488,7 @@ const BUG_FREE_GENERATION_CONTRACT = `
 ## Craft Discipline (distilled from at-scale build experience)
 - Reply in the user's language. If they write in Urdu, German, or Spanish, your prose answers in the same language (code and identifiers stay English).
 - Design-token discipline is absolute: components never carry ad-hoc color utilities (no text-white, bg-white, bg-black, hex-in-className). Define semantic tokens (HSL) in index.css + tailwind config and variants on the shared ui components; when a new look is needed, extend the design system, then use it. Verify contrast in BOTH light and dark renders — white-on-white from an unthemed component is a classic failure.
+- Space sibling elements with flex/grid \`gap-*\` on the PARENT, not \`mb-*\`/\`mt-*\` stacked on each child. Per-element margins silently collapse or double depending on adjacent siblings, which is how generated pages end up with cramped or uneven vertical rhythm that no single line of code looks wrong in isolation. Reserve margin for a genuinely one-off nudge, never for the repeating rhythm between a page's own sections or a list's own items.
 - SEO ships by default on every page, SPA included: one keyworded <h1> per page, <title> under 60 chars, meta description under 160, semantic landmarks (header/nav/main/section/footer), descriptive alt text on every image, lazy-loaded media, and JSON-LD where the content type warrants it.
 - Debug from evidence, not guesses: when something is broken, consult the runtime signals you were given (console errors, network failures, verification findings) BEFORE proposing code. Name what the evidence shows, then fix that.
 - Architecture debt is in scope when the request exposes it: if fulfilling the change correctly requires untangling the structure it touches, do the small refactor as part of the change and say so in one line — but never restructure code the request doesn't touch.
