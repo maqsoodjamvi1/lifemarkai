@@ -1647,6 +1647,126 @@ export function assessGenerationQuality(
     }
   }
 
+  if (appType === "healthcare") {
+    if (pageCount < 8) {
+      errors.push({
+        type: "too_few_healthcare_modules",
+        message: `Only ${pageCount} routed page file(s) found. Healthcare builds need 8+ modules such as today's schedule, patients, appointments, providers, charts/notes, billing, reports, and settings.`,
+        severity: "error",
+      });
+    }
+    const schemaText = all.filter((f) => /^supabase\/migrations\/.+\.sql$/.test(f.path)).map((f) => f.content).join("\n").toLowerCase();
+    const requiredTables = ["patients", "appointments", "providers"];
+    const missingTables = requiredTables.filter((table) => !schemaText.includes(table));
+    if (!hasSupabaseMigration || !hasSupabaseClient || !hasDataLayer || missingTables.length > 0) {
+      errors.push({
+        type: "missing_healthcare_data_backing",
+        message: `Healthcare builds must include Supabase schema/client/data layer for patients, appointments, and providers. Missing evidence for: ${missingTables.length ? missingTables.join(", ") : "data layer or migration files"}.`,
+        severity: "error",
+      });
+    }
+  }
+
+  if (appType === "hr") {
+    if (pageCount < 8) {
+      errors.push({
+        type: "too_few_hr_modules",
+        message: `Only ${pageCount} routed page file(s) found. HR builds need 8+ modules such as a people directory, candidates/hiring, leave requests, payroll, org chart, reports, and settings.`,
+        severity: "error",
+      });
+    }
+    const schemaText = all.filter((f) => /^supabase\/migrations\/.+\.sql$/.test(f.path)).map((f) => f.content).join("\n").toLowerCase();
+    const requiredTables = ["employees", "candidates", "leave_requests", "payroll"];
+    const missingTables = requiredTables.filter((table) => !schemaText.includes(table));
+    if (!hasSupabaseMigration || !hasSupabaseClient || !hasDataLayer || missingTables.length > 0) {
+      errors.push({
+        type: "missing_hr_data_backing",
+        message: `HR builds must include Supabase schema/client/data layer for employees, candidates, leave requests, and payroll. Missing evidence for: ${missingTables.length ? missingTables.join(", ") : "data layer or migration files"}.`,
+        severity: "error",
+      });
+    }
+  }
+
+  if (appType === "logistics") {
+    if (pageCount < 7) {
+      errors.push({
+        type: "too_few_logistics_modules",
+        message: `Only ${pageCount} routed page file(s) found. Logistics builds need 7+ modules such as a dispatch board, shipments, vehicles, drivers, routes, reports, and settings.`,
+        severity: "error",
+      });
+    }
+    const schemaText = all.filter((f) => /^supabase\/migrations\/.+\.sql$/.test(f.path)).map((f) => f.content).join("\n").toLowerCase();
+    const requiredTables = ["shipments", "vehicles", "drivers", "routes"];
+    const missingTables = requiredTables.filter((table) => !schemaText.includes(table));
+    if (!hasSupabaseMigration || !hasSupabaseClient || !hasDataLayer || missingTables.length > 0) {
+      errors.push({
+        type: "missing_logistics_data_backing",
+        message: `Logistics builds must include Supabase schema/client/data layer for shipments, vehicles, drivers, and routes. Missing evidence for: ${missingTables.length ? missingTables.join(", ") : "data layer or migration files"}.`,
+        severity: "error",
+      });
+    }
+  }
+
+  if (appType === "helpdesk") {
+    if (pageCount < 7) {
+      errors.push({
+        type: "too_few_helpdesk_modules",
+        message: `Only ${pageCount} routed page file(s) found. Helpdesk builds need 7+ modules such as a ticket queue, agents, customers, knowledge base, reports, and settings.`,
+        severity: "error",
+      });
+    }
+    const schemaText = all.filter((f) => /^supabase\/migrations\/.+\.sql$/.test(f.path)).map((f) => f.content).join("\n").toLowerCase();
+    const requiredTables = ["tickets", "agents", "customers"];
+    const missingTables = requiredTables.filter((table) => !schemaText.includes(table));
+    if (!hasSupabaseMigration || !hasSupabaseClient || !hasDataLayer || missingTables.length > 0) {
+      errors.push({
+        type: "missing_helpdesk_data_backing",
+        message: `Helpdesk builds must include Supabase schema/client/data layer for tickets, agents, and customers. Missing evidence for: ${missingTables.length ? missingTables.join(", ") : "data layer or migration files"}.`,
+        severity: "error",
+      });
+    }
+  }
+
+  if (appType === "school") {
+    if (pageCount < 8) {
+      errors.push({
+        type: "too_few_school_modules",
+        message: `Only ${pageCount} routed page file(s) found. School builds need 8+ modules such as students, attendance, classes, fees, staff, reports, and settings.`,
+        severity: "error",
+      });
+    }
+    const schemaText = all.filter((f) => /^supabase\/migrations\/.+\.sql$/.test(f.path)).map((f) => f.content).join("\n").toLowerCase();
+    const requiredTables = ["students", "attendance", "classes", "fees"];
+    const missingTables = requiredTables.filter((table) => !schemaText.includes(table));
+    if (!hasSupabaseMigration || !hasSupabaseClient || !hasDataLayer || missingTables.length > 0) {
+      errors.push({
+        type: "missing_school_data_backing",
+        message: `School builds must include Supabase schema/client/data layer for students, attendance, classes, and fees. Missing evidence for: ${missingTables.length ? missingTables.join(", ") : "data layer or migration files"}.`,
+        severity: "error",
+      });
+    }
+  }
+
+  if (appType === "hotel") {
+    if (pageCount < 8) {
+      errors.push({
+        type: "too_few_hotel_modules",
+        message: `Only ${pageCount} routed page file(s) found. Hotel builds need 8+ modules such as a front desk (arrivals/departures), rooms, reservations, guests, housekeeping, reports, and settings.`,
+        severity: "error",
+      });
+    }
+    const schemaText = all.filter((f) => /^supabase\/migrations\/.+\.sql$/.test(f.path)).map((f) => f.content).join("\n").toLowerCase();
+    const requiredTables = ["rooms", "reservations", "guests"];
+    const missingTables = requiredTables.filter((table) => !schemaText.includes(table));
+    if (!hasSupabaseMigration || !hasSupabaseClient || !hasDataLayer || missingTables.length > 0) {
+      errors.push({
+        type: "missing_hotel_data_backing",
+        message: `Hotel builds must include Supabase schema/client/data layer for rooms, reservations, and guests. Missing evidence for: ${missingTables.length ? missingTables.join(", ") : "data layer or migration files"}.`,
+        severity: "error",
+      });
+    }
+  }
+
   return errors;
 }
 

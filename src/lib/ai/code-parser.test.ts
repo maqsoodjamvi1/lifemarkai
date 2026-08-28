@@ -697,6 +697,150 @@ test("assessGenerationQuality rejects ERP without operations schema", () => {
   assert.ok(errors.some((e) => e.type === "missing_erp_data_backing"));
 });
 
+test("assessGenerationQuality rejects healthcare without patients/appointments/providers schema", () => {
+  const pageNames = ["Schedule", "Patients", "Appointments", "Providers", "Charts", "Billing", "Reports", "Settings"];
+  const errors = assessGenerationQuality([
+    ...pageNames.map((name) => ({
+      path: `src/pages/${name}.tsx`,
+      language: "typescriptreact",
+      content: "export default function Page() { return <section><table /><div /><div /></section>; }",
+    })),
+    { path: "src/App.tsx", language: "typescriptreact", content: "export default function App() { return <div />; }" },
+    { path: "src/layouts/AppLayout.tsx", language: "typescriptreact", content: "export function AppLayout() { return <aside />; }" },
+    { path: "src/components/DataTable.tsx", language: "typescriptreact", content: "export function DataTable() { return <table />; }" },
+    { path: "src/components/ui/Button.tsx", language: "typescriptreact", content: "export function Button() { return <button />; }" },
+    { path: "src/lib/supabase.ts", language: "typescript", content: "export const supabase = null;" },
+    { path: "src/lib/health-api.ts", language: "typescript", content: "export const fallbackVisits = []; export async function listVisits() { return supabase ?? fallbackVisits; }" },
+    { path: "supabase/migrations/001_healthcare_schema.sql", language: "sql", content: "create table clinics(id uuid); create table visits(id uuid);" },
+    { path: "src/data/mock.ts", language: "typescript", content: "export const mock = [];" },
+    { path: "src/hooks/useSchedule.ts", language: "typescript", content: "export function useSchedule() { return []; }" },
+    { path: "src/components/DayView.tsx", language: "typescriptreact", content: "export function DayView() { return <section />; }" },
+    { path: "src/components/StatusBadge.tsx", language: "typescriptreact", content: "export function StatusBadge() { return <span />; }" },
+  ], [], { appType: "healthcare", minFiles: 16 });
+
+  assert.ok(errors.some((e) => e.type === "missing_healthcare_data_backing"));
+});
+
+test("assessGenerationQuality rejects HR without employees/candidates/leave/payroll schema", () => {
+  const pageNames = ["People", "Candidates", "LeaveRequests", "Payroll", "OrgChart", "Reports", "Settings", "Onboarding"];
+  const errors = assessGenerationQuality([
+    ...pageNames.map((name) => ({
+      path: `src/pages/${name}.tsx`,
+      language: "typescriptreact",
+      content: "export default function Page() { return <section><table /><div /><div /></section>; }",
+    })),
+    { path: "src/App.tsx", language: "typescriptreact", content: "export default function App() { return <div />; }" },
+    { path: "src/layouts/AppLayout.tsx", language: "typescriptreact", content: "export function AppLayout() { return <aside />; }" },
+    { path: "src/components/DataTable.tsx", language: "typescriptreact", content: "export function DataTable() { return <table />; }" },
+    { path: "src/components/ui/Button.tsx", language: "typescriptreact", content: "export function Button() { return <button />; }" },
+    { path: "src/lib/supabase.ts", language: "typescript", content: "export const supabase = null;" },
+    { path: "src/lib/hr-api.ts", language: "typescript", content: "export const fallbackPeople = []; export async function listPeople() { return supabase ?? fallbackPeople; }" },
+    { path: "supabase/migrations/001_hr_schema.sql", language: "sql", content: "create table departments(id uuid); create table roles(id uuid);" },
+    { path: "src/data/mock.ts", language: "typescript", content: "export const mock = [];" },
+    { path: "src/hooks/usePeople.ts", language: "typescript", content: "export function usePeople() { return []; }" },
+    { path: "src/components/PersonCard.tsx", language: "typescriptreact", content: "export function PersonCard() { return <article />; }" },
+    { path: "src/components/StatusBadge.tsx", language: "typescriptreact", content: "export function StatusBadge() { return <span />; }" },
+  ], [], { appType: "hr", minFiles: 16 });
+
+  assert.ok(errors.some((e) => e.type === "missing_hr_data_backing"));
+});
+
+test("assessGenerationQuality rejects logistics without shipments/vehicles/drivers/routes schema", () => {
+  const pageNames = ["Dispatch", "Shipments", "Vehicles", "Drivers", "Routes", "Reports", "Settings"];
+  const errors = assessGenerationQuality([
+    ...pageNames.map((name) => ({
+      path: `src/pages/${name}.tsx`,
+      language: "typescriptreact",
+      content: "export default function Page() { return <section><table /><div /><div /></section>; }",
+    })),
+    { path: "src/App.tsx", language: "typescriptreact", content: "export default function App() { return <div />; }" },
+    { path: "src/layouts/AppLayout.tsx", language: "typescriptreact", content: "export function AppLayout() { return <aside />; }" },
+    { path: "src/components/DataTable.tsx", language: "typescriptreact", content: "export function DataTable() { return <table />; }" },
+    { path: "src/components/ui/Button.tsx", language: "typescriptreact", content: "export function Button() { return <button />; }" },
+    { path: "src/lib/supabase.ts", language: "typescript", content: "export const supabase = null;" },
+    { path: "src/lib/logistics-api.ts", language: "typescript", content: "export const fallbackLoads = []; export async function listLoads() { return supabase ?? fallbackLoads; }" },
+    { path: "supabase/migrations/001_logistics_schema.sql", language: "sql", content: "create table depots(id uuid); create table loads(id uuid);" },
+    { path: "src/data/mock.ts", language: "typescript", content: "export const mock = [];" },
+    { path: "src/hooks/useDispatch.ts", language: "typescript", content: "export function useDispatch() { return []; }" },
+    { path: "src/components/DispatchBoard.tsx", language: "typescriptreact", content: "export function DispatchBoard() { return <section />; }" },
+    { path: "src/components/StatusBadge.tsx", language: "typescriptreact", content: "export function StatusBadge() { return <span />; }" },
+  ], [], { appType: "logistics", minFiles: 16 });
+
+  assert.ok(errors.some((e) => e.type === "missing_logistics_data_backing"));
+});
+
+test("assessGenerationQuality rejects helpdesk without tickets/agents/customers schema", () => {
+  const pageNames = ["TicketQueue", "Tickets", "Agents", "Customers", "KnowledgeBase", "Reports", "Settings"];
+  const errors = assessGenerationQuality([
+    ...pageNames.map((name) => ({
+      path: `src/pages/${name}.tsx`,
+      language: "typescriptreact",
+      content: "export default function Page() { return <section><table /><div /><div /></section>; }",
+    })),
+    { path: "src/App.tsx", language: "typescriptreact", content: "export default function App() { return <div />; }" },
+    { path: "src/layouts/AppLayout.tsx", language: "typescriptreact", content: "export function AppLayout() { return <aside />; }" },
+    { path: "src/components/DataTable.tsx", language: "typescriptreact", content: "export function DataTable() { return <table />; }" },
+    { path: "src/components/ui/Button.tsx", language: "typescriptreact", content: "export function Button() { return <button />; }" },
+    { path: "src/lib/supabase.ts", language: "typescript", content: "export const supabase = null;" },
+    { path: "src/lib/helpdesk-api.ts", language: "typescript", content: "export const fallbackTickets = []; export async function listTickets() { return supabase ?? fallbackTickets; }" },
+    { path: "supabase/migrations/001_helpdesk_schema.sql", language: "sql", content: "create table queues(id uuid); create table sla_policies(id uuid);" },
+    { path: "src/data/mock.ts", language: "typescript", content: "export const mock = [];" },
+    { path: "src/hooks/useTickets.ts", language: "typescript", content: "export function useTickets() { return []; }" },
+    { path: "src/components/TicketQueue.tsx", language: "typescriptreact", content: "export function TicketQueue() { return <section />; }" },
+    { path: "src/components/StatusBadge.tsx", language: "typescriptreact", content: "export function StatusBadge() { return <span />; }" },
+  ], [], { appType: "helpdesk", minFiles: 13 });
+
+  assert.ok(errors.some((e) => e.type === "missing_helpdesk_data_backing"));
+});
+
+test("assessGenerationQuality rejects school without students/attendance/classes/fees schema", () => {
+  const pageNames = ["Students", "Attendance", "Classes", "Fees", "Staff", "Reports", "Settings", "Enrollment"];
+  const errors = assessGenerationQuality([
+    ...pageNames.map((name) => ({
+      path: `src/pages/${name}.tsx`,
+      language: "typescriptreact",
+      content: "export default function Page() { return <section><table /><div /><div /></section>; }",
+    })),
+    { path: "src/App.tsx", language: "typescriptreact", content: "export default function App() { return <div />; }" },
+    { path: "src/layouts/AppLayout.tsx", language: "typescriptreact", content: "export function AppLayout() { return <aside />; }" },
+    { path: "src/components/DataTable.tsx", language: "typescriptreact", content: "export function DataTable() { return <table />; }" },
+    { path: "src/components/ui/Button.tsx", language: "typescriptreact", content: "export function Button() { return <button />; }" },
+    { path: "src/lib/supabase.ts", language: "typescript", content: "export const supabase = null;" },
+    { path: "src/lib/school-api.ts", language: "typescript", content: "export const fallbackStudents = []; export async function listStudents() { return supabase ?? fallbackStudents; }" },
+    { path: "supabase/migrations/001_school_schema.sql", language: "sql", content: "create table schools(id uuid); create table terms(id uuid);" },
+    { path: "src/data/mock.ts", language: "typescript", content: "export const mock = [];" },
+    { path: "src/hooks/useStudents.ts", language: "typescript", content: "export function useStudents() { return []; }" },
+    { path: "src/components/StudentTable.tsx", language: "typescriptreact", content: "export function StudentTable() { return <section />; }" },
+    { path: "src/components/StatusBadge.tsx", language: "typescriptreact", content: "export function StatusBadge() { return <span />; }" },
+  ], [], { appType: "school", minFiles: 16 });
+
+  assert.ok(errors.some((e) => e.type === "missing_school_data_backing"));
+});
+
+test("assessGenerationQuality rejects hotel without rooms/reservations/guests schema", () => {
+  const pageNames = ["FrontDesk", "Rooms", "Reservations", "Guests", "Housekeeping", "Reports", "Settings"];
+  const errors = assessGenerationQuality([
+    ...pageNames.map((name) => ({
+      path: `src/pages/${name}.tsx`,
+      language: "typescriptreact",
+      content: "export default function Page() { return <section><table /><div /><div /></section>; }",
+    })),
+    { path: "src/App.tsx", language: "typescriptreact", content: "export default function App() { return <div />; }" },
+    { path: "src/layouts/AppLayout.tsx", language: "typescriptreact", content: "export function AppLayout() { return <aside />; }" },
+    { path: "src/components/DataTable.tsx", language: "typescriptreact", content: "export function DataTable() { return <table />; }" },
+    { path: "src/components/ui/Button.tsx", language: "typescriptreact", content: "export function Button() { return <button />; }" },
+    { path: "src/lib/supabase.ts", language: "typescript", content: "export const supabase = null;" },
+    { path: "src/lib/hotel-api.ts", language: "typescript", content: "export const fallbackStays = []; export async function listStays() { return supabase ?? fallbackStays; }" },
+    { path: "supabase/migrations/001_hotel_schema.sql", language: "sql", content: "create table properties(id uuid); create table rates(id uuid);" },
+    { path: "src/data/mock.ts", language: "typescript", content: "export const mock = [];" },
+    { path: "src/hooks/useFrontDesk.ts", language: "typescript", content: "export function useFrontDesk() { return []; }" },
+    { path: "src/components/ArrivalsBoard.tsx", language: "typescriptreact", content: "export function ArrivalsBoard() { return <section />; }" },
+    { path: "src/components/StatusBadge.tsx", language: "typescriptreact", content: "export function StatusBadge() { return <span />; }" },
+  ], [], { appType: "hotel", minFiles: 15 });
+
+  assert.ok(errors.some((e) => e.type === "missing_hotel_data_backing"));
+});
+
 
 test("validateGeneratedFiles accepts a complete TanStack Start scaffold without Vite entry files", () => {
   const files = [
