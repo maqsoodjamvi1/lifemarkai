@@ -110,6 +110,27 @@ test("the storefront image mandate ships only where a product grid is the point"
   assert.doesNotMatch(promptFor("Build a CRM with leads and deals"), SHOP_BLOCK);
 });
 
+// The hero-composition guidance ("the hero is the page's thesis") only makes
+// sense on a public-facing page — an app-shell build is told the OPPOSITE by
+// its own admin-density language a few lines later ("no hero sections"). This
+// pins that it is gated structurally (like SHOP_BLOCK above), not left for
+// instruction order to sort out.
+const HERO_BLOCK = /hero is the page's thesis/;
+
+test("hero composition guidance ships only on public-facing builds", () => {
+  for (const request of ["landing page for a bakery", "Build a portfolio site for a photographer"]) {
+    assert.match(promptFor(request), HERO_BLOCK, request);
+  }
+  for (const request of ["Build an ERP with inventory and purchase orders", "Build a point of sale for a cafe"]) {
+    const prompt = promptFor(request);
+    assert.doesNotMatch(prompt, HERO_BLOCK, request);
+    // the admin block says the opposite, explicitly, for every archetype —
+    // even POS/terminal, whose own density text is touch-target-focused
+    // rather than repeating "no hero sections" verbatim.
+    assert.match(prompt, /Use INSTEAD of hero\/marketing patterns/, request);
+  }
+});
+
 test("an unknown product still gets the complete design system", () => {
   // The screenshot-to-code and standalone Next paths pass no app type; gating
   // must only ever narrow a KNOWN product, never a guess.

@@ -348,14 +348,41 @@ draft/inactive = bg-slate-500/15 text-slate-600 (dark: text-slate-400)
 
 const DESIGN_SYSTEM_TAIL = `### Shared UI Kit — generate ONCE, reuse everywhere
 Every multi-page app must include \`src/components/ui/\` with these primitives, then import them
-instead of re-styling raw elements per page (consistency is what makes apps look professional):
+instead of re-styling raw elements per page (consistency is what makes apps look professional).
+A build that only ever reaches for Button/Card/Input reads as a wireframe, not a product —
+reach for the richer primitives below whenever the page actually calls for them (a settings
+page needs Tabs, a data table needs sortable headers with a Tooltip on truncated cells, a
+notification needs a Toast, not a browser alert):
 - \`Button.tsx\` — variants: primary | secondary | ghost | destructive; sizes sm | md; loading state
 - \`Card.tsx\` — Card / CardHeader / CardTitle / CardContent following the card pattern above
 - \`Badge.tsx\` — variant prop wired to the status-badge palette
 - \`Input.tsx\` + \`Select.tsx\` — labeled, with error-message slot
 - \`Dialog.tsx\` — overlay modal (fixed inset-0 bg-black/60 backdrop-blur-sm) with title + footer slots
 - \`Table.tsx\` — Table / THead / TRow / TCell implementing the data-table treatment above
+- \`Tabs.tsx\` — built on \`@radix-ui/react-tabs\`; use for any page with 2+ views of the same data
+  (e.g. a detail page's Overview/Activity/Settings sections) instead of stacking everything vertically
+- \`Tooltip.tsx\` + \`Popover.tsx\` — built on \`@radix-ui/react-tooltip\` / \`@radix-ui/react-popover\`;
+  use for truncated text, icon-only buttons, and secondary actions that don't need a full dialog
+- \`Avatar.tsx\` — built on \`@radix-ui/react-avatar\`; image with initials fallback, for any
+  user/customer/employee reference — never a bare \`<img>\` for a person
+- \`Toast.tsx\` — via \`sonner\`'s \`<Toaster />\` mounted once in the root layout; use for every
+  success/error side-effect (save, delete, submit) instead of a blocking \`alert()\`
 Pages compose these primitives; never duplicate their styles inline.`;
+
+/** Public-facing pages only — an app-shell build is told the opposite by its
+ * own admin-density language ("no hero sections, no marketing CTAs"), so this
+ * is gated the same structural way as ECOMMERCE_IMAGE_MANDATE rather than
+ * left to instruction order to sort out. */
+const HERO_COMPOSITION_GUIDANCE = `### The hero is the page's thesis, not a template slot
+Open with the single most characteristic thing about THIS product — a real
+screenshot or mockup of the actual feature, a specific number or outcome
+("Cut invoice time from 40 minutes to 4"), or the sharpest one-line answer to
+"what is this and who is it for." Never a generic "The Future of X" headline
+over an abstract gradient blob — that is true of every landing page and
+therefore true of none of them. Write hero copy from the visitor's side of
+the screen: what they get, not how the product is built. One clear primary
+CTA; a secondary CTA only when it earns its place (e.g. "Watch demo" next to
+"Start free").`;
 
 /** App types whose product grid is the point of the page. */
 const ECOMMERCE_IMAGE_APP_TYPES = new Set<BuildAppType>([
@@ -375,6 +402,7 @@ export function buildDesignSystem(appType?: BuildAppType, archetype?: SiteArchet
   const chromeSpec = siteChromeSpec(archetype ?? siteArchetypeForAppType(appType));
   return [
     designSystemHead(siteChrome ? siteChromeBulletFor(chromeSpec) : APP_SHELL_CHROME_BULLET),
+    siteChrome ? HERO_COMPOSITION_GUIDANCE : "",
     storefront ? ECOMMERCE_IMAGE_MANDATE : "",
     DESIGN_SYSTEM_MID,
     appShell ? adminDensityLanguage(adminShellSpec(adminArchetypeForAppType(appType))) : "",
