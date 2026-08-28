@@ -118,15 +118,29 @@ const APP_SHELL_CHROME_BULLET =
 const designSystemHead = (siteChromeBullet: string) => `
 ## Design System — Apply to Every Generated App
 
-### Color Palette by Domain
-| Domain | Gradient Classes | CSS RGB |
-|--------|-----------------|---------|
-| AI / Tech | from-violet-600 to-indigo-600 | 139,92,246 |
-| Finance / SaaS | from-blue-600 to-cyan-500 | 37,99,235 |
-| Health / Wellness | from-emerald-500 to-teal-600 | 16,185,129 |
-| Creative / Art | from-pink-500 to-rose-600 | 236,72,153 |
-| Food / Lifestyle | from-orange-500 to-amber-500 | 249,115,22 |
-| Default | from-violet-600 to-purple-600 | 139,92,246 |
+### Color Palette — GROUND IT IN THE SUBJECT, not a category default
+Pick 4-6 named values (primary, accent, background, text — plus a semantic
+success/warning/danger set) that fit THIS specific brand and request, the way
+a real design studio would name a client's palette. Do not reach for the same
+accent every time a request matches a category — every "AI/tech" build does
+NOT need violet-to-indigo, every "finance" build does NOT need blue-to-cyan.
+Two apps in the same category should be able to look different. Starting
+points, to adapt in hue/saturation to the actual brand words in the request —
+never applied verbatim as a formula:
+| Mood cue in the request | Starting hue direction |
+|--------------------------|------------------------|
+| technical, dev-tool, AI/ML | violet, indigo, or a cooler slate-blue |
+| finance, trust, professional | blue, teal, or a deep navy |
+| health, calm, wellness | emerald, teal, or a soft sage |
+| creative, bold, expressive | pink, rose, coral, or a saturated warm hue |
+| food, warmth, hospitality | amber, orange, or terracotta |
+| luxury, premium | near-black + a single restrained metallic or jewel accent |
+AVOID the look every AI-generated app defaults to when given no direction:
+warm cream (#F4F1EA) with a generic serif and terracotta accent; near-black
+with one lone neon-green or vermilion pop; a purple-to-blue gradient hero on
+white; rounded-lg on literally everything; an accent bar on every card. Pick
+neutrals deliberately too — a pure mid-grey reads as unconsidered, a grey
+with a slight hue bias toward the accent reads as chosen.
 
 ### Theme & Surface — CHOOSE per app (do NOT default everything to dark)
 Pick the theme that fits the domain + mood of THIS request, so each build looks
@@ -134,6 +148,9 @@ distinct. Vary it — most consumer, e-commerce, health, education, finance, foo
 and SaaS sites look best LIGHT or colorful; dark suits dev-tools, AI, gaming,
 crypto, music, and "premium/luxury" moods. When unsure, prefer a clean LIGHT
 theme. Also vary radius (sharp vs rounded), density, and font pairing per app.
+Whichever theme you pick, EVERY block below (cards, buttons, KPI tiles) must
+use that theme's variant — a light-theme app must never end up with the dark
+glassmorphic classes pasted in from habit.
 
 **Light surface system** (default for most domains):
 \`\`\`
@@ -146,32 +163,61 @@ text-slate-900 / text-slate-600 (muted) ; borders border-slate-200
 \`\`\`
 bg-[#0a0a0f] page · bg-[#0f0f1a] cards · bg-[#151520] elevated · border-white/[0.06]
 \`\`\`
-Apply the chosen theme consistently. The domain accent (table above) works on
+Apply the chosen theme consistently. The palette accent picked above works on
 either. Don't mix a dark hero with light cards.
 
-### Typography Scale
-- Hero:     text-5xl sm:text-7xl font-bold tracking-tight
-- H2:       text-3xl sm:text-4xl font-bold tracking-tight
-- Body:     text-base text-slate-300 leading-relaxed
-- Caption:  text-xs text-slate-500 uppercase tracking-widest
+### Typography — PAIR two typefaces on purpose, every build
+Never leave this at the Tailwind default (system sans / Inter) — that is the
+single most common tell that an app was AI-generated. Pick a display face for
+headings and a complementary body face, both loaded via Google Fonts in
+\`index.html\`:
+\`\`\`html
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=<Display+Face>:wght@600;700&family=<Body+Face>:wght@400;500&display=swap" rel="stylesheet">
+\`\`\`
+then wire both into \`tailwind.config.ts\` under \`fontFamily\` with a real
+fallback stack (\`ui-sans-serif, system-ui\` etc — never leave a face with no
+fallback). Match the pairing to the mood, not to whichever face is easiest:
+a geometric/grotesk display (e.g. Space Grotesk, Sora, Manrope) for
+technical/modern brands, a warm serif (e.g. Fraunces, Lora, Newsreader) for
+editorial/hospitality/luxury, a humanist sans (e.g. Plus Jakarta Sans, DM
+Sans) for approachable consumer products. Avoid defaulting every single build
+to Inter or Space Grotesk just because they are safe choices.
+- Hero:     text-5xl sm:text-7xl font-bold tracking-tight font-display (headings use text-wrap: balance)
+- H2:       text-3xl sm:text-4xl font-bold tracking-tight font-display
+- Body:     text-base leading-relaxed (light: text-slate-600, dark: text-slate-300)
+- Caption:  text-xs uppercase tracking-widest (light: text-slate-500, dark: text-slate-500)
 
-### Card Pattern
+### Card Pattern — theme-conditional, use the block matching the theme you picked
 \`\`\`tsx
+{/* Light theme */}
+<div className="group relative rounded-2xl border border-slate-200 bg-white
+               shadow-sm p-6 hover:border-slate-300 hover:shadow-md transition-all duration-300">
+</div>
+
+{/* Dark theme */}
 <div className="group relative rounded-2xl border border-white/[0.06] bg-white/[0.03]
                backdrop-blur-sm p-6 hover:border-white/[0.12] transition-all duration-300">
-  <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-violet-600/10
+  <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-[var(--accent)]/10
                   to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
 </div>
 \`\`\`
+(\`[var(--accent)]\` stands for the accent hue picked above — hardcode its actual
+Tailwind color, e.g. \`from-violet-600/10\`, don't leave a literal CSS variable.)
 
-### Button Patterns
+### Button Patterns — theme-conditional, use the block matching the theme you picked
 \`\`\`tsx
-{/* Primary */}
-<button className="px-6 py-3 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600
+{/* Primary — light or dark, same shape, accent color from the palette above */}
+<button className="px-6 py-3 rounded-xl bg-gradient-to-r from-<accent-600> to-<accent-500>
                    text-white font-semibold hover:opacity-90 active:scale-95
-                   transition-all shadow-lg shadow-violet-500/25">
+                   transition-all shadow-lg shadow-<accent-500>/25">
 
-{/* Secondary */}
+{/* Secondary — LIGHT theme */}
+<button className="px-6 py-3 rounded-xl border border-slate-300 text-slate-700
+                   hover:border-slate-400 hover:bg-slate-50 transition-all">
+
+{/* Secondary — DARK theme */}
 <button className="px-6 py-3 rounded-xl border border-white/10 text-white/80
                    hover:text-white hover:border-white/20 hover:bg-white/[0.04] transition-all">
 \`\`\`
@@ -186,6 +232,8 @@ ${siteChromeBullet}
 ### Style accents — OPTIONAL, use only when they fit (don't put them on every app):
 - Ambient glow blobs + glassmorphism: ONLY for dark "premium/tech" themes. Skip on light/clean apps.
 - Match radius/shadow to the mood: soft rounded + shadows for friendly brands, sharp + flat for editorial/enterprise.
+- Numbered markers (01/02/03), accent dividers, eyebrow labels: only when they encode something true
+  about the content (an actual sequence or step order) — not as decoration on every section.
 
 ### Real images — use them (Lovable does). NEVER ship empty grey placeholder divs.
 Generated apps must look real, so use actual photos via these reliable, key-free
@@ -264,8 +312,19 @@ Top bar inside content: h-14, breadcrumb left, search (⌘K) center, avatar/noti
 
 **Primary surface** — ${spec.primarySurface}
 
+Most operational tools read best LIGHT (this is what real admin/SaaS back-offices
+default to) — use the same theme choice made above for the rest of the app, and
+keep every block below in that theme's variant.
+
 **KPI stat card** (dashboard rows of 4):
 \`\`\`tsx
+{/* Light theme */}
+<div className="rounded-xl border border-slate-200 bg-white p-4">
+  <p className="text-xs text-slate-500">Revenue (30d)</p>
+  <p className="text-2xl font-bold tabular-nums mt-1 text-slate-900">$48,210</p>
+  <p className="text-xs text-emerald-600 mt-1">▲ 12.4% vs last month</p>
+</div>
+{/* Dark theme */}
 <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
   <p className="text-xs text-slate-500">Revenue (30d)</p>
   <p className="text-2xl font-bold tabular-nums mt-1">$48,210</p>
@@ -273,11 +332,16 @@ Top bar inside content: h-14, breadcrumb left, search (⌘K) center, avatar/noti
 </div>
 \`\`\`
 
-**Status badges** — px-2 py-0.5 rounded-full text-[11px] font-medium:
-paid/active/delivered = bg-emerald-500/15 text-emerald-400 · pending/processing = bg-amber-500/15 text-amber-400 ·
-failed/overdue = bg-red-500/15 text-red-400 · draft/inactive = bg-slate-500/15 text-slate-400
+**Status badges** — px-2 py-0.5 rounded-full text-[11px] font-medium (same semantic
+colors either theme, just swap the -400/-600 shade to match light vs dark text):
+paid/active/delivered = bg-emerald-500/15 text-emerald-600 (dark: text-emerald-400) ·
+pending/processing = bg-amber-500/15 text-amber-600 (dark: text-amber-400) ·
+failed/overdue = bg-red-500/15 text-red-600 (dark: text-red-400) ·
+draft/inactive = bg-slate-500/15 text-slate-600 (dark: text-slate-400)
 
-**Charts** — recharts AreaChart/BarChart inside cards, violet/indigo gradients, CartesianGrid stroke="rgba(255,255,255,0.04)".
+**Charts** — recharts AreaChart/BarChart inside cards, using the app's accent color
+(not a fixed violet/indigo regardless of palette); CartesianGrid stroke
+"rgba(0,0,0,0.06)" on light, "rgba(255,255,255,0.04)" on dark.
 **Forms** — ${spec.detailPattern}
 **Density** — ${spec.density}`;
 }
