@@ -299,14 +299,31 @@ export function ChatPanel({
     } else if (buildStartTimeRef.current !== null) {
       const elapsed = Date.now() - buildStartTimeRef.current;
       buildStartTimeRef.current = null;
-      // Fire a desktop notification if the build took >10s and permission is granted
+      // Fire a desktop notification if the build took >10s and permission is granted.
+      // Some contexts have `Notification` present with permission already
+      // "granted" but still refuse the raw constructor — an installed PWA
+      // window, some Android/Chrome configurations — and require
+      // ServiceWorkerRegistration.showNotification() instead, which this app
+      // does not register a service worker for. Feature-detecting the
+      // constructor's presence does not catch this; it throws at call time
+      // ("Illegal constructor. Use ServiceWorkerRegistration.showNotification()
+      // instead."), observed in production (Sentry
+      // JAVASCRIPT-TANSTACKSTART-REACT-4). This is a best-effort convenience
+      // notification, not core functionality, so a context that refuses it
+      // should fail silently rather than throw an uncaught error.
       if (elapsed > 10_000 && typeof window !== "undefined" && "Notification" in window) {
         if (Notification.permission === "granted") {
-          new Notification("Build complete ✓", {
-            body: `Finished in ${Math.round(elapsed / 1000)}s — your app is ready to preview.`,
-            icon: "/favicon.ico",
-            tag: "lifemark-build",
-          });
+          try {
+            new Notification("Build complete ✓", {
+              body: `Finished in ${Math.round(elapsed / 1000)}s — your app is ready to preview.`,
+              icon: "/favicon.ico",
+              tag: "lifemark-build",
+            });
+          } catch {
+            // Unsupported in this context (see comment above) — the build
+            // still completed and the in-app UI already reflects that;
+            // losing only the optional desktop notification is fine.
+          }
         }
       }
     }
