@@ -226,7 +226,12 @@ Tailwind color, e.g. \`from-violet-600/10\`, don't leave a literal CSS variable.
 ${siteChromeBullet}
 - Fixed/sticky main header row: backdrop-blur + a subtle bottom border, colored to MATCH the theme
   (light: bg-white/80 border-slate-200; dark: bg-[#0a0a0f]/80 border-white/[0.06]).
-- Framer Motion on page entry: initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+- Framer Motion on page entry: initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}.
+  Respect prefers-reduced-motion: wrap the transition in
+  { duration: shouldReduceMotion ? 0 : 0.4 } using Framer's useReducedMotion()
+  hook (or the equivalent motion-safe:/motion-reduce: Tailwind variants for
+  CSS-driven animation) — a build that animates every page load regardless of
+  the visitor's OS setting is not accessible.
 - Skeletons for loading (animate-pulse, theme-colored), beautiful empty states — never a blank div
 - Responsive at sm/md/lg breakpoints
 ### Style accents — OPTIONAL, use only when they fit (don't put them on every app):
@@ -454,6 +459,12 @@ const CODE_QUALITY_RULES = `
 - All interactive elements must have aria-labels or visible text.
 - Semantic HTML: nav, main, section, article, button (not div onClick).
 - Sufficient color contrast (text-slate-300 minimum on dark backgrounds).
+- Every focusable element needs a visible keyboard-focus state — never
+  outline-none without a replacement. Use Tailwind's
+  focus-visible:ring-2 focus-visible:ring-offset-2 with a ring color from
+  the app's accent, on every button, link, and form control. A mouse-only
+  hover state is not accessible; if a button only changes on :hover, add
+  the matching focus-visible: variant next to it.
 `.trim();
 
 const BUG_FREE_GENERATION_CONTRACT = `

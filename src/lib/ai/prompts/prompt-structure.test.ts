@@ -139,3 +139,15 @@ test("an unknown product still gets the complete design system", () => {
   assert.match(all, SHOP_BLOCK);
   assert.match(all, HEADER_BODY);
 });
+
+// Both apply to EVERY build, marketing or app-shell — a keyboard user or a
+// visitor with reduced-motion set does not stop existing because the product
+// is an internal tool. Checked against the full prompt (CODE_QUALITY_RULES
+// is a top-level block, not part of buildDesignSystem's own output).
+test("keyboard focus states and reduced-motion are mandated on every build", () => {
+  for (const request of ["landing page for a bakery", "Build an ERP with inventory and purchase orders"]) {
+    const prompt = promptFor(request);
+    assert.match(prompt, /focus-visible:ring-2/, request);
+    assert.match(prompt, /prefers-reduced-motion/, request);
+  }
+});
