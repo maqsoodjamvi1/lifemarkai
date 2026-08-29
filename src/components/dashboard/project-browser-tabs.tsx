@@ -19,6 +19,13 @@ interface TemplateMeta {
 
 interface ProjectBrowserTabsProps {
   projects: Project[];
+  /**
+   * Projects someone else owns and shared with this user (an accepted
+   * `collaborators` row) — see DashboardHome.sharedProjects in
+   * src/lib/dashboard-server.ts for why this can't be derived from
+   * `projects` by filtering `is_public`.
+   */
+  sharedProjects?: Project[];
   templates: TemplateMeta[];
   initialTab?: TabId;
 }
@@ -32,12 +39,15 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "templates", label: "Templates" },
 ];
 
-export function ProjectBrowserTabs({ projects, templates, initialTab = "mine" }: ProjectBrowserTabsProps) {
+export function ProjectBrowserTabs({ projects, sharedProjects = [], templates, initialTab = "mine" }: ProjectBrowserTabsProps) {
   const [tab, setTab] = useState<TabId>(initialTab);
 
   const filtered = useMemo(() => {
     if (tab === "starred") return projects.filter((p) => p.is_starred);
-    if (tab === "shared") return projects.filter((p) => p.is_public);
+    // "Shared with me" means someone else's project shared with THIS user —
+    // filtering `projects` (this user's own) by is_public used to show the
+    // user's own public projects mislabeled as shared, or nothing at all.
+    if (tab === "shared") return sharedProjects;
     if (tab === "recent") {
       const recentIds = getRecentProjects().map((r) => r.id);
       const byId = new Map(projects.map((p) => [p.id, p]));
@@ -49,7 +59,7 @@ export function ProjectBrowserTabs({ projects, templates, initialTab = "mine" }:
         .sort((a, b) => (b.total_views ?? 0) - (a.total_views ?? 0));
     }
     return projects;
-  }, [projects, tab]);
+  }, [projects, sharedProjects, tab]);
 
   return (
     <div>
@@ -81,7 +91,7 @@ export function ProjectBrowserTabs({ projects, templates, initialTab = "mine" }:
       ) : filtered.length === 0 ? (
         <div className="py-16 text-center text-sm text-muted-foreground">
           {tab === "shared"
-            ? "No shared projects yet — publish a project to share it."
+            ? "No projects have been shared with you yet — ask an owner to add you as a collaborator to see it here."
             : tab === "starred"
               ? "Star projects from the editor to see them here."
               : tab === "recent"

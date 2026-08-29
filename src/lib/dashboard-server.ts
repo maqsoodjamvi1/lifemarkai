@@ -18,6 +18,7 @@ import { createClient } from "./supabase/server.ts";
 import { getServerUser } from "./supabase/server-user.ts";
 import type { User } from "@supabase/supabase-js";
 import type { Database,Profile,Project } from "../types/database.ts";
+import { extractSharedProjects } from "./dashboard/shared-projects.ts";
 
 type ProfileRow = Database["public"]["Tables"]["profiles"]["Row"];
 type ProjectRow = Database["public"]["Tables"]["projects"]["Row"];
@@ -97,6 +98,17 @@ export const fetchDashboardShell = createServerFn({ method: "GET" }).handler(
 
 export interface DashboardHome {
   projects: DashboardProject[];
+  /**
+   * Projects another user owns and invited this user to collaborate on
+   * (an accepted row in `collaborators`) — NOT this user's own public
+   * projects. The dashboard's "Shared with me" tab (project-browser-tabs.tsx)
+   * used to filter the *owned* project list by `is_public`, which can only
+   * ever show a project this user made public themselves; a project someone
+   * else actually shared was never fetched at all, so the tab was either
+   * empty or showed the wrong projects for every collaborator. This list is
+   * fetched separately so the tab has the right data to show.
+   */
+  sharedProjects: Project[];
   profile: Profile | null;
   featuredTemplates: FeaturedTemplate[];
 }
@@ -106,9 +118,9 @@ export const fetchDashboardHome = createServerFn({ method: "GET" }).handler(
   async (): Promise<DashboardHome> => {
     const supabase = await createClient();
     const { user } = await getServerUser(supabase);
-    if (!user) return { projects: [], profile: null, featuredTemplates: [] };
+    if (!user) return { projects: [], sharedProjects: [], profile: null, featuredTemplates: [] };
 
-    const [{ data: projects }, { data: profile }, { data: featuredTemplates }] =
+    const [{ data: projects }, { data: profile }, { data: featuredTemplates }, { data: collabRows }] =
       await Promise.all([
         supabase
           .from("projects")
@@ -126,13 +138,25 @@ export const fetchDashboardHome = createServerFn({ method: "GET" }).handler(
           .select("id, name, description, category, fork_count, preview_url")
           .order("fork_count", { ascending: false })
           .limit(6),
+        supabase
+          .from("collaborators")
+          .select("projects(*)")
+          .eq("user_id", user.id)
+          // Pending invites aren't "shared with me" yet — they show up
+          // wherever invites are managed, not mixed into the project grid.
+          .not("accepted_at", "is", null),
       ]);
+
+    const sharedProjects = extractSharedProjects(
+      (collabRows ?? []) as Array<{ projects: ProjectRow | null }>,
+    ).map(normalizeProject);
 
     return {
       projects: (projects ?? []).map(({ project_files, ...project }) => ({
         ...normalizeProject(project),
         project_files,
       })),
+      sharedProjects,
       profile: normalizeProfile(profile),
       featuredTemplates: featuredTemplates ?? [],
     };

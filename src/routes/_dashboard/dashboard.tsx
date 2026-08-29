@@ -45,7 +45,7 @@ export const Route = createFileRoute("/_dashboard/dashboard")({
 const dashboardLayoutApi = getRouteApi("/_dashboard");
 
 function DashboardPage() {
-  const { projects, profile, featuredTemplates } = Route.useLoaderData();
+  const { projects, sharedProjects, profile, featuredTemplates } = Route.useLoaderData();
   const { user } = dashboardLayoutApi.useLoaderData();
   const { tab, new: newProject, fromUrl } = Route.useSearch();
 
@@ -94,6 +94,7 @@ function DashboardPage() {
         <div>
           <ProjectBrowserTabs
             projects={projects ?? []}
+            sharedProjects={sharedProjects ?? []}
             templates={featuredTemplates ?? []}
             initialTab={initialTab}
           />
