@@ -1,25 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import { hasSupabaseWired } from "@/lib/projects/detect-supabase-wiring";
 
 /** Native /api/projects/:id/remix — fork a public, remix-enabled project. */
-function hasSupabaseWired(files: Array<{ path: string; content: string }>): { hasSupabase: boolean; evidence: string[] } {
-  const evidence: string[] = [];
-  for (const f of files) {
-    const lower = f.path.toLowerCase();
-    if (/supabase\/(migrations|functions)\//.test(lower)) { evidence.push(f.path); continue; }
-    const c = f.content ?? "";
-    if (/@supabase\/(supabase-js|ssr|auth-helpers)/.test(c)) {
-      evidence.push(`${f.path} (import)`);
-    } else if (/NEXT_PUBLIC_SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY/.test(c)) {
-      evidence.push(`${f.path} (env)`);
-    } else if (/createClient\s*\(.*supabase/i.test(c)) {
-      evidence.push(`${f.path} (client)`);
-    }
-    if (evidence.length >= 6) break;
-  }
-  const uniq = [...new Set(evidence)];
-  return { hasSupabase: uniq.length > 0, evidence: uniq };
-}
+const MESSAGE_COPY_LIMIT = 500;
 
 export const Route = createFileRoute("/api/projects/$id/remix")({
   server: {
@@ -30,7 +14,7 @@ export const Route = createFileRoute("/api/projects/$id/remix")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-        let body: { dryRun?: boolean; disconnectSupabase?: boolean } = {};
+        let body: { dryRun?: boolean; disconnectSupabase?: boolean; carryOverChatHistory?: boolean } = {};
         try { body = await request.json(); } catch { /* empty body ok */ }
 
         const { data: source, error: srcErr } = await supabase
@@ -49,6 +33,14 @@ export const Route = createFileRoute("/api/projects/$id/remix")({
         const supabaseCheck = hasSupabaseWired(sourceFiles);
 
         if (body.dryRun) {
+          // Count-only — the dry run is what the confirmation dialog shows
+          // before committing to a remix, so it shouldn't pull every
+          // message's content over the wire just to report how many there are.
+          const { count: messageCount } = await supabase
+            .from("messages")
+            .select("id", { count: "exact", head: true })
+            .eq("project_id", id);
+
           return Response.json({
             ok: true,
             dryRun: true,
@@ -56,6 +48,7 @@ export const Route = createFileRoute("/api/projects/$id/remix")({
             supabaseEvidence: supabaseCheck.evidence,
             sourceName: source.name,
             fileCount: sourceFiles.length,
+            messageCount: messageCount ?? 0,
           });
         }
 
@@ -108,11 +101,49 @@ export const Route = createFileRoute("/api/projects/$id/remix")({
           if (filesErr) console.error("Failed to copy files:", filesErr.message);
         }
 
+        let carriedOverMessages = 0;
+        if (body.carryOverChatHistory) {
+          // Capped rather than unbounded: this is a one-time copy triggered
+          // by a user click, not a paginated read, and a remix is meant to
+          // hand the remixer useful context to keep building from — not
+          // necessarily the source project's entire history verbatim.
+          const { data: sourceMessages, error: msgErr } = await supabase
+            .from("messages")
+            .select("role, content, tokens_used, model, mode, metadata, created_at")
+            .eq("project_id", id)
+            .order("created_at", { ascending: true })
+            .limit(MESSAGE_COPY_LIMIT);
+
+          if (msgErr) {
+            console.error("Failed to read chat history for remix:", msgErr.message);
+          } else if (sourceMessages && sourceMessages.length > 0) {
+            const { error: copyErr } = await supabase.from("messages").insert(
+              sourceMessages.map((m) => ({
+                project_id: newProject.id,
+                role: m.role,
+                content: m.content,
+                tokens_used: m.tokens_used,
+                model: m.model,
+                mode: m.mode,
+                metadata: m.metadata,
+                created_at: m.created_at,
+                // A thumbs up/down is the ORIGINAL author's reaction to that
+                // reply — copying it onto the remixer's conversation would
+                // misrepresent it as their own feedback.
+                rating: null,
+              })),
+            );
+            if (copyErr) console.error("Failed to copy chat history for remix:", copyErr.message);
+            else carriedOverMessages = sourceMessages.length;
+          }
+        }
+
         supabase.rpc("increment_remix_count", { project_id: source.id }).then(() => {});
 
         return Response.json({
           id: newProject.id,
           disconnectedSupabase: !!body.disconnectSupabase && supabaseCheck.hasSupabase,
+          carriedOverMessages,
         });
       },
     },
