@@ -141,6 +141,7 @@ import { Route as ApiGithubCommitsRouteImport } from './routes/api/github/commit
 import { Route as ApiGithubConnectRouteImport } from './routes/api/github/connect'
 import { Route as ApiGithubImportRouteImport } from './routes/api/github/import'
 import { Route as ApiGithubSyncRouteImport } from './routes/api/github/sync'
+import { Route as ApiGithubWebhookRouteImport } from './routes/api/github/webhook'
 import { Route as ApiGitlabCommitsRouteImport } from './routes/api/gitlab/commits'
 import { Route as ApiGitlabConnectRouteImport } from './routes/api/gitlab/connect'
 import { Route as ApiGitlabSyncRouteImport } from './routes/api/gitlab/sync'
@@ -947,6 +948,11 @@ const ApiGithubImportRoute = ApiGithubImportRouteImport.update({
 const ApiGithubSyncRoute = ApiGithubSyncRouteImport.update({
   id: '/api/github/sync',
   path: '/api/github/sync',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiGithubWebhookRoute = ApiGithubWebhookRouteImport.update({
+  id: '/api/github/webhook',
+  path: '/api/github/webhook',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiGitlabCommitsRoute = ApiGitlabCommitsRouteImport.update({
@@ -1803,6 +1809,7 @@ export interface FileRoutesByFullPath {
   '/api/github/connect': typeof ApiGithubConnectRoute
   '/api/github/import': typeof ApiGithubImportRoute
   '/api/github/sync': typeof ApiGithubSyncRoute
+  '/api/github/webhook': typeof ApiGithubWebhookRoute
   '/api/gitlab/commits': typeof ApiGitlabCommitsRoute
   '/api/gitlab/connect': typeof ApiGitlabConnectRoute
   '/api/gitlab/sync': typeof ApiGitlabSyncRoute
@@ -2070,6 +2077,7 @@ export interface FileRoutesByTo {
   '/api/github/connect': typeof ApiGithubConnectRoute
   '/api/github/import': typeof ApiGithubImportRoute
   '/api/github/sync': typeof ApiGithubSyncRoute
+  '/api/github/webhook': typeof ApiGithubWebhookRoute
   '/api/gitlab/commits': typeof ApiGitlabCommitsRoute
   '/api/gitlab/connect': typeof ApiGitlabConnectRoute
   '/api/gitlab/sync': typeof ApiGitlabSyncRoute
@@ -2339,6 +2347,7 @@ export interface FileRoutesById {
   '/api/github/connect': typeof ApiGithubConnectRoute
   '/api/github/import': typeof ApiGithubImportRoute
   '/api/github/sync': typeof ApiGithubSyncRoute
+  '/api/github/webhook': typeof ApiGithubWebhookRoute
   '/api/gitlab/commits': typeof ApiGitlabCommitsRoute
   '/api/gitlab/connect': typeof ApiGitlabConnectRoute
   '/api/gitlab/sync': typeof ApiGitlabSyncRoute
@@ -2608,6 +2617,7 @@ export interface FileRouteTypes {
     | '/api/github/connect'
     | '/api/github/import'
     | '/api/github/sync'
+    | '/api/github/webhook'
     | '/api/gitlab/commits'
     | '/api/gitlab/connect'
     | '/api/gitlab/sync'
@@ -2875,6 +2885,7 @@ export interface FileRouteTypes {
     | '/api/github/connect'
     | '/api/github/import'
     | '/api/github/sync'
+    | '/api/github/webhook'
     | '/api/gitlab/commits'
     | '/api/gitlab/connect'
     | '/api/gitlab/sync'
@@ -3143,6 +3154,7 @@ export interface FileRouteTypes {
     | '/api/github/connect'
     | '/api/github/import'
     | '/api/github/sync'
+    | '/api/github/webhook'
     | '/api/gitlab/commits'
     | '/api/gitlab/connect'
     | '/api/gitlab/sync'
@@ -3391,6 +3403,7 @@ export interface RootRouteChildren {
   ApiGithubConnectRoute: typeof ApiGithubConnectRoute
   ApiGithubImportRoute: typeof ApiGithubImportRoute
   ApiGithubSyncRoute: typeof ApiGithubSyncRoute
+  ApiGithubWebhookRoute: typeof ApiGithubWebhookRoute
   ApiGitlabCommitsRoute: typeof ApiGitlabCommitsRoute
   ApiGitlabConnectRoute: typeof ApiGitlabConnectRoute
   ApiGitlabSyncRoute: typeof ApiGitlabSyncRoute
@@ -4352,6 +4365,13 @@ declare module '@tanstack/react-router' {
       path: '/api/github/sync'
       fullPath: '/api/github/sync'
       preLoaderRoute: typeof ApiGithubSyncRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/github/webhook': {
+      id: '/api/github/webhook'
+      path: '/api/github/webhook'
+      fullPath: '/api/github/webhook'
+      preLoaderRoute: typeof ApiGithubWebhookRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/gitlab/commits': {
@@ -5982,6 +6002,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubConnectRoute: ApiGithubConnectRoute,
   ApiGithubImportRoute: ApiGithubImportRoute,
   ApiGithubSyncRoute: ApiGithubSyncRoute,
+  ApiGithubWebhookRoute: ApiGithubWebhookRoute,
   ApiGitlabCommitsRoute: ApiGitlabCommitsRoute,
   ApiGitlabConnectRoute: ApiGitlabConnectRoute,
   ApiGitlabSyncRoute: ApiGitlabSyncRoute,

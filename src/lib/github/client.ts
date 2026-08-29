@@ -261,14 +261,48 @@ export async function listPullRequests(
 
 // ── Diff-aware push ───────────────────────────────────────────────────────────
 
-/** Push only files that differ from the remote tree — returns number of changed files */
+/**
+ * Creates (or reuses) a branch to land a commit that couldn't fast-forward
+ * onto its intended branch — mirrors Lovable's own conflict handling
+ * (a rejected push redirects to a `lovable-sync` branch, then a
+ * timestamped `lovable-sync-<ts>` one on repeat) rather than failing the
+ * whole sync and discarding the user's work.
+ */
+async function createConflictSyncBranch(
+  octokit: Octokit,
+  owner: string,
+  repoName: string,
+  commitSha: string,
+): Promise<string> {
+  const attempt = async (branchName: string): Promise<boolean> => {
+    try {
+      await octokit.rest.git.createRef({ owner, repo: repoName, ref: `refs/heads/${branchName}`, sha: commitSha });
+      return true;
+    } catch {
+      return false; // ref already exists (or some other failure) — try the next name
+    }
+  };
+
+  if (await attempt("lifemark-sync")) return "lifemark-sync";
+  const timestamped = `lifemark-sync-${Date.now()}`;
+  await attempt(timestamped);
+  return timestamped;
+}
+
+/**
+ * Push only files that differ from the remote tree — returns number of
+ * changed files. If the target branch has moved since it was last read
+ * (another push, or a pull triggered by the webhook in
+ * src/routes/api/github/webhook.ts), the commit lands on a conflict-sync
+ * branch instead of failing outright — see createConflictSyncBranch.
+ */
 export async function pushChangedFiles(
   token: string,
   repo: string,
   branch: string,
   files: GitHubFile[],
   message: string
-): Promise<{ changed: number; commitSha: string }> {
+): Promise<{ changed: number; commitSha: string; conflictBranch: string | null }> {
   const octokit = createGitHubClient(token);
   const [owner, repoName] = repo.split("/");
 
@@ -295,7 +329,7 @@ export async function pushChangedFiles(
     void remoteExists; // suppress unused warning
   }
 
-  if (changedFiles.length === 0) return { changed: 0, commitSha };
+  if (changedFiles.length === 0) return { changed: 0, commitSha, conflictBranch: null };
 
   // Create blobs
   const treeItems = await Promise.all(
@@ -311,7 +345,54 @@ export async function pushChangedFiles(
 
   const { data: newTree } = await octokit.rest.git.createTree({ owner, repo: repoName, base_tree: commit.tree.sha, tree: treeItems });
   const { data: newCommit } = await octokit.rest.git.createCommit({ owner, repo: repoName, message, tree: newTree.sha, parents: [commitSha] });
-  await octokit.rest.git.updateRef({ owner, repo: repoName, ref: `heads/${branch}`, sha: newCommit.sha });
 
-  return { changed: changedFiles.length, commitSha: newCommit.sha };
+  try {
+    await octokit.rest.git.updateRef({ owner, repo: repoName, ref: `heads/${branch}`, sha: newCommit.sha });
+    return { changed: changedFiles.length, commitSha: newCommit.sha, conflictBranch: null };
+  } catch {
+    // Not a fast-forward — someone (or the webhook-driven pull) moved the
+    // branch since we read it. The commit object itself doesn't depend on
+    // the ref, so it's still valid; land it on a sync branch instead of
+    // losing the user's work.
+    const conflictBranch = await createConflictSyncBranch(octokit, owner, repoName, newCommit.sha);
+    return { changed: changedFiles.length, commitSha: newCommit.sha, conflictBranch };
+  }
+}
+
+// ── Webhooks (bidirectional sync) ───────────────────────────────────────────
+
+/**
+ * Registers a push webhook so GitHub notifies LifemarkAI automatically
+ * instead of requiring a manual Pull click. Best-effort: an OAuth token
+ * without hook-admin rights on the target repo (e.g. an org repo the user
+ * doesn't administer) throws here, and callers treat that as non-fatal —
+ * manual push/pull still work without it.
+ */
+export async function createWebhook(
+  token: string,
+  repo: string,
+  callbackUrl: string,
+  secret: string,
+): Promise<{ id: number }> {
+  const octokit = createGitHubClient(token);
+  const [owner, repoName] = repo.split("/");
+  const { data } = await octokit.rest.repos.createWebhook({
+    owner, repo: repoName,
+    config: { url: callbackUrl, content_type: "json", secret, insecure_ssl: "0" },
+    events: ["push"],
+    active: true,
+  });
+  return { id: data.id };
+}
+
+/** Best-effort webhook teardown — never throws (called when disconnecting/deleting a project's sync). */
+export async function deleteWebhook(token: string, repo: string, hookId: number): Promise<void> {
+  try {
+    const octokit = createGitHubClient(token);
+    const [owner, repoName] = repo.split("/");
+    await octokit.rest.repos.deleteWebhook({ owner, repo: repoName, hook_id: hookId });
+  } catch {
+    // Repo may already be gone, hook may already be removed, or the token
+    // may no longer have access — none of that should block the caller.
+  }
 }

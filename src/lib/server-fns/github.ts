@@ -12,8 +12,10 @@ ensureBranch,
 pushChangedFiles,
 getBranchStatus,
 createOrGetPR,
+createWebhook,
 } from "@/lib/github/client";
 import { logger } from "../logger.ts";
+import { randomBytes } from "node:crypto";
 
 // ── OAuth callback: exchange code → token, save to profile ───────────────────
 export async function completeGithubConnect(data: any) {
@@ -97,6 +99,74 @@ const LANG_MAP: Record<string, string> = {
   sql: "sql", sh: "shell", yaml: "yaml", yml: "yaml",
 };
 
+/**
+ * Pulls a branch's files from GitHub and stores them into project_files.
+ * Shared by the manual Pull action below AND the push webhook
+ * (src/routes/api/github/webhook.ts) — factored out so real bidirectional
+ * sync (GitHub push -> LifemarkAI pull, no click required) reuses the exact
+ * same write path and failure-tracking as a user-initiated pull, rather
+ * than a second copy that could silently drift from it.
+ */
+export async function pullAndStoreFiles(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  projectId: string,
+  token: string,
+  repo: string,
+  branch: string,
+): Promise<{ fileCount: number; failedPaths: string[] }> {
+  const files = await pullFiles(token, repo, branch);
+  const failedPaths: string[] = [];
+  for (const file of files) {
+    const ext = file.path.split(".").pop()?.toLowerCase() ?? "";
+    const { error } = await supabase.from("project_files").upsert(
+      { project_id: projectId, path: file.path, content: file.content, language: LANG_MAP[ext] ?? "plaintext" },
+      { onConflict: "project_id,path" },
+    );
+    if (error) failedPaths.push(file.path);
+  }
+  return { fileCount: files.length - failedPaths.length, failedPaths };
+}
+
+/**
+ * Best-effort webhook registration so GitHub pushes flow back into
+ * LifemarkAI automatically. Never throws — an OAuth token without
+ * hook-admin rights on the repo (org repos the user doesn't administer,
+ * some fine-grained PAT scopes) just means manual Pull stays the only way
+ * to sync inbound, same as before this feature existed.
+ */
+async function ensureWebhookRegistered(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  projectId: string,
+  token: string,
+  repo: string,
+): Promise<void> {
+  const { data: existing } = await supabase
+    .from("projects")
+    .select("github_webhook_id")
+    .eq("id", projectId)
+    .single();
+  if ((existing as { github_webhook_id?: number | null } | null)?.github_webhook_id) return;
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const secret = randomBytes(24).toString("hex");
+  try {
+    const hook = await createWebhook(token, repo, `${appUrl}/api/github/webhook`, secret);
+    await supabase
+      .from("projects")
+      // github_webhook_secret/github_webhook_id aren't in the committed
+      // generated Supabase types yet (no live type-regen capability in this
+      // environment) — same `as never` pattern used elsewhere in this repo
+      // for columns that exist live but aren't reflected there.
+      .update({ github_webhook_secret: secret, github_webhook_id: hook.id } as never)
+      .eq("id", projectId);
+  } catch (error) {
+    logger.info("github.webhook.register_failed", {
+      projectId, repo,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 export async function githubSync(data: any) {
     const supabase = await createClient();
     const {
@@ -134,6 +204,7 @@ export async function githubSync(data: any) {
         .from("projects")
         .update({ github_repo: repo.full_name, github_branch: branch })
         .eq("id", projectId);
+      await ensureWebhookRegistered(supabase, projectId, token, repo.full_name);
       logger.info("github.sync.create", { projectId, repo: repo.full_name, branch });
       return { status: "ok" as const, payload: { repo: repo.full_name, url: repo.html_url, branch } };
     }
@@ -150,13 +221,19 @@ export async function githubSync(data: any) {
       const files = (project.project_files ?? []).map((f: { path: string; content: string }) => ({
         path: f.path, content: f.content,
       }));
-      const { changed, commitSha } = await pushChangedFiles(
+      const { changed, commitSha, conflictBranch } = await pushChangedFiles(
         token, repo, branch, files,
         `Update from LifemarkAI · ${new Date().toISOString()}`,
       );
       await supabase.from("projects").update({ github_branch: branch }).eq("id", projectId);
+      // Lazily registers on the first push after this feature shipped, for
+      // projects that connected a repo before webhook sync existed.
+      await ensureWebhookRegistered(supabase, projectId, token, repo);
+      if (conflictBranch) {
+        logger.info("github.sync.push_conflict", { projectId, branch, conflictBranch, commitSha });
+      }
       logger.info("github.sync.push", { projectId, branch, changed, commitSha });
-      return { status: "ok" as const, payload: { success: true, branch, changed, commitSha } };
+      return { status: "ok" as const, payload: { success: true, branch, changed, commitSha, conflictBranch } };
     }
 
     if (action === "pull") {

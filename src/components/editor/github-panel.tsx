@@ -193,10 +193,22 @@ export function GitHubPanel({
         window.open(data.url, "_blank");
         await loadBranchStatus();
       } else if (action === "push") {
-        const changedMsg = data.changed === 0
-          ? "Already up to date."
-          : `${data.changed} file${data.changed !== 1 ? "s" : ""} pushed to ${data.branch}.`;
-        toast({ title: `Pushed to ${providerLabel}`, description: changedMsg });
+        if (data.conflictBranch) {
+          // The target branch moved since we last read it (a teammate's push,
+          // or a webhook-driven pull) — pushChangedFiles redirected the commit
+          // to a sync branch instead of overwriting it. Same recovery shape
+          // as Lovable's lovable-sync fallback: nothing was lost, but it
+          // needs a manual look (diff/merge) rather than being silently live.
+          toast({
+            title: `${providerLabel} branch had moved`,
+            description: `Your changes landed on "${data.conflictBranch}" instead of ${data.branch} — open a PR from there to merge them in.`,
+          });
+        } else {
+          const changedMsg = data.changed === 0
+            ? "Already up to date."
+            : `${data.changed} file${data.changed !== 1 ? "s" : ""} pushed to ${data.branch}.`;
+          toast({ title: `Pushed to ${providerLabel}`, description: changedMsg });
+        }
         setCommitMessage("");
         await loadBranchStatus();
       } else if (action === "pull") {
