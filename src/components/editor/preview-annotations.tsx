@@ -3,16 +3,15 @@ import { useState,useRef,useCallback,useEffect } from "react";
 import { MessageSquarePlus,X,ChevronDown,ChevronUp,Pin,Pencil,Check,Trash2,Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatAnnotationsForAi } from "@/lib/editor/format-annotations-for-ai";
+import {
+  rowToAnnotation,
+  diffForSync,
+  signature,
+  type Annotation,
+  type PinCommentRow,
+} from "@/lib/editor/pin-annotations";
 
-export interface Annotation {
-  id: string;
-  x: number;          // percent of container width
-  y: number;          // percent of container height
-  text: string;
-  color: string;
-  createdAt: string;
-  resolved: boolean;
-}
+export type { Annotation };
 
 interface PreviewAnnotationsProps {
   projectId: string;
@@ -64,6 +63,9 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
   const serverReadyRef = useRef(false);
   const pastRef = useRef<Annotation[][]>([]);
   const futureRef = useRef<Annotation[][]>([]);
+  /** Last signature synced to the server per annotation id — the persist
+   *  effect diffs against this to send only what actually changed. */
+  const syncedRef = useRef<Map<string, string>>(new Map());
   /** Project whose annotations the hydrate effect has already swapped in. */
   const hydratedProjectRef = useRef(projectId);
   /** Project the persist effect last ran for; see the skip note below. */
@@ -97,7 +99,11 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
     [publishMeta],
   );
 
-  // Hydrate from project chat-state (localStorage is offline cache).
+  // Hydrate from the project's comments (project_comments rows with pin_x/
+  // pin_y set — see src/lib/server-fns/comments.ts) — localStorage is only
+  // the offline/instant-paint cache. Pins live here, not in a component-
+  // private blob, so they also show up in the Comments panel and (for a
+  // public project) the guest embed, same as any other comment.
   useEffect(() => {
     let cancelled = false;
     serverReadyRef.current = false;
@@ -111,21 +117,22 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
       futureRef.current = [];
       const cached = loadAnnotations(projectId);
       setAnnotations(cached);
+      syncedRef.current = new Map(cached.map((a) => [a.id, signature(a)]));
       publishMeta(cached, 0, 0);
     }
     void (async () => {
       try {
-        const res = await fetch(`/api/projects/${projectId}/chat-state`);
+        const res = await fetch(`/api/projects/${projectId}/comments`);
         if (!res.ok || cancelled) return;
-        const data = (await res.json()) as { preview_annotations?: Annotation[] };
+        const rows = (await res.json()) as PinCommentRow[];
         if (cancelled) return;
-        if (Array.isArray(data.preview_annotations) && data.preview_annotations.length > 0) {
-          pastRef.current = [];
-          futureRef.current = [];
-          setAnnotations(data.preview_annotations);
-          saveAnnotations(projectId, data.preview_annotations);
-          publishMeta(data.preview_annotations, 0, 0);
-        }
+        const pins = rows.map(rowToAnnotation).filter((a): a is Annotation => a !== null);
+        pastRef.current = [];
+        futureRef.current = [];
+        setAnnotations(pins);
+        syncedRef.current = new Map(pins.map((a) => [a.id, signature(a)]));
+        saveAnnotations(projectId, pins);
+        publishMeta(pins, 0, 0);
       } catch {
         /* keep local cache */
       } finally {
@@ -179,7 +186,8 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
     };
   }, [commitAnnotations, publishMeta]);
 
-  // Persist on change — local cache + server
+  // Persist on change — local cache + server (diffed against the last-synced
+  // signature per annotation, so an unrelated edit doesn't re-send every pin).
   useEffect(() => {
     if (persistProjectRef.current !== projectId) {
       // First pass after a project switch: `annotations` is still the previous
@@ -191,11 +199,34 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
     saveAnnotations(projectId, annotations);
     if (!serverReadyRef.current) return;
     const timer = window.setTimeout(() => {
-      void fetch(`/api/projects/${projectId}/chat-state`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ preview_annotations: annotations }),
-      }).catch(() => {/* best-effort */});
+      const synced = syncedRef.current;
+      const { toUpsert, toDeleteIds } = diffForSync(annotations, synced);
+
+      void Promise.all([
+        ...toUpsert.map((a) =>
+          fetch(`/api/projects/${projectId}/comments/pin`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              client_id: a.id,
+              content: a.text,
+              pin_x: a.x,
+              pin_y: a.y,
+              pin_color: a.color,
+              resolved: a.resolved,
+            }),
+          })
+            .then((res) => { if (res.ok || res.status === 201) synced.set(a.id, signature(a)); })
+            .catch(() => {/* best-effort — retried on the next change */}),
+        ),
+        ...toDeleteIds.map((id) =>
+          fetch(`/api/projects/${projectId}/comments/pin?client_id=${encodeURIComponent(id)}`, {
+            method: "DELETE",
+          })
+            .then((res) => { if (res.ok) synced.delete(id); })
+            .catch(() => {/* best-effort — retried on the next change */}),
+        ),
+      ]);
     }, 500);
     return () => window.clearTimeout(timer);
   }, [annotations, projectId]);

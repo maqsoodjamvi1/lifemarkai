@@ -31,6 +31,10 @@ type CommentRow = {
   element_preview?: string | null;
   is_guest?: boolean;
   guest_name?: string | null;
+  pin_x?: number | null;
+  pin_y?: number | null;
+  pin_color?: string | null;
+  client_id?: string | null;
 };
 
 const BASE_COLUMNS = `
@@ -55,10 +59,17 @@ const ELEMENT_COLUMNS = `
   guest_name
 `;
 
+const PIN_LIST_COLUMNS = `
+  pin_x,
+  pin_y,
+  pin_color,
+  client_id
+`;
+
 function missingOptionalColumn(message: string | undefined): boolean {
   if (!message) return false;
   return (
-    /element_xpath|element_tag|page_path|element_preview|is_guest|guest_name/i.test(
+    /element_xpath|element_tag|page_path|element_preview|is_guest|guest_name|pin_x|pin_y|pin_color|client_id/i.test(
       message,
     ) && /does not exist|schema cache/i.test(message)
   );
@@ -95,13 +106,32 @@ async function selectComments(
   supabase: Awaited<ReturnType<typeof createClient>>,
   projectId: string,
 ) {
+  const withPins = await supabase
+    .from("project_comments")
+    .select(`${BASE_COLUMNS},${ELEMENT_COLUMNS},${PIN_LIST_COLUMNS}`)
+    .eq("project_id", projectId)
+    .order("created_at", { ascending: true });
+
+  if (!withPins.error) return { data: (withPins.data ?? []) as unknown as CommentRow[], error: null };
+
+  if (!missingOptionalColumn(withPins.error.message)) {
+    return { data: [] as CommentRow[], error: withPins.error };
+  }
+
+  // Migration 185 (pin_x/pin_y/pin_color/client_id) hasn't run on this
+  // database yet — degrade to the element-annotation columns only.
   const full = await supabase
     .from("project_comments")
     .select(`${BASE_COLUMNS},${ELEMENT_COLUMNS}`)
     .eq("project_id", projectId)
     .order("created_at", { ascending: true });
 
-  if (!full.error) return { data: (full.data ?? []) as CommentRow[], error: null };
+  if (!full.error) {
+    const rows = ((full.data ?? []) as CommentRow[]).map((r) => ({
+      ...r, pin_x: null, pin_y: null, pin_color: null, client_id: null,
+    }));
+    return { data: rows, error: null };
+  }
 
   if (!missingOptionalColumn(full.error.message)) {
     return { data: [] as CommentRow[], error: full.error };
@@ -123,6 +153,10 @@ async function selectComments(
     element_preview: null,
     is_guest: false,
     guest_name: null,
+    pin_x: null,
+    pin_y: null,
+    pin_color: null,
+    client_id: null,
   }));
   return { data: rows, error: null };
 }
@@ -278,5 +312,104 @@ export async function deleteComment(input: { projectId: string; commentId: strin
     .eq("project_id", input.projectId);
 
   if (error) return { status: "error" as const, message: error.message };
+  return { status: "ok" as const, success: true };
+}
+
+// ── Preview pins (src/components/editor/preview-annotations.tsx) ────────────
+//
+// A pin is a project_comments row with pin_x/pin_y set and a client-chosen
+// client_id, unique per project (migration 185). Upserting by client_id lets
+// the click-to-annotate UI create AND edit a pin through the same call —
+// there's no server-assigned-id round trip to wait on before the next edit
+// can be sent, which matters for a component that autosaves on every
+// keystroke/color-change/resolve-toggle.
+
+const PIN_COLUMNS = `${BASE_COLUMNS},pin_x,pin_y,pin_color,client_id`;
+
+function missingPinColumn(message: string | undefined): boolean {
+  if (!message) return false;
+  return (
+    /pin_x|pin_y|pin_color|client_id/i.test(message) &&
+    /does not exist|schema cache/i.test(message)
+  );
+}
+
+export async function upsertPinComment(input: {
+  projectId: string;
+  clientId: string;
+  content: string;
+  pinX: number;
+  pinY: number;
+  pinColor: string;
+  resolved: boolean;
+}) {
+  const supabase = await createClient();
+  const { user } = await getServerUser(supabase);
+  if (!user) return { status: "unauthorized" as const };
+
+  const access = await assertChatAccess(supabase, input.projectId, user.id, "write");
+  if (!access.ok) {
+    return { status: "denied" as const, httpStatus: access.status, error: access.error };
+  }
+
+  const content = input.content.trim();
+  if (!content) return { status: "bad_request" as const, error: "Content is required" };
+
+  const row = {
+    project_id: input.projectId,
+    user_id: user.id,
+    content,
+    client_id: input.clientId,
+    pin_x: input.pinX,
+    pin_y: input.pinY,
+    pin_color: input.pinColor,
+    resolved: input.resolved,
+    resolved_by: input.resolved ? user.id : null,
+    resolved_at: input.resolved ? new Date().toISOString() : null,
+  };
+
+  const result = await supabase
+    .from("project_comments")
+    // client_id/pin_x/pin_y/pin_color aren't in the committed generated
+    // Supabase types yet (no live type-regen capability in this
+    // environment) — same `as never` pattern used elsewhere in this repo
+    // for columns that exist live but aren't reflected there.
+    .upsert(row as never, { onConflict: "project_id,client_id" })
+    .select(PIN_COLUMNS)
+    .single();
+
+  if (result.error) {
+    if (missingPinColumn(result.error.message)) {
+      // Migration 185 hasn't run yet on this database — degrade to a no-op
+      // rather than a hard error so the preview UI can still fall back to
+      // its own local cache.
+      return { status: "not_supported" as const };
+    }
+    return { status: "error" as const, message: result.error.message };
+  }
+
+  return { status: "ok" as const, comment: result.data };
+}
+
+export async function deletePinComment(input: { projectId: string; clientId: string }) {
+  const supabase = await createClient();
+  const { user } = await getServerUser(supabase);
+  if (!user) return { status: "unauthorized" as const };
+
+  const access = await assertChatAccess(supabase, input.projectId, user.id, "write");
+  if (!access.ok) {
+    return { status: "denied" as const, httpStatus: access.status, error: access.error };
+  }
+
+  const { error } = await supabase
+    .from("project_comments")
+    .delete()
+    .eq("project_id", input.projectId)
+    .eq("client_id" as "id", input.clientId);
+
+  if (error) {
+    if (missingPinColumn(error.message)) return { status: "not_supported" as const };
+    return { status: "error" as const, message: error.message };
+  }
   return { status: "ok" as const, success: true };
 }

@@ -263,6 +263,7 @@ import { Route as ApiV1ProjectsIdRouteImport } from './routes/api/v1/projects/$i
 import { Route as ApiAppsIdConnectProviderRouteImport } from './routes/api/apps/$id/connect/$provider'
 import { Route as ApiIntegrationsOpenaiOpenapiJsonRouteImport } from './routes/api/integrations/openai/openapi.json'
 import { Route as ApiProjectsIdCommentsCommentIdRouteImport } from './routes/api/projects/$id/comments/$commentId'
+import { Route as ApiProjectsIdCommentsPinRouteImport } from './routes/api/projects/$id/comments/pin'
 import { Route as ApiProjectsIdEdgeFunctionsTestRouteImport } from './routes/api/projects/$id/edge-functions/test'
 import { Route as ApiProjectsIdEnvKeyRouteImport } from './routes/api/projects/$id/env/$key'
 import { Route as ApiProjectsIdFeatureFlagsFlagIdRouteImport } from './routes/api/projects/$id/feature-flags/$flagId'
@@ -1601,6 +1602,12 @@ const ApiProjectsIdCommentsCommentIdRoute =
     path: '/$commentId',
     getParentRoute: () => ApiProjectsIdCommentsRoute,
   } as any)
+const ApiProjectsIdCommentsPinRoute =
+  ApiProjectsIdCommentsPinRouteImport.update({
+    id: '/pin',
+    path: '/pin',
+    getParentRoute: () => ApiProjectsIdCommentsRoute,
+  } as any)
 const ApiProjectsIdEdgeFunctionsTestRoute =
   ApiProjectsIdEdgeFunctionsTestRouteImport.update({
     id: '/test',
@@ -1931,6 +1938,7 @@ export interface FileRoutesByFullPath {
   '/api/apps/$id/connect/$provider': typeof ApiAppsIdConnectProviderRouteWithChildren
   '/api/integrations/openai/openapi/json': typeof ApiIntegrationsOpenaiOpenapiJsonRoute
   '/api/projects/$id/comments/$commentId': typeof ApiProjectsIdCommentsCommentIdRoute
+  '/api/projects/$id/comments/pin': typeof ApiProjectsIdCommentsPinRoute
   '/api/projects/$id/edge-functions/test': typeof ApiProjectsIdEdgeFunctionsTestRoute
   '/api/projects/$id/env/$key': typeof ApiProjectsIdEnvKeyRoute
   '/api/projects/$id/feature-flags/$flagId': typeof ApiProjectsIdFeatureFlagsFlagIdRoute
@@ -2199,6 +2207,7 @@ export interface FileRoutesByTo {
   '/api/apps/$id/connect/$provider': typeof ApiAppsIdConnectProviderRouteWithChildren
   '/api/integrations/openai/openapi/json': typeof ApiIntegrationsOpenaiOpenapiJsonRoute
   '/api/projects/$id/comments/$commentId': typeof ApiProjectsIdCommentsCommentIdRoute
+  '/api/projects/$id/comments/pin': typeof ApiProjectsIdCommentsPinRoute
   '/api/projects/$id/edge-functions/test': typeof ApiProjectsIdEdgeFunctionsTestRoute
   '/api/projects/$id/env/$key': typeof ApiProjectsIdEnvKeyRoute
   '/api/projects/$id/feature-flags/$flagId': typeof ApiProjectsIdFeatureFlagsFlagIdRoute
@@ -2469,6 +2478,7 @@ export interface FileRoutesById {
   '/api/apps/$id/connect/$provider': typeof ApiAppsIdConnectProviderRouteWithChildren
   '/api/integrations/openai/openapi/json': typeof ApiIntegrationsOpenaiOpenapiJsonRoute
   '/api/projects/$id/comments/$commentId': typeof ApiProjectsIdCommentsCommentIdRoute
+  '/api/projects/$id/comments/pin': typeof ApiProjectsIdCommentsPinRoute
   '/api/projects/$id/edge-functions/test': typeof ApiProjectsIdEdgeFunctionsTestRoute
   '/api/projects/$id/env/$key': typeof ApiProjectsIdEnvKeyRoute
   '/api/projects/$id/feature-flags/$flagId': typeof ApiProjectsIdFeatureFlagsFlagIdRoute
@@ -2739,6 +2749,7 @@ export interface FileRouteTypes {
     | '/api/apps/$id/connect/$provider'
     | '/api/integrations/openai/openapi/json'
     | '/api/projects/$id/comments/$commentId'
+    | '/api/projects/$id/comments/pin'
     | '/api/projects/$id/edge-functions/test'
     | '/api/projects/$id/env/$key'
     | '/api/projects/$id/feature-flags/$flagId'
@@ -3007,6 +3018,7 @@ export interface FileRouteTypes {
     | '/api/apps/$id/connect/$provider'
     | '/api/integrations/openai/openapi/json'
     | '/api/projects/$id/comments/$commentId'
+    | '/api/projects/$id/comments/pin'
     | '/api/projects/$id/edge-functions/test'
     | '/api/projects/$id/env/$key'
     | '/api/projects/$id/feature-flags/$flagId'
@@ -3276,6 +3288,7 @@ export interface FileRouteTypes {
     | '/api/apps/$id/connect/$provider'
     | '/api/integrations/openai/openapi/json'
     | '/api/projects/$id/comments/$commentId'
+    | '/api/projects/$id/comments/pin'
     | '/api/projects/$id/edge-functions/test'
     | '/api/projects/$id/env/$key'
     | '/api/projects/$id/feature-flags/$flagId'
@@ -5221,6 +5234,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiProjectsIdCommentsCommentIdRouteImport
       parentRoute: typeof ApiProjectsIdCommentsRoute
     }
+    '/api/projects/$id/comments/pin': {
+      id: '/api/projects/$id/comments/pin'
+      path: '/pin'
+      fullPath: '/api/projects/$id/comments/pin'
+      preLoaderRoute: typeof ApiProjectsIdCommentsPinRouteImport
+      parentRoute: typeof ApiProjectsIdCommentsRoute
+    }
     '/api/projects/$id/edge-functions/test': {
       id: '/api/projects/$id/edge-functions/test'
       path: '/test'
@@ -5447,10 +5467,12 @@ const ApiMcpRouteWithChildren =
 
 interface ApiProjectsIdCommentsRouteChildren {
   ApiProjectsIdCommentsCommentIdRoute: typeof ApiProjectsIdCommentsCommentIdRoute
+  ApiProjectsIdCommentsPinRoute: typeof ApiProjectsIdCommentsPinRoute
 }
 
 const ApiProjectsIdCommentsRouteChildren: ApiProjectsIdCommentsRouteChildren = {
   ApiProjectsIdCommentsCommentIdRoute: ApiProjectsIdCommentsCommentIdRoute,
+  ApiProjectsIdCommentsPinRoute: ApiProjectsIdCommentsPinRoute,
 }
 
 const ApiProjectsIdCommentsRouteWithChildren =
