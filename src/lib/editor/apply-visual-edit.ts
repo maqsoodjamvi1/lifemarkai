@@ -182,3 +182,68 @@ export function applySpacingToken(
   tokens.push(`${prefix}${scale}`);
   return tokens.join(" ");
 }
+
+// The overlay's color tab previously offered only 12 fixed swatches per
+// kind (TAILWIND_COLORS / BG_COLORS in visual-edit-overlay.tsx). These
+// regexes recognize *those exact* named utilities so an arbitrary hex pick
+// can replace one cleanly instead of stacking both classes on the element —
+// Tailwind's JIT doesn't guarantee last-defined-wins for two utilities that
+// both set the same CSS property, so leaving the old one in place would make
+// the resulting color depend on generation order rather than the user's pick.
+const NAMED_TEXT_COLOR_RE =
+  /^text-(white|black|gray|red|blue|green|yellow|purple|pink|indigo|orange|teal)(-\d+)?$/;
+const NAMED_BG_COLOR_RE =
+  /^bg-(transparent|white|black|gray|blue|green|red|yellow|purple|indigo|pink|gradient-brand)(-\d+)?$/;
+const HEX_RE = /^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/;
+
+/** Normalize a hex color input (with or without a leading #) to `#rrggbb`/`#rgb`. */
+export function normalizeHex(hex: string): string {
+  return `#${hex.trim().replace(/^#/, "")}`;
+}
+
+/**
+ * Replace any existing named-swatch or arbitrary color utility of `kind`
+ * with an arbitrary-value utility for `hex` (e.g. `text-[#3b82f6]`). Silently
+ * strips the old color and adds nothing new when `hex` isn't a valid hex
+ * value, so a half-typed color input never corrupts the class string.
+ */
+export function applyArbitraryColorToken(classes: string, kind: "text" | "bg", hex: string): string {
+  const namedRe = kind === "text" ? NAMED_TEXT_COLOR_RE : NAMED_BG_COLOR_RE;
+  const arbitraryPrefix = `${kind}-[`;
+  const tokens = classes
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((t) => !t.startsWith(arbitraryPrefix) && !namedRe.test(t));
+  const trimmed = hex.trim();
+  if (HEX_RE.test(trimmed)) tokens.push(`${kind}-[${normalizeHex(trimmed)}]`);
+  return tokens.join(" ");
+}
+
+const FONT_FAMILY_CLASSES = new Set(["font-sans", "font-serif", "font-mono"]);
+
+/**
+ * Swap the element's Tailwind font-family utility (font-sans/serif/mono —
+ * distinct from the font-WEIGHT utilities like font-bold, which are left
+ * untouched). Passing a value outside the known family set just removes any
+ * existing family utility, matching applyArbitraryColorToken's "strip on
+ * invalid input" behavior.
+ */
+export function applyFontFamilyToken(classes: string, family: string): string {
+  const tokens = classes.split(/\s+/).filter(Boolean).filter((t) => !FONT_FAMILY_CLASSES.has(t));
+  if (FONT_FAMILY_CLASSES.has(family)) tokens.push(family);
+  return tokens.join(" ");
+}
+
+/**
+ * Merge an explicit pixel width/height into a class string as a Tailwind
+ * arbitrary-value utility (`w-[240px]`), replacing any prior arbitrary
+ * width/height so repeated resizes don't pile up dead classes. Backs the
+ * visual-edit overlay's drag-resize handles.
+ */
+export function applyDimensionToken(classes: string, kind: "w" | "h", px: number): string {
+  const prefix = `${kind}-[`;
+  const tokens = classes.split(/\s+/).filter(Boolean).filter((t) => !t.startsWith(prefix));
+  const clamped = Math.max(1, Math.round(px));
+  tokens.push(`${kind}-[${clamped}px]`);
+  return tokens.join(" ");
+}

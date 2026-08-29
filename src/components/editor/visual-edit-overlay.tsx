@@ -7,6 +7,9 @@ AlignLeft,AlignCenter,AlignRight,X,Check,Wand2,Sparkles,Image as ImageIcon,
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+applyArbitraryColorToken,
+applyDimensionToken,
+applyFontFamilyToken,
 applySpacingToken,
 applyVisualEdit,
 buildVisualEditPrompt,
@@ -37,6 +40,26 @@ const BG_COLORS = [
   "bg-blue-500", "bg-green-500", "bg-red-500", "bg-yellow-500",
   "bg-purple-500", "bg-indigo-500", "bg-pink-500", "bg-gradient-brand",
 ];
+
+const TAILWIND_FONT_FAMILIES: Array<{ cls: string; label: string }> = [
+  { cls: "font-sans", label: "Sans" },
+  { cls: "font-serif", label: "Serif" },
+  { cls: "font-mono", label: "Mono" },
+];
+
+/** Read the current arbitrary-hex value (if any) for `kind` out of a class string, for the color input's value. */
+function currentArbitraryHex(classes: string, kind: "text" | "bg"): string {
+  const prefix = `${kind}-[`;
+  const token = classes.split(/\s+/).find((t) => t.startsWith(prefix) && t.endsWith("]"));
+  if (!token) return "#000000";
+  const inner = token.slice(prefix.length, -1);
+  if (/^#[0-9a-fA-F]{6}$/.test(inner)) return inner;
+  if (/^#[0-9a-fA-F]{3}$/.test(inner)) {
+    const [, r, g, b] = inner;
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+  return "#000000";
+}
 
 // ── Shared edit logic ─────────────────────────────────────────────────────────
 
@@ -169,6 +192,18 @@ export function VebEditPopover({
     onApply({ classes: updated });
   }
 
+  function setArbitraryColor(kind: "text" | "bg", hex: string) {
+    const updated = applyArbitraryColorToken(editClasses, kind, hex);
+    setEditClasses(updated);
+    onApply({ classes: updated });
+  }
+
+  function setFontFamily(family: string) {
+    const updated = applyFontFamilyToken(editClasses, family);
+    setEditClasses(updated);
+    onApply({ classes: updated });
+  }
+
   return (
     <AnimatePresence>
       <motion.div
@@ -271,6 +306,26 @@ export function VebEditPopover({
                 </div>
               </div>
 
+              {/* Font family */}
+              <div>
+                <label className="text-xs text-muted-foreground mb-1 block">Font</label>
+                <div className="flex flex-wrap gap-1">
+                  {TAILWIND_FONT_FAMILIES.map(({ cls, label }) => (
+                    <button
+                      key={cls}
+                      onClick={() => setFontFamily(cls)}
+                      className={`px-2 py-0.5 rounded text-xs border transition-colors ${cls} ${
+                        editClasses.includes(cls)
+                          ? "bg-violet-500/20 border-violet-500/40 text-violet-700 dark:text-violet-300"
+                          : "bg-muted border-border hover:bg-accent"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* Alignment */}
               <div>
                 <label className="text-xs text-muted-foreground mb-1 block">Align</label>
@@ -302,7 +357,7 @@ export function VebEditPopover({
               {/* Text color */}
               <div>
                 <label className="text-xs text-muted-foreground mb-1 block">Text color</label>
-                <div className="flex flex-wrap gap-1">
+                <div className="flex flex-wrap items-center gap-1">
                   {TAILWIND_COLORS.map((cls) => (
                     <button
                       key={cls}
@@ -315,13 +370,21 @@ export function VebEditPopover({
                       A
                     </button>
                   ))}
+                  <input
+                    type="color"
+                    aria-label="Custom text color"
+                    value={currentArbitraryHex(editClasses, "text")}
+                    onChange={(e) => setArbitraryColor("text", e.target.value)}
+                    className="w-7 h-7 rounded border-2 border-border bg-transparent cursor-pointer p-0.5"
+                    title="Custom color"
+                  />
                 </div>
               </div>
 
               {/* Background color */}
               <div>
                 <label className="text-xs text-muted-foreground mb-1 block">Background</label>
-                <div className="flex flex-wrap gap-1">
+                <div className="flex flex-wrap items-center gap-1">
                   {BG_COLORS.map((cls) => (
                     <button
                       key={cls}
@@ -332,6 +395,14 @@ export function VebEditPopover({
                       title={cls}
                     />
                   ))}
+                  <input
+                    type="color"
+                    aria-label="Custom background color"
+                    value={currentArbitraryHex(editClasses, "bg")}
+                    onChange={(e) => setArbitraryColor("bg", e.target.value)}
+                    className="w-7 h-7 rounded border-2 border-border bg-transparent cursor-pointer p-0.5"
+                    title="Custom color"
+                  />
                 </div>
               </div>
             </>
@@ -814,6 +885,27 @@ export function VisualEditOverlay({
         />
       ))}
 
+      {selectedList.length === 1 && (
+        <ResizeHandle
+          sel={selected}
+          onResize={(w, h) => {
+            const updatedClasses = applyDimensionToken(
+              applyDimensionToken(selected.classList.join(" "), "w", w),
+              "h",
+              h,
+            );
+            applyChangeToFiles(files, selected, { classes: updatedClasses }, onFileChange, onRequestAiEdit);
+            setSelectedList((prev) =>
+              prev.map((p) =>
+                p.xpath === selected.xpath
+                  ? { ...p, classList: updatedClasses.split(" ").filter(Boolean), rect: { ...p.rect, width: w, height: h } }
+                  : p,
+              ),
+            );
+          }}
+        />
+      )}
+
       <VebEditPopover
         selection={selected}
         selectionCount={selectedList.length}
@@ -935,6 +1027,22 @@ export function VebBridgePopover({
         />
       ))}
 
+      {targets.length === 1 && (
+        <ResizeHandle
+          sel={selection}
+          onResize={(w, h) => {
+            const updatedClasses = applyDimensionToken(
+              applyDimensionToken(selection.classList.join(" "), "w", w),
+              "h",
+              h,
+            );
+            onLiveApply({ xpath: selection.xpath, classes: updatedClasses });
+            applyChangeToFiles(files, selection, { classes: updatedClasses }, onFileChange, onRequestAiEdit);
+            onSelectionChange?.({ ...selection, classList: updatedClasses.split(" ").filter(Boolean) });
+          }}
+        />
+      )}
+
       <VebEditPopover
         selection={selection}
         selectionCount={targets.length}
@@ -992,6 +1100,67 @@ export function VebBridgePopover({
             });
           })();
         }}
+      />
+    </>
+  );
+}
+
+/**
+ * A single drag handle rendered at the selected element's bottom-right
+ * corner. Owns its own drag lifecycle (pointer down/move/up) so neither
+ * parent overlay re-renders on every pointermove — it only calls back into
+ * `onResize` once, on release, with the final pixel size.
+ */
+function ResizeHandle({
+  sel,
+  onResize,
+}: {
+  sel: SelectedElement;
+  onResize: (widthPx: number, heightPx: number) => void;
+}) {
+  const [dragging, setDragging] = useState(false);
+  const startRef = useRef({ x: 0, y: 0, w: 0, h: 0 });
+  const [live, setLive] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    if (!dragging) return;
+    const nextSize = (e: PointerEvent) => ({
+      w: Math.max(20, startRef.current.w + (e.clientX - startRef.current.x)),
+      h: Math.max(20, startRef.current.h + (e.clientY - startRef.current.y)),
+    });
+    const onMove = (e: PointerEvent) => setLive(nextSize(e));
+    const onUp = (e: PointerEvent) => {
+      const { w, h } = nextSize(e);
+      setDragging(false);
+      setLive(null);
+      onResize(w, h);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [dragging, onResize]);
+
+  return (
+    <>
+      {live && (
+        <div
+          className="fixed pointer-events-none z-40 border-2 border-dashed border-sky-400 rounded"
+          style={{ top: sel.rect.top, left: sel.rect.left, width: live.w, height: live.h }}
+        />
+      )}
+      <div
+        onPointerDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          startRef.current = { x: e.clientX, y: e.clientY, w: sel.rect.width, h: sel.rect.height };
+          setDragging(true);
+        }}
+        className="fixed z-50 w-3 h-3 rounded-sm bg-sky-500 border border-white shadow pointer-events-auto cursor-nwse-resize"
+        style={{ top: sel.rect.top + sel.rect.height - 6, left: sel.rect.left + sel.rect.width - 6 }}
+        title="Drag to resize"
       />
     </>
   );
