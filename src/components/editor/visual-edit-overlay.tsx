@@ -13,6 +13,8 @@ applyFontFamilyToken,
 applySpacingToken,
 applyVisualEdit,
 buildVisualEditPrompt,
+ensureResizableDisplay,
+resolveDisplayHex,
 type VisualEditChange,
 } from "@/lib/editor/apply-visual-edit";
 import type { ProjectFile } from "@/types/database";
@@ -47,19 +49,6 @@ const TAILWIND_FONT_FAMILIES: Array<{ cls: string; label: string }> = [
   { cls: "font-mono", label: "Mono" },
 ];
 
-/** Read the current arbitrary-hex value (if any) for `kind` out of a class string, for the color input's value. */
-function currentArbitraryHex(classes: string, kind: "text" | "bg"): string {
-  const prefix = `${kind}-[`;
-  const token = classes.split(/\s+/).find((t) => t.startsWith(prefix) && t.endsWith("]"));
-  if (!token) return "#000000";
-  const inner = token.slice(prefix.length, -1);
-  if (/^#[0-9a-fA-F]{6}$/.test(inner)) return inner;
-  if (/^#[0-9a-fA-F]{3}$/.test(inner)) {
-    const [, r, g, b] = inner;
-    return `#${r}${r}${g}${g}${b}${b}`;
-  }
-  return "#000000";
-}
 
 // ── Shared edit logic ─────────────────────────────────────────────────────────
 
@@ -373,7 +362,7 @@ export function VebEditPopover({
                   <input
                     type="color"
                     aria-label="Custom text color"
-                    value={currentArbitraryHex(editClasses, "text")}
+                    value={resolveDisplayHex(editClasses, "text") ?? "#000000"}
                     onChange={(e) => setArbitraryColor("text", e.target.value)}
                     className="w-7 h-7 rounded border-2 border-border bg-transparent cursor-pointer p-0.5"
                     title="Custom color"
@@ -398,7 +387,7 @@ export function VebEditPopover({
                   <input
                     type="color"
                     aria-label="Custom background color"
-                    value={currentArbitraryHex(editClasses, "bg")}
+                    value={resolveDisplayHex(editClasses, "bg") ?? "#000000"}
                     onChange={(e) => setArbitraryColor("bg", e.target.value)}
                     className="w-7 h-7 rounded border-2 border-border bg-transparent cursor-pointer p-0.5"
                     title="Custom color"
@@ -889,11 +878,8 @@ export function VisualEditOverlay({
         <ResizeHandle
           sel={selected}
           onResize={(w, h) => {
-            const updatedClasses = applyDimensionToken(
-              applyDimensionToken(selected.classList.join(" "), "w", w),
-              "h",
-              h,
-            );
+            const base = ensureResizableDisplay(selected.classList.join(" "), selected.tagName);
+            const updatedClasses = applyDimensionToken(applyDimensionToken(base, "w", w), "h", h);
             applyChangeToFiles(files, selected, { classes: updatedClasses }, onFileChange, onRequestAiEdit);
             setSelectedList((prev) =>
               prev.map((p) =>
@@ -1031,11 +1017,8 @@ export function VebBridgePopover({
         <ResizeHandle
           sel={selection}
           onResize={(w, h) => {
-            const updatedClasses = applyDimensionToken(
-              applyDimensionToken(selection.classList.join(" "), "w", w),
-              "h",
-              h,
-            );
+            const base = ensureResizableDisplay(selection.classList.join(" "), selection.tagName);
+            const updatedClasses = applyDimensionToken(applyDimensionToken(base, "w", w), "h", h);
             onLiveApply({ xpath: selection.xpath, classes: updatedClasses });
             applyChangeToFiles(files, selection, { classes: updatedClasses }, onFileChange, onRequestAiEdit);
             onSelectionChange?.({ ...selection, classList: updatedClasses.split(" ").filter(Boolean) });

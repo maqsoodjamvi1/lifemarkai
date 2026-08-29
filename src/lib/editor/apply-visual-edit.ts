@@ -247,3 +247,73 @@ export function applyDimensionToken(classes: string, kind: "w" | "h", px: number
   tokens.push(`${kind}-[${clamped}px]`);
   return tokens.join(" ");
 }
+
+// Common inline elements that the visual-edit picker can select — width/
+// height utilities are a documented no-op on `display: inline`, so dragging
+// a resize handle on a bare <span> would silently do nothing.
+const INLINE_TAGS = new Set([
+  "span", "a", "em", "strong", "label", "small", "i", "b", "code", "abbr", "cite", "mark", "sub", "sup", "u", "time",
+]);
+const DISPLAY_UTILITIES = new Set([
+  "block", "inline-block", "flex", "inline-flex", "grid", "inline-grid", "table", "table-cell", "hidden",
+]);
+
+/**
+ * When `tagName` is a common inline element and its classes don't already
+ * set a display utility, add `inline-block` so a width/height utility about
+ * to be applied (see applyDimensionToken) actually takes effect instead of
+ * being silently ignored by the browser.
+ */
+export function ensureResizableDisplay(classes: string, tagName: string): string {
+  if (!INLINE_TAGS.has(tagName.toLowerCase())) return classes;
+  const tokens = classes.split(/\s+/).filter(Boolean);
+  if (tokens.some((t) => DISPLAY_UTILITIES.has(t))) return classes;
+  tokens.push("inline-block");
+  return tokens.join(" ");
+}
+
+// The 12-swatch palettes the overlay's color tab offers (TAILWIND_COLORS /
+// BG_COLORS in visual-edit-overlay.tsx), mapped to the hex value each
+// swatch actually renders, so the arbitrary-color picker can show the
+// element's real current color instead of defaulting to black when a named
+// swatch (not yet an arbitrary hex) is what's applied.
+const NAMED_COLOR_HEX: Record<string, string> = {
+  "text-white": "#ffffff", "text-black": "#000000", "text-gray-500": "#6b7280",
+  "text-red-500": "#ef4444", "text-blue-500": "#3b82f6", "text-green-500": "#22c55e",
+  "text-yellow-500": "#eab308", "text-purple-500": "#a855f7", "text-pink-500": "#ec4899",
+  "text-indigo-500": "#6366f1", "text-orange-500": "#f97316", "text-teal-500": "#14b8a6",
+  "bg-white": "#ffffff", "bg-black": "#000000", "bg-gray-100": "#f3f4f6",
+  "bg-blue-500": "#3b82f6", "bg-green-500": "#22c55e", "bg-red-500": "#ef4444",
+  "bg-yellow-500": "#eab308", "bg-purple-500": "#a855f7", "bg-indigo-500": "#6366f1",
+  "bg-pink-500": "#ec4899",
+};
+
+/**
+ * Resolve the hex value a color-picker swatch should show for `kind`: an
+ * already-applied arbitrary hex utility wins, then a matching named swatch
+ * from the fixed palette, else null (the two "no readable color" cases —
+ * bg-transparent and bg-gradient-brand aren't single solid colors — also
+ * return null so the caller's neutral default applies rather than a wrong
+ * guess).
+ */
+export function resolveDisplayHex(classes: string, kind: "text" | "bg"): string | null {
+  const tokens = classes.split(/\s+/).filter(Boolean);
+  const arbitraryPrefix = `${kind}-[`;
+  const arbitrary = tokens.find((t) => t.startsWith(arbitraryPrefix) && t.endsWith("]"));
+  if (arbitrary) {
+    const inner = arbitrary.slice(arbitraryPrefix.length, -1);
+    if (/^#[0-9a-fA-F]{6}$/.test(inner)) return inner;
+    if (/^#[0-9a-fA-F]{3}$/.test(inner)) {
+      const [, r, g, b] = inner;
+      return `#${r}${r}${g}${g}${b}${b}`;
+    }
+    return null;
+  }
+  const namedPrefix = `${kind}-`;
+  for (const t of tokens) {
+    if (!t.startsWith(namedPrefix)) continue;
+    const hex = NAMED_COLOR_HEX[t];
+    if (hex) return hex;
+  }
+  return null;
+}

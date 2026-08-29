@@ -5,7 +5,9 @@ import {
   applyDimensionToken,
   applyFontFamilyToken,
   applySpacingToken,
+  ensureResizableDisplay,
   normalizeHex,
+  resolveDisplayHex,
 } from "./apply-visual-edit";
 
 // ── normalizeHex ─────────────────────────────────────────────────────────
@@ -107,4 +109,56 @@ test("applySpacingToken replaces a prior token for the same side", () => {
 
 test("applySpacingToken with an empty side sets the all-sides token", () => {
   assert.equal(applySpacingToken("mt-2", "m", "", "4"), "mt-2 m-4");
+});
+
+// ── ensureResizableDisplay ────────────────────────────────────────────────
+
+test("ensureResizableDisplay adds inline-block to a bare inline element", () => {
+  assert.equal(ensureResizableDisplay("text-sm", "span"), "text-sm inline-block");
+});
+
+test("ensureResizableDisplay leaves a block-level tag untouched", () => {
+  assert.equal(ensureResizableDisplay("text-sm", "div"), "text-sm");
+});
+
+test("ensureResizableDisplay does not double up when a display utility is already set", () => {
+  assert.equal(ensureResizableDisplay("flex text-sm", "span"), "flex text-sm");
+});
+
+test("ensureResizableDisplay is case-insensitive on the tag name", () => {
+  assert.equal(ensureResizableDisplay("", "SPAN"), "inline-block");
+});
+
+test("ensureResizableDisplay treats hidden as an existing display utility (no forced inline-block)", () => {
+  assert.equal(ensureResizableDisplay("hidden", "a"), "hidden");
+});
+
+// ── resolveDisplayHex ─────────────────────────────────────────────────────
+
+test("resolveDisplayHex reads an already-applied arbitrary hex", () => {
+  assert.equal(resolveDisplayHex("text-[#3b82f6] font-bold", "text"), "#3b82f6");
+});
+
+test("resolveDisplayHex expands a 3-digit arbitrary hex", () => {
+  assert.equal(resolveDisplayHex("bg-[#f00]", "bg"), "#ff0000");
+});
+
+test("resolveDisplayHex resolves a named swatch to its hex when no arbitrary value is set", () => {
+  assert.equal(resolveDisplayHex("text-red-500 font-bold", "text"), "#ef4444");
+});
+
+test("resolveDisplayHex prefers the arbitrary hex over a named swatch if both are somehow present", () => {
+  assert.equal(resolveDisplayHex("text-red-500 text-[#00ff00]", "text"), "#00ff00");
+});
+
+test("resolveDisplayHex returns null for a color with no single-hex equivalent (e.g. bg-transparent)", () => {
+  assert.equal(resolveDisplayHex("bg-transparent", "bg"), null);
+});
+
+test("resolveDisplayHex returns null when no color utility of that kind is present", () => {
+  assert.equal(resolveDisplayHex("font-bold text-lg", "text"), null);
+});
+
+test("resolveDisplayHex does not cross kinds — a bg color doesn't answer a text lookup", () => {
+  assert.equal(resolveDisplayHex("bg-red-500", "text"), null);
 });
