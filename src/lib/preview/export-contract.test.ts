@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { collectExports, findMissingExports } from "./export-contract.ts";
+import { collectExports, findContractErrors, findMissingExports, findMissingModules } from "./export-contract.ts";
 
 // Regression: `export const A = [], B = [];` only registered `A` — every
 // name after the first in a comma-separated declaration list was silently
@@ -54,4 +54,41 @@ test("findMissingExports still reports a genuinely missing export", () => {
   ]);
   assert.equal(missing.length, 1);
   assert.equal(missing[0]?.name, "MOCK_PARTNERS");
+});
+
+// Speed: self-verify.ts's per-repair-round loop calls buildFallbackHtml
+// (which internally runs findMissingModules/findMissingExports via
+// healPreviewContractGaps) and then findContractErrors (the SAME two
+// functions again) on the same unmodified files — a guaranteed 2x scan.
+// findMissingModules/findMissingExports are now memoized by content
+// signature; this pins that calling them twice with identical input doesn't
+// change the result, and that genuinely different input still gets its own
+// (different) answer rather than a stale cached one.
+test("findMissingModules/findMissingExports memoization returns consistent results across repeated and varied calls", () => {
+  const filesA = [
+    {
+      path: "src/App.tsx",
+      content: 'import { Missing } from "./Missing";\nexport default function App(){ return null; }',
+    },
+  ];
+  const first = findMissingModules(filesA);
+  const second = findMissingModules(filesA);
+  assert.deepEqual(first, second);
+  assert.equal(first.length, 1);
+
+  const filesB = [
+    {
+      path: "src/App.tsx",
+      content: 'import { OtherMissing } from "./OtherMissing";\nexport default function App(){ return null; }',
+    },
+  ];
+  const third = findMissingModules(filesB);
+  assert.equal(third.length, 1);
+  assert.notEqual(third[0]?.expected, first[0]?.expected);
+
+  // findContractErrors composes both memoized functions — must still see
+  // the change in filesB rather than reusing filesA's cached answer.
+  const errorsA = findContractErrors(filesA);
+  const errorsB = findContractErrors(filesB);
+  assert.notDeepEqual(errorsA, errorsB);
 });

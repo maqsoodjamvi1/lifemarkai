@@ -824,7 +824,7 @@ export function PreviewPanel({
         return;
       }
       const res = await runProjectInWebContainer({
-        files: files.map((f) => ({ path: f.path, content: f.content })),
+        files: previewRelevantFiles(files).map((f) => ({ path: f.path, content: f.content })),
         onProgress: (phase, detail) => {
           if (!cancelled) setWcPhase(detail ? `${phase}: ${detail}` : phase);
         },

@@ -21,9 +21,39 @@
  *     support.
  */
 
+import { normalizeProjectImports } from "./normalize-imports.ts";
+import { ensureTypecheckToolchain } from "./ensure-toolchain.ts";
+import { patchFilesForWebContainer } from "./patch-vite-for-webcontainer.ts";
+
 export interface WcFile {
   path: string;
   content?: string | null;
+}
+
+/**
+ * Run the project through the same file-prep steps the sandbox provider gets
+ * (patch-sandbox-preview-files.ts's patchSandboxPreviewFiles) before handing
+ * it to WebContainer — trimmed to the subset that's both relevant here and
+ * safe to run IN THE BROWSER (no TLS-tunnel/Supabase-env/route-tree steps,
+ * which are either sandbox-specific or read server-only env).
+ *
+ * Before this, files went into WebContainer completely raw. Two concrete
+ * failure modes that fixes elsewhere in this codebase, but only for the
+ * sandbox path:
+ *   - normalizeProjectImports repairs a broken import specifier BEFORE it
+ *     reaches the bundler — push-to-sandbox.ts's own docs describe the
+ *     unrepaired version as "the WORST moment for a bad specifier": it
+ *     freezes the dev server mid-build with "Failed to resolve import".
+ *   - ensureTypecheckToolchain re-adds `typescript`/`@types/react(-dom)` to
+ *     package.json when the model's rewrite dropped them — without it,
+ *     `npm install` reconciles node_modules DOWN to package.json and prunes
+ *     out the compiler, so `tsc` (and anything depending on it) 404s.
+ *   - patchFilesForWebContainer is the WebContainer-specific vite.config /
+ *     index.html / VEB-bridge patcher this file's sibling module exists to
+ *     provide — it was never actually being called from here.
+ */
+export function prepareFilesForWebContainer(files: WcFile[]): WcFile[] {
+  return patchFilesForWebContainer(ensureTypecheckToolchain(normalizeProjectImports(files)));
 }
 
 export interface WcBootResult {
@@ -89,6 +119,24 @@ let wcFatal: string | null = null;
  * the browser tab for as long as it stayed open.
  */
 let wcDevProcess: any = null;
+/**
+ * The package.json content `npm install` last succeeded against, in THIS
+ * page session. Every call ran `npm install` unconditionally — for a project
+ * where only application code changed (the overwhelming majority of edits),
+ * that repeats a multi-second dependency-resolution pass against an
+ * identical dependency graph, on every restart AND on every edit-triggered
+ * remount. WebContainer is a page-lifetime singleton, so `node_modules` from
+ * a prior install is still sitting in its virtual FS; skip the reinstall
+ * when package.json is byte-identical to what's already installed.
+ */
+let wcLastInstalledPackageJson: string | null = null;
+
+function packageJsonContent(files: WcFile[]): string | null {
+  const pkg = files.find(
+    (f) => f.path.replace(/\\/g, "/").replace(/^\/+/, "") === "package.json",
+  );
+  return pkg?.content ?? null;
+}
 
 export function isCrossOriginIsolated(): boolean {
   return typeof window !== "undefined" && window.crossOriginIsolated === true;
@@ -155,6 +203,93 @@ function hasDevScript(files: WcFile[]): boolean {
   }
 }
 
+/** Keeps only the last `max` characters of streamed output, for error messages. */
+class TailBuffer {
+  private buf = "";
+  constructor(private readonly max = 4000) {}
+  push(chunk: string): void {
+    this.buf = (this.buf + chunk).slice(-this.max);
+  }
+  toString(): string {
+    return this.buf.trim();
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
+/**
+ * Run `npm install` once, capturing its tail output for error reporting.
+ * Time-boxed (unlike before, where a hung install spun the "installing"
+ * phase forever with no user-visible failure — unlike the dev-server wait
+ * just below, which already had a timeout).
+ */
+async function runNpmInstallOnce(
+  wc: any,
+  output: (chunk: string) => void,
+  tail: TailBuffer,
+): Promise<{ ok: boolean; error?: string }> {
+  const install: any = await withTimeout<any>(
+    wc.spawn("npm", ["install", "--prefer-offline", "--no-audit", "--no-fund"]),
+    180_000,
+    "npm install did not start within 180s.",
+  );
+  void install.output.pipeTo(
+    new WritableStream({
+      write: (chunk: string) => {
+        tail.push(chunk);
+        output(chunk);
+      },
+    }),
+  );
+  const installCode: number = await withTimeout<number>(
+    install.exit,
+    180_000,
+    "npm install did not finish within 180s.",
+  );
+  if (installCode !== 0) {
+    return {
+      ok: false,
+      error: `npm install failed (exit ${installCode}).${tail.toString() ? `\n${tail.toString()}` : ""}`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * `npm install`, with ONE retry on failure. WebContainer's install goes
+ * through a virtual npm registry proxy running in the browser tab — a
+ * one-off network hiccup (more common here than on a real, supported CI
+ * machine) previously killed the whole boot outright with no second chance.
+ * A genuine dependency-resolution error fails identically on retry, so the
+ * only cost of retrying unconditionally is one extra attempt in the
+ * already-rare failure case.
+ */
+async function runNpmInstallWithRetry(
+  wc: any,
+  progress: (phase: string, detail?: string) => void,
+  output: (chunk: string) => void,
+): Promise<{ ok: boolean; error?: string }> {
+  const tail = new TailBuffer();
+  const first = await runNpmInstallOnce(wc, output, tail);
+  if (first.ok) return first;
+
+  progress("installing", "Install failed — retrying once…");
+  tail.push("\n--- retrying npm install ---\n");
+  return runNpmInstallOnce(wc, output, tail);
+}
+
 /**
  * Mount the project, install dependencies, start the dev server, and resolve
  * with the preview URL once the server actually reports ready.
@@ -170,6 +305,8 @@ export async function runProjectInWebContainer(
   const progress = opts.onProgress ?? (() => {});
   const output = opts.onOutput ?? (() => {});
 
+  const files = prepareFilesForWebContainer(opts.files);
+
   try {
     progress("creating", "Starting in-browser runtime");
     const wc = await getWebContainer();
@@ -177,11 +314,16 @@ export async function runProjectInWebContainer(
     // Kill any dev server left running from a previous call (a restart, or a
     // fresh run after switching projects) before starting a new one — the
     // WebContainer instance is a page-lifetime singleton, so an unkilled
-    // process just keeps running underneath the new one.
-    await killWcDevProcess();
-
-    progress("writing", `Mounting ${opts.files.length} files`);
-    await wc.mount(filesToFsTree(opts.files));
+    // process just keeps running underneath the new one. Independent of the
+    // mount below (neither touches the other), so run them together instead
+    // of paying two sequential round-trips.
+    await Promise.all([
+      killWcDevProcess(),
+      (async () => {
+        progress("writing", `Mounting ${files.length} files`);
+        await wc.mount(filesToFsTree(files));
+      })(),
+    ]);
 
     // Surface the URL the moment the dev server is up. `.on()` returns an
     // unsubscribe function — captured and called once this settles so a
@@ -196,21 +338,28 @@ export async function runProjectInWebContainer(
       );
     });
 
-    progress("installing", "Installing dependencies");
-    const install = await wc.spawn("npm", ["install"]);
-    void install.output.pipeTo(
-      new WritableStream({ write: (chunk: string) => output(chunk) }),
-    );
-    const installCode = await install.exit;
-    if (installCode !== 0) {
-      unsubReady?.();
-      unsubError?.();
-      return { ok: false, error: `npm install failed (exit ${installCode}).` };
+    const pkgContent = packageJsonContent(files);
+    if (pkgContent !== null && pkgContent === wcLastInstalledPackageJson) {
+      // Same dependency graph already installed in this page session — the
+      // WebContainer instance is a singleton, so node_modules from the last
+      // install is still there. Skipping this saves the multi-second
+      // resolve+fetch+link pass on the overwhelming majority of restarts,
+      // where only application code (not package.json) changed.
+      progress("installing", "Dependencies unchanged — skipping install");
+    } else {
+      progress("installing", "Installing dependencies");
+      const installResult = await runNpmInstallWithRetry(wc, progress, output);
+      if (!installResult.ok) {
+        unsubReady?.();
+        unsubError?.();
+        return { ok: false, error: installResult.error };
+      }
+      wcLastInstalledPackageJson = pkgContent;
     }
 
     const start =
       opts.startCommand ??
-      (hasDevScript(opts.files)
+      (hasDevScript(files)
         ? { cmd: "npm", args: ["run", "dev"] }
         : // No dev script: run Vite directly rather than failing outright.
           { cmd: "npx", args: ["vite", "--port", "5173"] });
@@ -259,13 +408,37 @@ async function killWcDevProcess(): Promise<void> {
 }
 
 /**
- * Swap the mounted project without re-booting (boot is once-per-page).
- * Returns the new preview URL.
+ * Swap the mounted project without re-booting (boot is once-per-page) — used
+ * for a live edit while the dev server is already running, so Vite's own
+ * file watcher/HMR picks up the change instead of a full restart.
+ *
+ * Previously this ONLY mounted — it never re-ran `npm install`, so an edit
+ * that added a new dependency to package.json was silently never installed;
+ * the preview just kept running against stale node_modules indefinitely with
+ * no error. Now it detects that case (comparing against the same
+ * wcLastInstalledPackageJson tracked by runProjectInWebContainer) and
+ * installs before reporting success — still skipping the install entirely,
+ * as before, on the far more common case of an edit that didn't touch
+ * dependencies.
  */
 export async function remountProject(opts: WcRunOptions): Promise<WcBootResult> {
   if (!wcInstance) return runProjectInWebContainer(opts);
+
+  const files = prepareFilesForWebContainer(opts.files);
+  const progress = opts.onProgress ?? (() => {});
+  const output = opts.onOutput ?? (() => {});
+
   try {
-    await wcInstance.mount(filesToFsTree(opts.files));
+    await wcInstance.mount(filesToFsTree(files));
+
+    const pkgContent = packageJsonContent(files);
+    if (pkgContent !== null && pkgContent !== wcLastInstalledPackageJson) {
+      progress("installing", "package.json changed — installing new dependencies");
+      const installResult = await runNpmInstallWithRetry(wcInstance, progress, output);
+      if (!installResult.ok) return { ok: false, error: installResult.error };
+      wcLastInstalledPackageJson = pkgContent;
+    }
+
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

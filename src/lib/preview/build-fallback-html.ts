@@ -13,6 +13,7 @@ NEXT_RUNTIME_SHIMS,
 NEXT_VIRTUAL_ENTRY_PATH,
 } from "@/lib/preview/next-app-preview";
 import { PREVIEW_PERF_SCRIPT } from "./preview-perf-bridge.ts";
+import { filesContentSignature } from "./files-signature.ts";
 
 /** Bump when preview transform logic changes — forces iframe remount in editor. */
 export const PREVIEW_ENGINE_REV = "46";
@@ -128,10 +129,30 @@ tailwind.config = {
   },
 };`;
 
+const FALLBACK_HTML_CACHE_LIMIT = 8;
+const fallbackHtmlCache = new Map<string, string>();
+
 export function buildFallbackHtml(files: ProjectFile[]): string {
+  const key = filesContentSignature(files);
+  const cached = fallbackHtmlCache.get(key);
+  if (cached !== undefined) return cached;
+  const html = buildFallbackHtmlUncached(files);
+  if (fallbackHtmlCache.size >= FALLBACK_HTML_CACHE_LIMIT) {
+    const oldest = fallbackHtmlCache.keys().next().value;
+    if (oldest !== undefined) fallbackHtmlCache.delete(oldest);
+  }
+  fallbackHtmlCache.set(key, html);
+  return html;
+}
+
+function buildFallbackHtmlUncached(files: ProjectFile[]): string {
   // Heal missing imports/exports first (so Navbar→Header aliases win), then
   // fill remaining UI support stubs.
-  files = ensureCommonGeneratedSupportFiles(healPreviewContractGaps(files));
+  try {
+    files = ensureCommonGeneratedSupportFiles(healPreviewContractGaps(files));
+  } catch (err) {
+    console.error("buildFallbackHtml: healing pipeline failed, using unhealed files", err);
+  }
   // Static HTML project — serve as-is
   const indexHtml = files.find(
     (f) => f.path === "index.html" || f.path === "/index.html"
@@ -1549,12 +1570,12 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
             sourceType: 'unambiguous',
             filename: file,
           }).code;
-        } catch (err) { showError(file, (err && err.message) || err, err); return; }
+        } catch (err) { showError(file, (err && err.message) || err, err); continue; }
         // Execute in an isolated IIFE so per-file const/let can't collide; cross
         // file linkage goes through window.__M (define/require), not scope.
         try {
           (0, eval)('(function(){"use strict";\\n' + code + '\\n})()');
-        } catch (err) { showError(file, (err && err.message) || err, err); return; }
+        } catch (err) { showError(file, (err && err.message) || err, err); continue; }
       }
       try {
         var mod = window.__Mrequire('${entryPath}');

@@ -26,6 +26,7 @@
  */
 
 import { BUNDLER_ASSET_RE } from "../verify/bundler-assets.ts";
+import { filesContentSignature } from "./files-signature.ts";
 
 export interface ProjectFileLike {
   path: string;
@@ -294,7 +295,7 @@ export interface MissingModule {
  * component" placeholder) that names nothing useful. Reported here as a plain
  * "create this file" instruction.
  */
-export function findMissingModules(files: ProjectFileLike[]): MissingModule[] {
+function findMissingModulesUncached(files: ProjectFileLike[]): MissingModule[] {
   const byPath = new Map<string, ProjectFileLike>();
   for (const f of files) byPath.set(f.path, f);
 
@@ -355,7 +356,7 @@ export function findMissingModules(files: ProjectFileLike[]): MissingModule[] {
  * its export list. Modules that don't exist at all are NOT reported here —
  * `findMissingModules` owns that case, so we never double-report one root cause.
  */
-export function findMissingExports(files: ProjectFileLike[]): MissingExport[] {
+function findMissingExportsUncached(files: ProjectFileLike[]): MissingExport[] {
   const byPath = new Map<string, ProjectFileLike>();
   for (const f of files) byPath.set(f.path, f);
 
@@ -406,6 +407,25 @@ export function findMissingExports(files: ProjectFileLike[]): MissingExport[] {
 
   return missing;
 }
+
+function memoizeByFiles<R>(compute: (files: ProjectFileLike[]) => R, limit = 8): (files: ProjectFileLike[]) => R {
+  const cache = new Map<string, R>();
+  return (files: ProjectFileLike[]): R => {
+    const key = filesContentSignature(files);
+    const cached = cache.get(key);
+    if (cached !== undefined) return cached;
+    const result = compute(files);
+    if (cache.size >= limit) {
+      const oldest = cache.keys().next().value;
+      if (oldest !== undefined) cache.delete(oldest);
+    }
+    cache.set(key, result);
+    return result;
+  };
+}
+
+export const findMissingModules = memoizeByFiles(findMissingModulesUncached);
+export const findMissingExports = memoizeByFiles(findMissingExportsUncached);
 
 /**
  * All broken module contracts in a project, ordered most-fatal-first:

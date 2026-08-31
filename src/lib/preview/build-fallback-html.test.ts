@@ -83,3 +83,56 @@ test("fallback preview HTML exposes useParams reading matched params, not a hard
     "useParams must read the route's matched params, not always return {}",
   );
 });
+
+// Regression: a single module's Babel-transform or eval failure inside
+// run()'s per-file loop used to "return" out of run() ENTIRELY — the first
+// broken file (whatever order it happened to be processed in) stopped every
+// subsequent module from ever registering, including the app's own entry
+// component, so the whole preview blanked out over one unrelated broken
+// file. This pins the generated source: the per-file catch blocks must
+// "continue" the loop, not "return" from the function.
+test("fallback preview run() isolates a single broken module instead of aborting entirely", () => {
+  const html = fallbackHtmlWithRouterShim();
+  const runStart = html.indexOf("function run() {");
+  assert.ok(runStart >= 0, "run() not found in generated HTML");
+  const runBody = html.slice(runStart, runStart + 4000);
+
+  // Both per-module failure sites (Babel transform, and eval of the
+  // transformed code) must "continue" the loop rather than "return" from
+  // run() — a "return" there aborts every subsequent module too.
+  const transformCatch = runBody.indexOf("showError(file, (err && err.message) || err, err); continue;");
+  assert.ok(transformCatch >= 0, "transform-failure catch must continue, not return");
+  const secondOccurrence = runBody.indexOf(
+    "showError(file, (err && err.message) || err, err); continue;",
+    transformCatch + 1,
+  );
+  assert.ok(secondOccurrence >= 0, "eval-failure catch must also continue, not return");
+});
+
+// Regression: buildFallbackHtml redid its entire multi-pass pipeline (a
+// project-wide contract-healing scan, CSS synthesis, ~40 regex transforms
+// per file) on every call, even when called twice in a row with byte-
+// identical input (the /preview/{id} route and self-verify's per-round loop
+// both do this). Caching by content signature makes the second call for
+// unchanged files return the SAME string instantly instead of rebuilding.
+test("buildFallbackHtml returns a cached result for byte-identical input", () => {
+  const files = [
+    file(
+      "index.html",
+      '<!doctype html><html><body><div id="root"></div>' +
+        '<script type="module" src="/src/main.tsx"></script></body></html>',
+    ),
+    file("src/main.tsx", 'import App from "./App"; export default App;'),
+    file("src/App.tsx", "export default function App(){ return null; }"),
+  ];
+  const first = buildFallbackHtml(files);
+  const second = buildFallbackHtml(files);
+  assert.equal(first, second);
+  // Different (unrelated) content must NOT hit the same cache entry.
+  const third = buildFallbackHtml([
+    ...files.slice(0, 2),
+    file("src/App.tsx", "export default function App(){ return 'different marker'; }"),
+  ]);
+  assert.notEqual(third, first);
+  assert.match(third, /different marker/);
+});
