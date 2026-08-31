@@ -47,10 +47,10 @@ export function PaymentsPanel({ profile }: PaymentsPanelProps) {
     if (selectedPlan === currentPlan || selectedPlan === "free") return;
     setIsRedirecting(true);
     try {
-      const res = await fetch("/api/billing/create-checkout", {
+      const res = await fetch("/api/billing/checkout", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planId: selectedPlan, interval: "monthly" }),
+        body: JSON.stringify({ plan: selectedPlan, billing: "monthly" }),
       });
       const data = await res.json() as { url?: string; error?: string };
       if (data.url) window.open(data.url, "_blank");

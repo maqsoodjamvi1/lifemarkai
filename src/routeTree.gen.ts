@@ -260,6 +260,7 @@ import { Route as ApiProjectsIdSlugRouteImport } from './routes/api/projects/$id
 import { Route as ApiProjectsIdStarRouteImport } from './routes/api/projects/$id/star'
 import { Route as ApiProjectsIdSummariseRouteImport } from './routes/api/projects/$id/summarise'
 import { Route as ApiProjectsIdViewsRouteImport } from './routes/api/projects/$id/views'
+import { Route as ApiProjectsIdWebhooksRouteImport } from './routes/api/projects/$id/webhooks'
 import { Route as ApiProjectsGroupsGroupIdRouteImport } from './routes/api/projects/groups/$groupId'
 import { Route as ApiProjectsInviteLinkRouteImport } from './routes/api/projects/invite/link'
 import { Route as ApiProjectsSnapshotsCompareRouteImport } from './routes/api/projects/snapshots/compare'
@@ -1595,6 +1596,11 @@ const ApiProjectsIdViewsRoute = ApiProjectsIdViewsRouteImport.update({
   path: '/views',
   getParentRoute: () => ApiProjectsIdRoute,
 } as any)
+const ApiProjectsIdWebhooksRoute = ApiProjectsIdWebhooksRouteImport.update({
+  id: '/webhooks',
+  path: '/webhooks',
+  getParentRoute: () => ApiProjectsIdRoute,
+} as any)
 const ApiProjectsGroupsGroupIdRoute =
   ApiProjectsGroupsGroupIdRouteImport.update({
     id: '/$groupId',
@@ -2020,6 +2026,7 @@ export interface FileRoutesByFullPath {
   '/api/projects/$id/star': typeof ApiProjectsIdStarRoute
   '/api/projects/$id/summarise': typeof ApiProjectsIdSummariseRoute
   '/api/projects/$id/views': typeof ApiProjectsIdViewsRoute
+  '/api/projects/$id/webhooks': typeof ApiProjectsIdWebhooksRoute
   '/api/projects/groups/$groupId': typeof ApiProjectsGroupsGroupIdRoute
   '/api/projects/invite/link': typeof ApiProjectsInviteLinkRoute
   '/api/projects/snapshots/compare': typeof ApiProjectsSnapshotsCompareRoute
@@ -2303,6 +2310,7 @@ export interface FileRoutesByTo {
   '/api/projects/$id/star': typeof ApiProjectsIdStarRoute
   '/api/projects/$id/summarise': typeof ApiProjectsIdSummariseRoute
   '/api/projects/$id/views': typeof ApiProjectsIdViewsRoute
+  '/api/projects/$id/webhooks': typeof ApiProjectsIdWebhooksRoute
   '/api/projects/groups/$groupId': typeof ApiProjectsGroupsGroupIdRoute
   '/api/projects/invite/link': typeof ApiProjectsInviteLinkRoute
   '/api/projects/snapshots/compare': typeof ApiProjectsSnapshotsCompareRoute
@@ -2588,6 +2596,7 @@ export interface FileRoutesById {
   '/api/projects/$id/star': typeof ApiProjectsIdStarRoute
   '/api/projects/$id/summarise': typeof ApiProjectsIdSummariseRoute
   '/api/projects/$id/views': typeof ApiProjectsIdViewsRoute
+  '/api/projects/$id/webhooks': typeof ApiProjectsIdWebhooksRoute
   '/api/projects/groups/$groupId': typeof ApiProjectsGroupsGroupIdRoute
   '/api/projects/invite/link': typeof ApiProjectsInviteLinkRoute
   '/api/projects/snapshots/compare': typeof ApiProjectsSnapshotsCompareRoute
@@ -2873,6 +2882,7 @@ export interface FileRouteTypes {
     | '/api/projects/$id/star'
     | '/api/projects/$id/summarise'
     | '/api/projects/$id/views'
+    | '/api/projects/$id/webhooks'
     | '/api/projects/groups/$groupId'
     | '/api/projects/invite/link'
     | '/api/projects/snapshots/compare'
@@ -3156,6 +3166,7 @@ export interface FileRouteTypes {
     | '/api/projects/$id/star'
     | '/api/projects/$id/summarise'
     | '/api/projects/$id/views'
+    | '/api/projects/$id/webhooks'
     | '/api/projects/groups/$groupId'
     | '/api/projects/invite/link'
     | '/api/projects/snapshots/compare'
@@ -3440,6 +3451,7 @@ export interface FileRouteTypes {
     | '/api/projects/$id/star'
     | '/api/projects/$id/summarise'
     | '/api/projects/$id/views'
+    | '/api/projects/$id/webhooks'
     | '/api/projects/groups/$groupId'
     | '/api/projects/invite/link'
     | '/api/projects/snapshots/compare'
@@ -5395,6 +5407,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiProjectsIdViewsRouteImport
       parentRoute: typeof ApiProjectsIdRoute
     }
+    '/api/projects/$id/webhooks': {
+      id: '/api/projects/$id/webhooks'
+      path: '/webhooks'
+      fullPath: '/api/projects/$id/webhooks'
+      preLoaderRoute: typeof ApiProjectsIdWebhooksRouteImport
+      parentRoute: typeof ApiProjectsIdRoute
+    }
     '/api/projects/groups/$groupId': {
       id: '/api/projects/groups/$groupId'
       path: '/$groupId'
@@ -5900,6 +5919,7 @@ interface ApiProjectsIdRouteChildren {
   ApiProjectsIdStarRoute: typeof ApiProjectsIdStarRoute
   ApiProjectsIdSummariseRoute: typeof ApiProjectsIdSummariseRoute
   ApiProjectsIdViewsRoute: typeof ApiProjectsIdViewsRoute
+  ApiProjectsIdWebhooksRoute: typeof ApiProjectsIdWebhooksRoute
 }
 
 const ApiProjectsIdRouteChildren: ApiProjectsIdRouteChildren = {
@@ -5958,6 +5978,7 @@ const ApiProjectsIdRouteChildren: ApiProjectsIdRouteChildren = {
   ApiProjectsIdStarRoute: ApiProjectsIdStarRoute,
   ApiProjectsIdSummariseRoute: ApiProjectsIdSummariseRoute,
   ApiProjectsIdViewsRoute: ApiProjectsIdViewsRoute,
+  ApiProjectsIdWebhooksRoute: ApiProjectsIdWebhooksRoute,
 }
 
 const ApiProjectsIdRouteWithChildren = ApiProjectsIdRoute._addFileChildren(

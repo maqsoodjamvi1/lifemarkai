@@ -38,6 +38,7 @@ import { resolveSmartModel } from "../editor-intelligence.ts";
 import { persistChatTurnMessages } from "../persist-chat-turn.ts";
 import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 import { commitGenerationSnapshot } from "../chat/commit-generation-snapshot.ts";
+import { fireProjectWebhookEvent } from "../../webhooks/dispatch.ts";
 import { checkTemplateCompatibility,lockControlledDependencyVersions,resolveControlledTemplateForPrompt } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
 import { setCorrelation } from "../../observability/correlation.ts";
@@ -983,6 +984,14 @@ export async function handleAiAgent(req: Request) {
         import("@/lib/stripe/auto-topup")
           .then(({ triggerAutoTopupIfNeeded }) => triggerAutoTopupIfNeeded(user.id))
           .catch(() => {});
+
+        if (filesChanged.length > 0) {
+          fireProjectWebhookEvent(supabase, projectId, "ai_generation", {
+            mode: "agent",
+            filesChanged: filesChanged.length,
+            paths: filesChanged.slice(0, 20),
+          }).catch(() => {});
+        }
 
         send({
           done: true,

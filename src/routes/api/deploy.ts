@@ -9,6 +9,7 @@ import { enqueueDeployJob,getDeployQueue } from "@/lib/queue/client";
 import { logger } from "@/lib/logger";
 import { createTraceContext,parseTraceparent,traceparent } from "@/lib/monitoring/tracing";
 import { evaluatePublishGate,publishGateResponseBody } from "@/lib/security/publish-gate";
+import { fireProjectWebhookEvent } from "@/lib/webhooks/dispatch";
 
 // ── Netlify helpers ────────────────────────────────────────────────────────
 
@@ -497,6 +498,10 @@ async function handlePOST(req: Request) {
           () => {}
         );
       }
+
+      // Outgoing webhooks (best-effort, never blocks the response above).
+      fireProjectWebhookEvent(supabase, projectId, "build_complete", { url: deployedUrl, provider }).catch(() => {});
+      fireProjectWebhookEvent(supabase, projectId, "deploy_success", { url: deployedUrl, provider }).catch(() => {});
     } catch (err) {
       logger.error("deploy.failed", err instanceof Error ? err : new Error(String(err)), {
         deploymentId: deployment.id,
@@ -515,6 +520,10 @@ async function handlePOST(req: Request) {
           build_log: err instanceof Error ? err.message : "Unknown error",
         })
         .eq("id", deployment.id);
+      fireProjectWebhookEvent(supabase, projectId, "deploy_failed", {
+        error: err instanceof Error ? err.message : "Unknown error",
+        provider,
+      }).catch(() => {});
     }
   })();
 

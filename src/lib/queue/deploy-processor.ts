@@ -5,6 +5,7 @@ import { buildLifemarkDeployUrl } from "@/lib/deploy/branded-deploy-url";
 import { logger } from "@/lib/logger";
 import { parseTraceparent,withTraceSpan } from "@/lib/monitoring/tracing";
 import { runJobOnce } from "./idempotency";
+import { fireProjectWebhookEvent } from "@/lib/webhooks/dispatch";
 import type { DeployJobPayload } from "./client";
 
 export async function processDeployJob(job: Job<DeployJobPayload>) {
@@ -85,6 +86,8 @@ export async function processDeployJob(job: Job<DeployJobPayload>) {
         if (projectError) throw projectError;
         await job.updateProgress(100);
         logger.info("deploy.worker_live", { deploymentId: payload.deploymentId, projectId: payload.projectId, url });
+        fireProjectWebhookEvent(supabase, payload.projectId, "build_complete", { url, provider: payload.provider }).catch(() => {});
+        fireProjectWebhookEvent(supabase, payload.projectId, "deploy_success", { url, provider: payload.provider }).catch(() => {});
         return { status: "live" as const, url };
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
@@ -94,6 +97,7 @@ export async function processDeployJob(job: Job<DeployJobPayload>) {
         logger.error("deploy.worker_failed", error instanceof Error ? error : new Error(detail), {
           deploymentId: payload.deploymentId, projectId: payload.projectId,
         });
+        fireProjectWebhookEvent(supabase, payload.projectId, "deploy_failed", { error: detail, provider: payload.provider }).catch(() => {});
         throw error;
       }
     });

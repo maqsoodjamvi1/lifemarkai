@@ -3,7 +3,9 @@
  * WebhookPanel
  * Configure outgoing webhooks fired on project events:
  *   deploy_success | deploy_failed | build_complete | ai_generation
- * Endpoints are persisted as project env vars (WEBHOOK_<ID>_URL etc.).
+ * Endpoints are persisted at projects.metadata.webhooks via
+ * /api/projects/:id/webhooks, and actually fired from src/lib/webhooks/dispatch.ts
+ * (called from the deploy route and the AI chat/agent build-completion paths).
  */
 
 import { useState,useEffect,useCallback } from "react";
@@ -19,10 +21,9 @@ import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
+import type { WebhookEndpoint as SharedWebhookEndpoint, WebhookEvent } from "@/lib/webhooks/dispatch";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-
-type WebhookEvent = "deploy_success" | "deploy_failed" | "build_complete" | "ai_generation";
 
 const ALL_EVENTS: WebhookEvent[] = [
   "deploy_success",
@@ -45,15 +46,9 @@ const EVENT_COLORS: Record<WebhookEvent, string> = {
   ai_generation: "text-violet-400 bg-violet-500/10 border-violet-500/20",
 };
 
-interface WebhookEndpoint {
-  id: string;
-  url: string;
-  secret: string;
-  events: WebhookEvent[];
+interface WebhookEndpoint extends SharedWebhookEndpoint {
   enabled: boolean;
   label: string;
-  lastStatus?: "success" | "failed" | null;
-  lastFiredAt?: string | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -66,6 +61,14 @@ function randomSecret() {
   const arr = new Uint8Array(20);
   crypto.getRandomValues(arr);
   return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** HMAC-SHA256(secret, body) as lowercase hex, matching src/lib/webhooks/dispatch.ts's server-side signing. */
+async function signHmacSha256(secret: string, body: string): Promise<string> {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(body));
+  return Array.from(new Uint8Array(sig), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 // ─── Add Webhook Form ─────────────────────────────────────────────────────────
@@ -351,22 +354,10 @@ export function WebhookPanel({ projectId }: WebhookPanelProps) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/projects/${projectId}/env`);
+      const res = await fetch(`/api/projects/${projectId}/webhooks`);
       if (!res.ok) return;
-      const data = await res.json() as { vars?: Record<string, string> };
-      const vars = data.vars ?? {};
-      // Webhooks stored as LIFEMARK_WEBHOOK_<ID>_JSON = <JSON string>
-      const loaded: WebhookEndpoint[] = [];
-      for (const [key, val] of Object.entries(vars)) {
-        if (key.startsWith("LIFEMARK_WEBHOOK_") && key.endsWith("_JSON")) {
-          try {
-            loaded.push(JSON.parse(val) as WebhookEndpoint);
-          } catch {
-            // skip malformed
-          }
-        }
-      }
-      setEndpoints(loaded);
+      const data = await res.json() as { webhooks?: WebhookEndpoint[] };
+      setEndpoints((data.webhooks ?? []).map((w) => ({ ...w, label: w.label || new URL(w.url).hostname, enabled: w.enabled !== false })));
     } catch {
       // ignore
     } finally {
@@ -376,44 +367,54 @@ export function WebhookPanel({ projectId }: WebhookPanelProps) {
 
   useEffect(() => { void load(); }, [load]);
 
-  // Persist all webhooks back to env vars
-  async function save(eps: WebhookEndpoint[]) {
+  async function handleAdd(ep: WebhookEndpoint) {
     setSaving(true);
     try {
-      // Build vars object — one key per webhook
-      const vars: Record<string, string> = {};
-      for (const ep of eps) {
-        vars[`LIFEMARK_WEBHOOK_${ep.id.toUpperCase()}_JSON`] = JSON.stringify(ep);
+      const res = await fetch(`/api/projects/${projectId}/webhooks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: ep.url, events: ep.events, secret: ep.secret }),
+      });
+      const data = await res.json() as { webhook?: WebhookEndpoint; error?: string };
+      if (!res.ok || !data.webhook) {
+        toast({ title: "Could not add webhook", description: data.error, variant: "destructive" });
+        return;
       }
-      await fetch(`/api/projects/${projectId}/env`, {
+      setEndpoints((prev) => [...prev, { ...data.webhook!, label: ep.label, enabled: true }]);
+      setShowForm(false);
+      toast({ title: "Webhook added", description: ep.url });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleChange(updated: WebhookEndpoint) {
+    setEndpoints((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
+    setSaving(true);
+    try {
+      await fetch(`/api/projects/${projectId}/webhooks`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ vars }),
+        body: JSON.stringify({ webhook: updated }),
       });
     } finally {
       setSaving(false);
     }
   }
 
-  function handleAdd(ep: WebhookEndpoint) {
-    const next = [...endpoints, ep];
-    setEndpoints(next);
-    setShowForm(false);
-    void save(next);
-    toast({ title: "Webhook added", description: ep.url });
-  }
-
-  function handleChange(updated: WebhookEndpoint) {
-    const next = endpoints.map((e) => (e.id === updated.id ? updated : e));
-    setEndpoints(next);
-    void save(next);
-  }
-
-  function handleDelete(id: string) {
-    const next = endpoints.filter((e) => e.id !== id);
-    setEndpoints(next);
-    void save(next);
-    toast({ title: "Webhook removed" });
+  async function handleDelete(id: string) {
+    setEndpoints((prev) => prev.filter((e) => e.id !== id));
+    setSaving(true);
+    try {
+      await fetch(`/api/projects/${projectId}/webhooks`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      toast({ title: "Webhook removed" });
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleTestFire(id: string) {
@@ -422,31 +423,36 @@ export function WebhookPanel({ projectId }: WebhookPanelProps) {
     if (!ep) { setTestingId(null); return; }
 
     try {
-      // Fire a simulated ping payload to the endpoint
+      // Fire a simulated ping payload to the endpoint, signed the same way
+      // the real dispatcher (src/lib/webhooks/dispatch.ts) signs deliveries,
+      // so a receiver validating X-Lifemark-Signature sees consistent
+      // behavior between "test fire" and a real event.
       const payload = {
         event: "ping",
         project_id: projectId,
         fired_at: new Date().toISOString(),
         message: "Test delivery from LifemarkAI",
       };
+      const body = JSON.stringify(payload);
+      const signature = await signHmacSha256(ep.secret, body);
       const res = await fetch(ep.url, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "X-Lifemark-Event": "ping",
-          "X-Lifemark-Signature": `sha256=${ep.secret}`,
+          "X-Lifemark-Signature": `sha256=${signature}`,
         },
-        body: JSON.stringify(payload),
+        body,
       }).catch(() => null);
 
       const ok = res?.ok ?? false;
-      const next = endpoints.map((e) =>
-        e.id === id
-          ? { ...e, lastStatus: ok ? ("success" as const) : ("failed" as const), lastFiredAt: new Date().toISOString() }
-          : e
-      );
-      setEndpoints(next);
-      void save(next);
+      const updated: WebhookEndpoint = {
+        ...ep,
+        lastStatus: ok ? ("success" as const) : ("failed" as const),
+        lastFiredAt: new Date().toISOString(),
+      };
+      setEndpoints((prev) => prev.map((e) => (e.id === id ? updated : e)));
+      void handleChange(updated);
 
       toast({
         title: ok ? "Test delivery succeeded" : "Test delivery failed",
