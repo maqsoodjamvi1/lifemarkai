@@ -193,6 +193,21 @@ export function EditorLayout({
   }, [project.id]);
 
   // Team / Intelligence file writes → refresh editor tree + preview.
+  //
+  // Routed through handleFilesUpdate (not a direct setFiles + manual dispatch)
+  // so this background refetch goes through the same "cancel a stale pending
+  // keystroke-save" guard as every other file-update path. Calling setFiles
+  // directly here bypassed that guard entirely: a user typing in file A while
+  // an Intelligence-panel pass rewrote A would have their pending 500ms
+  // autosave fire anyway, silently PATCHing their pre-rewrite buffer back
+  // over the agent's write with no error shown. handleFilesUpdate is
+  // referenced via closure rather than listed as an effect dependency (it's
+  // declared later in this component) -- its callback only runs from a timer
+  // fired well after the full render/commit, by which point the binding
+  // already exists, so this is safe; it only means a change to
+  // handleFilesUpdate's own deps (editorMode/isMobile/toast) won't re-arm
+  // this particular effect, which is fine since this effect's own trigger is
+  // project.id.
   useEffect(() => {
     let timer: number | null = null;
     const refetch = () => {
@@ -205,12 +220,7 @@ export function EditorLayout({
             const payload = await res.json();
             const next = (Array.isArray(payload) ? payload : payload.files) as ProjectFile[] | undefined;
             if (!next || next.length === 0) return;
-            setFiles(next);
-            window.dispatchEvent(
-              new CustomEvent("lifemark-refresh-preview", {
-                detail: { files: next, reason: "intelligence-file-change" },
-              }),
-            );
+            handleFilesUpdate(next, { replace: true });
           } catch { /* keep current tree */ }
         })();
       }, 350);
