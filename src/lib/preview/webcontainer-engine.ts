@@ -157,6 +157,26 @@ export function webContainerBlocker(): string | null {
 }
 
 /**
+ * Clear a remembered `WebContainer.boot()` failure so the next call actually
+ * retries instead of replaying the cached error.
+ *
+ * `wcFatal` exists to stop hammering a genuinely hopeless environment (no
+ * cross-origin isolation, which `webContainerBlocker` already reports
+ * separately and unconditionally), but `getWebContainer` also sets it for
+ * ordinary transient boot failures — a one-off StackBlitz-runtime hiccup,
+ * for instance — and never clears it itself. Before this, the editor's own
+ * "Restart runtime" button called back into `webContainerBlocker`, saw the
+ * stale `wcFatal` string, and returned immediately without ever calling
+ * `WebContainer.boot()` again: the button visibly did nothing, for the rest
+ * of the page session, for every project opened afterward too. Call this
+ * right before the explicit user-initiated retry (never automatically —
+ * only a person choosing to retry should pay for another boot attempt).
+ */
+export function resetWebContainerFatal(): void {
+  wcFatal = null;
+}
+
+/**
  * Boot (or reuse) the singleton. The dynamic import keeps @webcontainer/api out
  * of the main bundle — it is large and only needed when this engine is used.
  */

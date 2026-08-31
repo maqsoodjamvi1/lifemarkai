@@ -28,7 +28,7 @@ import { filterPinsForPage,toCommentPinList } from "@/lib/editor/comment-pin-mar
 import { PreviewAnnotateModal } from "./preview-annotate-modal";
 import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
-import { EMPTY_PREVIEW_HTML } from "@/lib/preview/build-fallback-html";
+import { buildFallbackHtml, EMPTY_PREVIEW_HTML } from "@/lib/preview/build-fallback-html";
 import { buildStaticPreview } from "@/lib/preview/build-static-preview";
 import type { ProjectRuntime } from "@/lib/project/runtime";
 import { filesContentSignature } from "@/lib/preview/files-signature";
@@ -1602,12 +1602,48 @@ export function PreviewPanel({
   // Static projects deliberately bypass package installation and render their
   // browser-native files directly. Framework projects continue to use the one
   // high-fidelity sandbox/WebContainer path.
-  const staticHtml = useMemo(
-    () => staticRuntime ? buildStaticPreview(previewFiles, previewPath) : "",
-    [previewFiles, previewPath, staticRuntime],
-  );
+  const staticHtml = useMemo(() => {
+    if (!staticRuntime) return "";
+    try {
+      return buildStaticPreview(previewFiles, previewPath);
+    } catch (err) {
+      // buildStaticPreview has no internal try/catch (unlike buildFallbackHtml,
+      // which was hardened for exactly this after a regex/asset-rewrite edge
+      // case took down its whole pipeline). Uncaught, this throw happens
+      // inside a useMemo in PreviewPanel's own render — with no error
+      // boundary around just this component, it would propagate up and can
+      // crash/unmount far more of the editor than the preview pane. Falling
+      // back to EMPTY_PREVIEW_HTML keeps the blast radius contained to
+      // exactly what an intentionally-empty project already shows.
+      console.error("[preview-panel] buildStaticPreview failed, rendering empty preview:", err);
+      return "";
+    }
+  }, [previewFiles, previewPath, staticRuntime]);
   const renderedStaticHtml = staticHtml || EMPTY_PREVIEW_HTML;
   const filesSignature = useMemo(() => filesContentSignature(previewFiles), [previewFiles]);
+
+  // Degraded fallback render for the sandbox/webcontainer engines: a
+  // Babel-transpile-in-iframe render of the CURRENT files, shown behind the
+  // live-preview status card while that engine is booting or has errored.
+  // buildFallbackHtml is already the render this exact codebase uses for the
+  // published /preview/{id} route, self-verify's repair loop, and the AI's
+  // own browser tool — it just never reached the interactive editor's
+  // sandbox/webcontainer panes, which previously showed a spinner or an
+  // error as the ENTIRE pane content with nothing behind it. It can't
+  // exercise real backend calls or npm packages, so it's paired with a
+  // persistent "simplified preview" status card rather than presented as the
+  // live app. buildFallbackHtml already wraps its own healing pipeline in
+  // try/catch (see its own source); this outer try/catch is only for the
+  // unlikely case something above that layer still throws.
+  const fallbackPreviewHtml = useMemo(() => {
+    if (!previewFiles.length) return EMPTY_PREVIEW_HTML;
+    try {
+      return buildFallbackHtml(previewFiles);
+    } catch (err) {
+      console.error("[preview-panel] buildFallbackHtml failed, rendering empty preview:", err);
+      return EMPTY_PREVIEW_HTML;
+    }
+  }, [previewFiles]);
 
   // Live file updates for the WebContainer engine. The boot effect above
   // deliberately excludes file content from its deps (a full boot + npm
@@ -2412,9 +2448,23 @@ export function PreviewPanel({
           // Fall through once the status check has come back negative, unless
           // there is a real error to show here.
           (sandboxEnabled || !sandboxStatusResolved || Boolean(sandboxError)) ? (
-          /* Modal-only: wait / error / retry — never fake with srcdoc/WC/esbuild */
-          <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
-            <div className="text-center max-w-sm px-4">
+          /* The live sandbox is booting or erroring — but the status card
+             below is no longer the ENTIRE pane. A degraded Babel-in-iframe
+             render of the current files (see fallbackPreviewHtml above) sits
+             behind it, so "must show preview not errors" holds even here:
+             the user sees an approximation of their app immediately, with
+             the real status/retry controls floating on top rather than
+             replacing it outright. */
+          <div className="relative flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)] overflow-hidden">
+            <iframe
+              key={`sandbox-fallback-${filesSignature}`}
+              srcDoc={fallbackPreviewHtml}
+              className="absolute inset-0 w-full h-full border-0 bg-white"
+              title="Simplified app preview"
+              tabIndex={-1}
+              sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+            />
+            <div className="relative z-10 text-center max-w-sm px-4 py-4 rounded-xl bg-[var(--bg-base,#0a0a0a)]/90 backdrop-blur-sm border border-border/40 shadow-lg">
               {!sandboxError && (
                 <Loader2 className="w-6 h-6 animate-spin text-violet-400/70 mx-auto mb-3" />
               )}
@@ -2436,6 +2486,10 @@ export function PreviewPanel({
                 {sandboxError
                   ? previewErrorCopy.description
                   : modalPhaseLabel || "Spinning up your app…"}
+              </p>
+              <p className="mt-2 text-[10px] text-muted-foreground/40">
+                Showing a simplified preview behind this card while the live app{" "}
+                {sandboxError ? "reconnects" : "starts"}.
               </p>
               {sandboxError && showRawDiagnostics && (
                 <details className="mt-3 text-left">
@@ -2514,18 +2568,48 @@ export function PreviewPanel({
                 />,
               )
             ) : (
-              <div className="flex flex-1 items-center justify-center p-6">
-                <div className="max-w-md text-center space-y-3">
+              // Same "fallback render behind the status card" treatment as
+              // the sandbox engine's loading/error pane above — WebContainer
+              // failing is the second-tier engine failing, not a reason to
+              // go blank when a degraded render is still possible.
+              <div className="relative flex flex-1 items-center justify-center p-6 overflow-hidden">
+                <iframe
+                  key={`webcontainer-fallback-${filesSignature}`}
+                  srcDoc={fallbackPreviewHtml}
+                  className="absolute inset-0 w-full h-full border-0 bg-white"
+                  title="Simplified app preview"
+                  tabIndex={-1}
+                  sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+                />
+                <div className="relative z-10 max-w-md text-center space-y-3 px-4 py-4 rounded-xl bg-[var(--bg-base,#0a0a0a)]/90 backdrop-blur-sm border border-border/40 shadow-lg">
                   <div className="text-sm font-medium">
                     {wcError ? "In-browser preview unavailable" : "Starting in-browser preview"}
                   </div>
                   <div className="text-xs text-muted-foreground whitespace-pre-wrap">
                     {wcError ?? wcPhase ?? "Booting runtime…"}
                   </div>
+                  <div className="text-[10px] text-muted-foreground/40">
+                    Showing a simplified preview behind this card while the in-browser runtime{" "}
+                    {wcError ? "reconnects" : "starts"}.
+                  </div>
                   {wcError && (
                     <button
                       type="button"
-                      onClick={() => setWcNonce((n) => n + 1)}
+                      onClick={() => {
+                        // Clear the remembered boot failure BEFORE bumping the
+                        // nonce — the boot effect's own webContainerBlocker()
+                        // check runs synchronously once it re-fires, so if the
+                        // reset lands after that check, it replays the same
+                        // cached error and this button does nothing again
+                        // (see resetWebContainerFatal's own doc comment).
+                        void (async () => {
+                          const { resetWebContainerFatal } = await import(
+                            "@/lib/preview/webcontainer-engine"
+                          );
+                          resetWebContainerFatal();
+                          setWcNonce((n) => n + 1);
+                        })();
+                      }}
                       className="text-xs px-3 py-1.5 rounded-md border hover:bg-muted"
                     >
                       Restart runtime
@@ -2663,9 +2747,21 @@ export function PreviewPanel({
         ) : (
           /* Live preview backend not configured. Setup details (env vars,
              provider name) are shown to DEVELOPERS only — end users get a
-             generic message that never reveals the underlying technology. */
-          <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
-            <div className="text-center max-w-md px-6">
+             generic message that never reveals the underlying technology.
+             Same fallback-render-behind-the-card treatment as the sandbox
+             and webcontainer panes above: an unconfigured backend is just
+             another reason the live engine isn't reachable, not a reason to
+             show nothing at all. */
+          <div className="relative flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)] overflow-hidden">
+            <iframe
+              key={`unconfigured-fallback-${filesSignature}`}
+              srcDoc={fallbackPreviewHtml}
+              className="absolute inset-0 w-full h-full border-0 bg-white"
+              title="Simplified app preview"
+              tabIndex={-1}
+              sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
+            />
+            <div className="relative z-10 text-center max-w-md px-6 py-4 rounded-xl bg-[var(--bg-base,#0a0a0a)]/90 backdrop-blur-sm border border-border/40 shadow-lg">
               <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl border border-violet-500/30 bg-violet-500/10">
                 <Globe className="size-5 text-violet-700 dark:text-violet-300" />
               </div>
@@ -2676,6 +2772,9 @@ export function PreviewPanel({
                 {process.env.NODE_ENV === "development"
                   ? "The live-sandbox backend is not configured for this server."
                   : "The live preview service is temporarily unavailable. Your project and files are safe — try again in a moment."}
+              </p>
+              <p className="text-[10px] text-muted-foreground/40 mb-3">
+                Showing a simplified preview behind this card in the meantime.
               </p>
               {process.env.NODE_ENV === "development" && (
                 <>
