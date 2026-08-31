@@ -7,6 +7,19 @@ export type PreviewEnginePolicyInput = {
   hasFiles: boolean;
   staticRuntime: boolean;
   sandboxEnabled: boolean;
+  /**
+   * True when the sandbox has a real, settled error to show (not just mid-
+   * boot). `sandboxEnabled` is a "credentials configured" flag that, per
+   * useSandboxPreview's own design, stays true forever once first observed
+   * true — even through every subsequent failure — so before this field
+   * existed `sandboxEnabled` alone pinned the engine to "sandbox" for the
+   * rest of the session no matter how badly or how long it kept failing.
+   * By the time a caller's `error` is non-null, useSandboxPreview has
+   * already run its own internal one-shot cold retry for a dead-tunnel
+   * phase (see coldRetryRef in use-sandbox-preview.ts) — this is not a raw
+   * first-attempt blip, it is what's left after that self-heal already ran.
+   */
+  sandboxError?: boolean;
   webContainerEnabled: boolean;
   explicitWebContainerFallback: boolean;
   /**
@@ -41,20 +54,29 @@ export type PreviewEnginePolicyInput = {
  * the sandbox when one exists puts the editor on that same real origin, so the
  * two agree and storage works, with no extra sandbox cost: this only picks a
  * sandbox that is already configured or booting.
+ *
+ * The one exception: a sandbox with a settled, non-transient error
+ * (`sandboxError`) falls through to WebContainer instead, PROVIDED
+ * WebContainer is actually usable here (explicitly requested, enabled, and
+ * the project has the right shape) — never automatically preferring
+ * WebContainer over a healthy or still-booting sandbox, only stepping in
+ * once the sandbox itself has nothing left to offer. Without a usable
+ * WebContainer fallback, this still returns "sandbox" so the existing
+ * error/retry UI for that engine stays reachable.
  */
 export function selectPreviewEngine(
   input: PreviewEnginePolicyInput,
 ): Exclude<PreviewEngine, "detecting"> {
   if (!input.hasFiles) return "unavailable";
-  if (input.sandboxEnabled) return "sandbox";
-  if (input.staticRuntime) return "static";
-  if (
+  const webContainerFallbackUsable =
     input.explicitWebContainerFallback &&
     input.webContainerEnabled &&
-    input.webContainerProjectShape
-  ) {
-    return "webcontainer";
+    input.webContainerProjectShape;
+  if (input.sandboxEnabled && !(input.sandboxError && webContainerFallbackUsable)) {
+    return "sandbox";
   }
+  if (input.staticRuntime) return "static";
+  if (webContainerFallbackUsable) return "webcontainer";
   return "unavailable";
 }
 
@@ -63,6 +85,8 @@ export function usePreviewEnginePolicy(options: {
   framework?: string | null;
   runtime?: ProjectRuntime | null;
   sandboxEnabled: boolean;
+  /** A settled (non-transient) sandbox error — see selectPreviewEngine's own doc comment. */
+  sandboxError?: boolean;
   useWebContainers?: boolean;
 }) {
   const staticRuntime =
@@ -77,6 +101,7 @@ export function usePreviewEnginePolicy(options: {
         hasFiles: options.files.length > 0,
         staticRuntime,
         sandboxEnabled: options.sandboxEnabled,
+        sandboxError: Boolean(options.sandboxError),
         webContainerEnabled,
         explicitWebContainerFallback: options.useWebContainers === true,
         webContainerProjectShape,
@@ -84,6 +109,7 @@ export function usePreviewEnginePolicy(options: {
     [
       options.files.length,
       options.sandboxEnabled,
+      options.sandboxError,
       options.useWebContainers,
       staticRuntime,
       webContainerEnabled,

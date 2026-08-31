@@ -773,9 +773,16 @@ export function PreviewPanel({
     })();
   }, [toast, projectId]);
 
-  // Docker-backed remote sandbox is the authoritative product preview.
-  // WebContainer is an explicit fallback only; it is never selected merely
-  // because the server sandbox is temporarily unavailable.
+  // Docker-backed remote sandbox is the authoritative product preview and
+  // stays preferred while it's healthy or still booting. WebContainer is an
+  // explicit fallback that is now also used automatically once the sandbox
+  // has a SETTLED error (sandboxError, set only after useSandboxPreview's
+  // own internal self-heal has already run) — previously `sandboxEnabled`
+  // alone pinned the engine to "sandbox" for the rest of the session no
+  // matter how long or how badly it kept failing, leaving the (already
+  // free, already hardened) WebContainer fallback permanently unreachable
+  // whenever a caller passed useWebContainers. See selectPreviewEngine's own
+  // doc comment for the exact precedence.
   const {
     engine: selectedPreviewEngine,
     staticRuntime,
@@ -786,6 +793,7 @@ export function PreviewPanel({
     framework,
     runtime,
     sandboxEnabled,
+    sandboxError: Boolean(sandboxError),
     useWebContainers,
   });
   useEffect(() => {
@@ -2540,6 +2548,17 @@ export function PreviewPanel({
             ref={runtimeContainerRef}
             className={`flex flex-col flex-1 min-h-0 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}
           >
+            {/* This engine can now be reached automatically (not just via an
+                explicit choice) once the live sandbox has a settled error —
+                see selectPreviewEngine. Surface WHY, so switching engines
+                doesn't read as an unexplained change from the user's last
+                known state. */}
+            {sandboxError && (
+              <div className="absolute top-2 left-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-background/90 border border-border/70 text-[10px] text-muted-foreground shadow-sm">
+                <AlertTriangle className="w-3 h-3 text-amber-400" />
+                <span>Live sandbox unavailable — using in-browser preview</span>
+              </div>
+            )}
             {wcUrl ? (
               withDeviceFrame(
                 <iframe
