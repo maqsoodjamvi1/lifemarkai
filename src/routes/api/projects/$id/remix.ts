@@ -48,7 +48,11 @@ export const Route = createFileRoute("/api/projects/$id/remix")({
             supabaseEvidence: supabaseCheck.evidence,
             sourceName: source.name,
             fileCount: sourceFiles.length,
-            messageCount: messageCount ?? 0,
+            // Capped to what carryOverChatHistory will actually copy (see
+            // MESSAGE_COPY_LIMIT below) — showing the untruncated count here
+            // would promise the confirm dialog more than the remix delivers.
+            messageCount: Math.min(messageCount ?? 0, MESSAGE_COPY_LIMIT),
+            messageCountTruncated: (messageCount ?? 0) > MESSAGE_COPY_LIMIT,
           });
         }
 
@@ -138,7 +142,9 @@ export const Route = createFileRoute("/api/projects/$id/remix")({
           }
         }
 
-        supabase.rpc("increment_remix_count", { project_id: source.id }).then(() => {});
+        supabase.rpc("increment_remix_count", { project_id: source.id }).then(({ error }) => {
+          if (error) console.error("Failed to increment remix_count:", error.message);
+        });
 
         return Response.json({
           id: newProject.id,

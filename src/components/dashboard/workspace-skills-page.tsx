@@ -224,9 +224,23 @@ export function WorkspaceSkillsPage({ user: _user }: WorkspaceSkillsPageProps) {
   async function handleDelete(skill: Skill) {
     setDeleting(skill.id);
     try {
-      await fetch(`/api/skills?id=${skill.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/skills?id=${skill.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast({
+          title: "Couldn't delete skill",
+          description: `"${skill.name}" is still here — try again in a moment.`,
+          variant: "destructive",
+        });
+        return;
+      }
       setCustomSkills((prev) => prev.filter((s) => s.id !== skill.id));
       toast({ title: "Skill deleted", description: `"${skill.name}" has been removed.` });
+    } catch {
+      toast({
+        title: "Couldn't delete skill",
+        description: `"${skill.name}" is still here — check your connection and try again.`,
+        variant: "destructive",
+      });
     } finally {
       setDeleting(null);
     }
@@ -430,6 +444,11 @@ export function WorkspaceSkillsPage({ user: _user }: WorkspaceSkillsPageProps) {
               className="overflow-hidden"
             >
               <div className="space-y-2 pb-2">
+                {filteredBuiltin.length === 0 && (
+                  <p className="text-xs text-muted-foreground text-center py-4">
+                    No skills match your search.
+                  </p>
+                )}
                 {filteredBuiltin.map((skill) => (
                   <div key={skill.id} className="rounded-xl border border-border/60 bg-muted/20">
                     <button

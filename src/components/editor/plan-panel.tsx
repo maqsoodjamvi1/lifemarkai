@@ -19,6 +19,7 @@ interface PlanMessage {
   role: "user" | "assistant";
   content: string;
   hasPlan?: boolean;         // assistant message that includes a formal plan
+  isFallback?: boolean;      // canned template inserted when plan generation failed — not a real AI response
 }
 
 interface PlanPanelProps {
@@ -187,7 +188,10 @@ Based on your request, here's a structured approach for implementing this featur
 - Review each step before implementation
 - Approve this plan to switch to Agent mode and begin building`;
         const id = `a-${Date.now()}`;
-        setMessages((prev) => [...prev, { id, role: "assistant", content: fallbackPlan, hasPlan: true }]);
+        setMessages((prev) => [
+          ...prev,
+          { id, role: "assistant", content: fallbackPlan, hasPlan: true, isFallback: true },
+        ]);
         setPlanMsgId(id);
       }
     } finally {
@@ -345,8 +349,15 @@ Based on your request, here's a structured approach for implementing this featur
                       <div className="flex items-center gap-2 px-3 py-2 bg-muted/40 border-b border-border">
                         <FileText className="w-3.5 h-3.5 text-violet-400" />
                         <span className="text-xs font-semibold text-foreground">Implementation Plan</span>
-                        <span className="ml-auto text-[10px] text-muted-foreground">Plan mode · no code changed</span>
+                        <span className="ml-auto text-[10px] text-muted-foreground">
+                          {msg.isFallback ? "Generic template — plan generation failed, review before building" : "Plan mode · no code changed"}
+                        </span>
                       </div>
+                      {msg.isFallback && (
+                        <div className="px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 text-[10px] text-amber-600 dark:text-amber-400">
+                          This isn&apos;t an AI-generated plan — plan generation failed, so a generic template was inserted instead. Check it matches your project before approving.
+                        </div>
+                      )}
 
                       {/* Editable plan or rendered markdown */}
                       {editingPlan !== null && planMsgId === msg.id ? (

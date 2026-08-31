@@ -17,6 +17,7 @@ interface DryRunInfo {
   fileCount: number;
   hasSupabase: boolean;
   messageCount: number;
+  messageCountTruncated: boolean;
 }
 
 /**
@@ -61,6 +62,7 @@ export function RemixButton({ projectId, remixCount = 0 }: RemixButtonProps) {
         fileCount: data.fileCount ?? 0,
         hasSupabase: !!data.hasSupabase,
         messageCount: data.messageCount ?? 0,
+        messageCountTruncated: !!data.messageCountTruncated,
       });
       setDisconnectSupabase(!!data.hasSupabase);
       setCarryOverChatHistory(false);
@@ -102,7 +104,10 @@ export function RemixButton({ projectId, remixCount = 0 }: RemixButtonProps) {
         Remix
         {remixCount > 0 && <span className="ml-1 text-xs opacity-80">{remixCount}</span>}
       </Button>
-      {error && <span className="text-[10px] text-red-500 max-w-[200px] text-right">{error}</span>}
+      {/* Only the pre-dialog (openDialog) failure renders here — once the
+          dialog is open, its own error block below is what's visible; a
+          sibling span here sits behind the dialog's portal/overlay. */}
+      {error && !info && <span className="text-[10px] text-red-500 max-w-[200px] text-right">{error}</span>}
 
       <Dialog open={!!info} onOpenChange={(open) => { if (!open && !remixing) setInfo(null); }}>
         <DialogContent className="sm:max-w-md">
@@ -133,11 +138,15 @@ export function RemixButton({ projectId, remixCount = 0 }: RemixButtonProps) {
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium">Carry over chat history</div>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Bring the {info?.messageCount} message{info?.messageCount === 1 ? "" : "s"} that built this project into your remix, so the AI has that context to keep building from.
+                    Bring the {info?.messageCountTruncated ? "first " : ""}{info?.messageCount} message{info?.messageCount === 1 ? "" : "s"} that built this project into your remix, so the AI has that context to keep building from.
                   </p>
                 </div>
                 <Switch checked={carryOverChatHistory} onCheckedChange={setCarryOverChatHistory} className="mt-0.5" />
               </div>
+            )}
+
+            {error && info && (
+              <p className="text-xs text-red-500">{error}</p>
             )}
           </div>
 

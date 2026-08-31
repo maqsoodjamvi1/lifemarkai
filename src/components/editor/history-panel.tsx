@@ -140,6 +140,19 @@ function ChangeRow({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, x: -12 }}
       onClick={selectMode ? onCardClick : undefined}
+      role={selectMode ? "button" : undefined}
+      tabIndex={selectMode ? 0 : undefined}
+      aria-pressed={selectMode ? isSelected : undefined}
+      onKeyDown={
+        selectMode
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onCardClick?.();
+              }
+            }
+          : undefined
+      }
       className={[
         "group flex items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors",
         isSelected
@@ -147,7 +160,7 @@ function ChangeRow({
           : snap.is_pinned
             ? "border-amber-500/35 bg-amber-500/[0.04]"
             : "border-border/80 bg-card/40 hover:bg-accent/40",
-        selectMode ? "cursor-pointer" : "",
+        selectMode ? "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60" : "",
       ].join(" ")}
     >
       {/* Tiny thumb or icon */}
@@ -722,7 +735,7 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
                     restoring={restoring === snap.id}
                     deleting={deleting === snap.id}
                     togglingPin={togglingPin === snap.id}
-                    canCompare={sorted.length > 1}
+                    canCompare={sorted.length > 1 && snap.id !== latestId}
                     selectMode={pairSelectMode}
                     isSelected={selectedForCompare.includes(snap.id)}
                     onRestore={() => void restoreSnapshot(snap)}

@@ -241,12 +241,16 @@ export function PreviewAnnotations({ projectId, enabled, onSendToChat }: Preview
     if (!enabled) return;
     const target = e.target as HTMLElement;
     if (target.closest("[data-annotation]")) return;
+    // A draft with typed-but-unsent text was about to be silently replaced
+    // (and its text lost) by whatever the user clicked next on the canvas.
+    // Leave it open instead — Cancel or Escape are the explicit ways out.
+    if (draft && draft.text.trim()) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * 100;
     const y = ((e.clientY - rect.top) / rect.height) * 100;
     setDraft({ x, y, text: "", colorId: "yellow" });
     setExpandedId(null);
-  }, [enabled]);
+  }, [enabled, draft]);
 
   function commitDraft() {
     if (!draft || !draft.text.trim()) { setDraft(null); return; }

@@ -90,6 +90,20 @@ export function PlanRevisionPopover({
     return () => abortRef.current?.abort();
   }, []);
 
+  // The instruction Textarea's own onKeyDown only exists while revised ===
+  // null; once a revision is showing (diff-preview view), that field is
+  // unmounted and Escape would otherwise do nothing. A document-level
+  // listener covers the popover for its whole lifetime instead.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCloseRef.current();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   // Clamp into the viewport — a selection near the right or bottom edge would
   // otherwise anchor the panel off-screen.
   const width = 340;
