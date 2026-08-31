@@ -15,6 +15,8 @@ export const Route = createFileRoute("/api/projects/snapshots")({
         const result = await listOrGetSnapshot({
             projectId: url.searchParams.get("projectId") ?? undefined,
             id: url.searchParams.get("id") ?? undefined,
+            cursor: url.searchParams.get("cursor") ?? undefined,
+            limit: url.searchParams.get("limit") ?? undefined,
           });
         if (result.status === "unauthorized") {
           return Response.json({ error: "Unauthorized" }, { status: 401 });
@@ -31,7 +33,7 @@ export const Route = createFileRoute("/api/projects/snapshots")({
         if (result.kind === "files") {
           return Response.json({ files: result.files });
         }
-        return Response.json(result.snapshots);
+        return Response.json({ snapshots: result.snapshots, nextCursor: result.nextCursor });
       },
       POST: async ({ request }) => {
         let body: { projectId?: string; label?: string } = {};

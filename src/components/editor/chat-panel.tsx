@@ -1410,8 +1410,8 @@ export function ChatPanel({
       // Fetch the most recent snapshot for this project
       const res = await fetch(`/api/projects/snapshots?projectId=${project.id}&limit=1`);
       if (!res.ok) throw new Error("No snapshot");
-      const snapshots = await res.json();
-      const snapshot = snapshots?.[0];
+      const page = (await res.json()) as { snapshots?: Array<{ id: string; label?: string }> };
+      const snapshot = page.snapshots?.[0];
       if (!snapshot) throw new Error("No snapshot found");
 
       // Restore it
@@ -1793,7 +1793,8 @@ export function ChatPanel({
     try {
       const listRes = await fetch(`/api/projects/snapshots?projectId=${project.id}`);
       if (!listRes.ok) return;
-      const snapshots = (await listRes.json()) as Array<{ id: string; created_at: string }>;
+      const page = (await listRes.json()) as { snapshots?: Array<{ id: string; created_at: string }> };
+      const snapshots = page.snapshots;
       if (!Array.isArray(snapshots)) return;
       const targetAt = new Date(msg.created_at).getTime();
       const target = snapshots.find((s) => new Date(s.created_at).getTime() <= targetAt);

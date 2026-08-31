@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { formatRelative } from "@/lib/utils";
 import type { ProjectFile } from "@/types/database";
+import { mergeSnapshotPage } from "@/lib/editor/snapshot-pagination";
 
 interface Snapshot {
   id: string;
@@ -289,6 +290,8 @@ function ChangeRow({
 export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelProps) {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [loading, setLoading] = useState(true);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [filter, setFilter] = useState<HistoryFilter>("all");
   const [creating, setCreating] = useState(false);
   const [restoring, setRestoring] = useState<string | null>(null);
@@ -325,8 +328,9 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
     try {
       const res = await fetch(`/api/projects/snapshots?projectId=${projectId}`);
       if (res.ok) {
-        const data = (await res.json()) as Snapshot[];
-        setSnapshots(data);
+        const page = (await res.json()) as { snapshots: Snapshot[]; nextCursor: string | null };
+        setSnapshots(page.snapshots);
+        setNextCursor(page.nextCursor);
       }
     } finally {
       setLoading(false);
@@ -336,6 +340,26 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Unlimited scrollable history, like Lovable — the initial page is capped
+  // (see SNAPSHOT_PAGE_SIZE in src/lib/server-fns/snapshots.ts) but older
+  // versions are always one click away instead of just gone.
+  async function loadMore() {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await fetch(
+        `/api/projects/snapshots?projectId=${projectId}&cursor=${encodeURIComponent(nextCursor)}`,
+      );
+      if (res.ok) {
+        const page = (await res.json()) as { snapshots: Snapshot[]; nextCursor: string | null };
+        setSnapshots((prev) => mergeSnapshotPage(prev, page.snapshots));
+        setNextCursor(page.nextCursor);
+      }
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   async function createSnapshot() {
     if (!label.trim()) return;
@@ -779,6 +803,27 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
                   ))}
               </div>
             ))}
+
+            {filter === "all" && nextCursor && (
+              <div className="flex justify-center py-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                  disabled={loadingMore}
+                  onClick={() => void loadMore()}
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                      Loading…
+                    </>
+                  ) : (
+                    "Load older versions"
+                  )}
+                </Button>
+              </div>
+            )}
           </AnimatePresence>
         )}
       </div>

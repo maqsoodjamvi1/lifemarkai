@@ -20,6 +20,10 @@ shouldStoreBaseline,
 type SnapshotFile,
 } from "@/lib/diff/snapshot-diff";
 import type { Database,Json } from "../../types/database.ts";
+import { computeNextCursor } from "@/lib/editor/snapshot-pagination";
+
+const SNAPSHOT_PAGE_SIZE = 50;
+const SNAPSHOT_PAGE_SIZE_MAX = 100;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getChainDepth(supabase: any, latestId: string): Promise<number> {
@@ -103,15 +107,46 @@ export async function listOrGetSnapshot(data: any) {
     const access = await getProjectAccess(supabase, data.projectId, user.id);
     if (!canReadProjectFiles(access)) return { status: "not_found" as const };
 
-    const { data: rows } = await supabase
-      .from("project_snapshots")
-      .select("id, label, is_baseline, is_pinned, pinned_at, created_at, screenshot_url")
-      .eq("project_id", data.projectId)
-      .order("is_pinned", { ascending: false })
-      .order("created_at", { ascending: false })
-      .limit(50);
+    // Unlimited scrollable history, like Lovable — rather than the old flat
+    // cap of 50 that silently hid anything older. Pinned snapshots are
+    // returned in full on every first page (there are normally few, and a
+    // user expects every pin visible, not just the newest 50); only
+    // non-pinned snapshots are paginated, by a created_at keyset cursor
+    // (see src/lib/editor/snapshot-pagination.ts, unit tested).
+    const limit = Math.min(
+      Math.max(1, Number(data.limit) || SNAPSHOT_PAGE_SIZE),
+      SNAPSHOT_PAGE_SIZE_MAX,
+    );
+    const cursor: string | null = typeof data.cursor === "string" && data.cursor ? data.cursor : null;
+    const COLUMNS = "id, label, is_baseline, is_pinned, pinned_at, created_at, screenshot_url";
 
-    return { status: "ok" as const, kind: "list" as const, snapshots: rows ?? [] };
+    const pinnedRows = cursor
+      ? []
+      : (
+          await supabase
+            .from("project_snapshots")
+            .select(COLUMNS)
+            .eq("project_id", data.projectId)
+            .eq("is_pinned", true)
+            .order("pinned_at", { ascending: false })
+        ).data ?? [];
+
+    let nonPinnedQuery = supabase
+      .from("project_snapshots")
+      .select(COLUMNS)
+      .eq("project_id", data.projectId)
+      .eq("is_pinned", false)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (cursor) nonPinnedQuery = nonPinnedQuery.lt("created_at", cursor);
+    const nonPinnedRows = (await nonPinnedQuery).data ?? [];
+
+    return {
+      status: "ok" as const,
+      kind: "list" as const,
+      snapshots: [...pinnedRows, ...nonPinnedRows],
+      nextCursor: computeNextCursor(nonPinnedRows, limit),
+    };
 }
 
 export async function createSnapshot(data: any) {

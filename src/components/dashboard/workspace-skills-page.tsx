@@ -3,6 +3,7 @@ import { useState,useEffect,useCallback } from "react";
 import {
 Zap,Plus,Pencil,Trash2,Save,X,Loader2,
 Search,Tag,ChevronDown,ChevronUp,BookOpen,Sparkles,
+Download,Github,FileArchive,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -149,6 +150,124 @@ function SkillForm({
   );
 }
 
+/**
+ * Import a skill from GitHub or a .zip/.skill archive — matches Lovable's
+ * "Import from GitHub" / "Upload ZIP" flow. The backend
+ * (src/routes/api/skills/import.ts) already handled both modes; this is the
+ * missing entry point for it — closes the "no import-creation UX" gap from
+ * the deep editor-parity audit.
+ */
+function ImportSkillForm({
+  onImported,
+  onCancel,
+}: {
+  onImported: (skill: Skill) => void;
+  onCancel: () => void;
+}) {
+  const { toast } = useToast();
+  const [tab, setTab] = useState<"github" | "zip">("github");
+  const [url, setUrl] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  async function handleImport() {
+    setImporting(true);
+    try {
+      let res: Response;
+      if (tab === "github") {
+        if (!url.trim()) return;
+        res = await fetch("/api/skills/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source: "github", url: url.trim() }),
+        });
+      } else {
+        if (!file) return;
+        const form = new FormData();
+        form.append("file", file);
+        res = await fetch("/api/skills/import", { method: "POST", body: form });
+      }
+      const result = (await res.json()) as { skill?: Skill; source?: string; error?: string };
+      if (!res.ok || !result.skill) {
+        toast({ title: "Import failed", description: result.error ?? "Could not import this skill", variant: "destructive" });
+        return;
+      }
+      onImported(result.skill);
+      toast({ title: "Skill imported", description: `"${result.skill.name}" is ready to use in any project.` });
+    } catch {
+      toast({ title: "Import failed", description: "Could not reach the import service", variant: "destructive" });
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  const canImport = tab === "github" ? url.trim().length > 0 : !!file;
+
+  return (
+    <div className="space-y-4 p-4 rounded-xl border border-violet-500/30 bg-violet-500/5">
+      <div className="flex gap-1">
+        <button
+          type="button"
+          onClick={() => setTab("github")}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+            tab === "github" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Github className="w-3.5 h-3.5" />
+          From GitHub
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab("zip")}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+            tab === "zip" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <FileArchive className="w-3.5 h-3.5" />
+          Upload archive
+        </button>
+      </div>
+
+      {tab === "github" ? (
+        <div className="space-y-1.5">
+          <Input
+            placeholder="https://github.com/owner/repo/tree/main/skills/my-skill"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            className="h-9 text-sm font-mono"
+          />
+          <p className="text-[10px] text-muted-foreground">
+            A repo, or a subdirectory URL, containing a SKILL.md file.
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          <input
+            type="file"
+            accept=".zip,.skill"
+            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            className="block w-full text-xs text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-medium file:bg-muted file:text-foreground hover:file:bg-accent"
+          />
+          <p className="text-[10px] text-muted-foreground">
+            A .zip or .skill archive containing a SKILL.md file (max 50MB).
+          </p>
+        </div>
+      )}
+
+      <div className="flex gap-2 pt-1">
+        <Button size="sm" disabled={importing || !canImport} onClick={() => void handleImport()} className="gap-1.5">
+          {importing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+          {importing ? "Importing…" : "Import skill"}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onCancel} className="gap-1.5">
+          <X className="w-3.5 h-3.5" />
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function WorkspaceSkillsPage({ user: _user }: WorkspaceSkillsPageProps) {
   const { toast } = useToast();
 
@@ -158,6 +277,7 @@ export function WorkspaceSkillsPage({ user: _user }: WorkspaceSkillsPageProps) {
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showBuiltin, setShowBuiltin] = useState(true);
@@ -287,7 +407,17 @@ export function WorkspaceSkillsPage({ user: _user }: WorkspaceSkillsPageProps) {
         </div>
         <Button
           size="sm"
-          onClick={() => { setShowCreate(true); setEditingId(null); }}
+          variant="outline"
+          onClick={() => { setShowImport(true); setShowCreate(false); setEditingId(null); }}
+          disabled={showImport}
+          className="gap-1.5 shrink-0"
+        >
+          <Download className="w-3.5 h-3.5" />
+          Import
+        </Button>
+        <Button
+          size="sm"
+          onClick={() => { setShowCreate(true); setShowImport(false); setEditingId(null); }}
           disabled={showCreate}
           className="gap-1.5 shrink-0"
         >
@@ -295,6 +425,22 @@ export function WorkspaceSkillsPage({ user: _user }: WorkspaceSkillsPageProps) {
           New skill
         </Button>
       </div>
+
+      {/* Import form */}
+      <AnimatePresence>
+        {showImport && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+          >
+            <ImportSkillForm
+              onImported={(skill) => { setCustomSkills((prev) => [skill, ...prev]); setShowImport(false); }}
+              onCancel={() => setShowImport(false)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Create form */}
       <AnimatePresence>
@@ -509,9 +655,11 @@ export function WorkspaceSkillsPage({ user: _user }: WorkspaceSkillsPageProps) {
           <p className="text-sm font-medium text-amber-300">How to use skills</p>
         </div>
         <p className="text-xs text-amber-200/70 leading-relaxed">
-          In any project&apos;s chat panel, click the <strong className="text-amber-200">⚡ Skills</strong> button in the toolbar to open the skill picker.
-          Select a skill and it will be injected as your next message — the AI will execute those instructions immediately.
-          Skills save you from re-typing the same instructions across projects.
+          In any project&apos;s chat panel, click the <strong className="text-amber-200">⚡ Skills</strong> button in the toolbar, or just type{" "}
+          <strong className="text-amber-200 font-mono">/</strong> in the message box to search skills and prompt templates as you type.
+          Selecting one injects it as your next message — the AI executes those instructions immediately.
+          Skills save you from re-typing the same instructions across projects, and <strong className="text-amber-200">Import</strong> above
+          brings one in from a GitHub repo or a .zip/.skill archive instead of writing it from scratch.
         </p>
       </div>
     </div>

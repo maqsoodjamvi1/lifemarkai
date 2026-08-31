@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-
+import { parseSkillMd, resolveGithubSkillLocation } from "@/lib/skills/parse-skill-md";
 
 /**
  * POST /api/skills/import
@@ -12,67 +12,21 @@ import { createClient } from "@/lib/supabase/server";
  *   2. multipart/form-data with field `file` (a .zip or .skill archive)
  *      → Extract SKILL.md from the archive, parse front-matter, create skill.
  *
- * The skill_creator front-matter format (mirrors Anthropic Skills spec):
- *     ---
- *     name: my-skill-id
- *     description: Use when...
- *     ---
- *     # Markdown body...
+ * The URL resolution and SKILL.md front-matter parsing live in
+ * src/lib/skills/parse-skill-md.ts (unit tested) — this route is now
+ * reachable from the UI (workspace-skills-page.tsx's Import button), where
+ * before it had no entry point and this logic had never actually run
+ * against a real skill.
  */
-interface SkillFrontMatter {
-  name: string;
-  description?: string;
-  prompt: string;
-  icon?: string;
-  tags?: string[];
-}
-
-function parseSkillMd(content: string): SkillFrontMatter | null {
-  const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
-  const frontmatter: Record<string, string> = {};
-  let body = content;
-  if (fmMatch) {
-    body = fmMatch[2];
-    for (const line of fmMatch[1].split("\n")) {
-      const m = line.match(/^(\w+)\s*:\s*(.*)$/);
-      if (m) frontmatter[m[1].toLowerCase()] = m[2].trim().replace(/^["']|["']$/g, "");
-    }
-  }
-  // Fallback: derive name from first H1
-  let name = frontmatter.name;
-  if (!name) {
-    const h1 = body.match(/^#\s+(.+)$/m);
-    if (h1) {
-      name = h1[1].toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-    }
-  }
-  if (!name) return null;
-  return {
-    name,
-    description: frontmatter.description ?? body.split("\n").find((l) => l.trim() && !l.startsWith("#")) ?? "",
-    prompt: body.trim(),
-    icon: frontmatter.icon,
-    tags: frontmatter.tags ? frontmatter.tags.split(",").map((t) => t.trim()) : undefined,
-  };
-}
 
 async function fetchSkillFromGithub(url: string): Promise<string | null> {
-  // Match either:
-  //   https://github.com/owner/repo
-  //   https://github.com/owner/repo/tree/<branch>/<path>
-  //   https://github.com/owner/repo/blob/<branch>/<path>/SKILL.md
-  const m = url.match(/^https?:\/\/github\.com\/([^\/]+)\/([^\/]+)(?:\/(tree|blob)\/([^\/]+)(?:\/(.+))?)?\/?$/);
-  if (!m) return null;
-  const [, owner, repo, kind, branch = "main", path = ""] = m;
-  const cleanPath = path.replace(/\/SKILL\.md$/i, "");
-  const skillPath = cleanPath ? `${cleanPath}/SKILL.md` : "SKILL.md";
-  const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo.replace(/\.git$/, "")}/${branch}/${skillPath}`;
+  const location = resolveGithubSkillLocation(url);
+  if (!location) return null;
 
-  const res = await fetch(rawUrl);
+  const res = await fetch(location.rawUrl);
   if (!res.ok) {
-    // Try `master` as a fallback if `main` was assumed
-    if (branch === "main") {
-      const fallback = await fetch(rawUrl.replace("/main/", "/master/"));
+    if (location.fallbackRawUrl) {
+      const fallback = await fetch(location.fallbackRawUrl);
       if (fallback.ok) return await fallback.text();
     }
     return null;
