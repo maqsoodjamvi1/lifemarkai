@@ -2,7 +2,7 @@
 import type { MutableRefObject,Ref } from "react";
 import type { EditorMode,LeftPanel } from "@/components/editor/editor-layout";
 import type { OpenRouterModelId } from "@/lib/ai/openrouter-models";
-import { VoiceMode } from "@/components/editor/voice-mode";
+import { VoiceMode, type VoiceModeHandle } from "@/components/editor/voice-mode";
 import {
 LovableComposerContextMenu,
 LovableVisualEditsButton,
@@ -46,6 +46,9 @@ export interface LovableComposerBottomRowProps {
   autoModel: OpenRouterModelId;
   activeModelLabel: string;
   onTranscript: (text: string) => void;
+  /** Lets a keyboard shortcut (Alt/Option+V) drive the same mic button the
+   *  user would click — see voice-mode.tsx's VoiceModeHandle. */
+  voiceModeRef?: Ref<VoiceModeHandle>;
   showFileGenPicker: boolean;
   fileGenBusy: string | null;
   fileGenDisabled: boolean;
@@ -99,6 +102,7 @@ export function LovableComposerBottomRow({
   autoModel,
   activeModelLabel,
   onTranscript,
+  voiceModeRef,
   showFileGenPicker,
   fileGenBusy,
   fileGenDisabled,
@@ -228,7 +232,7 @@ export function LovableComposerBottomRow({
         )}
       </div>
 
-      <VoiceMode onTranscript={onTranscript} />
+      <VoiceMode ref={voiceModeRef} onTranscript={onTranscript} />
 
       <LovableComposerSendControls
         streaming={streaming}

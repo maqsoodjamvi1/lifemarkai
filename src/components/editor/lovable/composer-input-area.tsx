@@ -191,6 +191,7 @@ export function LovableComposerInputArea({
         autoModel={rest.autoModel}
         activeModelLabel={rest.activeModelLabel}
         onTranscript={rest.onTranscript}
+        voiceModeRef={rest.voiceModeRef}
         showFileGenPicker={rest.showFileGenPicker}
         fileGenBusy={rest.fileGenBusy}
         fileGenDisabled={rest.fileGenDisabled}

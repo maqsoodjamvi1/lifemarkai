@@ -46,6 +46,7 @@ import { frameworkForMobileMode,initialWebFramework,isRnFramework } from "@/lib/
 import { LovableChatModals } from "./lovable/chat-modals";
 import { useComposerDockController } from "./lovable/use-composer-dock-controller";
 import { useChatKeyboardShortcuts } from "./lovable/use-chat-keyboard-shortcuts";
+import type { VoiceModeHandle } from "@/components/editor/voice-mode";
 import { useThreadMessageProps } from "./lovable/use-thread-message-props";
 import { extractStreamingReasoning } from "./lovable/streaming-utils";
 import type { ClarifySession,ClarifyQuestion } from "./lovable/clarify-session-card";
@@ -1209,6 +1210,9 @@ export function ChatPanel({
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Lets the Alt/Option+V keyboard shortcut (Lovable parity) drive the same
+  // start/stop flow as clicking the composer's mic button.
+  const voiceModeRef = useRef<VoiceModeHandle>(null);
   // Handle file-to-app drop: pre-fill input (and image) then consume
   useEffect(() => {
     if (!pendingBuildFromFile) return;
@@ -5481,7 +5485,7 @@ ${(f.content ?? "").slice(0, 8000)}
     return () => window.clearTimeout(timer);
   }, [messages, scrollToMessage]);
 
-  // ⌘F search · Alt+B bookmarks · End jump to bottom · Alt+P Plan/Build · Esc stop
+  // ⌘F search · Alt+B bookmarks · End jump to bottom · Alt+P Plan/Build · Alt+V voice · Esc stop
   useChatKeyboardShortcuts({
     mode,
     streaming,
@@ -5539,6 +5543,7 @@ ${(f.content ?? "").slice(0, 8000)}
     onNavigateMessage: navigateFocusedMessage,
     onFocusComposer: focusComposer,
     onStopGeneration: stopGeneration,
+    onVoiceShortcut: () => voiceModeRef.current?.toggle(),
   });
 
   // Dump places chat utilities in `#main-menu` (editor top bar), not an in-panel header.
@@ -6391,6 +6396,7 @@ ${(f.content ?? "").slice(0, 8000)}
             autoModel={autoModel}
             activeModelLabel={activeModelLabel}
             onTranscript={(t) => setInput((prev) => prev + (prev ? " " : "") + t)}
+            voiceModeRef={voiceModeRef}
             showFileGenPicker={showFileGenPicker}
             fileGenBusy={fileGenBusy}
             fileGenDisabled={!input.trim() || !!fileGenBusy || noCredits || isLocked || streaming}

@@ -1,18 +1,27 @@
 
-import { useState,useRef,useEffect } from "react";
+import { useState,useRef,useEffect,forwardRef,useImperativeHandle } from "react";
 import { motion,AnimatePresence } from "framer-motion";
 import { Mic,Square,Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { chatVoiceShortcutLabel } from "@/components/editor/lovable/shortcut-labels";
 
 interface VoiceModeProps {
   onTranscript: (text: string) => void;
   disabled?: boolean;
 }
 
+/** Imperative handle so a keyboard shortcut (Alt/Option+V, Lovable parity)
+ *  can drive the same start/stop flow as clicking the mic button, without
+ *  the shortcut hook needing to know about MediaRecorder internals. */
+export interface VoiceModeHandle {
+  /** Starts recording if idle, stops if currently recording. No-op while processing. */
+  toggle: () => void;
+}
+
 type VoiceState = "idle" | "recording" | "processing";
 
-export function VoiceMode({ onTranscript, disabled }: VoiceModeProps) {
+export const VoiceMode = forwardRef<VoiceModeHandle, VoiceModeProps>(function VoiceMode({ onTranscript, disabled }, ref) {
   const [state, setState] = useState<VoiceState>("idle");
   const [volume, setVolume] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -26,6 +35,16 @@ export function VoiceMode({ onTranscript, disabled }: VoiceModeProps) {
   useEffect(() => () => {
     stopAll();
   }, []);
+
+  useImperativeHandle(ref, () => ({
+    toggle: () => {
+      if (disabled) return;
+      if (state === "idle") void startRecording();
+      else if (state === "recording") stopRecording();
+      // "processing": ignore — a transcription is already in flight.
+    },
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [state, disabled]);
 
   function stopAll() {
     mediaRef.current?.stop();
@@ -119,6 +138,7 @@ export function VoiceMode({ onTranscript, disabled }: VoiceModeProps) {
         variant="ghost"
         size="icon"
         aria-label={state === "recording" ? "Stop voice recording" : "Start voice recording"}
+        title={`${state === "recording" ? "Stop voice recording" : "Start voice recording"} (${chatVoiceShortcutLabel()})`}
         // 28px, not 32. Every other control in the composer footer is 28, and
         // so is every one of Lovable's; this single 32px button made the whole
         // footer row 32 and the card 4px taller than theirs.
@@ -175,4 +195,4 @@ export function VoiceMode({ onTranscript, disabled }: VoiceModeProps) {
       </AnimatePresence>
     </div>
   );
-}
+});

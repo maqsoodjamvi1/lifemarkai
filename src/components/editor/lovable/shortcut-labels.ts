@@ -15,3 +15,7 @@ export function chatClearShortcutLabel(): string {
 export function chatBookmarksShortcutLabel(): string {
   return `Alt+B`;
 }
+
+export function chatVoiceShortcutLabel(): string {
+  return `Alt+V`;
+}

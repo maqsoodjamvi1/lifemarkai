@@ -17,9 +17,12 @@ export interface UseChatKeyboardShortcutsArgs {
   onNavigateMessage?: (delta: number) => void;
   onFocusComposer?: () => void;
   onStopGeneration?: () => void;
+  /** Alt/Option+V — toggle voice dictation (Lovable parity: previously only
+   *  reachable by clicking the mic button in the composer). */
+  onVoiceShortcut?: () => void;
 }
 
-/** Lovable-parity chat column keyboard shortcuts (⌘⇧K, ⌘F, Alt+P, Esc stop). */
+/** Lovable-parity chat column keyboard shortcuts (⌘⇧K, ⌘F, Alt+P, Alt+V, Esc stop). */
 export function useChatKeyboardShortcuts({
   mode,
   streaming,
@@ -34,6 +37,7 @@ export function useChatKeyboardShortcuts({
   onNavigateMessage,
   onFocusComposer,
   onStopGeneration,
+  onVoiceShortcut,
 }: UseChatKeyboardShortcutsArgs) {
   useEffect(() => {
     function handler(e: KeyboardEvent) {
@@ -153,6 +157,28 @@ export function useChatKeyboardShortcuts({
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [showSearch, onNavigateMessage]);
+
+  useEffect(() => {
+    function handler(e: KeyboardEvent) {
+      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      if (e.key.toLowerCase() !== "v") return;
+      // Unlike the other Alt+ shortcuts here, this one deliberately does NOT
+      // bail out when focus is in an input/textarea: voice dictation is
+      // normally triggered from inside the composer itself (that's where the
+      // mic button lives), so requiring focus to leave the composer first
+      // would defeat the point. Only skip inside Monaco, so the code editor's
+      // own Alt-combos keep working there.
+      const target = e.target as HTMLElement | null;
+      const inMonaco =
+        !!target?.closest?.(".monaco-editor") ||
+        !!document.activeElement?.closest?.(".monaco-editor");
+      if (inMonaco) return;
+      e.preventDefault();
+      onVoiceShortcut?.();
+    }
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onVoiceShortcut]);
 
   useEffect(() => {
     function handler(e: KeyboardEvent) {
