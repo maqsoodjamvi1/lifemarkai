@@ -1,8 +1,9 @@
 import { useEffect,useRef,useState } from "react";
 import { Link,useNavigate,useSearch } from "@tanstack/react-router";
-import { ArrowRight,Link2,Loader2,Sparkles } from "lucide-react";
+import { ArrowRight,Link2,Loader2,MessageCircle,Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { recommendedFrameworkForPrompt } from "@/lib/project/generation-profile";
+import { cn } from "@/lib/utils";
 
 interface DashboardHeroProps {
   firstName: string;
@@ -25,6 +26,14 @@ function HeroPromptCreateBox() {
   // simple sites, TanStack Start for everything else (one contract, bug-free).
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Lovable parity: a dedicated Chat Mode entry point for starting a new
+  // project via conversation before any code is generated. The editor
+  // already fully supports mode="chat" as one of its five tabs (plan/build/
+  // agent/chat/patch — see editor-search.ts) — the only thing missing was a
+  // way to land there from project creation, since this hero always hardcoded
+  // mode: "build" and offered a single "Build" button. Defaults to "build" so
+  // existing behavior is unchanged unless someone opts into "Chat first".
+  const [startMode, setStartMode] = useState<"build" | "chat">("build");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, unknown>;
@@ -78,7 +87,7 @@ function HeroPromptCreateBox() {
         await navigate({
           to: "/editor/$projectId",
           params: { projectId: project.id },
-          search: { prompt: trimmed, mode: "build" },
+          search: { prompt: trimmed, mode: startMode },
         });
       } catch {
         setError("Your project was created, but we couldn't open it automatically. Find it on your dashboard.");
@@ -114,6 +123,42 @@ function HeroPromptCreateBox() {
           {error && (
             <span className="text-xs text-destructive max-w-[200px] truncate">{error}</span>
           )}
+
+          {/* Build immediately, or start with a conversation first (Lovable's
+              Chat Mode) — the same choice offered inside the editor itself,
+              just moved up to before the project even exists. */}
+          <div
+            role="radiogroup"
+            aria-label="Start mode"
+            className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/5"
+          >
+            <button
+              type="button"
+              role="radio"
+              aria-checked={startMode === "build"}
+              onClick={() => setStartMode("build")}
+              className={cn(
+                "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors",
+                startMode === "build" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900",
+              )}
+            >
+              Build
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={startMode === "chat"}
+              onClick={() => setStartMode("chat")}
+              className={cn(
+                "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors",
+                startMode === "chat" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900",
+              )}
+              title="Talk it through first — nothing gets built until you're ready"
+            >
+              Chat first
+            </button>
+          </div>
+
           <Button
             size="sm"
             disabled={!prompt.trim() || loading}
@@ -122,10 +167,12 @@ function HeroPromptCreateBox() {
           >
             {loading ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : startMode === "chat" ? (
+              <MessageCircle className="w-3.5 h-3.5" />
             ) : (
               <Sparkles className="w-3.5 h-3.5" />
             )}
-            Build
+            {startMode === "chat" ? "Start chatting" : "Build"}
             <ArrowRight className="w-3.5 h-3.5" />
           </Button>
         </div>
