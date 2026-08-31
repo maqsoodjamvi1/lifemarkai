@@ -819,7 +819,28 @@ export function CodePanel({
     setOpenTabs((prev) =>
       prev.map((tab) => {
         const updated = files.find((f) => f.id === tab.id);
-        if (!updated || dirtyRef.current.has(tab.id)) return tab;
+        if (!updated) return tab;
+        if (dirtyRef.current.has(tab.id)) {
+          // The tab is marked dirty, but "dirty" is only ever cleared by an
+          // explicit saveTab/saveAll/closeTab -- NOT when the parent's own
+          // ambient ~500ms keystroke autosave silently completes and echoes
+          // this exact content back through `files`. Without this check the
+          // tab stayed "dirty" forever after its first edit, which meant a
+          // LATER genuine external rewrite (AI regen, collaborator edit)
+          // could never land here either (blocked by the same dirty check
+          // below) -- the stale pre-rewrite buffer would then get PATCHed
+          // back over the newer content on the next Save/Save All.
+          // Only treat this as "safely saved, no longer dirty" when the
+          // incoming content EXACTLY matches what's in the local buffer --
+          // if the user kept typing after the autosave fired, content here
+          // is already newer than the echo and must stay marked dirty.
+          const local = contentRef.current.get(tab.id);
+          if (local != null && updated.content === local) {
+            dirtyRef.current.delete(tab.id);
+            return updated;
+          }
+          return tab;
+        }
         contentRef.current.set(tab.id, updated.content ?? "");
         return updated;
       })
