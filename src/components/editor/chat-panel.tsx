@@ -3919,7 +3919,12 @@ ${(f.content ?? "").slice(0, 8000)}
                 }, 8000);
               }
 
-              // Generate follow-up suggestion chips
+              // Generate follow-up suggestion chips. The static pass below
+              // paints instantly (zero AI cost/latency by design — see
+              // src/lib/ai/follow-up-suggestions.ts); /api/ai/follow-up-suggestions
+              // then runs in the background and swaps in response-specific
+              // chips once it resolves, so a slow or failed call never blocks
+              // or breaks the UI — the static chips just stay put.
               const filePaths = (data.files as Array<{ path: string }> | undefined)?.map((f) => f.path)
                 ?? Array.from(serverStreamedPathsRef.current);
               const chips = enrichFollowUpSuggestions(
@@ -3928,6 +3933,24 @@ ${(f.content ?? "").slice(0, 8000)}
                 filePaths,
               );
               setSuggestions((prev) => ({ ...prev, [assistantId]: chips }));
+              if (suggestionChipsEnabled && filePaths.length > 0) {
+                fetch("/api/ai/follow-up-suggestions", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    projectId: project.id,
+                    userMessage,
+                    aiResponse: accumulated,
+                    changedFiles: filePaths,
+                  }),
+                })
+                  .then((r) => (r.ok ? r.json() : null))
+                  .then((data: { suggestions?: string[] } | null) => {
+                    if (!data?.suggestions?.length) return;
+                    setSuggestions((prev) => ({ ...prev, [assistantId]: data.suggestions! }));
+                  })
+                  .catch(() => {/* static chips already shown — best-effort only */});
+              }
 
               if (data.verification) {
                 const v = data.verification as {

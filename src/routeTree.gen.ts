@@ -95,6 +95,7 @@ import { Route as ApiAiDocgenRouteImport } from './routes/api/ai/docgen'
 import { Route as ApiAiEnhanceRouteImport } from './routes/api/ai/enhance'
 import { Route as ApiAiExtractDocumentRouteImport } from './routes/api/ai/extract-document'
 import { Route as ApiAiFixRouteImport } from './routes/api/ai/fix'
+import { Route as ApiAiFollowUpSuggestionsRouteImport } from './routes/api/ai/follow-up-suggestions'
 import { Route as ApiAiGenerateBrowserTestsRouteImport } from './routes/api/ai/generate-browser-tests'
 import { Route as ApiAiGenerateEmailRouteImport } from './routes/api/ai/generate-email'
 import { Route as ApiAiGenerateFileRouteImport } from './routes/api/ai/generate-file'
@@ -729,6 +730,12 @@ const ApiAiFixRoute = ApiAiFixRouteImport.update({
   path: '/api/ai/fix',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAiFollowUpSuggestionsRoute =
+  ApiAiFollowUpSuggestionsRouteImport.update({
+    id: '/api/ai/follow-up-suggestions',
+    path: '/api/ai/follow-up-suggestions',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiAiGenerateBrowserTestsRoute =
   ApiAiGenerateBrowserTestsRouteImport.update({
     id: '/api/ai/generate-browser-tests',
@@ -1848,6 +1855,7 @@ export interface FileRoutesByFullPath {
   '/api/ai/enhance': typeof ApiAiEnhanceRoute
   '/api/ai/extract-document': typeof ApiAiExtractDocumentRoute
   '/api/ai/fix': typeof ApiAiFixRoute
+  '/api/ai/follow-up-suggestions': typeof ApiAiFollowUpSuggestionsRoute
   '/api/ai/generate-browser-tests': typeof ApiAiGenerateBrowserTestsRoute
   '/api/ai/generate-email': typeof ApiAiGenerateEmailRouteWithChildren
   '/api/ai/generate-file': typeof ApiAiGenerateFileRoute
@@ -2130,6 +2138,7 @@ export interface FileRoutesByTo {
   '/api/ai/enhance': typeof ApiAiEnhanceRoute
   '/api/ai/extract-document': typeof ApiAiExtractDocumentRoute
   '/api/ai/fix': typeof ApiAiFixRoute
+  '/api/ai/follow-up-suggestions': typeof ApiAiFollowUpSuggestionsRoute
   '/api/ai/generate-browser-tests': typeof ApiAiGenerateBrowserTestsRoute
   '/api/ai/generate-email': typeof ApiAiGenerateEmailRouteWithChildren
   '/api/ai/generate-file': typeof ApiAiGenerateFileRoute
@@ -2414,6 +2423,7 @@ export interface FileRoutesById {
   '/api/ai/enhance': typeof ApiAiEnhanceRoute
   '/api/ai/extract-document': typeof ApiAiExtractDocumentRoute
   '/api/ai/fix': typeof ApiAiFixRoute
+  '/api/ai/follow-up-suggestions': typeof ApiAiFollowUpSuggestionsRoute
   '/api/ai/generate-browser-tests': typeof ApiAiGenerateBrowserTestsRoute
   '/api/ai/generate-email': typeof ApiAiGenerateEmailRouteWithChildren
   '/api/ai/generate-file': typeof ApiAiGenerateFileRoute
@@ -2698,6 +2708,7 @@ export interface FileRouteTypes {
     | '/api/ai/enhance'
     | '/api/ai/extract-document'
     | '/api/ai/fix'
+    | '/api/ai/follow-up-suggestions'
     | '/api/ai/generate-browser-tests'
     | '/api/ai/generate-email'
     | '/api/ai/generate-file'
@@ -2980,6 +2991,7 @@ export interface FileRouteTypes {
     | '/api/ai/enhance'
     | '/api/ai/extract-document'
     | '/api/ai/fix'
+    | '/api/ai/follow-up-suggestions'
     | '/api/ai/generate-browser-tests'
     | '/api/ai/generate-email'
     | '/api/ai/generate-file'
@@ -3263,6 +3275,7 @@ export interface FileRouteTypes {
     | '/api/ai/enhance'
     | '/api/ai/extract-document'
     | '/api/ai/fix'
+    | '/api/ai/follow-up-suggestions'
     | '/api/ai/generate-browser-tests'
     | '/api/ai/generate-email'
     | '/api/ai/generate-file'
@@ -3534,6 +3547,7 @@ export interface RootRouteChildren {
   ApiAiEnhanceRoute: typeof ApiAiEnhanceRoute
   ApiAiExtractDocumentRoute: typeof ApiAiExtractDocumentRoute
   ApiAiFixRoute: typeof ApiAiFixRoute
+  ApiAiFollowUpSuggestionsRoute: typeof ApiAiFollowUpSuggestionsRoute
   ApiAiGenerateBrowserTestsRoute: typeof ApiAiGenerateBrowserTestsRoute
   ApiAiGenerateEmailRoute: typeof ApiAiGenerateEmailRouteWithChildren
   ApiAiGenerateFileRoute: typeof ApiAiGenerateFileRoute
@@ -4224,6 +4238,13 @@ declare module '@tanstack/react-router' {
       path: '/api/ai/fix'
       fullPath: '/api/ai/fix'
       preLoaderRoute: typeof ApiAiFixRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/ai/follow-up-suggestions': {
+      id: '/api/ai/follow-up-suggestions'
+      path: '/api/ai/follow-up-suggestions'
+      fullPath: '/api/ai/follow-up-suggestions'
+      preLoaderRoute: typeof ApiAiFollowUpSuggestionsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/ai/generate-browser-tests': {
@@ -6246,6 +6267,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAiEnhanceRoute: ApiAiEnhanceRoute,
   ApiAiExtractDocumentRoute: ApiAiExtractDocumentRoute,
   ApiAiFixRoute: ApiAiFixRoute,
+  ApiAiFollowUpSuggestionsRoute: ApiAiFollowUpSuggestionsRoute,
   ApiAiGenerateBrowserTestsRoute: ApiAiGenerateBrowserTestsRoute,
   ApiAiGenerateEmailRoute: ApiAiGenerateEmailRouteWithChildren,
   ApiAiGenerateFileRoute: ApiAiGenerateFileRoute,
