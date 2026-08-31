@@ -2,7 +2,15 @@
 import { createAdminClient } from "../supabase/server.ts";
 import { redirectResponse } from "../api/redirect.ts";
 import { buildFallbackHtml } from "./build-fallback-html.ts";
+import { injectSimplifiedPreviewBanner, previewHeaders, rewriteStaticPaths } from "./preview-html-utils.ts";
 import type { ProjectFile } from "../../types/database.ts";
+
+// Re-exported for existing/future callers of this module — the actual
+// implementations live in preview-html-utils.ts so they can be unit tested
+// without pulling in createAdminClient (which reads a Vite-only
+// import.meta.env global at module load time and throws immediately under
+// the plain node:test runner this codebase's tests use).
+export { injectSimplifiedPreviewBanner, previewHeaders, rewriteStaticPaths };
 
 /**
  * Shared preview renderer — used by the editor preview (`/preview/[projectId]`)
@@ -13,28 +21,6 @@ import type { ProjectFile } from "../../types/database.ts";
  * ANY host — the slug-host rewrite in next.config excludes `preview/`, so those
  * requests fall through to the id-based asset route. No per-host asset handler.
  */
-
-export function previewHeaders(): Record<string, string> {
-  const base: Record<string, string> = { "Cache-Control": "no-store, must-revalidate" };
-  const crossOrigin = !!process.env.NEXT_PUBLIC_PREVIEW_ORIGIN;
-  const appOrigin = process.env.NEXT_PUBLIC_APP_URL;
-  if (crossOrigin && appOrigin) {
-    base["Content-Security-Policy"] = `frame-ancestors 'self' ${appOrigin}`;
-  } else {
-    base["X-Frame-Options"] = "SAMEORIGIN";
-  }
-  return base;
-}
-
-export function rewriteStaticPaths(html: string, projectId: string): string {
-  return html.replace(
-    /(src|href)="(?!https?:\/\/|\/\/|#|data:|blob:)([^"]+)"/g,
-    (_, attr: string, path: string) => {
-      const resolved = path.startsWith("/") ? path : `/${path}`;
-      return `${attr}="/preview/${projectId}${resolved}"`;
-    }
-  );
-}
 
 export async function servePreviewHtml(projectId: string): Promise<Response> {
   const supabase = await createAdminClient();
@@ -91,31 +77,25 @@ export async function servePreviewHtml(projectId: string): Promise<Response> {
     });
   }
 
-  // Vite/Next apps need Modal — do not serve Babel srcdoc as a fake live preview.
+  // Vite/Next apps normally need a live sandbox — this branch used to hard
+  // 503 here rather than "serve Babel srcdoc as a fake live preview." That
+  // was a real tradeoff (the fallback render can't run real backend calls or
+  // npm packages) but it meant whoever this link was shared with — often a
+  // non-technical stakeholder, not an editor user who understands the
+  // distinction — got a dead page naming internal vendor/backend details
+  // (MODAL_TOKEN_ID, "Modal sandbox") instead of any view of the app at all.
+  // buildFallbackHtml below is the same renderer this route already falls
+  // back to for a non-app project, and that self-verify/agent-browser use
+  // elsewhere in this codebase; the disclosure banner (baked into the HTML
+  // itself, since this route has no chrome to float a card over the render)
+  // is what keeps this honest instead of silently passing off a degraded
+  // render as the live app.
   const looksLikeApp = files.some(
     (f) =>
       f.path === "package.json" ||
       /vite\.config\.(t|j)sx?$/.test(f.path) ||
       /^src\/(main|index|App)\.(t|j)sx?$/.test(f.path.replace(/\\/g, "/")),
   );
-  if (looksLikeApp) {
-    return new Response(
-      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Modal preview required</title></head>
-<body style="margin:0;font-family:system-ui,sans-serif;background:#0a0a0a;color:#e5e5e5;display:flex;min-height:100vh;align-items:center;justify-content:center">
-  <div style="max-width:28rem;padding:2rem;text-align:center">
-    <p style="font-weight:600;margin:0 0 0.5rem">Modal preview required</p>
-    <p style="font-size:0.875rem;opacity:0.7;margin:0;line-height:1.5">
-      This app needs a live Modal sandbox (same path as Lovable). Open it in the Lifemark editor with
-      <code style="opacity:0.9">MODAL_TOKEN_ID</code> / <code style="opacity:0.9">MODAL_TOKEN_SECRET</code> configured.
-    </p>
-  </div>
-</body></html>`,
-      {
-        status: 503,
-        headers: { ...previewHeaders(), "Content-Type": "text/html; charset=utf-8" },
-      },
-    );
-  }
 
   const projectFiles: ProjectFile[] = files.map((f) => ({
     id: f.path,
@@ -128,7 +108,7 @@ export async function servePreviewHtml(projectId: string): Promise<Response> {
   }));
 
   const html = buildFallbackHtml(projectFiles);
-  return new Response(html, {
+  return new Response(looksLikeApp ? injectSimplifiedPreviewBanner(html) : html, {
     headers: { ...previewHeaders(), "Content-Type": "text/html; charset=utf-8" },
   });
 }
