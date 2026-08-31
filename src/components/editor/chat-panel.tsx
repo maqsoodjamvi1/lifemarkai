@@ -2707,6 +2707,16 @@ export function ChatPanel({
     const queuedImageName = opts?.imageName ?? attachedImageName;
     const queuedText = opts?.attachedText ?? combinedAttachedText;
     if ((!userMessage.trim() && !queuedImage) || streaming || sendingRef.current) return;
+    // Claim the re-entrancy guard IMMEDIATELY (synchronously, before any
+    // `await`) rather than after the credits-refresh fetch below. The old
+    // placement left a real window open: two overlapping sendMessage() calls
+    // (e.g. double-Enter) both pass the guard above, both `await` the same
+    // credits fetch, and both proceed — building two competing tempUserMsg
+    // objects from the same stale `messages` closure, overwriting each
+    // other's optimistic append, and racing over the single
+    // abortControllerRef/streamingContent state. Every early-return between
+    // here and the streaming send below must reset this back to false.
+    sendingRef.current = true;
     // Set when an AUTO-routed surgical patch missed — after this stream ends we
     // silently retry the same request as a full build (agent resilience).
     let patchFallbackMessage: string | null = null;
@@ -2806,6 +2816,7 @@ export function ChatPanel({
       window.dispatchEvent(new CustomEvent("lifemark-intelligence-run", {
         detail: { goal: userMessage, fromChat: true },
       }));
+      sendingRef.current = false;
       return;
     }
 
@@ -2834,6 +2845,7 @@ export function ChatPanel({
             : "Add credits or upgrade your plan to continue. (Dev: use Grant 100 credits if the balance is stuck at 0.)",
         variant: "destructive",
       });
+      sendingRef.current = false;
       return;
     }
     // Keep the mode chip in sync whenever intelligence upgrades Chat/Build → patch/agent
@@ -2865,7 +2877,9 @@ export function ChatPanel({
         description: "Switch to Build (or say /build) so this edit is applied to your app.",
       });
     }
-    sendingRef.current = true;
+    // sendingRef.current was already claimed synchronously right after the
+    // top guard (see comment there) — not re-set here so the placement stays
+    // obviously correct rather than looking like a duplicate no-op.
     setInput("");
     // Request desktop notification permission on first build (non-blocking)
     if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "default") {
@@ -3722,9 +3736,18 @@ ${(f.content ?? "").slice(0, 8000)}
                 setMessageBuildActivity((prev) => ({ ...prev, [assistantId]: completedBuildActivity! }));
               }
               setBuildStatus(null);
-              // Update credits
+              // Update credits. Deduct from `availableCredits`, NOT the
+              // `credits` prop this closure captured at call time: when the
+              // low-credit guard above found `credits` stale (e.g. still 0
+              // while the real balance was higher) it refreshed
+              // `availableCredits` and pushed the correction via
+              // onCreditsUpdate, but `credits` itself never changes for the
+              // rest of this call. Subtracting from the stale prop here
+              // computed a wrong (sometimes negative) balance and could lock
+              // the composer into "insufficient credits" with real credits
+              // still available, only fixable by a reload/project switch.
               if (typeof data.creditsUsed === "number") {
-                onCreditsUpdate(credits - data.creditsUsed);
+                onCreditsUpdate(availableCredits - data.creditsUsed);
                 setMessageCredits((prev) => ({ ...prev, [assistantId]: data.creditsUsed as number }));
               }
 
