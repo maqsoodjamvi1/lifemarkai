@@ -8,6 +8,7 @@ import {
 LovableStreamingPreviewVerifyCard,
 type PreviewVerifyResult,
 } from "./streaming-preview-verify-card";
+import { formatCredits } from "@/lib/ai/credit-cost";
 
 export type { PreviewVerifyResult };
 
@@ -19,6 +20,8 @@ export interface PendingSkillBadge {
 
 interface LovableStreamingMessageShellProps {
   thoughtSeconds: number;
+  /** Live "~" credit estimate for the in-flight message — see streaming-footer.tsx. */
+  estimatedCredits: number;
   showThought: boolean;
   reasoningText?: string | null;
   pendingSkills: PendingSkillBadge[];
@@ -39,6 +42,7 @@ interface LovableStreamingMessageShellProps {
 /** Lovable-parity live assistant message while AI is streaming. */
 export function LovableStreamingMessageShell({
   thoughtSeconds,
+  estimatedCredits,
   showThought,
   reasoningText,
   pendingSkills,
@@ -58,6 +62,20 @@ export function LovableStreamingMessageShell({
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex justify-start">
       <div className="w-full space-y-2">
+        {/* Live "Working for Xs · ~N credits" status, visible for the whole
+            stream (not just the early "thought" phase below) — Lovable
+            parity for a running cost display that updates as the work
+            progresses, not just a static figure once the message finishes. */}
+        {thoughtSeconds > 0 && (
+          <div className="flex items-center gap-1.5 px-1 text-[11px] text-[var(--fg-tertiary)]/70 tabular-nums">
+            <span>Working for {thoughtSeconds}s</span>
+            <span aria-hidden="true">·</span>
+            <span title="Estimated — the final amount is confirmed once this message completes">
+              ~{formatCredits(estimatedCredits)} credit{estimatedCredits === 1 ? "" : "s"}
+            </span>
+          </div>
+        )}
+
         {showThought && (
           <LovableStreamingThoughtPanel
             thoughtSeconds={thoughtSeconds}

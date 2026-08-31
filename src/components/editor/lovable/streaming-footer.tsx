@@ -3,6 +3,7 @@ import type { EditorMode } from "@/components/editor/editor-layout";
 import type { SubagentStep } from "@/lib/ai/subagents";
 import type { BuildActivityStep } from "@/lib/ai/build-activity";
 import type { BuildIntent } from "@/lib/ai/build-intent";
+import { computeCreditCost } from "@/lib/ai/credit-cost";
 import { BuildActivityCard } from "@/components/editor/build-activity-card";
 import { SubagentActivityCard } from "@/components/editor/subagent-activity-card";
 import { LovableAgentStepGlyph } from "./agent-step-glyph";
@@ -48,11 +49,33 @@ export function LovableChatStreamingFooter({
 }: LovableChatStreamingFooterProps) {
   const isBuildLikeMode = mode === "build" || mode === "patch" || mode === "agent" || !!buildStatus;
 
+  // Live credit estimate while the message is still streaming — Lovable
+  // shows "Working for Xs" + "Credits used" ticking together while
+  // processing, then finalizes on completion. Before this, LifemarkAI only
+  // had the duration ticking live (thoughtSeconds, updated every second);
+  // the actual credits figure only ever appeared as a static badge AFTER
+  // the message finished (message-meta-badges.tsx, from the server-computed
+  // final cost). computeCreditCost is the same formula the server uses to
+  // charge the message — reused here client-side against what's visible so
+  // far (files streamed in, and streamingContent.length/4 as a standard
+  // chars-per-token approximation for tokensUsed) for a live "~" estimate.
+  // It will not exactly match the final server-computed figure — that's
+  // expected and why the UI below labels it as an estimate — but it moves
+  // together with the work instead of sitting blank until the message ends.
+  const estimatedCredits = streaming
+    ? computeCreditCost({
+        mode,
+        filesGenerated: streamingFiles.length,
+        tokensUsed: Math.round(streamingContent.length / 4),
+      })
+    : 0;
+
   return (
     <>
       {streaming && (
         <LovableStreamingMessageShell
           thoughtSeconds={thoughtSeconds}
+          estimatedCredits={estimatedCredits}
           showThought={!extractStreamingProse(streamingContent) && streamingFiles.length === 0}
           reasoningText={reasoningText}
           pendingSkills={pendingSkills}
