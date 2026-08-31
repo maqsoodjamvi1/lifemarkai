@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { signGatewayOAuthState } from "@/lib/oauth/gateway-state";
 import { redirectResponse } from "@/lib/api/redirect";
+import { generateCodeVerifier, codeChallengeFromVerifier } from "@/lib/oauth/pkce";
 import { randomBytes } from "node:crypto";
 
 /**
@@ -20,11 +21,19 @@ import { randomBytes } from "node:crypto";
  * into the project's own env vars rather than a shared account-level row.
  * Keeping two live "Connect HubSpot" entry points would just be confusing.)
  *
- * Query params: connector (slack | google_workspace), returnTo (optional
- * same-origin path to redirect back to after connecting; defaults to
- * /dashboard).
+ * Query params: connector (slack | google_workspace | supabase), returnTo
+ * (optional same-origin path to redirect back to after connecting; defaults
+ * to /dashboard).
+ *
+ * `supabase` connects the user's own Supabase account so they can link an
+ * EXISTING Supabase project of theirs to a Lifemark project (see
+ * src/routes/api/supabase-connect/*) — distinct from Lifemark Cloud
+ * (src/lib/cloud/management.ts), which provisions a brand-new Supabase
+ * project under the platform's own account instead of using one the user
+ * already has. Supabase's OAuth apps use PKCE; the others here don't need
+ * it (their token exchange is already a confidential-client server call).
  */
-const AUTHORIZE: Record<string, { url: string; clientIdEnv: string; scope: string; extraParams?: Record<string, string> }> = {
+const AUTHORIZE: Record<string, { url: string; clientIdEnv: string; scope: string; extraParams?: Record<string, string>; usesPkce?: boolean }> = {
   slack: {
     url: "https://slack.com/oauth/v2/authorize",
     clientIdEnv: "SLACK_CLIENT_ID",
@@ -41,6 +50,12 @@ const AUTHORIZE: Record<string, { url: string; clientIdEnv: string; scope: strin
       "https://www.googleapis.com/auth/documents",
     ].join(" "),
     extraParams: { access_type: "offline", prompt: "consent" },
+  },
+  supabase: {
+    url: "https://api.supabase.com/v1/oauth/authorize",
+    clientIdEnv: "SUPABASE_OAUTH_CLIENT_ID",
+    scope: "all",
+    usesPkce: true,
   },
 };
 
@@ -73,8 +88,16 @@ export const Route = createFileRoute("/api/oauth/start/$connector")({
         // signed, not just when the callback reads it back.
         const returnTo = returnToRaw.startsWith("/") && !returnToRaw.startsWith("//") ? returnToRaw : "/dashboard";
 
+        const codeVerifier = config.usesPkce ? generateCodeVerifier() : undefined;
         const state = signGatewayOAuthState(
-          { connector, userId: user.id, nonce: randomBytes(9).toString("hex"), issuedAt: Math.floor(Date.now() / 1000), returnTo },
+          {
+            connector,
+            userId: user.id,
+            nonce: randomBytes(9).toString("hex"),
+            issuedAt: Math.floor(Date.now() / 1000),
+            returnTo,
+            ...(codeVerifier ? { codeVerifier } : {}),
+          },
           stateSecret,
         );
 
@@ -85,6 +108,10 @@ export const Route = createFileRoute("/api/oauth/start/$connector")({
         authorizeUrl.searchParams.set("scope", config.scope);
         authorizeUrl.searchParams.set("state", state);
         authorizeUrl.searchParams.set("response_type", "code");
+        if (codeVerifier) {
+          authorizeUrl.searchParams.set("code_challenge", codeChallengeFromVerifier(codeVerifier));
+          authorizeUrl.searchParams.set("code_challenge_method", "S256");
+        }
         for (const [k, v] of Object.entries(config.extraParams ?? {})) authorizeUrl.searchParams.set(k, v);
 
         return redirectResponse(authorizeUrl.toString());

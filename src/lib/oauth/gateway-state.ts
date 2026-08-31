@@ -31,6 +31,8 @@ export interface GatewayOAuthStatePayload {
   issuedAt: number; // unix seconds
   /** Path (same-origin, no scheme/host) to send the user back to after connect. */
   returnTo: string;
+  /** PKCE code_verifier, only for providers that need it (e.g. supabase). */
+  codeVerifier?: string;
 }
 
 function base64url(input: Buffer | string): string {

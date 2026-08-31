@@ -118,6 +118,126 @@ const TABS = [
 
 type TabId = typeof TABS[number]["id"];
 
+interface UserSupabaseProject {
+  ref: string;
+  name: string;
+  region: string;
+  status: string;
+}
+
+/**
+ * "Bring your own Supabase project" — an alternative to provisioning a new
+ * one through Lifemark Cloud above. Connects the user's own Supabase
+ * account via OAuth (src/routes/api/oauth/start/$connector, connector
+ * "supabase"), lists their existing projects, and links the chosen one's
+ * URL + keys into this project's env vars (src/routes/api/supabase-connect).
+ */
+function ConnectExistingSupabase({ projectId }: { projectId: string }) {
+  const { toast } = useToast();
+  const [connected, setConnected] = useState<boolean | null>(null);
+  const [projects, setProjects] = useState<UserSupabaseProject[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState(false);
+  const [linking, setLinking] = useState<string | null>(null);
+
+  const checkConnected = useCallback(() => {
+    fetch("/api/oauth/status")
+      .then((r) => (r.ok ? r.json() : { connectors: [] }))
+      .then((data: { connectors: string[] }) => setConnected((data.connectors ?? []).includes("supabase")))
+      .catch(() => setConnected(false));
+  }, []);
+
+  useEffect(() => { checkConnected(); }, [checkConnected]);
+
+  useEffect(() => {
+    // Landed back here from /api/oauth/callback/supabase's redirect.
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("oauth_success") === "supabase" || params.get("oauth_error")) {
+      if (params.get("oauth_success") === "supabase") {
+        toast({ title: "Connected", description: "Your Supabase account is connected." });
+        checkConnected();
+      } else {
+        toast({ title: "Connection failed", description: `Couldn't connect Supabase (${params.get("oauth_error")}).`, variant: "destructive" });
+      }
+      params.delete("oauth_success");
+      params.delete("oauth_error");
+      const query = params.toString();
+      window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!connected) return;
+    setLoadingProjects(true);
+    fetch("/api/supabase-connect/projects")
+      .then((r) => (r.ok ? r.json() : { projects: [] }))
+      .then((data: { projects: UserSupabaseProject[] }) => setProjects(data.projects ?? []))
+      .catch(() => setProjects([]))
+      .finally(() => setLoadingProjects(false));
+  }, [connected]);
+
+  async function linkProject(ref: string) {
+    setLinking(ref);
+    try {
+      const res = await fetch("/api/supabase-connect/link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId, ref }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast({ title: "Couldn't link project", description: data.error ?? "Try again.", variant: "destructive" });
+        return;
+      }
+      toast({ title: "Linked", description: `This project now points at ${data.url}. Its URL and keys are saved to Secrets.` });
+    } finally {
+      setLinking(null);
+    }
+  }
+
+  if (connected === null) return null;
+
+  if (!connected) {
+    return (
+      <Button
+        variant="outline"
+        className="w-full text-xs"
+        onClick={() => {
+          const returnTo = `${window.location.pathname}${window.location.search}`;
+          window.location.href = `/api/oauth/start/supabase?returnTo=${encodeURIComponent(returnTo)}`;
+        }}
+      >
+        Connect an existing Supabase project
+      </Button>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-border p-3 space-y-2">
+      <p className="text-xs font-medium">Link an existing Supabase project</p>
+      {loadingProjects ? (
+        <div className="flex items-center justify-center py-3"><Loader2 className="w-4 h-4 animate-spin text-muted-foreground" /></div>
+      ) : projects.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground">No Supabase projects found on your connected account.</p>
+      ) : (
+        <div className="space-y-1.5 max-h-40 overflow-y-auto">
+          {projects.map((p) => (
+            <button
+              key={p.ref}
+              disabled={linking !== null}
+              onClick={() => linkProject(p.ref)}
+              className="w-full flex items-center justify-between gap-2 text-left text-xs px-2 py-1.5 rounded-md border border-border hover:border-violet-500/40 hover:bg-violet-500/5 disabled:opacity-50"
+            >
+              <span className="truncate">{p.name}</span>
+              {linking === p.ref ? <Loader2 className="w-3 h-3 animate-spin shrink-0" /> : <span className="text-[10px] text-muted-foreground shrink-0">{p.region}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPanelProps) {
   const { toast } = useToast();
   const [active, setActive] = useState<TabId>("overview");
@@ -325,6 +445,13 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
               {busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Cloud className="w-4 h-4 mr-2" />}
               Enable Cloud
             </Button>
+
+            <div className="relative py-1 text-center">
+              <div className="absolute inset-x-0 top-1/2 h-px bg-border" />
+              <span className="relative bg-background px-2 text-[10px] text-muted-foreground">or</span>
+            </div>
+
+            <ConnectExistingSupabase projectId={project.id} />
           </div>
         </div>
       </div>

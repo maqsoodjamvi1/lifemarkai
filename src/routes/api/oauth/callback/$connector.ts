@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 // cookies, which the framework appends to this response — immutable headers throw.
 import { redirectResponse } from "@/lib/api/redirect";
 import { verifyGatewayOAuthState } from "@/lib/oauth/gateway-state";
+import { GATEWAY_TOKEN_REFRESH } from "@/lib/oauth/gateway-tokens";
 
 /**
  * Native /api/oauth/callback/:connector — gateway-connector OAuth callback.
@@ -16,23 +17,9 @@ import { verifyGatewayOAuthState } from "@/lib/oauth/gateway-state";
  * through any means be handed to a victim via a crafted callback URL and
  * silently attached to the victim's own account).
  */
-const OAUTH_CONFIG: Record<string, { tokenUrl: string; clientIdEnv: string; clientSecretEnv: string }> = {
-  slack: {
-    tokenUrl: "https://slack.com/api/oauth.v2.access",
-    clientIdEnv: "SLACK_CLIENT_ID",
-    clientSecretEnv: "SLACK_CLIENT_SECRET",
-  },
-  google_workspace: {
-    tokenUrl: "https://oauth2.googleapis.com/token",
-    clientIdEnv: "GOOGLE_CLIENT_ID",
-    clientSecretEnv: "GOOGLE_CLIENT_SECRET",
-  },
-  hubspot: {
-    tokenUrl: "https://api.hubapi.com/oauth/v1/token",
-    clientIdEnv: "HUBSPOT_CLIENT_ID",
-    clientSecretEnv: "HUBSPOT_CLIENT_SECRET",
-  },
-};
+// Same connector -> token-endpoint config the refresh path uses, so there's
+// one place that knows each provider's token URL and auth style.
+const OAUTH_CONFIG = GATEWAY_TOKEN_REFRESH;
 
 export const Route = createFileRoute("/api/oauth/callback/$connector")({
   server: {
@@ -72,16 +59,24 @@ export const Route = createFileRoute("/api/oauth/callback/$connector")({
         const clientSecret = process.env[config.clientSecretEnv];
         if (!clientId || !clientSecret) return redirect302("/dashboard?oauth_error=missing_credentials");
 
-        const tokenRes = await fetch(config.tokenUrl, {
+        const headers: Record<string, string> = { "Content-Type": "application/x-www-form-urlencoded" };
+        const body: Record<string, string> = {
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: redirectUri,
+        };
+        if (config.authStyle === "basic") {
+          headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`;
+          if (state.codeVerifier) body.code_verifier = state.codeVerifier;
+        } else {
+          body.client_id = clientId;
+          body.client_secret = clientSecret;
+        }
+
+        const tokenRes = await fetch(config.url, {
           method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            grant_type: "authorization_code",
-            code,
-            redirect_uri: redirectUri,
-            client_id: clientId,
-            client_secret: clientSecret,
-          }),
+          headers,
+          body: new URLSearchParams(body),
         });
 
         const tokenData = (await tokenRes.json()) as {

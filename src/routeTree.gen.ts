@@ -183,6 +183,8 @@ import { Route as ApiSecurityScanRouteImport } from './routes/api/security/scan'
 import { Route as ApiSecurityScheduledScanRouteImport } from './routes/api/security/scheduled-scan'
 import { Route as ApiSkillsImportRouteImport } from './routes/api/skills/import'
 import { Route as ApiSnippetsIdRouteImport } from './routes/api/snippets/$id'
+import { Route as ApiSupabaseConnectLinkRouteImport } from './routes/api/supabase-connect/link'
+import { Route as ApiSupabaseConnectProjectsRouteImport } from './routes/api/supabase-connect/projects'
 import { Route as ApiTeamsIdRouteImport } from './routes/api/teams/$id'
 import { Route as ApiTeamsTransferRouteImport } from './routes/api/teams/transfer'
 import { Route as ApiTelemetryClientRouteImport } from './routes/api/telemetry/client'
@@ -1187,6 +1189,17 @@ const ApiSnippetsIdRoute = ApiSnippetsIdRouteImport.update({
   path: '/$id',
   getParentRoute: () => ApiSnippetsRoute,
 } as any)
+const ApiSupabaseConnectLinkRoute = ApiSupabaseConnectLinkRouteImport.update({
+  id: '/api/supabase-connect/link',
+  path: '/api/supabase-connect/link',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiSupabaseConnectProjectsRoute =
+  ApiSupabaseConnectProjectsRouteImport.update({
+    id: '/api/supabase-connect/projects',
+    path: '/api/supabase-connect/projects',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiTeamsIdRoute = ApiTeamsIdRouteImport.update({
   id: '/$id',
   path: '/$id',
@@ -1994,6 +2007,8 @@ export interface FileRoutesByFullPath {
   '/api/security/scheduled-scan': typeof ApiSecurityScheduledScanRoute
   '/api/skills/import': typeof ApiSkillsImportRoute
   '/api/snippets/$id': typeof ApiSnippetsIdRoute
+  '/api/supabase-connect/link': typeof ApiSupabaseConnectLinkRoute
+  '/api/supabase-connect/projects': typeof ApiSupabaseConnectProjectsRoute
   '/api/teams/$id': typeof ApiTeamsIdRouteWithChildren
   '/api/teams/transfer': typeof ApiTeamsTransferRoute
   '/api/telemetry/client': typeof ApiTelemetryClientRoute
@@ -2285,6 +2300,8 @@ export interface FileRoutesByTo {
   '/api/security/scheduled-scan': typeof ApiSecurityScheduledScanRoute
   '/api/skills/import': typeof ApiSkillsImportRoute
   '/api/snippets/$id': typeof ApiSnippetsIdRoute
+  '/api/supabase-connect/link': typeof ApiSupabaseConnectLinkRoute
+  '/api/supabase-connect/projects': typeof ApiSupabaseConnectProjectsRoute
   '/api/teams/$id': typeof ApiTeamsIdRouteWithChildren
   '/api/teams/transfer': typeof ApiTeamsTransferRoute
   '/api/telemetry/client': typeof ApiTelemetryClientRoute
@@ -2578,6 +2595,8 @@ export interface FileRoutesById {
   '/api/security/scheduled-scan': typeof ApiSecurityScheduledScanRoute
   '/api/skills/import': typeof ApiSkillsImportRoute
   '/api/snippets/$id': typeof ApiSnippetsIdRoute
+  '/api/supabase-connect/link': typeof ApiSupabaseConnectLinkRoute
+  '/api/supabase-connect/projects': typeof ApiSupabaseConnectProjectsRoute
   '/api/teams/$id': typeof ApiTeamsIdRouteWithChildren
   '/api/teams/transfer': typeof ApiTeamsTransferRoute
   '/api/telemetry/client': typeof ApiTelemetryClientRoute
@@ -2871,6 +2890,8 @@ export interface FileRouteTypes {
     | '/api/security/scheduled-scan'
     | '/api/skills/import'
     | '/api/snippets/$id'
+    | '/api/supabase-connect/link'
+    | '/api/supabase-connect/projects'
     | '/api/teams/$id'
     | '/api/teams/transfer'
     | '/api/telemetry/client'
@@ -3162,6 +3183,8 @@ export interface FileRouteTypes {
     | '/api/security/scheduled-scan'
     | '/api/skills/import'
     | '/api/snippets/$id'
+    | '/api/supabase-connect/link'
+    | '/api/supabase-connect/projects'
     | '/api/teams/$id'
     | '/api/teams/transfer'
     | '/api/telemetry/client'
@@ -3454,6 +3477,8 @@ export interface FileRouteTypes {
     | '/api/security/scheduled-scan'
     | '/api/skills/import'
     | '/api/snippets/$id'
+    | '/api/supabase-connect/link'
+    | '/api/supabase-connect/projects'
     | '/api/teams/$id'
     | '/api/teams/transfer'
     | '/api/telemetry/client'
@@ -3715,6 +3740,8 @@ export interface RootRouteChildren {
   ApiSecurityLeakedKeyRoute: typeof ApiSecurityLeakedKeyRoute
   ApiSecurityScanRoute: typeof ApiSecurityScanRouteWithChildren
   ApiSecurityScheduledScanRoute: typeof ApiSecurityScheduledScanRoute
+  ApiSupabaseConnectLinkRoute: typeof ApiSupabaseConnectLinkRoute
+  ApiSupabaseConnectProjectsRoute: typeof ApiSupabaseConnectProjectsRoute
   ApiTelemetryClientRoute: typeof ApiTelemetryClientRoute
   ApiTelemetryPanelOpenRoute: typeof ApiTelemetryPanelOpenRoute
   ApiTestsRunRoute: typeof ApiTestsRunRoute
@@ -4961,6 +4988,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/snippets/$id'
       preLoaderRoute: typeof ApiSnippetsIdRouteImport
       parentRoute: typeof ApiSnippetsRoute
+    }
+    '/api/supabase-connect/link': {
+      id: '/api/supabase-connect/link'
+      path: '/api/supabase-connect/link'
+      fullPath: '/api/supabase-connect/link'
+      preLoaderRoute: typeof ApiSupabaseConnectLinkRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/supabase-connect/projects': {
+      id: '/api/supabase-connect/projects'
+      path: '/api/supabase-connect/projects'
+      fullPath: '/api/supabase-connect/projects'
+      preLoaderRoute: typeof ApiSupabaseConnectProjectsRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/api/teams/$id': {
       id: '/api/teams/$id'
@@ -6501,6 +6542,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSecurityLeakedKeyRoute: ApiSecurityLeakedKeyRoute,
   ApiSecurityScanRoute: ApiSecurityScanRouteWithChildren,
   ApiSecurityScheduledScanRoute: ApiSecurityScheduledScanRoute,
+  ApiSupabaseConnectLinkRoute: ApiSupabaseConnectLinkRoute,
+  ApiSupabaseConnectProjectsRoute: ApiSupabaseConnectProjectsRoute,
   ApiTelemetryClientRoute: ApiTelemetryClientRoute,
   ApiTelemetryPanelOpenRoute: ApiTelemetryPanelOpenRoute,
   ApiTestsRunRoute: ApiTestsRunRoute,

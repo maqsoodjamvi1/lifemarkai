@@ -12,6 +12,7 @@ import { createFileRoute } from "@tanstack/react-router";
  */
 
 import { createClient } from "@/lib/supabase/server";
+import { getOrRefreshGatewayToken } from "@/lib/oauth/gateway-tokens";
 
 interface Params {
   params: Promise<{ connector: string; path: string[] }>;
@@ -56,83 +57,6 @@ function pathAllowed(connector: string, upstreamPath: string): boolean {
   return patterns.some((re) => re.test(upstreamPath));
 }
 
-// Token refresh endpoints & grant types
-const TOKEN_REFRESH: Record<string, { url: string; clientIdEnv: string; clientSecretEnv: string }> = {
-  slack: {
-    url: "https://slack.com/api/oauth.v2.access",
-    clientIdEnv: "SLACK_CLIENT_ID",
-    clientSecretEnv: "SLACK_CLIENT_SECRET",
-  },
-  google_workspace: {
-    url: "https://oauth2.googleapis.com/token",
-    clientIdEnv: "GOOGLE_CLIENT_ID",
-    clientSecretEnv: "GOOGLE_CLIENT_SECRET",
-  },
-  hubspot: {
-    url: "https://api.hubapi.com/oauth/v1/token",
-    clientIdEnv: "HUBSPOT_CLIENT_ID",
-    clientSecretEnv: "HUBSPOT_CLIENT_SECRET",
-  },
-};
-
-async function getOrRefreshToken(
-  supabase: Awaited<ReturnType<typeof createClient>>,
-  userId: string,
-  connector: string
-): Promise<string | null> {
-  // Fetch stored token record
-  const { data: tokenRow } = await supabase
-    .from("oauth_tokens")
-    .select("access_token, refresh_token, expires_at")
-    .eq("user_id", userId)
-    .eq("connector", connector)
-    .maybeSingle();
-
-  if (!tokenRow) return null;
-
-  // Check if expired (with 60s buffer)
-  const expiresAt = tokenRow.expires_at ? new Date(tokenRow.expires_at as string).getTime() : 0;
-  const now = Date.now();
-  if (expiresAt > now + 60_000) {
-    return tokenRow.access_token as string;
-  }
-
-  // Attempt refresh
-  const refreshConfig = TOKEN_REFRESH[connector];
-  if (!refreshConfig || !tokenRow.refresh_token) return tokenRow.access_token as string;
-
-  const clientId     = process.env[refreshConfig.clientIdEnv];
-  const clientSecret = process.env[refreshConfig.clientSecretEnv];
-  if (!clientId || !clientSecret) return tokenRow.access_token as string;
-
-  try {
-    const res = await fetch(refreshConfig.url, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: tokenRow.refresh_token as string,
-        client_id: clientId,
-        client_secret: clientSecret,
-      }),
-    });
-    const json = await res.json() as { access_token?: string; expires_in?: number };
-    if (json.access_token) {
-      const newExpiry = new Date(Date.now() + (json.expires_in ?? 3600) * 1000).toISOString();
-      await supabase
-        .from("oauth_tokens")
-        .update({ access_token: json.access_token, expires_at: newExpiry, updated_at: new Date().toISOString() })
-        .eq("user_id", userId)
-        .eq("connector", connector);
-      return json.access_token;
-    }
-  } catch {
-    // Fall through — return potentially-expired token
-  }
-
-  return tokenRow.access_token as string;
-}
-
 async function handler(req: Request, params: any) {
   const connector = params.connector as string;
   // Drop empty and traversal segments — "." / ".." must never reach the
@@ -161,7 +85,7 @@ async function handler(req: Request, params: any) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-  const token = await getOrRefreshToken(supabase, user.id, connector);
+  const token = await getOrRefreshGatewayToken(supabase, user.id, connector);
   if (!token) {
     return Response.json(
       { error: `No OAuth token found for ${connector}. Connect it in the App Connectors panel.` },
