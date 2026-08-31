@@ -3686,6 +3686,9 @@ export type GeneratedDatabase = {
             "description": string | null;
             "design_system_meta": Json | null;
             "disabled_skill_ids": Json;
+            "draft_label": string | null;
+            "draft_of": string | null;
+            "draft_root_id": string | null;
             "environment": string;
             "favicon_url": string | null;
             "framework": string;
@@ -3746,6 +3749,9 @@ export type GeneratedDatabase = {
             "description"?: string | null;
             "design_system_meta"?: Json | null;
             "disabled_skill_ids"?: Json;
+            "draft_label"?: string | null;
+            "draft_of"?: string | null;
+            "draft_root_id"?: string | null;
             "environment"?: string;
             "favicon_url"?: string | null;
             "framework"?: string;
@@ -3806,6 +3812,9 @@ export type GeneratedDatabase = {
             "description"?: string | null;
             "design_system_meta"?: Json | null;
             "disabled_skill_ids"?: Json;
+            "draft_label"?: string | null;
+            "draft_of"?: string | null;
+            "draft_root_id"?: string | null;
             "environment"?: string;
             "favicon_url"?: string | null;
             "framework"?: string;
@@ -3870,6 +3879,28 @@ export type GeneratedDatabase = {
                             "foreignKeyName": "projects_remix_of_fkey",
                             "columns": [
                                       "remix_of"
+                            ],
+                            "isOneToOne": false,
+                            "referencedRelation": "projects",
+                            "referencedColumns": [
+                                      "id"
+                            ]
+                  },
+                  {
+                            "foreignKeyName": "projects_draft_of_fkey",
+                            "columns": [
+                                      "draft_of"
+                            ],
+                            "isOneToOne": false,
+                            "referencedRelation": "projects",
+                            "referencedColumns": [
+                                      "id"
+                            ]
+                  },
+                  {
+                            "foreignKeyName": "projects_draft_root_id_fkey",
+                            "columns": [
+                                      "draft_root_id"
                             ],
                             "isOneToOne": false,
                             "referencedRelation": "projects",

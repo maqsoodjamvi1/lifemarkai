@@ -39,6 +39,10 @@ interface LovableChatHeaderProps {
   chatDays?: LovableChatDayJumpItem[];
   onJumpToDay?: (messageId: string) => void;
   className?: string;
+  /** Drafts/branches switcher (Lovable parity) — self-contained, see
+   *  draft-switcher.tsx. Rendered as a slot so this already-large header
+   *  doesn't grow another dozen props for something that fetches its own data. */
+  draftSwitcherSlot?: React.ReactNode;
 }
 
 const MODE_LABELS: Record<EditorMode, string> = {
@@ -79,6 +83,7 @@ export function LovableChatHeader({
   chatDays,
   onJumpToDay,
   className,
+  draftSwitcherSlot,
 }: LovableChatHeaderProps) {
   return (
     <div
@@ -103,6 +108,7 @@ export function LovableChatHeader({
         </span>
       )}
       <LovableChatHeaderQueuePill count={queueCount} paused={queuePaused} />
+      {draftSwitcherSlot}
       <div className="flex-1" />
       {hasMessages && (
         <div className="flex items-center gap-0.5">

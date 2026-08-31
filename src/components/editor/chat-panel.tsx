@@ -23,6 +23,7 @@ import { LovableSecurityIssuesBar } from "./lovable/security-issues-bar";
 import { LovableLiveLockBanner } from "./lovable/live-lock-banner";
 import { LovableChatTimeline,type LovableChatTimelineHandle } from "./lovable/chat-timeline";
 import { LovableChatHeader } from "./lovable/chat-header";
+import { LovableDraftSwitcher } from "./lovable/draft-switcher";
 import { LovableChatHeaderStatus } from "./lovable/composer-estimated-credits";
 import { LovableScrollToBottom } from "./lovable/scroll-to-bottom";
 import { LovableContinueBanner } from "./lovable/continue-banner";
@@ -6024,6 +6025,7 @@ ${(f.content ?? "").slice(0, 8000)}
       compactDensity={compactDensity}
     >
       <LovableChatHeader
+        draftSwitcherSlot={<LovableDraftSwitcher projectId={project.id} />}
         mode={mode}
         queueCount={promptQueue.length}
         queuePaused={queuePaused}

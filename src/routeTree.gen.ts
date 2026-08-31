@@ -220,6 +220,7 @@ import { Route as ApiProjectsIdConnectorProxyRouteImport } from './routes/api/pr
 import { Route as ApiProjectsIdDatabaseRouteImport } from './routes/api/projects/$id/database'
 import { Route as ApiProjectsIdDbQueryRouteImport } from './routes/api/projects/$id/db-query'
 import { Route as ApiProjectsIdDesignSystemRouteImport } from './routes/api/projects/$id/design-system'
+import { Route as ApiProjectsIdDraftsRouteImport } from './routes/api/projects/$id/drafts'
 import { Route as ApiProjectsIdEdgeFunctionsRouteImport } from './routes/api/projects/$id/edge-functions'
 import { Route as ApiProjectsIdEditorIntelligenceRouteImport } from './routes/api/projects/$id/editor-intelligence'
 import { Route as ApiProjectsIdEnvRouteImport } from './routes/api/projects/$id/env'
@@ -1378,6 +1379,11 @@ const ApiProjectsIdDesignSystemRoute =
     path: '/design-system',
     getParentRoute: () => ApiProjectsIdRoute,
   } as any)
+const ApiProjectsIdDraftsRoute = ApiProjectsIdDraftsRouteImport.update({
+  id: '/drafts',
+  path: '/drafts',
+  getParentRoute: () => ApiProjectsIdRoute,
+} as any)
 const ApiProjectsIdEdgeFunctionsRoute =
   ApiProjectsIdEdgeFunctionsRouteImport.update({
     id: '/edge-functions',
@@ -1967,6 +1973,7 @@ export interface FileRoutesByFullPath {
   '/api/projects/$id/database': typeof ApiProjectsIdDatabaseRoute
   '/api/projects/$id/db-query': typeof ApiProjectsIdDbQueryRoute
   '/api/projects/$id/design-system': typeof ApiProjectsIdDesignSystemRoute
+  '/api/projects/$id/drafts': typeof ApiProjectsIdDraftsRoute
   '/api/projects/$id/edge-functions': typeof ApiProjectsIdEdgeFunctionsRouteWithChildren
   '/api/projects/$id/editor-intelligence': typeof ApiProjectsIdEditorIntelligenceRoute
   '/api/projects/$id/env': typeof ApiProjectsIdEnvRouteWithChildren
@@ -2248,6 +2255,7 @@ export interface FileRoutesByTo {
   '/api/projects/$id/database': typeof ApiProjectsIdDatabaseRoute
   '/api/projects/$id/db-query': typeof ApiProjectsIdDbQueryRoute
   '/api/projects/$id/design-system': typeof ApiProjectsIdDesignSystemRoute
+  '/api/projects/$id/drafts': typeof ApiProjectsIdDraftsRoute
   '/api/projects/$id/edge-functions': typeof ApiProjectsIdEdgeFunctionsRouteWithChildren
   '/api/projects/$id/editor-intelligence': typeof ApiProjectsIdEditorIntelligenceRoute
   '/api/projects/$id/env': typeof ApiProjectsIdEnvRouteWithChildren
@@ -2531,6 +2539,7 @@ export interface FileRoutesById {
   '/api/projects/$id/database': typeof ApiProjectsIdDatabaseRoute
   '/api/projects/$id/db-query': typeof ApiProjectsIdDbQueryRoute
   '/api/projects/$id/design-system': typeof ApiProjectsIdDesignSystemRoute
+  '/api/projects/$id/drafts': typeof ApiProjectsIdDraftsRoute
   '/api/projects/$id/edge-functions': typeof ApiProjectsIdEdgeFunctionsRouteWithChildren
   '/api/projects/$id/editor-intelligence': typeof ApiProjectsIdEditorIntelligenceRoute
   '/api/projects/$id/env': typeof ApiProjectsIdEnvRouteWithChildren
@@ -2814,6 +2823,7 @@ export interface FileRouteTypes {
     | '/api/projects/$id/database'
     | '/api/projects/$id/db-query'
     | '/api/projects/$id/design-system'
+    | '/api/projects/$id/drafts'
     | '/api/projects/$id/edge-functions'
     | '/api/projects/$id/editor-intelligence'
     | '/api/projects/$id/env'
@@ -3095,6 +3105,7 @@ export interface FileRouteTypes {
     | '/api/projects/$id/database'
     | '/api/projects/$id/db-query'
     | '/api/projects/$id/design-system'
+    | '/api/projects/$id/drafts'
     | '/api/projects/$id/edge-functions'
     | '/api/projects/$id/editor-intelligence'
     | '/api/projects/$id/env'
@@ -3377,6 +3388,7 @@ export interface FileRouteTypes {
     | '/api/projects/$id/database'
     | '/api/projects/$id/db-query'
     | '/api/projects/$id/design-system'
+    | '/api/projects/$id/drafts'
     | '/api/projects/$id/edge-functions'
     | '/api/projects/$id/editor-intelligence'
     | '/api/projects/$id/env'
@@ -5089,6 +5101,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiProjectsIdDesignSystemRouteImport
       parentRoute: typeof ApiProjectsIdRoute
     }
+    '/api/projects/$id/drafts': {
+      id: '/api/projects/$id/drafts'
+      path: '/drafts'
+      fullPath: '/api/projects/$id/drafts'
+      preLoaderRoute: typeof ApiProjectsIdDraftsRouteImport
+      parentRoute: typeof ApiProjectsIdRoute
+    }
     '/api/projects/$id/edge-functions': {
       id: '/api/projects/$id/edge-functions'
       path: '/edge-functions'
@@ -5821,6 +5840,7 @@ interface ApiProjectsIdRouteChildren {
   ApiProjectsIdDatabaseRoute: typeof ApiProjectsIdDatabaseRoute
   ApiProjectsIdDbQueryRoute: typeof ApiProjectsIdDbQueryRoute
   ApiProjectsIdDesignSystemRoute: typeof ApiProjectsIdDesignSystemRoute
+  ApiProjectsIdDraftsRoute: typeof ApiProjectsIdDraftsRoute
   ApiProjectsIdEdgeFunctionsRoute: typeof ApiProjectsIdEdgeFunctionsRouteWithChildren
   ApiProjectsIdEditorIntelligenceRoute: typeof ApiProjectsIdEditorIntelligenceRoute
   ApiProjectsIdEnvRoute: typeof ApiProjectsIdEnvRouteWithChildren
@@ -5877,6 +5897,7 @@ const ApiProjectsIdRouteChildren: ApiProjectsIdRouteChildren = {
   ApiProjectsIdDatabaseRoute: ApiProjectsIdDatabaseRoute,
   ApiProjectsIdDbQueryRoute: ApiProjectsIdDbQueryRoute,
   ApiProjectsIdDesignSystemRoute: ApiProjectsIdDesignSystemRoute,
+  ApiProjectsIdDraftsRoute: ApiProjectsIdDraftsRoute,
   ApiProjectsIdEdgeFunctionsRoute: ApiProjectsIdEdgeFunctionsRouteWithChildren,
   ApiProjectsIdEditorIntelligenceRoute: ApiProjectsIdEditorIntelligenceRoute,
   ApiProjectsIdEnvRoute: ApiProjectsIdEnvRouteWithChildren,
