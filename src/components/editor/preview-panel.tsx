@@ -391,6 +391,10 @@ export function PreviewPanel({
   const [wcError, setWcError] = useState<string | null>(null);
   const [wcPhase, setWcPhase] = useState<string | null>(null);
   const [wcNonce, setWcNonce] = useState(0);
+  // Content-signature of the files most recently mounted into the
+  // WebContainer (initial boot OR a later remountProject). See the
+  // remount-on-edit effect below, defined after `filesSignature` exists.
+  const wcMountedSignatureRef = useRef<string | null>(null);
   const sandboxIframeRef = useRef<HTMLIFrameElement>(null);
   const unifiedIframeRef = useRef<HTMLIFrameElement | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
@@ -804,6 +808,11 @@ export function PreviewPanel({
     setWcError(null);
     setWcUrl(null);
     setWcPhase("Booting runtime…");
+    // A fresh boot mounts the current files itself — the remount-on-edit
+    // effect below should treat that as the current baseline, not diff
+    // against whatever was mounted before this boot (a previous project, or
+    // a previous restart attempt).
+    wcMountedSignatureRef.current = null;
 
     void (async () => {
       const { runProjectInWebContainer, webContainerBlocker } = await import(
@@ -1599,6 +1608,49 @@ export function PreviewPanel({
   );
   const renderedStaticHtml = staticHtml || EMPTY_PREVIEW_HTML;
   const filesSignature = useMemo(() => filesContentSignature(previewFiles), [previewFiles]);
+
+  // Live file updates for the WebContainer engine. The boot effect above
+  // deliberately excludes file content from its deps (a full boot + npm
+  // install is too slow to repeat on every keystroke), which used to mean
+  // WebContainer previews just silently kept showing pre-edit code forever —
+  // there was no follow-up wired in. This re-mounts (not re-boots) the
+  // WebContainer's filesystem whenever the reconciled preview files actually
+  // change, mirroring the sandbox engine's own live-sync effect above, which
+  // keys off this same `previewFiles`/signature pair rather than the raw
+  // `files` prop.
+  useEffect(() => {
+    if (previewEngine !== "webcontainer") return;
+    // Nothing booted yet (or boot failed) — the boot effect owns the first
+    // mount; remounting here would race it or paper over a real boot error.
+    if (!wcUrl) return;
+    if (wcMountedSignatureRef.current === filesSignature) return;
+
+    let cancelled = false;
+    const signatureAtRequest = filesSignature;
+
+    void (async () => {
+      const { remountProject } = await import("@/lib/preview/webcontainer-engine");
+      const res = await remountProject({
+        files: previewFiles.map((f) => ({ path: f.path, content: f.content })),
+        onOutput: (chunk) => {
+          if (chunk.trim()) console.debug("[webcontainer]", chunk.trimEnd());
+        },
+      });
+      if (cancelled) return;
+      if (res.ok) {
+        wcMountedSignatureRef.current = signatureAtRequest;
+      } else {
+        // A failed remount shouldn't take down an otherwise-working preview —
+        // the previous mount is still live. Log it and let the next file
+        // change (or a manual restart) try again.
+        console.debug("[webcontainer] remount failed:", res.error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [previewEngine, wcUrl, filesSignature, previewFiles]);
 
   // Foreground reliability guard: WebContainer can occasionally stall while its
   // hidden StackBlitz runtime boots. Keep it available as a high-fidelity retry,

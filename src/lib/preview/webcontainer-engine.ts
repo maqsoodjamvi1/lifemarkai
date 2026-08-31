@@ -79,6 +79,16 @@ let wcInstance: any = null;
 let wcBooting: Promise<any> | null = null;
 /** Set when boot fails so we stop retrying a hopeless environment. */
 let wcFatal: string | null = null;
+/**
+ * The currently-running dev-server process (from the last successful
+ * runProjectInWebContainer call), if any. Every call used to spawn a new
+ * "npm run dev" without checking for one already running — restarting the
+ * runtime (the UI's own "Restart runtime" action on a boot error) or
+ * switching projects while on this engine left the previous dev server
+ * running inside the WebContainer indefinitely, accumulating CPU/memory in
+ * the browser tab for as long as it stayed open.
+ */
+let wcDevProcess: any = null;
 
 export function isCrossOriginIsolated(): boolean {
   return typeof window !== "undefined" && window.crossOriginIsolated === true;
@@ -164,13 +174,24 @@ export async function runProjectInWebContainer(
     progress("creating", "Starting in-browser runtime");
     const wc = await getWebContainer();
 
+    // Kill any dev server left running from a previous call (a restart, or a
+    // fresh run after switching projects) before starting a new one — the
+    // WebContainer instance is a page-lifetime singleton, so an unkilled
+    // process just keeps running underneath the new one.
+    await killWcDevProcess();
+
     progress("writing", `Mounting ${opts.files.length} files`);
     await wc.mount(filesToFsTree(opts.files));
 
-    // Surface the URL the moment the dev server is up.
+    // Surface the URL the moment the dev server is up. `.on()` returns an
+    // unsubscribe function — captured and called once this settles so a
+    // restart doesn't keep stacking new listeners onto the shared singleton
+    // forever (each one previously outlived this call indefinitely).
+    let unsubReady: (() => void) | undefined;
+    let unsubError: (() => void) | undefined;
     const serverReady = new Promise<string>((resolve, reject) => {
-      wc.on("server-ready", (_port: number, url: string) => resolve(url));
-      wc.on("error", (e: { message?: string }) =>
+      unsubReady = wc.on("server-ready", (_port: number, url: string) => resolve(url));
+      unsubError = wc.on("error", (e: { message?: string }) =>
         reject(new Error(e?.message || "WebContainer error")),
       );
     });
@@ -182,6 +203,8 @@ export async function runProjectInWebContainer(
     );
     const installCode = await install.exit;
     if (installCode !== 0) {
+      unsubReady?.();
+      unsubError?.();
       return { ok: false, error: `npm install failed (exit ${installCode}).` };
     }
 
@@ -194,26 +217,44 @@ export async function runProjectInWebContainer(
 
     progress("starting", `${start.cmd} ${start.args.join(" ")}`);
     const dev = await wc.spawn(start.cmd, start.args);
+    wcDevProcess = dev;
     void dev.output.pipeTo(
       new WritableStream({ write: (chunk: string) => output(chunk) }),
     );
 
-    // Don't wait forever — a project that never binds a port should report a
-    // real error instead of spinning indefinitely.
-    const url = await Promise.race([
-      serverReady,
-      new Promise<never>((_, reject) =>
-        setTimeout(
-          () => reject(new Error("Dev server did not become ready within 90s.")),
-          90_000,
+    try {
+      // Don't wait forever — a project that never binds a port should report
+      // a real error instead of spinning indefinitely.
+      const url = await Promise.race([
+        serverReady,
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Dev server did not become ready within 90s.")),
+            90_000,
+          ),
         ),
-      ),
-    ]);
+      ]);
 
-    progress("ready");
-    return { ok: true, url };
+      progress("ready");
+      return { ok: true, url };
+    } finally {
+      unsubReady?.();
+      unsubError?.();
+    }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Kill the tracked dev-server process, if one is running. Best-effort. */
+async function killWcDevProcess(): Promise<void> {
+  const proc = wcDevProcess;
+  wcDevProcess = null;
+  if (!proc) return;
+  try {
+    proc.kill();
+  } catch {
+    // Process may already have exited — nothing to clean up.
   }
 }
 

@@ -41,6 +41,7 @@ test("WebContainer is one explicit fallback and never outranks the sandbox", () 
     hasFiles: true,
     staticRuntime: false,
     webContainerEnabled: true,
+    webContainerProjectShape: true,
   };
   assert.equal(
     selectPreviewEngine({
@@ -64,6 +65,28 @@ test("WebContainer is one explicit fallback and never outranks the sandbox", () 
       sandboxEnabled: false,
       explicitWebContainerFallback: true,
     }),
+    "webcontainer",
+  );
+});
+
+test("WebContainer is never selected for a project shape it can't actually run", () => {
+  // A project mid-generation (or one whose framework detection missed) can
+  // have no package.json yet. Routing that into WebContainer used to run
+  // straight into `npm install` with nothing to install against — a
+  // confusing failure instead of a graceful "unavailable".
+  const base = {
+    hasFiles: true,
+    staticRuntime: false,
+    sandboxEnabled: false,
+    webContainerEnabled: true,
+    explicitWebContainerFallback: true,
+  };
+  assert.equal(
+    selectPreviewEngine({ ...base, webContainerProjectShape: false }),
+    "unavailable",
+  );
+  assert.equal(
+    selectPreviewEngine({ ...base, webContainerProjectShape: true }),
     "webcontainer",
   );
 });
@@ -148,6 +171,7 @@ test("a live sandbox outranks the static srcdoc renderer", () => {
     hasFiles: true,
     staticRuntime: true,
     webContainerEnabled: false,
+    webContainerProjectShape: false,
     explicitWebContainerFallback: false,
   };
   assert.equal(

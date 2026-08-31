@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { isWebContainerPreviewEnabled,type PreviewEngine } from "@/lib/preview/resolve-preview-engine";
+import { isWebContainerPreviewEnabled,shouldUseWebContainer,type PreviewEngine } from "@/lib/preview/resolve-preview-engine";
 import { resolveProjectRuntime,type ProjectRuntime } from "@/lib/project/runtime";
 import type { ProjectFile } from "@/types/database";
 
@@ -9,6 +9,17 @@ export type PreviewEnginePolicyInput = {
   sandboxEnabled: boolean;
   webContainerEnabled: boolean;
   explicitWebContainerFallback: boolean;
+  /**
+   * True when the project actually looks like a Vite/Node app (has a
+   * package.json plus a vite config or Node entry file) — see
+   * shouldUseWebContainer in resolve-preview-engine.ts, which the OTHER,
+   * unused engine-resolution function already gates on. This one didn't,
+   * so a project mid-generation (or one framework-detection missed) could
+   * be routed straight into WebContainer with no package.json present,
+   * where `npm install` fails immediately with a confusing error instead
+   * of the preview falling back gracefully.
+   */
+  webContainerProjectShape: boolean;
 };
 
 /**
@@ -37,7 +48,11 @@ export function selectPreviewEngine(
   if (!input.hasFiles) return "unavailable";
   if (input.sandboxEnabled) return "sandbox";
   if (input.staticRuntime) return "static";
-  if (input.explicitWebContainerFallback && input.webContainerEnabled) {
+  if (
+    input.explicitWebContainerFallback &&
+    input.webContainerEnabled &&
+    input.webContainerProjectShape
+  ) {
     return "webcontainer";
   }
   return "unavailable";
@@ -54,6 +69,7 @@ export function usePreviewEnginePolicy(options: {
     resolveProjectRuntime(options.runtime, options.framework, options.files) === "static";
   const webContainerEnabled =
     !staticRuntime && isWebContainerPreviewEnabled();
+  const webContainerProjectShape = shouldUseWebContainer(options.files);
 
   const engine = useMemo(
     () =>
@@ -63,6 +79,7 @@ export function usePreviewEnginePolicy(options: {
         sandboxEnabled: options.sandboxEnabled,
         webContainerEnabled,
         explicitWebContainerFallback: options.useWebContainers === true,
+        webContainerProjectShape,
       }),
     [
       options.files.length,
@@ -70,6 +87,7 @@ export function usePreviewEnginePolicy(options: {
       options.useWebContainers,
       staticRuntime,
       webContainerEnabled,
+      webContainerProjectShape,
     ],
   );
 

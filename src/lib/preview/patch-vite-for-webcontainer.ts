@@ -42,6 +42,30 @@ import { sandboxUsesTlsHmr, stripForcedTlsHmr } from "./sandbox-tls-hmr.ts";
 
 const ORIGIN_KEYED_HEADERS = 'headers: { "Origin-Agent-Cluster": "?1" },';
 
+/**
+ * Vite configs come in more than one shape:
+ *   export default defineConfig({ ... })
+ *   export default defineConfig(() => ({ ... }))
+ *   export default defineConfig((env) => ({ ... }))
+ *   export default defineConfig(({ mode, command }) => ({ ... }))
+ * Every "defineConfig({" check below used to match only the first shape.
+ * The function-form (idiomatic when the config needs `mode`/`command`, and
+ * entirely ordinary) silently skipped EVERY patch in this file, including
+ * the Origin-Agent-Cluster header this file exists to add — see the header
+ * comment above for what that header prevents. Falls back to the direct
+ * form when the arrow form isn't present, so existing behavior is unchanged
+ * for the common case.
+ */
+const DEFINE_CONFIG_ARROW_OBJECT_OPEN =
+  /defineConfig\s*\(\s*(?:async\s*)?\([^)]*\)\s*=>\s*\(\s*\{/;
+const DEFINE_CONFIG_DIRECT_OBJECT_OPEN = /defineConfig\s*\(\s*\{/;
+
+function findDefineConfigObjectOpen(content: string): RegExp | null {
+  if (DEFINE_CONFIG_ARROW_OBJECT_OPEN.test(content)) return DEFINE_CONFIG_ARROW_OBJECT_OPEN;
+  if (DEFINE_CONFIG_DIRECT_OBJECT_OPEN.test(content)) return DEFINE_CONFIG_DIRECT_OBJECT_OPEN;
+  return null;
+}
+
 export function patchViteConfigForWebContainer(content: string): string {
   let patched = patchReactPluginBabelConfig(content);
   if (!patched.trim()) return patched;
@@ -87,15 +111,20 @@ export function patchViteConfigForWebContainer(content: string): string {
     return stripForcedTlsHmr(patched);
   }
 
-  const defineConfig = /defineConfig\s*\(\s*\{/;
-  if (defineConfig.test(patched)) {
+  const defineConfig = findDefineConfigObjectOpen(patched);
+  if (defineConfig) {
     const hmrLine = sandboxUsesTlsHmr()
       ? '    hmr: { protocol: "wss", clientPort: 443 },\n'
       : "";
+    // Append after whatever was actually matched (direct object OR the
+    // arrow-function wrapper) rather than replacing the match with a
+    // hardcoded "defineConfig({" — replacing it would silently strip the
+    // arrow-function form's parameters/wrapper right out of the file.
     return stripForcedTlsHmr(
       patched.replace(
         defineConfig,
-        "defineConfig({\n  server: {\n    host: true,\n    allowedHosts: true,\n" +
+        (matched) =>
+          `${matched}\n  server: {\n    host: true,\n    allowedHosts: true,\n` +
           hmrLine +
           "    " +
           ORIGIN_KEYED_HEADERS +
@@ -142,12 +171,13 @@ export function ensureAtAlias(content: string): string {
     );
   }
 
-  // Case 2: no resolve block — insert one right after defineConfig({.
-  const defineConfig = /defineConfig\s*\(\s*\{/;
-  if (defineConfig.test(content)) {
+  // Case 2: no resolve block — insert one right after defineConfig's config
+  // object opens (handles both the direct-object and arrow-function forms).
+  const defineConfig = findDefineConfigObjectOpen(content);
+  if (defineConfig) {
     return content.replace(
       defineConfig,
-      `defineConfig({\n  resolve: { alias: { "@": ${aliasValue} } },`,
+      (matched) => `${matched}\n  resolve: { alias: { "@": ${aliasValue} } },`,
     );
   }
 
@@ -178,12 +208,13 @@ export function ensureReactDedupe(content: string): string {
     return content.replace(resolveBlock, `resolve: {\n    ${dedupeEntry}`);
   }
 
-  // Case 2: no resolve block — insert one right after defineConfig({.
-  const defineConfig = /defineConfig\s*\(\s*\{/;
-  if (defineConfig.test(content)) {
+  // Case 2: no resolve block — insert one right after defineConfig's config
+  // object opens (handles both the direct-object and arrow-function forms).
+  const defineConfig = findDefineConfigObjectOpen(content);
+  if (defineConfig) {
     return content.replace(
       defineConfig,
-      `defineConfig({\n  resolve: { ${dedupeEntry} },`,
+      (matched) => `${matched}\n  resolve: { ${dedupeEntry} },`,
     );
   }
 
@@ -208,9 +239,9 @@ export function ensureReactOptimizeDeps(content: string): string {
   if (/optimizeDeps\s*:/.test(content)) return content;
 
   const includeBlock = 'optimizeDeps: { include: ["react", "react-dom"] },';
-  const defineConfig = /defineConfig\s*\(\s*\{/;
-  if (defineConfig.test(content)) {
-    return content.replace(defineConfig, `defineConfig({\n  ${includeBlock}`);
+  const defineConfig = findDefineConfigObjectOpen(content);
+  if (defineConfig) {
+    return content.replace(defineConfig, (matched) => `${matched}\n  ${includeBlock}`);
   }
   return content;
 }
