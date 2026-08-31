@@ -1,6 +1,23 @@
 
 import { useState,useMemo } from "react";
 import { Search,ChevronRight,Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
+import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Avatar,AvatarFallback } from "@/components/ui/avatar";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs,TabsList,TabsTrigger } from "@/components/ui/tabs";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip,TooltipTrigger,TooltipProvider } from "@/components/ui/tooltip";
+import { Dialog,DialogTrigger } from "@/components/ui/dialog";
+import { AlertDialog,AlertDialogTrigger } from "@/components/ui/alert-dialog";
+import { DropdownMenu,DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Collapsible,CollapsibleTrigger } from "@/components/ui/collapsible";
 
 interface ComponentDef {
   name: string;
@@ -12,7 +29,7 @@ interface ComponentDef {
 }
 
 // Complete shadcn/ui component catalog with insert prompts
-const COMPONENTS: ComponentDef[] = [
+export const COMPONENTS: ComponentDef[] = [
   // Layout
   { name: "Accordion", description: "Collapsible content sections", category: "Layout", emoji: "📂", tags: ["collapse", "faq", "toggle"], prompt: "Add an Accordion component to display collapsible FAQ sections" },
   { name: "Card", description: "Contained content block with optional header/footer", category: "Layout", emoji: "🃏", tags: ["container", "block", "panel"], prompt: "Add a Card component to display structured content" },
@@ -75,6 +92,92 @@ const COMPONENTS: ComponentDef[] = [
 ];
 
 const CATEGORIES = ["All", ...Array.from(new Set(COMPONENTS.map((c) => c.category)))];
+
+/**
+ * Real, live-rendered instances of the actual shadcn/ui primitives this
+ * project ships under src/components/ui/ — not screenshots, not another
+ * hand-drawn icon. Previously every one of the 45 catalog entries above was
+ * just an emoji + description, a static list dressed up as a "component
+ * library" panel with nothing behind it to render.
+ *
+ * Only entries with a real local component get one; the rest keep the
+ * existing emoji card unchanged below (this repo's src/components/ui/ has
+ * ~20 of the 45 shadcn primitives installed — the remainder are things the
+ * AI can still scaffold into a generated project on request, they're just
+ * not part of THIS editor's own UI kit to preview live).
+ *
+ * `pointer-events-none` throughout: these render inside the catalog card's
+ * own <button>, so the preview must stay purely decorative — a nested
+ * interactive element (an actual Radix trigger, an actual <input>) would
+ * either swallow the click meant for the card or produce invalid nested
+ * button markup.
+ */
+export const LIVE_PREVIEWS: Partial<Record<string, () => React.ReactNode>> = {
+  Button: () => <Button size="sm" className="h-6 px-2 text-[10px] pointer-events-none">Button</Button>,
+  Input: () => <Input readOnly value="Input" className="h-6 text-[10px] pointer-events-none" />,
+  Textarea: () => <Textarea readOnly value="Textarea" className="h-8 w-24 text-[10px] resize-none pointer-events-none" />,
+  Label: () => <Label className="text-[10px] text-[#a6adc8]">Label</Label>,
+  Switch: () => <Switch checked className="scale-75 pointer-events-none" />,
+  Slider: () => <Slider defaultValue={[60]} className="w-16 pointer-events-none" />,
+  Separator: () => <Separator className="w-16" />,
+  Badge: () => <Badge className="text-[9px] px-1.5">Badge</Badge>,
+  Skeleton: () => <Skeleton className="w-14 h-3" />,
+  Avatar: () => (
+    <Avatar className="w-6 h-6">
+      <AvatarFallback className="text-[9px]">AB</AvatarFallback>
+    </Avatar>
+  ),
+  Tabs: () => (
+    <Tabs defaultValue="a" className="pointer-events-none">
+      <TabsList className="h-6 p-0.5">
+        <TabsTrigger value="a" className="h-5 px-1.5 text-[9px]">Tab A</TabsTrigger>
+        <TabsTrigger value="b" className="h-5 px-1.5 text-[9px]">Tab B</TabsTrigger>
+      </TabsList>
+    </Tabs>
+  ),
+  ScrollArea: () => (
+    <ScrollArea className="h-8 w-20 rounded border border-[#313244] pointer-events-none">
+      <div className="text-[9px] p-1 text-[#a6adc8]">Scrolls when content overflows the box</div>
+    </ScrollArea>
+  ),
+  Tooltip: () => (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] pointer-events-none">Hover me</Button>
+        </TooltipTrigger>
+      </Tooltip>
+    </TooltipProvider>
+  ),
+  Dialog: () => (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] pointer-events-none">Open dialog</Button>
+      </DialogTrigger>
+    </Dialog>
+  ),
+  "Alert Dialog": () => (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] pointer-events-none">Delete…</Button>
+      </AlertDialogTrigger>
+    </AlertDialog>
+  ),
+  "Dropdown Menu": () => (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="outline" className="h-6 px-2 text-[10px] pointer-events-none">Actions ▾</Button>
+      </DropdownMenuTrigger>
+    </DropdownMenu>
+  ),
+  Collapsible: () => (
+    <Collapsible className="pointer-events-none">
+      <CollapsibleTrigger asChild>
+        <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]">Show more ▾</Button>
+      </CollapsibleTrigger>
+    </Collapsible>
+  ),
+};
 
 interface ComponentsPanelProps {
   onInsertPrompt?: (prompt: string) => void;
@@ -174,7 +277,13 @@ export function ComponentsPanel({ onInsertPrompt }: ComponentsPanelProps) {
                   {hoveredComponent === component.name && (
                     <div className="absolute inset-0 rounded-lg bg-violet-500/5 pointer-events-none" />
                   )}
-                  <span className="text-base leading-none">{component.emoji}</span>
+                  {LIVE_PREVIEWS[component.name] ? (
+                    <div className="pointer-events-none flex items-center h-6" aria-hidden="true">
+                      {LIVE_PREVIEWS[component.name]!()}
+                    </div>
+                  ) : (
+                    <span className="text-base leading-none">{component.emoji}</span>
+                  )}
                   <div>
                     <p className="text-[11px] font-medium text-[#cdd6f4] leading-tight">
                       {component.name}
