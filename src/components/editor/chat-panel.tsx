@@ -274,6 +274,13 @@ export function ChatPanel({
   const [input, setInput] = useState("");
   const [showDraftBanner, setShowDraftBanner] = useState(false);
   const draftHydratedRef = useRef(false);
+  // Lovable parity: "drafts persist across refresh" — same guarantee the
+  // composer draft above already has, extended to the clarify-question
+  // wizard. Same hydrated-ref-guard pattern as composerDraftKey just above
+  // it, backed by the shared readJSON/writeJSON/removeKey localStorage
+  // helpers (local-storage-json.ts) rather than raw localStorage calls.
+  const clarifyDraftKey = `lifemark-clarify-draft-${project.id}`;
+  const clarifyDraftHydratedRef = useRef(false);
   // "Team" toggle: when on, Agent-mode sends run the full multi-agent Editor
   // Intelligence orchestrator (in the Intelligence panel) instead of the
   // single-model /api/ai/agent route. Only affects Agent mode.
@@ -2148,6 +2155,27 @@ export function ChatPanel({
     }, 400);
     return () => window.clearTimeout(timer);
   }, [input, composerDraftKey]);
+
+  // Restore an in-progress clarify session (unanswered/partially-answered
+  // questions) on mount — previously this was a plain useState, so a
+  // refresh mid-wizard silently threw away every answer already given.
+  useEffect(() => {
+    if (clarifyDraftHydratedRef.current) return;
+    clarifyDraftHydratedRef.current = true;
+    const saved = readJSON<ClarifySession | null>(clarifyDraftKey, null);
+    if (saved && Array.isArray(saved.questions) && saved.questions.length > 0) {
+      setActiveClarifySession(saved);
+    }
+  }, [clarifyDraftKey]);
+
+  useEffect(() => {
+    if (!clarifyDraftHydratedRef.current) return;
+    if (activeClarifySession) {
+      writeJSON(clarifyDraftKey, activeClarifySession);
+    } else {
+      removeKey(clarifyDraftKey);
+    }
+  }, [activeClarifySession, clarifyDraftKey]);
 
   useEffect(() => {
     if (!showSearch) return;
