@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runHealthScan } from "@/lib/ai/self-healing";
 import { sendEmail } from "@/lib/email/resend";
+import { getUserPlan,planAllows } from "@/lib/plans/gating";
 
 /**
  * GET /api/health-scan
@@ -74,6 +75,28 @@ async function handleGET(req: Request) {
       };
       const monitoring = (project.metadata as { monitoring?: MonitoringMeta } | null)?.monitoring;
       if (monitoring?.enabled) {
+        // gating.ts declares project monitoring Pro+, enforced on the enable
+        // path in /api/projects/[id]/monitoring — but that only stops NEW
+        // enables. A project whose owner downgraded (or that was enabled
+        // before that gate existed) still has monitoring.enabled: true in
+        // its metadata forever, so the cron would otherwise keep scanning
+        // and emailing for it indefinitely. Check the plan here too, and
+        // turn the setting off (not just skip silently) so the next time the
+        // owner opens the Self-Heal panel it honestly shows monitoring as
+        // off rather than a toggle stuck "on" that quietly does nothing.
+        const allowed = planAllows(await getUserPlan(project.user_id), "project_monitoring");
+        if (!allowed) {
+          await supabase
+            .from("projects")
+            .update({
+              metadata: {
+                ...((project.metadata ?? {}) as Record<string, unknown>),
+                monitoring: { ...monitoring, enabled: false },
+              },
+            })
+            .eq("id", project.id);
+          continue;
+        }
         const cadenceMs = monitoring.cadence === "weekly" ? 7 * 86_400_000 : 86_400_000;
         const lastRun = monitoring.last_run_at ? new Date(monitoring.last_run_at).getTime() : 0;
         if (Date.now() - lastRun >= cadenceMs - 60_000) {

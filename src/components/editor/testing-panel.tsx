@@ -1,5 +1,5 @@
 
-import { useState,useMemo,useRef } from "react";
+import { useState,useMemo,useRef,useEffect } from "react";
 import {
 FlaskConical,Sparkles,Play,Check,X,
 FileCode,ChevronRight,ChevronDown,Loader2,Plus,
@@ -119,6 +119,21 @@ export function TestingPanel({ projectId, files, onFilesUpdate, onOpenFile }: Te
   const [liveLogs, setLiveLogs] = useState<Array<{ line: string; isError?: boolean }>>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
+  // Whether server-side execution is even configured — checked once up
+  // front so "Run all" can be shown honestly disabled instead of looking
+  // clickable and then 503ing after the user has already watched it enter
+  // the results view. `null` = still checking (treated as available so the
+  // button isn't flashing disabled on every mount).
+  const [execAvailable, setExecAvailable] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/tests/run")
+      .then((res) => (res.ok ? res.json() : { available: true }))
+      .then((data: { available?: boolean }) => { if (!cancelled) setExecAvailable(data.available !== false); })
+      .catch(() => { if (!cancelled) setExecAvailable(true); });
+    return () => { cancelled = true; };
+  }, []);
+
   // Generate view state
   const [selectedSource, setSelectedSource] = useState<ProjectFile | null>(null);
   const [generating, setGenerating] = useState(false);
@@ -126,6 +141,14 @@ export function TestingPanel({ projectId, files, onFilesUpdate, onOpenFile }: Te
   // ── Run all tests via real SSE runner ────────────────────────────────────
   async function runTests() {
     if (!testFiles.length) return;
+    if (execAvailable === false) {
+      toast({
+        title: "Test execution isn't enabled on this deployment",
+        description: "Server-side test running requires ALLOW_UNSANDBOXED_TEST_RUNS to be configured. You can still generate tests and run them yourself.",
+        variant: "destructive",
+      });
+      return;
+    }
     setRunning(true);
     setRunResult(null);
     setLiveLogs([]);
@@ -143,8 +166,14 @@ export function TestingPanel({ projectId, files, onFilesUpdate, onOpenFile }: Te
       });
 
       if (!res.ok || !res.body) {
-        const errText = await res.text().catch(() => "Unknown error");
-        toast({ title: "Test run failed", description: errText, variant: "destructive" });
+        const raw = await res.text().catch(() => "");
+        let message = raw || "Unknown error";
+        try {
+          const parsed = JSON.parse(raw) as { error?: string };
+          if (parsed.error) message = parsed.error;
+        } catch { /* not JSON — show the raw body */ }
+        if (res.status === 503) setExecAvailable(false);
+        toast({ title: "Test run failed", description: message, variant: "destructive" });
         setRunning(false);
         return;
       }
@@ -274,14 +303,15 @@ export function TestingPanel({ projectId, files, onFilesUpdate, onOpenFile }: Te
             <Button
               size="sm"
               onClick={() => void runTests()}
-              disabled={running}
+              disabled={running || execAvailable === false}
+              title={execAvailable === false ? "Not enabled on this deployment — server-side test execution requires ALLOW_UNSANDBOXED_TEST_RUNS" : undefined}
               className="h-6 px-2 text-[10px] gap-1"
             >
               {running
                 ? <Loader2 className="w-3 h-3 animate-spin" />
                 : <Play className="w-3 h-3" />
               }
-              Run all
+              Run all{execAvailable === false ? " (unavailable)" : ""}
             </Button>
           )}
         </div>

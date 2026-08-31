@@ -289,9 +289,24 @@ export default defineConfig({
 }
 
 
+/**
+ * GET reports whether server-side test execution is configured, without
+ * running anything — lets the UI show "Run all" as honestly unavailable
+ * (with why) instead of a live-looking button that 503s on click. Before
+ * this, testing-panel.tsx's only signal was the POST failing after the user
+ * had already clicked "Run all" and watched it enter the "results" view.
+ */
+async function handleGET(req: Request) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return new Response("Unauthorized", { status: 401 });
+  return Response.json({ available: process.env.ALLOW_UNSANDBOXED_TEST_RUNS === "true" });
+}
+
 export const Route = createFileRoute("/api/tests/run")({
   server: {
     handlers: {
+      GET: async ({ request }) => handleGET(request),
       POST: async ({ request }) => handlePOST(request),
     },
   },

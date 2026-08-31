@@ -90,6 +90,11 @@ export function SelfHealingPanel({ projectId, files = [], isLocked, onFilesRefre
     history?: Array<{ at: string; findings: number; emailed: boolean }>;
   };
   const [monitoring, setMonitoring] = useState<MonitoringState | null>(null);
+  // gating.ts declares project monitoring Pro+; this mirrors what the GET
+  // handler now enforces server-side (previously neither side checked it —
+  // see monitoring.ts). null while loading = treat as allowed so the toggle
+  // doesn't flash locked before the real answer arrives.
+  const [monitoringGate, setMonitoringGate] = useState<{ allowed: boolean; requiredPlan: string | null } | null>(null);
 
   useEffect(() => {
     void fetch(`/api/projects/${projectId}/monitoring`)
@@ -110,11 +115,20 @@ export function SelfHealingPanel({ projectId, files = [], isLocked, onFilesRefre
           last_email_at: m?.last_email_at ?? null,
           history: Array.isArray(m?.history) ? m.history.slice(0, 10) : [],
         });
+        const gate = data.gate as { allowed?: boolean; requiredPlan?: string | null } | undefined;
+        setMonitoringGate({ allowed: gate?.allowed !== false, requiredPlan: gate?.requiredPlan ?? null });
       })
       .catch(() => {});
   }, [projectId]);
 
   async function saveMonitoring(enabled: boolean, cadence: "daily" | "weekly") {
+    if (enabled && monitoringGate && !monitoringGate.allowed) {
+      toast({
+        title: "Upgrade required",
+        description: `Project monitoring needs the ${monitoringGate.requiredPlan ?? "Pro"} plan.`,
+      });
+      return;
+    }
     setMonitoring((prev) => ({
       enabled,
       cadence,
@@ -128,6 +142,15 @@ export function SelfHealingPanel({ projectId, files = [], isLocked, onFilesRefre
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled, cadence }),
       });
+      if (res.status === 402) {
+        const data = await res.json().catch(() => ({}));
+        setMonitoring((m) => (m ? { ...m, enabled: !enabled } : m));
+        toast({
+          title: "Upgrade required",
+          description: data.error ?? "This plan doesn't include project monitoring.",
+        });
+        return;
+      }
       if (!res.ok) throw new Error();
       toast({ title: enabled ? `Monitoring on (${cadence})` : "Monitoring off" });
     } catch {
@@ -501,6 +524,11 @@ export function SelfHealingPanel({ projectId, files = [], isLocked, onFilesRefre
         <div className="flex items-center gap-2">
           <HeartPulse className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
           <span className="text-xs font-medium flex-1">Project monitoring</span>
+          {monitoringGate && !monitoringGate.allowed && !monitoring?.enabled && (
+            <span className="flex items-center gap-1 text-[9px] font-medium uppercase tracking-wide text-violet-400 border border-violet-500/30 bg-violet-500/10 rounded-full px-1.5 py-0.5">
+              <Lock className="w-2.5 h-2.5" /> {monitoringGate.requiredPlan ?? "Pro"}
+            </span>
+          )}
           {monitoring?.enabled && (
             <select
               value={monitoring.cadence}
@@ -514,8 +542,15 @@ export function SelfHealingPanel({ projectId, files = [], isLocked, onFilesRefre
           <button
             role="switch"
             aria-checked={!!monitoring?.enabled}
+            aria-disabled={!monitoring?.enabled && !!monitoringGate && !monitoringGate.allowed}
             onClick={() => void saveMonitoring(!monitoring?.enabled, monitoring?.cadence ?? "daily")}
-            className={`relative w-8 h-[18px] rounded-full transition-colors ${monitoring?.enabled ? "bg-emerald-500/80" : "bg-muted"}`}
+            className={`relative w-8 h-[18px] rounded-full transition-colors ${
+              monitoring?.enabled
+                ? "bg-emerald-500/80"
+                : monitoringGate && !monitoringGate.allowed
+                  ? "bg-muted/50 cursor-not-allowed"
+                  : "bg-muted"
+            }`}
           >
             <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all ${monitoring?.enabled ? "left-4" : "left-0.5"}`} />
           </button>
@@ -523,7 +558,9 @@ export function SelfHealingPanel({ projectId, files = [], isLocked, onFilesRefre
         <p className="mt-1 text-[10px] text-muted-foreground">
           {monitoring?.enabled
             ? `Scheduled ${monitoring.cadence} checks — you'll get an email when important issues are found.`
-            : "Turn on to have LifemarkAI check this app on a schedule and email you about important issues."}
+            : monitoringGate && !monitoringGate.allowed
+              ? `Upgrade to ${monitoringGate.requiredPlan ?? "Pro"} to have LifemarkAI check this app on a schedule and email you about important issues.`
+              : "Turn on to have LifemarkAI check this app on a schedule and email you about important issues."}
         </p>
         {monitoring?.enabled && (
           <div className="mt-2 space-y-1.5">
