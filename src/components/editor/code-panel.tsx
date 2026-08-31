@@ -1603,6 +1603,34 @@ export function CodePanel({
               </Button>
             </div>
           )}
+
+          {/* Result: AI proposed a replacement — nothing rendered here before,
+              so runInlineEdit() would set result/showDiff and the panel just
+              went blank with no way to accept or discard the suggestion. */}
+          {inlineEdit.result && (
+            <div className="space-y-2">
+              <div className="rounded border border-[#313244] bg-[#181825] overflow-hidden">
+                <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-[#585b70] bg-[#11111b] border-b border-[#313244]">
+                  Proposed change — lines {inlineEdit.startLine}–{inlineEdit.endLine}
+                </div>
+                <pre className="text-xs text-[#f38ba8] bg-[#f38ba8]/5 px-2 py-1.5 whitespace-pre-wrap break-all border-b border-[#313244]/60 max-h-32 overflow-y-auto">
+                  {inlineEdit.originalText.split("\n").map((l) => `- ${l}`).join("\n")}
+                </pre>
+                <pre className="text-xs text-[#a6e3a1] bg-[#a6e3a1]/5 px-2 py-1.5 whitespace-pre-wrap break-all max-h-32 overflow-y-auto">
+                  {inlineEdit.result.split("\n").map((l) => `+ ${l}`).join("\n")}
+                </pre>
+              </div>
+              <div className="flex gap-2 justify-end">
+                <Button size="sm" variant="ghost" onClick={cancelInlineEdit} className="h-8 text-[#585b70] hover:text-[#cdd6f4]">
+                  Discard
+                </Button>
+                <Button size="sm" onClick={acceptInlineEdit} className="h-8 gap-1.5 bg-violet-600 hover:bg-violet-700 text-white">
+                  <Check className="w-3.5 h-3.5" />
+                  Accept
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
