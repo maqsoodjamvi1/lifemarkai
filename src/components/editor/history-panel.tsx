@@ -804,7 +804,7 @@ export function HistoryPanel({ projectId, onRestore, onCompare }: HistoryPanelPr
               </div>
             ))}
 
-            {filter === "all" && nextCursor && (
+            {nextCursor && (
               <div className="flex justify-center py-2">
                 <Button
                   variant="ghost"
