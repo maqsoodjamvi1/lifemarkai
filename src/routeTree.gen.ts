@@ -165,6 +165,7 @@ import { Route as ApiIntegrationsSupabaseRouteImport } from './routes/api/integr
 import { Route as ApiMcpServersRouteImport } from './routes/api/mcp/servers'
 import { Route as ApiMcpTokenRouteImport } from './routes/api/mcp/token'
 import { Route as ApiNpmSearchRouteImport } from './routes/api/npm/search'
+import { Route as ApiOauthStatusRouteImport } from './routes/api/oauth/status'
 import { Route as ApiPreviewTokenRouteImport } from './routes/api/preview/token'
 import { Route as ApiProjectsIdRouteImport } from './routes/api/projects/$id'
 import { Route as ApiProjectsDbBackupRouteImport } from './routes/api/projects/db-backup'
@@ -211,6 +212,8 @@ import { Route as ApiIntegrationsOpenaiOpenapiDotjsonRouteImport } from './route
 import { Route as ApiIntegrationsTelegramLinkRouteImport } from './routes/api/integrations/telegram/link'
 import { Route as ApiIntegrationsTelegramWebhookRouteImport } from './routes/api/integrations/telegram/webhook'
 import { Route as ApiOauthCallbackConnectorRouteImport } from './routes/api/oauth/callback/$connector'
+import { Route as ApiOauthDisconnectConnectorRouteImport } from './routes/api/oauth/disconnect/$connector'
+import { Route as ApiOauthStartConnectorRouteImport } from './routes/api/oauth/start/$connector'
 import { Route as ApiProjectsIdActivityRouteImport } from './routes/api/projects/$id/activity'
 import { Route as ApiProjectsIdAiProxyRouteImport } from './routes/api/projects/$id/ai-proxy'
 import { Route as ApiProjectsIdAnalyticsRouteImport } from './routes/api/projects/$id/analytics'
@@ -1092,6 +1095,11 @@ const ApiNpmSearchRoute = ApiNpmSearchRouteImport.update({
   path: '/api/npm/search',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiOauthStatusRoute = ApiOauthStatusRouteImport.update({
+  id: '/api/oauth/status',
+  path: '/api/oauth/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPreviewTokenRoute = ApiPreviewTokenRouteImport.update({
   id: '/api/preview/token',
   path: '/api/preview/token',
@@ -1339,6 +1347,17 @@ const ApiOauthCallbackConnectorRoute =
     path: '/api/oauth/callback/$connector',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiOauthDisconnectConnectorRoute =
+  ApiOauthDisconnectConnectorRouteImport.update({
+    id: '/api/oauth/disconnect/$connector',
+    path: '/api/oauth/disconnect/$connector',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiOauthStartConnectorRoute = ApiOauthStartConnectorRouteImport.update({
+  id: '/api/oauth/start/$connector',
+  path: '/api/oauth/start/$connector',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiProjectsIdActivityRoute = ApiProjectsIdActivityRouteImport.update({
   id: '/activity',
   path: '/activity',
@@ -1957,6 +1976,7 @@ export interface FileRoutesByFullPath {
   '/api/mcp/servers': typeof ApiMcpServersRoute
   '/api/mcp/token': typeof ApiMcpTokenRoute
   '/api/npm/search': typeof ApiNpmSearchRoute
+  '/api/oauth/status': typeof ApiOauthStatusRoute
   '/api/preview/token': typeof ApiPreviewTokenRoute
   '/api/projects/$id': typeof ApiProjectsIdRouteWithChildren
   '/api/projects/db-backup': typeof ApiProjectsDbBackupRoute
@@ -2003,6 +2023,8 @@ export interface FileRoutesByFullPath {
   '/api/integrations/telegram/link': typeof ApiIntegrationsTelegramLinkRoute
   '/api/integrations/telegram/webhook': typeof ApiIntegrationsTelegramWebhookRoute
   '/api/oauth/callback/$connector': typeof ApiOauthCallbackConnectorRoute
+  '/api/oauth/disconnect/$connector': typeof ApiOauthDisconnectConnectorRoute
+  '/api/oauth/start/$connector': typeof ApiOauthStartConnectorRoute
   '/api/projects/$id/activity': typeof ApiProjectsIdActivityRoute
   '/api/projects/$id/ai-proxy': typeof ApiProjectsIdAiProxyRoute
   '/api/projects/$id/analytics': typeof ApiProjectsIdAnalyticsRoute
@@ -2245,6 +2267,7 @@ export interface FileRoutesByTo {
   '/api/mcp/servers': typeof ApiMcpServersRoute
   '/api/mcp/token': typeof ApiMcpTokenRoute
   '/api/npm/search': typeof ApiNpmSearchRoute
+  '/api/oauth/status': typeof ApiOauthStatusRoute
   '/api/preview/token': typeof ApiPreviewTokenRoute
   '/api/projects/$id': typeof ApiProjectsIdRouteWithChildren
   '/api/projects/db-backup': typeof ApiProjectsDbBackupRoute
@@ -2291,6 +2314,8 @@ export interface FileRoutesByTo {
   '/api/integrations/telegram/link': typeof ApiIntegrationsTelegramLinkRoute
   '/api/integrations/telegram/webhook': typeof ApiIntegrationsTelegramWebhookRoute
   '/api/oauth/callback/$connector': typeof ApiOauthCallbackConnectorRoute
+  '/api/oauth/disconnect/$connector': typeof ApiOauthDisconnectConnectorRoute
+  '/api/oauth/start/$connector': typeof ApiOauthStartConnectorRoute
   '/api/projects/$id/activity': typeof ApiProjectsIdActivityRoute
   '/api/projects/$id/ai-proxy': typeof ApiProjectsIdAiProxyRoute
   '/api/projects/$id/analytics': typeof ApiProjectsIdAnalyticsRoute
@@ -2535,6 +2560,7 @@ export interface FileRoutesById {
   '/api/mcp/servers': typeof ApiMcpServersRoute
   '/api/mcp/token': typeof ApiMcpTokenRoute
   '/api/npm/search': typeof ApiNpmSearchRoute
+  '/api/oauth/status': typeof ApiOauthStatusRoute
   '/api/preview/token': typeof ApiPreviewTokenRoute
   '/api/projects/$id': typeof ApiProjectsIdRouteWithChildren
   '/api/projects/db-backup': typeof ApiProjectsDbBackupRoute
@@ -2581,6 +2607,8 @@ export interface FileRoutesById {
   '/api/integrations/telegram/link': typeof ApiIntegrationsTelegramLinkRoute
   '/api/integrations/telegram/webhook': typeof ApiIntegrationsTelegramWebhookRoute
   '/api/oauth/callback/$connector': typeof ApiOauthCallbackConnectorRoute
+  '/api/oauth/disconnect/$connector': typeof ApiOauthDisconnectConnectorRoute
+  '/api/oauth/start/$connector': typeof ApiOauthStartConnectorRoute
   '/api/projects/$id/activity': typeof ApiProjectsIdActivityRoute
   '/api/projects/$id/ai-proxy': typeof ApiProjectsIdAiProxyRoute
   '/api/projects/$id/analytics': typeof ApiProjectsIdAnalyticsRoute
@@ -2825,6 +2853,7 @@ export interface FileRouteTypes {
     | '/api/mcp/servers'
     | '/api/mcp/token'
     | '/api/npm/search'
+    | '/api/oauth/status'
     | '/api/preview/token'
     | '/api/projects/$id'
     | '/api/projects/db-backup'
@@ -2871,6 +2900,8 @@ export interface FileRouteTypes {
     | '/api/integrations/telegram/link'
     | '/api/integrations/telegram/webhook'
     | '/api/oauth/callback/$connector'
+    | '/api/oauth/disconnect/$connector'
+    | '/api/oauth/start/$connector'
     | '/api/projects/$id/activity'
     | '/api/projects/$id/ai-proxy'
     | '/api/projects/$id/analytics'
@@ -3113,6 +3144,7 @@ export interface FileRouteTypes {
     | '/api/mcp/servers'
     | '/api/mcp/token'
     | '/api/npm/search'
+    | '/api/oauth/status'
     | '/api/preview/token'
     | '/api/projects/$id'
     | '/api/projects/db-backup'
@@ -3159,6 +3191,8 @@ export interface FileRouteTypes {
     | '/api/integrations/telegram/link'
     | '/api/integrations/telegram/webhook'
     | '/api/oauth/callback/$connector'
+    | '/api/oauth/disconnect/$connector'
+    | '/api/oauth/start/$connector'
     | '/api/projects/$id/activity'
     | '/api/projects/$id/ai-proxy'
     | '/api/projects/$id/analytics'
@@ -3402,6 +3436,7 @@ export interface FileRouteTypes {
     | '/api/mcp/servers'
     | '/api/mcp/token'
     | '/api/npm/search'
+    | '/api/oauth/status'
     | '/api/preview/token'
     | '/api/projects/$id'
     | '/api/projects/db-backup'
@@ -3448,6 +3483,8 @@ export interface FileRouteTypes {
     | '/api/integrations/telegram/link'
     | '/api/integrations/telegram/webhook'
     | '/api/oauth/callback/$connector'
+    | '/api/oauth/disconnect/$connector'
+    | '/api/oauth/start/$connector'
     | '/api/projects/$id/activity'
     | '/api/projects/$id/ai-proxy'
     | '/api/projects/$id/analytics'
@@ -3669,6 +3706,7 @@ export interface RootRouteChildren {
   ApiIntegrationsSemrushRoute: typeof ApiIntegrationsSemrushRoute
   ApiIntegrationsSupabaseRoute: typeof ApiIntegrationsSupabaseRoute
   ApiNpmSearchRoute: typeof ApiNpmSearchRoute
+  ApiOauthStatusRoute: typeof ApiOauthStatusRoute
   ApiPreviewTokenRoute: typeof ApiPreviewTokenRoute
   ApiSandboxStatusRoute: typeof ApiSandboxStatusRoute
   ApiSecurityDeepScanRoute: typeof ApiSecurityDeepScanRoute
@@ -3695,6 +3733,8 @@ export interface RootRouteChildren {
   ApiIntegrationsTelegramLinkRoute: typeof ApiIntegrationsTelegramLinkRoute
   ApiIntegrationsTelegramWebhookRoute: typeof ApiIntegrationsTelegramWebhookRoute
   ApiOauthCallbackConnectorRoute: typeof ApiOauthCallbackConnectorRoute
+  ApiOauthDisconnectConnectorRoute: typeof ApiOauthDisconnectConnectorRoute
+  ApiOauthStartConnectorRoute: typeof ApiOauthStartConnectorRoute
   ApiPublicAppDataSlugRoute: typeof ApiPublicAppDataSlugRoute
   ApiScimV2ServiceProviderConfigRoute: typeof ApiScimV2ServiceProviderConfigRoute
   ApiScimV2UsersRoute: typeof ApiScimV2UsersRouteWithChildren
@@ -4796,6 +4836,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiNpmSearchRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/oauth/status': {
+      id: '/api/oauth/status'
+      path: '/api/oauth/status'
+      fullPath: '/api/oauth/status'
+      preLoaderRoute: typeof ApiOauthStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/preview/token': {
       id: '/api/preview/token'
       path: '/api/preview/token'
@@ -5116,6 +5163,20 @@ declare module '@tanstack/react-router' {
       path: '/api/oauth/callback/$connector'
       fullPath: '/api/oauth/callback/$connector'
       preLoaderRoute: typeof ApiOauthCallbackConnectorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/oauth/disconnect/$connector': {
+      id: '/api/oauth/disconnect/$connector'
+      path: '/api/oauth/disconnect/$connector'
+      fullPath: '/api/oauth/disconnect/$connector'
+      preLoaderRoute: typeof ApiOauthDisconnectConnectorRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/oauth/start/$connector': {
+      id: '/api/oauth/start/$connector'
+      path: '/api/oauth/start/$connector'
+      fullPath: '/api/oauth/start/$connector'
+      preLoaderRoute: typeof ApiOauthStartConnectorRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/projects/$id/activity': {
@@ -6431,6 +6492,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiIntegrationsSemrushRoute: ApiIntegrationsSemrushRoute,
   ApiIntegrationsSupabaseRoute: ApiIntegrationsSupabaseRoute,
   ApiNpmSearchRoute: ApiNpmSearchRoute,
+  ApiOauthStatusRoute: ApiOauthStatusRoute,
   ApiPreviewTokenRoute: ApiPreviewTokenRoute,
   ApiSandboxStatusRoute: ApiSandboxStatusRoute,
   ApiSecurityDeepScanRoute: ApiSecurityDeepScanRoute,
@@ -6458,6 +6520,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiIntegrationsTelegramLinkRoute: ApiIntegrationsTelegramLinkRoute,
   ApiIntegrationsTelegramWebhookRoute: ApiIntegrationsTelegramWebhookRoute,
   ApiOauthCallbackConnectorRoute: ApiOauthCallbackConnectorRoute,
+  ApiOauthDisconnectConnectorRoute: ApiOauthDisconnectConnectorRoute,
+  ApiOauthStartConnectorRoute: ApiOauthStartConnectorRoute,
   ApiPublicAppDataSlugRoute: ApiPublicAppDataSlugRoute,
   ApiScimV2ServiceProviderConfigRoute: ApiScimV2ServiceProviderConfigRoute,
   ApiScimV2UsersRoute: ApiScimV2UsersRouteWithChildren,

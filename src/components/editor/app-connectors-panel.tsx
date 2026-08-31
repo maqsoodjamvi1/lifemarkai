@@ -1924,6 +1924,15 @@ const MANAGED_OAUTH_CONNECTOR_IDS = new Set([
   "github", "gitlab", "notion", "discord", "zoom", "linear", "asana", "hubspot",
 ]);
 
+// Connectors whose OAuth runs through the account-level "connector gateway"
+// (GET /api/oauth/start/$connector -> provider consent screen ->
+// /api/oauth/callback/$connector, token stored in oauth_tokens and used by
+// src/routes/api/gateway/$connector/$.ts) rather than the project-scoped
+// flow above. This connects the signed-in user's own Slack/Google account
+// once — not per project — so "Connected" here reflects /api/oauth/status,
+// not this project's env vars, and disconnecting hits /api/oauth/disconnect.
+const GATEWAY_OAUTH_CONNECTOR_IDS = new Set(["slack", "google_workspace"]);
+
 // ─── ConnectorCard ─────────────────────────────────────────────────────────────
 
 function ConnectorCard({
@@ -2019,6 +2028,24 @@ function ConnectorCard({
               </Button>
               <p className="text-[9px] text-muted-foreground text-center">or paste credentials manually below</p>
             </div>
+          ) : GATEWAY_OAUTH_CONNECTOR_IDS.has(connector.id) ? (
+            <div className="mb-2 p-2 rounded-lg bg-sky-500/5 border border-sky-500/15 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Zap className="w-3 h-3 text-sky-400 shrink-0" />
+                <p className="text-[10px] text-sky-700 dark:text-sky-300">Connects your account once — every project can use it.</p>
+              </div>
+              <Button
+                size="sm"
+                className="h-7 w-full text-[10px]"
+                onClick={() => {
+                  const returnTo = `${window.location.pathname}${window.location.search}`;
+                  window.location.href = `/api/oauth/start/${encodeURIComponent(connector.id)}?returnTo=${encodeURIComponent(returnTo)}`;
+                }}
+              >
+                Connect {connector.name} with OAuth
+              </Button>
+              <p className="text-[9px] text-muted-foreground text-center">or paste a project-specific token below</p>
+            </div>
           ) : connector.oauthFlow && (
             <div className="flex items-center gap-2 mb-2 p-2 rounded-lg bg-sky-500/5 border border-sky-500/15">
               <Zap className="w-3 h-3 text-sky-400 shrink-0" />
@@ -2105,20 +2132,27 @@ export function AppConnectorsPanel({ projectId }: AppConnectorsPanelProps) {
   // just an effect) because the OAuth-redirect effect below also needs to
   // trigger a reload once the callback route has written a new token.
   const loadConnected = useCallback((cancelled: { current: boolean }) => {
-    return fetch(`/api/projects/${projectId}/env`)
-      .then((r) => r.ok ? r.json() : { envVars: [] })
-      .then((data: { envVars: Array<{ key: string }> }) => {
+    return Promise.all([
+      fetch(`/api/projects/${projectId}/env`)
+        .then((r) => r.ok ? r.json() : { envVars: [] })
+        .then((data: { envVars: Array<{ key: string }> }) => new Set((data.envVars ?? []).map((e: { key: string }) => e.key)))
+        .catch(() => new Set<string>()),
+      // Account-level (see GATEWAY_OAUTH_CONNECTOR_IDS) — not project env vars.
+      fetch(`/api/oauth/status`)
+        .then((r) => r.ok ? r.json() : { connectors: [] })
+        .then((data: { connectors: string[] }) => new Set(data.connectors ?? []))
+        .catch(() => new Set<string>()),
+    ])
+      .then(([keys, gatewayConnectors]) => {
         if (cancelled.current) return;
-        const keys = new Set((data.envVars ?? []).map((e: { key: string }) => e.key));
         const connectedIds = new Set<string>();
         for (const c of CONNECTORS) {
-          if (c.fields.every((f) => keys.has(f.key))) {
+          if (GATEWAY_OAUTH_CONNECTOR_IDS.has(c.id) ? gatewayConnectors.has(c.id) : c.fields.every((f) => keys.has(f.key))) {
             connectedIds.add(c.id);
           }
         }
         setConnected(connectedIds);
       })
-      .catch(() => null)
       .finally(() => {
         if (!cancelled.current) setLoading(false);
       });
@@ -2138,7 +2172,12 @@ export function AppConnectorsPanel({ projectId }: AppConnectorsPanelProps) {
     const params = new URLSearchParams(window.location.search);
     const connectedConnector = params.get("connector_connected");
     const errorConnector = params.get("connector_error");
-    if (!connectedConnector && !errorConnector) return;
+    // /api/oauth/callback/$connector (the account-level gateway flow) uses
+    // its own, differently-named params so it doesn't collide with the
+    // project-scoped flow's connector_connected/connector_error above.
+    const gatewayConnected = params.get("oauth_success");
+    const gatewayError = params.get("oauth_error");
+    if (!connectedConnector && !errorConnector && !gatewayConnected && !gatewayError) return;
 
     if (connectedConnector) {
       const c = CONNECTORS.find((x) => x.id === connectedConnector);
@@ -2151,11 +2190,23 @@ export function AppConnectorsPanel({ projectId }: AppConnectorsPanelProps) {
         description: `Couldn't connect ${c?.name ?? params.get("connector") ?? "that app"} via OAuth (${errorConnector}). You can still paste credentials manually.`,
         variant: "destructive",
       });
+    } else if (gatewayConnected) {
+      const c = CONNECTORS.find((x) => x.id === gatewayConnected);
+      toast({ title: "Connected", description: `${c?.name ?? gatewayConnected} was connected to your account.` });
+      void loadConnected({ current: false });
+    } else if (gatewayError) {
+      toast({
+        title: "Connection failed",
+        description: `Couldn't connect that app (${gatewayError}). Try again.`,
+        variant: "destructive",
+      });
     }
 
     params.delete("connector_connected");
     params.delete("connector_error");
     params.delete("connector");
+    params.delete("oauth_success");
+    params.delete("oauth_error");
     const query = params.toString();
     window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
     // Runs once on mount to consume the redirect's one-time query params.
@@ -2204,11 +2255,12 @@ export function AppConnectorsPanel({ projectId }: AppConnectorsPanelProps) {
     // removed the connector from `connected` regardless — so a failed key
     // removal (session expired, server error) showed as "disconnected" in
     // the UI while the stored credential was still live server-side.
-    Promise.all(
-      c.fields.map((f) =>
-        fetch(`/api/projects/${projectId}/env/${f.key}`, { method: "DELETE" }).then((res) => res.ok).catch(() => false)
-      )
-    ).then((results) => {
+    const deletions = GATEWAY_OAUTH_CONNECTOR_IDS.has(id)
+      ? [fetch(`/api/oauth/disconnect/${encodeURIComponent(id)}`, { method: "DELETE" }).then((res) => res.ok).catch(() => false)]
+      : c.fields.map((f) =>
+          fetch(`/api/projects/${projectId}/env/${f.key}`, { method: "DELETE" }).then((res) => res.ok).catch(() => false)
+        );
+    Promise.all(deletions).then((results) => {
       if (results.some((ok) => !ok)) {
         toast({
           title: "Couldn't fully disconnect",
