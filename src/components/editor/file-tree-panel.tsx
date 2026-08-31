@@ -46,8 +46,9 @@ function buildTree(files: ProjectFile[]): TreeNode[] {
     for (let i = 0; i < parts.length; i++) {
       const path = parts.slice(0, i + 1).join("/");
       const isFolder = i < parts.length - 1;
+      const existing = nodeMap.get(path);
 
-      if (!nodeMap.has(path)) {
+      if (!existing) {
         const node: TreeNode = {
           name: parts[i],
           path,
@@ -57,6 +58,18 @@ function buildTree(files: ProjectFile[]): TreeNode[] {
         };
         nodeMap.set(path, node);
         siblings.push(node);
+      } else if (isFolder && !existing.children) {
+        // A file path and a folder path collide at this segment (e.g. a
+        // project has both "src" and "src/index.ts"). Rather than crash on
+        // the missing `children` array, promote the existing node in place
+        // so it can hold both its own file and the nested entries.
+        existing.isFolder = true;
+        existing.children = [];
+      } else if (!isFolder && existing.file && existing.file.path !== file.path) {
+        // Two distinct ProjectFile records resolved to the same leaf path
+        // (e.g. a rename/move race). Keep the tree from silently dropping
+        // one of them — last one wins, same as the underlying files list.
+        existing.file = file;
       }
 
       if (isFolder) {

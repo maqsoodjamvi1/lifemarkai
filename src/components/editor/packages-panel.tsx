@@ -82,6 +82,7 @@ export function PackagesPanel({ projectId, files, onFileChange }: PackagesPanelP
   }, [query]);
 
   async function mutatePkgJson(
+    pkgName: string,
     mutate: (deps: Record<string, string>) => void,
   ) {
     const pkgFile = files.find((f) => f.path === "package.json");
@@ -90,8 +91,19 @@ export function PackagesPanel({ projectId, files, onFileChange }: PackagesPanelP
       try { parsed = JSON.parse(pkgFile.content); } catch { /* use default */ }
     }
     const deps = (parsed.dependencies as Record<string, string>) ?? {};
-    mutate(deps);
+    const devDeps = (parsed.devDependencies as Record<string, string>) ?? {};
+    // `installed` (below) is built from BOTH dependencies and devDependencies,
+    // so a devDependency shows up with a working-looking remove button. Only
+    // mutating `dependencies` here made that button silently no-op for any
+    // package that actually lives in devDependencies. Mutate whichever
+    // section already has this package; new packages default to dependencies.
+    const target = !Object.prototype.hasOwnProperty.call(deps, pkgName)
+      && Object.prototype.hasOwnProperty.call(devDeps, pkgName)
+      ? devDeps
+      : deps;
+    mutate(target);
     parsed.dependencies = deps;
+    parsed.devDependencies = devDeps;
 
     const newContent = JSON.stringify(parsed, null, 2);
     const updated: ProjectFile = pkgFile
@@ -120,7 +132,7 @@ export function PackagesPanel({ projectId, files, onFileChange }: PackagesPanelP
   async function addPackage(pkg: NpmPackage) {
     setAdding(pkg.name);
     try {
-      await mutatePkgJson((deps) => { deps[pkg.name] = `^${pkg.version}`; });
+      await mutatePkgJson(pkg.name, (deps) => { deps[pkg.name] = `^${pkg.version}`; });
       toast({ title: "Package added", description: `${pkg.name}@^${pkg.version} added to package.json` });
     } catch {
       toast({ title: "Failed to add package", variant: "destructive" });
@@ -132,7 +144,7 @@ export function PackagesPanel({ projectId, files, onFileChange }: PackagesPanelP
   async function removePackage(name: string) {
     setRemoving(name);
     try {
-      await mutatePkgJson((deps) => { delete deps[name]; });
+      await mutatePkgJson(name, (deps) => { delete deps[name]; });
       toast({ title: "Package removed", description: `${name} removed from package.json` });
     } catch {
       toast({ title: "Failed to remove package", variant: "destructive" });

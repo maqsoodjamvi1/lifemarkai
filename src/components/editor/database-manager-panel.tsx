@@ -8,7 +8,7 @@
  *  none        — CTA pointing at the Cloud / DB tabs.
  */
 
-import { useState,useEffect,useCallback,useMemo } from "react";
+import { useState,useEffect,useCallback,useMemo,useRef } from "react";
 import {
 Database,Loader2,RefreshCw,Trash2,Plus,Play,Lock,
 Table2,KeyRound,ChevronLeft,ChevronRight,X,Check,
@@ -137,7 +137,15 @@ export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPan
 
   useEffect(() => { void loadTables(); }, [loadTables]);
 
+  // Guards against a table-switch race: if a user clicks table A then table B
+  // before A's request resolves, and A's response lands after B's, an
+  // unguarded setRows would overwrite B's already-correct rows with A's,
+  // mislabeled under B's header/columns. Only the most recently *issued*
+  // request is allowed to commit its result.
+  const rowsRequestRef = useRef(0);
+
   const loadRows = useCallback(async (tableName: string, pageIdx: number) => {
+    const requestId = ++rowsRequestRef.current;
     setLoadingRows(true);
     setEditing(null);
     try {
@@ -145,6 +153,7 @@ export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPan
         `${api}?action=rows&table=${encodeURIComponent(tableName)}&limit=${PAGE_SIZE}&offset=${pageIdx * PAGE_SIZE}`,
       );
       const data = await res.json();
+      if (requestId !== rowsRequestRef.current) return; // superseded by a newer request
       if (!res.ok) {
         toast({ title: "Failed to load rows", description: data.error, variant: "destructive" });
         setRows([]);
@@ -154,9 +163,10 @@ export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPan
       setRows(data.rows ?? []);
       setTotal(typeof data.total === "number" ? data.total : undefined);
     } catch {
+      if (requestId !== rowsRequestRef.current) return;
       toast({ title: "Failed to load rows", variant: "destructive" });
     } finally {
-      setLoadingRows(false);
+      if (requestId === rowsRequestRef.current) setLoadingRows(false);
     }
   }, [api]);
 

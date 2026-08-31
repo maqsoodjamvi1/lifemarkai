@@ -191,7 +191,11 @@ function scanFiles(files: ProjectFile[]): A11yIssue[] {
         const snippet = lines.slice(Math.max(0, lineNum - 2), lineNum + 2).join("\n").trim().slice(0, 200);
 
         issues.push({
-          id: `${rule.id}-${file.path}-${lineNum}`,
+          // Disambiguated by match position, not just rule+file+line — two
+          // matches of the same rule on one line (e.g. two <img> tags both
+          // missing alt) previously collided on the same id, breaking React
+          // keys and making the two issues share one expand/collapse state.
+          id: `${rule.id}-${file.path}-${lineNum}-${match.index ?? 0}`,
           severity: rule.severity,
           rule: rule.name,
           description: rule.description(match[0]),
@@ -368,7 +372,7 @@ export function AccessibilityPanel({ files, onFixWithAI }: AccessibilityPanelPro
                         </Button>
                         {issue.wcag && (
                           <a
-                            href={`https://www.w3.org/WAI/WCAG21/Understanding/${issue.wcag.replace(".", "")}.html`}
+                            href={`https://www.w3.org/WAI/WCAG21/Understanding/${issue.wcag.replaceAll(".", "")}.html`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors px-1.5"

@@ -146,11 +146,17 @@ export function DomainBuyModal({
       });
 
       if (checkoutRes.ok) {
-        const checkout = (await checkoutRes.json()) as { url?: string };
+        // A Response body can only be read once. The old code re-called
+        // .json() a second time below when this branch fell through without
+        // a url — that second read rejects ("body stream already read"),
+        // gets swallowed by the catch below, and the user saw a generic
+        // "Checkout failed (200)" instead of what actually happened.
+        const checkout = (await checkoutRes.json().catch(() => ({}))) as { url?: string };
         if (checkout.url) {
           window.location.href = checkout.url;
           return;
         }
+        throw new Error("Checkout succeeded but returned no redirect URL. Please try again.");
       }
 
       if (checkoutRes.status !== 501) {

@@ -20,8 +20,8 @@ export async function createDomainCheckout(data: any) {
     if (!process.env.STRIPE_SECRET_KEY) return { status: "unconfigured" as const, message: "Stripe is not configured" };
     if (!isPurchaseEnabled()) return { status: "unconfigured" as const, message: "Domain registrar is not configured" };
 
-    if (!data.projectId || !data.domain || !data.contact || !data.priceCents || data.priceCents < 100) {
-      return { status: "bad_request" as const, message: "projectId, domain, contact, and priceCents are required" };
+    if (!data.projectId || !data.domain || !data.contact) {
+      return { status: "bad_request" as const, message: "projectId, domain, and contact are required" };
     }
 
     const { data: project } = await supabase
@@ -30,6 +30,19 @@ export async function createDomainCheckout(data: any) {
 
     const yr = Math.min(Math.max(data.years ?? 1, 1), 10);
     const registrar = getRegistrar();
+
+    // Never trust a client-supplied price for a Stripe charge amount — a
+    // scripted request to this endpoint could set priceCents to anything.
+    // Re-look up the domain's real price from the registrar here and charge
+    // that instead, ignoring whatever the client sent.
+    const domainLower = data.domain.toLowerCase();
+    const quotes = await registrar.search(domainLower, yr).catch(() => []);
+    const quote = quotes.find((q) => q.domain.toLowerCase() === domainLower);
+    if (!quote || !quote.available || !quote.priceCents || quote.priceCents < 100) {
+      return { status: "bad_request" as const, message: "This domain is no longer available at a valid price. Please search again." };
+    }
+    const priceCents = quote.priceCents;
+
     const { data: profile } = await supabase
       .from("profiles").select("stripe_customer_id, email, full_name").eq("id", user.id).single();
 
@@ -48,7 +61,7 @@ export async function createDomainCheckout(data: any) {
           domain: data.domain.toLowerCase(),
           registrar: registrar.id,
           status: "pending_payment",
-          price_cents: data.priceCents,
+          price_cents: priceCents,
           years: yr,
           auto_renew: true,
           metadata: { contact: data.contact },
@@ -66,7 +79,7 @@ export async function createDomainCheckout(data: any) {
         {
           price_data: {
             currency: "usd",
-            unit_amount: data.priceCents,
+            unit_amount: priceCents,
             product_data: { name: `Domain registration — ${data.domain}`, description: `${yr}-year registration + auto DNS wiring` },
           },
           quantity: 1,

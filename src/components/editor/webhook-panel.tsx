@@ -10,7 +10,7 @@ import { useState,useEffect,useCallback } from "react";
 import {
 Webhook,Plus,Trash2,Send,CheckCircle2,XCircle,
 Loader2,Copy,Check,ChevronDown,ChevronRight,
-AlertCircle,ShieldCheck,Zap,
+AlertCircle,ShieldCheck,Zap,Eye,EyeOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -191,11 +191,13 @@ interface EndpointRowProps {
 function EndpointRow({ ep, onChange, onDelete, onTestFire, testing }: EndpointRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [secretRevealed, setSecretRevealed] = useState(false);
 
   function copySecret() {
-    void navigator.clipboard.writeText(ep.secret);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    navigator.clipboard.writeText(ep.secret).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => { /* clipboard unavailable — the masked/revealed text is still selectable */ });
   }
 
   function toggleEvent(ev: WebhookEvent) {
@@ -272,14 +274,26 @@ function EndpointRow({ ep, onChange, onDelete, onTestFire, testing }: EndpointRo
             </div>
           </div>
 
-          {/* Secret */}
+          {/* Secret — masked by default, same discipline as the secrets vault
+              and env panels. This used to render in plaintext the moment the
+              row was expanded, so a screen share or screenshot taken to copy
+              the webhook URL would also leak the HMAC signing secret. */}
           <div className="space-y-1">
             <Label className="text-[10px] text-muted-foreground uppercase tracking-wide">Signing secret</Label>
             <div className="flex gap-1.5 items-center">
               <code className="flex-1 text-[10px] font-mono bg-muted/50 border border-border rounded px-2 py-1 truncate">
-                {ep.secret}
+                {secretRevealed ? ep.secret : "•".repeat(Math.min(ep.secret.length, 32))}
               </code>
-              <Button variant="outline" size="icon" className="h-6 w-6 shrink-0" onClick={copySecret}>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-6 w-6 shrink-0"
+                onClick={() => setSecretRevealed((v) => !v)}
+                title={secretRevealed ? "Hide secret" : "Reveal secret"}
+              >
+                {secretRevealed ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+              </Button>
+              <Button variant="outline" size="icon" className="h-6 w-6 shrink-0" onClick={copySecret} title="Copy secret">
                 {copied ? <Check className="w-3 h-3 text-green-500" /> : <Copy className="w-3 h-3" />}
               </Button>
             </div>

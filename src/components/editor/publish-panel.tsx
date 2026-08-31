@@ -73,6 +73,24 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
     return () => { cancelled = true; };
   }, [project.id, project.deployed_url, project.updated_at, hasUnpublishedProp]);
 
+  // websiteAccess used to always start at "public" and was never loaded from
+  // the project's actual saved audience. Because handleDeploy PUTs whatever
+  // websiteAccess currently holds on every deploy, simply reopening this
+  // panel on a project set to "Private"/"Workspace only" and clicking
+  // "Update Live Site" silently reverted it back to public. Load the real
+  // saved value on mount.
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`/api/projects/${project.id}/publish-audience`, { credentials: "include" })
+      .then(async (res) => {
+        if (!res.ok) return;
+        const data = (await res.json().catch(() => ({}))) as { audience?: "public" | "workspace" | "private" | "custom" };
+        if (!cancelled && data.audience) setWebsiteAccess(data.audience);
+      })
+      .catch(() => null);
+    return () => { cancelled = true; };
+  }, [project.id]);
+
   /* ── Actions ── */
 
   const handleDeploy = async () => {

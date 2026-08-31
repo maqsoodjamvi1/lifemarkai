@@ -198,6 +198,15 @@ export function BrowserTestingPanel({ project, files, onFilesUpdate, onOpenFile 
   const liveAbortRef = useRef<(() => void) | null>(null);
   const liveScrollRef = useRef<HTMLDivElement>(null);
 
+  // The live-test SSE stream was only ever torn down from the "Stop" button —
+  // navigating away from this panel mid-run (e.g. switching tabs) left the
+  // fetch/ReadableStream running in the background indefinitely, still
+  // calling setLiveSteps/setLiveScreenshots/setLiveDone on an unmounted
+  // component and holding large base64 screenshot payloads alive.
+  useEffect(() => {
+    return () => { liveAbortRef.current?.(); };
+  }, []);
+
   // E2E test files in the project
   const testFiles = useMemo(
     () => files.filter((f) => f.path.match(/\.(spec|test)\.(ts|js)$/) || f.path.startsWith("e2e/")),

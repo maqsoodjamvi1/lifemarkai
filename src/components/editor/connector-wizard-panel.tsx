@@ -29,7 +29,7 @@ interface Connector {
   id: string;
   name: string;
   description: string;
-  category: "payments" | "database" | "analytics" | "Analytics" | "communication" | "Communication" | "storage" | "auth" | "ecommerce" | "crm" | "devtools" | "AI" | "Finance" | "Project Management";
+  category: "payments" | "database" | "analytics" | "communication" | "storage" | "auth" | "ecommerce" | "crm" | "devtools" | "finance" | "project-management";
   icon: string;          // emoji or URL
   color: string;         // Tailwind bg class
   docsUrl: string;
@@ -510,7 +510,7 @@ export const CONNECTORS: Connector[] = [
     id: "amplitude",
     name: "Amplitude",
     description: "Product analytics — track user behaviour, funnels, and retention",
-    category: "Analytics",
+    category: "analytics",
     icon: "📈",
     color: "bg-blue-500/10 border-blue-500/20",
     docsUrl: "https://www.docs.developers.amplitude.com/",
@@ -529,7 +529,7 @@ export const CONNECTORS: Connector[] = [
     id: "linear",
     name: "Linear",
     description: "Project management — create issues, update statuses, query cycles",
-    category: "Project Management",
+    category: "project-management",
     icon: "🎯",
     color: "bg-indigo-500/10 border-indigo-500/20",
     docsUrl: "https://developers.linear.app/docs",
@@ -548,7 +548,7 @@ export const CONNECTORS: Connector[] = [
     id: "atlassian",
     name: "Atlassian",
     description: "Jira issues and Confluence pages — enterprise project tracking",
-    category: "Project Management",
+    category: "project-management",
     icon: "🔷",
     color: "bg-[#0052CC]/10 border-[#0052CC]/20",
     docsUrl: "https://developer.atlassian.com/cloud/jira/platform/rest/v3/intro/",
@@ -694,7 +694,7 @@ export const CONNECTORS: Connector[] = [
     id: "plaid",
     name: "Plaid",
     description: "Banking & finance — connect bank accounts, transactions, balance data",
-    category: "Finance",
+    category: "finance",
     icon: "🏦",
     color: "bg-emerald-500/10 border-emerald-500/20",
     docsUrl: "https://plaid.com/docs/",
@@ -715,7 +715,7 @@ export const CONNECTORS: Connector[] = [
     id: "semrush",
     name: "Semrush",
     description: "SEO research — keyword data, backlink analysis, competitor insights",
-    category: "Analytics",
+    category: "analytics",
     icon: "🔍",
     color: "bg-orange-500/10 border-orange-500/20",
     docsUrl: "https://developer.semrush.com/api/",
@@ -734,7 +734,7 @@ export const CONNECTORS: Connector[] = [
     id: "google-search-console",
     name: "Google Search Console",
     description: "Search analytics — impressions, clicks, CTR, average position for your pages",
-    category: "Analytics",
+    category: "analytics",
     icon: "📊",
     color: "bg-green-500/10 border-green-500/20",
     docsUrl: "https://developers.google.com/webmaster-tools/v1/api_reference_index",
@@ -756,7 +756,7 @@ export const CONNECTORS: Connector[] = [
     id: "telegram-bot",
     name: "Telegram Bot",
     description: "Send messages, receive commands, and build interactive Telegram bots",
-    category: "Communication",
+    category: "communication",
     icon: "✈️",
     color: "bg-sky-500/10 border-sky-500/20",
     docsUrl: "https://core.telegram.org/bots/api",
@@ -776,7 +776,7 @@ export const CONNECTORS: Connector[] = [
     id: "openai-plugin",
     name: "ChatGPT Actions",
     description: "Expose your app as a ChatGPT Action — let GPT-4 call your API endpoints",
-    category: "AI",
+    category: "devtools",
     icon: "🤖",
     color: "bg-violet-500/10 border-violet-500/20",
     docsUrl: "https://platform.openai.com/docs/actions/introduction",
@@ -801,10 +801,18 @@ const CATEGORY_LABELS: Record<string, string> = {
   storage: "Storage",
   auth: "Auth",
   ecommerce: "E-commerce",
+  crm: "CRM",
   devtools: "AI & Tools",
+  finance: "Finance",
+  "project-management": "Project Management",
 };
 
-const CATEGORY_ORDER = ["payments", "ecommerce", "communication", "analytics", "database", "storage", "auth", "devtools"];
+// Every value the `Connector.category` union can take must appear here, or
+// that connector silently never renders anywhere (grouped view, category
+// pills, or search) — a mismatch here previously made 8 connectors
+// (Amplitude, Linear, Atlassian, Plaid, Semrush, Google Search Console,
+// Telegram Bot, ChatGPT Actions) permanently unreachable.
+const CATEGORY_ORDER = ["payments", "ecommerce", "crm", "communication", "analytics", "database", "storage", "auth", "finance", "project-management", "devtools"];
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 

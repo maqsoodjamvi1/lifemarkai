@@ -52,10 +52,20 @@ const MONO_OPTIONS = [
 
 function hexToHsl(hex: string): { h: number; s: number; l: number } {
   let r = 0, g = 0, b = 0;
+  // The hex text input this feeds accepts CSS shorthand hex (e.g. "#fff")
+  // and any in-progress partial length as the user types. Only handling the
+  // full 7-char form silently fell through to black (r=g=b=0) for shorthand
+  // or partial values, corrupting the exported/applied design tokens with no
+  // error shown — the swatch preview looked right (the browser renders
+  // shorthand hex fine) while the generated CSS got pure black instead.
   if (hex.length === 7) {
     r = parseInt(hex.slice(1, 3), 16) / 255;
     g = parseInt(hex.slice(3, 5), 16) / 255;
     b = parseInt(hex.slice(5, 7), 16) / 255;
+  } else if (hex.length === 4 && /^#[0-9a-fA-F]{3}$/.test(hex)) {
+    r = parseInt(hex[1] + hex[1], 16) / 255;
+    g = parseInt(hex[2] + hex[2], 16) / 255;
+    b = parseInt(hex[3] + hex[3], 16) / 255;
   }
   const max = Math.max(r, g, b), min = Math.min(r, g, b);
   let h = 0, s = 0;

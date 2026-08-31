@@ -21,6 +21,13 @@ export function PaymentsPanel({ profile }: PaymentsPanelProps) {
 
   const currentPlan = profile?.plan ?? "free";
   const credits     = profile?.credits ?? 0;
+  const planCreditsLimit = PLANS.find((p) => p.id === currentPlan)?.credits ?? 50;
+  // -1 is the "unlimited" sentinel used by Enterprise-tier plans. Dividing by
+  // it produces a negative percentage (and a negative CSS width) — treat it
+  // as a full, non-draining bar instead.
+  const isUnlimitedCredits = planCreditsLimit < 0;
+  const creditsPct = isUnlimitedCredits ? 100 : Math.min((credits / planCreditsLimit) * 100, 100);
+  const creditsLimitDisplay = isUnlimitedCredits ? "Unlimited" : planCreditsLimit.toLocaleString();
 
   const planColors: Record<string, string> = {
     free:       "text-muted-foreground",
@@ -98,12 +105,12 @@ export function PaymentsPanel({ profile }: PaymentsPanelProps) {
           <div className="mt-2">
             <div className="flex justify-between text-[9px] text-muted-foreground mb-0.5">
               <span>Credits</span>
-              <span>{credits.toLocaleString()} / {(PLANS.find((p) => p.id === currentPlan)?.credits ?? 50).toLocaleString()}</span>
+              <span>{credits.toLocaleString()} / {creditsLimitDisplay}</span>
             </div>
             <div className="h-1.5 bg-muted rounded-full overflow-hidden">
               <div
                 className={`h-full ${planColors[currentPlan].replace("text-", "bg-")} rounded-full transition-all`}
-                style={{ width: `${Math.min((credits / (PLANS.find((p) => p.id === currentPlan)?.credits ?? 50)) * 100, 100)}%` }}
+                style={{ width: `${creditsPct}%` }}
               />
             </div>
           </div>
@@ -112,7 +119,9 @@ export function PaymentsPanel({ profile }: PaymentsPanelProps) {
         {/* Plan selection */}
         <div className="space-y-2">
           {PLANS.map((plan) => {
-            const priceDisplay = plan.monthlyPrice === 0
+            const priceDisplay = plan.monthlyPrice < 0
+              ? "Custom"
+              : plan.monthlyPrice === 0
               ? "$0"
               : `$${(plan.monthlyPrice / 100).toFixed(0)}`;
             const isActive  = plan.id === currentPlan;
@@ -202,19 +211,20 @@ export function PaymentsPanel({ profile }: PaymentsPanelProps) {
               {
                 label: "Credits remaining",
                 used: credits,
-                limit: PLANS.find((p) => p.id === currentPlan)?.credits ?? 50,
+                limitDisplay: creditsLimitDisplay,
+                pct: creditsPct,
                 color: "bg-violet-400",
               },
             ].map((u) => (
               <div key={u.label}>
                 <div className="flex justify-between text-[9px] text-muted-foreground mb-0.5">
                   <span>{u.label}</span>
-                  <span>{u.used.toLocaleString()} / {u.limit.toLocaleString()}</span>
+                  <span>{u.used.toLocaleString()} / {u.limitDisplay}</span>
                 </div>
                 <div className="h-1 bg-muted rounded-full overflow-hidden">
                   <div
                     className={`h-full ${u.color} rounded-full`}
-                    style={{ width: `${Math.min((u.used / u.limit) * 100, 100)}%` }}
+                    style={{ width: `${u.pct}%` }}
                   />
                 </div>
               </div>

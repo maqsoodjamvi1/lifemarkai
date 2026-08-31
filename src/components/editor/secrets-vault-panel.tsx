@@ -64,14 +64,32 @@ export function SecretsVaultPanel({ projectId }: SecretsVaultPanelProps) {
 
   async function copySecret(id: string) {
     if (revealedId !== id) {
-      // Reveal first then copy
+      // Reveal first then copy. Unlike revealSecret() above, this had no
+      // try/catch/res.ok check: a network error or non-200 response left
+      // `revealing` stuck permanently true (button spinner never clears, no
+      // error shown), and a non-200 body without `value` copied an empty
+      // string to the clipboard silently — a user could paste that into a
+      // .env file believing it was the real secret.
       setRevealing(id);
-      const res = await fetch(`/api/projects/${projectId}/secrets/${id}`);
-      const data = await res.json() as { value: string };
-      setRevealing(null);
-      navigator.clipboard.writeText(data.value ?? "");
+      try {
+        const res = await fetch(`/api/projects/${projectId}/secrets/${id}`);
+        if (!res.ok) throw new Error("Failed to reveal secret");
+        const data = await res.json() as { value?: string };
+        if (!data.value) throw new Error("Secret has no value");
+        await navigator.clipboard.writeText(data.value);
+      } catch {
+        toast({ title: "Could not copy secret", variant: "destructive" });
+        return;
+      } finally {
+        setRevealing(null);
+      }
     } else {
-      navigator.clipboard.writeText(revealedValue);
+      try {
+        await navigator.clipboard.writeText(revealedValue);
+      } catch {
+        toast({ title: "Could not copy secret", variant: "destructive" });
+        return;
+      }
     }
     setCopied(id);
     setTimeout(() => setCopied(null), 2000);

@@ -71,7 +71,8 @@ export function CollaborationPanel({ project, currentUserId, yjsCollaborators = 
 
   useEffect(() => {
     loadCollaborators();
-    setupPresence();
+    const cleanupPresence = setupPresence();
+    return () => { cleanupPresence(); };
   }, []);
 
   async function loadCollaborators() {
@@ -104,8 +105,16 @@ export function CollaborationPanel({ project, currentUserId, yjsCollaborators = 
       })
       .subscribe(async (status) => {
         if (status === "SUBSCRIBED") {
+          // Every client used to track itself with the literal string "You" —
+          // harmless for the local user, but every *other* collaborator saw
+          // that same label on this user's row too. Look up the real name.
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("full_name, email")
+            .eq("id", currentUserId)
+            .single();
           await channel.track({
-            name: "You",
+            name: profile?.full_name || profile?.email || "Anonymous",
             online_at: new Date().toISOString(),
           });
         }
