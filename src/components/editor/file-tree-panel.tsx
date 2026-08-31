@@ -477,17 +477,41 @@ export function FileTreePanel({
         toast({ title: "A file with that name already exists there", variant: "destructive" });
         return;
       }
-      const updated = await Promise.all(
+      const results = await Promise.all(
         toRename.map(async (f, i) => {
-          const res = await fetch(apiBase, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ fileId: f.id, path: renamedPaths[i] }),
-          });
-          return res.ok ? (await res.json()) as ProjectFile : f;
+          try {
+            const res = await fetch(apiBase, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ fileId: f.id, path: renamedPaths[i] }),
+            });
+            if (!res.ok) return { file: f, ok: false as const };
+            return { file: (await res.json()) as ProjectFile, ok: true as const };
+          } catch {
+            return { file: f, ok: false as const };
+          }
         })
       );
+      // Same partial-failure handling as deleteNode's folder branch below: a
+      // PATCH that 401s/500s/times out mid-batch (these fire concurrently)
+      // used to silently keep that one file at its OLD path while its
+      // siblings moved to the new one, with onFilesChange called as if the
+      // whole rename succeeded — the tree then showed the same logical
+      // folder split across two paths with no indication anything went
+      // wrong. Report it instead; failed files simply stay at their old path.
+      const updated = results.map((r) => r.file);
+      const failed = results.filter((r) => !r.ok).map((r) => r.file.path);
       onFilesChange(files.map((f) => updated.find((u) => u.id === f.id) ?? f));
+      if (failed.length > 0) {
+        toast({
+          title:
+            failed.length === toRename.length
+              ? `"${node.name}" was not renamed`
+              : `"${node.name}" was only partly renamed`,
+          description: `${failed.length} file${failed.length === 1 ? "" : "s"} could not be moved (${failed.slice(0, 3).join(", ")}${failed.length > 3 ? "…" : ""}). They are still at their original path.`,
+          variant: "destructive",
+        });
+      }
     } else if (node.file) {
       const dir = node.path.includes("/") ? node.path.split("/").slice(0, -1).join("/") : "";
       const newPath = dir ? `${dir}/${newName}` : newName;
