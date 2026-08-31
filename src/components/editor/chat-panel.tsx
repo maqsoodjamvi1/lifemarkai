@@ -1817,6 +1817,21 @@ export function ChatPanel({
 
   async function submitEditedMessage() {
     if (!editingMessageId || !editInput.trim()) return;
+    // A NEW stream can start after the edit box was opened (queued-message
+    // auto-drain, a realtime event, etc.) — see handleRegenerate's identical
+    // guard below. Without this check we'd still run the file revert, chat
+    // truncation, and onMessagesUpdate() below (all destructive) and only
+    // then hit sendMessage's own `streaming || sendingRef.current` guard,
+    // which no-ops silently — losing the in-flight stream's output AND the
+    // user's edit with no feedback at all.
+    if (streaming || sendingRef.current) {
+      toast({
+        title: "Still generating",
+        description: "Wait for the current response to finish before editing this message.",
+        variant: "destructive",
+      });
+      return;
+    }
     const idx = messages.findIndex((m) => m.id === editingMessageId);
     if (idx < 0) return;
     const editedMsg = messages[idx]!;
