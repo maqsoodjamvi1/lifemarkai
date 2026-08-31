@@ -108,6 +108,13 @@ export function DiffViewerPanel({ projectId, diffs: externalDiffs }: DiffViewerP
   const [pairLoading, setPairLoading] = useState(false);
   const [pairSummary, setPairSummary] = useState<string>("");
   const [pairLabel, setPairLabel] = useState<string>("");
+  // Guards against a fast-compare race: opening "v3→v4" then "v5→v6" before
+  // the first request resolves could let the older response land after the
+  // newer one and silently overwrite it — the panel would show the wrong
+  // diff labeled as if it were the current comparison. Same pattern as
+  // cross-reference-panel's filesRequestRef / database-manager-panel's
+  // rowsRequestRef.
+  const pairRequestRef = useRef(0);
 
   // Active source — pair-mode trumps default-mode
   const diffs = pairDiffs ?? defaultDiffs;
@@ -121,6 +128,7 @@ export function DiffViewerPanel({ projectId, diffs: externalDiffs }: DiffViewerP
         projectId?: string;
       };
       if (!detail?.oldSnapshotId || !detail?.newSnapshotId) return;
+      const requestId = ++pairRequestRef.current;
       void (async () => {
         setPairLoading(true);
         setPairSummary("");
@@ -133,6 +141,7 @@ export function DiffViewerPanel({ projectId, diffs: externalDiffs }: DiffViewerP
               newSnapshotId: detail.newSnapshotId,
             }),
           });
+          if (requestId !== pairRequestRef.current) return; // superseded by a newer compare
           if (!res.ok) {
             setPairDiffs([]);
             return;
@@ -143,6 +152,7 @@ export function DiffViewerPanel({ projectId, diffs: externalDiffs }: DiffViewerP
             oldLabel: string;
             newLabel: string;
           };
+          if (requestId !== pairRequestRef.current) return; // superseded by a newer compare
           const enriched: DiffFile[] = data.diffs.map((d) => {
             const { added, removed } = countDiffLines(d.before, d.after);
             return {
@@ -157,7 +167,7 @@ export function DiffViewerPanel({ projectId, diffs: externalDiffs }: DiffViewerP
           setPairSummary(data.summary ?? "");
           setPairLabel(`${data.oldLabel} → ${data.newLabel}`);
         } finally {
-          setPairLoading(false);
+          if (requestId === pairRequestRef.current) setPairLoading(false);
         }
       })();
     }
