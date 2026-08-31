@@ -114,6 +114,8 @@ import { useAIStreamChat } from "@/hooks/use-ai-stream-chat";
 
 /** Label AND identity for the scope-guard override chip — compared by value. */
 const SCOPE_OVERRIDE_CHIP = "Build it anyway";
+/** Stable empty value for when suggestionChipsEnabled is off — avoids a fresh {} every render. */
+const EMPTY_SUGGESTIONS: Record<string, string[]> = {};
 
 // UI discovery list only. The provider accepts any valid OpenRouter slug.
 type AIModel = OpenRouterModelId;
@@ -468,6 +470,14 @@ export function ChatPanel({
   const [publishBusy, setPublishBusy] = useState(false);
   // Follow-up suggestion chips — keyed by assistant message id
   const [suggestions, setSuggestions] = useState<Record<string, string[]>>({});
+  // Lovable parity: "Suggestions ... can be toggled off in account
+  // settings." Chips themselves were always fully built (generation,
+  // rendering, click-to-send) — there was just never an off switch, so they
+  // were unconditionally always on. Defaults true (matches today's actual
+  // behavior for every existing user) and is fetched once alongside the
+  // user id below; see profiles.chat_prefs (migration 179) and the
+  // Appearance section of settings-page.tsx for where it's set.
+  const [suggestionChipsEnabled, setSuggestionChipsEnabled] = useState(true);
   // Multi-role test chips — appear after agent/build runs that touched 5+ files
   // when the project mentions roles (Admin, User, Investor, etc.).
   const [roleTestChips, setRoleTestChips] = useState<Record<string, string[]>>({});
@@ -1219,11 +1229,26 @@ export function ChatPanel({
   const queuePausedRef = useRef(false);
   useEffect(() => { promptQueueRef.current = promptQueue; }, [promptQueue]);
   useEffect(() => { queuePausedRef.current = queuePaused; }, [queuePaused]);
-  // Fetch current user id once for snippet ownership checks
+  // Fetch current user id once for snippet ownership checks, and their
+  // chat_prefs alongside it (one round trip) — suggestionChipsEnabled stays
+  // at its default (true) if this fails or the column is absent (older
+  // local schema without migration 179 applied), matching prior behavior.
   useEffect(() => {
     const supabase = createClient();
     supabase.auth.getUser().then(({ data }) => {
-      if (data.user) setCurrentUserId(data.user.id);
+      if (!data.user) return;
+      setCurrentUserId(data.user.id);
+      void supabase
+        .from("profiles")
+        .select("chat_prefs")
+        .eq("id", data.user.id)
+        .single()
+        .then(({ data: profileRow }) => {
+          const prefs = profileRow?.chat_prefs as { suggestion_chips_enabled?: boolean } | null;
+          if (prefs && typeof prefs.suggestion_chips_enabled === "boolean") {
+            setSuggestionChipsEnabled(prefs.suggestion_chips_enabled);
+          }
+        });
     });
   }, []);
 
@@ -4878,6 +4903,11 @@ ${(f.content ?? "").slice(0, 8000)}
     if (securityIssueCount > 0) {
       return ["Re-run full security scan"];
     }
+    // Lovable parity: "can be toggled off in account settings" — this is the
+    // generic suggestion-chip pool the toggle controls. It does NOT gate the
+    // two branches above (scope override, security re-scan), which are
+    // functional recovery actions, not "suggested next things to build".
+    if (!suggestionChipsEnabled) return [];
     if (!latestSnapshotMessageId) return [];
     let lastPrompt = "";
     const buildIdx = messages.findIndex((m) => m.id === latestSnapshotMessageId);
@@ -4885,7 +4915,7 @@ ${(f.content ?? "").slice(0, 8000)}
       if (messages[i]?.role === "user") { lastPrompt = messages[i].content; break; }
     }
     return suggestFollowUps(lastPrompt, files.map((f) => f.path), 4);
-  }, [latestSnapshotMessageId, messages, files, securityIssueCount, scopeHeldPrompt]);
+  }, [latestSnapshotMessageId, messages, files, securityIssueCount, scopeHeldPrompt, suggestionChipsEnabled]);
 
   const composerLineRefs = useMemo(() => parseLineRefs(input), [input]);
 
@@ -5653,7 +5683,7 @@ ${(f.content ?? "").slice(0, 8000)}
     messageSkills,
     messageCredits,
     genTimes,
-    suggestions,
+    suggestions: suggestionChipsEnabled ? suggestions : EMPTY_SUGGESTIONS,
     roleTestChips,
     approvedSteps,
     fileStates,

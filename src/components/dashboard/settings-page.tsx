@@ -149,6 +149,92 @@ function NotificationsPanel({ userId }: { userId: string }) {
   );
 }
 
+// ── Chat Preferences (Lovable parity: suggestion chips can be toggled off) ─────
+
+interface ChatPrefs {
+  suggestion_chips_enabled: boolean;
+}
+
+const DEFAULT_CHAT_PREFS: ChatPrefs = {
+  suggestion_chips_enabled: true,
+};
+
+function ChatPreferencesPanel({ userId }: { userId: string }) {
+  const [prefs, setPrefs]     = useState<ChatPrefs>(DEFAULT_CHAT_PREFS);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving]   = useState(false);
+  const { toast } = useToast();
+  const supabase = createClient();
+
+  useEffect(() => {
+    void (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("chat_prefs")
+        .eq("id", userId)
+        .single();
+      if (data?.chat_prefs) {
+        setPrefs({ ...DEFAULT_CHAT_PREFS, ...(data.chat_prefs as Partial<ChatPrefs>) });
+      }
+      setLoading(false);
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
+  async function toggleSuggestionChips() {
+    const next = { ...prefs, suggestion_chips_enabled: !prefs.suggestion_chips_enabled };
+    setPrefs(next);
+    setSaving(true);
+    const { error } = await supabase
+      .from("profiles")
+      .update({ chat_prefs: next })
+      .eq("id", userId);
+    setSaving(false);
+    if (error) {
+      setPrefs(prefs); // revert
+      toast({ title: "Failed to save", description: error.message, variant: "destructive" });
+    }
+  }
+
+  if (loading) {
+    return (
+      <div className="bg-card border border-border rounded-2xl p-6 flex items-center gap-2 text-muted-foreground text-sm">
+        <Loader2 className="w-4 h-4 animate-spin" /> Loading preferences…
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-card border border-border rounded-2xl p-6 space-y-5">
+      <div className="flex items-center justify-between">
+        <h2 className="font-semibold text-lg">Chat</h2>
+        {saving && <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />}
+      </div>
+      <p className="text-sm text-muted-foreground">
+        Control how the AI chat panel behaves.
+      </p>
+      <div className="flex items-center justify-between py-2">
+        <div>
+          <p className="text-sm font-medium">Suggested follow-ups</p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Show suggestion chips for what to build next after each response.
+          </p>
+        </div>
+        <button
+          role="switch"
+          aria-checked={prefs.suggestion_chips_enabled}
+          onClick={() => void toggleSuggestionChips()}
+          className={`relative shrink-0 ml-4 inline-flex h-6 w-11 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus-visible:outline-none ${
+            prefs.suggestion_chips_enabled ? "bg-violet-600" : "bg-input"
+          }`}
+        >
+          <span className={`pointer-events-none block h-5 w-5 rounded-full bg-white shadow-lg ring-0 transition-transform ${prefs.suggestion_chips_enabled ? "translate-x-5" : "translate-x-0"}`} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── API Keys Panel ────────────────────────────────────────────────────────────
 
 function ApiKeysPanel({ userId }: { userId: string }) {
@@ -642,6 +728,8 @@ export function SettingsPage({ user, profile }: SettingsPageProps) {
                   </div>
                 </div>
               )}
+
+              {active === "appearance" && <ChatPreferencesPanel userId={user.id} />}
 
               {active === "notifications" && <NotificationsPanel userId={user.id} />}
 

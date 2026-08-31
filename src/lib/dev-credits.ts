@@ -32,6 +32,7 @@ export async function ensureDevCredits(userId: string): Promise<number | null> {
       plan: "free",
       cloud_tool_permissions: {},
       notification_prefs: {},
+      chat_prefs: {},
     });
   }
 

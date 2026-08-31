@@ -2329,6 +2329,7 @@ export type GeneratedDatabase = {
             "branded_source_domain": string | null;
             "branded_status": string;
             "branded_subdomain": string | null;
+            "chat_prefs": Json;
             "cloud_ai_balance_cents": number;
             "cloud_balance_cents": number;
             "cloud_default_region": string | null;
@@ -2391,6 +2392,7 @@ export type GeneratedDatabase = {
             "branded_source_domain"?: string | null;
             "branded_status"?: string;
             "branded_subdomain"?: string | null;
+            "chat_prefs": Json;
             "cloud_ai_balance_cents"?: number;
             "cloud_balance_cents"?: number;
             "cloud_default_region"?: string | null;
@@ -2453,6 +2455,7 @@ export type GeneratedDatabase = {
             "branded_source_domain"?: string | null;
             "branded_status"?: string;
             "branded_subdomain"?: string | null;
+            "chat_prefs"?: Json;
             "cloud_ai_balance_cents"?: number;
             "cloud_balance_cents"?: number;
             "cloud_default_region"?: string | null;
