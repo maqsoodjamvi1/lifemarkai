@@ -422,6 +422,72 @@ function buildFallbackHtmlUncached(files: ProjectFile[]): string {
     return out;
   }
 
+  /**
+   * Replace the CONTENT of every backtick template literal with an opaque
+   * placeholder, so the import-rewriting regexes below never see it, then
+   * hand back a `restore` that puts the real content back afterward.
+   *
+   * stripCommentsSafe above only protects comments — it deliberately leaves
+   * string/template literal CONTENT untouched, so text like example code
+   * shown inside a template literal (a docs page, a code-showcase component
+   * — a plausible AI-generated output) still reads as real import statements
+   * to every `src.replace(/import .../g, ...)` call that follows, and gets
+   * silently rewritten/deleted right along with actual imports. A template
+   * literal can never legally BE an import specifier (`from`/`import()`/
+   * `require()` targets must be plain string literals per the ES spec), so
+   * masking backtick content here cannot hide a real import from the
+   * rewrite regexes — it can only stop them from corrupting a literal's
+   * displayed value. Ordinary '...'/"..." strings are left alone (those ARE
+   * valid import-specifier positions). Uses the same simple delimiter walk
+   * as stripCommentsSafe — a backtick nested inside a `${...}` interpolation
+   * isn't specially handled, matching that function's existing scope.
+   */
+  function maskTemplateLiterals(code: string): { masked: string; restore: (s: string) => string } {
+    const bodies: string[] = [];
+    let out = "";
+    let i = 0;
+    const n = code.length;
+    while (i < n) {
+      const ch = code[i];
+      if (ch === "'" || ch === '"') {
+        const delim = ch;
+        out += ch;
+        i++;
+        while (i < n) {
+          const c = code[i];
+          if (c === "\\") { out += c + (code[i + 1] ?? ""); i += 2; continue; }
+          out += c;
+          i++;
+          if (c === delim) break;
+        }
+        continue;
+      }
+      if (ch === "`") {
+        let j = i + 1;
+        let body = "";
+        while (j < n) {
+          const c = code[j];
+          if (c === "\\") { body += c + (code[j + 1] ?? ""); j += 2; continue; }
+          if (c === "`") { j++; break; }
+          body += c;
+          j++;
+        }
+        const idx = bodies.length;
+        bodies.push(body);
+        out += "`__LM_TPL_" + idx + "__`";
+        i = j;
+        continue;
+      }
+      out += ch;
+      i++;
+    }
+    return {
+      masked: out,
+      restore: (s: string) =>
+        s.replace(/__LM_TPL_(\d+)__/g, (_m, idx: string) => bodies[Number(idx)] ?? ""),
+    };
+  }
+
   /** Transform one source file into a self-contained Babel script block */
   function wrapFile(file: ProjectFile): string {
     let src = file.content ?? "";
@@ -472,6 +538,13 @@ function buildFallbackHtmlUncached(files: ProjectFile[]): string {
     // Strip comments (string-aware) BEFORE any import rewriting, so import-like
     // text or backticks inside comments can't be mangled into broken code.
     src = stripCommentsSafe(src);
+
+    // Mask template-literal CONTENT before the import-rewrite regexes below
+    // run, so import-like text living inside a string value (docs/example
+    // content) can't be matched and corrupted the same way comments could.
+    // Restored right after the last import/export rewrite, further down.
+    const { masked: maskedSrc, restore: restoreTemplates } = maskTemplateLiterals(src);
+    src = maskedSrc;
 
     // Strip CSS / asset imports
     src = src.replace(/import\s+['"][^'"]+\.css['"]\s*;?\n?/g, "");
@@ -854,6 +927,11 @@ function buildFallbackHtmlUncached(files: ProjectFile[]): string {
       const safe = line.replace(/\*\//g, "* /");
       return `/* [preview] unsupported module syntax skipped: ${safe} */`;
     });
+
+    // All import/export rewriting is done — put the real template-literal
+    // content back now, so everything downstream (charAt hardening, the
+    // </script> escape, and the eventual eval) sees the file's real values.
+    src = restoreTemplates(src);
 
     // Register at bottom of script
     const shortPath = fileShortPath;
