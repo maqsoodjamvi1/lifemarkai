@@ -197,6 +197,33 @@ function cfg() {
 }
 
 /**
+ * Pull an image the daemon doesn't have locally yet.
+ *
+ * Only reached when `containers/create` 404s with "No such image" — the
+ * ordinary path is an image already cached on the host from a previous
+ * boot, so this only pays a one-time cost on a fresh host or after the
+ * image was retagged/pruned, turning what used to be a hard "redeploy and
+ * manually `docker pull`" failure into a self-healing first boot.
+ */
+async function pullImage(
+  image: string,
+  progress: (event: SandboxProgressEvent) => void,
+): Promise<{ ok: boolean; error?: string }> {
+  progress(createSandboxProgress("creating", `Pulling image ${image} (not cached on this host yet)`));
+  const res = await docker("POST", `/v1.43/images/create?fromImage=${encodeURIComponent(image)}`);
+  if (res.status >= 400) {
+    return { ok: false, error: `image pull failed (${res.status}): ${trunc(res.text, 300)}` };
+  }
+  // The pull endpoint streams NDJSON progress events and answers 200 even
+  // when an individual layer — or the whole pull — failed; only the stream
+  // body says so (e.g. `{"error":"manifest unknown", ...}`).
+  if (/"error"\s*:/.test(res.text)) {
+    return { ok: false, error: `image pull failed: ${trunc(res.text, 300)}` };
+  }
+  return { ok: true };
+}
+
+/**
  * Browsers refuse to embed an http:// iframe inside an https:// page ("mixed
  * content"), silently — no console error the user will find, just a blank
  * pane. So a raw-IP preview works on http://localhost during development and
@@ -218,6 +245,23 @@ export function mixedContentWarning(): string | null {
     `and set SANDBOX_PUBLIC_SCHEME=https.`
   );
 }
+
+/**
+ * Shared keep-alive agent for every Docker API call.
+ *
+ * Without an explicit `agent`, node:http opens (and TLS/TCP-handshakes, in
+ * DOCKER_HOST/TCP mode) a brand new connection per request and tears it down
+ * immediately after — real cost on the TCP path, and even over the unix
+ * socket it's a syscall round trip we don't need. A container boot makes a
+ * couple dozen of these calls back to back (create, start, several execs,
+ * an archive PUT, inspects for readiness polling); reusing one socket across
+ * them is a straightforward win with no behavioral downside — Docker's API
+ * server handles keep-alive connections fine.
+ */
+const dockerAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 30_000, maxSockets: 32 });
+
+/** Default budget for a Docker API call that isn't shipping a file payload. */
+const DOCKER_REQUEST_TIMEOUT_MS = 15_000;
 
 /**
  * Minimal Docker Engine API client.
@@ -250,9 +294,27 @@ async function docker(
   const opts: http.RequestOptions = c.tcpHost
     ? (() => {
         const u = new URL(c.tcpHost);
-        return { host: u.hostname, port: u.port || 2375, method, path, headers };
+        return { host: u.hostname, port: u.port || 2375, method, path, headers, agent: dockerAgent };
       })()
-    : { socketPath: c.socketPath, method, path, headers };
+    : { socketPath: c.socketPath, method, path, headers, agent: dockerAgent };
+
+  // A local daemon call is normally sub-second, but `req.on("error", reject)`
+  // only fires for a hard connection failure — it never fires for "connected
+  // fine, then the daemon just never answers" (a wedged daemon, a half-open
+  // socket after a host suspend/resume). Before this, that hang was
+  // unbounded for every caller that didn't pass an explicit timeoutMs: every
+  // await'er up the stack (boot, exec, readiness polling) just sat forever
+  // with no way to notice or recover. `timeoutMs` stays a caller override
+  // (isDockerDaemonReachable wants a snappy 1500ms) — everyone else now gets
+  // a real default instead of none at all. Archive uploads carry the
+  // project's whole file set as a tar body, so they get a budget
+  // proportional to size instead of the flat default.
+  const effectiveTimeoutMs =
+    timeoutMs > 0
+      ? timeoutMs
+      : raw
+        ? Math.max(DOCKER_REQUEST_TIMEOUT_MS, Math.ceil(raw.byteLength / (128 * 1024)) * 1000)
+        : DOCKER_REQUEST_TIMEOUT_MS;
 
   return new Promise((resolve, reject) => {
     const req = http.request(opts, (res) => {
@@ -263,11 +325,9 @@ async function docker(
       );
     });
     req.on("error", reject);
-    if (timeoutMs > 0) {
-      req.setTimeout(timeoutMs, () => {
-        req.destroy(new Error("Docker daemon request timed out"));
-      });
-    }
+    req.setTimeout(effectiveTimeoutMs, () => {
+      req.destroy(new Error(`Docker API request timed out after ${effectiveTimeoutMs}ms (${method} ${path})`));
+    });
     if (payload) req.write(payload);
     req.end();
   });
@@ -654,7 +714,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       }
 
       progress(createSandboxProgress("creating", "Creating container"));
-      const create = await docker("POST", "/v1.43/containers/create", {
+      const createBody = {
         Image: c.image,
         // NO WorkingDir here on purpose — see the APP_DIR note above. Setting it
         // makes Docker pre-create the path as root, which the non-root user then
@@ -724,7 +784,25 @@ export class DockerSandboxProvider implements SandboxProvider {
               }
             : {}),
         },
-      });
+      };
+      let create = await docker("POST", "/v1.43/containers/create", createBody);
+      // A fresh host (new VPS, image rebuilt/retagged, daemon's local image
+      // cache pruned) has never pulled SANDBOX_IMAGE — Docker's own answer to
+      // that is a 404 "No such image", not an auto-pull. Previously that
+      // turned a first boot on a new host into a permanent failure requiring
+      // someone to manually `docker pull` and redeploy. One pull-and-retry
+      // makes the first boot self-healing instead; every boot after this one
+      // finds the image cached and never takes this branch.
+      if (create.status === 404 && /no such image/i.test(create.text)) {
+        const pulled = await pullImage(c.image, progress);
+        if (!pulled.ok) {
+          return {
+            ok: false,
+            error: pulled.error ?? `docker create failed (${create.status}): ${trunc(create.text, 400)}`,
+          };
+        }
+        create = await docker("POST", "/v1.43/containers/create", createBody);
+      }
       if (create.status >= 400) {
         return { ok: false, error: `docker create failed (${create.status}): ${trunc(create.text, 400)}` };
       }
@@ -1094,12 +1172,17 @@ export class DockerSandboxProvider implements SandboxProvider {
       //
       // Safe here specifically because `files` is the project's COMPLETE file
       // set read from the database. Never do this from an incremental caller.
-      await this.pruneRemovedFiles(id, files);
+      //
+      // Read the sync manifest once here and hand it to both pruning and the
+      // write below — they need the identical data, and previously each
+      // independently exec'd a `cat` of the same file on every warm boot.
+      const syncManifest = await this.readSyncManifest(id);
+      await this.pruneRemovedFiles(id, files, syncManifest);
 
       progress(createSandboxProgress("writing", "Syncing changed files"));
       // Incremental by content hash — an unchanged project writes nothing, so
       // vite is not disturbed at all and HMR keeps whatever state it had.
-      const { written } = await this.writeFiles(id, files);
+      const { written } = await this.writeFiles(id, files, syncManifest);
 
       let logs = "";
       // Only reinstall when the dependency manifest itself moved. A source-only
@@ -1158,6 +1241,33 @@ export class DockerSandboxProvider implements SandboxProvider {
   }
 
   /**
+   * Read and parse the container's sync manifest, or `null` when there is
+   * none (fresh container) or it fails to parse.
+   *
+   * Split out so `reuseProjectContainer` can read it ONCE and hand the same
+   * result to both `pruneRemovedFiles` and `writeFiles` — they used to each
+   * independently `exec` a `cat` of the identical file on every warm boot,
+   * a redundant container round trip for data already in hand a few lines
+   * up the call stack.
+   */
+  private async readSyncManifest(sandboxId: string): Promise<Record<string, string> | null> {
+    try {
+      const read = await this.exec(
+        sandboxId,
+        `cat ${APP_DIR}/${SYNC_MANIFEST} 2>/dev/null || true`,
+        "/",
+      );
+      const raw = read.stdout ?? "";
+      const start = raw.indexOf("{");
+      const end = raw.lastIndexOf("}");
+      if (start < 0 || end <= start) return null;
+      return JSON.parse(raw.slice(start, end + 1)) as Record<string, string>;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Delete files present in the container's sync manifest but absent from the
    * project's current file set — renames and deletions, in other words.
    *
@@ -1168,20 +1278,19 @@ export class DockerSandboxProvider implements SandboxProvider {
    * uploaded, so nothing the container generated (node_modules, .vite caches,
    * the manifest itself) is reachable, and a missing or unparseable manifest
    * removes nothing at all.
+   *
+   * `manifest`: pass an already-read manifest (or `null` for "confirmed
+   * none") to skip re-reading it from the container; omit to read it here.
    */
-  private async pruneRemovedFiles(sandboxId: string, files: SandboxFile[]): Promise<void> {
+  private async pruneRemovedFiles(
+    sandboxId: string,
+    files: SandboxFile[],
+    manifest?: Record<string, string> | null,
+  ): Promise<void> {
     try {
-      const read = await this.exec(
-        sandboxId,
-        `cat ${APP_DIR}/${SYNC_MANIFEST} 2>/dev/null || true`,
-        "/",
-      );
-      const raw = read.stdout ?? "";
-      const start = raw.indexOf("{");
-      const end = raw.lastIndexOf("}");
-      if (start < 0 || end <= start) return;
+      const prev = manifest !== undefined ? manifest : await this.readSyncManifest(sandboxId);
+      if (!prev) return;
 
-      const prev = JSON.parse(raw.slice(start, end + 1)) as Record<string, string>;
       const gone = filesToPrune(Object.keys(prev), files.map((f) => f.path));
       if (gone.length === 0) return;
 
@@ -1360,6 +1469,7 @@ export class DockerSandboxProvider implements SandboxProvider {
   async writeFiles(
     sandboxId: string,
     files: SandboxFile[],
+    prevManifest?: Record<string, string> | null,
   ): Promise<{ written: string[] }> {
     // INCREMENTAL SYNC — upload only files whose CONTENT actually changed.
     //
@@ -1384,26 +1494,12 @@ export class DockerSandboxProvider implements SandboxProvider {
       hashes[norm(f.path)] = createHash("sha1").update(f.content ?? "").digest("hex");
     }
 
-    let prev: Record<string, string> | null = null;
-    try {
-      // tty=true (default) keeps the output a single raw stream (no Docker
-      // stream-multiplexing frame headers). The manifest is compact JSON on one
-      // line, so tty CRLF translation cannot corrupt it. Any parse failure
-      // falls back to a full upload — worst case is today's behavior.
-      const read = await this.exec(
-        sandboxId,
-        `cat ${APP_DIR}/${SYNC_MANIFEST} 2>/dev/null || true`,
-        "/",
-      );
-      const raw = read.stdout ?? "";
-      const start = raw.indexOf("{");
-      const end = raw.lastIndexOf("}");
-      if (start >= 0 && end > start) {
-        prev = JSON.parse(raw.slice(start, end + 1)) as Record<string, string>;
-      }
-    } catch {
-      prev = null;
-    }
+    // `prevManifest` lets a caller that already read the manifest (e.g.
+    // `reuseProjectContainer`, which needs it for pruning too) hand the same
+    // result in here instead of this doing its own redundant `cat` exec.
+    // Any parse failure of a self-read falls back to a full upload — worst
+    // case is today's behavior.
+    const prev = prevManifest !== undefined ? prevManifest : await this.readSyncManifest(sandboxId);
 
     let toWrite = files;
     if (prev) {
