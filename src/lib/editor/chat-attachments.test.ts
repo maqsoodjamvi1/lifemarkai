@@ -63,3 +63,28 @@ test("appendAttachedFile respects a custom max", () => {
   assert.equal(result.length, 1);
   assert.equal(result[0].name, "a");
 });
+
+test("appendAttachedFile replaces an existing entry with the same name instead of duplicating it", () => {
+  const first = appendAttachedFile([], { name: "notes.txt", content: "v1" });
+  const second = appendAttachedFile(first, { name: "notes.txt", content: "v2" });
+  assert.equal(second.length, 1);
+  assert.equal(second[0].content, "v2");
+});
+
+test("appendAttachedFile's re-attach replacement keeps the file's original position in the tray", () => {
+  const files = [
+    { name: "a.txt", content: "1" },
+    { name: "b.txt", content: "2" },
+    { name: "c.txt", content: "3" },
+  ];
+  const result = appendAttachedFile(files, { name: "b.txt", content: "updated" });
+  assert.deepEqual(result.map((f) => f.name), ["a.txt", "b.txt", "c.txt"]);
+  assert.equal(result[1].content, "updated");
+});
+
+test("appendAttachedFile allows re-attaching (replacing) even when the tray is already at the cap", () => {
+  const full = Array.from({ length: MAX_ATTACHED_FILES }, (_, i) => ({ name: `f${i}.txt`, content: String(i) }));
+  const result = appendAttachedFile(full, { name: "f0.txt", content: "updated" });
+  assert.equal(result.length, MAX_ATTACHED_FILES);
+  assert.equal(result[0].content, "updated");
+});

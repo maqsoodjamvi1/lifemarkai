@@ -45,12 +45,24 @@ export function combineAttachedFiles(files: ChatAttachedFile[]): ChatAttachedFil
  * which case the tray is returned unchanged so the caller can tell the
  * attempt was rejected (by comparing the returned array's length to the
  * input's) and surface that to the user.
+ *
+ * Re-attaching the same filename (drag it in twice, or re-pick it from the
+ * file dialog) replaces the existing entry in place rather than appending a
+ * duplicate — without this, combineAttachedFiles would send the AI the same
+ * file's contents twice under two "--- name ---" headers, and the composer
+ * would show two identical, indistinguishable chips.
  */
 export function appendAttachedFile(
   files: ChatAttachedFile[],
   file: ChatAttachedFile,
   max: number = MAX_ATTACHED_FILES,
 ): ChatAttachedFile[] {
+  const existingIndex = files.findIndex((f) => f.name === file.name);
+  if (existingIndex !== -1) {
+    const next = [...files];
+    next[existingIndex] = file;
+    return next;
+  }
   if (files.length >= max) return files;
   return [...files, file];
 }
