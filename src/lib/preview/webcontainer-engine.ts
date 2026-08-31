@@ -319,7 +319,43 @@ async function runNpmInstallWithRetry(
  * iframe a URL that refuses the connection — the same class of bug that made
  * the Modal preview look broken when `getHost()` returned too soon.
  */
-export async function runProjectInWebContainer(
+/**
+ * Serializes calls into the mount→install→spawn pipeline below, which has no
+ * reentrancy guard of its own — unlike getWebContainer()'s wcBooting lock,
+ * which only serializes the ONE-TIME WebContainer.boot() call. Two
+ * overlapping calls here (both using the already-booted singleton) can both
+ * proceed to mount/install/spawn concurrently: `wcDevProcess` is written
+ * unconditionally at the end of each, so `killWcDevProcess()` in a second
+ * call can run in parallel with the first call's `mount` — long before
+ * either reaches `spawn` — meaning neither kills the other's future
+ * process, leaking a dev server. Worse, `wc.on("server-ready", ...)` is
+ * registered per call but the event fires once per WebContainer instance,
+ * so whichever spawned process reports ready FIRST resolves BOTH pending
+ * calls — the "current" (non-superseded) caller can resolve with the URL of
+ * the stale, orphaned dev server instead of the one actually serving its
+ * files. Concretely reachable during initial AI generation, where
+ * `files.length` changes on every streamed file and preview-panel.tsx's
+ * boot effect re-fires while the previous call is still mid-install; also
+ * reachable by double-clicking "Restart runtime". Chaining every call onto
+ * the last one — rather than dropping overlapping calls — keeps every
+ * requested run honored (the caller for project state N+1 still gets run,
+ * just after N's pipeline has fully finished touching the shared instance).
+ */
+let wcRunChain: Promise<unknown> = Promise.resolve();
+
+export function runProjectInWebContainer(opts: WcRunOptions): Promise<WcBootResult> {
+  const run = wcRunChain.then(() => runProjectInWebContainerInner(opts));
+  // Swallow here so one call's rejection doesn't poison the chain for
+  // whichever call is queued after it — each call's own returned promise
+  // still rejects normally for ITS caller.
+  wcRunChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+async function runProjectInWebContainerInner(
   opts: WcRunOptions,
 ): Promise<WcBootResult> {
   const progress = opts.onProgress ?? (() => {});
