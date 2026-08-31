@@ -31,16 +31,71 @@ export function SecurityPanel({ project, files, onFilesUpdate }: SecurityPanelPr
   const [fixing, setFixing] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [showSnippets, setShowSnippets] = useState(false);
+  // Dependency/CVE check status, separate from the static scan's `findings`:
+  // "unknown" (haven't run it yet), "checking", "unavailable" (feed
+  // unreachable — must never render the same as "clean", those are different
+  // claims), or "ok" once it's actually run. See /api/security/dependencies
+  // (cve-feed.ts) — the static scan alone never looked at what's actually
+  // installed, so a project pinned to a package with a known critical
+  // vulnerability could show a clean 100/100 score.
+  const [depStatus, setDepStatus] = useState<"unknown" | "checking" | "unavailable" | "ok">("unknown");
+  const [depSummary, setDepSummary] = useState<string | null>(null);
   const { toast } = useToast();
 
   async function runScan() {
     setScanning(true);
     setFindings(null);
+    setDepStatus("unknown");
+    setDepSummary(null);
     // Small artificial delay to feel responsive
     await new Promise(r => setTimeout(r, 600));
     const results = staticScan(files);
     setFindings(results);
     setScanning(false);
+
+    // Dependency/CVE audit runs separately and asynchronously after the
+    // (instant, offline) static scan — a slow or unreachable OSV.dev feed
+    // degrades to "static findings only, dependency check unavailable"
+    // rather than blocking the panel, and a network failure is shown
+    // honestly rather than silently reported as a clean score.
+    setDepStatus("checking");
+    try {
+      const res = await fetch(`/api/security/dependencies?projectId=${project.id}`);
+      if (!res.ok) throw new Error(`Dependency check failed (${res.status})`);
+      const data = (await res.json()) as {
+        cve: { available: boolean; findings: Array<{
+          severity: SecurityFinding["severity"];
+          title: string;
+          recommendation?: string;
+          file: string;
+          line?: number;
+          snippet?: string;
+        }>; error?: string | null };
+        summary: string;
+      };
+      setDepSummary(data.summary);
+      if (!data.cve.available) {
+        setDepStatus("unavailable");
+        return;
+      }
+      setDepStatus("ok");
+      if (data.cve.findings.length > 0) {
+        setFindings((prev) => [
+          ...(prev ?? []),
+          ...data.cve.findings.map((f) => ({
+            severity: f.severity,
+            title: f.title,
+            description: f.recommendation ?? "",
+            file: f.file,
+            line: f.line,
+            snippet: f.snippet,
+          })),
+        ]);
+      }
+    } catch {
+      setDepStatus("unavailable");
+      setDepSummary("Could not reach the vulnerability feed — advisory results are unknown, not clear.");
+    }
   }
 
   async function aiFixFinding(finding: SecurityFinding, findingKey: string) {
@@ -162,6 +217,24 @@ export function SecurityPanel({ project, files, onFilesUpdate }: SecurityPanelPr
                 </div>
               )}
             </div>
+
+            {/* Dependency/CVE check status — distinct from the score above,
+                since "no advisories found" and "could not check" are
+                different claims and must never render the same way. */}
+            {depStatus === "checking" && (
+              <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                <Loader2 className="w-3 h-3 animate-spin" /> Checking dependencies for known vulnerabilities…
+              </div>
+            )}
+            {depStatus === "unavailable" && (
+              <div className="flex items-center gap-1.5 text-xs text-amber-400">
+                <AlertTriangle className="w-3 h-3 shrink-0" />
+                {depSummary ?? "Dependency check unavailable — static findings only."}
+              </div>
+            )}
+            {depStatus === "ok" && depSummary && (
+              <div className="text-xs text-slate-500">{depSummary}</div>
+            )}
 
             {/* Show snippets toggle */}
             {findings.length > 0 && (
