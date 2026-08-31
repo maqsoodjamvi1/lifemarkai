@@ -156,6 +156,7 @@ export function LovableComposerBottomRow({
           ref={fileInputRef}
           type="file"
           accept="image/*,*/*"
+          multiple
           className="hidden"
           aria-label="Attach files"
           onChange={onImageAttach}

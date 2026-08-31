@@ -5,6 +5,7 @@ import {
 X
 } from "lucide-react";
 import { suggestFollowUps } from "@/lib/ai/follow-up-suggestions";
+import { appendAttachedFile, combineAttachedFiles, MAX_ATTACHED_FILES } from "@/lib/editor/chat-attachments";
 import { readJSON, readString, writeJSON, writeString, removeKey } from "@/lib/editor/local-storage-json";
 import { downloadBlob } from "@/lib/editor/download-blob";
 import { shouldClarifyCapabilities } from "@/lib/ai/clarification-intelligence";
@@ -402,10 +403,38 @@ export function ChatPanel({
   // say "go ahead", but a fresh "go ahead" is just a new prompt that carries no
   // forceBuild flag and no memory of what it was agreeing to.
   const [scopeHeldPrompt, setScopeHeldPrompt] = useState<string | null>(null);
+  // Deliberately still a single slot — the AI vision request this feeds is
+  // built for exactly one image; see attachMultipleFiles for why a
+  // multi-image selection only keeps the first, with the user told so.
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const [attachedImageName, setAttachedImageName] = useState<string | null>(null);
   const [chatAnnotateOpen, setChatAnnotateOpen] = useState(false);
-  const [attachedText, setAttachedText] = useState<{ name: string; content: string } | null>(null);
+  // Up to MAX_ATTACHED_FILES documents/code files per message (Lovable
+  // parity — was a single slot before this). Every existing single-slot
+  // consumer downstream (the prompt queue's wire shape, chat-state
+  // persistence, the actual send payload) is unchanged: combineAttachedFiles
+  // (src/lib/editor/chat-attachments.ts, unit-tested there) merges this
+  // array back into the same { name, content } | null shape those call
+  // sites already expect, so a 0- or 1-file selection behaves
+  // byte-identically to before, and 2+ files arrive as one merged document
+  // with clear per-file headers rather than requiring every downstream
+  // consumer (queue persistence, the AI request builder) to be taught a new
+  // multi-attachment wire format sight-unseen.
+  const [attachedFiles, setAttachedFiles] = useState<{ name: string; content: string }[]>([]);
+  const combinedAttachedText = useMemo(() => combineAttachedFiles(attachedFiles), [attachedFiles]);
+  function addAttachedFile(file: { name: string; content: string }) {
+    setAttachedFiles((prev) => {
+      const next = appendAttachedFile(prev, file);
+      if (next.length === prev.length) {
+        toast({
+          title: "Attachment limit reached",
+          description: `You can attach up to ${MAX_ATTACHED_FILES} files per message. Remove one before adding another.`,
+          variant: "destructive",
+        });
+      }
+      return next;
+    });
+  }
   const [contextFiles, setContextFiles] = useState<ProjectFile[]>([]);
   const [showFilePicker, setShowFilePicker] = useState(false);
   const [filePickerSearch, setFilePickerSearch] = useState("");
@@ -1520,8 +1549,9 @@ export function ChatPanel({
         });
         return;
       }
-      setAttachedText({ name: file.name, content: data.text });
+      addAttachedFile({ name: file.name, content: data.text });
       setAttachedImage(null);
+      setAttachedImageName(null);
     } catch {
       toast({ title: "Couldn't read file", description: "Network error while extracting text.", variant: "destructive" });
     }
@@ -1553,7 +1583,7 @@ export function ChatPanel({
       reader.onload = () => {
         setAttachedImage(reader.result as string);
         setAttachedImageName(file.name);
-        setAttachedText(null);
+        setAttachedFiles([]);
       };
       reader.readAsDataURL(file);
       return;
@@ -1582,8 +1612,9 @@ export function ChatPanel({
           });
           return;
         }
-        setAttachedText({ name: file.name, content });
+        addAttachedFile({ name: file.name, content });
         setAttachedImage(null);
+        setAttachedImageName(null);
       };
       reader.readAsText(file);
       return;
@@ -1605,12 +1636,63 @@ export function ChatPanel({
     });
   }
 
+  /**
+   * Attaches every file the user picked, not just the first — dispatched
+   * through the same per-file logic multi-select and drag-drop share (see
+   * attachMultipleFiles below). Reset afterward so re-selecting the same
+   * file(s) still fires a change event.
+   */
   function handleImageAttach(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    dispatchAttachedFile(file);
-    // Reset input so same file can be re-attached
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+    attachMultipleFiles(Array.from(fileList));
     e.target.value = "";
+  }
+
+  /**
+   * Fans a multi-file selection (or drop) out across dispatchAttachedFile.
+   *
+   * attachedImage stays a single slot deliberately — it feeds an AI vision
+   * request built for exactly one image, and that's untouched here (see its
+   * declaration). Document/code/text files no longer are: each attaches
+   * into attachedFiles up to MAX_ATTACHED_FILES, so selecting several docs
+   * at once now attaches all of them instead of silently keeping only the
+   * first file and dropping the rest, which is what this whole function
+   * replaces.
+   *
+   * dispatchAttachedFile's image and document branches each still clear the
+   * OTHER kind (that mutual-exclusion is pre-existing — this pass isn't
+   * making chat messages carry both an image and file attachments, since
+   * nothing downstream of the composer has ever been built to send both at
+   * once). Given a mixed batch, that means processing order decides the
+   * outcome — so instead of letting a later document silently wipe an
+   * earlier image (or vice versa) file-by-file, this decides once, up
+   * front: any document/code/audio file in the batch takes priority and any
+   * images are skipped with an explanation, since that's the direction this
+   * pass is actually expanding capability in.
+   */
+  function attachMultipleFiles(files: File[]) {
+    const imageFiles = files.filter((f) => f.type.startsWith("image/"));
+    const otherFiles = files.filter((f) => !f.type.startsWith("image/"));
+
+    if (otherFiles.length > 0) {
+      if (imageFiles.length > 0) {
+        toast({
+          title: "Image skipped",
+          description: `LifemarkAI can attach an image or files to a message, not both. Attaching your ${otherFiles.length} file${otherFiles.length === 1 ? "" : "s"}; the image you picked was skipped.`,
+        });
+      }
+      for (const file of otherFiles) dispatchAttachedFile(file);
+      return;
+    }
+
+    if (imageFiles.length > 1) {
+      toast({
+        title: "Only the first image was attached",
+        description: `LifemarkAI can attach one image per message — the other ${imageFiles.length - 1} you picked ${imageFiles.length - 1 === 1 ? "was" : "were"} skipped.`,
+      });
+    }
+    if (imageFiles[0]) dispatchAttachedFile(imageFiles[0]);
   }
 
   /** Lovable parity: paste an API key → auto-saved as a project secret, and
@@ -1651,9 +1733,8 @@ export function ChatPanel({
   function handleDrop(e: React.DragEvent<HTMLDivElement>) {
     e.preventDefault();
     setIsDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (!file) return;
-    dispatchAttachedFile(file);
+    if (e.dataTransfer.files.length === 0) return;
+    attachMultipleFiles(Array.from(e.dataTransfer.files));
   }
 
   function startEditMessage(msg: Message) {
@@ -2623,7 +2704,7 @@ export function ChatPanel({
   ) {
     const queuedImage = opts?.imageBase64 ?? attachedImage;
     const queuedImageName = opts?.imageName ?? attachedImageName;
-    const queuedText = opts?.attachedText ?? attachedText;
+    const queuedText = opts?.attachedText ?? combinedAttachedText;
     if ((!userMessage.trim() && !queuedImage) || streaming || sendingRef.current) return;
     // Set when an AUTO-routed surgical patch missed — after this stream ends we
     // silently retry the same request as a full build (agent resilience).
@@ -2719,7 +2800,7 @@ export function ChatPanel({
       setInput("");
       setAttachedImage(null);
       setAttachedImageName(null);
-      setAttachedText(null);
+      setAttachedFiles([]);
       onOpenPanel?.("intelligence");
       window.dispatchEvent(new CustomEvent("lifemark-intelligence-run", {
         detail: { goal: userMessage, fromChat: true },
@@ -2804,7 +2885,7 @@ export function ChatPanel({
     setAttachedImage(null);
     setAttachedImageName(null);
     const textToSend = queuedText;
-    setAttachedText(null);
+    setAttachedFiles([]);
     const contextFilesToSend = contextFiles;
     setContextFiles([]);
     // Capture + clear URL scrape state
@@ -4164,12 +4245,12 @@ ${(f.content ?? "").slice(0, 8000)}
       });
       return;
     }
-    if (attachedText) {
-      const attachmentSecret = detectPromptSecret(attachedText.content);
+    for (const f of attachedFiles) {
+      const attachmentSecret = detectPromptSecret(f.content);
       if (attachmentSecret) {
         toast({
           title: "Attached file contains a secret-looking value",
-          description: `Detected ${attachmentSecret.label}. Remove the secret before sending it to AI.`,
+          description: `Detected ${attachmentSecret.label} in ${f.name}. Remove the secret before sending it to AI.`,
           variant: "destructive",
         });
         return;
@@ -4195,13 +4276,13 @@ ${(f.content ?? "").slice(0, 8000)}
           remaining: 1,
           imageBase64: attachedImage,
           imageName: attachedImageName,
-          attachedText: attachedText,
+          attachedText: combinedAttachedText,
         },
       ]);
       setInput("");
       setAttachedImage(null);
       setAttachedImageName(null);
-      setAttachedText(null);
+      setAttachedFiles([]);
       return;
     }
     if (
@@ -4557,7 +4638,7 @@ ${(f.content ?? "").slice(0, 8000)}
           const saved = await saveSecretAssignments(redaction.assignments);
           if (shouldAttachLongPaste(redaction.redactedText)) {
             const attachment = createLongPasteAttachment(redaction.redactedText);
-            setAttachedText({ name: attachment.name, content: attachment.content });
+            addAttachedFile({ name: attachment.name, content: attachment.content });
             setAttachedImage(null);
             setAttachedImageName(null);
             const mentionLine = saved.map((name) => `@secret:${name}`).join(" ");
@@ -4617,7 +4698,7 @@ ${(f.content ?? "").slice(0, 8000)}
     if (!shouldAttachLongPaste(text)) return false;
 
     const attachment = createLongPasteAttachment(text);
-    setAttachedText({ name: attachment.name, content: attachment.content });
+    addAttachedFile({ name: attachment.name, content: attachment.content });
     setAttachedImage(null);
     setAttachedImageName(null);
     replaceInputRange(selection, `Use the attached pasted context file (${attachment.name}) for this request.`);
@@ -6395,8 +6476,8 @@ ${(f.content ?? "").slice(0, 8000)}
             setInput(prompt);
             setTimeout(() => textareaRef.current?.focus(), 50);
           }}
-          attachedText={attachedText}
-          onRemoveAttachedText={() => setAttachedText(null)}
+          attachedFiles={attachedFiles}
+          onRemoveAttachedFile={(index) => setAttachedFiles((prev) => prev.filter((_, i) => i !== index))}
           detectedUrl={detectedUrl}
           isScraping={isScraping}
           scrapedMeta={scrapedMeta}
@@ -6461,7 +6542,7 @@ ${(f.content ?? "").slice(0, 8000)}
                   "Review findings (secrets, XSS, auth/RLS gaps, unsafe deps), apply the safest fix for each, and keep the app building.",
               );
             }}
-            hasAttachments={!!attachedImage || !!attachedText}
+            hasAttachments={!!attachedImage || attachedFiles.length > 0}
             contextFileCount={contextFiles.length}
             mentionOpen={mentionQuery !== null}
             isCrossProjectQuery={isCrossProjectQuery}
@@ -6576,7 +6657,7 @@ ${(f.content ?? "").slice(0, 8000)}
             onGenerateFile={(fmt) => void handleGenerateFile(fmt)}
             streaming={streaming}
             canSend={(!input.trim() && !attachedImage) ? false : !noCredits && !isLocked}
-            canQueue={(!!input.trim() || !!attachedImage || !!attachedText) && !noCredits && !isLocked}
+            canQueue={(!!input.trim() || !!attachedImage || attachedFiles.length > 0) && !noCredits && !isLocked}
             // Was hardcoded undefined, so the send-control tooltip could never
             // explain why queueing was unavailable.
             queueDisabledReason={
@@ -6584,7 +6665,7 @@ ${(f.content ?? "").slice(0, 8000)}
                 ? "You're out of credits — top up to queue more messages."
                 : isLocked
                   ? "This project is in Live mode; switch to Test to make changes."
-                  : !input.trim() && !attachedImage && !attachedText
+                  : !input.trim() && !attachedImage && attachedFiles.length === 0
                     ? "Type a message first."
                     : undefined
             }

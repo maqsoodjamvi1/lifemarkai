@@ -38,8 +38,8 @@ export interface LovableComposerPreInputProps {
   onRemoveAttachedImage: () => void;
   onAnnotateAttachedImage: () => void;
   onAttachedImagePreset: (prompt: string) => void;
-  attachedText: { name: string; content: string } | null;
-  onRemoveAttachedText: () => void;
+  attachedFiles: { name: string; content: string }[];
+  onRemoveAttachedFile: (index: number) => void;
   detectedUrl: string | null;
   isScraping: boolean;
   scrapedMeta: LovableUrlScrapeMeta | null;
@@ -76,8 +76,8 @@ export function LovableComposerPreInput({
   onRemoveAttachedImage,
   onAnnotateAttachedImage,
   onAttachedImagePreset,
-  attachedText,
-  onRemoveAttachedText,
+  attachedFiles,
+  onRemoveAttachedFile,
   detectedUrl,
   isScraping,
   scrapedMeta,
@@ -119,13 +119,14 @@ export function LovableComposerPreInput({
         />
       )}
 
-      {attachedText && (
+      {attachedFiles.map((f, i) => (
         <LovableComposerAttachedTextChip
-          name={attachedText.name}
-          lineCount={attachedText.content.split("\n").length}
-          onRemove={onRemoveAttachedText}
+          key={`${f.name}-${i}`}
+          name={f.name}
+          lineCount={f.content.split("\n").length}
+          onRemove={() => onRemoveAttachedFile(i)}
         />
-      )}
+      ))}
 
       {detectedUrl && (
         <LovableComposerUrlScrapeBanner
