@@ -1,0 +1,34 @@
+-- CRITICAL SECURITY FIX: exec_sql(text) was callable by ANY authenticated
+-- LifemarkAI user, directly against Supabase's PostgREST RPC endpoint,
+-- completely bypassing the app's own /api/projects/:id/db-query route (its
+-- "ownership verified in API route" comment assumed the app route was the
+-- only caller — it is not; any signed-in user's own session JWT can call
+-- `POST /rest/v1/rpc/exec_sql` on this Supabase project directly).
+--
+-- The function is SECURITY DEFINER and executes arbitrary caller-supplied
+-- SQL (wrapped in a SELECT) against this project's actual database — the
+-- SAME shared Postgres instance that holds `profiles`, `auth.users`,
+-- `project_files`, `messages`, `project_secrets`, etc. across every
+-- LifemarkAI user and project. It takes no project-scoping parameter at
+-- all — the app route's "ownership" check only verifies the caller owns
+-- the `projectId` in the request body, but the actual `query` text is
+-- unrestricted and can reference any table. db-query-panel.tsx's own
+-- EXAMPLE_QUERIES list literally includes
+-- `SELECT id, email, created_at FROM auth.users ORDER BY created_at DESC`
+-- and `SELECT ... FROM messages` / `FROM project_files` with no
+-- project_id filter — reading every other user's account and every other
+-- project's files/chat history was an intended example query, not a
+-- theoretical edge case.
+--
+-- This revokes execute from `authenticated`/`anon` entirely, so the
+-- function can no longer be invoked by ANY end-user session — neither
+-- directly against the Supabase API nor through the app route (which uses
+-- the caller's own session client, not the service role). This
+-- intentionally disables the "DB Query Playground" feature outright,
+-- rather than attempting to retrofit per-project table scoping onto
+-- arbitrary free-form SQL under time pressure — that redesign (a real
+-- allowlist of the calling project's own tables, or dropping this feature
+-- for a properly sandboxed per-project database) is a follow-up product
+-- decision, not something to guess at in a security patch.
+REVOKE EXECUTE ON FUNCTION exec_sql(text) FROM authenticated;
+REVOKE EXECUTE ON FUNCTION exec_sql(text) FROM anon;
