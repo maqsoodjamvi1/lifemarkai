@@ -807,9 +807,22 @@ export class DockerSandboxProvider implements SandboxProvider {
         return { ok: false, error: `docker create failed (${create.status}): ${trunc(create.text, 400)}` };
       }
       const id = (JSON.parse(create.text) as { Id: string }).Id;
+      // Best-effort teardown for a container that fails partway through
+      // creation, below. Without this, a `start` or bootstrap-mkdir failure
+      // left the just-created container running with nothing to ever find
+      // it: the DB only learns a project's sandbox_id on a FULLY successful
+      // boot (see the caller), so the app-level cron that reaps containers
+      // by that column never sees this one — the only thing that could
+      // still catch it is an optional host-level GC script scanning Docker
+      // directly, if the deployment happens to run one. A transient blip
+      // (daemon momentarily busy, a `start` racing a host resource limit)
+      // otherwise leaked an unbilled, unaccounted-for container indefinitely.
+      const cleanupOrphan = () =>
+        void docker("DELETE", `/v1.43/containers/${id}?force=true&v=true`).catch(() => undefined);
 
       const start = await docker("POST", `/v1.43/containers/${id}/start`);
       if (start.status >= 400) {
+        cleanupOrphan();
         return { ok: false, error: `docker start failed (${start.status}): ${trunc(start.text, 400)}` };
       }
 
@@ -821,6 +834,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       // fails under load. `-p` makes it a no-op if the Cmd already won.
       const mk = await this.exec(id, `mkdir -p ${APP_DIR}`, "/");
       if (mk.exitCode && mk.exitCode !== 0) {
+        cleanupOrphan();
         return { ok: false, error: `could not create ${APP_DIR}: ${trunc(mk.stdout + mk.stderr, 300)}` };
       }
 
