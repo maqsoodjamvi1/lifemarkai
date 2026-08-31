@@ -49,6 +49,18 @@ export function useSandboxPreview(projectId: string) {
     phaseDetail: null,
   });
   const sandboxIdRef = useRef<string | null>(null);
+  /**
+   * The CURRENT projectId, readable from a long-lived async callback (the
+   * phase-poll interval below) without that callback closing over a stale
+   * one. The editor route does not remount this hook on a project switch
+   * (see bootedForProjectRef above), so a `setInterval` tick's in-flight
+   * `fetch` from the PREVIOUS project can still resolve after the switch --
+   * clearing the interval on cleanup does not cancel a request already in
+   * flight. Kept in sync every render (a plain assignment, not an effect --
+   * safe because reading/writing a ref never affects what gets rendered).
+   */
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
   /** Bumped when a zombie tunnel is healed in place, to force the iframe (which
    *  is stuck on a stale connection-reset page) to reload the recovered URL. */
   const [reloadNonce, setReloadNonce] = useState(0);
@@ -639,6 +651,17 @@ export function useSandboxPreview(projectId: string) {
           // read it; the type just never admitted it existed.
           error?: string | null;
         }) => {
+          // This fetch was issued for `projectId` as it was when this poll
+          // interval was set up. If the user has since switched projects,
+          // clearing the interval (the effect's cleanup) does NOT cancel a
+          // request already in flight — an old project's late response must
+          // never touch state that now belongs to a different project's
+          // editor. The sequence check below is not enough on its own: it
+          // only orders responses WITHIN one project's polling, and a fresh
+          // interval for the new project starts its sequence counter from
+          // wherever the shared ref already was, so an old-project response
+          // can still look "not stale" to it.
+          if (projectId !== projectIdRef.current) return;
           // A response older than one we've already acted on is stale —
           // applying it now would overwrite whatever a later, faster
           // response already resolved. Drop it.
