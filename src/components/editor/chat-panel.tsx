@@ -103,6 +103,7 @@ redactPromptSecrets,
 shouldAttachLongPaste,
 type SecretAssignment,
 } from "@/lib/ai/chat-capabilities";
+import { SUPPORTED_DOCUMENT_EXTENSIONS } from "@/lib/ai/document-extract";
 import type { SubagentStep } from "@/lib/ai/subagents";
 import {
 initialBuildActivitySteps,
@@ -1480,19 +1481,125 @@ export function ChatPanel({
     }
   }
 
+  // Lovable parity: chat attachments cover images, PDF/Word/Excel/PowerPoint,
+  // and audio, not just images. Real text extraction here (attachDocument,
+  // via document-extract.ts) currently covers the three modern Office Open
+  // XML formats — .docx/.xlsx/.pptx are ZIP+XML and this project already
+  // depends on jszip; legacy binary .doc/.xls/.ppt and PDF are NOT zip files
+  // and need a different parser this project doesn't have yet, so they're
+  // explicitly rejected below with a specific message rather than silently
+  // mishandled or lumped into the generic "unsupported" case.
+  const CHAT_AUDIO_EXTS = new Set(["webm", "mp3", "mp4", "m4a", "wav", "ogg", "flac"]);
+  const CHAT_CODE_EXTS = ["ts","tsx","js","jsx","css","html","json","md","txt","py","sql","sh","yaml","yml"];
+
+  async function attachDocumentFile(file: File) {
+    const fd = new FormData();
+    fd.append("file", file);
+    try {
+      const res = await fetch("/api/ai/extract-document", { method: "POST", body: fd });
+      const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+      if (!res.ok || !data.text) {
+        toast({ title: "Couldn't read file", description: data.error ?? `Failed to extract text (${res.status}).`, variant: "destructive" });
+        return;
+      }
+      const secret = detectPromptSecret(data.text);
+      if (secret) {
+        toast({
+          title: "Secret-looking value blocked",
+          description: `Detected ${secret.label} in ${file.name}. Store keys in Env/Secrets, then reference the variable name in chat.`,
+          variant: "destructive",
+        });
+        return;
+      }
+      setAttachedText({ name: file.name, content: data.text });
+      setAttachedImage(null);
+    } catch {
+      toast({ title: "Couldn't read file", description: "Network error while extracting text.", variant: "destructive" });
+    }
+  }
+
+  async function attachAudioFile(file: File) {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("model", "whisper-1");
+    try {
+      const res = await fetch("/api/ai/transcribe", { method: "POST", body: fd });
+      const data = (await res.json().catch(() => ({}))) as { text?: string; error?: string };
+      if (!res.ok || !data.text) {
+        toast({ title: "Transcription failed", description: data.error, variant: "destructive" });
+        return;
+      }
+      setInput((prev) => prev + (prev ? " " : "") + data.text);
+      toast({ title: "Transcribed!", description: `"${data.text.slice(0, 60)}..."` });
+    } catch {
+      toast({ title: "Transcription failed", variant: "destructive" });
+    }
+  }
+
+  function dispatchAttachedFile(file: File) {
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+
+    if (file.type.startsWith("image/")) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setAttachedImage(reader.result as string);
+        setAttachedImageName(file.name);
+        setAttachedText(null);
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    if (file.type.startsWith("audio/") || CHAT_AUDIO_EXTS.has(ext)) {
+      void attachAudioFile(file);
+      return;
+    }
+
+    if (SUPPORTED_DOCUMENT_EXTENSIONS.has(ext)) {
+      void attachDocumentFile(file);
+      return;
+    }
+
+    if (CHAT_CODE_EXTS.includes(ext)) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const content = reader.result as string;
+        const secret = detectPromptSecret(content);
+        if (secret) {
+          toast({
+            title: "Secret-looking value blocked",
+            description: `Detected ${secret.label}. Store keys in Env/Secrets, then reference the variable name in chat.`,
+            variant: "destructive",
+          });
+          return;
+        }
+        setAttachedText({ name: file.name, content });
+        setAttachedImage(null);
+      };
+      reader.readAsText(file);
+      return;
+    }
+
+    if (ext === "pdf" || ext === "doc" || ext === "xls" || ext === "ppt") {
+      toast({
+        title: `.${ext} isn't supported yet`,
+        description: "Try exporting to .docx/.xlsx/.pptx, or paste the text directly.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Unsupported file type",
+      description: "Attach an image, audio file, .docx/.xlsx/.pptx, or code file.",
+      variant: "destructive",
+    });
+  }
+
   function handleImageAttach(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      toast({ title: "Please attach an image file", variant: "destructive" });
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      setAttachedImage(reader.result as string);
-      setAttachedImageName(file.name);
-    };
-    reader.readAsDataURL(file);
+    dispatchAttachedFile(file);
     // Reset input so same file can be re-attached
     e.target.value = "";
   }
@@ -1537,38 +1644,7 @@ export function ChatPanel({
     setIsDragging(false);
     const file = e.dataTransfer.files[0];
     if (!file) return;
-    const isImage = file.type.startsWith("image/");
-    const codeExts = ["ts","tsx","js","jsx","css","html","json","md","txt","py","sql","sh","yaml","yml"];
-    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-    const isCode = codeExts.includes(ext);
-    if (isImage) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setAttachedImage(reader.result as string);
-        setAttachedImageName(file.name);
-        setAttachedText(null);
-      };
-      reader.readAsDataURL(file);
-    } else if (isCode) {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const content = reader.result as string;
-        const secret = detectPromptSecret(content);
-        if (secret) {
-          toast({
-            title: "Secret-looking value blocked",
-            description: `Detected ${secret.label}. Store keys in Env/Secrets, then reference the variable name in chat.`,
-            variant: "destructive",
-          });
-          return;
-        }
-        setAttachedText({ name: file.name, content });
-        setAttachedImage(null);
-      };
-      reader.readAsText(file);
-    } else {
-      toast({ title: "Unsupported file type", description: "Drop an image or code file.", variant: "destructive" });
-    }
+    dispatchAttachedFile(file);
   }
 
   function startEditMessage(msg: Message) {
