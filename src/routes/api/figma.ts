@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { rateLimit } from "@/lib/rate-limit";
 import { describeFigmaTree, type FigmaNode } from "@/lib/figma/describe-tree";
+import { generateComponentFromFigmaNode } from "@/lib/figma/generate-component";
 
 /** Native /api/figma — fetch a Figma file, summarize into an AI clone prompt. */
 const FIGMA_API = "https://api.figma.com/v1";
@@ -56,11 +57,32 @@ export const Route = createFileRoute("/api/figma")({
           .map((c) => `- ${c.name}${c.description ? `: ${c.description}` : ""}`)
           .join("\n");
 
+        // Real, deterministic code — not a description the AI has to
+        // re-imagine into structure. Walks each top-level frame on the
+        // first couple of pages directly into JSX/Tailwind (see
+        // src/lib/figma/generate-component.ts for why this exists: exact
+        // nesting and spacing by construction, rather than an approximation
+        // reconstructed from prose). Capped at 6 components total — this is
+        // a starting scaffold to hand to the AI for wiring up real
+        // functionality, not a bulk file-export feature.
+        const generatedComponents: Array<{ componentName: string; code: string; page: string }> = [];
+        for (const page of (figmaFile.document.children ?? []).slice(0, 3)) {
+          for (const frame of (page.children ?? []).slice(0, 3)) {
+            if (generatedComponents.length >= 6) break;
+            const { componentName, code } = generateComponentFromFigmaNode(frame);
+            generatedComponents.push({ componentName, code, page: page.name });
+          }
+        }
+        const generatedComponentsBlock = generatedComponents
+          .map((c) => `--- ${c.componentName}.tsx (from page "${c.page}") ---\n${c.code}`)
+          .join("\n\n");
+
         const summary = {
           fileName: figmaFile.name,
           fileKey,
           pages: figmaFile.document.children?.map((p) => p.name) ?? [],
           componentCount: Object.keys(figmaFile.components ?? {}).length,
+          generatedComponents,
           aiPrompt: `I want to recreate this Figma design as a React + Tailwind CSS app.
 
 File: "${figmaFile.name}"
@@ -72,7 +94,11 @@ ${componentNames ? `Named components:\n${componentNames}` : ""}
 
 Each node above lists its real fill/stroke colors as hex, font family/size/weight for text, auto-layout direction/gap/padding (map HORIZONTAL/VERTICAL directly to flex-row/flex-col with the given gap and padding), and the ACTUAL text content in quotes after "text:" for every TEXT node — use that exact copy verbatim, do not invent placeholder text for anything that has a "text:" value.
 
-Please generate React components that faithfully reproduce this UI using Tailwind CSS classes, using the exact colors, fonts, spacing, and copy given above rather than approximating them. Use semantic HTML and accessible markup, and match the visual hierarchy and layout direction shown above.`,
+${generatedComponentsBlock ? `I've already generated real starting components directly from the design's layer tree — exact structure, spacing, colors, and copy, no guessing:
+
+${generatedComponentsBlock}
+
+Use these as the real starting point (adjust file names/paths to fit the project) rather than rewriting their structure from the description above — the description is there to explain what's THERE, these components are the actual translation. Then make them functional: wire up real interactivity, state, routing, and data instead of leaving them static.` : `Please generate React components that faithfully reproduce this UI using Tailwind CSS classes, using the exact colors, fonts, spacing, and copy given above rather than approximating them. Use semantic HTML and accessible markup, and match the visual hierarchy and layout direction shown above.`}`,
         };
 
         return Response.json(summary);

@@ -19,6 +19,7 @@ interface FigmaSummary {
   fileKey: string;
   pages: string[];
   componentCount: number;
+  generatedComponents?: Array<{ componentName: string; code: string; page: string }>;
   aiPrompt: string;
 }
 
@@ -157,6 +158,9 @@ export function FigmaPanel({ projectId, onGenerateFromFigma }: FigmaPanelProps) 
                   <p className="text-xs text-muted-foreground">
                     {summary.pages.length} page{summary.pages.length !== 1 ? "s" : ""} ·{" "}
                     {summary.componentCount} components
+                    {summary.generatedComponents && summary.generatedComponents.length > 0 && (
+                      <> · {summary.generatedComponents.length} real component{summary.generatedComponents.length !== 1 ? "s" : ""} generated from the layer tree</>
+                    )}
                   </p>
                 </div>
               </div>
