@@ -233,7 +233,7 @@ export function SecondaryPanelContent(ctx: LazyPanelContext) {
   }
   if (rightPanel === "supabase") return <SupabaseWizard projectId={pid} />;
   if (rightPanel === "env") return <EnvPanel projectId={pid} files={files} onUpdateFile={handleEnvUpdateFile} />;
-  if (rightPanel === "image") return <ImageGenPanel projectId={pid} />;
+  if (rightPanel === "image") return <ImageGenPanel projectId={pid} onFilesUpdate={handleFilesUpdate} />;
   if (rightPanel === "testing") return <TestingPanel projectId={pid} files={files} onFilesUpdate={handleFilesUpdate} onOpenFile={setActiveFile} />;
   if (rightPanel === "mcp") return <McpPanel />;
   if (rightPanel === "connectors") return <ConnectorWizardPanel onApplyConnector={sendPromptToChat} />;

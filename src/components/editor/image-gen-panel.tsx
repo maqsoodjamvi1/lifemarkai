@@ -5,6 +5,7 @@ import { Image,Download,Copy,Loader2,Sparkles,X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import type { ProjectFile } from "@/types/database";
 
 interface GeneratedImage {
   id: string;
@@ -13,17 +14,44 @@ interface GeneratedImage {
   size: string;
   style: string;
   createdAt: string;
+  /** Set once the generated image has been saved into the project (src/assets/generated/...). */
+  filePath?: string;
+  saveError?: string;
 }
 
 const IMAGE_SIZES = ["1024x1024", "1792x1024", "1024x1792"] as const;
 const IMAGE_STYLES = ["vivid", "natural"] as const;
 
+/** data:image/<ext>;base64,... → file extension. Defaults to png for anything unrecognized. */
+export function extensionForDataUrl(url: string): string {
+  const m = /^data:image\/([a-z0-9+.-]+);base64,/i.exec(url);
+  const type = (m?.[1] ?? "png").toLowerCase();
+  return type === "jpeg" ? "jpg" : type;
+}
+
+/** Fetch a hosted image URL and convert it to a data: URL (base64) so it can be
+ * persisted the same way a data:-URL provider result is — media-gallery-panel
+ * renders project_files image content only when it's a data: URL or raw base64. */
+async function toDataUrl(url: string): Promise<string> {
+  if (url.startsWith("data:")) return url;
+  const res = await fetch(url);
+  const blob = await res.blob();
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read image"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 interface ImageGenPanelProps {
   projectId?: string;
   onInsertImage?: (url: string) => void;
+  /** Merges the saved image file into the editor's live file list/tree/media gallery. */
+  onFilesUpdate?: (files: ProjectFile[], opts?: { replace?: boolean }) => void;
 }
 
-export function ImageGenPanel({ projectId, onInsertImage }: ImageGenPanelProps = {}) {
+export function ImageGenPanel({ projectId, onInsertImage, onFilesUpdate }: ImageGenPanelProps = {}) {
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState<typeof IMAGE_SIZES[number]>("1024x1024");
   const [style, setStyle] = useState<typeof IMAGE_STYLES[number]>("vivid");
@@ -53,8 +81,9 @@ export function ImageGenPanel({ projectId, onInsertImage }: ImageGenPanelProps =
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
 
+      const id = `img-${Date.now()}`;
       const newImage: GeneratedImage = {
-        id: `img-${Date.now()}`,
+        id,
         prompt,
         url: data.url,
         size,
@@ -63,6 +92,39 @@ export function ImageGenPanel({ projectId, onInsertImage }: ImageGenPanelProps =
       };
       setImages((prev) => [newImage, ...prev]);
       setSelected(newImage);
+      onInsertImage?.(data.url);
+
+      // Persist into the project so the image survives navigation/reload and
+      // shows up in the Media gallery — previously the panel only ever held
+      // generated images in local React state (image never written anywhere),
+      // so refreshing the editor or switching panels silently lost it.
+      if (projectId) {
+        void (async () => {
+          try {
+            const dataUrl = await toDataUrl(data.url);
+            const ext = extensionForDataUrl(dataUrl);
+            const path = `src/assets/generated/${id}.${ext}`;
+            const res = await fetch(`/api/projects/${projectId}/files`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ path, content: dataUrl, language: "plaintext" }),
+            });
+            if (!res.ok) throw new Error(`Save failed (${res.status})`);
+            const savedFile = (await res.json()) as ProjectFile;
+            setImages((prev) => prev.map((img) => (img.id === id ? { ...img, filePath: path } : img)));
+            setSelected((prev) => (prev?.id === id ? { ...prev, filePath: path } : prev));
+            onFilesUpdate?.([savedFile]);
+          } catch (saveErr) {
+            const message = saveErr instanceof Error ? saveErr.message : "Could not save the image to the project";
+            setImages((prev) => prev.map((img) => (img.id === id ? { ...img, saveError: message } : img)));
+            toast({
+              title: "Image generated, but not saved to the project",
+              description: `${message} — the image is still shown here but won't survive a reload.`,
+              variant: "destructive",
+            });
+          }
+        })();
+      }
     } catch (err: unknown) {
       toast({ title: "Image generation failed", description: err instanceof Error ? err.message : "Unknown error", variant: "destructive" });
     } finally {
@@ -101,6 +163,19 @@ export function ImageGenPanel({ projectId, onInsertImage }: ImageGenPanelProps =
             className="relative border-b border-border shrink-0"
           >
             <img src={selected.url} alt={selected.prompt} className="w-full h-48 object-cover" />
+            {selected.filePath ? (
+              <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-emerald-300 border border-emerald-400/30">
+                Saved to project
+              </span>
+            ) : selected.saveError ? (
+              <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-red-300 border border-red-400/30">
+                Not saved — {selected.saveError}
+              </span>
+            ) : (
+              <span className="absolute top-2 left-2 text-[10px] px-1.5 py-0.5 rounded bg-black/50 text-white/70 border border-white/20">
+                Saving…
+              </span>
+            )}
             <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex items-end p-3 gap-2">
               <p className="text-xs text-white/80 flex-1 line-clamp-2">{selected.prompt}</p>
               <div className="flex gap-1 shrink-0">
