@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createFileRoute,Link,useSearch } from "@tanstack/react-router";
+import { createFileRoute,Link } from "@tanstack/react-router";
 import { motion } from "framer-motion";
 import { Github,Mail,Loader2,Zap,CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Separator } from "@/components/ui/separator";
 import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { resolveSafeRedirect,withAuthRedirect } from "@/lib/auth/safe-redirect";
+import { loginSearchValidator } from "@/lib/route-search";
 
 const perks = [
   "5 free AI credits daily",
@@ -18,6 +19,7 @@ const perks = [
 ];
 
 export const Route = createFileRoute("/signup")({
+  validateSearch: loginSearchValidator,
   head: () => ({ meta: [{ title: "Sign up — LifemarkAI" }] }),
   component: SignupContent,
 });
@@ -31,7 +33,7 @@ function SignupContent() {
   const [emailSent, setEmailSent] = useState(false);
   const { toast } = useToast();
   const supabase = createClient();
-  const search = useSearch({ strict: false }) as { ref?: string; next?: string; redirect?: string };
+  const search = Route.useSearch() as { ref?: string; next?: string; redirect?: string };
   const refCode = search.ref ?? null;
   const requestedRedirect = search.next ?? search.redirect ?? null;
   const safeRedirect = resolveSafeRedirect(requestedRedirect);
@@ -212,7 +214,13 @@ function SignupContent() {
 
             <p className="text-center text-sm text-muted-foreground mt-6">
               Already have an account?{" "}
-              <Link to={withAuthRedirect("/login", safeRedirect)} className="text-primary hover:underline font-medium">Sign in</Link>
+              <Link
+                to="/login"
+                search={{ next: safeRedirect }}
+                className="text-primary hover:underline font-medium"
+              >
+                Sign in
+              </Link>
             </p>
             <p className="text-center text-xs text-muted-foreground mt-3">
               By signing up, you agree to our{" "}

@@ -10,6 +10,7 @@
  */
 import { generateAI } from "./generate.ts";
 import { getFastAiModel } from "./model-defaults.ts";
+import { expandDependencyPaths,normalizeProjectPath } from "./dependency-context.ts";
 
 export interface FileRef {
   path: string;
@@ -104,11 +105,12 @@ export async function selectRelevantFiles(opts: SelectFilesOpts): Promise<FileRe
   for (const p of heuristicSelect(opts.prompt ?? "", files, opts.activeFile ?? undefined)) chosen.add(p);
 
   // 3. Resolve to real files under the budgets.
-  const byPath = new Map(files.map((f) => [f.path, f]));
+  const byPath = new Map(files.map((f) => [normalizeProjectPath(f.path), f]));
   const out: FileRef[] = [];
   let used = 0;
-  for (const path of chosen) {
-    const f = byPath.get(path);
+  const dependencyAwarePaths = expandDependencyPaths([...chosen], files);
+  for (const path of dependencyAwarePaths) {
+    const f = byPath.get(normalizeProjectPath(path));
     if (!f) continue;
     const len = f.content?.length ?? 0;
     if (out.length >= maxFiles || used + len > maxChars) continue;
@@ -119,7 +121,9 @@ export async function selectRelevantFiles(opts: SelectFilesOpts): Promise<FileRe
   // Never send nothing — fall back to entries or the first few files.
   if (out.length === 0) {
     const entries = files.filter((f) => ENTRY_RE.test(f.path));
-    return (entries.length ? entries : files).slice(0, smallProject);
+    const fallback = entries.length ? entries : files;
+    const expanded = expandDependencyPaths(fallback.map((file) => file.path), files);
+    return expanded.map((path) => byPath.get(path)).filter((file): file is FileRef => !!file).slice(0, smallProject);
   }
   return out;
 }

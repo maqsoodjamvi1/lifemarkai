@@ -4,7 +4,6 @@ import { motion,AnimatePresence } from "framer-motion";
 import { createClient } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
 import type { Notification } from "@/types/database";
-import { Link } from "@tanstack/react-router";
 
 const NOTIFICATION_ICONS: Record<string, string> = {
   deploy_success: "🚀",
@@ -196,13 +195,13 @@ export function NotificationBell({ userId }: { userId: string }) {
                       </div>
                       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                         {n.link && (
-                          <Link
-                            to={n.link}
+                          <a
+                            href={n.link}
                             onClick={() => setOpen(false)}
                             className="p-1 rounded hover:bg-white/[0.08] text-slate-500 hover:text-slate-300 transition-colors"
                           >
                             <ExternalLink className="w-3 h-3" />
-                          </Link>
+                          </a>
                         )}
                         <button
                           onClick={() => deleteNotification(n.id)}

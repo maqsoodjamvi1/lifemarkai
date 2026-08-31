@@ -4248,7 +4248,7 @@ ${(f.content ?? "").slice(0, 8000)}
     setDesignPreviewOpen(false);
     setPendingDesignPrompt(null);
     if (!base) return;
-    void sendMessage(`${base}\n\n${buildDesignBrief(direction)}`, "build");
+    void sendMessage(`${base}\n\n${buildDesignBrief(direction)}`, "build", undefined, { forceBuild: true });
   }
 
   function handleDesignPreviewSkip() {
@@ -4256,7 +4256,7 @@ ${(f.content ?? "").slice(0, 8000)}
     setDesignPreviewOpen(false);
     setPendingDesignPrompt(null);
     skipDesignPreviewOnceRef.current = true;
-    if (base) void sendMessage(base, "build");
+    if (base) void sendMessage(base, "build", undefined, { forceBuild: true });
   }
 
   // Auto-drain the queue when streaming finishes (unless paused)

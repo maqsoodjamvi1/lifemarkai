@@ -46,8 +46,10 @@ CommandResult,
 SandboxFile,
 SandboxProvider,
 SandboxRunResult,
+SandboxProgressEvent,
 TypecheckResult,
 } from "./index.ts";
+import { createSandboxProgress } from "./progress.ts";
 import { appServing,DEFAULT_TIMEOUT_MS,trunc,waitForServer } from "./shared.ts";
 import { SYNC_MANIFEST,filesToPrune } from "./prune-files.ts";
 import { parseTscOutput } from "./tsc-diagnostics.ts";
@@ -229,6 +231,7 @@ async function docker(
   path: string,
   body?: unknown,
   raw?: Buffer,
+  timeoutMs = 0,
 ): Promise<{ status: number; text: string }> {
   const c = cfg();
   const payload = raw ?? (body === undefined ? undefined : Buffer.from(JSON.stringify(body)));
@@ -260,9 +263,23 @@ async function docker(
       );
     });
     req.on("error", reject);
+    if (timeoutMs > 0) {
+      req.setTimeout(timeoutMs, () => {
+        req.destroy(new Error("Docker daemon request timed out"));
+      });
+    }
     if (payload) req.write(payload);
     req.end();
   });
+}
+
+export async function isDockerDaemonReachable(timeoutMs = 1500): Promise<boolean> {
+  try {
+    const res = await docker("GET", "/_ping", undefined, undefined, timeoutMs);
+    return res.status >= 200 && res.status < 300 && res.text.trim() === "OK";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -532,7 +549,7 @@ export class DockerSandboxProvider implements SandboxProvider {
     startCommand?: string;
     timeoutMs?: number;
     projectId?: string;
-    onProgress?: (phase: string, detail?: string) => void;
+    onProgress?: (event: SandboxProgressEvent) => void;
   }): Promise<SandboxRunResult> {
     // Serialize provisions per project (see inflightRuns). Projects without an
     // id can't be deduplicated — run those directly.
@@ -553,7 +570,7 @@ export class DockerSandboxProvider implements SandboxProvider {
     startCommand?: string;
     timeoutMs?: number;
     projectId?: string;
-    onProgress?: (phase: string, detail?: string) => void;
+    onProgress?: (event: SandboxProgressEvent) => void;
   }): Promise<SandboxRunResult> {
     const progress = opts.onProgress ?? (() => {});
     const c = cfg();
@@ -632,11 +649,11 @@ export class DockerSandboxProvider implements SandboxProvider {
       // No reusable container (first ever boot, GC removed it, or the image
       // changed) — fall through to a full cold provision.
       if (opts.projectId) {
-        progress("cleanup", "Removing previous sandbox for project");
+        progress(createSandboxProgress("cleanup", "Removing previous sandbox for project"));
         await this.removeProjectContainers(opts.projectId);
       }
 
-      progress("creating", "Creating container");
+      progress(createSandboxProgress("creating", "Creating container"));
       const create = await docker("POST", "/v1.43/containers/create", {
         Image: c.image,
         // NO WorkingDir here on purpose — see the APP_DIR note above. Setting it
@@ -771,7 +788,7 @@ export class DockerSandboxProvider implements SandboxProvider {
         ? baseline.stdout.slice(baseline.stdout.indexOf("LM_PKG_START") + "LM_PKG_START".length)
         : null;
 
-      progress("writing", `Uploading ${opts.files.length} files`);
+      progress(createSandboxProgress("writing", `Uploading ${opts.files.length} files`));
       // Ship the sync manifest with the cold upload too.
       //
       // `writeFiles` writes one on every warm sync, but the cold path never
@@ -858,12 +875,12 @@ export class DockerSandboxProvider implements SandboxProvider {
 
         if (depCheck.satisfied) {
           logs += `\n[preview] skipped npm install — ${depCheck.reason}\n`;
-          progress("installing", "Dependencies already prepared");
+          progress(createSandboxProgress("installing", "Dependencies already prepared"));
         } else {
-          progress(
+          progress(createSandboxProgress(
             "installing",
             hasPrebuiltModules ? "Reconciling dependencies" : "Installing dependencies",
-          );
+          ));
           // --prefer-offline: use anything already in the cache instead of
           // revalidating it over the network, which is most of the install once
           // the base modules are present. --progress/--loglevel keep npm from
@@ -888,7 +905,7 @@ export class DockerSandboxProvider implements SandboxProvider {
 
       // Bind 0.0.0.0 or the port mapping can't reach it from outside the container.
       const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
-      progress("starting", cmd);
+      progress(createSandboxProgress("starting", cmd));
       // TWO independent fixes here — both were needed, in order:
       //
       // (1) START DETACHED (Detach:true), not backgrounded over an attached
@@ -1009,7 +1026,7 @@ export class DockerSandboxProvider implements SandboxProvider {
     innerPort: number;
     startCommand?: string;
     files: SandboxFile[];
-    progress: (phase: string, detail?: string) => void;
+    progress: (event: SandboxProgressEvent) => void;
     readyBudgetMs: number;
   }): Promise<SandboxRunResult | null> {
     const { projectId, image, innerPort, files, progress } = opts;
@@ -1051,7 +1068,7 @@ export class DockerSandboxProvider implements SandboxProvider {
 
       const id = keep.Id;
       if (keep.State !== "running") {
-        progress("creating", "Waking the existing sandbox");
+        progress(createSandboxProgress("creating", "Waking the existing sandbox"));
         const started = await docker("POST", `/v1.43/containers/${id}/start`);
         // 304 = already running, which is a race we are happy to lose.
         if (started.status >= 400 && started.status !== 304) return null;
@@ -1079,7 +1096,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       // set read from the database. Never do this from an incremental caller.
       await this.pruneRemovedFiles(id, files);
 
-      progress("writing", "Syncing changed files");
+      progress(createSandboxProgress("writing", "Syncing changed files"));
       // Incremental by content hash — an unchanged project writes nothing, so
       // vite is not disturbed at all and HMR keeps whatever state it had.
       const { written } = await this.writeFiles(id, files);
@@ -1089,7 +1106,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       // edit needs no install, and running one anyway would hand back the very
       // cold-start cost this path exists to avoid.
       if (written.some((p) => p === "package.json" || p.endsWith("/package.json"))) {
-        progress("installing", "Updating dependencies");
+        progress(createSandboxProgress("installing", "Updating dependencies"));
         const install = await this.installNpmDependencies(id, progress);
         logs += install.logs;
         if (!install.ok) {
@@ -1122,7 +1139,7 @@ export class DockerSandboxProvider implements SandboxProvider {
           up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
         } else {
           const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
-          progress("starting", cmd);
+          progress(createSandboxProgress("starting", cmd));
           await this.exec(id, supervisorCommand(cmd), APP_DIR, false, true);
           up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
         }
@@ -1251,12 +1268,12 @@ export class DockerSandboxProvider implements SandboxProvider {
    */
   private async installNpmDependencies(
     sandboxId: string,
-    progress: (phase: string, detail?: string) => void,
+    progress: (event: SandboxProgressEvent) => void,
   ): Promise<{ ok: true; logs: string } | { ok: false; error: string; logs: string }> {
     let logs = "";
     for (let attempt = 1; attempt <= NPM_INSTALL_MAX_ATTEMPTS; attempt += 1) {
       if (attempt > 1) {
-        progress("installing", `Retrying npm install (${attempt}/${NPM_INSTALL_MAX_ATTEMPTS})`);
+        progress(createSandboxProgress("installing", `Retrying npm install (${attempt}/${NPM_INSTALL_MAX_ATTEMPTS})`));
         await new Promise((resolve) => setTimeout(resolve, 2_000 * attempt));
       }
       const res = await this.exec(sandboxId, npmInstallShell(INSTALL_TIMEOUT_SEC));

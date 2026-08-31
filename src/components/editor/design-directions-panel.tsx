@@ -1,10 +1,11 @@
 
-import { useState,useRef } from "react";
+import { useMemo,useState,useRef } from "react";
 import {
 Palette,Check,Sparkles,ArrowRight,Loader2,
 RefreshCw,Wand2,AlertTriangle,
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { buildFallbackDesignPreviews } from "@/lib/ai/design-previews";
 
 interface DesignDirectionsPanelProps {
   onSendToChat?: (prompt: string) => void;
@@ -16,6 +17,7 @@ interface DesignDirection {
   label: string;
   description: string;
   html: string;
+  colors?: string[];
 }
 
 // ── Fallback static directions (shown before the user generates) ──────────────
@@ -104,7 +106,23 @@ export function DesignDirectionsPanel({ onSendToChat, initialPrompt = "" }: Desi
   const [loading, setLoading] = useState(false);
   const [hasGenerated, setHasGenerated] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [surfaceLabel, setSurfaceLabel] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const contextualFallbacks = useMemo<DesignDirection[]>(
+    () => buildFallbackDesignPreviews(prompt || "product application", "design-panel").map((direction) => ({
+      id: direction.id,
+      label: direction.label,
+      description: direction.desc,
+      html: direction.previewHtml,
+      colors: direction.colors,
+    })),
+    [prompt],
+  );
+  const displayedDirections = hasGenerated
+    ? directions
+    : prompt.trim()
+      ? contextualFallbacks
+      : STATIC_FALLBACKS;
 
   async function generate() {
     const p = prompt.trim();
@@ -122,9 +140,11 @@ export function DesignDirectionsPanel({ onSendToChat, initialPrompt = "" }: Desi
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt: p }),
       });
-      const data = await res.json() as { directions?: DesignDirection[]; error?: string };
+      const data = await res.json() as { directions?: DesignDirection[]; error?: string; surfaceLabel?: string };
       if (!res.ok || !data.directions) throw new Error(data.error ?? "Generation failed");
       setDirections(data.directions);
+      setSelected(data.directions[0]?.id ?? null);
+      setSurfaceLabel(data.surfaceLabel ?? null);
       setHasGenerated(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
@@ -137,13 +157,8 @@ export function DesignDirectionsPanel({ onSendToChat, initialPrompt = "" }: Desi
     if (!selected) return;
     const dir = directions.find((d) => d.id === selected);
     if (!dir) return;
-    const styleHint =
-      dir.id === "minimal"
-        ? "clean whitespace, subtle gray borders, light background, and a minimal aesthetic"
-        : dir.id === "bold"
-        ? "saturated accent colours (violet/yellow), bold typography, and high-energy layouts"
-        : "dark background (#0a0a0f), glassmorphism cards with rgba borders, and violet/indigo gradient accents";
-    const chatPrompt = `Apply the "${dir.label}" design direction across this project. Use ${styleHint}. ${dir.description}. Propagate this style to all components — nav, cards, buttons, forms, and typography.`;
+    const palette = dir.colors?.length ? ` Palette: ${dir.colors.join(", ")}.` : "";
+    const chatPrompt = `Implement the "${dir.label}" design direction across this project. ${dir.description}.${palette} Preserve the requested product architecture and propagate this direction to navigation, layout, cards, buttons, forms, data views, and typography. Update the files and refresh the preview.`;
     onSendToChat?.(chatPrompt);
     toast({ title: `"${dir.label}" direction applied`, description: "The AI will build using this visual style." });
   }
@@ -158,7 +173,9 @@ export function DesignDirectionsPanel({ onSendToChat, initialPrompt = "" }: Desi
           </div>
           <div>
             <p className="text-sm font-semibold">Design Directions</p>
-            <p className="text-[11px] text-muted-foreground">AI renders 3 live previews — pick one before building</p>
+            <p className="text-[11px] text-muted-foreground">
+              {surfaceLabel ? `Showing ${surfaceLabel}` : "AI renders app-type-aware previews — pick one before building"}
+            </p>
           </div>
         </div>
 
@@ -203,7 +220,7 @@ export function DesignDirectionsPanel({ onSendToChat, initialPrompt = "" }: Desi
           </p>
         )}
 
-        {directions.map((dir) => {
+        {displayedDirections.map((dir) => {
           const isSelected = selected === dir.id;
           return (
             <div

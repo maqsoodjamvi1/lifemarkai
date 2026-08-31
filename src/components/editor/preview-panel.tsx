@@ -1686,14 +1686,14 @@ export function PreviewPanel({
 
   const previewStatusText =
     hideTopChrome
-      ? sandboxError
+      ? previewEngine === "sandbox" && sandboxError
         ? "Preview failed"
         : previewEngine === "sandbox" && !sandboxUrl
           ? (modalPhaseLabel || "Starting live preview…")
-          : sandboxSyncInstalling
-            ? "Installing dependencies…"
-            : previewMachineState === "building" || previewMachineState === "loading" || sandboxLoading
-              ? (modalPhaseLabel || (previewMachineState === "loading" ? "Updating preview…" : "Loading preview…"))
+        : previewEngine === "sandbox" && sandboxSyncInstalling
+          ? "Installing dependencies…"
+            : previewMachineState === "building" || previewMachineState === "loading" || (previewEngine === "sandbox" && sandboxLoading)
+              ? ((previewEngine === "sandbox" ? modalPhaseLabel : null) || (previewMachineState === "loading" ? "Updating preview…" : "Loading preview…"))
               : null
       : previewMachineState === "building"
         ? "Preparing preview"

@@ -11,9 +11,14 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as DashboardRouteImport } from './routes/_dashboard'
+import { Route as AboutRouteImport } from './routes/about'
 import { Route as AcceptInviteRouteImport } from './routes/accept-invite'
+import { Route as ApiReferenceRouteImport } from './routes/api-reference'
+import { Route as BlogRouteImport } from './routes/blog'
+import { Route as CareersRouteImport } from './routes/careers'
 import { Route as ChangelogRouteImport } from './routes/changelog'
 import { Route as ConnectorsRouteImport } from './routes/connectors'
+import { Route as CookiesRouteImport } from './routes/cookies'
 import { Route as DemoRouteImport } from './routes/demo'
 import { Route as DocsRouteImport } from './routes/docs'
 import { Route as ExploreRouteImport } from './routes/explore'
@@ -21,10 +26,16 @@ import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as HealthRouteImport } from './routes/health'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as MfaChallengeRouteImport } from './routes/mfa-challenge'
+import { Route as PressRouteImport } from './routes/press'
 import { Route as PricingRouteImport } from './routes/pricing'
+import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
+import { Route as RoadmapRouteImport } from './routes/roadmap'
 import { Route as SignupRouteImport } from './routes/signup'
+import { Route as StatusRouteImport } from './routes/status'
+import { Route as SupportRouteImport } from './routes/support'
 import { Route as TemplatesRouteImport } from './routes/templates'
+import { Route as TermsRouteImport } from './routes/terms'
 import { Route as DashboardBillingRouteImport } from './routes/_dashboard/billing'
 import { Route as DashboardDashboardRouteImport } from './routes/_dashboard/dashboard'
 import { Route as ApiSplatRouteImport } from './routes/api/$'
@@ -287,9 +298,29 @@ const DashboardRoute = DashboardRouteImport.update({
   id: '/_dashboard',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AboutRoute = AboutRouteImport.update({
+  id: '/about',
+  path: '/about',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AcceptInviteRoute = AcceptInviteRouteImport.update({
   id: '/accept-invite',
   path: '/accept-invite',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiReferenceRoute = ApiReferenceRouteImport.update({
+  id: '/api-reference',
+  path: '/api-reference',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BlogRoute = BlogRouteImport.update({
+  id: '/blog',
+  path: '/blog',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CareersRoute = CareersRouteImport.update({
+  id: '/careers',
+  path: '/careers',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ChangelogRoute = ChangelogRouteImport.update({
@@ -300,6 +331,11 @@ const ChangelogRoute = ChangelogRouteImport.update({
 const ConnectorsRoute = ConnectorsRouteImport.update({
   id: '/connectors',
   path: '/connectors',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CookiesRoute = CookiesRouteImport.update({
+  id: '/cookies',
+  path: '/cookies',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DemoRoute = DemoRouteImport.update({
@@ -337,9 +373,19 @@ const MfaChallengeRoute = MfaChallengeRouteImport.update({
   path: '/mfa-challenge',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PressRoute = PressRouteImport.update({
+  id: '/press',
+  path: '/press',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PricingRoute = PricingRouteImport.update({
   id: '/pricing',
   path: '/pricing',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
@@ -347,14 +393,34 @@ const ResetPasswordRoute = ResetPasswordRouteImport.update({
   path: '/reset-password',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RoadmapRoute = RoadmapRouteImport.update({
+  id: '/roadmap',
+  path: '/roadmap',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SignupRoute = SignupRouteImport.update({
   id: '/signup',
   path: '/signup',
   getParentRoute: () => rootRouteImport,
 } as any)
+const StatusRoute = StatusRouteImport.update({
+  id: '/status',
+  path: '/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SupportRoute = SupportRouteImport.update({
+  id: '/support',
+  path: '/support',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TemplatesRoute = TemplatesRouteImport.update({
   id: '/templates',
   path: '/templates',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TermsRoute = TermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DashboardBillingRoute = DashboardBillingRouteImport.update({
@@ -1686,9 +1752,14 @@ const ApiAppsIdConnectProviderCallbackRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/about': typeof AboutRoute
   '/accept-invite': typeof AcceptInviteRoute
+  '/api-reference': typeof ApiReferenceRoute
+  '/blog': typeof BlogRoute
+  '/careers': typeof CareersRoute
   '/changelog': typeof ChangelogRoute
   '/connectors': typeof ConnectorsRoute
+  '/cookies': typeof CookiesRoute
   '/demo': typeof DemoRoute
   '/docs': typeof DocsRouteWithChildren
   '/explore': typeof ExploreRoute
@@ -1696,10 +1767,16 @@ export interface FileRoutesByFullPath {
   '/health': typeof HealthRoute
   '/login': typeof LoginRoute
   '/mfa-challenge': typeof MfaChallengeRoute
+  '/press': typeof PressRoute
   '/pricing': typeof PricingRoute
+  '/privacy': typeof PrivacyRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/roadmap': typeof RoadmapRoute
   '/signup': typeof SignupRoute
+  '/status': typeof StatusRoute
+  '/support': typeof SupportRoute
   '/templates': typeof TemplatesRoute
+  '/terms': typeof TermsRoute
   '/billing': typeof DashboardBillingRoute
   '/dashboard': typeof DashboardDashboardRouteWithChildren
   '/api/$': typeof ApiSplatRoute
@@ -1955,9 +2032,14 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/about': typeof AboutRoute
   '/accept-invite': typeof AcceptInviteRoute
+  '/api-reference': typeof ApiReferenceRoute
+  '/blog': typeof BlogRoute
+  '/careers': typeof CareersRoute
   '/changelog': typeof ChangelogRoute
   '/connectors': typeof ConnectorsRoute
+  '/cookies': typeof CookiesRoute
   '/demo': typeof DemoRoute
   '/docs': typeof DocsRouteWithChildren
   '/explore': typeof ExploreRoute
@@ -1965,10 +2047,16 @@ export interface FileRoutesByTo {
   '/health': typeof HealthRoute
   '/login': typeof LoginRoute
   '/mfa-challenge': typeof MfaChallengeRoute
+  '/press': typeof PressRoute
   '/pricing': typeof PricingRoute
+  '/privacy': typeof PrivacyRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/roadmap': typeof RoadmapRoute
   '/signup': typeof SignupRoute
+  '/status': typeof StatusRoute
+  '/support': typeof SupportRoute
   '/templates': typeof TemplatesRoute
+  '/terms': typeof TermsRoute
   '/billing': typeof DashboardBillingRoute
   '/dashboard': typeof DashboardDashboardRouteWithChildren
   '/api/$': typeof ApiSplatRoute
@@ -2226,9 +2314,14 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/_dashboard': typeof DashboardRouteWithChildren
+  '/about': typeof AboutRoute
   '/accept-invite': typeof AcceptInviteRoute
+  '/api-reference': typeof ApiReferenceRoute
+  '/blog': typeof BlogRoute
+  '/careers': typeof CareersRoute
   '/changelog': typeof ChangelogRoute
   '/connectors': typeof ConnectorsRoute
+  '/cookies': typeof CookiesRoute
   '/demo': typeof DemoRoute
   '/docs': typeof DocsRouteWithChildren
   '/explore': typeof ExploreRoute
@@ -2236,10 +2329,16 @@ export interface FileRoutesById {
   '/health': typeof HealthRoute
   '/login': typeof LoginRoute
   '/mfa-challenge': typeof MfaChallengeRoute
+  '/press': typeof PressRoute
   '/pricing': typeof PricingRoute
+  '/privacy': typeof PrivacyRoute
   '/reset-password': typeof ResetPasswordRoute
+  '/roadmap': typeof RoadmapRoute
   '/signup': typeof SignupRoute
+  '/status': typeof StatusRoute
+  '/support': typeof SupportRoute
   '/templates': typeof TemplatesRoute
+  '/terms': typeof TermsRoute
   '/_dashboard/billing': typeof DashboardBillingRoute
   '/_dashboard/dashboard': typeof DashboardDashboardRouteWithChildren
   '/api/$': typeof ApiSplatRoute
@@ -2497,9 +2596,14 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/about'
     | '/accept-invite'
+    | '/api-reference'
+    | '/blog'
+    | '/careers'
     | '/changelog'
     | '/connectors'
+    | '/cookies'
     | '/demo'
     | '/docs'
     | '/explore'
@@ -2507,10 +2611,16 @@ export interface FileRouteTypes {
     | '/health'
     | '/login'
     | '/mfa-challenge'
+    | '/press'
     | '/pricing'
+    | '/privacy'
     | '/reset-password'
+    | '/roadmap'
     | '/signup'
+    | '/status'
+    | '/support'
     | '/templates'
+    | '/terms'
     | '/billing'
     | '/dashboard'
     | '/api/$'
@@ -2766,9 +2876,14 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/about'
     | '/accept-invite'
+    | '/api-reference'
+    | '/blog'
+    | '/careers'
     | '/changelog'
     | '/connectors'
+    | '/cookies'
     | '/demo'
     | '/docs'
     | '/explore'
@@ -2776,10 +2891,16 @@ export interface FileRouteTypes {
     | '/health'
     | '/login'
     | '/mfa-challenge'
+    | '/press'
     | '/pricing'
+    | '/privacy'
     | '/reset-password'
+    | '/roadmap'
     | '/signup'
+    | '/status'
+    | '/support'
     | '/templates'
+    | '/terms'
     | '/billing'
     | '/dashboard'
     | '/api/$'
@@ -3036,9 +3157,14 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/_dashboard'
+    | '/about'
     | '/accept-invite'
+    | '/api-reference'
+    | '/blog'
+    | '/careers'
     | '/changelog'
     | '/connectors'
+    | '/cookies'
     | '/demo'
     | '/docs'
     | '/explore'
@@ -3046,10 +3172,16 @@ export interface FileRouteTypes {
     | '/health'
     | '/login'
     | '/mfa-challenge'
+    | '/press'
     | '/pricing'
+    | '/privacy'
     | '/reset-password'
+    | '/roadmap'
     | '/signup'
+    | '/status'
+    | '/support'
     | '/templates'
+    | '/terms'
     | '/_dashboard/billing'
     | '/_dashboard/dashboard'
     | '/api/$'
@@ -3307,9 +3439,14 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DashboardRoute: typeof DashboardRouteWithChildren
+  AboutRoute: typeof AboutRoute
   AcceptInviteRoute: typeof AcceptInviteRoute
+  ApiReferenceRoute: typeof ApiReferenceRoute
+  BlogRoute: typeof BlogRoute
+  CareersRoute: typeof CareersRoute
   ChangelogRoute: typeof ChangelogRoute
   ConnectorsRoute: typeof ConnectorsRoute
+  CookiesRoute: typeof CookiesRoute
   DemoRoute: typeof DemoRoute
   DocsRoute: typeof DocsRouteWithChildren
   ExploreRoute: typeof ExploreRoute
@@ -3317,10 +3454,16 @@ export interface RootRouteChildren {
   HealthRoute: typeof HealthRoute
   LoginRoute: typeof LoginRoute
   MfaChallengeRoute: typeof MfaChallengeRoute
+  PressRoute: typeof PressRoute
   PricingRoute: typeof PricingRoute
+  PrivacyRoute: typeof PrivacyRoute
   ResetPasswordRoute: typeof ResetPasswordRoute
+  RoadmapRoute: typeof RoadmapRoute
   SignupRoute: typeof SignupRoute
+  StatusRoute: typeof StatusRoute
+  SupportRoute: typeof SupportRoute
   TemplatesRoute: typeof TemplatesRoute
+  TermsRoute: typeof TermsRoute
   ApiSplatRoute: typeof ApiSplatRoute
   ApiActivityRoute: typeof ApiActivityRoute
   ApiDebugLogRoute: typeof ApiDebugLogRoute
@@ -3470,11 +3613,39 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/about': {
+      id: '/about'
+      path: '/about'
+      fullPath: '/about'
+      preLoaderRoute: typeof AboutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/accept-invite': {
       id: '/accept-invite'
       path: '/accept-invite'
       fullPath: '/accept-invite'
       preLoaderRoute: typeof AcceptInviteRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api-reference': {
+      id: '/api-reference'
+      path: '/api-reference'
+      fullPath: '/api-reference'
+      preLoaderRoute: typeof ApiReferenceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/blog': {
+      id: '/blog'
+      path: '/blog'
+      fullPath: '/blog'
+      preLoaderRoute: typeof BlogRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/careers': {
+      id: '/careers'
+      path: '/careers'
+      fullPath: '/careers'
+      preLoaderRoute: typeof CareersRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/changelog': {
@@ -3489,6 +3660,13 @@ declare module '@tanstack/react-router' {
       path: '/connectors'
       fullPath: '/connectors'
       preLoaderRoute: typeof ConnectorsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/cookies': {
+      id: '/cookies'
+      path: '/cookies'
+      fullPath: '/cookies'
+      preLoaderRoute: typeof CookiesRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/demo': {
@@ -3540,11 +3718,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MfaChallengeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/press': {
+      id: '/press'
+      path: '/press'
+      fullPath: '/press'
+      preLoaderRoute: typeof PressRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/pricing': {
       id: '/pricing'
       path: '/pricing'
       fullPath: '/pricing'
       preLoaderRoute: typeof PricingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/reset-password': {
@@ -3554,6 +3746,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/roadmap': {
+      id: '/roadmap'
+      path: '/roadmap'
+      fullPath: '/roadmap'
+      preLoaderRoute: typeof RoadmapRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/signup': {
       id: '/signup'
       path: '/signup'
@@ -3561,11 +3760,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/status': {
+      id: '/status'
+      path: '/status'
+      fullPath: '/status'
+      preLoaderRoute: typeof StatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/support': {
+      id: '/support'
+      path: '/support'
+      fullPath: '/support'
+      preLoaderRoute: typeof SupportRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/templates': {
       id: '/templates'
       path: '/templates'
       fullPath: '/templates'
       preLoaderRoute: typeof TemplatesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/terms': {
+      id: '/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof TermsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_dashboard/billing': {
@@ -5913,9 +6133,14 @@ const ApiAppsIdConnectProviderRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DashboardRoute: DashboardRouteWithChildren,
+  AboutRoute: AboutRoute,
   AcceptInviteRoute: AcceptInviteRoute,
+  ApiReferenceRoute: ApiReferenceRoute,
+  BlogRoute: BlogRoute,
+  CareersRoute: CareersRoute,
   ChangelogRoute: ChangelogRoute,
   ConnectorsRoute: ConnectorsRoute,
+  CookiesRoute: CookiesRoute,
   DemoRoute: DemoRoute,
   DocsRoute: DocsRouteWithChildren,
   ExploreRoute: ExploreRoute,
@@ -5923,10 +6148,16 @@ const rootRouteChildren: RootRouteChildren = {
   HealthRoute: HealthRoute,
   LoginRoute: LoginRoute,
   MfaChallengeRoute: MfaChallengeRoute,
+  PressRoute: PressRoute,
   PricingRoute: PricingRoute,
+  PrivacyRoute: PrivacyRoute,
   ResetPasswordRoute: ResetPasswordRoute,
+  RoadmapRoute: RoadmapRoute,
   SignupRoute: SignupRoute,
+  StatusRoute: StatusRoute,
+  SupportRoute: SupportRoute,
   TemplatesRoute: TemplatesRoute,
+  TermsRoute: TermsRoute,
   ApiSplatRoute: ApiSplatRoute,
   ApiActivityRoute: ApiActivityRoute,
   ApiDebugLogRoute: ApiDebugLogRoute,

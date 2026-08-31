@@ -24,8 +24,10 @@ import type {
   CommandResult,
   SandboxFile,
   SandboxProvider,
+  SandboxProgressEvent,
   SandboxRunResult,
 } from "./index.ts";
+import { createSandboxProgress } from "./progress.ts";
 import { trunc,waitForServer } from "./shared.ts";
 
 interface VercelSandboxInstance {
@@ -124,7 +126,7 @@ export class VercelSandboxProvider implements SandboxProvider {
     startCommand?: string;
     timeoutMs?: number;
     projectId?: string;
-    onProgress?: (phase: string, detail?: string) => void;
+    onProgress?: (event: SandboxProgressEvent) => void;
   }): Promise<SandboxRunResult> {
     const port = opts.port ?? DEFAULT_PORT;
     const progress = opts.onProgress ?? (() => {});
@@ -133,7 +135,7 @@ export class VercelSandboxProvider implements SandboxProvider {
       const creds = credentials();
       if (!creds) return { ok: false, error: "Vercel Sandbox credentials are not configured" };
 
-      progress("creating", "Provisioning Vercel Sandbox…");
+      progress(createSandboxProgress("creating", "Provisioning Vercel Sandbox…"));
       const sandbox = await mod.Sandbox.create({
         ...creds,
         timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
@@ -143,25 +145,28 @@ export class VercelSandboxProvider implements SandboxProvider {
         // secrets (Phase 7 security validation).
       });
 
-      progress("writing", `Writing ${opts.files.length} file(s)…`);
+      progress(createSandboxProgress("writing", `Writing ${opts.files.length} file(s)…`));
       await sandbox.writeFiles(
         opts.files.map((file) => ({ path: file.path, content: Buffer.from(file.content, "utf8") })),
       );
 
-      progress("installing", "npm install…");
+      progress(createSandboxProgress("installing", "npm install…"));
       const install = await sandbox.runCommand({ cmd: "npm", args: ["install", "--no-audit", "--no-fund"] });
       if (install.exitCode !== undefined && install.exitCode !== 0) {
         const stderr = install.stderr ? await install.stderr().catch(() => "") : "";
         return { ok: false, sandboxId: sandbox.sandboxId, error: `npm install failed: ${trunc(stderr, 2000)}` };
       }
 
-      progress("starting", "Starting dev server…");
+      progress(createSandboxProgress("starting", "Starting dev server…"));
       const start = opts.startCommand ?? `npm run dev -- --host 0.0.0.0 --port ${port}`;
       await sandbox.runCommand({ cmd: "sh", args: ["-c", start], detached: true });
 
       const previewUrl = `https://${sandbox.domain(port)}`;
       const ready = await waitForServer(previewUrl, 90_000).catch(() => false);
-      progress(ready ? "ready" : "starting", ready ? undefined : "Waiting for the dev server…");
+      progress(createSandboxProgress(
+        ready ? "ready" : "starting",
+        ready ? undefined : "Waiting for the dev server…",
+      ));
       return { ok: true, sandboxId: sandbox.sandboxId, previewUrl, ready };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };

@@ -59,6 +59,18 @@ describe("describeAiFailure", () => {
     assert.ok((d.chatMarkdown).includes("upstream gone"));
   });
 
+  it("explains verification-blocked generations without calling them random request failures", () => {
+    const d = describeAiFailure({
+      rawError:
+        "Error: Verification blocked this generation before it replaced your working app: Render bootstrap present: no ReactDOM/createRoot/__Mrequire — app never renders",
+    });
+    assert.equal(d.isPlatformFault, false);
+    assert.match(d.chatMarkdown, /failed verification/i);
+    assert.match(d.chatMarkdown, /app was left unchanged/i);
+    assert.match(d.chatMarkdown, /app never renders/i);
+    assert.doesNotMatch(d.chatMarkdown, /The request failed/);
+  });
+
   // Every branch must promise the message survived, because every branch is
   // paired with a caller that now keeps it.
   it("always tells the user their message is still there", () => {

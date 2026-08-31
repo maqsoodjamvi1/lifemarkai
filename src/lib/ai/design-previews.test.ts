@@ -21,7 +21,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { classifyBuildIntent, isAppShellAppType } from "./build-intent.ts";
-import { buildAutoStyleBrief, shouldOfferDesignPreviews } from "./design-previews.ts";
+import {
+  buildAutoStyleBrief,
+  buildDesignPreviewSystemPrompt,
+  buildFallbackDesignPreviews,
+  getDesignPreviewContext,
+  shouldOfferDesignPreviews,
+} from "./design-previews.ts";
 
 // Anchored to the same real prompts admin-archetype.test.ts already verifies
 // classify to each of the 12 app-shell types — not re-guessing wording here.
@@ -67,4 +73,65 @@ test("public-facing builds keep both — the fix must not over-reach", () => {
     assert.equal(shouldOfferDesignPreviews(prompt, 0), true, prompt);
     assert.notEqual(buildAutoStyleBrief(prompt, "seed"), null, prompt);
   }
+});
+
+test("existing projects can still request the design picker explicitly", () => {
+  assert.equal(
+    shouldOfferDesignPreviews("Show me design directions for this landing page", 24),
+    true,
+  );
+  assert.equal(
+    shouldOfferDesignPreviews("Change the website design to something more premium", 24),
+    true,
+  );
+});
+
+test("existing feature work is not interrupted by the design picker", () => {
+  assert.equal(
+    shouldOfferDesignPreviews("Add a calendar filter to the todo list", 24),
+    false,
+  );
+});
+
+test("operational builds offer app-shell directions only when explicitly requested", () => {
+  assert.equal(
+    shouldOfferDesignPreviews("Show me design directions for a CRM with leads and deals", 0),
+    true,
+  );
+  assert.equal(
+    shouldOfferDesignPreviews("Choose a design for an ERP with inventory and purchase orders", 0),
+    true,
+  );
+  assert.equal(shouldOfferDesignPreviews("Build a CRM with leads and deals", 0), false);
+});
+
+test("landing pages and admin apps receive different structural contracts", () => {
+  const landing = "Build a modern bakery landing page";
+  const admin = "Show me design directions for a CRM with leads and deals";
+
+  assert.equal(getDesignPreviewContext(landing).surface, "public-site");
+  assert.equal(getDesignPreviewContext(admin).surface, "app-shell");
+
+  const landingPrompt = buildDesignPreviewSystemPrompt(landing);
+  const adminPrompt = buildDesignPreviewSystemPrompt(admin);
+  assert.match(landingPrompt, /PUBLIC-FACING SITE/);
+  assert.match(landingPrompt, /NEVER render an admin sidebar/);
+  assert.match(adminPrompt, /OPERATIONAL APP SHELL/);
+  assert.match(adminPrompt, /NEVER render a marketing hero/);
+});
+
+test("fallback frames differ by product structure, not only palette", () => {
+  const landingHtml = buildFallbackDesignPreviews(
+    "Build a modern bakery landing page",
+    "same-seed",
+  ).map((direction) => direction.previewHtml).join(" ");
+  const adminHtml = buildFallbackDesignPreviews(
+    "Show me design directions for an ERP with inventory and purchase orders",
+    "same-seed",
+  ).map((direction) => direction.previewHtml).join(" ");
+
+  assert.match(landingHtml, /Story Work Contact/);
+  assert.doesNotMatch(landingHtml, /Overview.*Records.*Reports/);
+  assert.match(adminHtml, /Overview.*Records.*Reports/);
+  assert.doesNotMatch(adminHtml, /Explore the experience/);
 });

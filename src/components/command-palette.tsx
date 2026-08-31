@@ -209,7 +209,7 @@ export function CommandPalette({ projects = [], files = [], actions }: CommandPa
                 <CommandItem
                   key={p.id}
                   value={p.name}
-                  onSelect={() => run(() => navigate({ to: `/editor/${p.id}` }))}
+                  onSelect={() => run(() => navigate({ to: "/editor/$projectId", params: { projectId: p.id } }))}
                 >
                   <FolderOpen className="mr-2 h-4 w-4" />
                   {p.name}

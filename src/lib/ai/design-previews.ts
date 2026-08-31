@@ -9,7 +9,27 @@ export interface DesignPreviewDirection {
   previewHtml: string;
 }
 
-export const DESIGN_PREVIEW_SYSTEM_PROMPT = `You are a senior product designer. Given an app/website build request, return exactly THREE distinct visual directions as JSON:
+export type DesignPreviewSurface = "public-site" | "app-shell" | "product-ui";
+
+export interface DesignPreviewContext {
+  appType: ReturnType<typeof classifyBuildIntent>["appType"];
+  surface: DesignPreviewSurface;
+  surfaceLabel: string;
+}
+
+/** Resolve structure before style so a CRM cannot receive landing-page frames. */
+export function getDesignPreviewContext(prompt: string): DesignPreviewContext {
+  const { appType } = classifyBuildIntent(prompt);
+  if (isAppShellAppType(appType)) {
+    return { appType, surface: "app-shell", surfaceLabel: `${appType.replace(/-/g, " ")} workspace` };
+  }
+  if (appType === "marketing-website" || appType === "portfolio" || appType === "blog") {
+    return { appType, surface: "public-site", surfaceLabel: `${appType.replace(/-/g, " ")} concepts` };
+  }
+  return { appType, surface: "product-ui", surfaceLabel: `${appType.replace(/-/g, " ")} product concepts` };
+}
+
+const JSON_RESPONSE_CONTRACT = `Return exactly THREE distinct visual directions as JSON:
 
 {
   "directions": [
@@ -24,29 +44,43 @@ export const DESIGN_PREVIEW_SYSTEM_PROMPT = `You are a senior product designer. 
 }
 
 Rules:
-- Exactly 3 directions — meaningfully different (e.g. minimal vs bold vs warm editorial).
-- previewHtml: a SINGLE self-contained mini hero (navbar + headline + CTA + 2 feature cards) using ONLY inline styles. Max 800 chars per preview. No <script>, no external URLs, no class names.
+- Exactly 3 directions with meaningfully different COMPOSITION, density, typography, and palette. A color swap of the same frame is invalid.
+- previewHtml: a SINGLE self-contained compact frame using ONLY inline styles. Max 1400 chars per preview. No <script>, no external URLs, no class names.
 - CRITICAL JSON safety: escape every double-quote inside previewHtml as \\". Do not use raw newlines inside any string — use <br/> or spaces instead. No trailing commas.
 - colors: 4 hex swatches that match the preview.
 - Tailor copy and palette to the user's niche — never "Lorem ipsum".
 - Return raw JSON only — no markdown fences.`;
 
+/** Create an app-type-aware prompt shared by both design-selection surfaces. */
+export function buildDesignPreviewSystemPrompt(prompt: string): string {
+  const context = getDesignPreviewContext(prompt);
+  const surfaceContract = context.surface === "app-shell"
+    ? `SURFACE: OPERATIONAL APP SHELL (${context.appType}). Every preview MUST show a desktop management workspace: persistent sidebar or rail, top command/search area, domain-specific records, and either a table, pipeline, schedule, KPI grid, or workflow. NEVER render a marketing hero, testimonials, pricing, a giant slogan, or a landing-page CTA. Direction 1 is calm/data-dense, direction 2 modular/workflow-led, direction 3 command-center/high-contrast.`
+    : context.surface === "public-site"
+      ? `SURFACE: PUBLIC-FACING SITE (${context.appType}). Every preview MUST show brand navigation, persuasive content, and a clear customer CTA. NEVER render an admin sidebar, KPI dashboard, data table, pipeline, or back-office chrome. Direction 1 is editorial/asymmetric, direction 2 conversion-led/split-layout, direction 3 immersive/bold with a materially different hierarchy.`
+      : `SURFACE: CUSTOMER PRODUCT UI (${context.appType}). Show the product's primary interactive experience, not a generic marketing hero and not a back-office analytics dashboard. Use domain-specific navigation and content. Direction 1 is focused/minimal, direction 2 card-led/modular, direction 3 immersive/high-contrast with a materially different hierarchy.`;
+
+  return `You are a senior product designer. First respect the requested product architecture, then explore its visual language.\n\n${surfaceContract}\n\n${JSON_RESPONSE_CONTRACT}`;
+}
+
 /** Offer Lovable-style 3-preview picker before first build on visual-forward apps. */
 export function shouldOfferDesignPreviews(prompt: string, fileCount: number): boolean {
-  if (fileCount > 8) return false;
   if (/\b(skip design|no design preview|just build|without design)\b/i.test(prompt)) return false;
-  if (!shouldAutoBuildMode(prompt) && !/\b(landing|website|site|storefront|store|redesign|rebrand)\b/i.test(prompt)) {
+  const explicitDesignChoice =
+    /\b(design directions?|choose (a )?design|pick (a )?design|style options?|visual directions?|theme options?)\b/i.test(prompt) ||
+    /\b(re-?design|re-?style|change\s+(the\s+)?(?:website\s+|site\s+|app\s+|page\s+)?(design|theme|style|palette|look)|new\s+(design|theme|look|style)|different\s+(design|theme|look|style)|make it look)\b/i.test(prompt);
+  if (fileCount > 8 && !explicitDesignChoice) return false;
+  if (
+    !explicitDesignChoice &&
+    !shouldAutoBuildMode(prompt) &&
+    !/\b(landing|website|site|storefront|store|redesign|rebrand)\b/i.test(prompt)
+  ) {
     return false;
   }
   const { appType } = classifyBuildIntent(prompt);
-  // Skip staff-only operational tools where visual direction is low-value —
-  // the same 12-type app-shell set site-chrome and admin-shell already gate
-  // on, not a local 3-type stand-in that misses 9 of them (healthcare, hr,
-  // accounting, logistics, helpdesk, school, hotel, project-management,
-  // admin-dashboard) and would offer a "bold vs warm editorial" picker meant
-  // for public-facing pages to a school administration or hospital scheduling
-  // build.
-  if (isAppShellAppType(appType)) return false;
+  // Operational apps need choices about density, navigation, and workflows,
+  // but only when requested explicitly. Ordinary CRM/ERP edits stay fast.
+  if (isAppShellAppType(appType)) return explicitDesignChoice;
   return true;
 }
 
@@ -209,9 +243,30 @@ export function sanitizePreviewHtml(html: string): string {
     .slice(0, 4000);
 }
 
-function buildArchetypePreviewHtml(a: StyleArchetype, headline: string): string {
+function buildArchetypePreviewHtml(
+  a: StyleArchetype,
+  headline: string,
+  surface: DesignPreviewSurface,
+  variant: number,
+): string {
   const [primary, accent, bg, text] = a.palette;
   const safeHeadline = headline.replace(/[<>&"]/g, "").slice(0, 48) || "Your product";
+  if (surface === "app-shell") {
+    const content = variant % 3 === 0
+      ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:7px"><div style="padding:9px;border:1px solid ${primary}35;border-radius:8px"><small style="opacity:.65">Open pipeline</small><b style="display:block;font-size:18px">24 records</b></div><div style="padding:9px;background:${accent}20;border-radius:8px"><small style="opacity:.65">This week</small><b style="display:block;font-size:18px">+18%</b></div></div>`
+      : variant % 3 === 1
+        ? `<div style="display:grid;gap:6px"><div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:6px;font-size:9px;opacity:.6"><span>Record</span><span>Status</span><span>Owner</span></div><div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:6px;padding:8px;background:${primary}12;border-radius:7px;font-size:9px"><b>Priority account</b><span>Active</span><span>Alex</span></div></div>`
+        : `<div style="display:flex;gap:6px;align-items:flex-end;height:55px">${[42, 70, 52, 88, 64].map((height) => `<i style="display:block;flex:1;height:${height}%;background:${primary};border-radius:4px 4px 1px 1px;opacity:.75"></i>`).join("")}</div>`;
+    return `<div style="font-family:system-ui,sans-serif;background:${bg};color:${text};padding:10px;border-radius:12px;min-height:180px;display:grid;grid-template-columns:58px 1fr;gap:10px"><aside style="background:${primary}14;border:1px solid ${primary}25;border-radius:9px;padding:8px 6px"><b style="font-size:9px">${a.label}</b><div style="margin-top:14px;display:grid;gap:8px;opacity:.55;font-size:8px"><span>Overview</span><span>Records</span><span>Reports</span><span>Settings</span></div></aside><main><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><b style="font-size:12px">${safeHeadline}</b><span style="padding:4px 7px;border-radius:6px;background:${primary};color:#fff;font-size:8px">+ New</span></div>${content}</main></div>`;
+  }
+  if (surface === "public-site") {
+    const content = variant % 3 === 0
+      ? `<div style="max-width:85%;font-size:25px;font-weight:800;line-height:1.05;margin:20px 0 8px">${safeHeadline}</div><p style="font-size:10px;opacity:.65;max-width:75%">A crafted experience with a clear story and memorable details.</p>`
+      : variant % 3 === 1
+        ? `<div style="display:grid;grid-template-columns:1.15fr .85fr;gap:10px;align-items:stretch;margin-top:15px"><div><b style="font-size:20px;line-height:1.1;display:block">${safeHeadline}</b><span style="font-size:9px;opacity:.65">Made for people who value thoughtful work.</span></div><div style="border-radius:12px;background:linear-gradient(135deg,${primary},${accent});min-height:88px"></div></div>`
+        : `<div style="margin-top:14px;padding:16px 12px;border:1px solid ${primary}30;border-radius:14px;text-align:center;background:${primary}0d"><b style="font-size:21px;line-height:1.1;display:block">${safeHeadline}</b><span style="font-size:9px;opacity:.65">Distinctive, useful, and ready to explore.</span></div>`;
+    return `<div style="font-family:system-ui,sans-serif;background:${bg};color:${text};padding:14px;border-radius:12px;min-height:180px"><nav style="display:flex;justify-content:space-between;align-items:center;font-size:9px"><b>${a.label}</b><span style="word-spacing:8px;opacity:.65">Story Work Contact</span></nav>${content}<span style="display:inline-block;margin-top:11px;padding:6px 10px;border-radius:999px;background:${primary};color:#fff;font-size:9px">Explore the experience →</span></div>`;
+  }
   return [
     `<div style="font-family:system-ui,sans-serif;background:${bg};color:${text};padding:16px;border-radius:12px;min-height:180px">`,
     `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;font-size:11px;opacity:.7">`,
@@ -232,6 +287,7 @@ export function buildFallbackDesignPreviews(
   prompt: string,
   seedKey = "fallback",
 ): DesignPreviewDirection[] {
+  const { surface } = getDesignPreviewContext(prompt);
   const seed = hashSeed(seedKey + prompt.slice(0, 80));
   const headline =
     prompt.replace(/\s+/g, " ").trim().slice(0, 60) || "Your new experience";
@@ -243,12 +299,12 @@ export function buildFallbackDesignPreviews(
     seen.add(a.id);
     unique.push(a);
   }
-  return unique.slice(0, 3).map((a) => ({
+  return unique.slice(0, 3).map((a, index) => ({
     id: a.id,
     label: a.label,
     desc: a.desc,
     colors: a.palette,
-    previewHtml: sanitizePreviewHtml(buildArchetypePreviewHtml(a, headline)),
+    previewHtml: sanitizePreviewHtml(buildArchetypePreviewHtml(a, headline, surface, index)),
   }));
 }
 

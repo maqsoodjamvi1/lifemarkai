@@ -59,7 +59,7 @@ export function RecentlyVisited({ projects }: RecentlyVisitedProps) {
               initial={{ opacity: 0, x: -8 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: idx * 0.05 }}
-              onClick={() => navigate({ to: `/editor/${r.id}` })}
+              onClick={() => navigate({ to: "/editor/$projectId", params: { projectId: r.id } })}
               className="group flex-shrink-0 w-44 rounded-xl border border-border bg-card hover:bg-accent/40 hover:border-border/80 transition-all cursor-pointer p-3"
             >
               <div className="flex items-center gap-2 mb-1.5">

@@ -253,7 +253,13 @@ export default defineConfig(({ mode }) => {
         "@tiptap/pm/model",
         "@tiptap/pm/view",
       ],
-      exclude: ["@tiptap/pm"],
+      exclude: [
+        "@tiptap/pm",
+        // Native Node binding used only by server/agent structural tools.
+        // Vite's client optimizer must not try to prebundle the .node binary.
+        "@ast-grep/napi",
+        "@ast-grep/napi-win32-x64-msvc",
+      ],
     },
     build: {
       // NOTE: a custom rolldown codeSplitting.groups config used to live here
@@ -339,4 +345,3 @@ export default defineConfig(({ mode }) => {
     ],
   };
 });
-

@@ -177,7 +177,7 @@ const STEPS: Array<{ title: string; description: string; videoSrc?: string; plac
 
 function HowItWorks() {
   return (
-    <section className="py-20 sm:py-28 border-t border-border/40">
+    <section id="features" className="py-20 sm:py-28 border-t border-border/40 scroll-mt-24">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <h2 className="text-center text-3xl sm:text-4xl font-semibold tracking-tight mb-3">
           How it works
@@ -227,20 +227,20 @@ function HowItWorks() {
 
 // ── Templates carousel ────────────────────────────────────────────────────────
 
-const TEMPLATES: Array<{ slug: string; title: string; subtitle: string; emoji: string }> = [
-  { slug: "saas-dashboard",    title: "SaaS dashboard",    subtitle: "Analytics & user management", emoji: "📊" },
-  { slug: "ecommerce-store",   title: "Ecommerce store",   subtitle: "Premium webstore design",     emoji: "🛍️" },
-  { slug: "portfolio",         title: "Personal portfolio",subtitle: "Work showcase template",      emoji: "🎨" },
-  { slug: "event-platform",    title: "Event platform",    subtitle: "Find, register, host events", emoji: "🎟️" },
-  { slug: "blog",              title: "Blog template",     subtitle: "Minimal, playful design",      emoji: "✍️" },
-  { slug: "ai-chat",           title: "AI chat app",       subtitle: "Multi-model conversation",     emoji: "🤖" },
-  { slug: "marketing-site",    title: "Marketing site",    subtitle: "Hero + features + CTA",        emoji: "🚀" },
-  { slug: "admin-panel",       title: "Admin panel",       subtitle: "CRUD + auth + permissions",    emoji: "⚙️" },
+const TEMPLATES: Array<{ slug: string; title: string; subtitle: string; emoji: string; category: string }> = [
+  { slug: "saas-dashboard",    title: "SaaS dashboard",     subtitle: "Analytics & user management", emoji: "📊", category: "SaaS" },
+  { slug: "ecommerce-store",   title: "Ecommerce store",    subtitle: "Premium webstore design",     emoji: "🛍️", category: "E-commerce" },
+  { slug: "portfolio",         title: "Personal portfolio", subtitle: "Work showcase template",      emoji: "🎨", category: "Portfolio" },
+  { slug: "event-platform",    title: "Event platform",     subtitle: "Find, register, host events", emoji: "🎟️", category: "SaaS" },
+  { slug: "blog",              title: "Blog template",      subtitle: "Minimal, playful design",      emoji: "✍️", category: "Blog" },
+  { slug: "ai-chat",           title: "AI chat app",        subtitle: "Multi-model conversation",     emoji: "🤖", category: "SaaS" },
+  { slug: "marketing-site",    title: "Marketing site",     subtitle: "Hero + features + CTA",        emoji: "🚀", category: "Landing Page" },
+  { slug: "admin-panel",       title: "Admin panel",        subtitle: "CRUD + auth + permissions",    emoji: "⚙️", category: "Dashboard" },
 ];
 
 function Templates() {
   return (
-    <section className="py-20 sm:py-28 border-t border-border/40">
+    <section id="templates" className="py-20 sm:py-28 border-t border-border/40 scroll-mt-24">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-end justify-between mb-10">
           <div>
@@ -259,7 +259,7 @@ function Templates() {
             <Link
               key={t.slug}
               to="/templates"
-              hash={t.slug}
+              search={{ category: t.category }}
               className="group rounded-xl border border-border/60 bg-card overflow-hidden hover:shadow-md transition-shadow"
             >
               <div className="aspect-[4/3] bg-gradient-to-br from-muted/30 to-muted/60 flex items-center justify-center text-5xl">

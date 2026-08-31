@@ -27,6 +27,9 @@ export function DesignPreviewPicker({
   const [error, setError] = useState<string | null>(null);
   const [directions, setDirections] = useState<DesignPreviewDirection[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [surfaceLabel, setSurfaceLabel] = useState<string | null>(null);
+  const recommendedId = directions[0]?.id ?? null;
+  const selectedIsRecommended = !selectedId || selectedId === recommendedId;
 
   // Shared staleness guard for BOTH the initial load effect and the "Try
   // again" retry button. The retry button used to fire its own duplicate
@@ -52,7 +55,14 @@ export function DesignPreviewPicker({
           onSkip();
           return;
         }
-        setDirections(data.directions ?? []);
+        const nextDirections = data.directions ?? [];
+        setSurfaceLabel(typeof data.surfaceLabel === "string" ? data.surfaceLabel : null);
+        setDirections(nextDirections);
+        setSelectedId((current) =>
+          current && nextDirections.some((dir: DesignPreviewDirection) => dir.id === current)
+            ? current
+            : (nextDirections[0]?.id ?? null),
+        );
       })
       .catch((e: Error) => {
         if (seq === requestSeq.current) setError(e.message);
@@ -66,6 +76,7 @@ export function DesignPreviewPicker({
     if (!open) return;
     setDirections([]);
     setSelectedId(null);
+    setSurfaceLabel(null);
     loadPreviews(false);
     return () => {
       // Invalidate any request this open started so it can never apply
@@ -84,9 +95,11 @@ export function DesignPreviewPicker({
           <div className="flex items-start gap-2">
             <Palette size={16} className="text-blue-500 mt-0.5 shrink-0" />
             <div>
-              <h2 className="text-sm font-semibold">Choose a design direction</h2>
+              <h2 className="text-sm font-semibold">
+                Choose {surfaceLabel ? `a ${surfaceLabel} direction` : "a design direction"}
+              </h2>
               <p className="text-[11px] text-muted-foreground mt-0.5 max-w-lg">
-                Three AI-generated previews for your app. Pick one to guide the build — or skip to let the AI decide.
+                I auto-pick the strongest fit for your prompt. You can build with it immediately, choose another, or skip.
               </p>
             </div>
           </div>
@@ -135,6 +148,7 @@ export function DesignPreviewPicker({
               directions={directions}
               selectedId={selectedId}
               onSelect={setSelectedId}
+              recommendedId={recommendedId}
             />
           )}
         </div>
@@ -145,19 +159,19 @@ export function DesignPreviewPicker({
             onClick={onSkip}
             className="text-xs text-muted-foreground hover:text-foreground transition px-2 py-1.5"
           >
-            Skip — AI picks for me
+            Skip design choice
           </button>
           <button
             type="button"
-            disabled={!selectedId || loading}
+            disabled={directions.length === 0 || loading}
             onClick={() => {
-              const dir = directions.find((d) => d.id === selectedId);
+              const dir = directions.find((d) => d.id === selectedId) ?? directions[0];
               if (dir) onSelect(dir);
             }}
             className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-blue-600 text-white hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition"
           >
             <Sparkles size={13} />
-            Build with this design
+            {selectedIsRecommended ? "Build with auto-picked design" : "Build with selected design"}
           </button>
         </div>
       </div>

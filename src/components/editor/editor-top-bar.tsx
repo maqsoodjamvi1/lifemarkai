@@ -801,7 +801,7 @@ export function EditorTopBar({
               {recentProjects.map((p) => (
                 <DropdownMenuItem
                   key={p.id}
-                  onClick={() => navigate({ to: `/editor/${p.id}` })}
+                  onClick={() => navigate({ to: "/editor/$projectId", params: { projectId: p.id } })}
                   className="text-xs gap-2"
                 >
                   <span className="truncate">{p.name}</span>

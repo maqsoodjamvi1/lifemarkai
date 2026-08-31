@@ -87,7 +87,7 @@ export function ContinueCard({ projects }: ContinueCardProps) {
         <Button
           size="sm"
           className="shrink-0 gap-1.5 bg-violet-600 hover:bg-violet-700 text-white"
-          onClick={() => navigate({ to: `/editor/${recent.id}` })}
+          onClick={() => navigate({ to: "/editor/$projectId", params: { projectId: recent.id } })}
         >
           Open editor
           <ArrowRight className="w-3.5 h-3.5" />

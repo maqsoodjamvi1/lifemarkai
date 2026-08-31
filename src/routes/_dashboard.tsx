@@ -17,10 +17,11 @@ import { DashboardSidebar } from "@/components/dashboard/dashboard-sidebar";
 import { PwaInstallPrompt } from "@/components/dashboard/pwa-install-prompt";
 
 export const Route = createFileRoute("/_dashboard")({
-  loader: async () => {
+  loader: async ({ location }) => {
     const shell = await fetchDashboardShell();
     if (!shell.user) {
-      throw redirect({ to: "/login", search: { next: "/dashboard" } });
+      const returnTo = `${location.pathname}${location.searchStr || ""}${location.hash || ""}`;
+      throw redirect({ to: "/login", search: { next: returnTo } });
     }
     return shell;
   },

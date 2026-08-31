@@ -38,18 +38,19 @@ export function verifyPreviewHtml(html: string): PreviewVerifyResult {
     detail: trimmed.length > 0 ? `${Math.round(trimmed.length / 1024)}KB` : "Empty bundle",
   });
 
-  const hasMount = /id=["']root["']/.test(html);
+  const isStaticPreview = /data-lifemark-static-bridge|data-lifemark-module-registry|data-lifemark-file=/.test(html);
+  const hasMount = isStaticPreview || /id=["'](?:root|__next)["']/.test(html);
   checks.push({
     name: "Root mount present",
     pass: hasMount,
-    detail: hasMount ? undefined : 'no <div id="root"> — nothing to mount into',
+    detail: hasMount ? undefined : 'no framework mount or static document body was found',
   });
 
-  const hasRender = /ReactDOM|createRoot|__Mrequire\(/.test(html);
+  const hasRender = isStaticPreview || /ReactDOM|createRoot|__Mrequire\(/.test(html);
   checks.push({
     name: "Render bootstrap present",
     pass: hasRender,
-    detail: hasRender ? undefined : "no ReactDOM/createRoot/__Mrequire — app never renders",
+    detail: hasRender ? undefined : "no framework or static-project render bootstrap — app never renders",
   });
 
   // ── Known blank-screen fatals (static, deterministic) ──────────────────────

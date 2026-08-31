@@ -25,6 +25,13 @@ export interface SandboxPreviewState {
   phaseDetail: string | null;
 }
 
+type SandboxStatusResponse = {
+  enabled?: boolean;
+  provider?: string | null;
+  configured?: boolean;
+  reachable?: boolean;
+};
+
 function storageKey(projectId: string) {
   return `lifemark-sandbox-${projectId}`;
 }
@@ -89,6 +96,30 @@ export function useSandboxPreview(projectId: string) {
       ...partial,
     }),
     [],
+  );
+
+  const applyStatus = useCallback(
+    (data: SandboxStatusResponse): boolean => {
+      if (!data.enabled) {
+        applyState(emptyState({
+          provider: typeof data.provider === "string" ? data.provider : null,
+          error:
+            data.provider === "docker" && data.configured && data.reachable === false
+              ? "Docker is configured, but Docker Desktop is not running."
+              : null,
+        }));
+        return false;
+      }
+      applyState({
+        ...stateRef.current,
+        enabled: true,
+        provider: typeof data.provider === "string" ? data.provider : stateRef.current.provider,
+        loading: true,
+        phase: stateRef.current.phase ?? "creating",
+      });
+      return true;
+    },
+    [applyState, emptyState],
   );
 
   const reconnectPreview = useCallback(async (): Promise<SandboxPreviewState> => {
@@ -196,6 +227,11 @@ export function useSandboxPreview(projectId: string) {
   const requestPreview = useCallback(async (): Promise<SandboxPreviewState> => {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
+      const status = (await fetch("/api/sandbox/status").then((r) => r.json())) as SandboxStatusResponse;
+      if (!applyStatus(status)) {
+        return stateRef.current;
+      }
+
       const postOnce = async () => {
         const res = await fetch(`/api/projects/${projectId}/sandbox-preview`, { method: "POST" });
         return res.json() as Promise<{
@@ -293,7 +329,7 @@ export function useSandboxPreview(projectId: string) {
         error: err instanceof Error ? err.message : "Request failed",
       });
     }
-  }, [applyState, projectId]);
+  }, [applyState, applyStatus, projectId]);
 
   /** Preflight: know Modal is configured before boot (skip WebContainer). */
   const [statusResolved, setStatusResolved] = useState(false);
@@ -302,26 +338,21 @@ export function useSandboxPreview(projectId: string) {
     statusCheckedRef.current = true;
     void fetch("/api/sandbox/status")
       .then((r) => r.json())
-      .then((data: { enabled?: boolean; provider?: string }) => {
-        if (!data.enabled) return;
-        setState((s) => ({
-          ...s,
-          enabled: true,
-          provider: typeof data.provider === "string" ? data.provider : s.provider,
-          loading: true,
-          phase: s.phase ?? "creating",
-        }));
+      .then((data: SandboxStatusResponse) => {
+        applyStatus(data);
       })
       .catch(() => {})
       // Resolved either way — until this flips, the panel must show a neutral
       // loading state, never the "backend not configured" setup pane (it used
       // to flash setup instructions at every editor open).
       .finally(() => setStatusResolved(true));
-  }, []);
+  }, [applyStatus]);
 
   /** Lovable parity: reconnect warm sandbox first, cold-provision only if needed. */
   useEffect(() => {
     if (!projectId || bootedRef.current) return;
+    if (!statusResolved) return;
+    if (!stateRef.current.enabled) return;
     bootedRef.current = true;
     void (async () => {
       setState((s) => ({ ...s, loading: true, phase: "creating", phaseDetail: "Connecting…" }));
@@ -355,7 +386,7 @@ export function useSandboxPreview(projectId: string) {
       setState((s) => ({ ...s, phase: "creating", phaseDetail: "Cold start…" }));
       await requestPreview();
     })();
-  }, [projectId, reconnectPreview, requestPreview]);
+  }, [projectId, reconnectPreview, requestPreview, statusResolved]);
 
   /** Keep-alive heartbeat: while a live preview is up AND the tab is visible,
    *  ping the sandbox so Modal's idle timer never fires (sandboxes were expiring

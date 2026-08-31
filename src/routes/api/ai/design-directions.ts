@@ -3,51 +3,13 @@ import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { DESIGN_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import {
+  buildDesignPreviewSystemPrompt,
+  buildFallbackDesignPreviews,
+  getDesignPreviewContext,
+  parseDesignPreviewResponse,
+} from "@/lib/ai/design-previews";
 
-
-// Returns 3 real rendered HTML/Tailwind previews (like Lovable's design-before-build feature)
-const SYSTEM_PROMPT = `You are a senior UI designer. Given a brief description of an app or feature,
-generate exactly 3 distinct design directions as self-contained HTML snippets.
-
-Each snippet is a small card/section preview (not a full page) — roughly a hero section, a dashboard card, or a landing section —
-that shows the visual direction: colours, typography, layout, and style.
-
-Return ONLY valid JSON in this exact shape:
-{
-  "directions": [
-    {
-      "id": "minimal",
-      "label": "Clean & Minimal",
-      "description": "One sentence describing this direction",
-      "html": "<!-- FULL self-contained HTML using Tailwind CDN + inline styles -->"
-    },
-    {
-      "id": "bold",
-      "label": "Bold & Vibrant",
-      "description": "One sentence describing this direction",
-      "html": "..."
-    },
-    {
-      "id": "dark",
-      "label": "Dark & Modern",
-      "description": "One sentence describing this direction",
-      "html": "..."
-    }
-  ]
-}
-
-Rules for each HTML snippet:
-- Load Tailwind via CDN: <script src="https://cdn.tailwindcss.com"></script>
-- Self-contained: no external imports beyond Tailwind CDN
-- 280px wide, ~200px tall — compact preview card only (not a full page)
-- Use <body class="m-0 p-0 overflow-hidden">
-- Each direction must look meaningfully different (colour, font, spacing, style)
-- Use realistic dummy content matching the user's description
-- No JavaScript — static HTML only
-- Direction 1: light/minimal — white bg, subtle borders, muted colours
-- Direction 2: bold/colourful — saturated accents, strong contrast
-- Direction 3: dark/glass — dark background (#0f0f1a), glassmorphism cards
-- Only return the raw JSON — no markdown, no explanation`;
 
 async function handlePOST(req: Request) {
   const supabase = await createClient();
@@ -73,7 +35,7 @@ async function handlePOST(req: Request) {
         // than the coding workhorse and better at aesthetics).
         model: DESIGN_MODEL,
         messages: [
-          { role: "system", content: SYSTEM_PROMPT },
+          { role: "system", content: buildDesignPreviewSystemPrompt(prompt) },
           { role: "user", content: `App/feature description: ${prompt.slice(0, 500)}` },
         ],
         maxTokens: 4000,
@@ -84,26 +46,34 @@ async function handlePOST(req: Request) {
       { userId: user.id, task: "design_directions" },
     );
 
-    let parsed: {
-      directions: Array<{ id: string; label: string; description: string; html: string }>;
-    };
-
-    try {
-      const raw = result.content.replace(/^```json\s*/i, "").replace(/\s*```$/i, "").trim();
-      parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed.directions) || parsed.directions.length !== 3) {
-        throw new Error("Invalid structure");
-      }
-    } catch {
-      return Response.json({ error: "AI returned invalid JSON" }, { status: 500 });
+    let directions = parseDesignPreviewResponse(result.content ?? "");
+    if (directions.length < 3) {
+      directions = buildFallbackDesignPreviews(prompt, user.id);
     }
-
-    return Response.json(parsed);
+    return Response.json({
+      directions: directions.map((direction) => ({
+        id: direction.id,
+        label: direction.label,
+        description: direction.desc,
+        html: direction.previewHtml,
+        colors: direction.colors,
+      })),
+      ...getDesignPreviewContext(prompt),
+    });
   } catch (err) {
-    return Response.json(
-      { error: err instanceof Error ? err.message : "Generation failed" },
-      { status: 500 }
-    );
+    const fallback = buildFallbackDesignPreviews(prompt, user.id);
+    return Response.json({
+      directions: fallback.map((direction) => ({
+        id: direction.id,
+        label: direction.label,
+        description: direction.desc,
+        html: direction.previewHtml,
+        colors: direction.colors,
+      })),
+      degraded: true,
+      warning: err instanceof Error ? err.message : "Generation failed",
+      ...getDesignPreviewContext(prompt),
+    });
   }
 }
 

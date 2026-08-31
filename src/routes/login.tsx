@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { createClient } from "@/lib/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { resolveSafeRedirect,withAuthRedirect } from "@/lib/auth/safe-redirect";
+import { resolveSafeRedirect } from "@/lib/auth/safe-redirect";
 import { loginSearchValidator } from "@/lib/route-search";
 
 export const Route = createFileRoute("/login")({
@@ -193,7 +193,11 @@ function LoginContent() {
 
           <p className="text-center text-sm text-muted-foreground mt-6">
             Don&apos;t have an account?{" "}
-            <Link to={withAuthRedirect("/signup", safeRedirect)} className="text-primary hover:underline font-medium">
+            <Link
+              to="/signup"
+              search={{ next: safeRedirect }}
+              className="text-primary hover:underline font-medium"
+            >
               Sign up free
             </Link>
           </p>

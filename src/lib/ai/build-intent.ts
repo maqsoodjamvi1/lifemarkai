@@ -31,8 +31,20 @@ export type BuildAppType =
   | "portfolio"
   | "general-app";
 
+export type BuildOperation = "create" | "modify" | "repair" | "redesign" | "explain";
+export type BuildChangeScope = "single-component" | "single-page" | "multi-page" | "architecture";
+export type BuildCapability = "auth" | "database" | "storage" | "payments" | "search" | "analytics";
+
 export interface BuildIntent {
   appType: BuildAppType;
+  /** What the user wants done, independently of the kind of product. */
+  operation: BuildOperation;
+  /** How much of the project should be allowed to change. */
+  changeScope: BuildChangeScope;
+  /** Product capabilities that generation and verification must account for. */
+  requiredCapabilities: BuildCapability[];
+  /** Deterministic classifier confidence, from 0 to 1. */
+  confidence: number;
   niche: string | null;
   statusLabel: string;
   blueprint: string;
@@ -40,6 +52,53 @@ export interface BuildIntent {
   singlePage: boolean;
   /** Minimum file count a real version of this app type should have. */
   minFiles: number;
+}
+
+const DATA_BACKED_APP_TYPES = new Set<BuildAppType>([
+  "ecommerce", "erp", "pos", "crm", "admin-dashboard", "saas", "booking",
+  "marketplace", "education", "social", "healthcare", "hr", "accounting",
+  "logistics", "helpdesk", "school", "hotel", "project-management",
+  "real-estate", "restaurant", "events", "fitness", "blog",
+]);
+
+function inferBuildOperation(prompt: string): BuildOperation {
+  if (/\b(fix|debug|repair|broken|failing|error|crash|not working)\b/i.test(prompt)) return "repair";
+  if (/\b(redesign|restyle|rebrand|refresh the (?:ui|design)|new look|change the theme)\b/i.test(prompt)) return "redesign";
+  if (/\b(edit|modify|update|change|add|remove|replace|rename|improve)\b/i.test(prompt)) return "modify";
+  if (/\b(create|build|make|develop|generate)\b/i.test(prompt)) return "create";
+  if (/\b(explain|describe|review|audit|how does|what does|why does)\b/i.test(prompt)) return "explain";
+  return "create";
+}
+
+function inferChangeScope(prompt: string, operation: BuildOperation, appType: BuildAppType, singlePage: boolean): BuildChangeScope {
+  if (/\b(architecture|rebuild|rewrite|migrate|whole (?:app|project)|entire (?:app|project)|full[- ]stack)\b/i.test(prompt)) return "architecture";
+  if (/\bcomponent\b/i.test(prompt) || (operation !== "create" && /\b(button|input|modal|dialog|card|table|navbar|header|footer|sidebar)\b/i.test(prompt))) return "single-component";
+  if (singlePage || /\b(this page|current page|single page|landing page|homepage)\b/i.test(prompt)) return "single-page";
+  if (/\b(pages|routes|modules|screens|workflow|dashboard and|sitewide|across the app)\b/i.test(prompt)) return "multi-page";
+  if (operation === "create") return appType === "marketing-website" ? "multi-page" : "architecture";
+  return "single-page";
+}
+
+function inferRequiredCapabilities(prompt: string, appType: BuildAppType): BuildCapability[] {
+  const capabilities = new Set<BuildCapability>();
+  if (DATA_BACKED_APP_TYPES.has(appType) || /\b(database|records?|data model|persist|save data)\b/i.test(prompt)) capabilities.add("database");
+  if (DATA_BACKED_APP_TYPES.has(appType) || /\b(auth|login|log in|sign in|signup|sign up|users?|roles?|permissions?)\b/i.test(prompt)) capabilities.add("auth");
+  if (/\b(upload|attachment|file storage|media library|(?:image|file|document|media) uploads?)\b/i.test(prompt)) capabilities.add("storage");
+  if (["ecommerce", "pos", "saas", "marketplace", "booking", "events"].includes(appType) || /\b(payment|checkout|subscription|invoice|billing|stripe|paddle)\b/i.test(prompt)) capabilities.add("payments");
+  if (/\b(search|filter|find records?|catalog|knowledge base)\b/i.test(prompt)) capabilities.add("search");
+  if (/\b(analytics|metrics|reporting|reports?|insights?|conversion|tracking)\b/i.test(prompt)) capabilities.add("analytics");
+  return [...capabilities];
+}
+
+function buildIntentMetadata(prompt: string, appType: BuildAppType, singlePage: boolean): Pick<BuildIntent, "operation" | "changeScope" | "requiredCapabilities" | "confidence"> {
+  const operation = inferBuildOperation(prompt);
+  const explicitType = appType !== "general-app" && appType !== "admin-dashboard";
+  return {
+    operation,
+    changeScope: inferChangeScope(prompt, operation, appType, singlePage),
+    requiredCapabilities: inferRequiredCapabilities(prompt, appType),
+    confidence: explicitType ? 0.92 : appType === "admin-dashboard" ? 0.7 : 0.5,
+  };
 }
 
 /**
@@ -908,6 +967,7 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
   if (BUILDER_KEYWORDS.test(prompt)) {
     return {
       appType: "general-app",
+      ...buildIntentMetadata(prompt, "general-app", false),
       niche: extractNiche(prompt),
       statusLabel: "Designing Lovable-inspired builder UI…",
       blueprint: BLUEPRINTS["general-app"](extractNiche(prompt)),
@@ -1026,6 +1086,7 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
 
   return {
     appType,
+    ...buildIntentMetadata(prompt, appType, singlePage),
     niche,
     statusLabel: STATUS_LABELS[appType](niche, prompt),
     blueprint,
@@ -1166,6 +1227,8 @@ export function buildUserDirective(intent: BuildIntent): string {
     "---",
     `Autonomous build: ${intent.statusLabel}`,
     `App type: ${intent.appType}${intent.niche ? ` | Niche: ${intent.niche}` : ""}`,
+    `Operation: ${intent.operation} | Allowed change scope: ${intent.changeScope} | Classifier confidence: ${Math.round(intent.confidence * 100)}%`,
+    `Required capabilities: ${intent.requiredCapabilities.length > 0 ? intent.requiredCapabilities.join(", ") : "none inferred — do not invent a backend requirement"}`,
     "Use LifemarkAI's internal editor intelligence lenses (product, architecture, UX, frontend, backend, database, QA, security, deployability) to improve the build, but do not expose them as a separate module or workflow.",
     "Infer brand, pages, modules, and realistic mock data yourself. Do not ask clarifying questions — ship a complete working app.",
   ];

@@ -11,7 +11,9 @@ CommandResult,
 SandboxFile,
 SandboxProvider,
 SandboxRunResult,
+SandboxProgressEvent,
 } from "./index.ts";
+import { createSandboxProgress,type SandboxPhase } from "./progress.ts";
 import {
 DEFAULT_IDLE_TIMEOUT_MS,
 DEFAULT_TIMEOUT_MS,
@@ -25,13 +27,7 @@ import { BASE_APP_DEPENDENCIES,BASE_APP_DEV_DEPENDENCIES } from "../preview/base
 const WORKDIR = "/workspace";
 const WRITE_CONCURRENCY = 8;
 
-export type ModalBootPhase =
-  | "creating"
-  | "writing"
-  | "installing"
-  | "starting"
-  | "ready"
-  | "error";
+export type ModalBootPhase = Extract<SandboxPhase, "creating" | "writing" | "installing" | "starting" | "ready" | "error">;
 
 type ModalFilesystem = {
   writeText?: (text: string, remotePath: string) => Promise<void>;
@@ -339,7 +335,7 @@ export class ModalSandboxProvider implements SandboxProvider {
     startCommand?: string;
     timeoutMs?: number;
     projectId?: string;
-    onProgress?: (phase: ModalBootPhase, detail?: string) => void;
+    onProgress?: (event: SandboxProgressEvent) => void;
   }): Promise<SandboxRunResult> {
     if (!this.isEnabled()) {
       return { ok: false, error: "Modal not configured (set MODAL_TOKEN_ID + MODAL_TOKEN_SECRET)." };
@@ -361,7 +357,7 @@ export class ModalSandboxProvider implements SandboxProvider {
           const warm = await modal.sandboxes.fromName(this.appName, name);
           if (await this.waitForLocalPort(warm, port, 8000)) {
             const previewUrl = await this.previewUrlFromSandbox(warm, port);
-            progress?.("ready", "Reconnected to warm Modal sandbox");
+            progress?.(createSandboxProgress("ready", "Reconnected to warm Modal sandbox"));
             return { ok: true, sandboxId: warm.sandboxId, previewUrl, logs: "Reconnected to warm Modal sandbox" };
           }
           await warm.terminate().catch(() => {});
@@ -370,7 +366,7 @@ export class ModalSandboxProvider implements SandboxProvider {
         }
       }
 
-      progress?.("creating", "Provisioning Modal sandbox");
+      progress?.(createSandboxProgress("creating", "Provisioning Modal sandbox"));
       const image = await this.resolveImage(modal, app);
       // Keep the sandbox's entrypoint alive for the WHOLE lifetime — a fixed
       // `sleep 7200` (2h) used to terminate the container before the wall-clock
@@ -404,7 +400,7 @@ export class ModalSandboxProvider implements SandboxProvider {
             try {
               if (await this.waitForLocalPort(existing, port, 12_000)) {
                 const previewUrl = await this.previewUrlFromSandbox(existing, port);
-                progress?.("ready", "Reconnected to existing Modal sandbox");
+                progress?.(createSandboxProgress("ready", "Reconnected to existing Modal sandbox"));
                 return {
                   ok: true,
                   sandboxId: existing.sandboxId,
@@ -443,23 +439,23 @@ export class ModalSandboxProvider implements SandboxProvider {
             command: ["sleep", String(Math.ceil(cappedMs / 1000) + 60)],
           };
           sb = await modal.sandboxes.create(app, image, cappedOpts);
-          progress?.("creating", "Provisioned with a 2h cap (plan limit on lifetime)");
+          progress?.(createSandboxProgress("creating", "Provisioned with a 2h cap (plan limit on lifetime)"));
         } else {
           throw createErr;
         }
       }
 
-      progress?.("writing", `Writing ${opts.files.length} files`);
+      progress?.(createSandboxProgress("writing", `Writing ${opts.files.length} files`));
       await this.writeAllFiles(sb, opts.files);
 
-      progress?.("installing", "Installing dependencies");
+      progress?.(createSandboxProgress("installing", "Installing dependencies"));
       const logs = await this.installDeps(sb, opts.files);
 
-      progress?.("starting", `Starting ${startCommand}`);
+      progress?.(createSandboxProgress("starting", `Starting ${startCommand}`));
       await this.startDevServer(sb, startCommand, port);
       const previewUrl = await this.previewUrlFromSandbox(sb, port);
 
-      progress?.("ready", previewUrl);
+      progress?.(createSandboxProgress("ready", previewUrl));
       return {
         ok: true,
         sandboxId: sb.sandboxId,
@@ -467,7 +463,7 @@ export class ModalSandboxProvider implements SandboxProvider {
         logs: trunc(logs),
       };
     } catch (err) {
-      progress?.("error", err instanceof Error ? err.message : String(err));
+      progress?.(createSandboxProgress("error", err instanceof Error ? err.message : String(err)));
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }

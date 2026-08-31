@@ -125,7 +125,7 @@ export function ActivityFeed() {
                 initial={{ opacity: 0, x: -6 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: idx * 0.04 }}
-                onClick={() => navigate({ to: `/editor/${event.projectId}` })}
+                onClick={() => navigate({ to: "/editor/$projectId", params: { projectId: event.projectId } })}
                 className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-muted/60 transition-colors group text-left"
               >
                 {/* Icon badge */}

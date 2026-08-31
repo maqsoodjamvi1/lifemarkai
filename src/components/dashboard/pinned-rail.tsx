@@ -80,7 +80,7 @@ export function PinnedRail({ projects }: PinnedRailProps) {
               initial={{ opacity: 0, x: -8 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: idx * 0.05 }}
-              onClick={() => navigate({ to: `/editor/${project.id}` })}
+              onClick={() => navigate({ to: "/editor/$projectId", params: { projectId: project.id } })}
               className="group relative flex-shrink-0 w-52 rounded-xl border border-border bg-card hover:bg-accent/40 hover:border-border/80 transition-all cursor-pointer p-3"
             >
               {/* Unpin button */}

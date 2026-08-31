@@ -1,11 +1,53 @@
 import { Link } from "@tanstack/react-router";
 import { Zap,Github,Twitter } from "lucide-react";
 
-const links = {
-  Product: ["Features", "Pricing", "Templates", "Changelog", "Roadmap"],
-  Developers: ["Documentation", "API Reference", "GitHub", "Status"],
-  Company: ["About", "Blog", "Careers", "Press"],
-  Legal: ["Privacy Policy", "Terms of Service", "Cookie Policy"],
+type FooterLink = {
+  label: string;
+  to:
+    | "/"
+    | "/about"
+    | "/api-reference"
+    | "/blog"
+    | "/careers"
+    | "/changelog"
+    | "/connectors"
+    | "/cookies"
+    | "/docs"
+    | "/press"
+    | "/pricing"
+    | "/privacy"
+    | "/roadmap"
+    | "/status"
+    | "/templates"
+    | "/terms";
+  hash?: string;
+};
+
+const links: Record<string, FooterLink[]> = {
+  Product: [
+    { label: "Features", to: "/" as const, hash: "features" },
+    { label: "Pricing", to: "/pricing" as const },
+    { label: "Templates", to: "/templates" as const },
+    { label: "Changelog", to: "/changelog" as const },
+    { label: "Roadmap", to: "/roadmap" as const },
+  ],
+  Developers: [
+    { label: "Documentation", to: "/docs" as const },
+    { label: "API Reference", to: "/api-reference" as const },
+    { label: "Connectors", to: "/connectors" as const },
+    { label: "Status", to: "/status" as const },
+  ],
+  Company: [
+    { label: "About", to: "/about" as const },
+    { label: "Blog", to: "/blog" as const },
+    { label: "Careers", to: "/careers" as const },
+    { label: "Press", to: "/press" as const },
+  ],
+  Legal: [
+    { label: "Privacy Policy", to: "/privacy" as const },
+    { label: "Terms of Service", to: "/terms" as const },
+    { label: "Cookie Policy", to: "/cookies" as const },
+  ],
 };
 
 export function Footer() {
@@ -42,10 +84,14 @@ export function Footer() {
               <h4 className="font-semibold text-sm mb-4">{category}</h4>
               <ul className="space-y-2">
                 {items.map((item) => (
-                  <li key={item}>
-                    <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                      {item}
-                    </a>
+                  <li key={item.label}>
+                    <Link
+                      to={item.to}
+                      hash={item.hash}
+                      className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {item.label}
+                    </Link>
                   </li>
                 ))}
               </ul>

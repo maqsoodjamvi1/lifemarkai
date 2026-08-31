@@ -52,6 +52,17 @@ function isProviderBalance(raw: string): boolean {
   );
 }
 
+function isVerificationBlocked(raw: string): boolean {
+  return /verification blocked this generation/i.test(raw);
+}
+
+function verificationReason(raw: string): string {
+  return raw
+    .replace(/^Error:\s*/i, "")
+    .replace(/^Verification blocked this generation before it replaced your working app:\s*/i, "")
+    .trim();
+}
+
 export function describeAiFailure(input: AiFailureInput): AiFailureDescription {
   const raw = (input.rawError ?? "").trim();
   const status = input.status;
@@ -73,6 +84,20 @@ export function describeAiFailure(input: AiFailureInput): AiFailureDescription {
         "https://openrouter.ai/settings/credits. Your message is still in the thread; " +
         "resend it once that is done." +
         (excerpt ? `\n\n\`\`\`\n${excerpt}\n\`\`\`` : ""),
+    };
+  }
+
+  if (isVerificationBlocked(raw)) {
+    const reason = verificationReason(raw);
+    return {
+      title: "Build failed verification",
+      summary: "The generated code did not pass the safety/render check, so your app was left unchanged.",
+      isPlatformFault: false,
+      chatMarkdown:
+        "⚠️ **The build failed verification, so your app was left unchanged.**\n\n" +
+        "LifemarkAI generated a candidate update, but rejected it before replacing your files because the preview check found that the app would not render correctly." +
+        (reason ? `\n\n**Why it was blocked:** ${reason}` : "") +
+        "\n\nResend the message to retry, or make the request more specific about the page/app type and the design you want.",
     };
   }
 

@@ -1239,7 +1239,7 @@ export function EditorLayout({
       });
       if (res.ok) {
         const newProject = await res.json() as { id: string };
-        navigate({ to: `/editor/${newProject.id}` });
+        navigate({ to: "/editor/$projectId", params: { projectId: newProject.id } });
       }
     } catch {
       // User can duplicate from dashboard if this fails.
@@ -1888,7 +1888,7 @@ export function EditorLayout({
                     deployedUrl={currentProject.deployed_url ?? undefined}
                     badgeHidden={(currentProject as { badge_hidden?: boolean }).badge_hidden ?? false}
                     credits={uiCredits}
-                    useWebContainers={false}
+                    useWebContainers
                     isPublic={!!currentProject.is_public}
                     onOpenPanel={handleOpenPanel}
                     onSendAnnotatedToChat={(prompt, img) => {

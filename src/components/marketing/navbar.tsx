@@ -1,23 +1,22 @@
 import { useState,useEffect } from "react";
-import { Link,useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { motion,AnimatePresence } from "framer-motion";
 import { Zap,Menu,X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/client";
 
 const navLinks = [
-  { label: "Features", href: "/#features" },
-  { label: "Explore", href: "/explore" },
-  { label: "Templates", href: "/templates" },
-  { label: "Docs", href: "/docs" },
-  { label: "Pricing", href: "/pricing" },
+  { label: "Features", to: "/" as const, hash: "features" },
+  { label: "Explore", to: "/explore" as const },
+  { label: "Templates", to: "/templates" as const },
+  { label: "Docs", to: "/docs" as const },
+  { label: "Pricing", to: "/pricing" as const },
 ];
 
 export function Navbar() {
   const [scrolled, setScrolled] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [user, setUser] = useState<object | null>(null);
-  const navigate = useNavigate();
   const supabase = createClient();
 
   useEffect(() => {
@@ -50,8 +49,9 @@ export function Navbar() {
           <nav className="hidden md:flex items-center gap-1">
             {navLinks.map((link) => (
               <Link
-                key={link.href}
-                to={link.href}
+                key={`${link.to}:${link.hash ?? ""}`}
+                to={link.to}
+                hash={link.hash}
                 className="px-4 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors rounded-lg hover:bg-accent"
               >
                 {link.label}
@@ -71,15 +71,15 @@ export function Navbar() {
               </Button>
             </Link>
             {user ? (
-              <Button onClick={() => navigate({ to: "/dashboard" })} size="sm">
-                Dashboard
+              <Button asChild size="sm">
+                <Link to="/dashboard">Dashboard</Link>
               </Button>
             ) : (
               <>
                 <Button
+                  asChild
                   variant="ghost"
                   size="sm"
-                  onClick={() => navigate({ to: "/login" })}
                   // Ghost variant has no idle color; explicitly set foreground
                   // so the label is readable against the navbar's transparent
                   // header (before scroll) AND its bg-background/80 (after
@@ -87,15 +87,17 @@ export function Navbar() {
                   // text on the marketing page's dark background.
                   className="text-xs sm:text-sm px-2 sm:px-3 text-foreground hover:text-foreground"
                 >
-                  Sign in
+                  <Link to="/login">Sign in</Link>
                 </Button>
                 <Button
+                  asChild
                   size="sm"
-                  onClick={() => navigate({ to: "/signup" })}
                   className="bg-gradient-brand text-white hover:opacity-90 text-xs sm:text-sm px-2 sm:px-3 whitespace-nowrap"
                 >
-                  <span className="hidden sm:inline">Start building — free</span>
-                  <span className="sm:hidden">Sign up</span>
+                  <Link to="/signup">
+                    <span className="hidden sm:inline">Start building — free</span>
+                    <span className="sm:hidden">Sign up</span>
+                  </Link>
                 </Button>
               </>
             )}
@@ -120,8 +122,9 @@ export function Navbar() {
             <div className="px-4 py-4 space-y-2">
               {navLinks.map((link) => (
                 <Link
-                  key={link.href}
-                  to={link.href}
+                  key={`${link.to}:${link.hash ?? ""}`}
+                  to={link.to}
+                  hash={link.hash}
                   className="block px-4 py-2 text-sm hover:bg-accent rounded-lg"
                   onClick={() => setMobileOpen(false)}
                 >

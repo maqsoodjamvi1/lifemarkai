@@ -14,8 +14,10 @@
  */
 
 import type { TscDiagnostic } from "./tsc-diagnostics.ts";
+import { createSandboxProgress,type SandboxProgressEvent } from "./progress.ts";
 
 export type { TscDiagnostic };
+export type { SandboxPhase,SandboxProgressEvent,SandboxProgressState } from "./progress.ts";
 
 export interface SandboxFile {
   path: string;
@@ -113,8 +115,8 @@ export interface SandboxProvider {
     timeoutMs?: number;
     /** Project id — enables Lovable-style named warm sandboxes. */
     projectId?: string;
-    /** Modal boot progress (creating → writing → installing → starting → ready). */
-    onProgress?: (phase: string, detail?: string) => void;
+    /** Provider-neutral boot progress (creating → writing → installing → starting → ready). */
+    onProgress?: (event: SandboxProgressEvent) => void;
   }): Promise<SandboxRunResult>;
   /** Tail the sandbox Vite/Next log (Modal `/tmp/lifemark-dev.log`). */
   getDevLogs?(sandboxId: string, lines?: number): Promise<string>;
@@ -246,7 +248,7 @@ class E2BSandboxProvider implements SandboxProvider {
     timeoutMs?: number;
     /** Present so E2B matches the Modal provider's contract (see below). */
     projectId?: string;
-    onProgress?: (phase: string, detail?: string) => void;
+    onProgress?: (event: SandboxProgressEvent) => void;
   }): Promise<SandboxRunResult> {
     if (!this.isEnabled()) {
       return { ok: false, error: "E2B not configured (set E2B_API_KEY)." };
@@ -266,11 +268,11 @@ class E2BSandboxProvider implements SandboxProvider {
     // boot with no sign of life. Emit the same phase vocabulary as Modal.
     const progress = opts.onProgress ?? (() => {});
     try {
-      progress("creating", "Provisioning E2B sandbox");
+      progress(createSandboxProgress("creating", "Provisioning E2B sandbox"));
       const sandbox = await e2b.Sandbox.create(opts.template ?? this.template);
       await sandbox.setTimeout(timeoutMs);
 
-      progress("writing", `Writing ${opts.files.length} files`);
+      progress(createSandboxProgress("writing", `Writing ${opts.files.length} files`));
       for (const f of opts.files) {
         await sandbox.files.write(f.path, f.content);
       }
@@ -278,7 +280,7 @@ class E2BSandboxProvider implements SandboxProvider {
       let logs = "";
       // Install deps if a package.json is present.
       if (opts.files.some((f) => f.path.endsWith("package.json"))) {
-        progress("installing", "Installing dependencies");
+        progress(createSandboxProgress("installing", "Installing dependencies"));
         const install = await sandbox.commands.run("npm install", {
           onStdout: (d: string) => (logs += d),
           onStderr: (d: string) => (logs += d),
@@ -294,7 +296,7 @@ class E2BSandboxProvider implements SandboxProvider {
       // on a project whose start command failed to detect and would then fail
       // with "next: not found". Vite is the correct floor.
       const start = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${port}`;
-      progress("starting", start);
+      progress(createSandboxProgress("starting", start));
       // Tee output to a file so getDevLogs() can tail it — same contract as the
       // Modal provider (/tmp/lifemark-dev.log), which the logs endpoint and the
       // chat error-surfacing both rely on.
@@ -304,7 +306,7 @@ class E2BSandboxProvider implements SandboxProvider {
 
       const host = await sandbox.getHost(port);
       const previewUrl = `https://${host}`;
-      progress("starting", "Waiting for the dev server to respond");
+      progress(createSandboxProgress("starting", "Waiting for the dev server to respond"));
       // Don't hand back the URL until the dev server is actually responding —
       // getHost() returns before the server is up, so without this the preview
       // iframe loads a dead URL and shows a blank / connection-refused page.

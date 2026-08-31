@@ -5,8 +5,9 @@ import { DESIGN_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { claimDailyCredits } from "@/lib/credits";
 import {
-DESIGN_PREVIEW_SYSTEM_PROMPT,
+buildDesignPreviewSystemPrompt,
 buildFallbackDesignPreviews,
+getDesignPreviewContext,
 parseDesignPreviewResponse,
 shouldOfferDesignPreviews,
 } from "@/lib/ai/design-previews";
@@ -49,7 +50,7 @@ async function handlePOST(req: Request) {
       {
         model: DESIGN_MODEL,
         messages: [
-          { role: "system", content: DESIGN_PREVIEW_SYSTEM_PROMPT },
+          { role: "system", content: buildDesignPreviewSystemPrompt(prompt) },
           { role: "user", content: `Build request:\n${prompt}` },
         ],
         maxTokens: 2800,
@@ -70,13 +71,14 @@ async function handlePOST(req: Request) {
       if (directions.length < 3) directions = fallback;
     }
 
-    return Response.json({ directions });
+    return Response.json({ directions, ...getDesignPreviewContext(prompt) });
   } catch (err) {
     // Soft-fail: still return usable direction cards so the user can pick/skip.
     console.error("[design-previews]", err instanceof Error ? err.message : err);
     return Response.json({
       directions: buildFallbackDesignPreviews(prompt, projectId ?? user.id),
       degraded: true,
+      ...getDesignPreviewContext(prompt),
     });
   }
 }

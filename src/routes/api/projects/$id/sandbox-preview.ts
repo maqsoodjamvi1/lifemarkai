@@ -22,6 +22,8 @@ isSandboxEnabled,
 sandboxNameForProject,
 type SandboxFile
 } from "@/lib/sandbox";
+import type { SandboxProgressEvent } from "@/lib/sandbox";
+import { isDockerDaemonReachable } from "@/lib/sandbox/docker";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { patchSandboxPreviewFiles } from "@/lib/preview/patch-sandbox-preview-files";
 import type { Database,Json } from "@/types/database";
@@ -140,6 +142,24 @@ function rememberBootState(projectId: string, patch: Partial<LiveBootState>) {
   });
 }
 
+async function sandboxUnavailableResponse(): Promise<Response | null> {
+  if (!isSandboxEnabled()) {
+    return Response.json({ enabled: false, reason: "sandbox_not_configured" });
+  }
+  const provider = getSandboxProviderId();
+  if (provider === "docker" && !(await isDockerDaemonReachable())) {
+    return Response.json({
+      enabled: false,
+      provider,
+      reason: "docker_unreachable",
+      configured: true,
+      reachable: false,
+      error: "Docker is configured, but Docker Desktop is not running.",
+    });
+  }
+  return null;
+}
+
 async function handlePOST(req: Request, params: { id: string }) {
   const { id: projectId } = params;
   const existing = bootInflight.get(projectId);
@@ -179,10 +199,8 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
   const { user } = await getServerUser(supabase);
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Not configured → client shows "Modal preview required".
-  if (!isSandboxEnabled()) {
-    return Response.json({ enabled: false, reason: "sandbox_not_configured" });
-  }
+  const unavailable = await sandboxUnavailableResponse();
+  if (unavailable) return unavailable;
 
   const access = await getProjectAccess(supabase, projectId, user.id);
   if (!canReadProjectFiles(access)) {
@@ -386,7 +404,7 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
     port,
     startCommand,
     projectId,
-    onProgress: (phase, detail) => persistPhase(phase, detail),
+    onProgress: (event: SandboxProgressEvent) => persistPhase(event.phase, event.detail),
   });
 
   if (result.ok && result.sandboxId) setCorrelation({ sandboxSessionId: result.sandboxId });
@@ -434,7 +452,7 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
         port,
         startCommand,
         projectId,
-        onProgress: (phase, detail) => persistPhase(phase, detail),
+        onProgress: (event: SandboxProgressEvent) => persistPhase(event.phase, event.detail),
       });
 
       recordEvent(retry.ok ? "sandbox_boot_completed" : "sandbox_boot_failed", {
@@ -611,9 +629,8 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
 async function handleGET(req: Request, params: any) {
   const { id: projectId } = params;
 
-  if (!isSandboxEnabled()) {
-    return Response.json({ enabled: false, reason: "sandbox_not_configured" });
-  }
+  const unavailable = await sandboxUnavailableResponse();
+  if (unavailable) return unavailable;
 
   const supabase = await createClient();
   const { user } = await getServerUser(supabase);

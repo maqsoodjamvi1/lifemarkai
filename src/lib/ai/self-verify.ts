@@ -17,7 +17,9 @@ import { z } from "zod";
 import { recordEvent } from "../observability/events.ts";
 
 import { buildFallbackHtml } from "../preview/build-fallback-html.ts";
+import { buildStaticPreview } from "../preview/build-static-preview.ts";
 import { verifyPreviewHtml } from "./preview-verify.ts";
+import { isStaticProject } from "../project/runtime.ts";
 import { findContractErrors } from "../preview/export-contract.ts";
 import { filesWithSyntaxErrors, findMissingListKeys, findUnresolvedLocalImports, runTypecheckGate } from "../verify/typecheck-gate.ts";
 import { typecheckRunningSandbox } from "../preview/typecheck-project.ts";
@@ -800,7 +802,13 @@ export async function runSelfVerification(opts: {
     for (let round = 0; round <= maxRounds + freeRounds; round++) {
       result.rounds = round + 1;
       const roundStartedAt = Date.now();
-      const html = buildFallbackHtml(files);
+      // Use the same renderer the editor uses. Plain HTML/CSS/JS projects need
+      // their local scripts and styles inlined; buildFallbackHtml intentionally
+      // returns index.html as-is for them, which made the verifier inspect an
+      // empty #root without ever loading app.js and reject valid vanilla apps.
+      const html = isStaticProject(null, files)
+        ? buildStaticPreview(files)
+        : buildFallbackHtml(files);
 
       // Broken module contracts — a file imported but never created, or a symbol
       // imported but never exported — surface at runtime only as an opaque
