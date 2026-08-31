@@ -2064,11 +2064,19 @@ export function AppConnectorsPanel({ projectId }: AppConnectorsPanelProps) {
   const [connected, setConnected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
-  // Load which connectors are already configured
+  // Load which connectors are already configured. Guarded against a fast
+  // project switch or unmount racing a slow response — without the
+  // `cancelled` flag, a stale fetch finishing after the component has moved
+  // on could overwrite the current project's connected-set or flip loading
+  // back on for a panel nobody's looking at anymore (same cancelled-ref
+  // pattern already used elsewhere in the editor, e.g.
+  // visual-edit-overlay.tsx's useFreeEditQuota).
   useEffect(() => {
+    const cancelled = { current: false };
     fetch(`/api/projects/${projectId}/env`)
       .then((r) => r.ok ? r.json() : { envVars: [] })
       .then((data: { envVars: Array<{ key: string }> }) => {
+        if (cancelled.current) return;
         const keys = new Set((data.envVars ?? []).map((e: { key: string }) => e.key));
         const connectedIds = new Set<string>();
         for (const c of CONNECTORS) {
@@ -2079,7 +2087,12 @@ export function AppConnectorsPanel({ projectId }: AppConnectorsPanelProps) {
         setConnected(connectedIds);
       })
       .catch(() => null)
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled.current) setLoading(false);
+      });
+    return () => {
+      cancelled.current = true;
+    };
   }, [projectId]);
 
   async function handleConnect(id: string, values: Record<string, string>) {

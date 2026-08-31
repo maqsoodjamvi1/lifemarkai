@@ -6,6 +6,7 @@ X
 } from "lucide-react";
 import { suggestFollowUps } from "@/lib/ai/follow-up-suggestions";
 import { readJSON, readString, writeJSON, writeString, removeKey } from "@/lib/editor/local-storage-json";
+import { downloadBlob } from "@/lib/editor/download-blob";
 import { shouldClarifyCapabilities } from "@/lib/ai/clarification-intelligence";
 import { detectPastedSecret,redactSecret } from "@/lib/security/detect-secret";
 import { useToast } from "@/hooks/use-toast";
@@ -5275,13 +5276,7 @@ ${(f.content ?? "").slice(0, 8000)}
     const role = msg.role === "user" ? "You" : "LifemarkAI";
     const body = getDisplayMessageContent(msg);
     const md = `### ${role}\n\n${body}\n\n---\n_${new Date(msg.created_at).toLocaleString()}_\n`;
-    const blob = new Blob([md], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${project.name.replace(/\s+/g, "-").toLowerCase()}-message-${msg.id.slice(0, 8)}.md`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(md, "text/markdown", `${project.name.replace(/\s+/g, "-").toLowerCase()}-message-${msg.id.slice(0, 8)}.md`);
     toast({ description: "Message exported" });
   }
 
@@ -5457,13 +5452,7 @@ ${(f.content ?? "").slice(0, 8000)}
       lines.push(`---`);
       lines.push(``);
     }
-    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${project.name.replace(/\s+/g, "-").toLowerCase()}-chat.md`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(lines.join("\n"), "text/markdown", `${project.name.replace(/\s+/g, "-").toLowerCase()}-chat.md`);
     toast({ description: "Chat exported ✓" });
   }
 
@@ -5482,13 +5471,7 @@ ${(f.content ?? "").slice(0, 8000)}
         metadata: m.metadata ?? null,
       })),
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${project.name.replace(/\s+/g, "-").toLowerCase()}-chat.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(JSON.stringify(payload, null, 2), "application/json", `${project.name.replace(/\s+/g, "-").toLowerCase()}-chat.json`);
     toast({ description: "Chat exported as JSON ✓" });
   }
 
