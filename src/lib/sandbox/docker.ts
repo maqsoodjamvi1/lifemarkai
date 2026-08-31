@@ -1385,7 +1385,17 @@ export class DockerSandboxProvider implements SandboxProvider {
         progress(createSandboxProgress("installing", `Retrying npm install (${attempt}/${NPM_INSTALL_MAX_ATTEMPTS})`));
         await new Promise((resolve) => setTimeout(resolve, 2_000 * attempt));
       }
-      const res = await this.exec(sandboxId, npmInstallShell(INSTALL_TIMEOUT_SEC));
+      const res = await this.exec(
+        sandboxId,
+        npmInstallShell(INSTALL_TIMEOUT_SEC),
+        APP_DIR,
+        true,
+        false,
+        // HTTP watchdog must outlive the in-container `timeout N` budget
+        // it is wrapping, plus headroom for the exec create/start/inspect
+        // round trips themselves.
+        (INSTALL_TIMEOUT_SEC + 30) * 1000,
+      );
       logs += res.stdout + res.stderr;
       const npmExit = parseNpmInstallExit(res.stdout, res.stderr);
       if (npmExit === 0) return { ok: true, logs };
@@ -1432,6 +1442,16 @@ export class DockerSandboxProvider implements SandboxProvider {
     workdir = APP_DIR,
     tty = true,
     detach = false,
+    // Budget for the exec-start call, which BLOCKS for the command's whole
+    // runtime when not detached (Docker only replies once the process
+    // exits). The flat DOCKER_REQUEST_TIMEOUT_MS default is right for the
+    // create/inspect calls in this method, which are fast lifecycle ops —
+    // but applying it here too would abort any exec that legitimately runs
+    // longer than 15s (npm install, tsc) well before its own in-container
+    // `timeout N` gets a chance to finish. Long-running callers pass an
+    // explicit budget; short ones (probes, mkdir, rm) fall back to the
+    // default via docker()'s own effectiveTimeoutMs.
+    execTimeoutMs = 0,
   ): Promise<CommandResult> {
     const create = await docker("POST", `/v1.43/containers/${sandboxId}/exec`, {
       // A detached exec cannot attach streams; asking to would error.
@@ -1445,10 +1465,13 @@ export class DockerSandboxProvider implements SandboxProvider {
       return { stdout: "", stderr: `exec create failed: ${create.text}`, exitCode: 1 };
     }
     const execId = (JSON.parse(create.text) as { Id: string }).Id;
-    const run = await docker("POST", `/v1.43/exec/${execId}/start`, {
-      Detach: detach,
-      Tty: detach ? false : tty,
-    });
+    const run = await docker(
+      "POST",
+      `/v1.43/exec/${execId}/start`,
+      { Detach: detach, Tty: detach ? false : tty },
+      undefined,
+      detach ? 0 : execTimeoutMs,
+    );
     if (detach) {
       // Fire-and-forget: the daemon owns the process now. No output, no wait.
       return { stdout: "", stderr: "", exitCode: 0 };
@@ -1580,6 +1603,10 @@ export class DockerSandboxProvider implements SandboxProvider {
     const res = await this.exec(
       sandboxId,
       `timeout ${timeoutSec} node_modules/.bin/tsc --noEmit --pretty false 2>&1; echo "LM_TSC_EXIT:$?"`,
+      APP_DIR,
+      true,
+      false,
+      (timeoutSec + 15) * 1000,
     );
 
     const raw = `${res.stdout ?? ""}${res.stderr ?? ""}`;
