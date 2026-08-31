@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { stripe } from "@/lib/stripe/client";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { isSameOriginRedirect } from "@/lib/security/same-origin-redirect";
 
 /**
  * Native /api/embed/checkout — public Stripe Checkout for monetized apps.
@@ -83,6 +84,8 @@ export const Route = createFileRoute("/api/embed/checkout")({
           }
 
           const appUrl = project.deployed_url ?? process.env.NEXT_PUBLIC_APP_URL ?? "";
+          const safeSuccessUrl = isSameOriginRedirect(successUrl, appUrl) ? successUrl! : `${appUrl}?subscribed=1`;
+          const safeCancelUrl = isSameOriginRedirect(cancelUrl, appUrl) ? cancelUrl! : appUrl;
           const session = await stripe.checkout.sessions.create({
             mode: "subscription",
             customer_email: email.toLowerCase(),
@@ -90,8 +93,8 @@ export const Route = createFileRoute("/api/embed/checkout")({
             ...(config.trial_days > 0
               ? { subscription_data: { trial_period_days: config.trial_days, metadata: { kind: "app_subscription", lifemark_project_id: projectId, subscriber_email: email.toLowerCase() } } }
               : { subscription_data: { metadata: { kind: "app_subscription", lifemark_project_id: projectId, subscriber_email: email.toLowerCase() } } }),
-            success_url: successUrl ?? `${appUrl}?subscribed=1`,
-            cancel_url: cancelUrl ?? appUrl,
+            success_url: safeSuccessUrl,
+            cancel_url: safeCancelUrl,
             metadata: {
               kind: "app_subscription",
               lifemark_project_id: projectId,

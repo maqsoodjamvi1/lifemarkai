@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient } from "@/lib/supabase/server";
 import { verifyPreviewToken } from "@/lib/preview/preview-token";
 import { servePreviewHtml } from "@/lib/preview/serve-preview";
+import { isBlockedPreviewAssetPath } from "@/lib/preview/sensitive-asset-path";
 
 /**
  * Native /preview/$ — TRUE NATIVE (no worker).
@@ -47,6 +48,17 @@ async function handleGET(req: Request, params: any) {
 
   // ── asset request: /preview/:projectId/<path> ──
   if (filePath) {
+    // No auth/token gate on this branch by design (a rendered preview's own
+    // HTML must be able to load its assets on any host, with no session) —
+    // which is exactly why a dotfile like .env.local must never be
+    // reachable through it. See sensitive-asset-path.ts for the incident
+    // this guard closes.
+    if (isBlockedPreviewAssetPath(filePath)) {
+      return new Response(JSON.stringify({ error: "file not found", path: filePath }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     const supabase = createAdminClient();
     const { data: file } = await supabase
       .from("project_files")

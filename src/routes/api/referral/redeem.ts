@@ -19,39 +19,57 @@ export const Route = createFileRoute("/api/referral/redeem")({
 
         const admin = createAdminClient();
 
-        // Check new user hasn't already been referred
-        const { data: myProfile } = await admin
-          .from("profiles").select("referred_by, credits").eq("id", user.id).single();
-        if (myProfile?.referred_by) {
-          return Response.json({ error: "You have already used a referral code" }, { status: 409 });
-        }
-
         // Look up the referrer by code
         const { data: referrerProfile } = await admin
-          .from("profiles").select("id, credits, referral_credits_earned").eq("referral_code", code.trim().toLowerCase()).single();
+          .from("profiles").select("id, referral_credits_earned").eq("referral_code", code.trim().toLowerCase()).single();
         if (!referrerProfile) return Response.json({ error: "Invalid referral code" }, { status: 404 });
         if (referrerProfile.id === user.id) return Response.json({ error: "Cannot use your own code" }, { status: 400 });
 
-        // Credit referee (new user)
-        await admin
+        // Claim the redemption FIRST, atomically, with the "not already
+        // redeemed" check built into the same statement — `.is("referred_by",
+        // null)` in the WHERE clause means this UPDATE only actually touches
+        // (and only actually returns) a row if referred_by was still NULL at
+        // the moment Postgres locked it. This used to be a plain SELECT
+        // ("have I already redeemed?") followed much later by an UPDATE, with
+        // both credit grants and a credit_logs insert in between — two
+        // concurrent POSTs (a double-click, a naive retry, or a deliberate
+        // script) could both read referred_by as NULL before either wrote it,
+        // and both would fall through to award credits, letting a user farm
+        // unlimited free credits for both sides of the referral. A second,
+        // concurrent redemption attempt now loses the race here and gets
+        // nothing — it can never reach the credit-granting code below.
+        const { data: claimed } = await admin
           .from("profiles")
-          .update({ referred_by: referrerProfile.id, credits: (myProfile?.credits ?? 0) + REFEREE_BONUS })
-          .eq("id", user.id);
+          .update({ referred_by: referrerProfile.id })
+          .eq("id", user.id)
+          .is("referred_by", null)
+          .select("id")
+          .maybeSingle();
+        if (!claimed) {
+          return Response.json({ error: "You have already used a referral code" }, { status: 409 });
+        }
 
-        // Credit referrer
+        // add_credits is the atomic, race-safe credit-grant RPC (migration
+        // 006/085) — `credits = credits + amount` inside the database, not a
+        // read-then-write with a value computed in this request, which would
+        // itself be a second race against any other concurrent credit change
+        // even after the claim above closes the double-redeem.
+        await admin.rpc("add_credits", {
+          p_user_id: user.id,
+          p_amount: REFEREE_BONUS,
+          p_action: "referral_bonus",
+          p_description: `Referral signup bonus (used code: ${code})`,
+        });
+        await admin.rpc("add_credits", {
+          p_user_id: referrerProfile.id,
+          p_amount: REFERRER_BONUS,
+          p_action: "referral_bonus",
+          p_description: "Referral bonus — new user signed up with your code",
+        });
         await admin
           .from("profiles")
-          .update({
-            credits: (referrerProfile.credits ?? 0) + REFERRER_BONUS,
-            referral_credits_earned: (referrerProfile.referral_credits_earned ?? 0) + REFERRER_BONUS,
-          })
+          .update({ referral_credits_earned: (referrerProfile.referral_credits_earned ?? 0) + REFERRER_BONUS })
           .eq("id", referrerProfile.id);
-
-        // Log credit events
-        await admin.from("credit_logs").insert([
-          { user_id: user.id, amount: REFEREE_BONUS, action: "referral_bonus", description: `Referral signup bonus (used code: ${code})` },
-          { user_id: referrerProfile.id, amount: REFERRER_BONUS, action: "referral_bonus", description: "Referral bonus — new user signed up with your code" },
-        ]);
 
         // Insert referral record
         await admin.from("referrals").insert({

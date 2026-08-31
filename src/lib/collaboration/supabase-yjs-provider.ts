@@ -80,6 +80,12 @@ export class SupabaseYjsProvider {
     // ── Supabase Realtime channel ───────────────────────────────────────────
     this.channel = supabase.channel(`collab:${roomName}`, {
       config: {
+        // private: true routes this channel through migration 188's RLS
+        // policies on realtime.messages — without it, Realtime performs no
+        // authorization at all and anyone holding the (non-secret) anon key
+        // could join any project's collab:<id> channel, watch its live
+        // source as it's typed, and inject their own Yjs updates into it.
+        private: true,
         broadcast: { self: false, ack: false },
         presence:  { key: this.presenceKey },
       },

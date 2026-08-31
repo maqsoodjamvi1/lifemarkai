@@ -87,11 +87,21 @@ export const Route = createFileRoute("/api/projects/db-backup")({
           `-- Created: ${new Date().toISOString()}`,
           `-- Files: ${files.length}`,
           ``,
+          // Content is base64-encoded, not embedded raw between /* */. The
+          // old raw-embed format broke on the very common case of a file
+          // whose own content contains "*/" (any JS/TS/CSS block comment,
+          // e.g. a JSDoc header) — parseSqlBackup's non-greedy regex
+          // stopped at that FIRST internal "*/", silently truncating the
+          // file and misparsing everything after it as garbage or the next
+          // file. Base64's alphabet (A-Za-z0-9+/=) can never produce the
+          // two-character sequence "*/", so this is immune to that class of
+          // corruption by construction, not by careful escaping.
           ...files.map((f: { path: string; content: string; language: string }) => [
             `-- FILE: ${f.path}`,
             `-- LANGUAGE: ${f.language}`,
+            `-- ENCODING: base64`,
             `/*`,
-            f.content,
+            Buffer.from(f.content ?? "", "utf8").toString("base64"),
             `*/`,
             ``,
           ].join("\n")),

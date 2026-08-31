@@ -58,9 +58,33 @@ export const Route = createFileRoute("/api/teams/$id/members")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
         const { memberId, role, credit_allowance } = await request.json().catch(() => ({}));
+        if (typeof memberId !== "string" || !memberId) {
+          return Response.json({ error: "memberId required" }, { status: 400 });
+        }
         const updates: Database["public"]["Tables"]["team_members"]["Update"] = {};
         if (role !== undefined) updates.role = role;
         if (credit_allowance !== undefined) updates.credit_allowance = credit_allowance;
+
+        // role/credit_allowance changes are an owner/admin-only action — a
+        // plain member may never grant themself (or anyone else) a higher
+        // role or a bigger allowance. This mirrors migration 187's
+        // team_member_self_update_guard trigger, which enforces the same
+        // rule at the database layer regardless of this route; checking it
+        // here too means the caller gets a clear 403 instead of a raw
+        // Postgres error.
+        if (updates.role !== undefined || updates.credit_allowance !== undefined) {
+          const admin = createAdminClient();
+          const { data: myMembership } = await admin
+            .from("team_members")
+            .select("role, accepted_at")
+            .eq("team_id", params.id)
+            .eq("user_id", user.id)
+            .single();
+          if (!myMembership || !myMembership.accepted_at || !["owner", "admin"].includes(myMembership.role)) {
+            return Response.json({ error: "Only a team owner or admin can change role or credit_allowance" }, { status: 403 });
+          }
+        }
+
         const { data, error } = await supabase.from("team_members").update(updates).eq("id", memberId).eq("team_id", params.id).select().single();
         if (error) return Response.json({ error: error.message }, { status: 400 });
         return Response.json({ member: data });
@@ -71,6 +95,25 @@ export const Route = createFileRoute("/api/teams/$id/members")({
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
         const memberId = new URL(request.url).searchParams.get("memberId");
         if (!memberId) return Response.json({ error: "memberId required" }, { status: 400 });
+
+        // Removing a member is an owner/admin-only action, same reasoning
+        // as PATCH above — team_members_owner_admin's RLS policy already
+        // enforces this for the target row, but a caller with no
+        // membership row at all (never invited to this team) would
+        // otherwise get a generic RLS "0 rows affected" instead of a clear
+        // 403, and self-removal (leaving a team) has no policy support at
+        // all today, so an explicit check here is the honest behavior.
+        const admin = createAdminClient();
+        const { data: myMembership } = await admin
+          .from("team_members")
+          .select("role, accepted_at")
+          .eq("team_id", params.id)
+          .eq("user_id", user.id)
+          .single();
+        if (!myMembership || !myMembership.accepted_at || !["owner", "admin"].includes(myMembership.role)) {
+          return Response.json({ error: "Only a team owner or admin can remove a member" }, { status: 403 });
+        }
+
         const { error } = await supabase.from("team_members").delete().eq("id", memberId).eq("team_id", params.id);
         if (error) return Response.json({ error: error.message }, { status: 400 });
         return Response.json({ ok: true });

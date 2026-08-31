@@ -189,9 +189,9 @@ function withPreview(meta: LogMeta, requestPreview: string | null): LogMeta {
   return requestPreview ? { ...meta, requestPreview } : meta;
 }
 
-export async function POST(
+async function handlePOST(
   req: Request,
-  { params }: { params: Promise<{ id: string }> | { id: string } },
+  params: Promise<{ id: string }> | { id: string },
 ) {
   const { id: projectId } = await params;
   const origin = req.headers.get("origin") ?? "*";
@@ -501,6 +501,14 @@ async function handleOPTIONS(req: Request) {
 export const Route = createFileRoute("/api/projects/$id/ai-proxy")({
   server: {
     handlers: {
+      // Was previously a bare `export async function POST(...)` — a
+      // Next.js App Router convention that TanStack Start's file router does
+      // NOT auto-detect. Only handlers listed here are ever invoked, so this
+      // endpoint's full ~300-line implementation (auth, credit limits,
+      // proxying, request logging) silently never ran: every POST to
+      // /api/projects/:id/ai-proxy fell through with no matching handler.
+      // See connector-proxy.ts for the same wiring pattern.
+      POST: async ({ request, params }) => handlePOST(request, params),
       OPTIONS: async ({ request }) => handleOPTIONS(request),
     },
   },

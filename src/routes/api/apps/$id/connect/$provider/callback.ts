@@ -29,7 +29,18 @@ async function handleGET(req: Request, params: any) {
   if (oauthError) return fail(`Provider returned an error: ${oauthError}`);
   if (!code || !state) return fail("Missing code or state");
 
-  // Validate + consume the single-use state.
+  // Validate + consume the single-use state. Unlike the platform-level
+  // gateway/managed-connector flows (src/lib/oauth/{state,gateway-state}.ts),
+  // this state is a random token stored in a row rather than a signed,
+  // self-describing payload, so it had no expiry check of its own — a state
+  // row that was minted but never completed (browser closed on the
+  // provider's consent screen, tab abandoned) stayed valid forever. It was
+  // never guessable or otherwise attacker-reachable (24 random bytes,
+  // single-use, and the table is revoked from anon/authenticated — only the
+  // admin client can read it), so this was a hygiene gap rather than an
+  // exploitable one, but it's worth matching the same 10-minute window the
+  // sibling flows use.
+  const OAUTH_STATE_MAX_AGE_MS = 10 * 60 * 1000;
   const { data: stateRow } = await admin
     .from("app_user_oauth_state")
     .select("*")
@@ -39,6 +50,10 @@ async function handleGET(req: Request, params: any) {
     return fail("Invalid or expired OAuth state", 401);
   }
   await admin.from("app_user_oauth_state").delete().eq("state", state);
+  const stateAgeMs = Date.now() - new Date(stateRow.created_at).getTime();
+  if (!(stateAgeMs >= 0) || stateAgeMs > OAUTH_STATE_MAX_AGE_MS) {
+    return fail("OAuth state expired — please reconnect", 401);
+  }
 
   const cfg = getProviderConfig(provider);
   const creds = providerCredentials(provider);
