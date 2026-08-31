@@ -6,7 +6,7 @@
  * Groups: Communication, Data, AI, Commerce, Productivity
  */
 
-import { useState,useEffect,useMemo } from "react";
+import { useState,useEffect,useMemo,useCallback } from "react";
 import {
 Plug,Search,CheckCircle2,ChevronRight,ExternalLink,Key,Loader2,X,Eye,EyeOff,
 AlertCircle,Zap
@@ -1912,16 +1912,30 @@ export const CONNECTORS: Connector[] = [
 
 const CATEGORIES = ["All", "Communication", "Data", "AI", "Commerce", "Productivity", "Infrastructure"] as const;
 
+// Connectors with a real, working managed-OAuth flow
+// (GET /api/connectors/oauth/start -> provider consent screen -> callback
+// writes the token into this project's env vars automatically). Kept in
+// sync by hand with src/lib/oauth/providers.ts's OAUTH_PROVIDERS — every
+// other connector, including ones still flagged `oauthFlow: true` above,
+// keeps the honest manual paste-your-own-token form; that flag only ever
+// meant "this provider supports OAuth in general," not "this app has a
+// working OAuth integration for it."
+const MANAGED_OAUTH_CONNECTOR_IDS = new Set([
+  "github", "gitlab", "notion", "discord", "zoom", "linear", "asana", "hubspot",
+]);
+
 // ─── ConnectorCard ─────────────────────────────────────────────────────────────
 
 function ConnectorCard({
   connector,
   connected,
+  projectId,
   onConnect,
   onDisconnect,
 }: {
   connector: Connector;
   connected: boolean;
+  projectId: string;
   onConnect: (id: string, values: Record<string, string>) => Promise<void>;
   onDisconnect: (id: string) => void;
 }) {
@@ -1988,7 +2002,24 @@ function ConnectorCard({
       {/* Expanded form */}
       {open && !connected && (
         <div className="px-3 pb-3 pt-1 border-t border-border/40 space-y-2">
-          {connector.oauthFlow && (
+          {MANAGED_OAUTH_CONNECTOR_IDS.has(connector.id) ? (
+            <div className="mb-2 p-2 rounded-lg bg-sky-500/5 border border-sky-500/15 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Zap className="w-3 h-3 text-sky-400 shrink-0" />
+                <p className="text-[10px] text-sky-700 dark:text-sky-300">Connect with one click — no copying tokens.</p>
+              </div>
+              <Button
+                size="sm"
+                className="h-7 w-full text-[10px]"
+                onClick={() => {
+                  window.location.href = `/api/connectors/oauth/start?projectId=${encodeURIComponent(projectId)}&connector=${encodeURIComponent(connector.id)}`;
+                }}
+              >
+                Connect {connector.name} with OAuth
+              </Button>
+              <p className="text-[9px] text-muted-foreground text-center">or paste credentials manually below</p>
+            </div>
+          ) : connector.oauthFlow && (
             <div className="flex items-center gap-2 mb-2 p-2 rounded-lg bg-sky-500/5 border border-sky-500/15">
               <Zap className="w-3 h-3 text-sky-400 shrink-0" />
               <p className="text-[10px] text-sky-700 dark:text-sky-300">OAuth is available — paste your credentials below or use the OAuth flow in production.</p>
@@ -2070,10 +2101,11 @@ export function AppConnectorsPanel({ projectId }: AppConnectorsPanelProps) {
   // on could overwrite the current project's connected-set or flip loading
   // back on for a panel nobody's looking at anymore (same cancelled-ref
   // pattern already used elsewhere in the editor, e.g.
-  // visual-edit-overlay.tsx's useFreeEditQuota).
-  useEffect(() => {
-    const cancelled = { current: false };
-    fetch(`/api/projects/${projectId}/env`)
+  // visual-edit-overlay.tsx's useFreeEditQuota). Extracted to a callback (not
+  // just an effect) because the OAuth-redirect effect below also needs to
+  // trigger a reload once the callback route has written a new token.
+  const loadConnected = useCallback((cancelled: { current: boolean }) => {
+    return fetch(`/api/projects/${projectId}/env`)
       .then((r) => r.ok ? r.json() : { envVars: [] })
       .then((data: { envVars: Array<{ key: string }> }) => {
         if (cancelled.current) return;
@@ -2090,10 +2122,45 @@ export function AppConnectorsPanel({ projectId }: AppConnectorsPanelProps) {
       .finally(() => {
         if (!cancelled.current) setLoading(false);
       });
+  }, [projectId]);
+
+  useEffect(() => {
+    const cancelled = { current: false };
+    void loadConnected(cancelled);
     return () => {
       cancelled.current = true;
     };
-  }, [projectId]);
+  }, [loadConnected]);
+
+  // Landed back here from /api/connectors/oauth/callback's redirect —
+  // surface the result and drop the params so a refresh doesn't re-toast.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connectedConnector = params.get("connector_connected");
+    const errorConnector = params.get("connector_error");
+    if (!connectedConnector && !errorConnector) return;
+
+    if (connectedConnector) {
+      const c = CONNECTORS.find((x) => x.id === connectedConnector);
+      toast({ title: "Connected", description: `${c?.name ?? connectedConnector} was connected via OAuth.` });
+      void loadConnected({ current: false });
+    } else if (errorConnector) {
+      const c = CONNECTORS.find((x) => x.id === params.get("connector"));
+      toast({
+        title: "Connection failed",
+        description: `Couldn't connect ${c?.name ?? params.get("connector") ?? "that app"} via OAuth (${errorConnector}). You can still paste credentials manually.`,
+        variant: "destructive",
+      });
+    }
+
+    params.delete("connector_connected");
+    params.delete("connector_error");
+    params.delete("connector");
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+    // Runs once on mount to consume the redirect's one-time query params.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleConnect(id: string, values: Record<string, string>) {
     // SEQUENTIAL, and checked.
@@ -2241,6 +2308,7 @@ export function AppConnectorsPanel({ projectId }: AppConnectorsPanelProps) {
                 key={c.id}
                 connector={c}
                 connected={connected.has(c.id)}
+                projectId={projectId}
                 onConnect={handleConnect}
                 onDisconnect={handleDisconnect}
               />

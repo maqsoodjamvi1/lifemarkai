@@ -114,6 +114,8 @@ import { Route as ApiBillingAutoTopupRouteImport } from './routes/api/billing/au
 import { Route as ApiBillingCheckoutRouteImport } from './routes/api/billing/checkout'
 import { Route as ApiBillingCreditsRouteImport } from './routes/api/billing/credits'
 import { Route as ApiBillingDevGrantRouteImport } from './routes/api/billing/dev-grant'
+import { Route as ApiBillingPaddleCheckoutRouteImport } from './routes/api/billing/paddle-checkout'
+import { Route as ApiBillingPaddleWebhookRouteImport } from './routes/api/billing/paddle-webhook'
 import { Route as ApiBillingPortalRouteImport } from './routes/api/billing/portal'
 import { Route as ApiBillingRedeemPromoRouteImport } from './routes/api/billing/redeem-promo'
 import { Route as ApiBillingStudentDiscountRouteImport } from './routes/api/billing/student-discount'
@@ -200,6 +202,8 @@ import { Route as ApiAiGenerateEmailTestRouteImport } from './routes/api/ai/gene
 import { Route as ApiAppsIdMcpRouteImport } from './routes/api/apps/$id/mcp'
 import { Route as ApiBuildRunsIdCancelRouteImport } from './routes/api/build-runs/$id/cancel'
 import { Route as ApiBuildRunsIdEventsRouteImport } from './routes/api/build-runs/$id/events'
+import { Route as ApiConnectorsOauthCallbackRouteImport } from './routes/api/connectors/oauth/callback'
+import { Route as ApiConnectorsOauthStartRouteImport } from './routes/api/connectors/oauth/start'
 import { Route as ApiEditorIntelligenceInitiativeIdRouteImport } from './routes/api/editor-intelligence/initiative/$id'
 import { Route as ApiGatewayConnectorSplatRouteImport } from './routes/api/gateway/$connector/$'
 import { Route as ApiIntegrationsOpenaiBuildRouteImport } from './routes/api/integrations/openai/build'
@@ -828,6 +832,17 @@ const ApiBillingDevGrantRoute = ApiBillingDevGrantRouteImport.update({
   path: '/api/billing/dev-grant',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiBillingPaddleCheckoutRoute =
+  ApiBillingPaddleCheckoutRouteImport.update({
+    id: '/api/billing/paddle-checkout',
+    path: '/api/billing/paddle-checkout',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiBillingPaddleWebhookRoute = ApiBillingPaddleWebhookRouteImport.update({
+  id: '/api/billing/paddle-webhook',
+  path: '/api/billing/paddle-webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiBillingPortalRoute = ApiBillingPortalRouteImport.update({
   id: '/api/billing/portal',
   path: '/api/billing/portal',
@@ -1269,6 +1284,17 @@ const ApiBuildRunsIdCancelRoute = ApiBuildRunsIdCancelRouteImport.update({
 const ApiBuildRunsIdEventsRoute = ApiBuildRunsIdEventsRouteImport.update({
   id: '/api/build-runs/$id/events',
   path: '/api/build-runs/$id/events',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiConnectorsOauthCallbackRoute =
+  ApiConnectorsOauthCallbackRouteImport.update({
+    id: '/api/connectors/oauth/callback',
+    path: '/api/connectors/oauth/callback',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ApiConnectorsOauthStartRoute = ApiConnectorsOauthStartRouteImport.update({
+  id: '/api/connectors/oauth/start',
+  path: '/api/connectors/oauth/start',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiEditorIntelligenceInitiativeIdRoute =
@@ -1880,6 +1906,8 @@ export interface FileRoutesByFullPath {
   '/api/billing/checkout': typeof ApiBillingCheckoutRoute
   '/api/billing/credits': typeof ApiBillingCreditsRoute
   '/api/billing/dev-grant': typeof ApiBillingDevGrantRoute
+  '/api/billing/paddle-checkout': typeof ApiBillingPaddleCheckoutRoute
+  '/api/billing/paddle-webhook': typeof ApiBillingPaddleWebhookRoute
   '/api/billing/portal': typeof ApiBillingPortalRoute
   '/api/billing/redeem-promo': typeof ApiBillingRedeemPromoRoute
   '/api/billing/student-discount': typeof ApiBillingStudentDiscountRoute
@@ -1966,6 +1994,8 @@ export interface FileRoutesByFullPath {
   '/api/apps/$id/mcp': typeof ApiAppsIdMcpRoute
   '/api/build-runs/$id/cancel': typeof ApiBuildRunsIdCancelRoute
   '/api/build-runs/$id/events': typeof ApiBuildRunsIdEventsRoute
+  '/api/connectors/oauth/callback': typeof ApiConnectorsOauthCallbackRoute
+  '/api/connectors/oauth/start': typeof ApiConnectorsOauthStartRoute
   '/api/editor-intelligence/initiative/$id': typeof ApiEditorIntelligenceInitiativeIdRoute
   '/api/gateway/$connector/$': typeof ApiGatewayConnectorSplatRoute
   '/api/integrations/openai/build': typeof ApiIntegrationsOpenaiBuildRoute
@@ -2164,6 +2194,8 @@ export interface FileRoutesByTo {
   '/api/billing/checkout': typeof ApiBillingCheckoutRoute
   '/api/billing/credits': typeof ApiBillingCreditsRoute
   '/api/billing/dev-grant': typeof ApiBillingDevGrantRoute
+  '/api/billing/paddle-checkout': typeof ApiBillingPaddleCheckoutRoute
+  '/api/billing/paddle-webhook': typeof ApiBillingPaddleWebhookRoute
   '/api/billing/portal': typeof ApiBillingPortalRoute
   '/api/billing/redeem-promo': typeof ApiBillingRedeemPromoRoute
   '/api/billing/student-discount': typeof ApiBillingStudentDiscountRoute
@@ -2250,6 +2282,8 @@ export interface FileRoutesByTo {
   '/api/apps/$id/mcp': typeof ApiAppsIdMcpRoute
   '/api/build-runs/$id/cancel': typeof ApiBuildRunsIdCancelRoute
   '/api/build-runs/$id/events': typeof ApiBuildRunsIdEventsRoute
+  '/api/connectors/oauth/callback': typeof ApiConnectorsOauthCallbackRoute
+  '/api/connectors/oauth/start': typeof ApiConnectorsOauthStartRoute
   '/api/editor-intelligence/initiative/$id': typeof ApiEditorIntelligenceInitiativeIdRoute
   '/api/gateway/$connector/$': typeof ApiGatewayConnectorSplatRoute
   '/api/integrations/openai/build': typeof ApiIntegrationsOpenaiBuildRoute
@@ -2450,6 +2484,8 @@ export interface FileRoutesById {
   '/api/billing/checkout': typeof ApiBillingCheckoutRoute
   '/api/billing/credits': typeof ApiBillingCreditsRoute
   '/api/billing/dev-grant': typeof ApiBillingDevGrantRoute
+  '/api/billing/paddle-checkout': typeof ApiBillingPaddleCheckoutRoute
+  '/api/billing/paddle-webhook': typeof ApiBillingPaddleWebhookRoute
   '/api/billing/portal': typeof ApiBillingPortalRoute
   '/api/billing/redeem-promo': typeof ApiBillingRedeemPromoRoute
   '/api/billing/student-discount': typeof ApiBillingStudentDiscountRoute
@@ -2536,6 +2572,8 @@ export interface FileRoutesById {
   '/api/apps/$id/mcp': typeof ApiAppsIdMcpRoute
   '/api/build-runs/$id/cancel': typeof ApiBuildRunsIdCancelRoute
   '/api/build-runs/$id/events': typeof ApiBuildRunsIdEventsRoute
+  '/api/connectors/oauth/callback': typeof ApiConnectorsOauthCallbackRoute
+  '/api/connectors/oauth/start': typeof ApiConnectorsOauthStartRoute
   '/api/editor-intelligence/initiative/$id': typeof ApiEditorIntelligenceInitiativeIdRoute
   '/api/gateway/$connector/$': typeof ApiGatewayConnectorSplatRoute
   '/api/integrations/openai/build': typeof ApiIntegrationsOpenaiBuildRoute
@@ -2736,6 +2774,8 @@ export interface FileRouteTypes {
     | '/api/billing/checkout'
     | '/api/billing/credits'
     | '/api/billing/dev-grant'
+    | '/api/billing/paddle-checkout'
+    | '/api/billing/paddle-webhook'
     | '/api/billing/portal'
     | '/api/billing/redeem-promo'
     | '/api/billing/student-discount'
@@ -2822,6 +2862,8 @@ export interface FileRouteTypes {
     | '/api/apps/$id/mcp'
     | '/api/build-runs/$id/cancel'
     | '/api/build-runs/$id/events'
+    | '/api/connectors/oauth/callback'
+    | '/api/connectors/oauth/start'
     | '/api/editor-intelligence/initiative/$id'
     | '/api/gateway/$connector/$'
     | '/api/integrations/openai/build'
@@ -3020,6 +3062,8 @@ export interface FileRouteTypes {
     | '/api/billing/checkout'
     | '/api/billing/credits'
     | '/api/billing/dev-grant'
+    | '/api/billing/paddle-checkout'
+    | '/api/billing/paddle-webhook'
     | '/api/billing/portal'
     | '/api/billing/redeem-promo'
     | '/api/billing/student-discount'
@@ -3106,6 +3150,8 @@ export interface FileRouteTypes {
     | '/api/apps/$id/mcp'
     | '/api/build-runs/$id/cancel'
     | '/api/build-runs/$id/events'
+    | '/api/connectors/oauth/callback'
+    | '/api/connectors/oauth/start'
     | '/api/editor-intelligence/initiative/$id'
     | '/api/gateway/$connector/$'
     | '/api/integrations/openai/build'
@@ -3305,6 +3351,8 @@ export interface FileRouteTypes {
     | '/api/billing/checkout'
     | '/api/billing/credits'
     | '/api/billing/dev-grant'
+    | '/api/billing/paddle-checkout'
+    | '/api/billing/paddle-webhook'
     | '/api/billing/portal'
     | '/api/billing/redeem-promo'
     | '/api/billing/student-discount'
@@ -3391,6 +3439,8 @@ export interface FileRouteTypes {
     | '/api/apps/$id/mcp'
     | '/api/build-runs/$id/cancel'
     | '/api/build-runs/$id/events'
+    | '/api/connectors/oauth/callback'
+    | '/api/connectors/oauth/start'
     | '/api/editor-intelligence/initiative/$id'
     | '/api/gateway/$connector/$'
     | '/api/integrations/openai/build'
@@ -3578,6 +3628,8 @@ export interface RootRouteChildren {
   ApiBillingCheckoutRoute: typeof ApiBillingCheckoutRoute
   ApiBillingCreditsRoute: typeof ApiBillingCreditsRoute
   ApiBillingDevGrantRoute: typeof ApiBillingDevGrantRoute
+  ApiBillingPaddleCheckoutRoute: typeof ApiBillingPaddleCheckoutRoute
+  ApiBillingPaddleWebhookRoute: typeof ApiBillingPaddleWebhookRoute
   ApiBillingPortalRoute: typeof ApiBillingPortalRoute
   ApiBillingRedeemPromoRoute: typeof ApiBillingRedeemPromoRoute
   ApiBillingStudentDiscountRoute: typeof ApiBillingStudentDiscountRoute
@@ -3635,6 +3687,8 @@ export interface RootRouteChildren {
   ApiAppsIdMcpRoute: typeof ApiAppsIdMcpRoute
   ApiBuildRunsIdCancelRoute: typeof ApiBuildRunsIdCancelRoute
   ApiBuildRunsIdEventsRoute: typeof ApiBuildRunsIdEventsRoute
+  ApiConnectorsOauthCallbackRoute: typeof ApiConnectorsOauthCallbackRoute
+  ApiConnectorsOauthStartRoute: typeof ApiConnectorsOauthStartRoute
   ApiGatewayConnectorSplatRoute: typeof ApiGatewayConnectorSplatRoute
   ApiIntegrationsOpenaiBuildRoute: typeof ApiIntegrationsOpenaiBuildRoute
   ApiIntegrationsOpenaiOpenapiDotjsonRoute: typeof ApiIntegrationsOpenaiOpenapiDotjsonRoute
@@ -4385,6 +4439,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiBillingDevGrantRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/billing/paddle-checkout': {
+      id: '/api/billing/paddle-checkout'
+      path: '/api/billing/paddle-checkout'
+      fullPath: '/api/billing/paddle-checkout'
+      preLoaderRoute: typeof ApiBillingPaddleCheckoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/billing/paddle-webhook': {
+      id: '/api/billing/paddle-webhook'
+      path: '/api/billing/paddle-webhook'
+      fullPath: '/api/billing/paddle-webhook'
+      preLoaderRoute: typeof ApiBillingPaddleWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/billing/portal': {
       id: '/api/billing/portal'
       path: '/api/billing/portal'
@@ -4985,6 +5053,20 @@ declare module '@tanstack/react-router' {
       path: '/api/build-runs/$id/events'
       fullPath: '/api/build-runs/$id/events'
       preLoaderRoute: typeof ApiBuildRunsIdEventsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/connectors/oauth/callback': {
+      id: '/api/connectors/oauth/callback'
+      path: '/api/connectors/oauth/callback'
+      fullPath: '/api/connectors/oauth/callback'
+      preLoaderRoute: typeof ApiConnectorsOauthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/connectors/oauth/start': {
+      id: '/api/connectors/oauth/start'
+      path: '/api/connectors/oauth/start'
+      fullPath: '/api/connectors/oauth/start'
+      preLoaderRoute: typeof ApiConnectorsOauthStartRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/editor-intelligence/initiative/$id': {
@@ -6307,6 +6389,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiBillingCheckoutRoute: ApiBillingCheckoutRoute,
   ApiBillingCreditsRoute: ApiBillingCreditsRoute,
   ApiBillingDevGrantRoute: ApiBillingDevGrantRoute,
+  ApiBillingPaddleCheckoutRoute: ApiBillingPaddleCheckoutRoute,
+  ApiBillingPaddleWebhookRoute: ApiBillingPaddleWebhookRoute,
   ApiBillingPortalRoute: ApiBillingPortalRoute,
   ApiBillingRedeemPromoRoute: ApiBillingRedeemPromoRoute,
   ApiBillingStudentDiscountRoute: ApiBillingStudentDiscountRoute,
@@ -6365,6 +6449,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAppsIdMcpRoute: ApiAppsIdMcpRoute,
   ApiBuildRunsIdCancelRoute: ApiBuildRunsIdCancelRoute,
   ApiBuildRunsIdEventsRoute: ApiBuildRunsIdEventsRoute,
+  ApiConnectorsOauthCallbackRoute: ApiConnectorsOauthCallbackRoute,
+  ApiConnectorsOauthStartRoute: ApiConnectorsOauthStartRoute,
   ApiGatewayConnectorSplatRoute: ApiGatewayConnectorSplatRoute,
   ApiIntegrationsOpenaiBuildRoute: ApiIntegrationsOpenaiBuildRoute,
   ApiIntegrationsOpenaiOpenapiDotjsonRoute:

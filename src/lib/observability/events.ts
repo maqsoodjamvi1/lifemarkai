@@ -36,6 +36,8 @@ export type ObservabilityEvent =
   // Billing
   | "stripe_webhook_received"
   | "stripe_webhook_rejected"
+  | "paddle_webhook_received"
+  | "paddle_webhook_rejected"
   | "credits_finalized"
   // External deps
   | "external_call_completed";

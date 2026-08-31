@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
 CreditCard,CheckCircle2,Zap,Check,ArrowRight,ExternalLink,
 Sparkles,Loader2
@@ -18,6 +18,27 @@ interface PaymentsPanelProps {
 export function PaymentsPanel({ profile }: PaymentsPanelProps) {
   const [selectedPlan, setSelectedPlan] = useState<string>(profile?.plan ?? "pro");
   const [isRedirecting, setIsRedirecting] = useState(false);
+  const [isPaddleRedirecting, setIsPaddleRedirecting] = useState(false);
+  // Paddle is an optional second billing provider (Lovable uses it as
+  // merchant-of-record for global VAT/tax handling) — hidden unless the
+  // deployment has actually configured PADDLE_API_KEY, so this never offers
+  // a button that 503s. See /api/billing/paddle-checkout's GET handler.
+  const [paddleAvailable, setPaddleAvailable] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/billing/paddle-checkout")
+      .then((res) => (res.ok ? res.json() : { available: false }))
+      .then((data: { available?: boolean }) => {
+        if (!cancelled) setPaddleAvailable(!!data.available);
+      })
+      .catch(() => {
+        if (!cancelled) setPaddleAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const currentPlan = profile?.plan ?? "free";
   const credits     = profile?.credits ?? 0;
@@ -58,6 +79,24 @@ export function PaymentsPanel({ profile }: PaymentsPanelProps) {
       /* handled by redirect failure */
     } finally {
       setIsRedirecting(false);
+    }
+  };
+
+  const handlePaddleUpgrade = async () => {
+    if (selectedPlan === currentPlan || selectedPlan === "free") return;
+    setIsPaddleRedirecting(true);
+    try {
+      const res = await fetch("/api/billing/paddle-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: selectedPlan, billing: "monthly" }),
+      });
+      const data = await res.json() as { url?: string; error?: string };
+      if (data.url) window.open(data.url, "_blank");
+    } catch {
+      /* handled by redirect failure */
+    } finally {
+      setIsPaddleRedirecting(false);
     }
   };
 
@@ -190,6 +229,19 @@ export function PaymentsPanel({ profile }: PaymentsPanelProps) {
             {isRedirecting
               ? <><Loader2 size={12} className="animate-spin" /> Redirecting…</>
               : <><CreditCard size={12} /> Upgrade to {PLANS.find((p) => p.id === selectedPlan)?.name}</>
+            }
+          </button>
+        )}
+
+        {selectedPlan !== currentPlan && selectedPlan !== "free" && paddleAvailable && (
+          <button
+            onClick={handlePaddleUpgrade}
+            disabled={isPaddleRedirecting}
+            className="w-full py-2 border border-border text-[10px] font-medium rounded-xl hover:bg-muted/50 transition flex items-center justify-center gap-1.5 disabled:opacity-60"
+          >
+            {isPaddleRedirecting
+              ? <><Loader2 size={11} className="animate-spin" /> Redirecting…</>
+              : <>Pay with Paddle instead</>
             }
           </button>
         )}
