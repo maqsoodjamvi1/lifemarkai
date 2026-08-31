@@ -32,7 +32,7 @@ export function LovableMessageEditInline({ value, onChange, onSubmit, onCancel }
       />
       <div className="flex items-center gap-1.5">
         <Button size="sm" className="h-6 text-xs px-2 bg-violet-600 hover:bg-violet-500 text-white" onClick={onSubmit}>
-          Regenerate
+          Revert and resend
         </Button>
         <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={onCancel}>
           Cancel

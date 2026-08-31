@@ -1601,10 +1601,58 @@ export function ChatPanel({
     }
   }
 
+  // "Revert and resend" (Lovable parity): restore file state back to what it
+  // was right before `msg`'s ORIGINAL build ran, not whatever the files
+  // happen to be now. sendMessage() fires an auto-snapshot labeled
+  // "Before: <prompt>" right before every build/agent/patch run (see the
+  // fire-and-forget POST further down, near `Auto-snapshot before AI
+  // modifies files`) — that snapshot IS the pre-build state for `msg`. Find
+  // the newest one at or before `msg`'s timestamp and restore it.
+  //
+  // Previously, editing an earlier message (or hitting Regenerate) only ever
+  // took a fresh "Before edit"/"Before regenerate" snapshot of the CURRENT
+  // state — a manual undo safety net — and then resent against that same
+  // current state. If anything built after the original message, the resend
+  // ran on top of that later work instead of reproducing the original
+  // starting point, which is what both "Revert and resend" and "Regenerate"
+  // are supposed to do.
+  //
+  // Deliberately no dry-run/confirm-schema dance here (unlike the History
+  // panel's manual multi-version-jump restore) — same lower-ceremony
+  // approach as the existing handleUndo() above. Any failure (network,
+  // schema-change confirmation required, no matching snapshot) is
+  // non-blocking: we fall through and resend against the current files
+  // rather than blocking the edit/regenerate entirely.
+  async function revertFilesToBeforeMessage(msg: Message) {
+    try {
+      const listRes = await fetch(`/api/projects/snapshots?projectId=${project.id}`);
+      if (!listRes.ok) return;
+      const snapshots = (await listRes.json()) as Array<{ id: string; created_at: string }>;
+      if (!Array.isArray(snapshots)) return;
+      const targetAt = new Date(msg.created_at).getTime();
+      const target = snapshots.find((s) => new Date(s.created_at).getTime() <= targetAt);
+      if (!target) return;
+
+      const restoreRes = await fetch("/api/projects/snapshots/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ snapshotId: target.id, projectId: project.id }),
+      });
+      if (!restoreRes.ok) return;
+      const payload = (await restoreRes.json().catch(() => null)) as { files?: unknown[] } | null;
+      if (Array.isArray(payload?.files) && payload.files.length > 0) {
+        onFilesUpdate(payload.files as ProjectFile[], { replace: true });
+      }
+    } catch {
+      /* non-blocking, see comment above */
+    }
+  }
+
   async function submitEditedMessage() {
     if (!editingMessageId || !editInput.trim()) return;
     const idx = messages.findIndex((m) => m.id === editingMessageId);
     if (idx < 0) return;
+    const editedMsg = messages[idx]!;
 
     let snapshotId: string | null = null;
     try {
@@ -1623,6 +1671,10 @@ export function ChatPanel({
     } catch {
       /* non-blocking */
     }
+
+    // Actually revert files before resending — see revertFilesToBeforeMessage
+    // above for why this was missing.
+    await revertFilesToBeforeMessage(editedMsg);
 
     try {
       await truncateChatFromMessage(editingMessageId, true);
@@ -1675,6 +1727,10 @@ export function ChatPanel({
     } catch {
       /* non-blocking */
     }
+
+    // Same missing-revert bug as edit-and-resend above — restore files to
+    // what they were right before this prompt's original build ran.
+    await revertFilesToBeforeMessage(lastUserMsg);
 
     try {
       // Drop the last assistant (and anything after); keep the user prompt.
