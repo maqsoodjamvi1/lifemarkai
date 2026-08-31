@@ -1254,6 +1254,7 @@ window.__lucideReact = (function() {
 // react-router-dom CDN path is fragile — in-preview mini-router with SPA navigation.
 window.__reactRouterDom = (function() {
   var LocCtx = React.createContext({ pathname: '/', search: '', hash: '', state: null, key: 'default' });
+  var ParamsCtx = React.createContext({});
   var listeners = [];
 
   // The preview iframe is served at /preview/<id>, so window.location.pathname is
@@ -1292,16 +1293,57 @@ window.__reactRouterDom = (function() {
     } catch (e) {}
   }
 
-  function matchRoute(pattern, pathname) {
+  // Returns the matched route's params object (possibly {}), or null when
+  // "pattern" does not match "pathname". Previously this only supported an
+  // exact string match or a trailing "/*" wildcard - a dynamic segment like
+  // "/blog/:slug" never matched a real URL such as "/blog/hello-world" at
+  // all, so any project using this common react-router pattern (detail,
+  // product, or post pages) rendered a blank page in the fallback preview
+  // (used when the Babel-in-iframe path runs rather than WebContainer/Vite).
+  function matchRouteParams(pattern, pathname) {
     pattern = String(pattern == null ? '' : pattern);
     pathname = String(pathname == null ? '' : pathname);
-    if (pattern == null || pattern === '*' || pattern === '') return pathname === '/' || pathname === '';
-    if (pattern === '/') return pathname === '/' || pathname === '';
-    if (pattern.endsWith('/*')) {
-      var base = pattern.slice(0, -2);
-      return pathname === base || pathname.indexOf(base + '/') === 0;
+    if (pattern === '' || pattern === '*') {
+      return (pathname === '/' || pathname === '') ? {} : null;
     }
-    return pattern === pathname;
+    if (pattern === '/') {
+      return (pathname === '/' || pathname === '') ? {} : null;
+    }
+    if (pattern.slice(-2) === '/*') {
+      var base = pattern.slice(0, -2);
+      if (pathname === base || pathname.indexOf(base + '/') === 0) {
+        // This whole runtime is embedded as text inside an outer TS template
+        // literal (see the file this shim is generated from) — a literal
+        // backslash written here would need doubling to survive that outer
+        // template's own escape handling. Plain string ops sidestep the trap
+        // entirely rather than relying on getting the doubling right.
+        var rest = pathname.slice(base.length);
+        if (rest.charAt(0) === '/') rest = rest.slice(1);
+        return { '*': rest };
+      }
+      return null;
+    }
+    var patternSegs = pattern.split('/').filter(Boolean);
+    var pathSegs = pathname.split('/').filter(Boolean);
+    if (patternSegs.length !== pathSegs.length) return null;
+    var params = {};
+    for (var i = 0; i < patternSegs.length; i++) {
+      var ps = patternSegs[i];
+      var vs = pathSegs[i];
+      if (ps.charAt(0) === ':') {
+        if (!vs) return null;
+        var paramName = ps.slice(1);
+        if (paramName.charAt(paramName.length - 1) === '?') paramName = paramName.slice(0, -1);
+        try { params[paramName] = decodeURIComponent(vs); } catch (e) { params[paramName] = vs; }
+      } else if (ps !== vs) {
+        return null;
+      }
+    }
+    return params;
+  }
+
+  function matchRoute(pattern, pathname) {
+    return matchRouteParams(pattern, pathname) !== null;
   }
 
   function RouterShell(props) {
@@ -1334,9 +1376,14 @@ window.__reactRouterDom = (function() {
       if (!r || !r.props) continue;
       var p = r.props.path;
       if (p == null) { indexEl = r.props.element || null; continue; }
-      if (matchRoute(p, pathname)) return r.props.element || null;
+      var params = matchRouteParams(p, pathname);
+      if (params !== null) {
+        return React.createElement(ParamsCtx.Provider, { value: params }, r.props.element || null);
+      }
     }
-    if ((pathname === '/' || pathname === '') && indexEl) return indexEl;
+    if ((pathname === '/' || pathname === '') && indexEl) {
+      return React.createElement(ParamsCtx.Provider, { value: {} }, indexEl);
+    }
     return null;
   }
 
@@ -1385,7 +1432,7 @@ window.__reactRouterDom = (function() {
     Outlet: function() { return null; },
     Navigate: function(props) { navigate(props && props.to ? props.to : '/'); return null; },
     useNavigate: function() { return navigate; },
-    useParams: function() { return {}; },
+    useParams: function() { return React.useContext(ParamsCtx); },
     useLocation: useLocation,
     useSearchParams: function() { return [new URLSearchParams(), function() {}]; },
   };

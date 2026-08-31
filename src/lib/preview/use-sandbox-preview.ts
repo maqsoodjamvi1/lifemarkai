@@ -54,8 +54,33 @@ export function useSandboxPreview(projectId: string) {
   const [reloadNonce, setReloadNonce] = useState(0);
   /** One-shot guard for mid-session dead-sandbox auto-recovery (cold re-boot). */
   const coldRetryRef = useRef(false);
-  const bootedRef = useRef(false);
+  /**
+   * Tracks which projectId the boot effect has already run for — NOT just
+   * whether it has ever run. The editor route (`/editor/$projectId`) does not
+   * remount its component tree on a client-side navigation between two
+   * projects (no `key` on the route/panel component keyed by projectId), so
+   * a plain "booted once" boolean latched true forever and silently starved
+   * every project switch of its own boot: the hook kept returning the
+   * PREVIOUS project's sandboxId/previewUrl, the preview pane rendered the
+   * old project's app under the new project's UI, and the keepalive/poll
+   * effects kept hitting `/api/projects/<newId>/...` using state that
+   * actually belonged to the old sandbox.
+   */
+  const bootedForProjectRef = useRef<string | null>(null);
   const statusCheckedRef = useRef(false);
+  /**
+   * The phase-poll effect below fires a `fetch` every 1200ms with no
+   * AbortController and applied its response unconditionally. Two in-flight
+   * polls can resolve out of order under ordinary network jitter — an older
+   * request's response arriving after a newer one's already updated state
+   * would silently re-apply stale data, including UNDOING a just-completed
+   * cold-reboot recovery (resetting a freshly-healthy previewUrl back to
+   * null and re-triggering a redundant reboot). Each poll gets an
+   * incrementing sequence number; a response older than the last one already
+   * applied is dropped rather than acted on.
+   */
+  const pollSeqRef = useRef(0);
+  const appliedPollSeqRef = useRef(0);
 
   /**
    * The latest state, readable from a callback without becoming a dependency.
@@ -350,12 +375,22 @@ export function useSandboxPreview(projectId: string) {
 
   /** Lovable parity: reconnect warm sandbox first, cold-provision only if needed. */
   useEffect(() => {
-    if (!projectId || bootedRef.current) return;
+    if (!projectId || bootedForProjectRef.current === projectId) return;
     if (!statusResolved) return;
     if (!stateRef.current.enabled) return;
-    bootedRef.current = true;
+    bootedForProjectRef.current = projectId;
+    // A fresh boot for a DIFFERENT project must not carry over the previous
+    // project's guards/state: a one-shot recovery already used on the old
+    // project should get another chance on the new one, and the panel must
+    // not keep showing the old project's previewUrl while the new one boots.
+    coldRetryRef.current = false;
     void (async () => {
-      setState((s) => ({ ...s, loading: true, phase: "creating", phaseDetail: "Connecting…" }));
+      // Clear the previous project's previewUrl/sandboxId/error/logs so the
+      // panel never renders another project's app while this one boots —
+      // `enabled` is carried over explicitly (not reset via emptyState's
+      // default `false`) since it's already been confirmed true above and
+      // this effect doesn't re-derive it.
+      setState((s) => emptyState({ enabled: s.enabled, loading: true, phase: "creating", phaseDetail: "Connecting…" }));
 
       // Only try to reconnect when there is something to reconnect TO.
       //
@@ -589,6 +624,7 @@ export function useSandboxPreview(projectId: string) {
     const hasStaleUrlRisk = !!state.previewUrl;
     if (!projectId || !state.enabled || (!bootPending && !hasStaleUrlRisk)) return;
     const timer = window.setInterval(() => {
+      const seq = ++pollSeqRef.current;
       void fetch(`/api/projects/${projectId}/sandbox-preview?phaseOnly=1`)
         .then((r) => r.json())
         .then((data: {
@@ -603,6 +639,12 @@ export function useSandboxPreview(projectId: string) {
           // read it; the type just never admitted it existed.
           error?: string | null;
         }) => {
+          // A response older than one we've already acted on is stale —
+          // applying it now would overwrite whatever a later, faster
+          // response already resolved. Drop it.
+          if (seq < appliedPollSeqRef.current) return;
+          appliedPollSeqRef.current = seq;
+
           // Only adopt URL once boot reports ready — never a stale preview_url
           // left over from a timed-out Modal sandbox.
           if (data.ok && data.previewUrl && data.phase === "ready") {

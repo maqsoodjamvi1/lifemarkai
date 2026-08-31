@@ -9,6 +9,7 @@
  */
 import type { ProjectFile } from "../../types/database.ts";
 import {
+collectExports,
 findMissingExports,
 findMissingModules,
 type ProjectFileLike,
@@ -50,9 +51,32 @@ export default function ${name}() {
 `;
 }
 
+/**
+ * Turn an arbitrary basename into a syntactically valid JS identifier by
+ * PascalCasing every run of non-identifier characters away.
+ *
+ * `guessExportNameFromPath` used to return the raw basename verbatim (only
+ * the extension stripped), which is fine for a name like "Hero" but not for
+ * the very common kebab-case filenames generated apps actually use —
+ * "hero-section.tsx" produced the bare string "hero-section", and
+ * `stubComponentSource`/`stubPageSource` interpolate that straight into
+ * `export function ${name}() {}`, emitting `export function hero-section()`:
+ * a SyntaxError. The stub file — created specifically so a missing import
+ * doesn't crash the preview — then fails to parse at all, which is strictly
+ * worse than the unhealed `undefined` import it was meant to fix.
+ */
+function toValidComponentIdentifier(raw: string): string {
+  const parts = raw.split(/[^A-Za-z0-9$]+/).filter(Boolean);
+  let name = parts.map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join("");
+  if (!name) name = "Missing";
+  if (/^[0-9]/.test(name)) name = `_${name}`;
+  return name;
+}
+
 function guessExportNameFromPath(expectedPath: string): string {
   const base = expectedPath.split("/").pop() || "Missing";
-  return base.replace(/\.(tsx|ts|jsx|js)$/i, "") || "Missing";
+  const stem = base.replace(/\.(tsx|ts|jsx|js)$/i, "") || "Missing";
+  return toValidComponentIdentifier(stem);
 }
 
 function findAliasSource(
@@ -78,7 +102,16 @@ function findAliasSource(
 }
 
 function appendMissingExport(content: string, name: string): string {
-  if (new RegExp(`\\bexport\\s+(const|let|var|function|class)\\s+${name}\\b`).test(content)) {
+  // Belt-and-suspenders: the primary defense against reporting a name that
+  // IS already exported lives in export-contract.ts's findMissingExports.
+  // This guard used a narrower regex that only matched a name declared
+  // immediately after `export const/let/var` — it missed a name declared
+  // later in a comma-separated list (`export const A = [], ${name} = []`),
+  // so a stale/misbehaving caller could still have this function append a
+  // SECOND `export const ${name}` for an already-exported name, producing a
+  // duplicate-identifier SyntaxError. collectExports parses the whole
+  // comma-separated declarator list, so this catches that case too.
+  if (collectExports(content).names.has(name)) {
     return content;
   }
   // Array-ish mock data: safest default that stops `.map` crashes.

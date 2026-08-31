@@ -109,6 +109,60 @@ interface ModuleExports {
   hasStarReexport: boolean;
 }
 
+/**
+ * Given the index right after `export const `/`let `/`var `, scan the
+ * declaration statement and return the bound identifier of every top-level,
+ * comma-separated declarator (`A = 1, B = 2, C = f(x, y)` → `["A","B","C"]`).
+ * Stops at the statement's terminating top-level `;`, a top-level newline (no
+ * semicolon — ASI), or end of input, tracking paren/bracket/brace depth and
+ * quote state so a comma inside a call's arguments or an array/object
+ * initializer is never mistaken for a declarator separator. Destructuring
+ * declarators (`export const { a, b } = obj`) are left unhandled, matching
+ * this checker's existing conservative stance — they simply contribute no
+ * names, same as before this fix.
+ */
+function collectDeclaratorNames(src: string, start: number): string[] {
+  const names: string[] = [];
+  let depth = 0;
+  let quote: '"' | "'" | "`" | null = null;
+  let segStart = start;
+
+  const flushSegment = (end: number) => {
+    const seg = src.slice(segStart, end).trimStart();
+    const m = /^([\w$]+)/.exec(seg);
+    if (m) names.push(m[1]);
+  };
+
+  for (let i = start; i < src.length; i++) {
+    const ch = src[i];
+    if (quote) {
+      if (ch === "\\") { i++; continue; }
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") { quote = ch; continue; }
+    if (ch === "(" || ch === "[" || ch === "{") { depth++; continue; }
+    if (ch === ")" || ch === "]" || ch === "}") {
+      if (depth === 0) { flushSegment(i); return names; } // closed an ENCLOSING scope
+      depth--;
+      continue;
+    }
+    if (depth > 0) continue;
+    if (ch === ";") { flushSegment(i); return names; }
+    if (ch === "," ) { flushSegment(i); segStart = i + 1; continue; }
+    if (ch === "\n") {
+      // No semicolon before end of line at depth 0 — ASI. Only treat this as
+      // the statement end once at least one non-whitespace, non-comma
+      // character has been seen since segStart (otherwise it's just the
+      // declaration keyword's own line wrapping).
+      const seg = src.slice(segStart, i);
+      if (/\S/.test(seg)) { flushSegment(i); return names; }
+    }
+  }
+  flushSegment(src.length);
+  return names;
+}
+
 /** Collect every name a module exports (values AND types — we only need existence). */
 export function collectExports(content: string): ModuleExports {
   const names = new Set<string>();
@@ -121,9 +175,24 @@ export function collectExports(content: string): ModuleExports {
 
   if (/export\s+\*\s+from/.test(src)) hasStarReexport = true;
 
-  // export const/let/var NAME    (also: export const A = 1, B = 2)
-  for (const m of src.matchAll(/export\s+(?:const|let|var)\s+([\w$]+)/g)) {
-    names.add(m[1]);
+  // export const/let/var NAME    (also: export const A = 1, B = 2, C = f(x, y))
+  //
+  // A single `matchAll` on `export\s+(?:const|let|var)\s+([\w$]+)` only ever
+  // captures the FIRST declarator — for `export const MOCK_SERVICES = [],
+  // MOCK_PARTNERS = [];` it silently drops MOCK_PARTNERS. That produced a
+  // false positive in findMissingExports for every genuinely-exported name
+  // after the first, which per this file's own stated design ("a false
+  // positive here ... becomes an instruction to the repair model") gets
+  // handed to heal-preview-contract.ts as a real gap — which then appends a
+  // SECOND `export const MOCK_PARTNERS = ...` stub, turning a correct file
+  // into one with a duplicate-identifier SyntaxError. collectDeclaratorNames
+  // scans the whole statement (respecting nested (), [], {} and quotes) so
+  // every top-level comma-separated declarator is captured, not just the
+  // first.
+  for (const m of src.matchAll(/export\s+(?:const|let|var)\s+/g)) {
+    for (const name of collectDeclaratorNames(src, m.index + m[0].length)) {
+      names.add(name);
+    }
   }
   // export function NAME / export async function NAME / export function* NAME
   for (const m of src.matchAll(/export\s+(?:async\s+)?function\s*\*?\s*([\w$]+)/g)) {

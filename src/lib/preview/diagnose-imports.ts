@@ -241,10 +241,24 @@ export function diagnoseBrokenImports(files: DiagnosableFile[]): string[] {
             `${imp.fromFile}: named import \`{ ${name} }\` from "${imp.spec}" not exported in ${target.path}`,
           );
         } else if (!hasNamedExport(target.content, name) && name !== "default") {
-          const onlyDefault =
+          // Mixing up default vs. named import of a same-named component is a
+          // common AI-generated mistake (`import { Button } from "./Button"`
+          // against a file with only `export default function Button(){}`).
+          // This USED to suppress the report entirely whenever the imported
+          // name matched the default export's function name — silently
+          // letting a genuinely broken import (no named binding `${name}`
+          // exists; Vite/esbuild fails it at runtime with "does not provide
+          // an export named") reach the preview instead of the healing
+          // prompt. Report it with the same actionable phrasing used above
+          // for the reverse mismatch.
+          const isSameNameDefault =
             hasDefaultExport(target.content) &&
             new RegExp(`export\\s+default\\s+function\\s+${name}\\b`).test(target.content);
-          if (!onlyDefault) {
+          if (isSameNameDefault) {
+            push(
+              `${imp.fromFile}: \`import { ${name} }\` from "${imp.spec}" but ${target.path} exports it as \`export default\` - use \`import ${name} from "${imp.spec}"\` or switch to \`export { ${name} }\``,
+            );
+          } else {
             push(
               `${imp.fromFile}: \`{ ${name} }\` not found in ${target.path} - check export name`,
             );

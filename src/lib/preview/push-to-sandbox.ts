@@ -24,6 +24,41 @@ import { injectLifemarkDataSdk } from "./lifemark-data.ts";
 /** Writes are deduped per project so a burst of agent saves coalesces. */
 const pending = new Map<string, Map<string, string>>();
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
+/**
+ * Per-project chain of in-flight `flush()` calls. Debouncing only coalesces
+ * writes that land inside the SAME 1200ms window — a save right after a
+ * debounce fires starts a brand-new timer, so two `flush()` calls for the
+ * same project can still be in flight at once. Each is an independent
+ * network pipeline (fetch project metadata, fetch all file paths, repair
+ * imports, then `provider.writeFiles`) with no shared ordering, so the
+ * *older* flush's slower network round-trip could complete AFTER the newer
+ * one's, overwriting fresher content with stale content — precisely the
+ * "preview kept serving a file the database no longer contained" failure
+ * this module exists to eliminate. Chaining each flush onto the previous
+ * one for the same project forces them to apply in the order they were
+ * scheduled, not the order their network calls happen to resolve.
+ */
+const flushChains = new Map<string, Promise<void>>();
+
+function enqueueFlush(
+  supabase: unknown,
+  projectId: string,
+  files: Map<string, string>,
+): void {
+  const prevChain = flushChains.get(projectId) ?? Promise.resolve();
+  const nextChain = prevChain
+    .catch(() => {})
+    .then(() => flush(supabase, projectId, files))
+    .catch(() => {});
+  flushChains.set(projectId, nextChain);
+  void nextChain.finally(() => {
+    // Only clear the slot if nothing newer has queued behind us — leaving a
+    // stale reference around would just mean the next call chains onto an
+    // already-settled promise, which is harmless, but clearing keeps the map
+    // from growing unboundedly for projects that stop being edited.
+    if (flushChains.get(projectId) === nextChain) flushChains.delete(projectId);
+  });
+}
 
 export function pushFileToRunningSandbox(
   supabase: unknown,
@@ -50,7 +85,7 @@ export function pushFileToRunningSandbox(
         const files = pending.get(projectId);
         pending.delete(projectId);
         if (!files || files.size === 0) return;
-        void flush(supabase, projectId, files).catch(() => {});
+        enqueueFlush(supabase, projectId, files);
       }, 1200),
     );
   } catch {

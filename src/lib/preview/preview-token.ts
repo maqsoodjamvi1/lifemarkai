@@ -64,16 +64,32 @@ function hsSecret(): string | undefined {
   return crypto.createHash("sha256").update(`lifemarkai-preview:${seed}`).digest("hex");
 }
 
-function signingAlg(): Alg | null {
-  if (pem(process.env.PREVIEW_JWT_PRIVATE_KEY)) return "RS256";
+/**
+ * Signing and verifying happen in the same server process (mint in
+ * /api/preview/token, verify in the preview serve route), so they must
+ * always agree on the algorithm. Deciding RS256 from the private key alone
+ * (for signing) and the public key alone (for verifying) let the two choices
+ * diverge: an operator who sets only PREVIEW_JWT_PRIVATE_KEY (forgetting the
+ * public half) got tokens minted as RS256 but verified as HS256 — every
+ * token failed verification, with previewTokenConfigured() still reporting
+ * `true` since both functions independently returned non-null. RS256 is only
+ * selected when BOTH keys are present, so signing and verifying can never
+ * pick different algorithms.
+ */
+function resolvedAlg(): Alg | null {
+  if (pem(process.env.PREVIEW_JWT_PRIVATE_KEY) && pem(process.env.PREVIEW_JWT_PUBLIC_KEY)) {
+    return "RS256";
+  }
   if (hsSecret()) return "HS256";
   return null;
 }
 
+function signingAlg(): Alg | null {
+  return resolvedAlg();
+}
+
 function verifyingAlg(): Alg | null {
-  if (pem(process.env.PREVIEW_JWT_PUBLIC_KEY)) return "RS256";
-  if (hsSecret()) return "HS256";
-  return null;
+  return resolvedAlg();
 }
 
 /** True when the environment can mint/verify preview tokens. */
