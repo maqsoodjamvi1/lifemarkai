@@ -11,7 +11,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
-import { canReadProjectFiles,getProjectAccess } from "@/lib/project/access";
+import { canWriteProjectFiles,getProjectAccess } from "@/lib/project/access";
 import { getSandboxProvider,isSandboxEnabled,type SandboxFile } from "@/lib/sandbox";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { patchSandboxPreviewFiles } from "@/lib/preview/patch-sandbox-preview-files";
@@ -33,7 +33,10 @@ async function handlePATCH(req: Request, params: any) {
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const access = await getProjectAccess(supabase, projectId, user.id);
-  if (!canReadProjectFiles(access)) {
+  // Syncing writes attacker-controlled file content (including package.json,
+  // which drives an in-container `npm install`) into the running sandbox —
+  // requires write access, not just read.
+  if (!canWriteProjectFiles(access)) {
     return Response.json({ error: "Project not found" }, { status: 404 });
   }
 
