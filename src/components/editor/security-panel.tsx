@@ -43,8 +43,8 @@ export function SecurityPanel({ project, files, onFilesUpdate }: SecurityPanelPr
     setScanning(false);
   }
 
-  async function aiFixFinding(finding: SecurityFinding) {
-    setFixing(finding.title);
+  async function aiFixFinding(finding: SecurityFinding, findingKey: string) {
+    setFixing(findingKey);
     try {
       const affectedFiles = files.filter(f => f.path === finding.file);
       const res = await fetch("/api/ai/fix", {
@@ -246,11 +246,11 @@ export function SecurityPanel({ project, files, onFilesUpdate }: SecurityPanelPr
                             {finding.severity !== "info" && (
                               <Button
                                 size="sm"
-                                onClick={() => aiFixFinding(finding)}
+                                onClick={() => aiFixFinding(finding, `${i}`)}
                                 disabled={!!fixing}
                                 className="h-7 text-xs bg-violet-600 hover:bg-violet-500 text-white"
                               >
-                                {fixing === finding.title ? (
+                                {fixing === `${i}` ? (
                                   <><Loader2 className="w-3 h-3 mr-1.5 animate-spin" />Fixing…</>
                                 ) : (
                                   <><Wand2 className="w-3 h-3 mr-1.5" />Auto-Fix with AI</>

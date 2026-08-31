@@ -2795,7 +2795,7 @@ MODAL_TOKEN_SECRET=...
           <div className="absolute top-2 left-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-background/90 border border-border/70 text-[10px] text-muted-foreground shadow-sm">
             {previewMachineState === "building" || previewMachineState === "loading" ? (
               <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
-            ) : previewMachineState === "error" ? (
+            ) : previewMachineState === "error" || previewMachineState === "unavailable" ? (
               <AlertTriangle className="w-3 h-3 text-red-400" />
             ) : (
               <Check className="w-3 h-3 text-amber-400" />

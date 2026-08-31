@@ -69,11 +69,21 @@ function HeroPromptCreateBox() {
       if (!res.ok || !project.id) {
         throw new Error(project.error || "Create failed");
       }
-      await navigate({
-        to: "/editor/$projectId",
-        params: { projectId: project.id },
-        search: { prompt: trimmed, mode: "build" },
-      });
+      // Outside the try above on purpose: the project already exists
+      // server-side at this point, so a navigation failure is a different
+      // problem than a creation failure — telling the user "Failed to
+      // create project" here would be wrong, since it was created; they'd
+      // just have an orphaned project with no obvious way to reach it.
+      try {
+        await navigate({
+          to: "/editor/$projectId",
+          params: { projectId: project.id },
+          search: { prompt: trimmed, mode: "build" },
+        });
+      } catch {
+        setError("Your project was created, but we couldn't open it automatically. Find it on your dashboard.");
+        setLoading(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create project");
       setLoading(false);

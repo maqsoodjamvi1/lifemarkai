@@ -5,6 +5,7 @@ import {
 X
 } from "lucide-react";
 import { suggestFollowUps } from "@/lib/ai/follow-up-suggestions";
+import { readJSON, readString, writeJSON, writeString, removeKey } from "@/lib/editor/local-storage-json";
 import { shouldClarifyCapabilities } from "@/lib/ai/clarification-intelligence";
 import { detectPastedSecret,redactSecret } from "@/lib/security/detect-secret";
 import { useToast } from "@/hooks/use-toast";
@@ -622,14 +623,7 @@ export function ChatPanel({
 
   // Prompt queue — messages queued while AI is streaming
   const [promptQueue, setPromptQueue] = useState<QueueItem[]>([]);
-  const [queuePaused, setQueuePaused] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return localStorage.getItem(`lifemark-queue-paused-${project.id}`) === "1";
-    } catch {
-      return false;
-    }
-  });
+  const [queuePaused, setQueuePaused] = useState(() => readString(`lifemark-queue-paused-${project.id}`) === "1");
   const [editingQueueId, setEditingQueueId] = useState<string | null>(null);
   const [editingQueueText, setEditingQueueText] = useState("");
   // Agent task step visibility
@@ -724,11 +718,7 @@ export function ChatPanel({
     }
   }, [project.id, toast]);
   const [showSearch, setShowSearch] = useState(false);
-  const [compactDensity, setCompactDensity] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try { return localStorage.getItem(`lifemark-chat-density-${project.id}`) === "compact"; }
-    catch { return false; }
-  });
+  const [compactDensity, setCompactDensity] = useState(() => readString(`lifemark-chat-density-${project.id}`) === "compact");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchMode, setSearchMode] = useState<ChatSearchMode>("keyword");
   const [searchRoleFilter, setSearchRoleFilter] = useState<ChatSearchRoleFilter>("all");
@@ -744,15 +734,9 @@ export function ChatPanel({
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
   const clearedSnapshotRef = useRef<Message[] | null>(null);
   const deletedSnapshotRef = useRef<Message | null>(null);
-  const [recentSearchQueries, setRecentSearchQueries] = useState<string[]>(() => {
-    if (typeof window === "undefined") return [];
-    try {
-      const raw = localStorage.getItem(`lifemark-recent-searches-${project.id}`);
-      return raw ? (JSON.parse(raw) as string[]).slice(0, 6) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [recentSearchQueries, setRecentSearchQueries] = useState<string[]>(() =>
+    readJSON<string[]>(`lifemark-recent-searches-${project.id}`, []).slice(0, 6),
+  );
   const collapsedThreadsKey = `lifemark-collapsed-threads-${project.id}`;
   // Default expanded — auto-collapsing every older turn made the chat look empty
   // (only "Turn N" labels). Manual collapse via turn dividers still works.
@@ -780,15 +764,10 @@ export function ChatPanel({
   const bookmarkKey = `lifemark-bookmarks-${project.id}`;
   const chatStateReadyRef = useRef(false);
   const [bookmarkedIds, setBookmarkedIds] = useState<Set<string>>(() => {
-    if (typeof window === "undefined") return new Set();
-    try { return new Set(JSON.parse(localStorage.getItem(`lifemark-bookmarks-${project.id}`) ?? "[]")); }
-    catch { return new Set(); }
+    return new Set(readJSON<string[]>(`lifemark-bookmarks-${project.id}`, []));
   });
   const [showBookmarks, setShowBookmarks] = useState(false);
-  const [pinnedMsgId, setPinnedMsgId] = useState<string | null>(() => {
-    if (typeof window === "undefined") return null;
-    try { return localStorage.getItem(`lifemark-pinned-${project.id}`); } catch { return null; }
-  });
+  const [pinnedMsgId, setPinnedMsgId] = useState<string | null>(() => readString(`lifemark-pinned-${project.id}`));
 
   // Hydrate pins / bookmarks / queue from server (localStorage is offline cache only).
   useEffect(() => {
@@ -848,11 +827,9 @@ export function ChatPanel({
               }),
           );
         }
-        try {
-          if (localStorage.getItem(`lifemark-queue-paused-${project.id}`) === "1") {
-            setQueuePaused(true);
-          }
-        } catch { /* private mode */ }
+        if (readString(`lifemark-queue-paused-${project.id}`) === "1") {
+          setQueuePaused(true);
+        }
       } catch {
         /* offline — keep local cache */
       } finally {
@@ -866,15 +843,10 @@ export function ChatPanel({
 
   // Persist chat state to server + local cache.
   useEffect(() => {
-    try {
-      if (pinnedMsgId) localStorage.setItem(`lifemark-pinned-${project.id}`, pinnedMsgId);
-      else localStorage.removeItem(`lifemark-pinned-${project.id}`);
-      localStorage.setItem(bookmarkKey, JSON.stringify([...bookmarkedIds]));
-      localStorage.setItem(
-        `lifemark-queue-paused-${project.id}`,
-        queuePaused ? "1" : "0",
-      );
-    } catch { /* private mode */ }
+    if (pinnedMsgId) writeString(`lifemark-pinned-${project.id}`, pinnedMsgId);
+    else removeKey(`lifemark-pinned-${project.id}`);
+    writeJSON(bookmarkKey, [...bookmarkedIds]);
+    writeString(`lifemark-queue-paused-${project.id}`, queuePaused ? "1" : "0");
 
     if (!chatStateReadyRef.current) return;
     const timer = window.setTimeout(() => {
@@ -2000,22 +1972,18 @@ export function ChatPanel({
   useEffect(() => {
     if (draftHydratedRef.current) return;
     draftHydratedRef.current = true;
-    try {
-      const draft = localStorage.getItem(composerDraftKey);
-      if (draft?.trim()) {
-        setInput(draft);
-        setShowDraftBanner(true);
-      }
-    } catch { /* private mode */ }
+    const draft = readString(composerDraftKey);
+    if (draft?.trim()) {
+      setInput(draft);
+      setShowDraftBanner(true);
+    }
   }, [composerDraftKey]);
 
   useEffect(() => {
     if (!draftHydratedRef.current) return;
     const timer = window.setTimeout(() => {
-      try {
-        if (input.trim()) localStorage.setItem(composerDraftKey, input);
-        else localStorage.removeItem(composerDraftKey);
-      } catch { /* private mode */ }
+      if (input.trim()) writeString(composerDraftKey, input);
+      else removeKey(composerDraftKey);
     }, 400);
     return () => window.clearTimeout(timer);
   }, [input, composerDraftKey]);
@@ -2041,9 +2009,7 @@ export function ChatPanel({
       if (trimmed.length < 2) return;
       setRecentSearchQueries((prev) => {
         const next = [trimmed, ...prev.filter((x) => x !== trimmed)].slice(0, 6);
-        try {
-          localStorage.setItem(`lifemark-recent-searches-${project.id}`, JSON.stringify(next));
-        } catch { /* private mode */ }
+        writeJSON(`lifemark-recent-searches-${project.id}`, next);
         return next;
       });
     },
@@ -2636,7 +2602,7 @@ export function ChatPanel({
     genStartRef.current = Date.now();
     setStoppedDraft(null);
     setShowDraftBanner(false);
-    try { localStorage.removeItem(composerDraftKey); } catch { /* private mode */ }
+    removeKey(composerDraftKey);
     setStreamingContent("");
     setStreamingFiles([]);
     setPendingSkills([]);
@@ -5247,7 +5213,7 @@ ${(f.content ?? "").slice(0, 8000)}
         if (!prev.has(msg.id)) return prev;
         const next = new Set(prev);
         next.delete(msg.id);
-        try { localStorage.setItem(bookmarkKey, JSON.stringify([...next])); } catch { /* */ }
+        writeJSON(bookmarkKey, [...next]);
         return next;
       });
       toast({
@@ -5642,12 +5608,7 @@ ${(f.content ?? "").slice(0, 8000)}
         case "toggle-density":
           setCompactDensity((v) => {
             const next = !v;
-            try {
-              localStorage.setItem(
-                `lifemark-chat-density-${project.id}`,
-                next ? "compact" : "comfortable",
-              );
-            } catch { /* private mode */ }
+            writeString(`lifemark-chat-density-${project.id}`, next ? "compact" : "comfortable");
             return next;
           });
           break;
@@ -5883,12 +5844,7 @@ ${(f.content ?? "").slice(0, 8000)}
         onToggleCompactDensity={() => {
           setCompactDensity((v) => {
             const next = !v;
-            try {
-              localStorage.setItem(
-                `lifemark-chat-density-${project.id}`,
-                next ? "compact" : "comfortable",
-              );
-            } catch { /* private mode */ }
+            writeString(`lifemark-chat-density-${project.id}`, next ? "compact" : "comfortable");
             return next;
           });
         }}
@@ -5969,9 +5925,7 @@ ${(f.content ?? "").slice(0, 8000)}
             }}
             onClearRecent={() => {
               setRecentSearchQueries([]);
-              try {
-                localStorage.removeItem(`lifemark-recent-searches-${project.id}`);
-              } catch { /* private mode */ }
+              removeKey(`lifemark-recent-searches-${project.id}`);
             }}
             onClearQuery={() => {
               setSearchQuery("");
@@ -6166,7 +6120,7 @@ ${(f.content ?? "").slice(0, 8000)}
           onDiscard={() => {
             setInput("");
             setShowDraftBanner(false);
-            try { localStorage.removeItem(composerDraftKey); } catch { /* private mode */ }
+            removeKey(composerDraftKey);
           }}
         />
       )}

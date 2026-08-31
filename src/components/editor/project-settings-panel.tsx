@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
 Settings,Save,Loader2,Globe,Lock,Share2,
@@ -35,23 +35,38 @@ function BrandedUrlEditor({
 
   const brandedUrl = slug ? `${appUrl}/app/${slug}` : null;
 
+  // Timer id in a ref, not a property hung off the handleChange function
+  // itself: handleChange is a brand-new closure every render, so
+  // `(handleChange as any)._t` was always reading a fresh function's
+  // never-set property and clearTimeout never actually cancelled the
+  // previous debounce — every keystroke fired its own checkSlug request.
+  // latestQueryRef additionally guards against those uncoalesced requests
+  // resolving out of order and showing a stale Available/Taken status for
+  // whatever's currently typed.
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const latestQueryRef = useRef("");
+
   const checkSlug = async (val: string) => {
     if (!val || val.length < 3) { setStatus("idle"); return; }
     setStatus("checking");
     try {
       const res = await fetch(`/api/projects/${projectId}/slug?check=${encodeURIComponent(val)}`);
       const data = await res.json();
+      if (latestQueryRef.current !== val) return; // a newer keystroke has since fired its own check
       if (!data.available && data.reason) { setStatus("invalid"); return; }
       setStatus(data.available ? "available" : "taken");
-    } catch { setStatus("idle"); }
+    } catch {
+      if (latestQueryRef.current === val) setStatus("idle");
+    }
   };
 
   const handleChange = (val: string) => {
     const cleaned = val.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/--+/g, "-");
     setSlug(cleaned);
     setStatus("idle");
-    clearTimeout((handleChange as any)._t);
-    (handleChange as any)._t = setTimeout(() => checkSlug(cleaned), 500);
+    latestQueryRef.current = cleaned;
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => checkSlug(cleaned), 500);
   };
 
   const handleSave = async () => {

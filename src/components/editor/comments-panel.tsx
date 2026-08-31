@@ -289,40 +289,60 @@ export function CommentsPanel({ projectId, currentUserId, isPublic = false }: Co
     if (!text.trim() || sending) return;
     setSending(true);
 
-    const res = await fetch(`/api/projects/${projectId}/comments`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: text.trim(), parent_id: replyTo }),
-    });
+    // No try/catch used to mean a network failure (offline, DNS, aborted
+    // connection — not just a non-2xx response, which res.ok already
+    // handles) threw out of this function before `setSending(false)` ran,
+    // leaving the Send button (disabled while `sending`) stuck disabled
+    // until the page was reloaded.
+    try {
+      const res = await fetch(`/api/projects/${projectId}/comments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: text.trim(), parent_id: replyTo }),
+      });
 
-    if (res.ok) {
-      const newComment: Comment = await res.json();
-      setComments((prev) => [...prev, newComment]);
-      setText("");
-      setReplyTo(null);
-      setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
-    } else {
-      toast({ title: "Failed to post comment", variant: "destructive" });
+      if (res.ok) {
+        const newComment: Comment = await res.json();
+        setComments((prev) => [...prev, newComment]);
+        setText("");
+        setReplyTo(null);
+        setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+      } else {
+        toast({ title: "Failed to post comment", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to post comment", description: "Check your connection and try again.", variant: "destructive" });
+    } finally {
+      setSending(false);
     }
-    setSending(false);
   };
 
   const handleResolve = async (id: string, resolved: boolean) => {
-    const res = await fetch(`/api/projects/${projectId}/comments/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ resolved }),
-    });
-    if (res.ok) {
-      const updated: Comment = await res.json();
-      setComments((prev) => prev.map((c) => (c.id === id ? updated : c)));
+    try {
+      const res = await fetch(`/api/projects/${projectId}/comments/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resolved }),
+      });
+      if (res.ok) {
+        const updated: Comment = await res.json();
+        setComments((prev) => prev.map((c) => (c.id === id ? updated : c)));
+      } else {
+        toast({ title: "Failed to update comment", variant: "destructive" });
+      }
+    } catch {
+      toast({ title: "Failed to update comment", description: "Check your connection and try again.", variant: "destructive" });
     }
   };
 
   const handleDelete = async (id: string) => {
-    const res = await fetch(`/api/projects/${projectId}/comments/${id}`, { method: "DELETE" });
-    if (res.ok) setComments((prev) => prev.filter((c) => c.id !== id && c.parent_id !== id));
-    else toast({ title: "Failed to delete", variant: "destructive" });
+    try {
+      const res = await fetch(`/api/projects/${projectId}/comments/${id}`, { method: "DELETE" });
+      if (res.ok) setComments((prev) => prev.filter((c) => c.id !== id && c.parent_id !== id));
+      else toast({ title: "Failed to delete", variant: "destructive" });
+    } catch {
+      toast({ title: "Failed to delete", description: "Check your connection and try again.", variant: "destructive" });
+    }
   };
 
   // Organise into threads

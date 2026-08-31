@@ -450,14 +450,26 @@ export function FileTreePanel({
       // Rename all files that start with this folder path
       const prefix = node.path + "/";
       const toRename = files.filter((f) => f.path.startsWith(prefix));
+      const parentDir = node.path.split("/").slice(0, -1).join("/");
+      const renamedPaths = toRename.map(
+        (f) => (parentDir ? `${parentDir}/${newName}` : newName) + f.path.slice(node.path.length),
+      );
+      // Same collision guard moveNode already has for a single file, applied
+      // here across the whole subtree: without it, renaming a folder onto a
+      // name that collides with an existing sibling silently clobbers (or
+      // gets clobbered by) that file server-side instead of being stopped.
+      const others = files.filter((f) => !toRename.includes(f));
+      const collision = renamedPaths.find((p) => others.some((f) => f.path === p));
+      if (collision) {
+        toast({ title: "A file with that name already exists there", variant: "destructive" });
+        return;
+      }
       const updated = await Promise.all(
-        toRename.map(async (f) => {
-          const parentDir = node.path.split("/").slice(0, -1).join("/");
-          const newPath = (parentDir ? `${parentDir}/${newName}` : newName) + f.path.slice(node.path.length);
+        toRename.map(async (f, i) => {
           const res = await fetch(apiBase, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ fileId: f.id, path: newPath }),
+            body: JSON.stringify({ fileId: f.id, path: renamedPaths[i] }),
           });
           return res.ok ? (await res.json()) as ProjectFile : f;
         })
@@ -466,6 +478,10 @@ export function FileTreePanel({
     } else if (node.file) {
       const dir = node.path.includes("/") ? node.path.split("/").slice(0, -1).join("/") : "";
       const newPath = dir ? `${dir}/${newName}` : newName;
+      if (files.some((f) => f.id !== node.file!.id && f.path === newPath)) {
+        toast({ title: "A file with that name already exists there", variant: "destructive" });
+        return;
+      }
       const res = await fetch(apiBase, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },

@@ -13,6 +13,7 @@ import { MemberGroupsSection } from "@/components/dashboard/member-groups-sectio
 interface Collaborator {
   id: string;
   user_id: string;
+  project_id: string;
   role: string;
   created_at: string;
   profiles: {
@@ -22,6 +23,13 @@ interface Collaborator {
     avatar_url: string | null;
   } | null;
 }
+
+interface OwnedProject {
+  id: string;
+  name: string;
+}
+
+const EMAIL_RE = /^\S+@\S+\.\S+$/;
 
 /* ─── Constants ─────────────────────────────────────────── */
 
@@ -45,11 +53,13 @@ const ROLE_DESCRIPTIONS = [
 
 export function PeoplePage({ currentUserId }: { currentUserId: string }) {
   const [members, setMembers]         = useState<Collaborator[]>([]);
+  const [ownedProjects, setOwnedProjects] = useState<OwnedProject[]>([]);
   const [loading, setLoading]         = useState(true);
   const [search, setSearch]           = useState("");
   const [showInvite, setShowInvite]   = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole]   = useState<RoleKey>("editor");
+  const [inviteProjectId, setInviteProjectId] = useState("");
   const [editingId, setEditingId]     = useState<string | null>(null);
   const [sending, setSending]         = useState(false);
 
@@ -57,36 +67,61 @@ export function PeoplePage({ currentUserId }: { currentUserId: string }) {
     setLoading(true);
     const supabase = createClient();
     // Fetch all collaborators across all user's projects
-    const { data } = await supabase
-      .from("collaborators")
-      .select("id, user_id, role, created_at, profiles:user_id(id, full_name, email, avatar_url)")
-      .order("created_at", { ascending: true });
+    const [{ data }, { data: projects }] = await Promise.all([
+      supabase
+        .from("collaborators")
+        .select("id, user_id, project_id, role, created_at, profiles:user_id(id, full_name, email, avatar_url)")
+        .order("created_at", { ascending: true }),
+      supabase.from("projects").select("id, name").eq("user_id", currentUserId).order("name"),
+    ]);
     setMembers((data as Collaborator[] | null) ?? []);
+    setOwnedProjects((projects as OwnedProject[] | null) ?? []);
     setLoading(false);
-  }, []);
+  }, [currentUserId]);
 
   useEffect(() => { fetchMembers(); }, [fetchMembers]);
 
+  // Collaborators are invited per-project (collaborators.project_id), not
+  // workspace-wide — this must pick which project before it can invite.
+  useEffect(() => {
+    if (showInvite && !inviteProjectId && ownedProjects.length > 0) {
+      setInviteProjectId(ownedProjects[0].id);
+    }
+  }, [showInvite, inviteProjectId, ownedProjects]);
+
   const handleInvite = async () => {
-    if (!inviteEmail.trim()) {
-      toast({ title: "Enter an email address", variant: "destructive" });
+    const email = inviteEmail.trim();
+    if (!email || !EMAIL_RE.test(email)) {
+      toast({ title: "Enter a valid email address", variant: "destructive" });
+      return;
+    }
+    if (!inviteProjectId) {
+      toast({ title: "Choose a project to invite them to", variant: "destructive" });
       return;
     }
     setSending(true);
-    // Call the team invite API
+    // Collaborators are scoped to one project (see project_invite_tokens /
+    // the collaborators table's project_id) — there is no workspace-wide
+    // "/api/team/invite" endpoint. This used to call one that doesn't
+    // exist, so every invite from this page 404'd.
     try {
-      const res = await fetch("/api/team/invite", {
+      const res = await fetch("/api/projects/invite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
+        body: JSON.stringify({ projectId: inviteProjectId, email, role: inviteRole }),
       });
-      if (!res.ok) throw new Error("Invite failed");
-      toast({ title: "Invitation sent", description: `Invite sent to ${inviteEmail}` });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? "Invite failed");
+      toast({ title: "Invitation sent", description: data?.message ?? `Invite sent to ${email}` });
       setInviteEmail("");
       setShowInvite(false);
       fetchMembers();
-    } catch {
-      toast({ title: "Invite failed", description: "Could not send invitation", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Invite failed",
+        description: err instanceof Error ? err.message : "Could not send invitation",
+        variant: "destructive",
+      });
     } finally {
       setSending(false);
     }
@@ -94,23 +129,40 @@ export function PeoplePage({ currentUserId }: { currentUserId: string }) {
 
   const handleUpdateRole = async (collaboratorId: string, newRole: string) => {
     const supabase = createClient();
-    await supabase
+    const { error } = await supabase
       .from("collaborators")
       .update({ role: newRole })
       .eq("id", collaboratorId);
     setEditingId(null);
+    if (error) {
+      toast({ title: "Couldn't update role", description: error.message, variant: "destructive" });
+      return;
+    }
     toast({ title: "Role updated" });
     fetchMembers();
   };
 
-  const handleRemove = async (collaboratorId: string) => {
-    const supabase = createClient();
-    await supabase
-      .from("collaborators")
-      .delete()
-      .eq("id", collaboratorId);
-    toast({ title: "Member removed" });
-    fetchMembers();
+  const handleRemove = async (collaborator: Collaborator) => {
+    // Routed through the same owner-checked, audit-logged endpoint the
+    // invite panel uses, rather than a raw client-side delete — this also
+    // catches (and reports) an RLS-denied removal instead of silently
+    // leaving the row in place while the toast claims success.
+    try {
+      const res = await fetch(
+        `/api/projects/invite?projectId=${encodeURIComponent(collaborator.project_id)}&collaboratorId=${encodeURIComponent(collaborator.id)}`,
+        { method: "DELETE" },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? "Could not remove member");
+      toast({ title: "Member removed" });
+      fetchMembers();
+    } catch (err) {
+      toast({
+        title: "Couldn't remove member",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    }
   };
 
   const filtered = members.filter((m) => {
@@ -173,6 +225,21 @@ export function PeoplePage({ currentUserId }: { currentUserId: string }) {
               type="email"
               className="w-full text-xs px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
             />
+            {ownedProjects.length > 0 ? (
+              <select
+                value={inviteProjectId}
+                onChange={(e) => setInviteProjectId(e.target.value)}
+                className="w-full text-xs px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                {ownedProjects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            ) : (
+              <p className="text-[10px] text-muted-foreground">
+                You need a project of your own before you can invite someone to it.
+              </p>
+            )}
             <div className="flex gap-1.5">
               {ROLES.map((r) => (
                 <button
@@ -190,7 +257,7 @@ export function PeoplePage({ currentUserId }: { currentUserId: string }) {
             </div>
             <button
               onClick={handleInvite}
-              disabled={sending}
+              disabled={sending || ownedProjects.length === 0}
               className="w-full py-2 bg-foreground text-background text-xs font-medium rounded-lg hover:opacity-90 transition disabled:opacity-50 flex items-center justify-center gap-1.5"
             >
               {sending ? <><Loader2 size={12} className="animate-spin" /> Sending…</> : <><Mail size={12} /> Send Invitation</>}
@@ -279,7 +346,7 @@ export function PeoplePage({ currentUserId }: { currentUserId: string }) {
                             <Pencil size={11} />
                           </button>
                           <button
-                            onClick={() => handleRemove(m.id)}
+                            onClick={() => handleRemove(m)}
                             className="p-1 hover:bg-red-500/10 rounded transition text-muted-foreground hover:text-red-400"
                             title="Remove member"
                           >

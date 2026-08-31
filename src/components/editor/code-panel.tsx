@@ -69,11 +69,20 @@ interface InlineEditState {
 const LANG_MAP: Record<string, string> = {
   tsx: "typescript", ts: "typescript",
   jsx: "javascript",  js: "javascript",
+  mjs: "javascript",  cjs: "javascript",
+  mts: "typescript",  cts: "typescript",
   css: "css",         scss: "scss",
   html: "html",       json: "json",
-  md: "markdown",     py: "python",
+  jsonc: "json",      json5: "json",
+  md: "markdown",     mdx: "markdown",
+  py: "python",       rb: "ruby",
   sql: "sql",         sh: "shell",
+  bash: "shell",      zsh: "shell",
   yaml: "yaml",       yml: "yaml",
+  toml: "toml",       xml: "xml",
+  rs: "rust",         go: "go",
+  php: "php",         graphql: "graphql",
+  env: "shell",       dockerfile: "dockerfile",
 };
 
 function monacoLang(path: string): string {
@@ -1406,7 +1415,7 @@ export function CodePanel({
                         }}
                         className={`w-8 h-4 rounded-full transition-colors relative ${editorSettings[key] ? "bg-violet-500" : "bg-[#45475a]"}`}
                       >
-                        <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${editorSettings[key] ? "left-4.5" : "left-0.5"}`} />
+                        <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${editorSettings[key] ? "left-[18px]" : "left-0.5"}`} />
                       </button>
                     </div>
                   ))}

@@ -3,9 +3,13 @@
  * Full Next BillingPage/TeamPage trees depend on many platform libs;
  * these render real loader data and call proxied `/api/*` endpoints.
  */
+import { useState } from "react";
 import { Link } from "@tanstack/react-router";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DashboardHeader } from "@/components/dashboard/dashboard-header";
+import { useToast } from "@/hooks/use-toast";
+import { formatCreditAmount } from "@/lib/dashboard/format-credit-amount";
 import type { Database,Profile } from "@/types/database";
 import type { User } from "@supabase/supabase-js";
 
@@ -85,21 +89,60 @@ export function BillingShellPage({
 }) {
   const credits = profile?.credits ?? 0;
   const plan = profile?.plan ?? "free";
+  const { toast } = useToast();
+  // A single flag covers all three buttons: they're mutually exclusive
+  // redirects (each sends the browser away on success), so one in-flight
+  // request at a time is exactly what should be allowed — this also blocks
+  // a double-click on the same button from firing two concurrent Stripe
+  // sessions before the first response comes back.
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
 
   async function openPortal() {
-    const res = await fetch("/api/billing/portal", { method: "POST" });
-    const data = await res.json();
-    if (data.url) window.location.href = data.url;
+    if (pendingAction) return;
+    setPendingAction("portal");
+    try {
+      const res = await fetch("/api/billing/portal", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.url) {
+        toast({
+          title: "Couldn't open billing portal",
+          description: data.error ?? "Try again in a moment.",
+          variant: "destructive",
+        });
+        return;
+      }
+      window.location.href = data.url;
+    } catch {
+      toast({ title: "Couldn't open billing portal", description: "Check your connection and try again.", variant: "destructive" });
+    } finally {
+      setPendingAction(null);
+    }
   }
 
   async function checkout(planKey: string) {
-    const res = await fetch("/api/billing/checkout", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plan: planKey, billing: "monthly" }),
-    });
-    const data = await res.json();
-    if (data.url) window.location.href = data.url;
+    if (pendingAction) return;
+    setPendingAction(planKey);
+    try {
+      const res = await fetch("/api/billing/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: planKey, billing: "monthly" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.url) {
+        toast({
+          title: "Couldn't start checkout",
+          description: data.error ?? "Try again in a moment.",
+          variant: "destructive",
+        });
+        return;
+      }
+      window.location.href = data.url;
+    } catch {
+      toast({ title: "Couldn't start checkout", description: "Check your connection and try again.", variant: "destructive" });
+    } finally {
+      setPendingAction(null);
+    }
   }
 
   return (
@@ -114,11 +157,16 @@ export function BillingShellPage({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => checkout("pro")}>Upgrade to Pro</Button>
-          <Button variant="outline" onClick={() => checkout("team")}>
+          <Button onClick={() => void checkout("pro")} disabled={!!pendingAction}>
+            {pendingAction === "pro" && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
+            Upgrade to Pro
+          </Button>
+          <Button variant="outline" onClick={() => void checkout("team")} disabled={!!pendingAction}>
+            {pendingAction === "team" && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
             Team plan
           </Button>
-          <Button variant="outline" onClick={openPortal}>
+          <Button variant="outline" onClick={() => void openPortal()} disabled={!!pendingAction}>
+            {pendingAction === "portal" && <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />}
             Stripe portal
           </Button>
         </div>
@@ -146,7 +194,9 @@ export function BillingShellPage({
                 className="flex justify-between border-b border-border/40 py-1.5"
               >
                 <span className="text-muted-foreground">{log.description ?? log.action}</span>
-                <span>{log.amount}</span>
+                <span className={log.amount > 0 ? "text-emerald-500" : log.amount < 0 ? "text-foreground" : "text-muted-foreground"}>
+                  {formatCreditAmount(log.amount)}
+                </span>
               </li>
             ))}
             {creditLogs.length === 0 && (

@@ -61,15 +61,26 @@ export function NotificationBell({ userId }: { userId: string }) {
     return () => { supabase.removeChannel(channel); };
   }, [userId, fetchNotifications]);
 
-  // Close on outside click
+  // Close on outside click or Escape — the editor's own notifications bell
+  // uses Radix DropdownMenu, which gets Escape for free; this hand-rolled
+  // panel didn't, so a keyboard user had no way to close it without a mouse.
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
     }
-    if (open) document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    if (open) {
+      document.addEventListener("mousedown", handleClick);
+      document.addEventListener("keydown", handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, [open]);
 
   // Mark all read when panel opens
@@ -87,13 +98,30 @@ export function NotificationBell({ userId }: { userId: string }) {
   }, [open, unreadCount]);
 
   async function deleteNotification(id: string) {
+    const removed = notifications.find((n) => n.id === id);
     setNotifications((prev) => prev.filter((n) => n.id !== id));
-    await fetch(`/api/notifications?id=${id}`, { method: "DELETE" });
+    try {
+      const res = await fetch(`/api/notifications?id=${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error();
+    } catch {
+      // Put it back — it optimistically vanished from the list, but it's
+      // still on the server, so leaving it removed here just makes it
+      // reappear (confusingly) on the next reload or mark-all-read.
+      if (removed) setNotifications((prev) => [...prev, removed].sort((a, b) => b.created_at.localeCompare(a.created_at)));
+    }
   }
 
   async function clearRead() {
+    const removed = notifications.filter((n) => n.is_read);
     setNotifications((prev) => prev.filter((n) => !n.is_read));
-    await fetch("/api/notifications", { method: "DELETE" });
+    try {
+      const res = await fetch("/api/notifications", { method: "DELETE" });
+      if (!res.ok) throw new Error();
+    } catch {
+      if (removed.length > 0) {
+        setNotifications((prev) => [...prev, ...removed].sort((a, b) => b.created_at.localeCompare(a.created_at)));
+      }
+    }
   }
 
   return (

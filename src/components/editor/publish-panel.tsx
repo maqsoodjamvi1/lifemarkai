@@ -152,18 +152,35 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
   };
 
   const handleSaveMeta = async () => {
-    // Persist metadata via projects API
+    // Persist metadata via projects API. Only description/favicon/OG image
+    // are included when the user actually typed/picked something this
+    // session — these fields aren't hydrated from `project` on mount, so
+    // unconditionally sending the (blank) initial state would silently wipe
+    // out whatever was saved previously.
     try {
-      await fetch(`/api/projects/${project.id}`, {
+      const res = await fetch(`/api/projects/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: siteTitle || project.name }),
+        body: JSON.stringify({
+          name: siteTitle || project.name,
+          ...(siteDesc.trim() ? { description: siteDesc.trim() } : {}),
+          ...(faviconUrl ? { favicon_url: faviconUrl } : {}),
+          ...(ogImageUrl ? { og_image_url: ogImageUrl } : {}),
+        }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error ?? "Save failed");
+      }
       setSavedMeta(true);
       setTimeout(() => setSavedMeta(false), 2000);
       toast({ title: "Settings saved" });
-    } catch {
-      toast({ title: "Save failed", variant: "destructive" });
+    } catch (err) {
+      toast({
+        title: "Save failed",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     }
   };
 

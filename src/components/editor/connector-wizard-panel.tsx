@@ -39,7 +39,11 @@ interface Connector {
   npm?: string[];        // packages to install
 }
 
-const CONNECTORS: Connector[] = [
+// Exported so connector-catalog-consistency.test.ts can cross-check id/name
+// drift against app-connectors-panel.tsx's separate CONNECTORS catalog —
+// see that test file for why two catalogs exist and what "consistent"
+// means here.
+export const CONNECTORS: Connector[] = [
   {
     id: "stripe",
     name: "Stripe",

@@ -2120,12 +2120,23 @@ export function AppConnectorsPanel({ projectId }: AppConnectorsPanelProps) {
   function handleDisconnect(id: string) {
     const c = CONNECTORS.find((x) => x.id === id);
     if (!c) return;
-    // Remove all keys for this connector
+    // Previously swallowed every failed DELETE via .catch(() => null) and
+    // removed the connector from `connected` regardless — so a failed key
+    // removal (session expired, server error) showed as "disconnected" in
+    // the UI while the stored credential was still live server-side.
     Promise.all(
       c.fields.map((f) =>
-        fetch(`/api/projects/${projectId}/env/${f.key}`, { method: "DELETE" }).catch(() => null)
+        fetch(`/api/projects/${projectId}/env/${f.key}`, { method: "DELETE" }).then((res) => res.ok).catch(() => false)
       )
-    ).then(() => {
+    ).then((results) => {
+      if (results.some((ok) => !ok)) {
+        toast({
+          title: "Couldn't fully disconnect",
+          description: `${c.name} may still be connected — some credentials could not be removed. Try again.`,
+          variant: "destructive",
+        });
+        return;
+      }
       setConnected((prev) => {
         const next = new Set(prev);
         next.delete(id);
