@@ -13,6 +13,11 @@ interface LovableFilesViewPaneProps {
   onFilesChange: (files: ProjectFile[]) => void;
   onSave: (content: string) => void | Promise<void>;
   onChange: (content: string) => void;
+  /** See the doc comment on the same-named CodePanel prop: syncs a
+   *  background-saved tab's content into parent state without stealing
+   *  focus to it. Optional only because some other CodePanel embeds don't
+   *  wire it yet — always pass it through when the parent has it. */
+  onFileContentSync?: (file: ProjectFile) => void;
   collabUser?: { id: string; name: string; avatar?: string };
   onCollaboratorsChange?: (users: YjsCollaborator[]) => void;
 }
@@ -28,6 +33,7 @@ export function LovableFilesViewPane({
   onFilesChange,
   onSave,
   onChange,
+  onFileContentSync,
   collabUser,
   onCollaboratorsChange,
 }: LovableFilesViewPaneProps) {
@@ -61,6 +67,7 @@ export function LovableFilesViewPane({
             onSave={onSave}
             onChange={onChange}
             onFileChange={onFileSelect}
+            onFileContentSync={onFileContentSync}
             collabUser={collabUser}
             onCollaboratorsChange={onCollaboratorsChange}
           />

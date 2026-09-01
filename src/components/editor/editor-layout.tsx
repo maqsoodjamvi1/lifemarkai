@@ -1557,6 +1557,7 @@ export function EditorLayout({
                   onFilesChange={handleFilesUpdate}
                   onSave={handleCodeSave}
                   onChange={handleCodeChange}
+                  onFileContentSync={handleFileContentSync}
                   collabUser={collabUser}
                   onCollaboratorsChange={setYjsCollaborators}
                 />
@@ -1894,6 +1895,7 @@ export function EditorLayout({
                   onFilesChange={handleFilesUpdate}
                   onSave={handleCodeSave}
                   onChange={handleCodeChange}
+                  onFileContentSync={handleFileContentSync}
                   collabUser={collabUser}
                   onCollaboratorsChange={setYjsCollaborators}
                 />
