@@ -35,6 +35,7 @@ import { findDependencyIssues } from "../verify/dependency-gate.ts";
 import { fingerprintError } from "./failure-fingerprint.ts";
 import { recordRepairOutcome } from "./record-outcome.ts";
 import type { ProjectFile } from "../../types/database.ts";
+import { buildRepairContext } from "./repair-context.ts";
 import { loadOptionalPlaywright } from "../optional-playwright.ts";
 import { isLadderExhausted,resolveRepairTier,shouldPromoteRepairTier } from "./repair-ladder.ts";
 import { buildPriorAttemptsBlock,lookupPriorAttempts,suggestedStartingTier } from "./repair-memory.ts";
@@ -1139,9 +1140,7 @@ export async function runSelfVerification(opts: {
       const namedByCompiler = filesNamedByCompiler(files, errors);
       const usePreciseContext = roundSignal === "typecheck" && namedByCompiler.length > 0;
       const contextFiles = usePreciseContext ? namedByCompiler : relevantFiles(files, errors);
-      const context = contextFiles
-        .map((f) => `=== ${f.path} ===\n${(f.content ?? "").slice(0, 6_000)}`)
-        .join("\n\n");
+      const context = buildRepairContext(contextFiles, errors);
       const diagnosis = buildPreviewDiagnosis(
         files,
         errors.map((message) => ({
