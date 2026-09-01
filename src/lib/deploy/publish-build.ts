@@ -147,24 +147,39 @@ export async function publishBuild(
   }
   output = ensureBuildEntryDocument(output, files, projectId, onLog);
 
-  const stored = await storeBuild(projectId, buildId, output);
+  // Pass this build's own start time as the compare-and-swap key so a
+  // slower/older concurrent publish for the same project can never flip
+  // live_build_id back to stale content after a newer one already won —
+  // see storeBuild's header comment.
+  const stored = await storeBuild(projectId, buildId, output, {
+    startedAt: new Date(publishStartedAt).toISOString(),
+  });
   if (!stored.ok) {
     onLog?.(`[publish] could not store build: ${stored.error}`);
     recordEvent("deployment_failed", { reason: "store_failed", durationMs: Date.now() - publishStartedAt });
     return { ok: false, buildId: null, fileCount: 0, detail: stored.error, compiled };
   }
 
-  onLog?.(`[publish] stored ${stored.fileCount} file(s) as build ${buildId}`);
+  if (!stored.wentLive) {
+    onLog?.(
+      `[publish] stored ${stored.fileCount} file(s) as build ${buildId}, but a newer concurrent publish already went live first — this build stays available for rollback but was not made live`,
+    );
+  } else {
+    onLog?.(`[publish] stored ${stored.fileCount} file(s) as build ${buildId}`);
+  }
   recordEvent("deployment_completed", {
     fileCount: stored.fileCount,
     compiled,
+    wentLive: stored.wentLive,
     durationMs: Date.now() - publishStartedAt,
   });
   return {
     ok: true,
     buildId,
     fileCount: stored.fileCount,
-    detail: compiled ? "compiled and published" : "published static files",
+    detail: compiled
+      ? (stored.wentLive ? "compiled and published" : "compiled and stored (a newer publish is live)")
+      : (stored.wentLive ? "published static files" : "stored static files (a newer publish is live)"),
     compiled,
   };
 }

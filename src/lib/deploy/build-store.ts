@@ -43,12 +43,25 @@ import { isTextAsset,contentTypeFor,normaliseBuildPath } from "./asset-kind.ts";
  * visitor never resolves a build id whose files are still being written. If the
  * insert fails the previous build stays live and the publish is simply
  * unsuccessful — never half-served.
+ *
+ * The final flip is a compare-and-swap, not a blind UPDATE: two publishes
+ * for the same project (a double-click, or a second publish fired while an
+ * earlier one is still building) can otherwise race, and whichever one's
+ * flip lands LAST wins regardless of which build is actually newer — a
+ * slower, older build can silently regress the live site back to stale
+ * content even though a newer deployment already completed. `startedAt`
+ * (defaults to "now" if the caller doesn't have a better value — see
+ * publish-build.ts's `publishStartedAt`) becomes the new `live_build_at`,
+ * and the UPDATE only applies `WHERE live_build_at IS NULL OR
+ * live_build_at < startedAt` — an older build's flip then matches zero
+ * rows instead of overwriting a newer build's already-live pointer.
  */
 export async function storeBuild(
   projectId: string,
   buildId: string,
   files: Array<{ path: string; content: string; encoding?: "utf8" | "base64" }>,
-): Promise<{ ok: true; fileCount: number } | { ok: false; error: string }> {
+  opts: { startedAt?: string } = {},
+): Promise<{ ok: true; fileCount: number; wentLive: boolean } | { ok: false; error: string }> {
   if (!files.length) return { ok: false, error: "build produced no files" };
 
   const admin = createAdminClient();
@@ -86,11 +99,24 @@ export async function storeBuild(
     if (error) return { ok: false, error: error.message };
   }
 
-  const { error: flipError } = await admin
+  const liveBuildAt = opts.startedAt ?? new Date().toISOString();
+  const { error: flipError, data: flippedRows } = await admin
     .from("projects")
-    .update({ live_build_id: buildId, live_build_at: new Date().toISOString() })
-    .eq("id", projectId);
+    .update({ live_build_id: buildId, live_build_at: liveBuildAt })
+    .eq("id", projectId)
+    .or(`live_build_at.is.null,live_build_at.lt.${liveBuildAt}`)
+    .select("id");
   if (flipError) return { ok: false, error: flipError.message };
+  const wentLive = (flippedRows?.length ?? 0) > 0;
+  if (!wentLive) {
+    // Zero rows matched: either the project doesn't exist, or (far more
+    // likely — projectId came from a row we just inserted build files for)
+    // a newer build's flip already won the race. Files are stored either
+    // way (kept for history/rollback); only distinguish "project missing"
+    // as a hard error.
+    const { data: existing } = await admin.from("projects").select("id").eq("id", projectId).maybeSingle();
+    if (!existing) return { ok: false, error: "project not found" };
+  }
 
   // Old builds are kept for rollback, but not forever — keep the 3 most recent.
   try {
@@ -115,7 +141,7 @@ export async function storeBuild(
     // Pruning is housekeeping. A failure here must not fail a successful publish.
   }
 
-  return { ok: true, fileCount: rows.length };
+  return { ok: true, fileCount: rows.length, wentLive };
 }
 
 /**
