@@ -10,6 +10,7 @@ getBranchStatus,
 createOrGetMR,
 } from "@/lib/gitlab/client";
 import { logger } from "@/lib/logger";
+import { getProjectAccess,canWriteProjectFiles } from "@/lib/project/access";
 
 /** Native /api/gitlab/sync — actions: create | push | pull | mr | status. */
 const LANG_MAP: Record<string, string> = {
@@ -44,6 +45,17 @@ export const Route = createFileRoute("/api/gitlab/sync")({
         const { data: project } = await supabase
           .from("projects").select("*, project_files(*)").eq("id", projectId).single();
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
+
+        // Same fix as githubSync (src/lib/server-fns/github.ts): RLS alone
+        // lets any authenticated user SELECT a public project, which
+        // without this check let action=create push a public project's
+        // entire source to a new repo under the caller's own GitLab
+        // account. Every mutating action here (create/push/mr) needs
+        // write-level access, not just read.
+        const access = await getProjectAccess(supabase, projectId, user.id);
+        if (!canWriteProjectFiles(access)) {
+          return Response.json({ error: "Project not found" }, { status: 404 });
+        }
 
         // ── Create ──
         if (action === "create") {

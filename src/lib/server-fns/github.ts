@@ -17,6 +17,8 @@ createWebhook,
 import { logger } from "../logger.ts";
 import { randomBytes } from "node:crypto";
 import { verifyGatewayOAuthState } from "../oauth/gateway-state.ts";
+import { deleteWebhook } from "@/lib/github/client";
+import { getProjectAccess,canWriteProjectFiles } from "@/lib/project/access";
 
 // ── OAuth callback: exchange code → token, save to profile ───────────────────
 // `data.state` is the signed token minted by /api/github/start (see that
@@ -165,7 +167,7 @@ async function ensureWebhookRegistered(
   const secret = randomBytes(24).toString("hex");
   try {
     const hook = await createWebhook(token, repo, `${appUrl}/api/github/webhook`, secret);
-    await supabase
+    const { error: persistError } = await supabase
       .from("projects")
       // github_webhook_secret/github_webhook_id aren't in the committed
       // generated Supabase types yet (no live type-regen capability in this
@@ -173,6 +175,18 @@ async function ensureWebhookRegistered(
       // for columns that exist live but aren't reflected there.
       .update({ github_webhook_secret: secret, github_webhook_id: hook.id } as never)
       .eq("id", projectId);
+    if (persistError) {
+      // The webhook now exists live on GitHub, but the app has no record
+      // of it (the guard at the top of this function only checks
+      // github_webhook_id, which was never persisted) — left as-is, the
+      // next sync would create ANOTHER webhook on every call, forever.
+      // Clean up the one we just created instead; best-effort, never
+      // throws (deleteWebhook's own contract).
+      logger.info("github.webhook.persist_failed", {
+        projectId, repo, message: persistError.message,
+      });
+      deleteWebhook(token, repo, hook.id).catch(() => undefined);
+    }
   } catch (error) {
     logger.info("github.webhook.register_failed", {
       projectId, repo,
@@ -201,6 +215,18 @@ export async function githubSync(data: any) {
       .eq("id", data.projectId)
       .single();
     if (!project) return { status: "not_found" as const };
+
+    // RLS alone lets any authenticated user SELECT a public project (that's
+    // by design — public projects are meant to be broadly readable/copyable
+    // via the remix feature). Without an explicit write-level check here,
+    // that same SELECT let action=create push a public project's ENTIRE
+    // file set to a brand-new repo under the CALLER's own GitHub account —
+    // a silent, git-based full-source copy distinct from (and more durable
+    // than) the intended remix flow, leaving no trace in the app's own UI.
+    // Every other mutating project route in this codebase gates on
+    // canWriteProjectFiles; this one relied on RLS alone.
+    const access = await getProjectAccess(supabase, data.projectId, user.id);
+    if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
 
     const token = profile.github_access_token;
     const { projectId, action } = data;

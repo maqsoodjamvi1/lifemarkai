@@ -17,6 +17,8 @@ import { lovableViteScaffold } from "../templates/lovable-vite-scaffold.ts";
 import { controlledTemplateMetadata,resolveControlledTemplateForPrompt,stampControlledTemplateFiles } from "../templates/controlled-registry.ts";
 import { getTemplateById,type TemplateFile } from "../templates/built-in.ts";
 import type { Database,Json } from "../../types/database.ts";
+import { deleteWebhook } from "@/lib/github/client";
+import { logger } from "../logger.ts";
 
 const PROJECT_SAFE_SELECT =
   "id, user_id, name, description, framework, runtime, status, is_public, preview_url, deployed_url, slug, template_id, created_at, updated_at, remix_enabled, remix_count, star_count, app_slug, visibility" as const;
@@ -516,6 +518,17 @@ export async function deleteProject(data: any) {
     const access = await getProjectAccess(supabase, data.id, user.id);
     if (access !== "owner") return { status: "not_found" as const };
 
+    // Fetch what's needed to tear down a registered GitHub webhook BEFORE
+    // deleting the row — deleteWebhook was defined (src/lib/github/client.ts)
+    // but never called from anywhere in this codebase, so every project
+    // that ever synced to GitHub left its webhook registered on that repo
+    // forever, even after the project itself was deleted here.
+    const { data: projectForCleanup } = await supabase
+      .from("projects")
+      .select("github_repo, github_webhook_id" as never)
+      .eq("id", data.id)
+      .maybeSingle();
+
     const { error } = await supabase
       .from("projects")
       .delete()
@@ -523,5 +536,26 @@ export async function deleteProject(data: any) {
       .eq("user_id", user.id);
 
     if (error) return { status: "error" as const, message: error.message };
+
+    const cleanup = projectForCleanup as { github_repo?: string | null; github_webhook_id?: number | null } | null;
+    if (cleanup?.github_repo && cleanup?.github_webhook_id) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("github_access_token")
+        .eq("id", user.id)
+        .single();
+      const token = profile?.github_access_token;
+      if (token) {
+        // Best-effort, never blocks the delete response — deleteWebhook
+        // itself never throws (see its own doc comment).
+        deleteWebhook(token, cleanup.github_repo, cleanup.github_webhook_id).catch((err) => {
+          logger.info("github.webhook.cleanup_failed", {
+            projectId: data.id,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+    }
+
     return { status: "ok" as const, success: true };
 }
