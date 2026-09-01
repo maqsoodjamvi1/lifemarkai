@@ -146,10 +146,21 @@ export interface SandboxProvider {
    *  MAY return the normalized paths that actually changed on disk (Docker
    *  provider does — it diffs against a content-hash manifest). Callers use
    *  this to gate side effects like npm install / vite restart on REAL changes;
-   *  providers returning void get the caller's conservative fallback. */
+   *  providers returning void get the caller's conservative fallback.
+   *
+   *  `opts.partial`: pass `true` when `files` is NOT the project's complete
+   *  file set — e.g. a debounced push of just the paths that changed. The
+   *  Docker provider's manifest tracks every file it has ever written so a
+   *  later unrelated sync can tell "unchanged" from "changed" without
+   *  re-uploading everything; a caller that always sends a partial batch
+   *  MUST set this, or its writes silently shrink that manifest down to just
+   *  its own batch and erase the record for every other file, which then
+   *  looks "changed" (and gets re-uploaded, restarting vite) on the very
+   *  next unrelated sync. Providers without a manifest concept ignore it. */
   writeFiles(
     sandboxId: string,
     files: SandboxFile[],
+    opts?: { partial?: boolean },
   ): Promise<void | { written: string[] }>;
   /**
    * Type-check the project in place, using its OWN installed dependencies.

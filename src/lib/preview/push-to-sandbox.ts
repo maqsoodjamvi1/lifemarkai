@@ -193,5 +193,16 @@ async function flush(
 
   // The Docker provider content-hashes against its in-container manifest, so
   // re-pushing an unchanged file is a no-op and this stays cheap.
-  await provider.writeFiles(sandboxId, withData);
+  //
+  // `partial: true` is load-bearing, not optional. `withData` here is only
+  // this flush's own debounced batch — a handful of recently-saved files,
+  // never the whole project — and the Docker provider's manifest write
+  // defaults to REPLACING its stored manifest with exactly what it was
+  // handed. Without this flag, every agent save would silently erase the
+  // manifest's record for every file NOT in that save, and the next sync of
+  // any kind (another flush, or the editor's own full sync on next open)
+  // would see the whole rest of the project as "changed" and re-upload it,
+  // restarting vite — the exact stale-preview flakiness this sync path
+  // exists to eliminate, reintroduced by itself.
+  await provider.writeFiles(sandboxId, withData, { partial: true });
 }

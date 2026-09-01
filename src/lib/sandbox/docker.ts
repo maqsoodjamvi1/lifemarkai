@@ -1208,7 +1208,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       progress(createSandboxProgress("writing", "Syncing changed files"));
       // Incremental by content hash — an unchanged project writes nothing, so
       // vite is not disturbed at all and HMR keeps whatever state it had.
-      const { written } = await this.writeFiles(id, files, syncManifest);
+      const { written } = await this.writeFiles(id, files, { prevManifest: syncManifest });
 
       let logs = "";
       // Only reinstall when the dependency manifest itself moved. A source-only
@@ -1534,7 +1534,7 @@ export class DockerSandboxProvider implements SandboxProvider {
   async writeFiles(
     sandboxId: string,
     files: SandboxFile[],
-    prevManifest?: Record<string, string> | null,
+    opts?: { prevManifest?: Record<string, string> | null; partial?: boolean },
   ): Promise<{ written: string[] }> {
     // INCREMENTAL SYNC — upload only files whose CONTENT actually changed.
     //
@@ -1559,12 +1559,12 @@ export class DockerSandboxProvider implements SandboxProvider {
       hashes[norm(f.path)] = createHash("sha1").update(f.content ?? "").digest("hex");
     }
 
-    // `prevManifest` lets a caller that already read the manifest (e.g.
+    // `opts.prevManifest` lets a caller that already read the manifest (e.g.
     // `reuseProjectContainer`, which needs it for pruning too) hand the same
     // result in here instead of this doing its own redundant `cat` exec.
     // Any parse failure of a self-read falls back to a full upload — worst
     // case is today's behavior.
-    const prev = prevManifest !== undefined ? prevManifest : await this.readSyncManifest(sandboxId);
+    const prev = opts?.prevManifest !== undefined ? opts.prevManifest : await this.readSyncManifest(sandboxId);
 
     let toWrite = files;
     if (prev) {
@@ -1574,9 +1574,30 @@ export class DockerSandboxProvider implements SandboxProvider {
       if (toWrite.length === 0) return { written: [] };
     }
 
+    // `opts.partial` picks REPLACE vs MERGE for the manifest this call writes
+    // back. The two existing complete-set callers (this class's own warm-boot
+    // resync, and the editor's baseline sync in sandbox-preview/sync.ts) send
+    // every file the project has, so replacing the manifest with exactly
+    // `hashes` is correct — anything in `prev` and not in `hashes` really is a
+    // deleted/renamed file, and dropping it here is how the manifest stays
+    // accurate for them.
+    //
+    // A PARTIAL caller (push-to-sandbox.ts's debounced flush of just the
+    // files that changed) must never do that: `hashes` only covers its own
+    // small batch, so replacing wholesale would erase the manifest's record
+    // for every other file in the project on every single agent save. The
+    // very next sync — another partial flush, or the editor's own full sync
+    // on next open — would then see those files as "changed" (no manifest
+    // entry) and re-upload the entire project, restarting vite: exactly the
+    // "editor open knocked the dev server down" failure this manifest exists
+    // to prevent, reintroduced by the one caller that was never supposed to
+    // shrink it. Merging instead only ever adds/updates entries for files a
+    // partial call actually touched.
+    const manifest = opts?.partial ? { ...(prev ?? {}), ...hashes } : hashes;
+
     const payload: SandboxFile[] = [
       ...toWrite,
-      { path: SYNC_MANIFEST, content: JSON.stringify(hashes) },
+      { path: SYNC_MANIFEST, content: JSON.stringify(manifest) },
     ];
     const res = await docker(
       "PUT",
