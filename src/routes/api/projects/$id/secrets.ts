@@ -1,11 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getProjectAccess, canWriteProjectFiles } from "@/lib/project/access";
-
-function obfuscate(value: string): string {
-  const key = process.env.SECRETS_ENCRYPTION_KEY ?? "lifemarkai-default-key-32chars!!";
-  return Buffer.from(value.split("").map((c, i) => c.charCodeAt(0) ^ key.charCodeAt(i % key.length))).toString("base64");
-}
+import { encryptSecret } from "@/lib/security/secret-crypto";
 
 /**
  * Native /api/projects/:id/secrets — GET (masked + rotation), POST upsert.
@@ -44,8 +40,17 @@ export const Route = createFileRoute("/api/projects/$id/secrets")({
         const body = (await request.json().catch(() => ({}))) as { key: string; value: string; description?: string; rotate_after_days?: number };
         if (!body.key || !body.value) return Response.json({ error: "key and value required" }, { status: 400 });
         const sanitizedKey = body.key.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+        let valueEnc: string;
+        try {
+          valueEnc = encryptSecret(body.value);
+        } catch (err) {
+          return Response.json(
+            { error: err instanceof Error ? err.message : "Could not encrypt secret" },
+            { status: 503 },
+          );
+        }
         const { data, error } = await supabase.from("project_secrets").upsert({
-          project_id: params.id, key: sanitizedKey, value_enc: obfuscate(body.value),
+          project_id: params.id, key: sanitizedKey, value_enc: valueEnc,
           description: body.description ?? null, rotate_after_days: body.rotate_after_days ?? 90, updated_at: new Date().toISOString(),
         }, { onConflict: "project_id,key" }).select("id, key, description, rotate_after_days, created_at, updated_at").single();
         if (error) return Response.json({ error: error.message }, { status: 500 });
