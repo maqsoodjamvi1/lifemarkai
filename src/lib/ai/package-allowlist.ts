@@ -244,3 +244,64 @@ export function renderPackageAllowlistCompact(): string {
     "  and never invent a package name. Solve the problem with what is listed.",
   ].join("\n");
 }
+
+/**
+ * Strip any dependency/devDependency the allowlist does not recognize from a
+ * package.json's content, before it is ever committed or reaches the
+ * sandbox's `npm install`.
+ *
+ * WHY THIS EXISTS SEPARATELY FROM syncPackageJsonDeps/findDependencyIssues.
+ * Both of those only ever look at packages that are IMPORTED but MISSING
+ * from package.json — the "add a dependency for this new import" case. A
+ * name already present in package.json (because a generation, an Agent Mode
+ * write_file call, or content the model merely read and echoed back wrote it
+ * there directly) is never re-checked by either: `syncPackageJsonDeps`
+ * filters candidates to `!existingDeps.has(name)`, and
+ * `findDependencyIssues` skips any import where `deps.has(name)`. So a
+ * package.json committed with an already-declared malicious/typosquatted
+ * entry — or a legitimate package repointed via an `npm:` alias to a
+ * different one — sailed straight through to the sandbox's unconditional
+ * `npm install`, including whatever install/postinstall scripts that
+ * package ships.
+ *
+ * This is the backstop: called at commit time on every package.json write,
+ * regardless of which pipeline produced it, so nothing reaches the
+ * installer that resolveAllowedPackage() would not itself have approved.
+ * Malformed JSON is left untouched — that is a different, already-handled
+ * failure mode (guardFileWrite / JSON.parse elsewhere), not this function's
+ * job to diagnose.
+ */
+export function sanitizePackageJsonDependencies(packageJsonContent: string): string {
+  let pkg: {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    [key: string]: unknown;
+  };
+  try {
+    pkg = JSON.parse(packageJsonContent);
+  } catch {
+    return packageJsonContent;
+  }
+  if (typeof pkg !== "object" || pkg === null) return packageJsonContent;
+
+  let changed = false;
+  const sanitizeSection = (section: Record<string, string> | undefined): Record<string, string> | undefined => {
+    if (!section || typeof section !== "object") return section;
+    const cleaned: Record<string, string> = {};
+    for (const [name, version] of Object.entries(section)) {
+      if (NEVER_INSTALL.has(name) || resolveAllowedPackage(name).allowed) {
+        cleaned[name] = version;
+      } else {
+        changed = true;
+      }
+    }
+    return cleaned;
+  };
+
+  const dependencies = sanitizeSection(pkg.dependencies);
+  const devDependencies = sanitizeSection(pkg.devDependencies);
+  if (!changed) return packageJsonContent;
+
+  const updated = { ...pkg, ...(pkg.dependencies ? { dependencies } : {}), ...(pkg.devDependencies ? { devDependencies } : {}) };
+  return JSON.stringify(updated, null, 2);
+}

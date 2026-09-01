@@ -2,6 +2,7 @@ import type { createClientFromRequest } from "../../supabase/request-client.ts";
 import { sanitizeGeneratedFile } from "../html-sanity.ts";
 import type { ParsedFile } from "../code-parser.ts";
 import { enforceGeneratedFileContract } from "../generated-file-contract.ts";
+import { sanitizePackageJsonDependencies } from "../package-allowlist.ts";
 
 export async function commitGeneratedFiles(
   supabase: ReturnType<typeof createClientFromRequest>,
@@ -11,7 +12,16 @@ export async function commitGeneratedFiles(
   const normalizedFiles = enforceGeneratedFileContract(files);
   const sanitizedFiles = normalizedFiles.map((file) => ({
     ...file,
-    content: sanitizeGeneratedFile(file.path, file.content),
+    // Belt-and-suspenders alongside syncPackageJsonDeps/findDependencyIssues
+    // (which only ever ADD missing-but-allowed packages or flag disallowed
+    // NEW imports): this strips any dependency the allowlist doesn't
+    // recognize that was already present in the committed package.json
+    // content, so it never reaches the sandbox's unconditional `npm
+    // install`. See sanitizePackageJsonDependencies's doc comment.
+    content:
+      file.path === "package.json"
+        ? sanitizePackageJsonDependencies(sanitizeGeneratedFile(file.path, file.content))
+        : sanitizeGeneratedFile(file.path, file.content),
   }));
   const { data: previousRows, error: previousError } = await supabase
     .from("project_files")
