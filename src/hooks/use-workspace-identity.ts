@@ -63,11 +63,18 @@ export function useWorkspaceIdentity() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? "Save failed");
+    // `data.sso ?? s.sso` can't tell "the server omitted this field" (keep
+    // the previous value) apart from "the server returned it as null"
+    // (e.g. after a delete — redactSsoForClient(null) genuinely returns
+    // null) — both fall through `??` to the fallback, so a clearing PATCH
+    // response gets silently ignored and this hook's local state stays
+    // stale. `in` checks whether the key was actually present in the
+    // response instead of inferring it from the value.
     setState((s) => ({
       ...s,
-      sso: data.sso ?? s.sso,
-      scim: data.scim ?? s.scim,
-      enforceSettings: data.enforceSettings ?? s.enforceSettings,
+      sso: "sso" in data ? data.sso : s.sso,
+      scim: "scim" in data ? data.scim : s.scim,
+      enforceSettings: "enforceSettings" in data ? data.enforceSettings : s.enforceSettings,
     }));
     return data as { scimApiKey?: string };
   }, []);

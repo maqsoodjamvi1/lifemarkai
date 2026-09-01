@@ -46,12 +46,19 @@ export function PwaInstallPrompt() {
   async function install() {
     if (!event) return;
     setInstalling(true);
-    await event.prompt();
-    const { outcome } = await event.userChoice;
-    if (outcome === "accepted") {
-      setVisible(false);
+    try {
+      await event.prompt();
+      const { outcome } = await event.userChoice;
+      if (outcome === "accepted") {
+        setVisible(false);
+      }
+    } catch {
+      // event.prompt()/userChoice can reject (e.g. the prompt was already
+      // consumed) — without a finally below, that left the button stuck
+      // showing "Installing…" forever with no way to retry.
+    } finally {
+      setInstalling(false);
     }
-    setInstalling(false);
   }
 
   function dismiss() {

@@ -10,7 +10,7 @@
  * this is "my AI usage" — aggregation happens client-side over the window.
  */
 
-import { useCallback,useEffect,useMemo,useState,type ReactNode } from "react";
+import { useCallback,useEffect,useMemo,useState,useRef,type ReactNode } from "react";
 import {
 Activity,Gauge,CheckCircle2,AlertTriangle,Cpu,Loader2,RefreshCw,
 } from "lucide-react";
@@ -80,8 +80,13 @@ export function AiEvalsPage({ userId: _userId }: { userId: string }) {
   const [requestFilter, setRequestFilter] = useState<"all" | "failed">("all");
   const [requestModel, setRequestModel] = useState("");
   const [requestLimit, setRequestLimit] = useState(50);
+  // Switching the time range (or hitting the manual Refresh button) before
+  // an earlier fetch resolves can otherwise let the stale range's response
+  // land last and overwrite the correct, newer one.
+  const requestRef = useRef(0);
 
   const fetchRows = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     try {
       const supabase = createClient();
@@ -94,11 +99,13 @@ export function AiEvalsPage({ userId: _userId }: { userId: string }) {
       if (sinceIso) q = q.gte("created_at", sinceIso);
       q = q.order("created_at", { ascending: false }).limit(2000);
       const { data } = (await q) as { data: EvalRow[] | null };
+      if (requestId !== requestRef.current) return; // superseded by a newer request
       setRows(data ?? []);
     } catch {
+      if (requestId !== requestRef.current) return;
       setRows([]);
     } finally {
-      setLoading(false);
+      if (requestId === requestRef.current) setLoading(false);
     }
   }, [range]);
 

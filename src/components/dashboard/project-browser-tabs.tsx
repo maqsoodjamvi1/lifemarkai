@@ -1,4 +1,4 @@
-import { useMemo,useState } from "react";
+import { useMemo,useState,useEffect } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowUpRight } from "lucide-react";
 import { ProjectsGrid } from "@/components/dashboard/projects-grid";
@@ -41,6 +41,15 @@ const TABS: { id: TabId; label: string }[] = [
 
 export function ProjectBrowserTabs({ projects, sharedProjects = [], templates, initialTab = "mine" }: ProjectBrowserTabsProps) {
   const [tab, setTab] = useState<TabId>(initialTab);
+
+  // `useState(initialTab)` only reads the prop on first mount. A sidebar
+  // link to e.g. /dashboard?tab=starred re-renders this component with a
+  // new `initialTab` but doesn't remount it (same route), so without this
+  // effect the tab strip silently ignores the deep link and stays on
+  // whatever tab was already showing.
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
   const filtered = useMemo(() => {
     if (tab === "starred") return projects.filter((p) => p.is_starred);

@@ -31,6 +31,13 @@ export function GlobalSearch() {
   const routerNavigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Same request-sequencing guard used elsewhere in this app (e.g.
+  // cross-reference-panel.tsx, database-manager-panel.tsx) — each
+  // keystroke's debounced fetch is independent, so a slower earlier
+  // request (e.g. for "auth") can otherwise resolve AFTER a faster later
+  // one (e.g. for "authentication") and overwrite its correct results
+  // with stale ones.
+  const searchRequestRef = useRef(0);
 
   // Open on ⌘F or /
   useEffect(() => {
@@ -55,23 +62,30 @@ export function GlobalSearch() {
       setQuery("");
       setResults([]);
       setActiveIdx(0);
+      // Invalidate any request still in flight from before the modal was
+      // reopened — without this, a slow fetch from a previous open could
+      // land after this fresh, empty session and overwrite it.
+      searchRequestRef.current += 1;
     }
   }, [open]);
 
   // Debounced search
   const search = useCallback(async (q: string) => {
     if (q.trim().length < 2) { setResults([]); return; }
+    const requestId = ++searchRequestRef.current;
     setLoading(true);
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(q.trim())}`);
       if (!res.ok) throw new Error("Search failed");
       const data = await res.json();
+      if (requestId !== searchRequestRef.current) return; // superseded by a newer query
       setResults(data.results ?? []);
       setActiveIdx(0);
     } catch {
+      if (requestId !== searchRequestRef.current) return;
       setResults([]);
     } finally {
-      setLoading(false);
+      if (requestId === searchRequestRef.current) setLoading(false);
     }
   }, []);
 

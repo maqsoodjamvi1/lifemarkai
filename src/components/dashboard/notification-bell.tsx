@@ -20,6 +20,13 @@ export function NotificationBell({ userId }: { userId: string }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  // Kept in sync every render so the mark-all-read effect below can read
+  // the current notifications list without needing it in its own
+  // dependency array — putting it there would re-fire the effect (and
+  // re-send the PATCH) every time a realtime INSERT changes the array
+  // while the panel is open, not just when the panel opens.
+  const notificationsRef = useRef<Notification[]>(notifications);
+  notificationsRef.current = notifications;
 
   const fetchNotifications = useCallback(async () => {
     setLoading(true);
@@ -86,13 +93,25 @@ export function NotificationBell({ userId }: { userId: string }) {
   // Mark all read when panel opens
   useEffect(() => {
     if (open && unreadCount > 0) {
+      // Snapshot which notifications exist right now — a realtime INSERT
+      // (the channel subscription above) can otherwise deliver a brand-new
+      // notification while this PATCH is in flight, and blindly marking
+      // "every currently-held notification" as read in the .then() below
+      // would mark that one read too, even though the server never touched
+      // it (mark_all_read only covers what existed server-side when the
+      // request was sent).
+      const idsAtRequestTime = new Set(notificationsRef.current.map((n) => n.id));
       fetch("/api/notifications", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "mark_all_read" }),
-      }).then(() => {
-        setUnreadCount(0);
-        setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+      }).then((res) => {
+        if (!res.ok) return;
+        setNotifications((prev) => {
+          const next = prev.map((n) => (idsAtRequestTime.has(n.id) ? { ...n, is_read: true } : n));
+          setUnreadCount(next.filter((n) => !n.is_read).length);
+          return next;
+        });
       });
     }
   }, [open, unreadCount]);

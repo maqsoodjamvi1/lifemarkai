@@ -1,6 +1,6 @@
 
 import { auditCategory } from "@/lib/audit/category";
-import { useState,useEffect,useCallback } from "react";
+import { useState,useEffect,useCallback,useRef } from "react";
 import {
 ClipboardList,ChevronDown,ChevronUp,Clock,Globe,
 Monitor,FileJson,Copy,Check,Filter,Calendar,HelpCircle,X,Loader2,Info
@@ -84,8 +84,13 @@ export function AuditLogsPage({ userId }: { userId: string }) {
   const [copiedJson, setCopiedJson] = useState(false);
   const [showFAQ, setShowFAQ]       = useState(false);
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
+  // Rapid filter switching (e.g. "Last 7 days" -> "Last 30 days" before the
+  // first request returns) can otherwise let the stale filter's response
+  // land last and display the wrong filtered rows.
+  const requestRef = useRef(0);
 
   const fetchLogs = useCallback(async () => {
+    const requestId = ++requestRef.current;
     setLoading(true);
     const supabase = createClient();
     let q = (supabase as ReturnType<typeof createClient>)
@@ -110,6 +115,7 @@ export function AuditLogsPage({ userId }: { userId: string }) {
     }
 
     const { data } = await q;
+    if (requestId !== requestRef.current) return; // superseded by a newer filter change
     setLogs((data as AuditLog[] | null) ?? []);
     setLoading(false);
   }, [userId, actionFilter, timeRange]);
