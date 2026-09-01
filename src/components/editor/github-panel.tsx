@@ -126,16 +126,14 @@ export function GitHubPanel({
   }, [provider]);
 
   // ── Connect OAuth ────────────────────────────────────────────────────────
+  // Goes through /api/{github,gitlab}/start rather than building the
+  // provider's authorize URL (and its `state`) directly in the client: the
+  // server mints a signed, user-bound state there so the callback can
+  // reject a code/state pair that didn't originate from this session (see
+  // /api/github/start's header comment).
   function connectProvider() {
-    if (isGitHub) {
-      const clientId = process.env.NEXT_PUBLIC_GITHUB_CLIENT_ID;
-      const redirectUri = `${window.location.origin}/api/github/connect`;
-      window.location.href = `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=repo&state=${project.id}`;
-    } else {
-      const clientId = process.env.NEXT_PUBLIC_GITLAB_CLIENT_ID;
-      const redirectUri = `${window.location.origin}/api/gitlab/connect`;
-      window.location.href = `https://gitlab.com/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=api+read_user&state=${project.id}`;
-    }
+    const startEndpoint = isGitHub ? "/api/github/start" : "/api/gitlab/start";
+    window.location.href = `${startEndpoint}?projectId=${encodeURIComponent(project.id)}`;
   }
 
   // ── AI commit message ────────────────────────────────────────────────────

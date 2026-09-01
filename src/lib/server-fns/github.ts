@@ -16,10 +16,35 @@ createWebhook,
 } from "@/lib/github/client";
 import { logger } from "../logger.ts";
 import { randomBytes } from "node:crypto";
+import { verifyGatewayOAuthState } from "../oauth/gateway-state.ts";
 
 // ── OAuth callback: exchange code → token, save to profile ───────────────────
+// `data.state` is the signed token minted by /api/github/start (see that
+// route's header comment) — verifying it here closes an OAuth connect CSRF:
+// without this, a code obtained through any means could be handed to a
+// signed-in victim via a crafted /api/github/connect?code=...&state=...
+// link and would silently overwrite the victim's own
+// profiles.github_access_token with the attacker's token.
 export async function completeGithubConnect(data: any) {
     if (!data.code) return { status: "denied" as const, redirectPath: "/dashboard?error=github_denied" };
+
+    const stateSecret = process.env.OAUTH_STATE_SECRET;
+    const state = data.state && stateSecret ? verifyGatewayOAuthState(data.state, stateSecret) : null;
+    if (!state || state.connector !== "github") {
+      return { status: "invalid_state" as const, redirectPath: "/dashboard?error=github_invalid_state" };
+    }
+
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return { status: "unauthorized" as const, redirectPath: "/login" };
+
+    // The state was minted for a specific user — refuse to attach a token
+    // obtained under one session to a different signed-in user.
+    if (state.userId !== user.id) {
+      return { status: "invalid_state" as const, redirectPath: "/dashboard?error=github_state_user_mismatch" };
+    }
 
     const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
       method: "POST",
@@ -39,23 +64,12 @@ export async function completeGithubConnect(data: any) {
     });
     const githubUser = await userRes.json();
 
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { status: "unauthorized" as const, redirectPath: "/login" };
-
     await supabase
       .from("profiles")
       .update({ github_username: githubUser.login, github_access_token: accessToken })
       .eq("id", user.id);
 
-    return {
-      status: "ok" as const,
-      redirectPath: data.projectId
-        ? `/editor/${data.projectId}?github=connected`
-        : "/dashboard?github=connected",
-    };
+    return { status: "ok" as const, redirectPath: state.returnTo };
 }
 
 // ── Commit history ──────────────────────────────────────────────────────────
