@@ -155,10 +155,12 @@ import { Route as ApiEmbedStatusRouteImport } from './routes/api/embed/status'
 import { Route as ApiGithubCommitsRouteImport } from './routes/api/github/commits'
 import { Route as ApiGithubConnectRouteImport } from './routes/api/github/connect'
 import { Route as ApiGithubImportRouteImport } from './routes/api/github/import'
+import { Route as ApiGithubStartRouteImport } from './routes/api/github/start'
 import { Route as ApiGithubSyncRouteImport } from './routes/api/github/sync'
 import { Route as ApiGithubWebhookRouteImport } from './routes/api/github/webhook'
 import { Route as ApiGitlabCommitsRouteImport } from './routes/api/gitlab/commits'
 import { Route as ApiGitlabConnectRouteImport } from './routes/api/gitlab/connect'
+import { Route as ApiGitlabStartRouteImport } from './routes/api/gitlab/start'
 import { Route as ApiGitlabSyncRouteImport } from './routes/api/gitlab/sync'
 import { Route as ApiIntegrationsSemrushRouteImport } from './routes/api/integrations/semrush'
 import { Route as ApiIntegrationsSupabaseRouteImport } from './routes/api/integrations/supabase'
@@ -1047,6 +1049,11 @@ const ApiGithubImportRoute = ApiGithubImportRouteImport.update({
   path: '/api/github/import',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiGithubStartRoute = ApiGithubStartRouteImport.update({
+  id: '/api/github/start',
+  path: '/api/github/start',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiGithubSyncRoute = ApiGithubSyncRouteImport.update({
   id: '/api/github/sync',
   path: '/api/github/sync',
@@ -1065,6 +1072,11 @@ const ApiGitlabCommitsRoute = ApiGitlabCommitsRouteImport.update({
 const ApiGitlabConnectRoute = ApiGitlabConnectRouteImport.update({
   id: '/api/gitlab/connect',
   path: '/api/gitlab/connect',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiGitlabStartRoute = ApiGitlabStartRouteImport.update({
+  id: '/api/gitlab/start',
+  path: '/api/gitlab/start',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiGitlabSyncRoute = ApiGitlabSyncRouteImport.update({
@@ -1979,10 +1991,12 @@ export interface FileRoutesByFullPath {
   '/api/github/commits': typeof ApiGithubCommitsRoute
   '/api/github/connect': typeof ApiGithubConnectRoute
   '/api/github/import': typeof ApiGithubImportRoute
+  '/api/github/start': typeof ApiGithubStartRoute
   '/api/github/sync': typeof ApiGithubSyncRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
   '/api/gitlab/commits': typeof ApiGitlabCommitsRoute
   '/api/gitlab/connect': typeof ApiGitlabConnectRoute
+  '/api/gitlab/start': typeof ApiGitlabStartRoute
   '/api/gitlab/sync': typeof ApiGitlabSyncRoute
   '/api/integrations/semrush': typeof ApiIntegrationsSemrushRoute
   '/api/integrations/supabase': typeof ApiIntegrationsSupabaseRoute
@@ -2272,10 +2286,12 @@ export interface FileRoutesByTo {
   '/api/github/commits': typeof ApiGithubCommitsRoute
   '/api/github/connect': typeof ApiGithubConnectRoute
   '/api/github/import': typeof ApiGithubImportRoute
+  '/api/github/start': typeof ApiGithubStartRoute
   '/api/github/sync': typeof ApiGithubSyncRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
   '/api/gitlab/commits': typeof ApiGitlabCommitsRoute
   '/api/gitlab/connect': typeof ApiGitlabConnectRoute
+  '/api/gitlab/start': typeof ApiGitlabStartRoute
   '/api/gitlab/sync': typeof ApiGitlabSyncRoute
   '/api/integrations/semrush': typeof ApiIntegrationsSemrushRoute
   '/api/integrations/supabase': typeof ApiIntegrationsSupabaseRoute
@@ -2567,10 +2583,12 @@ export interface FileRoutesById {
   '/api/github/commits': typeof ApiGithubCommitsRoute
   '/api/github/connect': typeof ApiGithubConnectRoute
   '/api/github/import': typeof ApiGithubImportRoute
+  '/api/github/start': typeof ApiGithubStartRoute
   '/api/github/sync': typeof ApiGithubSyncRoute
   '/api/github/webhook': typeof ApiGithubWebhookRoute
   '/api/gitlab/commits': typeof ApiGitlabCommitsRoute
   '/api/gitlab/connect': typeof ApiGitlabConnectRoute
+  '/api/gitlab/start': typeof ApiGitlabStartRoute
   '/api/gitlab/sync': typeof ApiGitlabSyncRoute
   '/api/integrations/semrush': typeof ApiIntegrationsSemrushRoute
   '/api/integrations/supabase': typeof ApiIntegrationsSupabaseRoute
@@ -2862,10 +2880,12 @@ export interface FileRouteTypes {
     | '/api/github/commits'
     | '/api/github/connect'
     | '/api/github/import'
+    | '/api/github/start'
     | '/api/github/sync'
     | '/api/github/webhook'
     | '/api/gitlab/commits'
     | '/api/gitlab/connect'
+    | '/api/gitlab/start'
     | '/api/gitlab/sync'
     | '/api/integrations/semrush'
     | '/api/integrations/supabase'
@@ -3155,10 +3175,12 @@ export interface FileRouteTypes {
     | '/api/github/commits'
     | '/api/github/connect'
     | '/api/github/import'
+    | '/api/github/start'
     | '/api/github/sync'
     | '/api/github/webhook'
     | '/api/gitlab/commits'
     | '/api/gitlab/connect'
+    | '/api/gitlab/start'
     | '/api/gitlab/sync'
     | '/api/integrations/semrush'
     | '/api/integrations/supabase'
@@ -3449,10 +3471,12 @@ export interface FileRouteTypes {
     | '/api/github/commits'
     | '/api/github/connect'
     | '/api/github/import'
+    | '/api/github/start'
     | '/api/github/sync'
     | '/api/github/webhook'
     | '/api/gitlab/commits'
     | '/api/gitlab/connect'
+    | '/api/gitlab/start'
     | '/api/gitlab/sync'
     | '/api/integrations/semrush'
     | '/api/integrations/supabase'
@@ -3723,10 +3747,12 @@ export interface RootRouteChildren {
   ApiGithubCommitsRoute: typeof ApiGithubCommitsRoute
   ApiGithubConnectRoute: typeof ApiGithubConnectRoute
   ApiGithubImportRoute: typeof ApiGithubImportRoute
+  ApiGithubStartRoute: typeof ApiGithubStartRoute
   ApiGithubSyncRoute: typeof ApiGithubSyncRoute
   ApiGithubWebhookRoute: typeof ApiGithubWebhookRoute
   ApiGitlabCommitsRoute: typeof ApiGitlabCommitsRoute
   ApiGitlabConnectRoute: typeof ApiGitlabConnectRoute
+  ApiGitlabStartRoute: typeof ApiGitlabStartRoute
   ApiGitlabSyncRoute: typeof ApiGitlabSyncRoute
   ApiIntegrationsSemrushRoute: typeof ApiIntegrationsSemrushRoute
   ApiIntegrationsSupabaseRoute: typeof ApiIntegrationsSupabaseRoute
@@ -4793,6 +4819,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiGithubImportRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/github/start': {
+      id: '/api/github/start'
+      path: '/api/github/start'
+      fullPath: '/api/github/start'
+      preLoaderRoute: typeof ApiGithubStartRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/github/sync': {
       id: '/api/github/sync'
       path: '/api/github/sync'
@@ -4819,6 +4852,13 @@ declare module '@tanstack/react-router' {
       path: '/api/gitlab/connect'
       fullPath: '/api/gitlab/connect'
       preLoaderRoute: typeof ApiGitlabConnectRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/gitlab/start': {
+      id: '/api/gitlab/start'
+      path: '/api/gitlab/start'
+      fullPath: '/api/gitlab/start'
+      preLoaderRoute: typeof ApiGitlabStartRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/gitlab/sync': {
@@ -6525,10 +6565,12 @@ const rootRouteChildren: RootRouteChildren = {
   ApiGithubCommitsRoute: ApiGithubCommitsRoute,
   ApiGithubConnectRoute: ApiGithubConnectRoute,
   ApiGithubImportRoute: ApiGithubImportRoute,
+  ApiGithubStartRoute: ApiGithubStartRoute,
   ApiGithubSyncRoute: ApiGithubSyncRoute,
   ApiGithubWebhookRoute: ApiGithubWebhookRoute,
   ApiGitlabCommitsRoute: ApiGitlabCommitsRoute,
   ApiGitlabConnectRoute: ApiGitlabConnectRoute,
+  ApiGitlabStartRoute: ApiGitlabStartRoute,
   ApiGitlabSyncRoute: ApiGitlabSyncRoute,
   ApiIntegrationsSemrushRoute: ApiIntegrationsSemrushRoute,
   ApiIntegrationsSupabaseRoute: ApiIntegrationsSupabaseRoute,
