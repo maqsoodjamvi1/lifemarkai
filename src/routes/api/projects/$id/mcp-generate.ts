@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import { getProjectAccess,canWriteProjectFiles } from "@/lib/project/access";
 import {
 generateAppMcpFiles,
 MCP_GENERATED_BANNER,
@@ -45,16 +46,16 @@ export const Route = createFileRoute("/api/projects/$id/mcp-generate")({
           .single();
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
-        const canWrite =
-          project.user_id === user.id ||
-          (await supabase
-            .from("collaborators")
-            .select("role")
-            .eq("project_id", id)
-            .eq("user_id", user.id)
-            .maybeSingle()
-            .then((r: any) => ["owner", "editor"].includes(r.data?.role)));
-        if (!canWrite) return Response.json({ error: "Forbidden" }, { status: 403 });
+        // Was a hand-rolled collaborator check that duplicated (and drifted
+        // from) the canonical getProjectAccess/canWriteProjectFiles helper —
+        // it omitted the accepted_at gate the canonical helper applies.
+        // Not currently exploitable (collaborators rows are only ever
+        // created by accept_project_invite_token(), which always sets
+        // accepted_at at insert time — see migration 087), but using the
+        // one shared implementation instead of a second copy is how this
+        // codebase avoids that class of bug reappearing elsewhere.
+        const access = await getProjectAccess(supabase, id, user.id);
+        if (!canWriteProjectFiles(access)) return Response.json({ error: "Forbidden" }, { status: 403 });
 
         const body = await request.json().catch(() => ({}));
         const tools = Array.isArray(body?.tools) ? body.tools : [];

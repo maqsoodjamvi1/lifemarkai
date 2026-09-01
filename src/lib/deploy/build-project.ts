@@ -151,6 +151,13 @@ export async function tryViteBuild(
     for (const f of files) {
       const rel = f.path.replace(/\\/g, "/").replace(/^\/+/, "");
       if (!rel) continue;
+      // Reject traversal outright rather than resolving it — same guard as
+      // asset-kind.ts's normaliseBuildPath (used for the DB-persisted
+      // build), which was never applied to this filesystem-write path.
+      // `path.join(tmp, rel)` below resolves ".." segments, so a
+      // project_files.path like "../../../evil.sh" would otherwise write
+      // outside the mkdtemp sandbox.
+      if (rel.split("/").some((seg) => seg === "..")) continue;
       let content = f.content ?? "";
       if (/^(public\/)?index\.html$/.test(rel)) content = fixHtmlEntry(content, entry);
       // Legacy TSS configs (generated before the scaffold shipped the hook)

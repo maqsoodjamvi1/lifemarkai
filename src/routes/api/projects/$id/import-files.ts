@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import { getProjectAccess,canReadProjectFiles,canWriteProjectFiles } from "@/lib/project/access";
 
 /**
  * Native /api/projects/:id/import-files — copy selected files from a source
@@ -31,33 +32,26 @@ export const Route = createFileRoute("/api/projects/$id/import-files")({
           .from("projects").select("id, user_id").eq("id", targetProjectId).single();
         if (!targetProject) return Response.json({ error: "Target project not found" }, { status: 404 });
 
-        const canWriteTarget =
-          targetProject.user_id === user.id ||
-          (await supabase
-            .from("collaborators")
-            .select("role")
-            .eq("project_id", targetProjectId)
-            .eq("user_id", user.id)
-            .in("role", ["owner", "editor"])
-            .maybeSingle()
-          ).data != null;
-        if (!canWriteTarget) return Response.json({ error: "No write access to target project" }, { status: 403 });
+        // Were two hand-rolled collaborator checks that duplicated (and
+        // drifted from) the canonical getProjectAccess helper — the target
+        // check omitted the accepted_at gate the canonical helper applies
+        // (not currently exploitable, same reasoning as mcp-generate.ts's
+        // identical fix: collaborators rows always have accepted_at set at
+        // creation). Using the shared implementation instead of two more
+        // copies is how this codebase avoids that class of bug recurring.
+        const targetAccess = await getProjectAccess(supabase, targetProjectId, user.id);
+        if (!canWriteProjectFiles(targetAccess)) {
+          return Response.json({ error: "No write access to target project" }, { status: 403 });
+        }
 
         const { data: sourceProject } = await supabase
           .from("projects").select("id, user_id, is_public").eq("id", sourceProjectId).single();
         if (!sourceProject) return Response.json({ error: "Source project not found" }, { status: 404 });
 
-        const canReadSource =
-          sourceProject.user_id === user.id ||
-          sourceProject.is_public === true ||
-          (await supabase
-            .from("collaborators")
-            .select("id")
-            .eq("project_id", sourceProjectId)
-            .eq("user_id", user.id)
-            .maybeSingle()
-          ).data != null;
-        if (!canReadSource) return Response.json({ error: "No read access to source project" }, { status: 403 });
+        const sourceAccess = await getProjectAccess(supabase, sourceProjectId, user.id);
+        if (!canReadProjectFiles(sourceAccess)) {
+          return Response.json({ error: "No read access to source project" }, { status: 403 });
+        }
 
         const { data: sourceFiles, error: fetchErr } = await supabase
           .from("project_files")
