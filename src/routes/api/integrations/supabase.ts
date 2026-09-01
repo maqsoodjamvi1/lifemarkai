@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import { isFetchablePublicUrl } from "@/lib/ai/page-reference";
+import { getProjectAccess, canReadProjectFiles } from "@/lib/project/access";
 
 async function handlePOST(request: Request) {
   try {
@@ -21,6 +23,14 @@ async function handlePOST(request: Request) {
       if (!supabaseUrl || !supabaseAnonKey) {
         return Response.json({ error: "Missing Supabase credentials" }, { status: 400 });
       }
+      // supabaseUrl is caller-supplied and was previously fetched with no
+      // hostname validation at all — a full SSRF primitive letting any
+      // authenticated user point this server-side fetch at an internal or
+      // cloud-metadata address. Same guard used elsewhere in this codebase
+      // for the same threat model.
+      if (!isFetchablePublicUrl(supabaseUrl)) {
+        return Response.json({ valid: false, error: "Invalid Supabase URL" });
+      }
 
       try {
         const res = await fetch(`${supabaseUrl}/rest/v1/`, {
@@ -28,6 +38,7 @@ async function handlePOST(request: Request) {
             apikey: supabaseAnonKey,
             Authorization: `Bearer ${supabaseAnonKey}`,
           },
+          redirect: "manual",
         });
 
         if (!res.ok) {
@@ -62,7 +73,17 @@ async function handlePOST(request: Request) {
     }
 
     if (action === "generate_schema") {
-      // Generate a Supabase schema based on the project's files
+      // Unlike the "save" action above (scoped with .eq("user_id", user.id))
+      // and unlike every other project-scoped route in this codebase, this
+      // previously read another user's project_files with no ownership/
+      // access check at all — a working information-disclosure oracle over
+      // any project's private file contents via the returned table names.
+      const access = await getProjectAccess(supabase, projectId, user.id);
+      if (!canReadProjectFiles(access)) {
+        return Response.json({ error: "You don't have access to this project" }, { status: 403 });
+      }
+
+      // Generate a simple SQL schema based on detected entities
       const { data: files } = await supabase
         .from("project_files")
         .select("path, content")
