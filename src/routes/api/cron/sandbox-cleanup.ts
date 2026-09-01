@@ -47,7 +47,11 @@ async function killAndCleanRow(
 async function handleGET(req: Request) {
   const auth = req.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret && auth !== `Bearer ${cronSecret}`) {
+  // Fail CLOSED: an unset CRON_SECRET must not leave this endpoint open.
+  // (Matches the pattern used by every sibling cron route — bill-usage.ts,
+  // daily-backups.ts, health-scan.ts, scheduled-scan.ts — this one just
+  // never got it.)
+  if (!cronSecret || auth !== `Bearer ${cronSecret}`) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 

@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 
 type Status = "ok" | "missing" | "invalid" | "warning" | "unknown";
-interface EnvCheck { key: string; status: Status; value?: string; hint: string; docUrl?: string; category: string; required: boolean; }
+interface EnvCheck { key: string; status: Status; hint: string; docUrl?: string; category: string; required: boolean; }
 
 const ENV_SCHEMA: Omit<EnvCheck, "status" | "value">[] = [
   { key: "NEXT_PUBLIC_SUPABASE_URL", category: "Supabase", required: true, hint: "Should be https://<project-ref>.supabase.co", docUrl: "https://supabase.com/docs/guides/getting-started/quickstarts/nextjs" },
@@ -53,9 +53,17 @@ export const Route = createFileRoute("/api/projects/$id/env-health")({
         const { data: project } = await supabase.from("projects").select("id, user_id").eq("id", params.id).single();
         if (!project || project.user_id !== user.id) return Response.json({ error: "Forbidden" }, { status: 403 });
 
+        // Report presence/validity only — this endpoint is reachable by any
+        // signed-in user who owns *a* project (not necessarily an admin), so
+        // the response must never echo back actual server secret material.
+        // (Previously returned `value: val.slice(0, 40)` for every platform
+        // env var, including SUPABASE_SERVICE_ROLE_KEY, STRIPE_WEBHOOK_SECRET,
+        // GITHUB_CLIENT_SECRET, NEXTAUTH_SECRET, UPSTASH_REDIS_REST_TOKEN —
+        // several of which are <=40 chars and were fully recoverable in one
+        // call.)
         const checks: EnvCheck[] = ENV_SCHEMA.map((schema) => {
           const val = process.env[schema.key];
-          return { ...schema, status: checkValue(schema.key, val), value: val ? val.slice(0, 40) : undefined };
+          return { ...schema, status: checkValue(schema.key, val) };
         });
         const required = checks.filter((c) => c.required);
         const optional = checks.filter((c) => !c.required);
