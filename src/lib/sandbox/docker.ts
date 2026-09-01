@@ -323,6 +323,18 @@ async function docker(
       res.on("end", () =>
         resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }),
       );
+      // `req.on("error", reject)` below only covers errors on the REQUEST —
+      // once headers arrive and this callback fires, a later fault (the
+      // daemon restarting, the container OOM-killing mid-read, the host
+      // suspending/resuming) can surface as an error on the RESPONSE stream
+      // instead, and nothing here was listening for that. Node does not
+      // reliably re-emit a response-stream error as a request-level one, so
+      // without this handler neither "end" nor req's "error" ever fires: the
+      // Promise never settles, and req.setTimeout's inactivity timer is tied
+      // to the same now-destroyed socket, so it does not fire either. Every
+      // await'er up the stack (boot, exec, readiness polling) then hangs
+      // indefinitely instead of retrying or surfacing a real error.
+      res.on("error", reject);
     });
     req.on("error", reject);
     req.setTimeout(effectiveTimeoutMs, () => {
@@ -1399,17 +1411,33 @@ export class DockerSandboxProvider implements SandboxProvider {
         progress(createSandboxProgress("installing", `Retrying npm install (${attempt}/${NPM_INSTALL_MAX_ATTEMPTS})`));
         await new Promise((resolve) => setTimeout(resolve, 2_000 * attempt));
       }
-      const res = await this.exec(
-        sandboxId,
-        npmInstallShell(INSTALL_TIMEOUT_SEC),
-        APP_DIR,
-        true,
-        false,
-        // HTTP watchdog must outlive the in-container `timeout N` budget
-        // it is wrapping, plus headroom for the exec create/start/inspect
-        // round trips themselves.
-        (INSTALL_TIMEOUT_SEC + 30) * 1000,
-      );
+      let res: CommandResult;
+      try {
+        res = await this.exec(
+          sandboxId,
+          npmInstallShell(INSTALL_TIMEOUT_SEC),
+          APP_DIR,
+          true,
+          false,
+          // HTTP watchdog must outlive the in-container `timeout N` budget
+          // it is wrapping, plus headroom for the exec create/start/inspect
+          // round trips themselves.
+          (INSTALL_TIMEOUT_SEC + 30) * 1000,
+        );
+      } catch (err) {
+        // exec()/docker() REJECT rather than resolve on a Docker API request
+        // failure (daemon connection refused, a socket error, the watchdog
+        // timeout) — as opposed to a captured, non-zero npm exit code, which
+        // is what every other branch below is built to handle. Before this,
+        // nothing here caught that: a single transient Docker-API failure at
+        // ANY attempt — not just the last — threw straight out of this
+        // function and aborted the whole retry loop, defeating the retries
+        // this function exists to give a flaky install.
+        const message = err instanceof Error ? err.message : String(err);
+        logs += `\n[docker] exec failed: ${message}\n`;
+        if (attempt < NPM_INSTALL_MAX_ATTEMPTS) continue;
+        return { ok: false, logs, error: `npm install failed: ${message}` };
+      }
       logs += res.stdout + res.stderr;
       const npmExit = parseNpmInstallExit(res.stdout, res.stderr);
       if (npmExit === 0) return { ok: true, logs };

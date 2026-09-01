@@ -22,8 +22,28 @@ export function npmInstallShell(timeoutSec: number): string {
   return `${npmInstallEnvExports()}; timeout ${timeoutSec} npm install ${NPM_INSTALL_FLAGS}; echo "LM_NPM_EXIT:$?"`;
 }
 
+/**
+ * Returned by parseNpmInstallExit when the LM_NPM_EXIT marker never appears
+ * in the captured output at all — the shell's own trailing
+ * `echo "LM_NPM_EXIT:$?"` never ran, which means npm's actual exit status is
+ * unknown, not zero. The echo is a plain `;`-sequenced statement after the
+ * install command, so it always runs once that command returns control —
+ * the only way it is missing is that the whole exec was torn down before
+ * getting there: a container OOM-kill, the daemon restarting mid-install, a
+ * killed process group. Deliberately not 0 (success, which this can never
+ * legitimately be) and not 124 (the gate's own wall-clock timeout code), so
+ * a caller can't mistake "we never heard back" for either of those.
+ */
+export const NPM_INSTALL_EXIT_UNKNOWN = -1;
+
 export function parseNpmInstallExit(stdout: string, stderr: string): number {
-  return Number(/LM_NPM_EXIT:(\d+)/.exec(`${stdout}${stderr}`)?.[1] ?? "0");
+  // Previously defaulted to "0" (success) when the marker was missing, which
+  // told installNpmDependencies() the install had succeeded when it is
+  // exactly the case where npm's actual outcome was never observed — most
+  // reachable via a container OOM-kill during install, which silently made
+  // the pipeline proceed with an app that has no node_modules.
+  const m = /LM_NPM_EXIT:(\d+)/.exec(`${stdout}${stderr}`);
+  return m ? Number(m[1]) : NPM_INSTALL_EXIT_UNKNOWN;
 }
 
 export function isTransientNpmInstallFailure(output: string, exitCode: number): boolean {
