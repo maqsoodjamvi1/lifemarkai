@@ -6,6 +6,16 @@ import { createAdminClient } from "@/lib/supabase/admin";
  *   GET  ?projectId=&pagePath= → list comments for a PUBLIC project
  *   POST                       → post a guest comment on a PUBLIC project
  * Guest writes go through service role after validating the project is public.
+ *
+ * This route has no user session (pure guest access — createAdminClient only),
+ * so it can only ever safely serve the "public" audience: unlike
+ * /api/embed/access.ts (THE enforcement point for viewing a published app),
+ * there is no viewer identity here to evaluate "workspace"/"custom" grants
+ * against. Gate on `publish_audience`, the same column embed/access.ts reads,
+ * not the legacy `is_public` flag — the two can drift (the Publish panel only
+ * ever writes `publish_audience`; `is_public` can be set independently via
+ * project-config import), and gating on the stale flag let guest comments
+ * stay open on a project the owner had explicitly set to "Private"/"Custom".
  */
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -14,8 +24,9 @@ const CORS = {
 };
 
 async function assertPublic(supabase: any, projectId: string) {
-  const { data } = await supabase.from("projects").select("id, is_public").eq("id", projectId).single();
-  return Boolean(data?.is_public);
+  const { data } = await supabase.from("projects").select("id, publish_audience").eq("id", projectId).single();
+  const audience = data?.publish_audience ?? "public";
+  return audience === "public";
 }
 
 export const Route = createFileRoute("/api/embed/comments")({
