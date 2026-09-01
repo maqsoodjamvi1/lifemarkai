@@ -19,6 +19,16 @@ export interface OAuthStatePayload {
   codeVerifier: string;
   nonce: string;
   issuedAt: number; // unix seconds
+  // The user who called /start. Unlike projectId (protected by re-checking
+  // the *completing* user's access at /callback), a project can have
+  // multiple collaborators with write access — so binding state to a
+  // specific projectId alone doesn't stop one collaborator from crafting an
+  // authorize link and having ANOTHER collaborator complete it with their
+  // own account, planting that other user's OAuth token into the project.
+  // /callback must reject any state whose userId doesn't match the
+  // authenticated completer, the same fix already applied to the
+  // account-level gateway OAuth flow (src/lib/oauth/gateway-state.ts).
+  userId: string;
 }
 
 function base64url(input: Buffer | string): string {
@@ -66,7 +76,14 @@ export function verifyOAuthState(
   } catch {
     return null;
   }
-  if (!payload.projectId || !payload.connector || !payload.codeVerifier || !payload.nonce || !payload.issuedAt) {
+  if (
+    !payload.projectId ||
+    !payload.connector ||
+    !payload.codeVerifier ||
+    !payload.nonce ||
+    !payload.issuedAt ||
+    !payload.userId
+  ) {
     return null;
   }
 

@@ -58,6 +58,15 @@ export const Route = createFileRoute("/api/connectors/oauth/callback")({
         if (!user) {
           return Response.redirect(editorUrl(state.projectId, { connector_error: "signed_out", connector: state.connector }), 302);
         }
+        // Must be the same user who called /start — otherwise a project
+        // collaborator with write access could craft an authorize link for
+        // this project and get a DIFFERENT collaborator to complete it,
+        // planting that other user's OAuth token (e.g. their personal
+        // GitHub "repo" access) into the shared project for the attacker to
+        // read back via the env-var pipeline.
+        if (state.userId !== user.id) {
+          return Response.redirect(editorUrl(state.projectId, { connector_error: "wrong_user", connector: state.connector }), 302);
+        }
         const access = await getProjectAccess(supabase, state.projectId, user.id);
         if (!canWriteProjectFiles(access)) {
           return Response.redirect(editorUrl(state.projectId, { connector_error: "forbidden", connector: state.connector }), 302);

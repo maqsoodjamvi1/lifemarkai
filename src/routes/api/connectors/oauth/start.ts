@@ -55,7 +55,14 @@ export const Route = createFileRoute("/api/connectors/oauth/start")({
 
         const codeVerifier = generateCodeVerifier();
         const state = signOAuthState(
-          { projectId, connector, codeVerifier, nonce: randomBytes(9).toString("hex"), issuedAt: Math.floor(Date.now() / 1000) },
+          {
+            projectId,
+            connector,
+            codeVerifier,
+            nonce: randomBytes(9).toString("hex"),
+            issuedAt: Math.floor(Date.now() / 1000),
+            userId: user.id,
+          },
           stateSecret,
         );
 
