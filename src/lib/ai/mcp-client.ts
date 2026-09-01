@@ -37,7 +37,14 @@ interface JsonRpcResponse {
 
 let rpcIdCounter = 1;
 
-/** Reject anything that isn't https, except localhost for local development. */
+/**
+ * Reject anything that isn't https, except localhost for local development
+ * (guarded to non-production below), and reject any hostname that resolves
+ * by name alone to a private/link-local/loopback range. This is checked
+ * again on every redirect in mcpRpc() below — an https server the caller
+ * registered is otherwise free to 302 the request anywhere, including
+ * cloud-metadata addresses, once the initial hostname check has passed.
+ */
 function assertAllowedUrl(url: string): URL {
   let parsed: URL;
   try {
@@ -45,12 +52,28 @@ function assertAllowedUrl(url: string): URL {
   } catch {
     throw new Error(`Invalid MCP server URL: ${url}`);
   }
-  const isLocalhost =
-    parsed.hostname === "localhost" ||
-    parsed.hostname === "127.0.0.1" ||
-    parsed.hostname === "[::1]";
-  if (parsed.protocol !== "https:" && !isLocalhost) {
-    throw new Error("MCP server URL must use https (localhost excepted).");
+  const host = parsed.hostname.toLowerCase();
+  const isLocalhost = host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "::1";
+  // The localhost carve-out is for local development only — a production
+  // deployment must not let any authenticated user use this as a probe
+  // against services bound to the app server's own loopback interface.
+  const localhostAllowed = isLocalhost && process.env.NODE_ENV !== "production";
+  if (parsed.protocol !== "https:" && !localhostAllowed) {
+    throw new Error("MCP server URL must use https (localhost excepted in development).");
+  }
+  if (
+    !localhostAllowed &&
+    (isLocalhost ||
+      host === "0.0.0.0" ||
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      /^169\.254\./.test(host) || // link-local / cloud metadata
+      host.endsWith(".internal") ||
+      host.endsWith(".local"))
+  ) {
+    throw new Error("MCP server URL must not point at a private, loopback, or link-local address.");
   }
   return parsed;
 }
@@ -114,6 +137,12 @@ async function mcpRpc(
       headers: buildHeaders(opts.authHeader, opts.sessionId),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      // Never auto-follow a redirect: assertAllowedUrl() only validated the
+      // URL the caller registered, and a server the caller controls is free
+      // to answer with a 3xx pointing anywhere (internal services, cloud
+      // metadata) if redirects were followed blindly. A 3xx response now
+      // just fails the res.ok check below like any other bad response.
+      redirect: "manual",
     });
   } catch (err) {
     const reason = err instanceof Error && err.name === "TimeoutError"
