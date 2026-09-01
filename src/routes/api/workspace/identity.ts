@@ -135,7 +135,14 @@ export const Route = createFileRoute("/api/workspace/identity")({
           updated_at: new Date().toISOString(),
         };
 
-        await supabase.from("workspace_identity_settings").upsert(row);
+        const { error: upsertError } = await supabase.from("workspace_identity_settings").upsert(row);
+        if (upsertError) {
+          // Previously unchecked: on failure this still fell through to the
+          // 200 response below, handing back a freshly generated plaintext
+          // SCIM key that was never actually persisted — every subsequent
+          // SCIM call using it would 401 with no way to tell why.
+          return Response.json({ error: `Could not save identity settings: ${upsertError.message}` }, { status: 500 });
+        }
 
         await logAuditFromRequest(request, {
           userId: user.id,

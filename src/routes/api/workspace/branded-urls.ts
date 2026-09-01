@@ -120,7 +120,7 @@ export const Route = createFileRoute("/api/workspace/branded-urls")({
         const { enable, sourceDomain } = (await request.json()) as { enable: boolean; sourceDomain?: string };
 
         if (!enable) {
-          await supabase
+          const { error: disableError } = await supabase
             .from("profiles")
             .update({
               branded_status: "inactive",
@@ -129,6 +129,7 @@ export const Route = createFileRoute("/api/workspace/branded-urls")({
               branded_activated_at: null,
             })
             .eq("id", user.id);
+          if (disableError) return Response.json({ error: disableError.message }, { status: 500 });
           return Response.json({ ok: true, status: "inactive" });
         }
 
@@ -156,7 +157,7 @@ export const Route = createFileRoute("/api/workspace/branded-urls")({
           final = `${subdomain}-${Math.floor(Math.random() * 10000)}`;
         }
 
-        await supabase
+        const { error: enableError } = await supabase
           .from("profiles")
           .update({
             branded_subdomain: final,
@@ -165,6 +166,11 @@ export const Route = createFileRoute("/api/workspace/branded-urls")({
             branded_activated_at: new Date().toISOString(),
           })
           .eq("id", user.id);
+        // Previously unchecked: on the rare loss of the 5-try uniqueness
+        // race, the DB's unique index correctly rejects this update, but the
+        // caller still got back {ok:true, status:"active"} for a row that
+        // was never actually written.
+        if (enableError) return Response.json({ error: "Could not activate branded subdomain — it may already be taken. Try again." }, { status: 409 });
 
         return Response.json({
           ok: true,
@@ -182,7 +188,8 @@ export const Route = createFileRoute("/api/workspace/branded-urls")({
         const domain = new URL(request.url).searchParams.get("domain");
         if (!domain) return Response.json({ error: "domain required" }, { status: 400 });
 
-        await supabase.from("workspace_domains").delete().eq("user_id", user.id).eq("domain", domain);
+        const { error: deleteError } = await supabase.from("workspace_domains").delete().eq("user_id", user.id).eq("domain", domain);
+        if (deleteError) return Response.json({ error: deleteError.message }, { status: 500 });
         return Response.json({ ok: true });
       },
     },

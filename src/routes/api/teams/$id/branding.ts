@@ -19,7 +19,7 @@ export const Route = createFileRoute("/api/teams/$id/branding")({
         const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
         const nullableString = (value: unknown): string | null =>
           typeof value === "string" && value.trim() ? value.trim() : null;
-        await supabase.from("workspace_branding").upsert({
+        const { error } = await supabase.from("workspace_branding").upsert({
           team_id: params.id,
           logo_url: nullableString(body.logo_url),
           primary_color: typeof body.primary_color === "string" ? body.primary_color : "#8b5cf6",
@@ -29,6 +29,11 @@ export const Route = createFileRoute("/api/teams/$id/branding")({
           hide_powered_by: body.hide_powered_by === true,
           updated_at: new Date().toISOString(),
         }, { onConflict: "team_id" });
+        // Previously unchecked: RLS silently rejects a non-admin's write, and
+        // this returned {ok:true} regardless — a false-positive "saved" for
+        // both an unauthorized caller and a legitimate admin whose write
+        // failed for any other reason.
+        if (error) return Response.json({ error: error.message }, { status: 500 });
         return Response.json({ ok: true });
       },
     },
