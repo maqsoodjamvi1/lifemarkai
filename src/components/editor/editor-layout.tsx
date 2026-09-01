@@ -23,6 +23,7 @@ import { useRecordProjectVisit } from "@/hooks/use-recent-projects";
 import type { Project,ProjectFile,Message,Profile } from "@/types/database";
 import type { PreviewErrorReport,PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import { saveApprovedPlan } from "@/lib/editor/save-approved-plan";
+import { createKeyedSerialQueue } from "@/lib/editor/keyed-serial-queue";
 import { useToast } from "@/hooks/use-toast";
 import {
 pickActiveFileAfterUpdate,
@@ -990,82 +991,92 @@ export function EditorLayout({
    * a toast per keystroke would be its own bug.
    */
   const saveFailureRef = useRef<string | null>(null);
+  /**
+   * Serializes the PATCH below per file id — see keyed-serial-queue.ts for
+   * why: without this, a second keystroke-debounce save firing while the
+   * first one for the same file is still in flight could have its response
+   * arrive first, then get silently overwritten when the slower, earlier
+   * request finally lands — the user's latest edit reverted on the server
+   * with no error anywhere.
+   */
+  const saveQueueRef = useRef(createKeyedSerialQueue());
   const persistFileContent = useCallback(
-    async (fileId: string, content: string, opts?: { explicit?: boolean }) => {
-      /**
-       * Report once per failure kind, then THROW.
-       *
-       * The throw matters as much as the toast. `handleCodeSave` is the
-       * `onSave` prop the code panel awaits for ⌘S and Save All; when this
-       * function swallowed failures and returned normally, the panel counted
-       * the tab as written, cleared its dirty flag and printed "Saved" over a
-       * write that never landed. Callers that fire-and-forget (the keystroke
-       * debounce, the unmount flush) attach `.catch` — the toast is their
-       * report.
-       *
-       * Two details the first version got wrong:
-       *
-       * `explicit` — the dedupe exists because this runs on a 500ms keystroke
-       * debounce and a toast per keystroke would be its own bug. But it also
-       * silenced the ⌘S the user pressed *because* of the first toast. A save
-       * the user asked for always reports; only the automatic ones dedupe.
-       *
-       * `reported` on the error — the code panel has its own catch that
-       * toasts "Save failed". With the throw added, one failure produced two
-       * toasts, and the bare one was the less useful of the pair. The flag
-       * lets the caller stay quiet because it knows the user has already been
-       * told something specific.
-       */
-      const fail: (key: string, title: string, description: string) => never = (
-        key,
-        title,
-        description,
-      ) => {
-        if (opts?.explicit || saveFailureRef.current !== key) {
-          saveFailureRef.current = key;
-          toast({ title, description, variant: "destructive" });
+    (fileId: string, content: string, opts?: { explicit?: boolean }) =>
+      saveQueueRef.current(fileId, async () => {
+        /**
+         * Report once per failure kind, then THROW.
+         *
+         * The throw matters as much as the toast. `handleCodeSave` is the
+         * `onSave` prop the code panel awaits for ⌘S and Save All; when this
+         * function swallowed failures and returned normally, the panel counted
+         * the tab as written, cleared its dirty flag and printed "Saved" over a
+         * write that never landed. Callers that fire-and-forget (the keystroke
+         * debounce, the unmount flush) attach `.catch` — the toast is their
+         * report.
+         *
+         * Two details the first version got wrong:
+         *
+         * `explicit` — the dedupe exists because this runs on a 500ms keystroke
+         * debounce and a toast per keystroke would be its own bug. But it also
+         * silenced the ⌘S the user pressed *because* of the first toast. A save
+         * the user asked for always reports; only the automatic ones dedupe.
+         *
+         * `reported` on the error — the code panel has its own catch that
+         * toasts "Save failed". With the throw added, one failure produced two
+         * toasts, and the bare one was the less useful of the pair. The flag
+         * lets the caller stay quiet because it knows the user has already been
+         * told something specific.
+         */
+        const fail: (key: string, title: string, description: string) => never = (
+          key,
+          title,
+          description,
+        ) => {
+          if (opts?.explicit || saveFailureRef.current !== key) {
+            saveFailureRef.current = key;
+            toast({ title, description, variant: "destructive" });
+          }
+          const err = new Error(`${title} (${key})`) as Error & { reported?: boolean };
+          err.reported = true;
+          throw err;
+        };
+
+        // Only the transport is wrapped. Keeping the response handling out of
+        // the try is deliberate: `fail` throws, and a catch around it would
+        // swallow a 403 and re-report it as "you appear to be offline".
+        let res: Response;
+        try {
+          res = await fetch(`/api/projects/${project.id}/files`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fileId, content }),
+          });
+        } catch {
+          fail(
+            "offline",
+            "Changes are NOT saving",
+            "You appear to be offline. Edits exist only in this tab until the connection returns.",
+          );
         }
-        const err = new Error(`${title} (${key})`) as Error & { reported?: boolean };
-        err.reported = true;
-        throw err;
-      };
 
-      // Only the transport is wrapped. Keeping the response handling out of
-      // the try is deliberate: `fail` throws, and a catch around it would
-      // swallow a 403 and re-report it as "you appear to be offline".
-      let res: Response;
-      try {
-        res = await fetch(`/api/projects/${project.id}/files`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ fileId, content }),
-        });
-      } catch {
+        if (res.ok) {
+          setLastSaved(new Date());
+          saveFailureRef.current = null;
+          return;
+        }
+        if (res.status === 401 || res.status === 403) {
+          fail(
+            "auth",
+            "Your session expired — changes are NOT saving",
+            "Sign in again in another tab, then keep working here. Do not reload this tab until a save succeeds.",
+          );
+        }
         fail(
-          "offline",
+          `http-${res.status}`,
           "Changes are NOT saving",
-          "You appear to be offline. Edits exist only in this tab until the connection returns.",
+          `The server rejected the save (${res.status}). Copy anything important before reloading this tab.`,
         );
-      }
-
-      if (res.ok) {
-        setLastSaved(new Date());
-        saveFailureRef.current = null;
-        return;
-      }
-      if (res.status === 401 || res.status === 403) {
-        fail(
-          "auth",
-          "Your session expired — changes are NOT saving",
-          "Sign in again in another tab, then keep working here. Do not reload this tab until a save succeeds.",
-        );
-      }
-      fail(
-        `http-${res.status}`,
-        "Changes are NOT saving",
-        `The server rejected the save (${res.status}). Copy anything important before reloading this tab.`,
-      );
-    },
+      }),
     [project.id, toast]
   );
 
