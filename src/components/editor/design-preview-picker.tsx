@@ -1,5 +1,5 @@
 
-import { useEffect,useState,useRef } from "react";
+import { useCallback,useEffect,useState,useRef } from "react";
 import { Loader2,Palette,X,Sparkles } from "lucide-react";
 import type { DesignPreviewDirection } from "@/lib/ai/design-previews";
 import { DesignPreviewCards } from "./design-preview-cards";
@@ -31,25 +31,23 @@ export function DesignPreviewPicker({
   const recommendedId = directions[0]?.id ?? null;
   const selectedIsRecommended = !selectedId || selectedId === recommendedId;
 
-  // Shared staleness guard for BOTH the initial load effect and the "Try
-  // again" retry button. The retry button used to fire its own duplicate
-  // fetch with no guard at all — if the modal was closed/reopened with a
-  // new prompt while a stale retry was still in flight, that stale response
-  // could land afterward and overwrite the newer, correct state.
-  const requestSeq = useRef(0);
+  const requestControllerRef = useRef<AbortController | null>(null);
 
-  function loadPreviews(force: boolean) {
-    const seq = ++requestSeq.current;
+  const loadPreviews = useCallback((force: boolean) => {
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
     setLoading(true);
     setError(null);
     void fetch("/api/ai/design-previews", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(force ? { prompt, projectId, fileCount, force: true } : { prompt, projectId, fileCount }),
+      signal: controller.signal,
     })
       .then(async (res) => {
-        const data = await res.json();
-        if (seq !== requestSeq.current) return;
+        const data = await res.json().catch(() => ({ error: `Preview request failed (${res.status})` }));
+        if (controller.signal.aborted) return;
         if (!res.ok) throw new Error(data.error ?? "Failed to load previews");
         if (data.skip) {
           onSkip();
@@ -65,12 +63,15 @@ export function DesignPreviewPicker({
         );
       })
       .catch((e: Error) => {
-        if (seq === requestSeq.current) setError(e.message);
+        if (!controller.signal.aborted) setError(e.message);
       })
       .finally(() => {
-        if (seq === requestSeq.current) setLoading(false);
+        if (requestControllerRef.current === controller) {
+          requestControllerRef.current = null;
+          setLoading(false);
+        }
       });
-  }
+  }, [fileCount, onSkip, projectId, prompt]);
 
   useEffect(() => {
     if (!open) return;
@@ -79,23 +80,37 @@ export function DesignPreviewPicker({
     setSurfaceLabel(null);
     loadPreviews(false);
     return () => {
-      // Invalidate any request this open started so it can never apply
-      // stale state after the modal closes or reopens with a new prompt.
-      requestSeq.current++;
+      requestControllerRef.current?.abort();
+      requestControllerRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, prompt, projectId, fileCount]);
+  }, [loadPreviews, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose, open]);
 
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 p-4">
-      <div className="w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-2xl border border-border bg-background shadow-2xl flex flex-col">
+      <div
+        className="w-full max-w-4xl max-h-[90vh] overflow-hidden rounded-2xl border border-border bg-background shadow-2xl flex flex-col"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="design-preview-title"
+      >
         <div className="flex items-start justify-between gap-3 p-4 border-b border-border">
           <div className="flex items-start gap-2">
             <Palette size={16} className="text-blue-500 mt-0.5 shrink-0" />
             <div>
-              <h2 className="text-sm font-semibold">
+              <h2 id="design-preview-title" className="text-sm font-semibold">
                 Choose {surfaceLabel ? `a ${surfaceLabel} direction` : "a design direction"}
               </h2>
               <p className="text-[11px] text-muted-foreground mt-0.5 max-w-lg">

@@ -1368,11 +1368,12 @@ export function ChatPanel({
     const file = files.find((f) => f.path === diff.path);
     if (!file) return;
     try {
-      await fetch(`/api/projects/${project.id}/files`, {
+      const res = await fetch(`/api/projects/${project.id}/files`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fileId: file.id, content: diff.oldContent }),
       });
+      if (!res.ok) throw new Error(`Revert failed (${res.status})`);
       // Update local state
       onFilesUpdate(files.map((f) => f.id === file.id ? { ...f, content: diff.oldContent } : f));
       setFileStates((prev) => ({
@@ -1388,11 +1389,12 @@ export function ChatPanel({
     const file = files.find((f) => f.path === diff.path);
     if (!file) return;
     try {
-      await fetch(`/api/projects/${project.id}/files`, {
+      const res = await fetch(`/api/projects/${project.id}/files`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fileId: file.id, content: diff.newContent }),
       });
+      if (!res.ok) throw new Error(`Re-apply failed (${res.status})`);
       onFilesUpdate(files.map((f) => f.id === file.id ? { ...f, content: diff.newContent } : f));
       setFileStates((prev) => ({
         ...prev,
@@ -2947,16 +2949,37 @@ export function ChatPanel({
     // can clear it on any exit path).
     let streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
-    // Auto-snapshot before AI modifies files (Build / Agent / Patch modes)
+    // Auto-snapshot before AI modifies files (Build / Agent / Patch modes).
+    // This must finish before the generation request begins. Fire-and-forget
+    // allowed a fast build to replace files before the snapshot route read
+    // them, producing an "undo" snapshot of the already-modified project.
     if ((effectiveMode === "build" || effectiveMode === "agent" || effectiveMode === "patch") && files.length > 0) {
-      fetch("/api/projects/snapshots", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId: project.id,
-          label: `Before: ${userMessage.slice(0, 60)}${userMessage.length > 60 ? "…" : ""}`,
-        }),
-      }).catch(() => {}); // fire-and-forget
+      try {
+        const snapshotRes = await fetch("/api/projects/snapshots", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId: project.id,
+            label: `Before: ${userMessage.slice(0, 60)}${userMessage.length > 60 ? "…" : ""}`,
+          }),
+          signal: controller.signal,
+        });
+        if (!snapshotRes.ok) {
+          toast({
+            title: "Undo checkpoint unavailable",
+            description: "The build can continue, but this turn may not be reversible from History.",
+            variant: "destructive",
+          });
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          toast({
+            title: "Undo checkpoint unavailable",
+            description: "The build can continue, but this turn may not be reversible from History.",
+            variant: "destructive",
+          });
+        }
+      }
     }
 
     // Optimistically add user message
@@ -3519,6 +3542,10 @@ ${(f.content ?? "").slice(0, 8000)}
       let hasPendingStreamedPathUpdate = false;
       const streamingAssistantId = `assistant-${Date.now()}`;
       let clarifyExited = false;
+      // SSE callbacks are synchronous, while completion handlers refresh files,
+      // persist messages, and can await preview work. Serialize those handlers
+      // so a later `done` event cannot overtake an earlier status/file event.
+      let streamEventQueue: Promise<void> = Promise.resolve();
       // Local mirror of pendingSkills — the async stream handlers below close
       // over the pre-send render, so reading `pendingSkills` state on data.done
       // would always be stale (empty, or worse, the PREVIOUS message's skills).
@@ -4167,7 +4194,9 @@ ${(f.content ?? "").slice(0, 8000)}
               }, 66);
             }
           },
-          onEvent: (data) => { void processChatStreamEvent(data); },
+          onEvent: (data) => {
+            streamEventQueue = streamEventQueue.then(() => processChatStreamEvent(data));
+          },
           // handleAIStream special-cases a `{ error }` SSE frame: it routes it
           // to onError instead of onEvent (see dispatchSseEvent in
           // lib/ai/handle-ai-stream.ts) and returns without ever calling
@@ -4183,6 +4212,7 @@ ${(f.content ?? "").slice(0, 8000)}
           },
         },
       });
+      await streamEventQueue;
 
       if (clarifyExited) return;
     } catch (err: unknown) {
@@ -5562,12 +5592,18 @@ ${(f.content ?? "").slice(0, 8000)}
   async function handleClearChat() {
     if (!window.confirm("Clear this conversation?")) return;
     const snapshot = [...messages];
-    clearedSnapshotRef.current = snapshot;
     try {
-      await fetch(`/api/projects/${project.id}/messages`, { method: "DELETE" });
-    } catch {
-      // best-effort
+      const res = await fetch(`/api/projects/${project.id}/messages`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`Clear failed (${res.status})`);
+    } catch (error) {
+      toast({
+        title: "Conversation was not cleared",
+        description: error instanceof Error ? error.message : "Check your connection and try again.",
+        variant: "destructive",
+      });
+      return;
     }
+    clearedSnapshotRef.current = snapshot;
     window.speechSynthesis?.cancel();
     setSpeakingMessageId(null);
     onMessagesUpdate([]);

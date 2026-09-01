@@ -1,4 +1,4 @@
-import { useCallback,useRef,useState } from "react";
+import { useCallback,useEffect,useRef,useState } from "react";
 import type { PreviewEngine } from "@/lib/preview/resolve-preview-engine";
 
 export type PreviewMachineState =
@@ -27,8 +27,14 @@ export function usePreviewMachine(
   const previewBuildShaRef = useRef("");
   const previewEngineRef = useRef(engine);
   const onTransitionRef = useRef(onTransition);
-  previewEngineRef.current = engine;
-  onTransitionRef.current = onTransition;
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    previewEngineRef.current = engine;
+    onTransitionRef.current = onTransition;
+  }, [engine, onTransition]);
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
   // Mirrors `previewMachineState` outside React's state so
   // transitionPreviewMachine can read "previous" without a functional
   // setState updater — see the comment below for why.
@@ -59,6 +65,7 @@ export function usePreviewMachine(
         at: Date.now(),
       };
       queueMicrotask(() => {
+        if (!mountedRef.current) return;
         window.dispatchEvent(
           new CustomEvent("lifemark-preview-machine-transition", {
             detail: transition,

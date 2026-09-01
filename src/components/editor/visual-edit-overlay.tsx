@@ -645,22 +645,26 @@ export function VisualEditOverlay({
   const selected = selectedList[selectedList.length - 1] ?? null;
   const [popoverPos, setPopoverPos] = useState({ x: 0, y: 0 });
   const editTextModeRef = useRef(editTextMode);
-  editTextModeRef.current = editTextMode;
-  const onSelectionChangeRef = useRef(onSelectionChange);
-  onSelectionChangeRef.current = onSelectionChange;
   const onStageInlineEditRef = useRef(onStageInlineEdit);
-  onStageInlineEditRef.current = onStageInlineEdit;
 
   // In-place edit commit — kept in a ref so the injected dblclick handler
   // (deps: [enabled, iframeRef]) never closes over stale files/props.
   const inlineCommitRef = useRef<((sel: SelectedElement, text: string) => void) | null>(null);
-  inlineCommitRef.current = (sel, text) => {
-    if (onStageInlineEditRef.current) {
-      onStageInlineEditRef.current(sel, text);
-      return;
-    }
-    applyChangeToFiles(files, sel, { text }, onFileChange, onRequestAiEdit);
-  };
+  useEffect(() => {
+    editTextModeRef.current = editTextMode;
+    onStageInlineEditRef.current = onStageInlineEdit;
+    inlineCommitRef.current = (sel, text) => {
+      if (onStageInlineEditRef.current) {
+        onStageInlineEditRef.current(sel, text);
+        return;
+      }
+      applyChangeToFiles(files, sel, { text }, onFileChange, onRequestAiEdit);
+    };
+  }, [editTextMode, files, onFileChange, onRequestAiEdit, onStageInlineEdit]);
+
+  useEffect(() => {
+    onSelectionChange?.(selectedList);
+  }, [onSelectionChange, selectedList]);
 
   const injectOverlayScript = useCallback(() => {
     const iframe = iframeRef.current;
@@ -788,7 +792,6 @@ export function VisualEditOverlay({
         } else {
           list = [...prev, next];
         }
-        onSelectionChangeRef.current?.(list);
         return list;
       });
       setPopoverPos({
@@ -829,27 +832,26 @@ export function VisualEditOverlay({
       doc.removeEventListener("mouseout", handleMouseOut);
       doc.removeEventListener("click", handleClick, true);
       doc.removeEventListener("dblclick", handleDblClick, true);
+      doc.querySelectorAll(".lifemark-hover, .lifemark-selected, .lifemark-multi")
+        .forEach((node) => node.classList.remove("lifemark-hover", "lifemark-selected", "lifemark-multi"));
+      doc.getElementById("lifemark-overlay")?.remove();
     };
   }, [enabled, iframeRef]);
 
-  // Clear the selection when the overlay is toggled off — adjust-state-during-
-  // render pattern keeps setState out of the effect body (react-hooks v7 rule).
-  const [prevEnabled, setPrevEnabled] = useState(enabled);
-  if (prevEnabled !== enabled) {
-    setPrevEnabled(enabled);
+  // Selection cleanup belongs after commit. Updating state or calling parent
+  // callbacks during render is replayable under concurrent React and caused
+  // duplicate selection events and occasional render loops.
+  useEffect(() => {
     if (!enabled) {
       setSelectedList([]);
-      onSelectionChangeRef.current?.([]);
     }
-  }
+  }, [enabled]);
 
-  const [prevClearSignal, setPrevClearSignal] = useState(clearSelectionSignal);
-  if (prevClearSignal !== clearSelectionSignal) {
-    setPrevClearSignal(clearSelectionSignal);
+  useEffect(() => {
     if (clearSelectionSignal > 0) {
       setSelectedList([]);
     }
-  }
+  }, [clearSelectionSignal]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -898,7 +900,6 @@ export function VisualEditOverlay({
         position={popoverPos}
         onClose={() => {
           setSelectedList([]);
-          onSelectionChangeRef.current?.([]);
         }}
         aiFallbackAvailable={!!onRequestAiEdit}
         onRequestAiImage={onRequestAiEdit}

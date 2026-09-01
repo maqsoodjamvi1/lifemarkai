@@ -11,6 +11,7 @@ import { EditorTopBar } from "./editor-top-bar";
 import { LovableFilesViewPane } from "./lovable/files-view-pane";
 import { LovableLiveTasksDock } from "./lovable/live-tasks-dock";
 import { EditorPaymentBanner } from "./editor-payment-banner";
+import { EditorPanelErrorBoundary } from "./editor-panel-error-boundary";
 import {
 LovableToolsOverlay,
 LovableOverlayHeader,
@@ -1478,6 +1479,7 @@ export function EditorLayout({
             {/* Chat pane — always chat-only, no emoji tab strip */}
             <div className={`absolute inset-0 flex flex-col ${mobilePaneActive === "left" ? "" : "hidden"}`}>
               <div className="relative flex-1 overflow-hidden">
+                <EditorPanelErrorBoundary name="Chat" resetKey={currentProject.id}>
                 <ChatPanel
                   project={currentProject}
                   files={files}
@@ -1515,6 +1517,7 @@ export function EditorLayout({
                   isMobile={isMobile}
                   securityIssueCount={securityIssueCount}
                 />
+                </EditorPanelErrorBoundary>
                 {leftChatOverlay === "history" && (
                   <div className="absolute inset-0 z-10 flex flex-col bg-background">
                     <LovableOverlayHeader title="History" onClose={() => setLeftChatOverlay(null)} />
@@ -1576,6 +1579,7 @@ export function EditorLayout({
 
             {/* Preview pane */}
             <div className={`absolute inset-0 ${mobilePaneActive === "preview" ? "" : "hidden"}`}>
+              <EditorPanelErrorBoundary name="Preview" resetKey={project.id}>
               <PreviewPanel
                 files={previewVersion?.files ?? files}
                 framework={project.framework}
@@ -1604,6 +1608,7 @@ export function EditorLayout({
                 onOpenPanel={handleOpenPanel}
                 onSendAnnotatedToChat={(prompt, img) => { setMobilePaneActive("left"); setLeftPanel("chat"); setPendingBuildFromFile({ prompt, imageBase64: img }); }}
               />
+              </EditorPanelErrorBoundary>
             </div>
 
             {/* Tool panel overlay — same as desktop right-side panels */}
@@ -1730,6 +1735,7 @@ export function EditorLayout({
               data-panel-id="sidebar-panel"
               className="relative flex flex-col h-full border-r border-border bg-background"
             >
+              <EditorPanelErrorBoundary name="Chat" resetKey={currentProject.id}>
               <ChatPanel
                 project={currentProject}
                 files={files}
@@ -1766,6 +1772,7 @@ export function EditorLayout({
                 isVisualEditActive={isVisualEditActive}
                 securityIssueCount={securityIssueCount}
               />
+              </EditorPanelErrorBoundary>
               {leftChatOverlay === "history" && (
                 <div className="absolute inset-0 z-10 flex flex-col bg-background">
                   <LovableOverlayHeader title="History" onClose={() => setLeftChatOverlay(null)} />
@@ -1907,6 +1914,7 @@ export function EditorLayout({
                   id="preview-frame"
                   style={viewMode === "code" ? { display: "none" } : undefined}
                 >
+                  <EditorPanelErrorBoundary name="Preview" resetKey={currentProject.id}>
                   <PreviewPanel
                     files={previewVersion?.files ?? files}
                     framework={project.framework}
@@ -1935,6 +1943,7 @@ export function EditorLayout({
                       setLeftPanel("chat");
                     }}
                   />
+                  </EditorPanelErrorBoundary>
                 </Panel>
                 <PanelResizeHandle
                   className={`w-px bg-border transition-colors hover:bg-primary/50 ${

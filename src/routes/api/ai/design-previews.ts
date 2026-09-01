@@ -4,6 +4,7 @@ import { generateAI } from "@/lib/ai/generate";
 import { DESIGN_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { claimDailyCredits } from "@/lib/credits";
+import { canWriteProjectFiles,getProjectAccess } from "@/lib/project/access";
 import {
 buildDesignPreviewSystemPrompt,
 buildFallbackDesignPreviews,
@@ -23,14 +24,12 @@ async function handlePOST(req: Request) {
     return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
   }
 
-  await claimDailyCredits(supabase, user.id);
-  const { data: profile } = await supabase
-    .from("profiles").select("credits").eq("id", user.id).single();
-  if (!profile || profile.credits <= 0) {
-    return Response.json({ error: "Insufficient credits" }, { status: 402 });
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
-
-  const body = await req.json();
   const { prompt, projectId, fileCount = 0, force = false } = body as {
     prompt?: string;
     projectId?: string;
@@ -38,10 +37,36 @@ async function handlePOST(req: Request) {
     force?: boolean;
   };
 
-  if (!prompt || typeof prompt !== "string") {
+  if (!prompt || typeof prompt !== "string" || prompt.trim().length === 0) {
     return Response.json({ error: "prompt required" }, { status: 400 });
   }
-  if (!force && !shouldOfferDesignPreviews(prompt, fileCount)) {
+  if (prompt.length > 20_000) {
+    return Response.json({ error: "prompt too long" }, { status: 413 });
+  }
+  if (!projectId || typeof projectId !== "string") {
+    return Response.json({ error: "projectId required" }, { status: 400 });
+  }
+
+  try {
+    const access = await getProjectAccess(supabase, projectId, user.id);
+    if (!canWriteProjectFiles(access)) {
+      return Response.json({ error: "Project write access required" }, { status: 403 });
+    }
+  } catch {
+    return Response.json({ error: "Could not verify project access" }, { status: 503 });
+  }
+
+  await claimDailyCredits(supabase, user.id);
+  const { data: profile } = await supabase
+    .from("profiles").select("credits").eq("id", user.id).single();
+  if (!profile || profile.credits <= 0) {
+    return Response.json({ error: "Insufficient credits" }, { status: 402 });
+  }
+
+  const normalizedFileCount = Number.isFinite(fileCount)
+    ? Math.max(0, Math.min(10_000, Math.trunc(fileCount)))
+    : 0;
+  if (!force && !shouldOfferDesignPreviews(prompt, normalizedFileCount)) {
     return Response.json({ skip: true, directions: [] });
   }
 
