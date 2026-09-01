@@ -1,5 +1,5 @@
 
-import { useState,useEffect,useCallback,useRef } from "react";
+import { useState,useEffect,useCallback,useRef,memo } from "react";
 import dynamic from "@/lib/lazy-component";
 import { importWithRetry } from "@/lib/import-with-retry";
 import {
@@ -125,7 +125,7 @@ const EMPTY_INLINE: InlineEditState = {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function CodePanel({
+function CodePanelImpl({
   file, files, projectId, onFileChange, onFileContentSync, onSave, onChange,
   collabUser, onCollaboratorsChange, onReferenceInChat,
 }: CodePanelProps) {
@@ -2756,3 +2756,7 @@ export function CodePanel({
     </div>
   );
 }
+
+// Memoized: CodePanel is one of the three heaviest editor child components.
+// See the matching note on ChatPanel/PreviewPanel.
+export const CodePanel = memo(CodePanelImpl);

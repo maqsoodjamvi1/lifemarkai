@@ -19,7 +19,7 @@ isLovableToolPanel,
 } from "./lovable-tools-overlay";
 import { FileToAppDropZone } from "./file-to-app-drop-zone";
 import { useShortcutsModal } from "@/hooks/use-shortcuts-modal";
-import type { CommandPaletteActions } from "@/components/command-palette";
+import type { CommandPaletteActions,CommandPaletteFile } from "@/components/command-palette";
 import { useRecordProjectVisit } from "@/hooks/use-recent-projects";
 import type { Project,ProjectFile,Message,Profile } from "@/types/database";
 import type { PreviewErrorReport,PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
@@ -145,6 +145,71 @@ interface EditorLayoutProps {
   /** Deep-link: left tool panel id (`?panel=chat`). */
   initialPanel?: LeftPanel | string;
 }
+
+// Static tab metadata — independent of any prop/state, so it lives at module
+// scope instead of being re-allocated (a ~60-object array plus a filter pass)
+// on every EditorLayout render. Was a `const` inside the component body.
+const LEFT_PANEL_TABS: { id: LeftPanel; label: string; emoji: string }[] = [
+  { id: "chat",      label: "Chat",     emoji: "💬" },
+  { id: "plan",      label: "Plan",     emoji: "🗺️" },
+  { id: "agent",     label: "Agent",    emoji: "🤖" },
+  { id: "intelligence", label: "Intelligence", emoji: "AI" },
+  { id: "healing",   label: "Self-Heal", emoji: "🩹" },
+  { id: "knowledge", label: "Knowledge",emoji: "🧠" },
+  { id: "activity",  label: "Activity", emoji: "📋" },
+  { id: "github",    label: "Git",      emoji: "🐙" },
+  { id: "collab",    label: "Live",     emoji: "👥" },
+  { id: "image",     label: "Image",    emoji: "🎨" },
+  { id: "supabase",  label: "DB",       emoji: "🗄" },
+  { id: "env",       label: "Env",      emoji: "🔑" },
+  { id: "figma",     label: "Figma",    emoji: "🎭" },
+  { id: "domains",   label: "Domains",  emoji: "🌐" },
+  { id: "history",   label: "History",  emoji: "⏱️" },
+  { id: "deploys",    label: "Deploys",    emoji: "🚀" },
+  { id: "analytics",  label: "Analytics",  emoji: "📊" },
+  { id: "security",   label: "Security",   emoji: "🔒" },
+  { id: "settings",  label: "Settings", emoji: "⚙️" },
+  { id: "search",     label: "Search",     emoji: "🔍" },
+  { id: "components", label: "Components", emoji: "🧩" },
+  { id: "design",     label: "Design",     emoji: "🖌️" },
+  { id: "comments",   label: "Comments",   emoji: "💬" },
+  { id: "crossref",   label: "Import",     emoji: "🔗" },
+  { id: "email",      label: "Email",      emoji: "✉️" },
+  { id: "testing",    label: "Testing",    emoji: "🧪" },
+  { id: "guidance",   label: "Design AI",  emoji: "✨" },
+  { id: "e2e",        label: "E2E Tests",  emoji: "🌐" },
+  { id: "packages",   label: "Packages",   emoji: "📦" },
+  { id: "review",     label: "Review",     emoji: "🔍" },
+  { id: "mcp",        label: "MCP",        emoji: "🔌" },
+  { id: "seo",        label: "SEO",        emoji: "📈" },
+  { id: "customemail",label: "Emails",     emoji: "📧" },
+  { id: "designdir",  label: "Design Dir", emoji: "🎯" },
+  { id: "designpanel",  label: "Design",       emoji: "🖌️" },
+  { id: "visualedits",   label: "Visual Edits", emoji: "✏️" },
+  { id: "publishpanel",  label: "Publish",      emoji: "🚀" },
+  { id: "payments",      label: "Billing",      emoji: "💳" },
+  { id: "problems",   label: "Problems",   emoji: "⚠️" },
+  // Runtime errors real visitors hit on the PUBLISHED app, as opposed to
+  // "Problems", which is Monaco's compile-time markers. The panel shipped
+  // with no union member and no menu row, so it was unreachable.
+  { id: "apperrors",  label: "App Errors", emoji: "🐞" },
+  { id: "connectors", label: "Connectors", emoji: "🔗" },
+  { id: "accessibility", label: "A11y", emoji: "♿" },
+  { id: "schema",        label: "Schema",  emoji: "🗃️" },
+  { id: "webhooks",      label: "Webhooks", emoji: "🪝" },
+  { id: "performance",   label: "Perf",     emoji: "🚀" },
+  { id: "cloud",         label: "Cloud",     emoji: "☁️" },
+  { id: "dbmanager",     label: "Data",      emoji: "🗃️" },
+  { id: "storage",       label: "Storage",   emoji: "🗄️" },
+  { id: "media",         label: "Media",     emoji: "🖼️" },
+  { id: "appconnectors", label: "Connectors", emoji: "🔌" },
+  { id: "monetize",      label: "Monetize",   emoji: "💰" },
+  { id: "edgefn",       label: "Edge Fns",   emoji: "⚡" },
+  { id: "dbquery",      label: "DB Query",   emoji: "🔍" },
+  { id: "secrets",      label: "Secrets",    emoji: "🔐" },
+  { id: "savetemplate", label: "Publish Template", emoji: "🌐" },
+  { id: "diffviewer",   label: "Diff Viewer",      emoji: "🔀" },
+];
 
 export function EditorLayout({
   project,
@@ -411,6 +476,12 @@ export function EditorLayout({
     });
   }, [syncCredits]);
   const [isVisualEditActive, setIsVisualEditActive] = useState(false);
+  // One stable identity shared by all 4 JSX call sites below (mobile +
+  // desktop x chat/preview panels) instead of a fresh arrow function per
+  // site on every render.
+  const handleVisualEditToggle = useCallback(() => {
+    setIsVisualEditActive((v) => !v);
+  }, []);
   const [showFileTree, setShowFileTree] = useState(false);
   const [focusMode, setFocusMode] = useState(false);
   /** Lovable close-sidebar — hides chat column but keeps top nav */
@@ -482,10 +553,18 @@ export function EditorLayout({
     });
   }, [storageKey]);
 
-  // collabUser derived from profile — passed into CodePanel to activate Yjs
-  const collabUser = profile
-    ? { id: profile.id, name: profile.full_name ?? profile.email ?? "User", avatar: profile.avatar_url ?? undefined }
-    : undefined;
+  // collabUser derived from profile — passed into CodePanel to activate Yjs.
+  // Memoized so its identity only changes when profile actually changes,
+  // rather than on every EditorLayout render — an inline object literal here
+  // would otherwise look "new" to CodePanel's Yjs-connect effect every time,
+  // tearing down and reconnecting the collab session for unrelated re-renders.
+  const collabUser = useMemo(
+    () =>
+      profile
+        ? { id: profile.id, name: profile.full_name ?? profile.email ?? "User", avatar: profile.avatar_url ?? undefined }
+        : undefined,
+    [profile],
+  );
   const [currentProject, setCurrentProject] = useState<Project>(project);
   // Test / Live environment — starts from the value saved on the project
   const [environment, setEnvironment] = useState<"test" | "live">(
@@ -562,6 +641,23 @@ export function EditorLayout({
   }, []);
   const { open: shortcutsOpen, setOpen: setShortcutsOpen } = useShortcutsModal();
 
+  // ChatPanel props below this point are each rendered twice (mobile and
+  // desktop branches). Extracted to shared stable callbacks — all bodies
+  // only call setState setters plus the module-scope EMPTY_PREVIEW_ERRORS
+  // constant, so an empty dep array is correct — instead of a fresh arrow
+  // function allocated per branch on every render.
+  const handleChatAutoFixComplete = useCallback(() => {
+    setPreviewError(null);
+    setPreviewRuntimeErrors(EMPTY_PREVIEW_ERRORS);
+  }, []);
+  const handleChatPendingFixConsumed = useCallback(() => setPendingFix(null), []);
+  const handleChatPendingFileRefConsumed = useCallback(() => setPendingFileRef(null), []);
+  const handleChatStreamingChange = useCallback((s: boolean, fc?: number) => {
+    setIsGenerating(s);
+    if (fc !== undefined) setGeneratingFileCount(fc);
+  }, []);
+  const handleChatPendingBuildFromFileConsumed = useCallback(() => setPendingBuildFromFile(null), []);
+
   const handleOpenPanel = useCallback((panel: string) => {
     if (panel === "history") {
       setLeftChatOverlay("history");
@@ -582,25 +678,78 @@ export function EditorLayout({
     if (isMobile) setMobilePaneActive("preview");
   }, [isMobile]);
 
+  // HistoryPanel's onRestore/onCompare are each rendered twice (mobile and
+  // desktop overlay). Shared stable callbacks instead of a fresh closure per
+  // branch on every render.
+  const handleHistoryRestore = useCallback((snapshotFiles: ProjectFile[]) => {
+    setFiles(snapshotFiles);
+    filesRef.current = snapshotFiles;
+    setActiveFile(snapshotFiles[0] ?? null);
+    setLeftChatOverlay(null);
+    window.dispatchEvent(new CustomEvent("lifemark-preview-reverting"));
+    window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
+      detail: { files: snapshotFiles, reason: "history-restore" },
+    }));
+    handleFocusPreview();
+  }, [handleFocusPreview]);
+  const handleHistoryCompare = useCallback((oldId: string, newId: string) => {
+    window.dispatchEvent(new CustomEvent("lifemark-open-diff", {
+      detail: { oldSnapshotId: oldId, newSnapshotId: newId, projectId: currentProject.id },
+    }));
+    setLeftChatOverlay(null);
+    handleOpenPanel("diffviewer");
+  }, [currentProject.id, handleOpenPanel]);
+  const handleFileToAppPromptReady = useCallback((prompt: string, imageBase64?: string) => {
+    setLeftPanel("chat");
+    setPendingBuildFromFile({ prompt, imageBase64 });
+  }, []);
+
   // Mobile: Files tab routes to the dedicated files layout.
   useEffect(() => {
     if (!isMobile) return;
     if (viewMode === "files" || viewMode === "code") setMobilePaneActive("files");
   }, [isMobile, viewMode]);
 
-  const commandPaletteActions: CommandPaletteActions = {
-    onOpenFile: (file) => setActiveFile(files.find(f => f.id === file.id) || null),
-    onOpenPanel: (panel) => {
-      const chatPanels: LeftPanel[] = ["chat", "plan", "agent"];
-      if (chatPanels.includes(panel as LeftPanel)) {
-        setLeftPanel(panel as LeftPanel);
-      } else {
-        handleOpenPanel(panel);
-      }
-    },
-    onSetViewMode: (mode) => setViewMode(mode),
-    onToggleFileTree: () => setShowFileTree((v) => !v),
-  };
+  // Reads filesRef.current (already kept in sync with `files` above) instead
+  // of closing over `files` directly, so this callback's identity never has
+  // to change on every file edit — same pattern already used elsewhere in
+  // this component for latest-value-without-a-dependency access.
+  const handleCommandOpenFile = useCallback((file: CommandPaletteFile) => {
+    setActiveFile(filesRef.current.find((f) => f.id === file.id) || null);
+  }, []);
+  const handleCommandOpenPanel = useCallback((panel: string) => {
+    const chatPanels: LeftPanel[] = ["chat", "plan", "agent"];
+    if (chatPanels.includes(panel as LeftPanel)) {
+      setLeftPanel(panel as LeftPanel);
+    } else {
+      handleOpenPanel(panel);
+    }
+  }, [handleOpenPanel]);
+  const handleCommandSetViewMode = useCallback((mode: "preview" | "code" | "both" | "files") => {
+    setViewMode(mode);
+  }, []);
+  const handleCommandToggleFileTree = useCallback(() => {
+    setShowFileTree((v) => !v);
+  }, []);
+  // Stable object identity — CommandPalette only needs to see a new `actions`
+  // prop when one of the handlers themselves actually changes, not on every
+  // EditorLayout render.
+  const commandPaletteActions: CommandPaletteActions = useMemo(
+    () => ({
+      onOpenFile: handleCommandOpenFile,
+      onOpenPanel: handleCommandOpenPanel,
+      onSetViewMode: handleCommandSetViewMode,
+      onToggleFileTree: handleCommandToggleFileTree,
+    }),
+    [handleCommandOpenFile, handleCommandOpenPanel, handleCommandSetViewMode, handleCommandToggleFileTree],
+  );
+  // Was a fresh array-with-a-fresh-object literal on every render — a stable
+  // reference here means CommandPalette (a lazy-loaded component) only re-
+  // renders on an actual project id/name/framework change.
+  const commandPaletteProjects = useMemo(
+    () => [{ id: currentProject.id, name: currentProject.name, framework: currentProject.framework }],
+    [currentProject.id, currentProject.name, currentProject.framework],
+  );
 
   useEffect(() => {
     setCredits(profile?.credits ?? 0);
@@ -1289,87 +1438,12 @@ export function EditorLayout({
     setCredits(newCredits);
   }, []);
 
-  const leftPanelTabs: { id: LeftPanel; label: string; emoji: string }[] = [
-    { id: "chat",      label: "Chat",     emoji: "💬" },
-    { id: "plan",      label: "Plan",     emoji: "🗺️" },
-    { id: "agent",     label: "Agent",    emoji: "🤖" },
-    { id: "intelligence", label: "Intelligence", emoji: "AI" },
-    { id: "healing",   label: "Self-Heal", emoji: "🩹" },
-    { id: "knowledge", label: "Knowledge",emoji: "🧠" },
-    { id: "activity",  label: "Activity", emoji: "📋" },
-    { id: "github",    label: "Git",      emoji: "🐙" },
-    { id: "collab",    label: "Live",     emoji: "👥" },
-    { id: "image",     label: "Image",    emoji: "🎨" },
-    { id: "supabase",  label: "DB",       emoji: "🗄" },
-    { id: "env",       label: "Env",      emoji: "🔑" },
-    { id: "figma",     label: "Figma",    emoji: "🎭" },
-    { id: "domains",   label: "Domains",  emoji: "🌐" },
-    { id: "history",   label: "History",  emoji: "⏱️" },
-    { id: "deploys",    label: "Deploys",    emoji: "🚀" },
-    { id: "analytics",  label: "Analytics",  emoji: "📊" },
-    { id: "security",   label: "Security",   emoji: "🔒" },
-    { id: "settings",  label: "Settings", emoji: "⚙️" },
-    { id: "search",     label: "Search",     emoji: "🔍" },
-    { id: "components", label: "Components", emoji: "🧩" },
-    { id: "design",     label: "Design",     emoji: "🖌️" },
-    { id: "comments",   label: "Comments",   emoji: "💬" },
-    { id: "crossref",   label: "Import",     emoji: "🔗" },
-    { id: "email",      label: "Email",      emoji: "✉️" },
-    { id: "testing",    label: "Testing",    emoji: "🧪" },
-    { id: "guidance",   label: "Design AI",  emoji: "✨" },
-    { id: "e2e",        label: "E2E Tests",  emoji: "🌐" },
-    { id: "packages",   label: "Packages",   emoji: "📦" },
-    { id: "review",     label: "Review",     emoji: "🔍" },
-    { id: "mcp",        label: "MCP",        emoji: "🔌" },
-    { id: "seo",        label: "SEO",        emoji: "📈" },
-    { id: "customemail",label: "Emails",     emoji: "📧" },
-    { id: "designdir",  label: "Design Dir", emoji: "🎯" },
-    { id: "designpanel",  label: "Design",       emoji: "🖌️" },
-    { id: "visualedits",   label: "Visual Edits", emoji: "✏️" },
-    { id: "publishpanel",  label: "Publish",      emoji: "🚀" },
-    { id: "payments",      label: "Billing",      emoji: "💳" },
-    { id: "problems",   label: "Problems",   emoji: "⚠️" },
-    // Runtime errors real visitors hit on the PUBLISHED app, as opposed to
-    // "Problems", which is Monaco's compile-time markers. The panel shipped
-    // with no union member and no menu row, so it was unreachable.
-    { id: "apperrors",  label: "App Errors", emoji: "🐞" },
-    { id: "connectors", label: "Connectors", emoji: "🔗" },
-    { id: "accessibility", label: "A11y", emoji: "♿" },
-    { id: "schema",        label: "Schema",  emoji: "🗃️" },
-    { id: "webhooks",      label: "Webhooks", emoji: "🪝" },
-    { id: "performance",   label: "Perf",     emoji: "🚀" },
-    { id: "cloud",         label: "Cloud",     emoji: "☁️" },
-    { id: "dbmanager",     label: "Data",      emoji: "🗃️" },
-    { id: "storage",       label: "Storage",   emoji: "🗄️" },
-    { id: "media",         label: "Media",     emoji: "🖼️" },
-    { id: "appconnectors", label: "Connectors", emoji: "🔌" },
-    { id: "monetize",      label: "Monetize",   emoji: "💰" },
-    { id: "edgefn",       label: "Edge Fns",   emoji: "⚡" },
-    { id: "dbquery",      label: "DB Query",   emoji: "🔍" },
-    { id: "secrets",      label: "Secrets",    emoji: "🔐" },
-    { id: "savetemplate", label: "Publish Template", emoji: "🌐" },
-    { id: "diffviewer",   label: "Diff Viewer",      emoji: "🔀" },
-  ];
-
-  // Primary tabs shown inline in the left panel header; rest go into overflow dropdown
-  const primaryTabs: { id: LeftPanel; label: string }[] = [
-    { id: "chat",      label: "Chat"      },
-    { id: "plan",      label: "Plan"      },
-    { id: "agent",     label: "Agent"     },
-    { id: "knowledge", label: "Knowledge" },
-    { id: "activity",  label: "Activity"  },
-  ];
-  const overflowTabs = leftPanelTabs.filter((t) => !primaryTabs.find((p) => p.id === t.id));
-
   return (
     <div className="flex flex-col h-screen bg-background overflow-hidden">
       {/* File-to-app global drop zone */}
       <FileToAppDropZone
         disabled={isGenerating}
-        onPromptReady={(prompt, imageBase64) => {
-          setLeftPanel("chat");
-          setPendingBuildFromFile({ prompt, imageBase64 });
-        }}
+        onPromptReady={handleFileToAppPromptReady}
       />
       {/* Focus mode exit button */}
       {focusMode && (
@@ -1498,21 +1572,18 @@ export function EditorLayout({
                   onFilesUpdate={handleFilesUpdate}
                   onCreditsUpdate={handleCreditsUpdate}
                   onProjectUpdate={handleProjectUpdate}
-                  onAutoFixComplete={() => {
-                    setPreviewError(null);
-                    setPreviewRuntimeErrors(EMPTY_PREVIEW_ERRORS);
-                  }}
-                  onPendingFixConsumed={() => setPendingFix(null)}
-                  onPendingFileRefConsumed={() => setPendingFileRef(null)}
-                  onStreamingChange={(s, fc) => { setIsGenerating(s); if (fc !== undefined) setGeneratingFileCount(fc); }}
+                  onAutoFixComplete={handleChatAutoFixComplete}
+                  onPendingFixConsumed={handleChatPendingFixConsumed}
+                  onPendingFileRefConsumed={handleChatPendingFileRefConsumed}
+                  onStreamingChange={handleChatStreamingChange}
                   onModeChange={setEditorMode}
                   pendingBuildFromFile={pendingBuildFromFile}
-                  onPendingBuildFromFileConsumed={() => setPendingBuildFromFile(null)}
+                  onPendingBuildFromFileConsumed={handleChatPendingBuildFromFileConsumed}
                   isLocked={isLiveLocked}
                   onApprovePlan={handleApprovePlan}
                   onOpenPanel={handleOpenPanel}
                   onFocusPreview={handleFocusPreview}
-                  onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
+                  onVisualEditToggle={handleVisualEditToggle}
                   isVisualEditActive={isVisualEditActive}
                   isMobile={isMobile}
                   securityIssueCount={securityIssueCount}
@@ -1524,24 +1595,8 @@ export function EditorLayout({
                     <div className="flex-1 overflow-hidden">
                       <HistoryPanel
                         projectId={currentProject.id}
-                        onRestore={(snapshotFiles) => {
-                          setFiles(snapshotFiles);
-                          filesRef.current = snapshotFiles;
-                          setActiveFile(snapshotFiles[0] ?? null);
-                          setLeftChatOverlay(null);
-                          window.dispatchEvent(new CustomEvent("lifemark-preview-reverting"));
-                          window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
-                            detail: { files: snapshotFiles, reason: "history-restore" },
-                          }));
-                          handleFocusPreview();
-                        }}
-                        onCompare={(oldId, newId) => {
-                          window.dispatchEvent(new CustomEvent("lifemark-open-diff", {
-                            detail: { oldSnapshotId: oldId, newSnapshotId: newId, projectId: currentProject.id },
-                          }));
-                          setLeftChatOverlay(null);
-                          handleOpenPanel("diffviewer");
-                        }}
+                        onRestore={handleHistoryRestore}
+                        onCompare={handleHistoryCompare}
                       />
                     </div>
                   </div>
@@ -1588,7 +1643,7 @@ export function EditorLayout({
                 hideTopChrome
                 activeFile={activeFile}
                 isVisualEditActive={isVisualEditActive}
-                onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
+                onVisualEditToggle={handleVisualEditToggle}
                 onFileUpdate={handleFileUpdate}
                 onError={setPreviewError}
                 onErrorReport={handlePreviewErrorReport}
@@ -1635,7 +1690,7 @@ export function EditorLayout({
                   <>
                     <div className="flex items-center justify-between px-4 h-9 border-b border-border shrink-0">
                       <span className="text-xs font-semibold text-foreground">
-                        {leftPanelTabs.find((t) => t.id === rightPanel)?.label ?? rightPanel}
+                        {LEFT_PANEL_TABS.find((t) => t.id === rightPanel)?.label ?? rightPanel}
                       </span>
                       <button
                         onClick={() => setRightPanel(null)}
@@ -1754,21 +1809,18 @@ export function EditorLayout({
                 onFilesUpdate={handleFilesUpdate}
                 onCreditsUpdate={handleCreditsUpdate}
                 onProjectUpdate={handleProjectUpdate}
-                onAutoFixComplete={() => {
-                  setPreviewError(null);
-                  setPreviewRuntimeErrors(EMPTY_PREVIEW_ERRORS);
-                }}
-                onPendingFixConsumed={() => setPendingFix(null)}
-                onPendingFileRefConsumed={() => setPendingFileRef(null)}
-                onStreamingChange={(s, fc) => { setIsGenerating(s); if (fc !== undefined) setGeneratingFileCount(fc); }}
+                onAutoFixComplete={handleChatAutoFixComplete}
+                onPendingFixConsumed={handleChatPendingFixConsumed}
+                onPendingFileRefConsumed={handleChatPendingFileRefConsumed}
+                onStreamingChange={handleChatStreamingChange}
                 onModeChange={setEditorMode}
                 pendingBuildFromFile={pendingBuildFromFile}
-                onPendingBuildFromFileConsumed={() => setPendingBuildFromFile(null)}
+                onPendingBuildFromFileConsumed={handleChatPendingBuildFromFileConsumed}
                 isLocked={isLiveLocked}
                 onApprovePlan={handleApprovePlan}
                 onOpenPanel={handleOpenPanel}
                 onFocusPreview={handleFocusPreview}
-                onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
+                onVisualEditToggle={handleVisualEditToggle}
                 isVisualEditActive={isVisualEditActive}
                 securityIssueCount={securityIssueCount}
               />
@@ -1779,24 +1831,8 @@ export function EditorLayout({
                   <div className="flex-1 overflow-hidden">
                     <HistoryPanel
                       projectId={currentProject.id}
-                      onRestore={(snapshotFiles) => {
-                        setFiles(snapshotFiles);
-                        filesRef.current = snapshotFiles;
-                        setActiveFile(snapshotFiles[0] ?? null);
-                        setLeftChatOverlay(null);
-                        window.dispatchEvent(new CustomEvent("lifemark-preview-reverting"));
-                        window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
-                          detail: { files: snapshotFiles, reason: "history-restore" },
-                        }));
-                        handleFocusPreview();
-                      }}
-                      onCompare={(oldId, newId) => {
-                        window.dispatchEvent(new CustomEvent("lifemark-open-diff", {
-                          detail: { oldSnapshotId: oldId, newSnapshotId: newId, projectId: currentProject.id },
-                        }));
-                        setLeftChatOverlay(null);
-                        handleOpenPanel("diffviewer");
-                      }}
+                      onRestore={handleHistoryRestore}
+                      onCompare={handleHistoryCompare}
                     />
                   </div>
                 </div>
@@ -1851,7 +1887,7 @@ export function EditorLayout({
                     <>
                   <div className="flex items-center justify-between px-4 h-9 border-b border-border shrink-0">
                     <span className="text-xs font-semibold text-foreground">
-                      {leftPanelTabs.find((t) => t.id === rightPanel)?.label ?? rightPanel}
+                      {LEFT_PANEL_TABS.find((t) => t.id === rightPanel)?.label ?? rightPanel}
                     </span>
                     <button
                       onClick={() => setRightPanel(null)}
@@ -1924,7 +1960,7 @@ export function EditorLayout({
                     projectId={pid}
                     activeFile={activeFile}
                     isVisualEditActive={isVisualEditActive}
-                    onVisualEditToggle={() => setIsVisualEditActive((v) => !v)}
+                    onVisualEditToggle={handleVisualEditToggle}
                     onFileUpdate={handleFileUpdate}
                     isGenerating={isGenerating}
                     generatingFileCount={generatingFileCount}
@@ -2013,7 +2049,7 @@ export function EditorLayout({
         />
       )}
       <CommandPalette
-        projects={[{ id: currentProject.id, name: currentProject.name, framework: currentProject.framework }]}
+        projects={commandPaletteProjects}
         files={files}
         actions={commandPaletteActions}
       />

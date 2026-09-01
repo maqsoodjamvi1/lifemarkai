@@ -205,7 +205,7 @@ function waitForPreviewSuccess(timeoutMs = 10_000): Promise<boolean> {
 }
 
 
-export function ChatPanel({
+function ChatPanelImpl({
   project, messages, files, activeFile, mode, credits, starterPrompt,
   previewError, previewRuntimeErrors = [], pendingFixPrompt, pendingFileRef,
   onMessagesUpdate, onFilesUpdate, onCreditsUpdate,
@@ -6776,3 +6776,13 @@ ${(f.content ?? "").slice(0, 8000)}
     </LovableChatPanelShell>
   );
 }
+
+// Memoized: ChatPanel is one of the three heaviest editor child components
+// and re-renders on every EditorLayout state change (chat text, generation
+// state, mobile pane, etc.) that has nothing to do with chat. React.memo
+// skips its re-render when its own props are shallow-equal to the previous
+// render — most of ChatPanel's callback/object props were stabilized in
+// EditorLayout alongside this change so the memo comparison actually pays
+// off, but this wrapper is safe (a no-op at worst) even for any prop that
+// isn't yet reference-stable.
+export const ChatPanel = React.memo(ChatPanelImpl);

@@ -1,5 +1,5 @@
 
-import { useState,useMemo,useCallback,useEffect,useRef } from "react";
+import { useState,useMemo,useCallback,useEffect,useRef,memo } from "react";
 import {
 RefreshCw,Smartphone,Tablet,Monitor,
 ExternalLink,MousePointer,Terminal,Loader2,
@@ -129,7 +129,7 @@ const BG_COLORS = [
   "bg-blue-500","bg-green-500","bg-red-500","bg-yellow-500",
 ];
 
-export function PreviewPanel({
+function PreviewPanelImpl({
   files,
   framework,
   runtime,
@@ -3290,3 +3290,8 @@ MODAL_TOKEN_SECRET=...
     </TooltipProvider>
   );
 }
+
+// Memoized: PreviewPanel is one of the three heaviest editor child
+// components and previously re-rendered on every EditorLayout state change
+// regardless of relevance. See the matching note on ChatPanel/CodePanel.
+export const PreviewPanel = memo(PreviewPanelImpl);
