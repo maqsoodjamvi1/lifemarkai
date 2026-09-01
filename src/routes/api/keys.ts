@@ -48,6 +48,15 @@ export const Route = createFileRoute("/api/keys")({
           return Response.json({ error: "name is required (max 64 chars)" }, { status: 400 });
         }
 
+        // An explicitly empty array (the dashboard lets a user deselect every
+        // scope checkbox and still submit) must be rejected here, not stored
+        // as-is: hasScope() treats a key with zero scopes as unrestricted —
+        // that behavior exists for legacy pre-scoping keys, not for a key a
+        // developer just visually configured with nothing checked, which
+        // should mean least-privilege, not full access.
+        if (Array.isArray(body.scopes) && body.scopes.length === 0) {
+          return Response.json({ error: "Select at least one permission scope." }, { status: 400 });
+        }
         const scopes: string[] = Array.isArray(body.scopes) ? body.scopes : ["ai:chat", "projects:read"];
         const validScopes = new Set(["ai:chat", "ai:plan", "ai:build", "projects:read", "projects:write", "deploy"]);
         for (const s of scopes) {

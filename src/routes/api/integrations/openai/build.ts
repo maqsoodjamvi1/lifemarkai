@@ -5,7 +5,7 @@ import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 
 /**
  * Native /api/integrations/openai/build — ChatGPT Action "createProject".
- * Auth via X-LifemarkAI-Key or Bearer key (projects:create scope). Creates a
+ * Auth via X-LifemarkAI-Key or Bearer key (projects:write scope). Creates a
  * project + starter message and returns its editor URL.
  */
 interface CreateBody {
@@ -48,9 +48,16 @@ export const Route = createFileRoute("/api/integrations/openai/build")({
         }
         const auth = await validateApiKey(headerKey);
         if (!auth) return Response.json({ error: "Invalid or expired API key." }, { status: 401, headers: CORS_HEADERS });
-        if (!auth.scopes.includes("projects:create")) {
+        // Was "projects:create" — not one of the scopes /api/keys will ever
+        // let a user issue (validScopes there: ai:chat, ai:plan, ai:build,
+        // projects:read, projects:write, deploy), so this endpoint 403'd for
+        // every possible caller. "projects:write" is the scope this
+        // codebase actually uses for project creation elsewhere (mcp.ts's
+        // create_project, v1/projects.ts's POST) and is what the dashboard's
+        // scope picker labels "Create and update projects".
+        if (!auth.scopes.includes("projects:write")) {
           return Response.json(
-            { error: "API key is missing the `projects:create` scope. Re-issue it from /dashboard/settings → API keys." },
+            { error: "API key is missing the `projects:write` scope. Re-issue it from /dashboard/settings → API keys." },
             { status: 403, headers: CORS_HEADERS },
           );
         }

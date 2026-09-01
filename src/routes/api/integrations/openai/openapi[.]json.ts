@@ -125,7 +125,7 @@ function handleGET() {
               },
             },
             "403": {
-              description: "API key is missing the `projects:create` scope.",
+              description: "API key is missing the `projects:write` scope.",
               content: {
                 "application/json": {
                   schema: { type: "object", properties: { error: { type: "string" } } },
@@ -151,7 +151,7 @@ function handleGET() {
           in: "header",
           name: "X-LifemarkAI-Key",
           description:
-            "API key provisioned at /dashboard/settings → API keys. Must include the `projects:create` scope.",
+            "API key provisioned at /dashboard/settings → API keys. Must include the `projects:write` scope.",
         },
       },
     },
