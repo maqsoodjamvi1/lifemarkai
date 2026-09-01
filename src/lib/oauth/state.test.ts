@@ -11,6 +11,7 @@ function payload(overrides: Partial<OAuthStatePayload> = {}): OAuthStatePayload 
     codeVerifier: "abc123verifier",
     nonce: "n0nce",
     issuedAt: 1700000000,
+    userId: "user_abc",
     ...overrides,
   };
 }
@@ -39,6 +40,17 @@ test("verifyOAuthState rejects a tampered payload (e.g. a swapped projectId)", (
 test("verifyOAuthState rejects malformed tokens", () => {
   assert.equal(verifyOAuthState("not-a-valid-token", SECRET), null);
   assert.equal(verifyOAuthState("", SECRET), null);
+});
+
+test("verifyOAuthState rejects a validly-signed payload missing userId", () => {
+  // Regression guard for the token-planting fix: userId is required so
+  // /callback can reject a state whose initiating user differs from the
+  // user completing the flow. A payload signed before that field existed
+  // (or with it stripped) must not verify.
+  const { projectId, connector, codeVerifier, nonce, issuedAt } = payload();
+  const legacyPayload = { projectId, connector, codeVerifier, nonce, issuedAt };
+  const token = signOAuthState(legacyPayload as OAuthStatePayload, SECRET);
+  assert.equal(verifyOAuthState(token, SECRET, { now: 1700000000 }), null);
 });
 
 test("verifyOAuthState rejects a state older than maxAgeSeconds (replay protection)", () => {
