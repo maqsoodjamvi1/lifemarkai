@@ -298,9 +298,17 @@ function ApiKeysPanel({ userId }: { userId: string }) {
       variant: "destructive",
     });
     if (!ok) return;
-    await fetch(`/api/keys?id=${id}`, { method: "DELETE" });
-    setKeys((prev) => prev.filter((k) => k.id !== id));
-    toast({ title: "Key revoked" });
+    try {
+      const res = await fetch(`/api/keys?id=${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`revoke failed (${res.status})`);
+      setKeys((prev) => prev.filter((k) => k.id !== id));
+      toast({ title: "Key revoked" });
+    } catch {
+      // Don't remove it from the list or claim success — a key the user
+      // believes is revoked but is actually still live is worse than an
+      // extra click to retry.
+      toast({ title: "Couldn't revoke key", description: "The key is still active. Try again.", variant: "destructive" });
+    }
   }
 
   async function copyKey(text: string) {

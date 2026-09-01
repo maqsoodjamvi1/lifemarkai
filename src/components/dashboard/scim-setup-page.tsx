@@ -130,6 +130,7 @@ export function SCIMSetupPage({ hasSso = true }: { hasSso?: boolean }) {
 
   const handleAddMapping = async () => {
     if (!groupName.trim()) { toast({ title: "Enter a group name", variant: "destructive" }); return; }
+    const previous = mappings;
     const next = [...mappings, { id: crypto.randomUUID(), groupName: groupName.trim(), role: groupRole }];
     setMappings(next);
     setGroupName("");
@@ -137,18 +138,24 @@ export function SCIMSetupPage({ hasSso = true }: { hasSso?: boolean }) {
       await patch({ scim: { enabled: true, welcomeEmail: config?.welcomeEmail ?? true, groupMappings: next } });
       toast({ title: "Group mapping added" });
     } catch {
-      toast({ title: "Save failed", variant: "destructive" });
+      // Roll back the optimistic add — otherwise the UI shows a mapping
+      // that was never actually saved, and an admin trusting it believes
+      // access is granted/revoked that isn't.
+      setMappings(previous);
+      toast({ title: "Save failed", description: "The mapping was not added.", variant: "destructive" });
     }
   };
 
   const handleRemoveMapping = async (id: string) => {
+    const previous = mappings;
     const next = mappings.filter((x) => x.id !== id);
     setMappings(next);
     try {
       await patch({ scim: { enabled: true, welcomeEmail: config?.welcomeEmail ?? true, groupMappings: next } });
       toast({ title: "Mapping removed" });
     } catch {
-      toast({ title: "Save failed", variant: "destructive" });
+      setMappings(previous);
+      toast({ title: "Save failed", description: "The mapping was not removed.", variant: "destructive" });
     }
   };
 

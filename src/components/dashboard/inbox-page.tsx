@@ -57,33 +57,42 @@ export function InboxPage({ userId }: { userId: string }) {
   async function markRead(id: string) {
     setBusy(id);
     try {
-      await fetch("/api/notifications", {
+      const res = await fetch("/api/notifications", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "mark_read", ids: [id] }),
       });
+      if (!res.ok) throw new Error(`mark_read failed (${res.status})`);
       setItems((prev) => prev.map((n) => n.id === id ? { ...n, is_read: true } : n));
+    } catch {
+      toast({ title: "Couldn't mark as read", variant: "destructive" });
     } finally { setBusy(null); }
   }
 
   async function remove(id: string) {
     setBusy(id);
     try {
-      await fetch(`/api/notifications?id=${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/notifications?id=${id}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`delete failed (${res.status})`);
       setItems((prev) => prev.filter((n) => n.id !== id));
+    } catch {
+      toast({ title: "Couldn't delete notification", variant: "destructive" });
     } finally { setBusy(null); }
   }
 
   async function markAllRead() {
     setMarkingAll(true);
     try {
-      await fetch("/api/notifications", {
+      const res = await fetch("/api/notifications", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "mark_all_read" }),
       });
+      if (!res.ok) throw new Error(`mark_all_read failed (${res.status})`);
       setItems((prev) => prev.map((n) => ({ ...n, is_read: true })));
       toast({ title: "Marked all as read" });
+    } catch {
+      toast({ title: "Couldn't mark all as read", variant: "destructive" });
     } finally { setMarkingAll(false); }
   }
 

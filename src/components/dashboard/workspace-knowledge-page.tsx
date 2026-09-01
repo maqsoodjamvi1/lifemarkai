@@ -225,10 +225,20 @@ export function WorkspaceKnowledgePage({ user }: WorkspaceKnowledgePageProps) {
             variant="outline"
             size="sm"
             onClick={async () => {
+              const previous = knowledge;
               setKnowledge("");
               setSaving(true);
-              await supabase.from("profiles").update({ workspace_knowledge: null }).eq("id", user.id);
+              const { error } = await supabase.from("profiles").update({ workspace_knowledge: null }).eq("id", user.id);
               setSaving(false);
+              if (error) {
+                // Don't claim it's cleared when the write failed — the old
+                // value is still live and still being injected into every
+                // AI call across the workspace, which the user needs to
+                // know rather than believe they already turned off.
+                setKnowledge(previous);
+                toast({ title: "Couldn't clear workspace knowledge", description: "Please try again.", variant: "destructive" });
+                return;
+              }
               setSaved("");
               toast({ title: "Workspace knowledge cleared" });
             }}
