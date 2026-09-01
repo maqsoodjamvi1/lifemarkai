@@ -85,6 +85,28 @@ export async function createCreditPackCheckout(data: any) {
     const pack = CREDIT_PACKS.find((p) => p.key === data.packKey);
     if (!pack) return { status: "bad_request" as const, message: "Invalid pack" };
 
+    // A caller-supplied teamId is untrusted: without this check anyone who
+    // knows/guesses a team id (they surface in shared-project/invite URLs)
+    // could pay with their own card and have the webhook unconditionally
+    // credit an arbitrary team's pool via `add_team_credits`, which itself
+    // has no caller-membership check (by design — it's service_role-only,
+    // meant to be called from a trusted context like this one). Only honor
+    // teamId when the buyer is actually an accepted member of that team —
+    // same membership check this codebase already uses elsewhere
+    // (billing.ts's getCredits, deduct_team_credits) — otherwise fall back
+    // to crediting the buyer's own account.
+    let teamId: string | null = null;
+    if (data.teamId) {
+      const { data: membership } = await supabase
+        .from("team_members")
+        .select("team_id")
+        .eq("team_id", data.teamId)
+        .eq("user_id", user.id)
+        .not("accepted_at", "is", null)
+        .maybeSingle();
+      teamId = membership ? data.teamId : null;
+    }
+
     const { data: profile } = await supabase
       .from("profiles")
       .select("email, stripe_customer_id")
@@ -110,7 +132,7 @@ export async function createCreditPackCheckout(data: any) {
       ],
       metadata: {
         userId: user.id,
-        teamId: data.teamId ?? "",
+        teamId: teamId ?? "",
         packKey: pack.key,
         credits: String(pack.credits),
       },
@@ -120,7 +142,7 @@ export async function createCreditPackCheckout(data: any) {
 
     await supabase.from("credit_packs").insert({
       user_id: user.id,
-      team_id: data.teamId ?? null,
+      team_id: teamId,
       amount: pack.credits,
       price_cents: pack.priceCents,
       stripe_session_id: session.id,
