@@ -1080,6 +1080,21 @@ export function EditorLayout({
     [project.id, toast]
   );
 
+  /**
+   * Sync a file's content into `files`/`activeFile` after CodePanel has
+   * already persisted it itself (Save or Save All on a background tab)
+   * — WITHOUT reassigning which file is active. See the doc comment on
+   * `onFileContentSync` in code-panel.tsx for the bug this replaces: that
+   * callback used to be `onFileChange` (== `setActiveFile`), so saving a
+   * tab the user was not looking at could silently steal focus to it, and
+   * `files` — read by the file tree, the diff panel and preview rebuilds —
+   * was never updated for a background-saved tab at all.
+   */
+  const handleFileContentSync = useCallback((updated: ProjectFile) => {
+    setFiles((prev) => prev.map((f) => (f.id === updated.id ? { ...f, content: updated.content } : f)));
+    setActiveFile((prev) => (prev?.id === updated.id ? { ...prev, content: updated.content } : prev));
+  }, []);
+
   const commitCodeChange = useCallback(
     (fileId: string, content: string) => {
       // Everything we send is an "echo" we may see again from a later refetch.
@@ -1550,6 +1565,7 @@ export function EditorLayout({
                 file={activeFile} files={files} projectId={project.id}
                 onSave={handleCodeSave} onChange={handleCodeChange}
                 onFileChange={setActiveFile}
+                onFileContentSync={handleFileContentSync}
                 collabUser={collabUser}
                 onCollaboratorsChange={setYjsCollaborators}
                 onReferenceInChat={(f) => { setPendingFileRef(f); setMobilePaneActive("left"); setLeftPanel("chat"); }}
@@ -1954,6 +1970,7 @@ export function EditorLayout({
                         onSave={handleCodeSave}
                         onChange={handleCodeChange}
                         onFileChange={setActiveFile}
+                        onFileContentSync={handleFileContentSync}
                         collabUser={collabUser}
                         onCollaboratorsChange={setYjsCollaborators}
                       />

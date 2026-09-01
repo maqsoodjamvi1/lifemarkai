@@ -48,6 +48,23 @@ interface CodePanelProps {
   files?: ProjectFile[];
   projectId?: string;
   onFileChange?: (file: ProjectFile) => void;
+  /**
+   * Sync a file's content into the parent after this panel has already
+   * saved it itself — WITHOUT treating the file as newly active.
+   *
+   * `onFileChange` exists for the opposite case (the user switched tabs);
+   * the parent wires it straight to its "which file is open" state.
+   * `saveAll` used to reuse `onFileChange` for every dirty tab it saved,
+   * including tabs the user was not looking at — so confirming Save All
+   * from tab A could silently steal focus to tab B or C once their
+   * background saves happened to resolve, pointing the top bar, the AI's
+   * "current file" context and every other consumer of the parent's
+   * active-file state at a file the user never selected. It also left the
+   * parent's own `files` list — read by the file tree, the diff panel and
+   * preview rebuilds — silently stale for every background-saved tab,
+   * because the active-file setter alone never touches it.
+   */
+  onFileContentSync?: (file: ProjectFile) => void;
   onSave?: (content: string) => void;
   onChange?: (content: string) => void;
   collabUser?: CollabUserInfo;
@@ -109,7 +126,7 @@ const EMPTY_INLINE: InlineEditState = {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function CodePanel({
-  file, files, projectId, onFileChange, onSave, onChange,
+  file, files, projectId, onFileChange, onFileContentSync, onSave, onChange,
   collabUser, onCollaboratorsChange, onReferenceInChat,
 }: CodePanelProps) {
   const [openTabs, setOpenTabs] = useState<ProjectFile[]>(file ? [file] : []);
@@ -931,7 +948,7 @@ export function CodePanel({
       setOpenTabs((prev) =>
         prev.map((t) => t.id === target.id ? { ...t, content } : t)
       );
-      onFileChange?.({ ...target, content });
+      onFileContentSync?.({ ...target, content });
       toast({ title: "Saved", description: target.path });
     } catch (err) {
       // `onSave` already toasts something specific ("your session expired…",
@@ -985,7 +1002,7 @@ export function CodePanel({
           setOpenTabs((prev) =>
             prev.map((t) => t.id === target.id ? { ...t, content } : t)
           );
-          onFileChange?.({ ...target, content });
+          onFileContentSync?.({ ...target, content });
           saved++;
         } catch {
           failedPaths.push(target.path);
