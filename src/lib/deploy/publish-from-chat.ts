@@ -292,9 +292,27 @@ export async function publishProjectFromChat(
       emit("Waiting for the site to go live…");
       deployedUrl = await deployToNetlify(site.id, fileMap);
     } else {
-      // Lifemark-hosted URL (fallback / lifemarkai provider — same as deploy route)
-      emit("Publishing to your Lifemark URL…");
-      await new Promise((r) => setTimeout(r, 2500));
+      // Lifemark-hosted deployment (fallback / lifemarkai provider) — mirrors
+      // routes/api/deploy.ts's own lifemarkai branch. This used to be a
+      // 2.5s sleep followed by `lifemarkUrl()`: it reported success, wrote
+      // an {app_slug}.apps.lifemarkai.com URL to projects.deployed_url, and
+      // published nothing — no build, no stored files, nothing for that URL
+      // to serve. Whenever NETLIFY_AUTH_TOKEN isn't configured, every chat
+      // "ship it" took this branch and told the user "Your app is live!"
+      // while the URL 503'd. Now it runs the same real build+store pipeline
+      // as the deploy route (publishBuild → vite build when applicable,
+      // stored via storeBuild's compare-and-swap live flip) before the URL
+      // is ever handed back.
+      emit("Building your app…");
+      const { publishBuild } = await import("@/lib/deploy/publish-build");
+      const result = await publishBuild(projectId, projectFiles, (line) => emit(line));
+      if (!result.ok) {
+        await supabase
+          .from("deployments")
+          .update({ status: "failed", build_log: `[publish] FAILED: ${result.detail}` })
+          .eq("id", deploymentId);
+        return { ok: false, deploymentId, provider, fileCount, error: result.detail };
+      }
       deployedUrl = lifemarkUrl();
     }
 
