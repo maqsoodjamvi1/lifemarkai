@@ -8,6 +8,7 @@ import { getServerUser } from "../supabase/server-user.ts";
 import { ensureDevCredits } from "../dev-credits.ts";
 import { stripe,getOrCreateCustomer,createBillingPortalSession } from "../stripe/client.ts";
 import { PLANS,CREDIT_PACKS } from "../stripe/plans.ts";
+import { logger } from "../logger.ts";
 
 export async function createSubscriptionCheckout(data: any) {
     const supabase = await createClient();
@@ -140,7 +141,14 @@ export async function createCreditPackCheckout(data: any) {
       cancel_url: `${data.appUrl}/dashboard/billing?credit_cancel=1`,
     });
 
-    await supabase.from("credit_packs").insert({
+    // Purchase-history row for this checkout session — the actual credit
+    // grant does NOT depend on this (the webhook credits from Stripe
+    // metadata independently), so a failure here must never block or roll
+    // back the checkout the user already started. It's still worth
+    // knowing about (migration 190 fixed a missing INSERT policy that
+    // made this fail every time), so the error is logged instead of
+    // silently discarded.
+    const { error: packInsertError } = await supabase.from("credit_packs").insert({
       user_id: user.id,
       team_id: teamId,
       amount: pack.credits,
@@ -149,6 +157,12 @@ export async function createCreditPackCheckout(data: any) {
       pack_key: pack.key,
       status: "pending",
     });
+    if (packInsertError) {
+      logger.error("billing.credit_pack_insert_failed", packInsertError, {
+        userId: user.id,
+        stripeSessionId: session.id,
+      });
+    }
 
     return { status: "ok" as const, url: session.url };
 }
@@ -226,6 +240,31 @@ export async function grantStudentDiscount(data: any) {
       return { status: "error" as const, code: 400, message: "Student discount has already been applied to this account." };
     }
 
+    // Atomically claim the discount BEFORE doing any Stripe work: two
+    // concurrent requests could otherwise both pass the read-only check
+    // above (a classic TOCTOU), each create its own Stripe coupon and
+    // apply it to the subscription. Stripe only holds one discount at a
+    // time, so a race silently wastes a duplicate coupon and leaves the
+    // outcome dependent on which request's `subscriptions.update` landed
+    // last - not a security issue, but a real correctness bug. The
+    // `.eq("student_discount_used", false)` condition makes this UPDATE a
+    // compare-and-swap: it matches (and claims) the row only if no other
+    // request already claimed it first.
+    const { data: claimed } = await supabase
+      .from("profiles")
+      .update({ student_discount_used: true })
+      .eq("id", user.id)
+      .eq("student_discount_used", false)
+      .select("id");
+    if (!claimed || claimed.length === 0) {
+      return { status: "error" as const, code: 400, message: "Student discount has already been applied to this account." };
+    }
+
+    // From here on, any failure must release the claim (set the flag back
+    // to false) so the user isn't permanently locked out of a discount
+    // they never actually received.
+    const release = () => supabase.from("profiles").update({ student_discount_used: false }).eq("id", user.id);
+
     const email = user.email ?? "";
     let customerId = profile?.stripe_customer_id ?? "";
     if (!customerId) {
@@ -240,6 +279,7 @@ export async function grantStudentDiscount(data: any) {
         metadata: { userId: user.id, eduEmail: data.eduEmail.trim() },
       });
     } catch (err: unknown) {
+      await release();
       return { status: "error" as const, code: 500, message: err instanceof Error ? err.message : "Failed to create coupon." };
     }
 
@@ -251,10 +291,10 @@ export async function grantStudentDiscount(data: any) {
         await stripe.customers.update(customerId, { coupon: coupon.id });
       }
     } catch (err: unknown) {
+      await release();
       return { status: "error" as const, code: 500, message: err instanceof Error ? err.message : "Failed to apply coupon." };
     }
 
-    await supabase.from("profiles").update({ student_discount_used: true }).eq("id", user.id);
     return { status: "ok" as const, message: "Student discount applied! 50% off for your next 3 months." };
 }
 
