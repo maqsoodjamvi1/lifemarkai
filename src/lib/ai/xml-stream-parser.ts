@@ -175,11 +175,34 @@ export class XmlStreamParser {
   feed(chunk: string): void {
     if (!chunk) return;
     this.buffer += chunk;
-    if (this.buffer.length > this.maxBytes) {
-      // Drop oldest processed prefix — keep last 512KB for tag completion
-      this.buffer = this.buffer.slice(-512 * 1024);
-    }
+    // Drain BEFORE trimming. The old order trimmed first — so any complete
+    // block sitting in the part about to be dropped was destroyed unread,
+    // and worse, an in-progress block's own OPENING tag (with its path
+    // attribute) could be more than 512KB from the buffer's end and get cut
+    // off too, making that block permanently unrecoverable: nextFileUpdateBlock
+    // can never find it again, no onParseError fires (it only fires for a
+    // block that WAS found but failed to parse), and the file just never
+    // appears in the live preview while streaming — "why didn't my file show
+    // up" with no error anywhere. Draining first means every block that IS
+    // complete gets removed (and its buffer space reclaimed) before any
+    // trimming decision is made.
     this.drainCompleteBlocks();
+    if (this.buffer.length > this.maxBytes) {
+      const open = this.buffer.match(FILE_UPDATE_OPEN);
+      if (open && open.index !== undefined) {
+        // An in-progress block is still streaming (drainCompleteBlocks just
+        // ran and didn't consume it, so its closing tag hasn't arrived yet).
+        // Only trim plain-text preamble strictly BEFORE its opening tag —
+        // never the tag itself or anything after it — so the block stays
+        // recoverable no matter how large it grows before it closes.
+        if (open.index > 0) this.buffer = this.buffer.slice(open.index);
+      } else {
+        // No pending block at all, just accumulated prose/chatter between
+        // blocks. Safe to drop all but a small tail, in case a new opening
+        // tag is about to start arriving mid-chunk.
+        this.buffer = this.buffer.slice(-512 * 1024);
+      }
+    }
   }
 
   /** Call when the upstream stream closes to flush any trailing complete blocks. */
