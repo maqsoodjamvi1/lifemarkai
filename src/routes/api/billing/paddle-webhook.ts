@@ -73,6 +73,15 @@ export const Route = createFileRoute("/api/billing/paddle-webhook")({
             .maybeSingle();
           return data as unknown as { id: string; email: string | null; credits: number; plan: string } | null;
         }
+        // Same atomic RPC used by the Stripe webhook's creditUser (locked
+        // UPDATE + relative increment, migration 085) - see the plan-change
+        // branch below for why the additive case can't be a plain UPDATE.
+        async function creditUser(userId: string, amount: number, action: string, description: string) {
+          const { error } = await supabase.rpc("add_credits" as never, {
+            p_user_id: userId, p_amount: amount, p_action: action, p_description: description,
+          } as never);
+          if (error) throw new Error(`Unable to credit user: ${error.message}`);
+        }
 
         try {
           switch (event.event_type) {
@@ -103,19 +112,25 @@ export const Route = createFileRoute("/api/billing/paddle-webhook")({
                 break;
               }
 
-              let newCredits: number | null = credits;
+              // See webhook.ts's identical branch: a new subscription sets
+              // credits to the plan's fixed allotment (a literal, safe as a
+              // plain UPDATE); a plan CHANGE computes an additive diff over
+              // `profile.credits`, which was read a moment ago - that case
+              // is routed through the atomic add_credits RPC instead of a
+              // plain UPDATE to avoid a lost-update race against a
+              // concurrent credit mutation on the same profile row.
               let logAmount = credits;
               let logDesc = `${plan.name} plan activated (Paddle)`;
+              let creditDelta: number | null = null;
               if (!isNewSub && planChanged) {
                 const oldPlan = PLANS.find((p) => p.id === profile.plan);
                 const oldCredits = oldPlan ? (oldPlan.credits === -1 ? 99999 : oldPlan.credits) : 0;
                 const diff = credits - oldCredits;
                 if (diff > 0) {
-                  newCredits = (profile.credits ?? 0) + diff;
+                  creditDelta = diff;
                   logAmount = diff;
                   logDesc = `Upgraded to ${plan.name}: +${diff} credits (Paddle)`;
                 } else {
-                  newCredits = null;
                   logAmount = 0;
                   logDesc = `Changed to ${plan.name} plan (Paddle)`;
                 }
@@ -123,14 +138,18 @@ export const Route = createFileRoute("/api/billing/paddle-webhook")({
 
               await supabase.from("profiles").update({
                 plan: plan.id,
-                ...(newCredits !== null ? { credits: newCredits } : {}),
+                ...(isNewSub ? { credits } : {}),
                 paddle_subscription_id: sub.id,
                 updated_at: new Date().toISOString(),
               } as never).eq("id", profile.id);
 
-              await supabase.from("credit_logs").insert({
-                user_id: profile.id, amount: logAmount, action: "subscription", description: logDesc,
-              });
+              if (creditDelta !== null) {
+                await creditUser(profile.id, creditDelta, "subscription", logDesc);
+              } else {
+                await supabase.from("credit_logs").insert({
+                  user_id: profile.id, amount: logAmount, action: "subscription", description: logDesc,
+                });
+              }
 
               if (isNewSub && profile.email) {
                 const price = plan.monthlyPrice > 0 ? `$${(plan.monthlyPrice / 100).toFixed(0)}/mo` : "Free";

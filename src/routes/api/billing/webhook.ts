@@ -121,19 +121,35 @@ export const Route = createFileRoute("/api/billing/webhook")({
                 break;
               }
 
-              let newCredits: number | null = credits;
+              // A brand-new subscription sets credits to the plan's fixed
+              // allotment - a literal value independent of the profile's
+              // current balance, so a plain UPDATE is safe (nothing here
+              // depends on the earlier read). A plan CHANGE on an existing
+              // subscription instead computes an ADDITIVE diff over
+              // `profile.credits`, which WAS read a moment ago in this same
+              // request (see profileByCustomer above) - applying that as a
+              // plain UPDATE is a lost-update race: any concurrent credit
+              // mutation on the same profile row (another webhook delivery,
+              // a credit-pack purchase settling at the same time, etc.) can
+              // have its change silently overwritten by whichever write
+              // lands last. Route the additive case through the same
+              // atomic add_credits RPC (locked UPDATE + relative increment,
+              // migration 085) already used elsewhere in this file for
+              // exactly this reason - it also logs credit_logs itself, so
+              // that insert is only done manually for the non-additive
+              // (downgrade/lateral) case below.
               let logAmount = credits;
               let logDesc = `${plan.name} plan activated`;
+              let creditDelta: number | null = null;
               if (!isNewSub && planChanged) {
                 const oldPlan = PLANS.find((p) => p.id === profile.plan);
                 const oldCredits = oldPlan ? (oldPlan.credits === -1 ? 99999 : oldPlan.credits) : 0;
                 const diff = credits - oldCredits;
                 if (diff > 0) {
-                  newCredits = (profile.credits ?? 0) + diff;
+                  creditDelta = diff;
                   logAmount = diff;
                   logDesc = `Upgraded to ${plan.name}: +${diff} credits`;
                 } else {
-                  newCredits = null;
                   logAmount = 0;
                   logDesc = `Changed to ${plan.name} plan`;
                 }
@@ -141,14 +157,18 @@ export const Route = createFileRoute("/api/billing/webhook")({
 
               await supabase.from("profiles").update({
                 plan: plan.id,
-                ...(newCredits !== null ? { credits: newCredits } : {}),
+                ...(isNewSub ? { credits } : {}),
                 stripe_subscription_id: sub.id,
                 updated_at: new Date().toISOString(),
               }).eq("id", profile.id);
 
-              await supabase.from("credit_logs").insert({
-                user_id: profile.id, amount: logAmount, action: "subscription", description: logDesc,
-              });
+              if (creditDelta !== null) {
+                await creditUser(profile.id, creditDelta, "subscription", logDesc);
+              } else {
+                await supabase.from("credit_logs").insert({
+                  user_id: profile.id, amount: logAmount, action: "subscription", description: logDesc,
+                });
+              }
 
               if (isNewSub && profile.email) {
                 const price = plan.monthlyPrice > 0 ? `$${(plan.monthlyPrice / 100).toFixed(0)}/mo` : "Free";
