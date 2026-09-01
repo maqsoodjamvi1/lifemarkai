@@ -896,7 +896,15 @@ export async function runSelfVerification(opts: {
           compilerUsed = "sandbox";
           typeErrorList = sandboxCheck.diagnostics
             .filter((d) => d.category === "error")
-            .slice(0, 6)
+            // Was `.slice(0, 6)`. That silently capped this source's share of
+            // the merged error list at 6 before shouldPromoteRepairTier below
+            // ever saw a count — and production rounds routinely carry 82-138
+            // simultaneous errors (see the MAX_REPAIR_ROUNDS comment above), so
+            // the true count was lost well before the cap even mattered.
+            // Raised so the promotion signal reflects reality; the repair
+            // model's prompt context and the user-facing list stay capped
+            // separately, at the merge point below.
+            .slice(0, 200)
             .map((d) =>
               d.file
                 ? `${d.file}:${d.line ?? 0}:${d.column ?? 0} — TS${d.code}: ${d.message}`
@@ -906,7 +914,13 @@ export async function runSelfVerification(opts: {
       }
 
       if (compilerUsed === "none") {
-        const typecheck = await runTypecheckGate(files, { timeoutMs: 30_000, maxErrors: 6 });
+        // Was `maxErrors: 6`. runTypecheckGate's maxErrors truncates the SCAN
+        // itself (it breaks out of the diagnostic loop once it is hit), not
+        // just the returned array — so the true error count is unrecoverable
+        // from this call once it fires. Raised for the same reason as the
+        // sandbox cap above: this feeds the promotion signal, which needs the
+        // real count, not a value clamped to 6 every round.
+        const typecheck = await runTypecheckGate(files, { timeoutMs: 30_000, maxErrors: 200 });
         if (typecheck.available) {
           compilerUsed = "local";
           typeErrorList = typecheck.errors.map((e) => e.formatted);
@@ -966,7 +980,16 @@ export async function runSelfVerification(opts: {
 
       // Type errors lead: they carry a file:line:column, so the repair model can
       // go straight to the defect instead of inferring a location from a stack.
-      let errors = [...new Set([...typeErrors, ...contractErrors, ...runtimeErrors])].slice(0, 6);
+      // Full merged, deduped list BEFORE any display/context cap. This is the
+      // count shouldPromoteRepairTier and the user-facing "found N issues"
+      // message must see — see the note by shouldPromoteRepairTier below.
+      const allErrors = [...new Set([...typeErrors, ...contractErrors, ...runtimeErrors])];
+      const errorCount = allErrors.length;
+      // Still capped: this is what gets shown in `result.errors`, fed into the
+      // deterministic repair pass, and used to build the repair model's prompt
+      // context further down. That cap is a legitimate, separate cost-control
+      // decision — unrelated to the counting bug fixed by errorCount above.
+      let errors = allErrors.slice(0, 6);
       const roundSignal: "typecheck" | "runtime" = typeErrors.length > 0 ? "typecheck" : "runtime";
 
       // ── Vision design review (env-gated, Lovable "agent looks at the result") ──
@@ -1003,8 +1026,16 @@ export async function runSelfVerification(opts: {
       // Equal or more = stalled = promote. Note that "made things worse" lands
       // in the same bucket as "changed nothing", which is deliberate: both mean
       // this tier has stopped being the right tool, and both should escalate.
-      if (shouldPromoteRepairTier(errors.length, lastErrorCount)) repairTier += 1;
-      lastErrorCount = errors.length;
+      // Feed the TRUE count (errorCount), not the display-capped errors.length.
+      // Before this fix both were the same value — errors.length, capped at 6
+      // by the two upstream caps raised above and the merge-slice above — so
+      // once the real error count exceeded 6 (the routine case; see the
+      // 138/82-error production rounds cited near MAX_REPAIR_ROUNDS) this
+      // signal read a constant "6" every round regardless of whether repairs
+      // were actually making progress, wrongly promoting the repair tier to
+      // the expensive model on rounds that were in fact working.
+      if (shouldPromoteRepairTier(errorCount, lastErrorCount)) repairTier += 1;
+      lastErrorCount = errorCount;
 
       // Running out of LADDER is a real stop condition, not just a cap. Once the
       // most capable tier has itself stalled, another round buys another bill
@@ -1013,7 +1044,7 @@ export async function runSelfVerification(opts: {
       const ladderExhausted = isLadderExhausted(repairTier, repairTiers.length);
 
       if (round - freeRounds === maxRounds || ladderExhausted || Date.now() - startedAt > TIME_BUDGET_MS) {
-        emit(`Verification found ${errors.length} issue${errors.length === 1 ? "" : "s"} — open the preview to review.`);
+        emit(`Verification found ${errorCount} issue${errorCount === 1 ? "" : "s"} — open the preview to review.`);
         return result;
       }
 
