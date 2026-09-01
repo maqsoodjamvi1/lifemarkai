@@ -28,8 +28,21 @@ export const Route = createFileRoute("/api/teams/$id/credit-pool")({
             ),
           );
 
+        // `credit_logs.amount` is signed: negative for real spend
+        // (settle_credit_reservation, deduct_workspace_credits, ...), positive
+        // for grants, purchases and renewals (grant_daily_credits's daily
+        // 5-credit grant among them). Summing Math.abs() of every entry counted
+        // a member's own free daily credits as if they were usage, inflating
+        // "used" by up to the monthly grant cap (30 or 150) on top of whatever
+        // they actually spent — every member's usage bar read too high, with no
+        // way to tell from this screen alone. Only negative entries are real
+        // consumption.
         const usageMap: Record<string, number> = {};
-        for (const log of logs ?? []) usageMap[log.user_id] = (usageMap[log.user_id] ?? 0) + Math.abs(log.amount as number);
+        for (const log of logs ?? []) {
+          const amount = log.amount as number;
+          if (amount >= 0) continue;
+          usageMap[log.user_id] = (usageMap[log.user_id] ?? 0) + Math.abs(amount);
+        }
         const capMap: Record<string, number> = {};
         for (const cap of caps ?? []) capMap[cap.user_id] = cap.monthly_cap;
 
