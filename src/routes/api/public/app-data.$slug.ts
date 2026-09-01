@@ -114,7 +114,17 @@ async function loadSchema(
   return { recordId: row.id, schema: { fields } as LifemarkCollectionSchema };
 }
 
-/** Resolve a published project's id from its slug (or app_slug). */
+/**
+ * Resolve a published project's id from its slug (or app_slug) — but only
+ * when the project is actually public. This route has no auth mechanism of
+ * its own (no session, no API key — anyone with the slug can call it), so
+ * "public" is the only visibility this endpoint may ever serve; a
+ * "workspace" or "private" project has no way to be safely gated here.
+ * Previously this check was missing entirely: any project's app_data was
+ * readable/writable by anyone who knew (or guessed) its slug, including
+ * projects that were never published, or that were published once and later
+ * set back to private/workspace.
+ */
 async function resolveProject(slug: string): Promise<string | null> {
   // The slug is interpolated into a PostgREST .or() filter — reject anything
   // that could carry filter syntax (commas, parens) before it gets there.
@@ -122,12 +132,20 @@ async function resolveProject(slug: string): Promise<string | null> {
   const supabase = createAdminClient();
   const { data } = await supabase
     .from("projects")
-    .select("id, slug, app_slug, visibility, deployed_url")
+    .select("id, slug, app_slug, visibility, is_public, deployed_url")
     .or(`slug.eq.${slug},app_slug.eq.${slug}`)
     .limit(1)
     .maybeSingle();
   if (!data) return null;
-  return (data as { id: string }).id;
+  const row = data as { id: string; visibility: string | null; is_public: boolean | null };
+  const visibility: "public" | "workspace" | "private" =
+    row.visibility === "public" || row.visibility === "workspace" || row.visibility === "private"
+      ? row.visibility
+      : row.is_public
+        ? "public"
+        : "workspace";
+  if (visibility !== "public") return null;
+  return row.id;
 }
 
 export const Route = createFileRoute("/api/public/app-data/$slug")({
