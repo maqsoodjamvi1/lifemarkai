@@ -4,6 +4,7 @@
  */
 import { buildFallbackHtml } from "../preview/build-fallback-html.ts";
 import { loadOptionalPlaywright } from "../optional-playwright.ts";
+import { isFetchablePublicUrl } from "./page-reference.ts";
 
 export type BrowseAction = "navigate" | "click" | "fill" | "screenshot" | "snapshot";
 
@@ -31,14 +32,34 @@ function htmlToText(html: string): string {
     .slice(0, 4000);
 }
 
+/**
+ * Resolves the model-supplied navigation target. Unlike fetchUrlAsText
+ * (agent-web-tools.ts), this previously had no SSRF guard at all — a model
+ * (or content it read, i.e. prompt injection) could pass any http(s) URL,
+ * including loopback/private/link-local/cloud-metadata addresses, and both
+ * the fetch() fallback and the real headless-browser Playwright path would
+ * navigate straight to it. Every "url"-kind target — whether it came from
+ * the model's own `url` argument or was built from the project's
+ * deployedUrl — now goes through the same public-host check the rest of
+ * this agent's tools use.
+ */
 function resolveTargetUrl(args: BrowsePreviewArgs): { kind: "url" | "srcdoc"; target: string } {
   const raw = (args.url ?? "/").trim() || "/";
-  if (/^https?:\/\//i.test(raw)) return { kind: "url", target: raw };
+  if (/^https?:\/\//i.test(raw)) {
+    if (!isFetchablePublicUrl(raw)) {
+      throw new Error(`Refusing to browse "${raw}": not a public http(s) address.`);
+    }
+    return { kind: "url", target: raw };
+  }
   if (args.deployedUrl) {
     try {
       const base = args.deployedUrl.replace(/\/$/, "");
       const path = raw.startsWith("/") ? raw : `/${raw}`;
-      return { kind: "url", target: `${base}${path}` };
+      const target = `${base}${path}`;
+      if (isFetchablePublicUrl(target)) return { kind: "url", target };
+      // Fall through to the srcdoc fallback rather than throwing — an
+      // internal-looking deployedUrl means dev/preview infra, not an
+      // attacker-chosen target, so degrade gracefully instead of erroring.
     } catch {
       /* fall through */
     }
