@@ -136,8 +136,19 @@ export function applyPatches(
       continue;
     }
 
-    // Exact, unique match.
-    const updated = current.replace(patch.find, patch.replace);
+    // Exact, unique match. NOT current.replace(patch.find, patch.replace) —
+    // String.prototype.replace treats $&, $`, $', $$ in a STRING replacement
+    // argument as special substitution patterns (the same as with a regex
+    // search), not literal text. A model-generated replacement containing a
+    // real-world idiom like the thousand-separator pattern '$&,' would have
+    // $& expanded to the entire matched find-block and spliced verbatim into
+    // the output — corrupting the saved file while the live streaming
+    // preview (xml-stream-parser.ts's applySearchReplace, which already uses
+    // slice()) showed the correct edit. We already know the match is unique
+    // and its position (checked just above), so slice+concat applies it
+    // literally with no special-character interpretation.
+    const idx = current.indexOf(patch.find);
+    const updated = current.slice(0, idx) + patch.replace + current.slice(idx + patch.find.length);
     fileMap.set(patch.path, updated);
     results.push({ path: patch.path, content: updated, applied: true });
   }

@@ -188,7 +188,19 @@ export function applyEditBlocks(
       continue;
     }
     if (count === 1) {
-      working.set(b.path, original.replace(b.search, b.replace));
+      // NOT original.replace(b.search, b.replace) — String.prototype.replace
+      // treats $&, $`, $', $$ in a STRING replacement argument as special
+      // substitution patterns, not literal text. A repair's replacement
+      // containing a real-world idiom like '$&,' (thousand-separator regex)
+      // would have $& expanded to the entire matched search block and
+      // spliced into the output — silently corrupting the very file a
+      // repair round is trying to fix. `count === 1` (via occurrences(),
+      // plain indexOf-based) already proves uniqueness, so slice+concat
+      // applies it literally with no special-character interpretation —
+      // the same pattern spliceNormalized below already uses for its own
+      // whitespace-tolerant pass.
+      const idx = original.indexOf(b.search);
+      working.set(b.path, original.slice(0, idx) + b.replace + original.slice(idx + b.search.length));
       continue;
     }
     // Whitespace-tolerant second pass: trailing space/CR drift is noise. The

@@ -115,6 +115,29 @@ describe("application — exactly-once or not at all", () => {
     assert.equal(r.ok, false);
     assert.match(r.failures[0], /not in the project/);
   });
+
+  it("applies a replacement containing $&/$`/$'/$$ literally, not as a substitution pattern", () => {
+    // String.prototype.replace(searchString, replaceString) treats these as
+    // special substitution tokens even when the search argument is a plain
+    // string, not a regex — $& means "the whole match". A replacement text
+    // this common (formatting numbers with commas) must land byte-for-byte,
+    // not have $& expanded into the matched SEARCH block.
+    const src = new Map([["fmt.ts", "function fmt(v) {\n  return v;\n}\n"]]);
+    const r = applyEditBlocks(
+      [
+        {
+          path: "fmt.ts",
+          search: "return v;",
+          replace: 'return v.replace(/(\\d)(?=(\\d{3})+(?!\\d))/g, "$&,");',
+        },
+      ],
+      src,
+    );
+    assert.equal(r.ok, true);
+    const out = r.files.get("fmt.ts")!;
+    assert.match(out, /"\$&,"\);/, "the literal $&, must survive untouched");
+    assert.doesNotMatch(out, /return v;\s*\n\s*return v;/, "the SEARCH block must not be spliced back in via $&");
+  });
 });
 
 describe("strict batch validation — review-caught bug #1", () => {
