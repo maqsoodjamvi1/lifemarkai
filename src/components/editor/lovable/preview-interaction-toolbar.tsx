@@ -3,7 +3,7 @@ import { useCallback,useEffect,useRef,useState } from "react";
 import {
 MousePointer,MessageSquarePlus,Terminal,RefreshCw,
 Maximize2,Minimize2,Frame,Monitor,Smartphone,Tablet,Pencil,
-Type,ChevronRight,Undo2,Redo2,MoreHorizontal,
+Type,ChevronRight,Undo2,Redo2,MoreHorizontal,Palette,
 } from "lucide-react";
 import {
 Tooltip,TooltipContent,TooltipProvider,TooltipTrigger,
@@ -20,6 +20,8 @@ export interface LovablePreviewInteractionToolbarProps {
   /** Discrete edit-text mode (inline text) — optional; falls back to visual edit */
   editTextMode?: boolean;
   onEditTextToggle?: () => void;
+  designView?: boolean;
+  onDesignViewToggle?: () => void;
   commentPinMode?: boolean;
   onCommentPinToggle?: () => void;
   annotationsEnabled?: boolean;
@@ -72,6 +74,8 @@ export function LovablePreviewInteractionToolbar({
   onVisualEditToggle,
   editTextMode = false,
   onEditTextToggle,
+  designView = false,
+  onDesignViewToggle,
   commentPinMode = false,
   onCommentPinToggle,
   annotationsEnabled = false,
@@ -327,6 +331,21 @@ export function LovablePreviewInteractionToolbar({
                       </button>
                     </TooltipTrigger>
                     <TooltipContent>Edit text inline</TooltipContent>
+                  </Tooltip>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="Design view"
+                        aria-pressed={designView}
+                        onClick={() => onDesignViewToggle?.()}
+                        className={btn(designView)}
+                      >
+                        <Palette className="size-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>Design view — colors, type, radius</TooltipContent>
                   </Tooltip>
 
                   <Tooltip>

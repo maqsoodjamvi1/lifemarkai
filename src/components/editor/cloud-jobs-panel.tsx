@@ -1,6 +1,6 @@
 /**
  * CloudJobsPanel — "Jobs" section of the Lifemark Cloud panel.
- * Scheduled cron tasks (pg_cron) on the project's managed backend:
+ * Scheduled cron tasks (pg_cron) on Lifemark Cloud or a linked Supabase project:
  * list, create (name / cron schedule / SQL command), delete.
  */
 
@@ -43,11 +43,12 @@ export function CloudJobsPanel({ projectId }: { projectId: string }) {
   const [schedule, setSchedule] = useState("0 3 * * *");
   const [command, setCommand] = useState("");
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/cloud/jobs?projectId=${projectId}`);
+      const res = await fetch(`/api/cloud/jobs?projectId=${projectId}`, { signal });
       const data = await res.json();
+      if (signal?.aborted) return;
       if (!res.ok) {
         setAvailable(false);
         setReason(data.error ?? "Failed to load jobs");
@@ -56,12 +57,18 @@ export function CloudJobsPanel({ projectId }: { projectId: string }) {
       setAvailable(data.available !== false);
       setReason(data.reason ?? null);
       setJobs(data.jobs ?? []);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [projectId]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    const ac = new AbortController();
+    void load(ac.signal);
+    return () => ac.abort();
+  }, [load]);
 
   async function createJob() {
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) {

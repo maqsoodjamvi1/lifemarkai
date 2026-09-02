@@ -2,13 +2,13 @@
 import { useState,useRef,useCallback,useEffect,useMemo } from "react";
 import { useNavigate,useRouter } from "@tanstack/react-router";
 import {
-Zap,ChevronDown,Bot,MessageSquare,Eye,Code2,Palette,Blocks,MousePointer2,
-Columns,Rocket,Settings,Sparkles,Loader2,
+Zap,ChevronDown,MousePointer2,
+Rocket,Settings,Sparkles,Loader2,
 PanelLeft,PanelsTopLeft,Download,
-Share2,Globe,Lock,Copy,ExternalLink,Shield,Brain,Pencil,Trash2,
-AlignJustify,BarChart2,
+Share2,Globe,Lock,Copy,ExternalLink,Pencil,Trash2,
+AlignJustify,
 MessageCircle,Users,Link2,MoreHorizontal,History,LayoutDashboard,
-ChevronRight,UserPlus,CheckCircle2,Cloud,FolderOpen,CreditCard,Search,Pin,
+ChevronRight,UserPlus,CheckCircle2,Search,Pin,
 ChevronsDownUp,ChevronsUpDown
 } from "lucide-react";
 import {
@@ -21,13 +21,14 @@ Tooltip,TooltipContent,TooltipProvider,TooltipTrigger,
 import {
 DropdownMenu,DropdownMenuContent,DropdownMenuItem,
 DropdownMenuLabel,DropdownMenuSeparator,DropdownMenuTrigger,
+DropdownMenuSub,DropdownMenuSubContent,DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { Project,Profile } from "@/types/database";
 import type { EditorMode,ViewMode,LeftPanel } from "./editor-layout";
 import { toast } from "@/hooks/use-toast";
 import { createClient } from "@/lib/supabase/client";
-import { ViewSwitcherPill,type ViewSwitcherTab } from "./view-switcher-pill";
 import { UrlBarPill } from "./url-bar-pill";
+import { EditorWorkspaceNav } from "./editor-workspace-nav";
 import { NotificationsBell } from "./notifications-bell";
 import { LovableUpgradeDialog } from "./lovable/upgrade-dialog";
 import { dispatchChatSettings } from "./lovable/chat-settings-events";
@@ -140,25 +141,18 @@ function useRelativeTime(date: Date | null | undefined): string {
   return "Saved";
 }
 
-const MODES: { id: EditorMode; label: string; icon: React.ElementType; description: string }[] = [
-  { id: "chat", label: "Chat", icon: MessageSquare, description: "Conversational edits" },
-  { id: "plan", label: "Plan", icon: Sparkles, description: "Plan before building" },
-  { id: "build", label: "Build", icon: Code2, description: "Full app generation" },
-  { id: "agent", label: "Agent", icon: Bot, description: "Autonomous AI agent" },
-];
-
 export function EditorTopBar({
   project,
-  editorMode,
+  editorMode: _editorMode,
   viewMode,
   credits,
-  leftPanel,
+  leftPanel: _leftPanel,
   showFileTree,
   profile,
   lastSaved,
-  onModeChange,
+  onModeChange: _onModeChange,
   onViewChange,
-  onLeftPanelChange,
+  onLeftPanelChange: _onLeftPanelChange,
   onToggleFileTree,
   onOpenShortcuts,
   onRename,
@@ -426,6 +420,7 @@ export function EditorTopBar({
   const [shareCopied, setShareCopied] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteRole, setInviteRole] = useState<"editor" | "viewer">("editor");
   // Inline rename
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(project.name);
@@ -558,7 +553,7 @@ export function EditorTopBar({
       const res = await fetch("/api/projects/invite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId: project.id, email, role: "editor" }),
+        body: JSON.stringify({ projectId: project.id, email, role: inviteRole }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
@@ -735,19 +730,10 @@ export function EditorTopBar({
   // Deliberately narrow: a running deploy and a Test/Live toggle are normal
   // states, not problems, and dotting them would train people to ignore it.
   const statusNeedsAttention = creditsLow || deployStatus === "failed";
-  const ModeIcon = MODES.find((item) => item.id === editorMode)?.icon ?? MessageSquare;
-  const designPanelActive = rightPanel === "designpanel" || rightPanel === "designdir" ||
-    rightPanel === "visualedits" || rightPanel === "guidance" || rightPanel === "components" ||
-    rightPanel === "figma" || rightPanel === "image" || rightPanel === "media";
-
-  const openTool = (panel: LeftPanel) => {
-    onLeftPanelChange(panel);
-    onRightPanelChange?.(rightPanel === panel ? null : panel);
-  };
 
   return (
     <TooltipProvider>
-      <div className="sticky top-0 z-50 flex h-12 flex-shrink-0 items-center gap-2 border-b border-border/70 bg-background/95 px-2.5 shadow-[0_1px_0_rgba(0,0,0,0.02)] backdrop-blur-xl safe-area-top safe-area-x">
+      <div className="sticky top-0 z-50 flex h-12 flex-shrink-0 items-center gap-2 border-b border-border/80 bg-background/80 px-2.5 shadow-[0_1px_0_rgba(59,130,246,0.08)] backdrop-blur-xl safe-area-top safe-area-x">
 
         {/* ── Left: width-synced to chat panel (Lovable [data-editor-chat-nav-container]) ── */}
         <div
@@ -785,7 +771,7 @@ export function EditorTopBar({
               <button
                 type="button"
                 aria-label="Switch project"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-foreground hover:bg-muted/80 transition-colors"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-gradient-brand text-white shadow-[0_0_16px_rgba(59,130,246,0.35)] hover:opacity-90 transition-opacity"
               >
                 <Sparkles className="size-[18px]" />
               </button>
@@ -870,6 +856,34 @@ export function EditorTopBar({
                     <Settings className="w-3.5 h-3.5" />
                     Project settings
                   </DropdownMenuItem>
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger className="text-xs gap-2">
+                      Project tools
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="w-48">
+                      <DropdownMenuItem className="text-xs" onClick={() => openSecondaryPanel("cloud", onRightPanelChange)}>
+                        Cloud
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="text-xs" onClick={() => openSecondaryPanel("github", onRightPanelChange)}>
+                        GitHub
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="text-xs" onClick={() => openSecondaryPanel("collab", onRightPanelChange)}>
+                        People
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="text-xs" onClick={() => openSecondaryPanel("analytics", onRightPanelChange)}>
+                        Analytics
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="text-xs" onClick={() => openSecondaryPanel("payments", onRightPanelChange)}>
+                        Payments
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="text-xs" onClick={() => openSecondaryPanel("security", onRightPanelChange)}>
+                        Security
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="text-xs" onClick={() => openSecondaryPanel("history", onRightPanelChange)}>
+                        Version history
+                      </DropdownMenuItem>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
                   <DropdownMenuItem onClick={onToggleFileTree} className="text-xs gap-2">
                     <PanelsTopLeft className="w-3.5 h-3.5" />
                     {showFileTree ? "Hide file tree" : "Show file tree"}
@@ -973,16 +987,21 @@ export function EditorTopBar({
           )}
         </div>
 
-        {/* ── Center: [data-navbar] view switcher + URL bar ── */}
+        <EditorWorkspaceNav
+          viewMode={viewMode}
+          rightPanel={rightPanel}
+          showFileTree={showFileTree}
+          onViewChange={onViewChange}
+          onRightPanelChange={onRightPanelChange}
+          onToggleFileTree={onToggleFileTree}
+        />
+
+        {/* ── Center: URL bar only. Workspace tools live on the left; Publish on the right. ── */}
         <div
           data-navbar
           className={cn("flex items-center gap-0.5 flex-1 justify-center min-w-0", isMobile && "justify-start gap-1")}
         >
 
-          {/* Status, notifications and tools live on the LEFT. Lovable's
-              right cluster is exactly Share and Publish, and anything else
-              sitting beside them competes with the only button in the row
-              that ships. Moved, not removed. */}
           <NotificationsBell projectId={project.id} className="hidden lg:flex" />
 
           {/* ── Status & tools — one control instead of nine ──────────────────
@@ -1091,206 +1110,15 @@ export function EditorTopBar({
               >
                 <MessageCircle className="w-3.5 h-3.5" /> Comments
               </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          {/* Editing mode is a first-class workspace control. Keeping it in
-              the top bar makes the chat panel and canvas feel like one tool. */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                className="hidden h-7 items-center gap-1.5 rounded-full border border-border/70 bg-background px-2.5 text-xs font-medium text-foreground shadow-sm transition-colors hover:bg-muted/60 md:flex"
-                aria-label={`Editor mode: ${editorMode}`}
+              <DropdownMenuItem
+                className="text-xs gap-2"
+                onClick={() => openSecondaryPanel("seo", onRightPanelChange)}
               >
-                <ModeIcon className="h-3.5 w-3.5 text-[#1F55F1]" />
-                <span className="capitalize">{editorMode === "patch" ? "Quick edit" : editorMode}</span>
-                <ChevronDown className="h-3 w-3 text-muted-foreground" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="center" className="w-60 p-1.5">
-              <DropdownMenuLabel className="px-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">AI workflow</DropdownMenuLabel>
-              {MODES.map(({ id, label, icon: Icon, description }) => (
-                <DropdownMenuItem key={id} onClick={() => onModeChange(id)} className="gap-2.5 rounded-md py-2">
-                  <span className={cn("grid h-7 w-7 place-items-center rounded-md", editorMode === id ? "bg-blue-500/10 text-[#1F55F1]" : "bg-muted text-muted-foreground")}>
-                    <Icon className="h-3.5 w-3.5" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-xs font-medium">{label}</span>
-                    <span className="block text-[10px] text-muted-foreground">{description}</span>
-                  </span>
-                  {editorMode === id && <CheckCircle2 className="h-3.5 w-3.5 text-[#1F55F1]" />}
-                </DropdownMenuItem>
-              ))}
+                <Search className="w-3.5 h-3.5" /> SEO
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {!isMobile && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon"
-                className={`h-7 w-7 flex-shrink-0 transition-all ${viewMode === "both" ? "text-foreground bg-muted" : "text-foreground/70 hover:text-foreground hover:bg-muted/70"}`}
-                onClick={() => { onRightPanelChange?.(null); onViewChange(viewMode === "both" ? "preview" : "both"); }}>
-                <Columns className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Split view (⌘3)</TooltipContent>
-          </Tooltip>
-          )}
-
-          {/* Preview / Files / Code / More — Lovable-parity animated view switcher */}
-          <ViewSwitcherPill
-            tabs={[
-              { id: "preview", label: "Preview", icon: Eye },
-              { id: "files", label: "Files", icon: FolderOpen },
-              { id: "code", label: "Code", icon: Code2 },
-            ] as ViewSwitcherTab[]}
-            activeId={
-              viewMode === "files" ? "files" : viewMode === "code" ? "code" : "preview"
-            }
-            onSelect={(id) => {
-              if (id === "preview") {
-                onRightPanelChange?.(null);
-                onViewChange("preview");
-                return;
-              }
-              if (id === "files") {
-                onRightPanelChange?.(null);
-                onViewChange("files");
-                return;
-              }
-              if (id === "code") {
-                onRightPanelChange?.(null);
-                onViewChange(viewMode === "code" ? "preview" : "code");
-                return;
-              }
-            }}
-          >
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-label="More"
-                  className="relative z-10 flex h-6 shrink-0 items-center gap-1 overflow-hidden rounded-full px-1.5 text-[var(--fg-tertiary)] outline-none transition-colors hover:text-[var(--fg-primary)] active:scale-[0.97]"
-                >
-                  <MoreHorizontal className="h-4 w-4 shrink-0" />
-                  {!isMobile && (
-                    <span className="text-sm font-[450] leading-none whitespace-nowrap">More</span>
-                  )}
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="center" className="w-52 p-1">
-                {([
-                  { id: "analytics" as LeftPanel, label: "Analytics",        icon: BarChart2 },
-                  { id: "intelligence" as LeftPanel, label: "Intelligence",  icon: Brain     },
-                  { id: "cloud" as LeftPanel,     label: "Cloud",            icon: Cloud     },
-                  { id: "code" as LeftPanel,      label: "Code",             icon: Code2     },
-                  { id: "search" as LeftPanel,    label: "Files",            icon: FolderOpen },
-                  { id: "payments" as LeftPanel,  label: "Payments",         icon: CreditCard },
-                  { id: "security" as LeftPanel,  label: "Security",         icon: Shield    },
-                  { id: "appauth" as LeftPanel,       label: "App sign-in",      icon: UserPlus  },
-                  { id: "seo" as LeftPanel,       label: "SEO & AI search",  icon: Search    },
-                ] as { id: LeftPanel; label: string; icon: React.ElementType }[]).map(({ id, label, icon: Icon }) => (
-                  <DropdownMenuItem
-                    key={id}
-                    onClick={() => {
-                      if (id === "code") {
-                        onViewChange("code");
-                        return;
-                      }
-                      onRightPanelChange?.(rightPanel === id ? null : id);
-                    }}
-                    className="text-xs gap-2.5 py-2"
-                  >
-                    <Icon className="w-3.5 h-3.5 text-muted-foreground" />
-                    <span className="flex-1">{label}</span>
-                  </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => { const a = document.createElement("a"); a.href = `/api/projects/${project.id}/export`; a.download = ""; a.click(); }} className="text-xs gap-2">
-                  <Download className="w-3.5 h-3.5" /> Download ZIP
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={onOpenShortcuts} className="text-xs gap-2">
-                  <Zap className="w-3.5 h-3.5" /> Keyboard shortcuts
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-xs gap-2 text-destructive focus:text-destructive">
-                  <Trash2 className="w-3.5 h-3.5" /> Delete project
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </ViewSwitcherPill>
-
-          {/* Design and product features are intentionally outside “More”.
-              Every item opens its existing functional editor panel. */}
-          <div className="hidden h-7 items-center rounded-full border border-border/70 bg-background p-0.5 shadow-sm xl:flex">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className={cn(
-                    "flex h-6 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors",
-                    designPanelActive ? "bg-blue-500/10 text-[#1F55F1]" : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
-                  )}
-                >
-                  <Palette className="h-3.5 w-3.5" /> Design
-                  <ChevronDown className="h-3 w-3 opacity-60" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="center" className="w-56 p-1.5">
-                <DropdownMenuLabel className="px-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Design workspace</DropdownMenuLabel>
-                {([
-                  { id: "designpanel" as LeftPanel, label: "Design system", icon: Palette },
-                  { id: "designdir" as LeftPanel, label: "Design directions", icon: Sparkles },
-                  { id: "visualedits" as LeftPanel, label: "Visual edits", icon: Pencil },
-                  { id: "components" as LeftPanel, label: "Components", icon: Blocks },
-                  { id: "figma" as LeftPanel, label: "Import from Figma", icon: LayoutDashboard },
-                  { id: "image" as LeftPanel, label: "Generate images", icon: Eye },
-                  { id: "media" as LeftPanel, label: "Media library", icon: FolderOpen },
-                  { id: "accessibility" as LeftPanel, label: "Accessibility", icon: CheckCircle2 },
-                ]).map(({ id, label, icon: Icon }) => (
-                  <DropdownMenuItem key={id} onClick={() => openTool(id)} className="gap-2.5 rounded-md py-2 text-xs">
-                    <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="flex-1">{label}</span>
-                    {rightPanel === id && <span className="h-1.5 w-1.5 rounded-full bg-[#1F55F1]" />}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            <div className="h-4 w-px bg-border/70" />
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button type="button" className="flex h-6 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground">
-                  <Blocks className="h-3.5 w-3.5" /> Features
-                  <ChevronDown className="h-3 w-3 opacity-60" />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="center" className="w-60 p-1.5">
-                <DropdownMenuLabel className="px-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">App features</DropdownMenuLabel>
-                {([
-                  { id: "cloud" as LeftPanel, label: "Cloud & database", icon: Cloud },
-                  { id: "appauth" as LeftPanel, label: "Authentication", icon: UserPlus },
-                  { id: "connectors" as LeftPanel, label: "Connectors", icon: Link2 },
-                  { id: "payments" as LeftPanel, label: "Payments", icon: CreditCard },
-                  { id: "analytics" as LeftPanel, label: "Analytics", icon: BarChart2 },
-                  { id: "security" as LeftPanel, label: "Security", icon: Shield },
-                  { id: "seo" as LeftPanel, label: "SEO & AI search", icon: Search },
-                  { id: "settings" as LeftPanel, label: "Project settings", icon: Settings },
-                ]).map(({ id, label, icon: Icon }) => (
-                  <DropdownMenuItem key={id} onClick={() => openTool(id)} className="gap-2.5 rounded-md py-2 text-xs">
-                    <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-                    <span className="flex-1">{label}</span>
-                    {rightPanel === id && <span className="h-1.5 w-1.5 rounded-full bg-[#1F55F1]" />}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-
-          {/* Center URL bar — Lovable parity: editable route on desktop + mobile */}
           <UrlBarPill
             className={cn("flex-1", isMobile ? "max-w-full px-2" : "max-w-md")}
             device={previewDevice}
@@ -1404,6 +1232,15 @@ export function EditorTopBar({
                     disabled={inviteBusy}
                     className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground/50 outline-none"
                   />
+                  <select
+                    value={inviteRole}
+                    onChange={(e) => setInviteRole(e.target.value === "viewer" ? "viewer" : "editor")}
+                    className="text-[10px] bg-transparent border-0 outline-none text-muted-foreground"
+                    aria-label="Invite role"
+                  >
+                    <option value="editor">Editor</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
                   {inviteEmail.trim() && (
                     <button
                       type="submit"
@@ -1450,7 +1287,29 @@ export function EditorTopBar({
                           <p className="text-xs font-medium truncate">{name}</p>
                           <p className="text-[10px] text-muted-foreground truncate">{c.profile?.email}</p>
                         </div>
-                        <span className="text-[11px] text-muted-foreground shrink-0 capitalize">{c.role}</span>
+                        <select
+                          className="text-[11px] bg-transparent border border-border rounded px-1 py-0.5 shrink-0"
+                          value={c.role === "viewer" ? "viewer" : "editor"}
+                          onChange={(e) => {
+                            const role = e.target.value === "viewer" ? "viewer" : "editor";
+                            void fetch("/api/projects/invite", {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ projectId: project.id, collaboratorId: c.id, role }),
+                            }).then((res) => {
+                              if (!res.ok) {
+                                toast({ title: "Role not updated", variant: "destructive" });
+                                return;
+                              }
+                              setShareCollaborators((rows) =>
+                                rows.map((row) => (row.id === c.id ? { ...row, role } : row)),
+                              );
+                            });
+                          }}
+                        >
+                          <option value="editor">Editor</option>
+                          <option value="viewer">Viewer</option>
+                        </select>
                       </div>
                     );
                   })}

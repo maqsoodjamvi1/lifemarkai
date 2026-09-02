@@ -123,7 +123,7 @@ export function LovableComposerPreInput({
         <LovableComposerAttachedTextChip
           key={`${f.name}-${i}`}
           name={f.name}
-          lineCount={f.content.split("\n").length}
+          lineCount={(typeof f.content === "string" ? f.content : "").split("\n").length}
           onRemove={() => onRemoveAttachedFile(i)}
         />
       ))}

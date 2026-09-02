@@ -176,6 +176,7 @@ import { Route as ApiProjectsImportLovableRouteImport } from './routes/api/proje
 import { Route as ApiProjectsInviteRouteImport } from './routes/api/projects/invite'
 import { Route as ApiProjectsSnapshotsRouteImport } from './routes/api/projects/snapshots'
 import { Route as ApiReferralRedeemRouteImport } from './routes/api/referral/redeem'
+import { Route as ApiSandboxMetricsRouteImport } from './routes/api/sandbox/metrics'
 import { Route as ApiSandboxStatusRouteImport } from './routes/api/sandbox/status'
 import { Route as ApiSecurityDeepScanRouteImport } from './routes/api/security/deep-scan'
 import { Route as ApiSecurityDependenciesRouteImport } from './routes/api/security/dependencies'
@@ -269,6 +270,7 @@ import { Route as ApiProjectsIdSecurityScanRouteImport } from './routes/api/proj
 import { Route as ApiProjectsIdSeoAuditRouteImport } from './routes/api/projects/$id/seo-audit'
 import { Route as ApiProjectsIdSlugRouteImport } from './routes/api/projects/$id/slug'
 import { Route as ApiProjectsIdStarRouteImport } from './routes/api/projects/$id/star'
+import { Route as ApiProjectsIdStorageRouteImport } from './routes/api/projects/$id/storage'
 import { Route as ApiProjectsIdSummariseRouteImport } from './routes/api/projects/$id/summarise'
 import { Route as ApiProjectsIdViewsRouteImport } from './routes/api/projects/$id/views'
 import { Route as ApiProjectsIdWebhooksRouteImport } from './routes/api/projects/$id/webhooks'
@@ -1155,6 +1157,11 @@ const ApiReferralRedeemRoute = ApiReferralRedeemRouteImport.update({
   path: '/redeem',
   getParentRoute: () => ApiReferralRoute,
 } as any)
+const ApiSandboxMetricsRoute = ApiSandboxMetricsRouteImport.update({
+  id: '/api/sandbox/metrics',
+  path: '/api/sandbox/metrics',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiSandboxStatusRoute = ApiSandboxStatusRouteImport.update({
   id: '/api/sandbox/status',
   path: '/api/sandbox/status',
@@ -1656,6 +1663,11 @@ const ApiProjectsIdStarRoute = ApiProjectsIdStarRouteImport.update({
   path: '/star',
   getParentRoute: () => ApiProjectsIdRoute,
 } as any)
+const ApiProjectsIdStorageRoute = ApiProjectsIdStorageRouteImport.update({
+  id: '/storage',
+  path: '/storage',
+  getParentRoute: () => ApiProjectsIdRoute,
+} as any)
 const ApiProjectsIdSummariseRoute = ApiProjectsIdSummariseRouteImport.update({
   id: '/summarise',
   path: '/summarise',
@@ -2012,6 +2024,7 @@ export interface FileRoutesByFullPath {
   '/api/projects/invite': typeof ApiProjectsInviteRouteWithChildren
   '/api/projects/snapshots': typeof ApiProjectsSnapshotsRouteWithChildren
   '/api/referral/redeem': typeof ApiReferralRedeemRoute
+  '/api/sandbox/metrics': typeof ApiSandboxMetricsRoute
   '/api/sandbox/status': typeof ApiSandboxStatusRoute
   '/api/security/deep-scan': typeof ApiSecurityDeepScanRoute
   '/api/security/dependencies': typeof ApiSecurityDependenciesRoute
@@ -2105,6 +2118,7 @@ export interface FileRoutesByFullPath {
   '/api/projects/$id/seo-audit': typeof ApiProjectsIdSeoAuditRoute
   '/api/projects/$id/slug': typeof ApiProjectsIdSlugRoute
   '/api/projects/$id/star': typeof ApiProjectsIdStarRoute
+  '/api/projects/$id/storage': typeof ApiProjectsIdStorageRoute
   '/api/projects/$id/summarise': typeof ApiProjectsIdSummariseRoute
   '/api/projects/$id/views': typeof ApiProjectsIdViewsRoute
   '/api/projects/$id/webhooks': typeof ApiProjectsIdWebhooksRoute
@@ -2307,6 +2321,7 @@ export interface FileRoutesByTo {
   '/api/projects/invite': typeof ApiProjectsInviteRouteWithChildren
   '/api/projects/snapshots': typeof ApiProjectsSnapshotsRouteWithChildren
   '/api/referral/redeem': typeof ApiReferralRedeemRoute
+  '/api/sandbox/metrics': typeof ApiSandboxMetricsRoute
   '/api/sandbox/status': typeof ApiSandboxStatusRoute
   '/api/security/deep-scan': typeof ApiSecurityDeepScanRoute
   '/api/security/dependencies': typeof ApiSecurityDependenciesRoute
@@ -2400,6 +2415,7 @@ export interface FileRoutesByTo {
   '/api/projects/$id/seo-audit': typeof ApiProjectsIdSeoAuditRoute
   '/api/projects/$id/slug': typeof ApiProjectsIdSlugRoute
   '/api/projects/$id/star': typeof ApiProjectsIdStarRoute
+  '/api/projects/$id/storage': typeof ApiProjectsIdStorageRoute
   '/api/projects/$id/summarise': typeof ApiProjectsIdSummariseRoute
   '/api/projects/$id/views': typeof ApiProjectsIdViewsRoute
   '/api/projects/$id/webhooks': typeof ApiProjectsIdWebhooksRoute
@@ -2604,6 +2620,7 @@ export interface FileRoutesById {
   '/api/projects/invite': typeof ApiProjectsInviteRouteWithChildren
   '/api/projects/snapshots': typeof ApiProjectsSnapshotsRouteWithChildren
   '/api/referral/redeem': typeof ApiReferralRedeemRoute
+  '/api/sandbox/metrics': typeof ApiSandboxMetricsRoute
   '/api/sandbox/status': typeof ApiSandboxStatusRoute
   '/api/security/deep-scan': typeof ApiSecurityDeepScanRoute
   '/api/security/dependencies': typeof ApiSecurityDependenciesRoute
@@ -2697,6 +2714,7 @@ export interface FileRoutesById {
   '/api/projects/$id/seo-audit': typeof ApiProjectsIdSeoAuditRoute
   '/api/projects/$id/slug': typeof ApiProjectsIdSlugRoute
   '/api/projects/$id/star': typeof ApiProjectsIdStarRoute
+  '/api/projects/$id/storage': typeof ApiProjectsIdStorageRoute
   '/api/projects/$id/summarise': typeof ApiProjectsIdSummariseRoute
   '/api/projects/$id/views': typeof ApiProjectsIdViewsRoute
   '/api/projects/$id/webhooks': typeof ApiProjectsIdWebhooksRoute
@@ -2901,6 +2919,7 @@ export interface FileRouteTypes {
     | '/api/projects/invite'
     | '/api/projects/snapshots'
     | '/api/referral/redeem'
+    | '/api/sandbox/metrics'
     | '/api/sandbox/status'
     | '/api/security/deep-scan'
     | '/api/security/dependencies'
@@ -2994,6 +3013,7 @@ export interface FileRouteTypes {
     | '/api/projects/$id/seo-audit'
     | '/api/projects/$id/slug'
     | '/api/projects/$id/star'
+    | '/api/projects/$id/storage'
     | '/api/projects/$id/summarise'
     | '/api/projects/$id/views'
     | '/api/projects/$id/webhooks'
@@ -3196,6 +3216,7 @@ export interface FileRouteTypes {
     | '/api/projects/invite'
     | '/api/projects/snapshots'
     | '/api/referral/redeem'
+    | '/api/sandbox/metrics'
     | '/api/sandbox/status'
     | '/api/security/deep-scan'
     | '/api/security/dependencies'
@@ -3289,6 +3310,7 @@ export interface FileRouteTypes {
     | '/api/projects/$id/seo-audit'
     | '/api/projects/$id/slug'
     | '/api/projects/$id/star'
+    | '/api/projects/$id/storage'
     | '/api/projects/$id/summarise'
     | '/api/projects/$id/views'
     | '/api/projects/$id/webhooks'
@@ -3492,6 +3514,7 @@ export interface FileRouteTypes {
     | '/api/projects/invite'
     | '/api/projects/snapshots'
     | '/api/referral/redeem'
+    | '/api/sandbox/metrics'
     | '/api/sandbox/status'
     | '/api/security/deep-scan'
     | '/api/security/dependencies'
@@ -3585,6 +3608,7 @@ export interface FileRouteTypes {
     | '/api/projects/$id/seo-audit'
     | '/api/projects/$id/slug'
     | '/api/projects/$id/star'
+    | '/api/projects/$id/storage'
     | '/api/projects/$id/summarise'
     | '/api/projects/$id/views'
     | '/api/projects/$id/webhooks'
@@ -3759,6 +3783,7 @@ export interface RootRouteChildren {
   ApiNpmSearchRoute: typeof ApiNpmSearchRoute
   ApiOauthStatusRoute: typeof ApiOauthStatusRoute
   ApiPreviewTokenRoute: typeof ApiPreviewTokenRoute
+  ApiSandboxMetricsRoute: typeof ApiSandboxMetricsRoute
   ApiSandboxStatusRoute: typeof ApiSandboxStatusRoute
   ApiSecurityDeepScanRoute: typeof ApiSecurityDeepScanRoute
   ApiSecurityDependenciesRoute: typeof ApiSecurityDependenciesRoute
@@ -4966,6 +4991,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiReferralRedeemRouteImport
       parentRoute: typeof ApiReferralRoute
     }
+    '/api/sandbox/metrics': {
+      id: '/api/sandbox/metrics'
+      path: '/api/sandbox/metrics'
+      fullPath: '/api/sandbox/metrics'
+      preLoaderRoute: typeof ApiSandboxMetricsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/sandbox/status': {
       id: '/api/sandbox/status'
       path: '/api/sandbox/status'
@@ -5617,6 +5649,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiProjectsIdStarRouteImport
       parentRoute: typeof ApiProjectsIdRoute
     }
+    '/api/projects/$id/storage': {
+      id: '/api/projects/$id/storage'
+      path: '/storage'
+      fullPath: '/api/projects/$id/storage'
+      preLoaderRoute: typeof ApiProjectsIdStorageRouteImport
+      parentRoute: typeof ApiProjectsIdRoute
+    }
     '/api/projects/$id/summarise': {
       id: '/api/projects/$id/summarise'
       path: '/summarise'
@@ -6141,6 +6180,7 @@ interface ApiProjectsIdRouteChildren {
   ApiProjectsIdSeoAuditRoute: typeof ApiProjectsIdSeoAuditRoute
   ApiProjectsIdSlugRoute: typeof ApiProjectsIdSlugRoute
   ApiProjectsIdStarRoute: typeof ApiProjectsIdStarRoute
+  ApiProjectsIdStorageRoute: typeof ApiProjectsIdStorageRoute
   ApiProjectsIdSummariseRoute: typeof ApiProjectsIdSummariseRoute
   ApiProjectsIdViewsRoute: typeof ApiProjectsIdViewsRoute
   ApiProjectsIdWebhooksRoute: typeof ApiProjectsIdWebhooksRoute
@@ -6200,6 +6240,7 @@ const ApiProjectsIdRouteChildren: ApiProjectsIdRouteChildren = {
   ApiProjectsIdSeoAuditRoute: ApiProjectsIdSeoAuditRoute,
   ApiProjectsIdSlugRoute: ApiProjectsIdSlugRoute,
   ApiProjectsIdStarRoute: ApiProjectsIdStarRoute,
+  ApiProjectsIdStorageRoute: ApiProjectsIdStorageRoute,
   ApiProjectsIdSummariseRoute: ApiProjectsIdSummariseRoute,
   ApiProjectsIdViewsRoute: ApiProjectsIdViewsRoute,
   ApiProjectsIdWebhooksRoute: ApiProjectsIdWebhooksRoute,
@@ -6577,6 +6618,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiNpmSearchRoute: ApiNpmSearchRoute,
   ApiOauthStatusRoute: ApiOauthStatusRoute,
   ApiPreviewTokenRoute: ApiPreviewTokenRoute,
+  ApiSandboxMetricsRoute: ApiSandboxMetricsRoute,
   ApiSandboxStatusRoute: ApiSandboxStatusRoute,
   ApiSecurityDeepScanRoute: ApiSecurityDeepScanRoute,
   ApiSecurityDependenciesRoute: ApiSecurityDependenciesRoute,

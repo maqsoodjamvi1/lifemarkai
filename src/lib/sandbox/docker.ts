@@ -34,12 +34,14 @@
  *   SANDBOX_PUBLIC_HOST=1.2.3.4        host/IP users' browsers can reach
  *   SANDBOX_PORT_RANGE=42000-42099     host ports available for previews
  *   SANDBOX_IMAGE=node:22-alpine       runtime image
- *   SANDBOX_MEMORY_MB=1024             per-container memory cap
- *   SANDBOX_CPUS=1                     per-container CPU cap
+ *   SANDBOX_MEMORY_MB=2048             per-container memory cap (raise with VPS RAM)
+ *   SANDBOX_CPUS=2                     per-container CPU cap
+ *   SANDBOX_PROXY_NETWORK=coolify      Traefik network (auto-picked if unset)
  */
 
 import http from "node:http";
 import { createHash } from "node:crypto";
+import { dockerSocketIsPresent, resolveDockerSocketPath } from "./docker-socket.ts";
 import type {
 ClaudeCodeResult,
 CommandResult,
@@ -60,6 +62,10 @@ import {
   npmInstallShell,
   parseNpmInstallExit,
 } from "./npm-install.ts";
+import {
+  pickProxyNetworkName,
+  proxyNetworkMissingError,
+} from "./docker-network.ts";
 
 /** Vite's port inside the sandbox. The heartbeat has no opts.port to read. */
 const DEFAULT_INNER_PORT = 5173;
@@ -171,7 +177,7 @@ function cfg() {
   // publishing host ports, which only works when the editor is also on http.
   const previewDomain = normalizeHost(process.env.SANDBOX_PREVIEW_DOMAIN || "");
   return {
-    socketPath: process.env.DOCKER_SOCKET || "/var/run/docker.sock",
+    socketPath: resolveDockerSocketPath(),
     tcpHost: process.env.DOCKER_HOST || "",
     publicHost: normalizeHost(process.env.SANDBOX_PUBLIC_HOST || ""),
     // http for a bare IP; set to "https" once previews sit behind a TLS proxy.
@@ -180,8 +186,8 @@ function cfg() {
     portLo: Number.isFinite(lo) ? lo : 42000,
     portHi: Number.isFinite(hi) ? hi : 42099,
     image: process.env.SANDBOX_IMAGE || "node:22-alpine",
-    memoryMb: Number(process.env.SANDBOX_MEMORY_MB) || 1024,
-    cpus: Number(process.env.SANDBOX_CPUS) || 1,
+    memoryMb: Number(process.env.SANDBOX_MEMORY_MB) || 2048,
+    cpus: Number(process.env.SANDBOX_CPUS) || 2,
     // ── routing ──────────────────────────────────────────────────────────────
     previewDomain,
     // Hostname routing is what makes previews usable in production: Traefik
@@ -190,8 +196,9 @@ function cfg() {
     // and nothing of the sandbox is reachable from the internet except through
     // the proxy.
     routeViaProxy: Boolean(previewDomain),
-    proxyNetwork: process.env.SANDBOX_PROXY_NETWORK || "lifemark-previews",
+    proxyNetworkExplicit: (process.env.SANDBOX_PROXY_NETWORK || "").trim(),
     certResolver: process.env.SANDBOX_CERT_RESOLVER || "letsencrypt",
+    pidsLimit: Number(process.env.SANDBOX_PIDS_LIMIT) || 1024,
     entrypoint: process.env.SANDBOX_TRAEFIK_ENTRYPOINT || "https",
   };
 }
@@ -346,12 +353,53 @@ async function docker(
 }
 
 export async function isDockerDaemonReachable(timeoutMs = 1500): Promise<boolean> {
+  const c = cfg();
+  // Opening a missing Windows named pipe can hang past the HTTP timeout.
+  if (!c.tcpHost && !dockerSocketIsPresent(c.socketPath)) return false;
   try {
     const res = await docker("GET", "/_ping", undefined, undefined, timeoutMs);
     return res.status >= 200 && res.status < 300 && res.text.trim() === "OK";
   } catch {
     return false;
   }
+}
+
+async function listDockerNetworkNames(): Promise<string[]> {
+  const res = await docker("GET", "/v1.43/networks");
+  if (res.status >= 400) return [];
+  try {
+    const nets = JSON.parse(res.text) as Array<{ Name?: string }>;
+    return nets.map((n) => n.Name).filter((n): n is string => Boolean(n));
+  } catch {
+    return [];
+  }
+}
+
+async function ensureProxyNetwork(name: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const names = await listDockerNetworkNames();
+  if (names.includes(name)) return { ok: true };
+  const missing = proxyNetworkMissingError(name);
+  if (missing) return { ok: false, error: missing };
+  const created = await docker("POST", "/v1.43/networks/create", {
+    Name: name,
+    Driver: "bridge",
+    CheckDuplicate: true,
+  });
+  if (created.status >= 400 && created.status !== 409) {
+    return {
+      ok: false,
+      error: `Could not create Docker network "${name}": ${trunc(created.text, 300)}`,
+    };
+  }
+  return { ok: true };
+}
+
+async function resolveProxyNetworkName(explicit: string): Promise<{ name: string } | { error: string }> {
+  const names = await listDockerNetworkNames();
+  const name = pickProxyNetworkName(explicit || null, names);
+  const ensured = await ensureProxyNetwork(name);
+  if (!ensured.ok) return { error: ensured.error };
+  return { name };
 }
 
 /**
@@ -654,6 +702,14 @@ export class DockerSandboxProvider implements SandboxProvider {
     }
 
     const innerPort = opts.port ?? DEFAULT_INNER_PORT;
+    let proxyNetwork = "";
+    if (c.routeViaProxy) {
+      const resolved = await resolveProxyNetworkName(c.proxyNetworkExplicit);
+      if ("error" in resolved) {
+        return { ok: false, error: resolved.error };
+      }
+      proxyNetwork = resolved.name;
+    }
     // In proxy mode Traefik reaches the container over the shared network, so
     // there is no host port to claim and no range to exhaust.
     const hostPort = c.routeViaProxy ? null : await claimPort();
@@ -748,13 +804,13 @@ export class DockerSandboxProvider implements SandboxProvider {
         ExposedPorts: { [`${innerPort}/tcp`]: {} },
         // Proxy mode: join the network Traefik watches. Port mode: publish to host.
         ...(c.routeViaProxy
-          ? { NetworkingConfig: { EndpointsConfig: { [c.proxyNetwork]: {} } } }
+          ? { NetworkingConfig: { EndpointsConfig: { [proxyNetwork]: {} } } }
           : {}),
         HostConfig: {
           PortBindings: c.routeViaProxy
             ? {}
             : { [`${innerPort}/tcp`]: [{ HostPort: String(hostPort) }] },
-          ...(c.routeViaProxy ? { NetworkMode: c.proxyNetwork } : {}),
+          ...(c.routeViaProxy ? { NetworkMode: proxyNetwork } : {}),
           // Init (tini) as pid 1 is LOAD-BEARING. Without it pid 1 is our
           // `sleep infinity`, which never reaps children: when vite's file
           // watcher triggers a self-restart (late .env/config writes), the
@@ -764,7 +820,7 @@ export class DockerSandboxProvider implements SandboxProvider {
           Init: true,
           Memory: c.memoryMb * 1024 * 1024,
           NanoCpus: Math.round(c.cpus * 1e9),
-          PidsLimit: 512,
+          PidsLimit: c.pidsLimit,
           CapDrop: ["ALL"],
           SecurityOpt: ["no-new-privileges"],
           // No bind mounts. Never mount the docker socket into a sandbox.
@@ -786,7 +842,7 @@ export class DockerSandboxProvider implements SandboxProvider {
           ...(c.routeViaProxy
             ? {
                 "traefik.enable": "true",
-                "traefik.docker.network": c.proxyNetwork,
+                "traefik.docker.network": proxyNetwork,
                 [`traefik.http.routers.${routerId(previewHost)}.rule`]: `Host(\`${previewHost}\`)`,
                 [`traefik.http.routers.${routerId(previewHost)}.entrypoints`]: c.entrypoint,
                 [`traefik.http.routers.${routerId(previewHost)}.tls`]: "true",
@@ -814,6 +870,16 @@ export class DockerSandboxProvider implements SandboxProvider {
           };
         }
         create = await docker("POST", "/v1.43/containers/create", createBody);
+      }
+      if (
+        c.routeViaProxy &&
+        create.status >= 400 &&
+        /network .* not found|not found/i.test(create.text)
+      ) {
+        const again = await ensureProxyNetwork(proxyNetwork);
+        if (again.ok) {
+          create = await docker("POST", "/v1.43/containers/create", createBody);
+        }
       }
       if (create.status >= 400) {
         return { ok: false, error: `docker create failed (${create.status}): ${trunc(create.text, 400)}` };
@@ -979,7 +1045,7 @@ export class DockerSandboxProvider implements SandboxProvider {
 
         if (depCheck.satisfied) {
           logs += `\n[preview] skipped npm install — ${depCheck.reason}\n`;
-          progress(createSandboxProgress("installing", "Dependencies already prepared"));
+          progress(createSandboxProgress("starting", "Dependencies already prepared"));
         } else {
           progress(createSandboxProgress(
             "installing",
@@ -1757,17 +1823,12 @@ export class DockerSandboxProvider implements SandboxProvider {
     );
 
     if (!opts?.previewUrl) return { alive: true };
+    // reconnect() already probed inside the container. A second host-side
+    // fetch of localhost:published-port can take tens of seconds on a cold
+    // Vite transform (or fail outright from another container) and the
+    // client used to read that as dead — blanking a preview that was up.
+    if (re.ready) return { alive: true, tunnelHealthy: true };
 
-    // Docker Desktop does not hairpin published ports. When the Lifemark app is
-    // ITSELF a container and previewUrl is localhost/127.0.0.1, fetching that
-    // URL from here reaches the app container, not the sibling sandbox — it
-    // answers ECONNREFUSED for a perfectly healthy preview. The client reads
-    // `tunnelHealthy: false` as dead and cold-boots a replacement, whose own
-    // heartbeat fails the same way: the endless "Installing dependencies" loop.
-    //
-    // Boot already measures readiness INSIDE the container (waitForLocalServer,
-    // see the long note on that call). The heartbeat has to use the same probe
-    // or it contradicts the check that just passed thirty seconds earlier.
     const previewHost = (() => {
       try {
         return new URL(opts.previewUrl).hostname;
@@ -1775,11 +1836,15 @@ export class DockerSandboxProvider implements SandboxProvider {
         return "";
       }
     })();
-    const probeInside = previewHost === "localhost" || previewHost === "127.0.0.1";
+    // Local Docker publish: the container is alive; Vite may still be
+    // compiling. Never report tunnelHealthy:false here — that was the
+    // blank "Starting live preview" pane after a successful boot.
+    if (previewHost === "localhost" || previewHost === "127.0.0.1") {
+      return { alive: true };
+    }
 
-    const healthy = probeInside
-      ? await this.waitForLocalServer(sandboxId, DEFAULT_INNER_PORT, 3000)
-      : await waitForServer(opts.previewUrl, 3000);
+    // Remote tunnels (Coolify / Modal): still probe the public URL.
+    const healthy = await waitForServer(opts.previewUrl, 3000);
     if (healthy) return { alive: true, tunnelHealthy: true };
 
     // GRACE WINDOW — the tunnel being down while the container is alive almost
@@ -1790,9 +1855,7 @@ export class DockerSandboxProvider implements SandboxProvider {
     // one-per-project teardown, stacked duplicates behind one hostname and
     // caused the dual-React blank. Wait out the restart window and re-probe;
     // only report dead if the tunnel stays down.
-    const recovered = probeInside
-      ? await this.waitForLocalServer(sandboxId, DEFAULT_INNER_PORT, 9000)
-      : await waitForServer(opts.previewUrl, 9000);
+    const recovered = await waitForServer(opts.previewUrl, 9000);
     if (recovered) {
       // The iframe may be stuck on a connection-reset page from the brief
       // outage — `restarted` tells the client to bump its reload nonce.
@@ -1800,26 +1863,10 @@ export class DockerSandboxProvider implements SandboxProvider {
     }
 
     // The tunnel is not answering US. That is not the same as the app being
-    // down, and the difference matters enormously: `tunnelHealthy: false`
-    // makes the client tear down the container and cold-boot a replacement.
-    // Right after a first boot the hostname's certificate may still be
-    // mid-issuance (ACME HTTP-01), so an HTTPS probe from this server fails
-    // while the user's browser — moments later, once the cert lands — would
-    // have been served fine. Rebooting there is not just wasteful, it restarts
-    // the same race and can loop.
-    //
-    // So before condemning the sandbox, ask the app directly. If it answers on
-    // localhost the problem is the edge, and the right move is to leave the
-    // container alone and let the next heartbeat re-probe.
+    // down. Ask the app directly inside the container before condemning it.
     const innerPort = await this.portFor(sandboxId).catch(() => null);
     if (innerPort != null) {
       const localUp = await this.waitForLocalServer(sandboxId, innerPort, 4000);
-      // `restarted` is set on purpose. We got here because the tunnel refused
-      // us at least twice, which means the iframe may be sitting on a Bad
-      // Gateway page — and browsers never retry those on their own. The client
-      // reads this as "bump the reload nonce", which is exactly the recovery
-      // needed, whereas tunnelHealthy:false would throw away a container whose
-      // app is demonstrably serving.
       if (localUp) return { alive: true, tunnelHealthy: true, restarted: true };
     }
     return { alive: true, tunnelHealthy: false };

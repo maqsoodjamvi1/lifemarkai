@@ -31,7 +31,7 @@ export async function persistChatTurnMessages(
   supabase: { from: (table: string) => any },
   rows: ChatTurnInsertRow[],
   context: { projectId: string; label: string },
-): Promise<{ assistantMessageId?: string; error?: unknown }> {
+): Promise<{ assistantMessageId?: string; userMessageId?: string; error?: unknown }> {
   const payload = rows.map((row) => ({
     project_id: row.project_id,
     role: row.role,
@@ -89,6 +89,7 @@ export async function persistChatTurnMessages(
   }
 
   const assistantMessageId = data?.find((row) => row.role === "assistant")?.id;
+  const userMessageId = data?.find((row) => row.role === "user")?.id;
 
   // Semantic-search cache — fire-and-forget; never block the chat turn.
   void (async () => {
@@ -109,5 +110,5 @@ export async function persistChatTurnMessages(
     }
   })();
 
-  return { assistantMessageId };
+  return { assistantMessageId, userMessageId };
 }

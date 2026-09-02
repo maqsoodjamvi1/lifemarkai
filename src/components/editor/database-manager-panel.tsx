@@ -26,6 +26,7 @@ const PAGE_SIZE = 50;
 interface DatabaseManagerPanelProps {
   projectId: string;
   isLocked?: boolean; // Live environment — writes blocked (migration 046)
+  initialTab?: "data" | "schema" | "sql";
 }
 
 // ── Value helpers ─────────────────────────────────────────────────────────────
@@ -79,12 +80,12 @@ function coerceValue(raw: string, col: ColumnInfo | undefined, original?: unknow
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPanelProps) {
+export function DatabaseManagerPanel({ projectId, isLocked, initialTab = "data" }: DatabaseManagerPanelProps) {
   const [backend, setBackend] = useState<Backend | null>(null); // null = loading
   const [backendNote, setBackendNote] = useState<string | null>(null);
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [tab, setTab] = useState<"data" | "schema" | "sql">("data");
+  const [tab, setTab] = useState<"data" | "schema" | "sql">(initialTab);
 
   const [rows, setRows] = useState<Row[]>([]);
   const [total, setTotal] = useState<number | undefined>(undefined);
@@ -440,7 +441,7 @@ export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPan
         )}
 
         <div className="flex items-center gap-1">
-          {(["data", "schema", ...(backend === "cloud" ? (["sql"] as const) : [])] as const).map((t) => (
+          {(["data", "schema", "sql"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -455,7 +456,7 @@ export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPan
       </div>
 
       {/* ── SQL tab (managed Cloud only) ──────────────────────────────────── */}
-      {tab === "sql" && backend === "cloud" ? (
+      {tab === "sql" ? (
         <div className="flex-1 min-h-0 flex flex-col p-3 gap-2">
           <textarea
             value={sql}
@@ -464,6 +465,11 @@ export function DatabaseManagerPanel({ projectId, isLocked }: DatabaseManagerPan
             spellCheck={false}
             className="h-32 shrink-0 w-full rounded-lg border border-border bg-card p-2.5 text-[11px] font-mono resize-y outline-none focus:border-primary/50"
           />
+          {backend === "supabase" ? (
+            <p className="text-[10px] text-muted-foreground">
+              SQL runs on your linked Supabase project. Connect the account under Cloud if this fails.
+            </p>
+          ) : null}
           <div className="flex items-center gap-2 shrink-0">
             <Button size="sm" className="h-7 text-xs gap-1.5" onClick={() => void runSql()} disabled={sqlRunning || !sql.trim() || isLocked}>
               {sqlRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}

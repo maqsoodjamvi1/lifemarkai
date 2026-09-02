@@ -3,11 +3,13 @@
  *
  * Tabs:
  *   - Overview      → status + region + instance + health summary
- *   - Database      → links to existing schema-panel + db-query-panel
+ *   - Database      → DatabaseManagerPanel (tables + SQL on the app backend)
  *   - Users & Auth  → wraps Supabase Auth UI
  *   - Storage       → links to existing storage-panel
  *   - Edge Functions → links to existing edge-functions-panel
- *   - AI            → links to existing ai-integration-panel
+ *   - Jobs          → pg_cron
+ *   - Emails        → custom domain + auth templates (same as Lovable Cloud Emails)
+ *   - AI            → built-in AI permission + secrets for LIFEMARK_API_KEY
  *   - Secrets       → links to existing secrets-vault-panel
  *   - Logs          → links to existing analytics
  *   - Usage         → segmented-bar breakdown by category
@@ -18,11 +20,18 @@ import { useState,useEffect,useCallback } from "react";
 import {
 Cloud,Database,Lock,FolderOpen,Zap,Sparkles,KeyRound,
 Activity,BarChart3,Settings,Loader2,MapPin,Cpu,
-AlertCircle,ArrowUpRight,RefreshCw,Server,
-HeartPulse,ShieldCheck,Gauge,CalendarClock
+AlertCircle,RefreshCw,Server,
+HeartPulse,ShieldCheck,Gauge,CalendarClock,Mail
 } from "lucide-react";
 import { CloudSlowQueries } from "./cloud-slow-queries";
 import { CloudJobsPanel } from "./cloud-jobs-panel";
+import { CloudLogsPanel } from "./cloud-logs-panel";
+import { DatabaseManagerPanel } from "./database-manager-panel";
+import { AppAuthPanel } from "./app-auth-panel";
+import { StoragePanel } from "./storage-panel";
+import { EdgeFunctionsPanel } from "./edge-functions-panel";
+import { EnvPanel } from "./env-panel";
+import { SecretsVaultPanel } from "./secrets-vault-panel";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import type { Project } from "@/types/database";
@@ -41,7 +50,8 @@ interface LifemarkCloudPanelProps {
     cloud_status?: string | null;
     cloud_provisioned_at?: string | null;
   };
-  onOpenSubPanel?: (panel: string) => void;
+  files?: Array<{ path: string; content: string }>;
+  onUpdateEnvFile?: (path: string, content: string) => void | Promise<void>;
 }
 
 interface Tier {
@@ -108,6 +118,8 @@ const TABS = [
   { id: "storage",   label: "Storage",        icon: FolderOpen },
   { id: "edge",      label: "Edge Functions", icon: Zap },
   { id: "jobs",      label: "Jobs",           icon: CalendarClock },
+  { id: "emails",    label: "Emails",         icon: Mail },
+  { id: "env",       label: "Env",            icon: KeyRound },
   { id: "ai",        label: "AI",             icon: Sparkles },
   { id: "secrets",   label: "Secrets",        icon: KeyRound },
   { id: "logs",      label: "Logs",           icon: Activity },
@@ -238,9 +250,19 @@ function ConnectExistingSupabase({ projectId }: { projectId: string }) {
   );
 }
 
-export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPanelProps) {
+export function LifemarkCloudPanel({ project, files = [], onUpdateEnvFile }: LifemarkCloudPanelProps) {
   const { toast } = useToast();
-  const [active, setActive] = useState<TabId>("overview");
+  const [active, setActive] = useState<TabId>(() => {
+    if (typeof window === "undefined") return "overview";
+    try {
+      const t = sessionStorage.getItem("lifemark-cloud-tab");
+      if (t && TABS.some((x) => x.id === t)) {
+        sessionStorage.removeItem("lifemark-cloud-tab");
+        return t as TabId;
+      }
+    } catch { /* private mode */ }
+    return "overview";
+  });
   const [status, setStatus] = useState<CloudStatus | null>(null);
   const [health, setHealth] = useState<HealthResp | null>(null);
   const [usage, setUsage] = useState<UsageResp | null>(null);
@@ -257,6 +279,15 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
   }, [project.id]);
 
   useEffect(() => { void loadStatus(); }, [loadStatus]);
+
+  useEffect(() => {
+    const onTab = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (TABS.some((tab) => tab.id === id)) setActive(id as TabId);
+    };
+    window.addEventListener("lifemark-cloud-open-tab", onTab);
+    return () => window.removeEventListener("lifemark-cloud-open-tab", onTab);
+  }, []);
 
   const cloudActive = !!project.cloud_enabled && project.cloud_status === "active";
 
@@ -452,6 +483,12 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
             </div>
 
             <ConnectExistingSupabase projectId={project.id} />
+
+            {onUpdateEnvFile && (
+              <div className="rounded-xl border border-border overflow-hidden min-h-[16rem]">
+                <EnvPanel projectId={project.id} files={files} onUpdateFile={onUpdateEnvFile} />
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -593,89 +630,80 @@ export function LifemarkCloudPanel({ project, onOpenSubPanel }: LifemarkCloudPan
         )}
 
         {active === "database" && (
-          <SubPanelCard
-            title="Database"
-            description="Hosted Postgres. Create tables, run queries, manage rows."
-            actions={[
-              { label: "Open Schema Designer", panel: "schema" },
-              { label: "Open SQL Console",     panel: "dbquery" },
-            ]}
-            onOpen={(p) => onOpenSubPanel?.(p)}
+          <DatabaseManagerPanel
+            projectId={project.id}
+            isLocked={(project as { environment?: string }).environment === "live"}
           />
         )}
 
         {active === "auth" && (
-          <SubPanelCard
-            title="Users & Auth"
-            description="Manage user accounts, signup policies, and OAuth providers."
-            actions={[
-              { label: "Open Supabase Wizard",  panel: "supabase" },
-              { label: "Configure Auth in Env", panel: "env" },
-              { label: "Security Review",       panel: "security" },
-            ]}
-            onOpen={(p) => onOpenSubPanel?.(p)}
-          />
+          <AppAuthPanel project={project} />
         )}
 
         {active === "storage" && (
-          <SubPanelCard
-            title="Storage buckets"
-            description="Private file storage with public-bucket option. Up to 2 GB per file."
-            actions={[
-              { label: "Open Storage Panel", panel: "storage" },
-            ]}
-            onOpen={(p) => onOpenSubPanel?.(p)}
-          />
+          <StoragePanel projectId={project.id} />
         )}
 
         {active === "edge" && (
-          <SubPanelCard
-            title="Edge Functions"
-            description="Serverless logic — APIs, webhooks, AI calls, scheduled jobs."
-            actions={[
-              { label: "Open Edge Functions", panel: "edgefn" },
-              { label: "Webhooks",            panel: "webhooks" },
-            ]}
-            onOpen={(p) => onOpenSubPanel?.(p)}
-          />
+          <EdgeFunctionsPanel projectId={project.id} />
         )}
 
         {active === "jobs" && <CloudJobsPanel projectId={project.id} />}
 
+        {active === "emails" && <CustomEmailsPanel />}
+        {active === "env" && onUpdateEnvFile && (
+          <EnvPanel projectId={project.id} files={files} onUpdateFile={onUpdateEnvFile} />
+        )}
+
         {active === "performance" && <CloudSlowQueries projectId={project.id} />}
 
         {active === "ai" && (
-          <SubPanelCard
-            title="Built-in AI"
-            description="Lifemark AI for your deployed apps. No API keys needed — billed against AI balance."
-            actions={[
-            ]}
-            onOpen={(p) => onOpenSubPanel?.(p)}
-          />
+          <div className="rounded-xl border border-border bg-card p-4 space-y-3">
+            <h3 className="text-sm font-medium">Built-in AI</h3>
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              Generated apps can call Lifemark AI through the gateway without shipping OpenAI keys.
+              Usage bills the project owner&apos;s credit balance. Permission is currently{" "}
+              <span className="font-medium text-foreground">{toolPermissions.ai}</span>
+              {" "}(change it under Advanced).
+            </p>
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              Store <code className="text-[10px]">LIFEMARK_API_KEY</code> in Secrets so edge functions
+              can authenticate. The key is injected at provision time when the AI gateway is configured.
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                onClick={() => setActive("secrets")}
+              >
+                Open secrets
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                onClick={() => setActive("env")}
+              >
+                App env vars
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                onClick={() => setActive("advanced")}
+              >
+                AI permission
+              </Button>
+            </div>
+          </div>
         )}
 
         {active === "secrets" && (
-          <SubPanelCard
-            title="Secrets vault"
-            description="Encrypted environment variables, automatically injected into Edge Functions."
-            actions={[
-              { label: "Open Secrets Vault", panel: "secrets" },
-            ]}
-            onOpen={(p) => onOpenSubPanel?.(p)}
-          />
+          <SecretsVaultPanel projectId={project.id} />
         )}
 
-        {active === "logs" && (
-          <SubPanelCard
-            title="Logs & monitoring"
-            description="Real-time backend activity and request traces."
-            actions={[
-              { label: "Project Analytics",  panel: "analytics" },
-              { label: "Problems",           panel: "problems" },
-            ]}
-            onOpen={(p) => onOpenSubPanel?.(p)}
-          />
-        )}
+        {active === "logs" && <CloudLogsPanel projectId={project.id} />}
 
         {active === "usage" && (
           <div className="space-y-3">
@@ -938,36 +966,6 @@ function Metric({ label, value, sub }: { label: string; value: string; sub: stri
       <div className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className="text-sm font-semibold tabular-nums">{value}</div>
       <div className="text-[9px] text-muted-foreground/60 truncate">{sub}</div>
-    </div>
-  );
-}
-
-function SubPanelCard({
-  title, description, actions, onOpen,
-}: {
-  title: string;
-  description: string;
-  actions: Array<{ label: string; panel: string }>;
-  onOpen: (panel: string) => void;
-}) {
-  return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <h3 className="text-sm font-medium mb-1">{title}</h3>
-      <p className="text-[11px] text-muted-foreground leading-relaxed mb-3">{description}</p>
-      <div className="flex flex-wrap gap-1.5">
-        {actions.map((a) => (
-          <Button
-            key={a.panel}
-            size="sm"
-            variant="outline"
-            className="h-7 text-xs gap-1.5"
-            onClick={() => onOpen(a.panel)}
-          >
-            <ArrowUpRight className="w-3 h-3" />
-            {a.label}
-          </Button>
-        ))}
-      </div>
     </div>
   );
 }

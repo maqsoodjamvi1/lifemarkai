@@ -16,81 +16,44 @@ test("no files means unavailable regardless of everything else", () => {
   assert.equal(selectPreviewEngine({ ...base, hasFiles: false, sandboxEnabled: true }), "unavailable");
 });
 
-test("a healthy or still-booting sandbox is preferred (unchanged prior behavior)", () => {
+test("a healthy or still-booting sandbox is the only live origin", () => {
   assert.equal(selectPreviewEngine({ ...base, sandboxEnabled: true, sandboxError: false }), "sandbox");
 });
 
-// Regression: `sandboxEnabled` is a "credentials configured" flag that stays
-// true forever once first observed true (per useSandboxPreview's own
-// design) — before this fix, `if (sandboxEnabled) return "sandbox"` pinned
-// the engine to "sandbox" for the rest of the session no matter how badly
-// or how long it kept failing, leaving the WebContainer fallback
-// permanently unreachable even when a caller explicitly requested it.
-test("a sandbox with a settled error fails over to WebContainer when the fallback is usable", () => {
+test("a sandbox with a settled error stays on the sandbox origin", () => {
   assert.equal(
     selectPreviewEngine({ ...base, sandboxEnabled: true, sandboxError: true }),
-    "webcontainer",
-  );
-});
-
-test("a sandbox error does NOT fail over when WebContainer was never explicitly requested", () => {
-  assert.equal(
-    selectPreviewEngine({
-      ...base,
-      sandboxEnabled: true,
-      sandboxError: true,
-      explicitWebContainerFallback: false,
-    }),
     "sandbox",
   );
 });
 
-test("a sandbox error does NOT fail over when WebContainer is disabled (e.g. static runtime)", () => {
-  assert.equal(
-    selectPreviewEngine({ ...base, sandboxEnabled: true, sandboxError: true, webContainerEnabled: false }),
-    "sandbox",
-  );
-});
-
-test("a sandbox error does NOT fail over when the project doesn't have WebContainer's expected shape", () => {
-  assert.equal(
-    selectPreviewEngine({
-      ...base,
-      sandboxEnabled: true,
-      sandboxError: true,
-      webContainerProjectShape: false,
-    }),
-    "sandbox",
-  );
-});
-
-test("without a usable WebContainer fallback, an erroring sandbox still returns sandbox (keeps its own error/retry UI reachable)", () => {
-  assert.equal(
-    selectPreviewEngine({
-      ...base,
-      sandboxEnabled: true,
-      sandboxError: true,
-      explicitWebContainerFallback: false,
-      webContainerEnabled: false,
-      webContainerProjectShape: false,
-    }),
-    "sandbox",
-  );
-});
-
-test("no sandbox at all still falls through to static, then WebContainer, as before", () => {
-  assert.equal(selectPreviewEngine({ ...base, sandboxEnabled: false, staticRuntime: true }), "static");
-  assert.equal(selectPreviewEngine({ ...base, sandboxEnabled: false, staticRuntime: false }), "webcontainer");
-});
-
-test("no sandbox and no usable WebContainer fallback is unavailable", () => {
+test("WebContainer is never the product engine, even when opted in", () => {
   assert.equal(
     selectPreviewEngine({
       ...base,
       sandboxEnabled: false,
-      staticRuntime: false,
-      explicitWebContainerFallback: false,
+      explicitWebContainerFallback: true,
     }),
+    "unavailable",
+  );
+});
+
+test("product path never returns srcdoc or webcontainer", () => {
+  const engines = [
+    selectPreviewEngine({ ...base, sandboxEnabled: true }),
+    selectPreviewEngine({ ...base, sandboxEnabled: false }),
+    selectPreviewEngine({ ...base, sandboxEnabled: false, staticRuntime: true, webContainerEnabled: true }),
+  ];
+  for (const engine of engines) {
+    assert.notEqual(engine, "webcontainer");
+    assert.notEqual(engine, "srcdoc");
+    assert.notEqual(engine, "static");
+  }
+});
+
+test("without a sandbox there is no fake srcdoc/static engine", () => {
+  assert.equal(
+    selectPreviewEngine({ ...base, sandboxEnabled: false, staticRuntime: true }),
     "unavailable",
   );
 });

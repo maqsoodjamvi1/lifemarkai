@@ -11,6 +11,17 @@
  * sessionStorage so reloads can reconnect quickly.
  */
 import { useCallback,useEffect,useRef,useState } from "react";
+import { announcePreviewSettled } from "@/lib/preview/wait-for-preview-success";
+import { reportPreviewSlo } from "@/lib/preview/preview-slo";
+import {
+  announcePreviewLifecycle,
+  deriveSandboxLifecycle,
+  isAppBuildFailure,
+  isDeadSandboxPhase,
+  isIdleReclaimText,
+  planResumeAfterPause,
+  type SandboxLifecycle,
+} from "@/lib/preview/sandbox-lifecycle";
 
 export interface SandboxPreviewState {
   enabled: boolean;
@@ -23,6 +34,9 @@ export interface SandboxPreviewState {
   /** Modal boot phase: creating | writing | installing | starting | ready */
   phase: string | null;
   phaseDetail: string | null;
+  /** Idle reclaim — keep sandbox id for warm resume. */
+  paused?: boolean;
+  resuming?: boolean;
 }
 
 type SandboxStatusResponse = {
@@ -30,6 +44,7 @@ type SandboxStatusResponse = {
   provider?: string | null;
   configured?: boolean;
   reachable?: boolean;
+  hint?: string | null;
 };
 
 function storageKey(projectId: string) {
@@ -47,6 +62,8 @@ export function useSandboxPreview(projectId: string) {
     logs: null,
     phase: null,
     phaseDetail: null,
+    paused: false,
+    resuming: false,
   });
   const sandboxIdRef = useRef<string | null>(null);
   /**
@@ -65,7 +82,11 @@ export function useSandboxPreview(projectId: string) {
    *  is stuck on a stale connection-reset page) to reload the recovered URL. */
   const [reloadNonce, setReloadNonce] = useState(0);
   /** One-shot guard for mid-session dead-sandbox auto-recovery (cold re-boot). */
-  const coldRetryRef = useRef(false);
+  /** Cold POSTs used while recovering from a pause (cap = 1). */
+  const resumeColdBootsRef = useRef(0);
+  const bootStartedAtRef = useRef<number | null>(null);
+  const resumeStartedAtRef = useRef<number | null>(null);
+  const lastLifecycleRef = useRef<SandboxLifecycle | null>(null);
   /**
    * Tracks which projectId the boot effect has already run for — NOT just
    * whether it has ever run. The editor route (`/editor/$projectId`) does not
@@ -79,7 +100,7 @@ export function useSandboxPreview(projectId: string) {
    * actually belonged to the old sandbox.
    */
   const bootedForProjectRef = useRef<string | null>(null);
-  const statusCheckedRef = useRef(false);
+
   /**
    * The phase-poll effect below fires a `fetch` every 1200ms with no
    * AbortController and applied its response unconditionally. Two in-flight
@@ -104,19 +125,24 @@ export function useSandboxPreview(projectId: string) {
   const stateRef = useRef(state);
 
   const applyState = useCallback((next: SandboxPreviewState) => {
-    stateRef.current = next;
-    sandboxIdRef.current = next.sandboxId;
+    const merged: SandboxPreviewState = {
+      ...next,
+      paused: next.paused ?? false,
+      resuming: next.resuming ?? false,
+    };
+    stateRef.current = merged;
+    sandboxIdRef.current = merged.sandboxId;
     if (projectId) {
       try {
-        if (next.sandboxId) {
-          sessionStorage.setItem(storageKey(projectId), next.sandboxId);
+        if (merged.sandboxId) {
+          sessionStorage.setItem(storageKey(projectId), merged.sandboxId);
         } else {
           sessionStorage.removeItem(storageKey(projectId));
         }
       } catch { /* private mode */ }
     }
-    setState(next);
-    return next;
+    setState(merged);
+    return merged;
   }, [projectId]);
 
   const emptyState = useCallback(
@@ -130,6 +156,8 @@ export function useSandboxPreview(projectId: string) {
       logs: null,
       phase: null,
       phaseDetail: null,
+      paused: false,
+      resuming: false,
       ...partial,
     }),
     [],
@@ -142,7 +170,8 @@ export function useSandboxPreview(projectId: string) {
           provider: typeof data.provider === "string" ? data.provider : null,
           error:
             data.provider === "docker" && data.configured && data.reachable === false
-              ? "Docker is configured, but Docker Desktop is not running."
+              ? data.hint ||
+                "Docker is configured but the daemon is not reachable. On Coolify, mount /var/run/docker.sock into this app."
               : null,
         }));
         return false;
@@ -211,7 +240,7 @@ export function useSandboxPreview(projectId: string) {
       if (data.waking) {
         return applyState({
           enabled: true,
-          previewUrl: null,
+          previewUrl: typeof data.previewUrl === "string" ? data.previewUrl : null,
           sandboxId: data.sandboxId ?? null,
           provider: typeof data.provider === "string" ? data.provider : null,
           loading: true,
@@ -232,8 +261,11 @@ export function useSandboxPreview(projectId: string) {
           loading: false,
           error: null,
           logs: data.reconnected ? "Reconnected to warm sandbox" : null,
-          phase: typeof data.phase === "string" ? data.phase : "ready",
-          phaseDetail: typeof data.phaseDetail === "string" ? data.phaseDetail : null,
+          // A serving tunnel is ready even if project metadata still says
+          // "installing" from a previous boot. Echoing that phase made project
+          // switches show "Installing dependencies…" over an already-live app.
+          phase: data.phase === "app_error" ? "app_error" : "ready",
+          phaseDetail: null,
         });
       }
 
@@ -321,7 +353,7 @@ export function useSandboxPreview(projectId: string) {
       if (data.ok && data.ready === false) {
         return applyState({
           enabled: true,
-          previewUrl: null,
+          previewUrl: data.previewUrl ?? null,
           sandboxId: data.sandboxId ?? null,
           provider: typeof data.provider === "string" ? data.provider : null,
           loading: true,
@@ -368,21 +400,98 @@ export function useSandboxPreview(projectId: string) {
     }
   }, [applyState, applyStatus, projectId]);
 
-  /** Preflight: know Modal is configured before boot (skip WebContainer). */
+  const enterPaused = useCallback((reason: string) => {
+    const sid = sandboxIdRef.current;
+    applyState({
+      ...stateRef.current,
+      // Keep framing the last origin. Clearing it was the blank-pane failure:
+      // a slow host probe paused a sandbox whose Vite was still serving.
+      previewUrl: stateRef.current.previewUrl,
+      sandboxId: sid,
+      loading: false,
+      error: reason,
+      logs: stateRef.current.logs,
+      phase: "paused",
+      phaseDetail: "Still building?",
+      paused: true,
+      resuming: false,
+    });
+  }, [applyState]);
+
+  const resumePreview = useCallback(async (): Promise<SandboxPreviewState> => {
+    resumeStartedAtRef.current = Date.now();
+    applyState({
+      ...stateRef.current,
+      loading: true,
+      error: null,
+      paused: false,
+      resuming: true,
+      phase: "starting",
+      phaseDetail: "Resuming live preview…",
+    });
+
+    const reconnected = await reconnectPreview();
+    if (reconnected.previewUrl) {
+      resumeColdBootsRef.current = 0;
+      reportPreviewSlo("preview.reconnect_ok", { projectId });
+      return applyState({ ...reconnected, paused: false, resuming: false, phase: reconnected.phase ?? "ready" });
+    }
+    if (reconnected.phase === "starting") {
+      return applyState({ ...reconnected, paused: false, resuming: true });
+    }
+
+    const plan = planResumeAfterPause({
+      reconnectHasUrl: false,
+      reconnectWaking: reconnected.phase === "starting",
+      coldBootsUsed: resumeColdBootsRef.current,
+    });
+    if (plan === "cold") {
+      resumeColdBootsRef.current += 1;
+      const cold = await requestPreview();
+      if (cold.previewUrl) {
+        resumeColdBootsRef.current = 0;
+        return applyState({ ...cold, paused: false, resuming: false });
+      }
+      if (cold.phase === "starting" || cold.loading) {
+        return applyState({ ...cold, paused: false, resuming: true });
+      }
+    }
+
+    return applyState({
+      ...stateRef.current,
+      loading: false,
+      resuming: false,
+      paused: false,
+      phase: "error",
+      error:
+        "The live preview could not resume. Retry once more, or ask chat to check the app boot.",
+    });
+  }, [applyState, projectId, reconnectPreview, requestPreview]);
+
+  /** Preflight: know the Docker daemon is up before boot. Keep probing while it is down. */
   const [statusResolved, setStatusResolved] = useState(false);
   useEffect(() => {
-    if (statusCheckedRef.current) return;
-    statusCheckedRef.current = true;
-    void fetch("/api/sandbox/status")
-      .then((r) => r.json())
-      .then((data: SandboxStatusResponse) => {
-        applyStatus(data);
-      })
-      .catch(() => {})
-      // Resolved either way — until this flips, the panel must show a neutral
-      // loading state, never the "backend not configured" setup pane (it used
-      // to flash setup instructions at every editor open).
-      .finally(() => setStatusResolved(true));
+    let cancelled = false;
+    let timer: number | undefined;
+    const check = async () => {
+      try {
+        const res = await fetch("/api/sandbox/status");
+        const data = (await res.json()) as SandboxStatusResponse;
+        if (cancelled) return;
+        const ok = applyStatus(data);
+        setStatusResolved(true);
+        if (!ok) timer = window.setTimeout(check, 2500);
+      } catch {
+        if (cancelled) return;
+        setStatusResolved(true);
+        timer = window.setTimeout(check, 2500);
+      }
+    };
+    void check();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
   }, [applyStatus]);
 
   /** Lovable parity: reconnect warm sandbox first, cold-provision only if needed. */
@@ -391,11 +500,7 @@ export function useSandboxPreview(projectId: string) {
     if (!statusResolved) return;
     if (!stateRef.current.enabled) return;
     bootedForProjectRef.current = projectId;
-    // A fresh boot for a DIFFERENT project must not carry over the previous
-    // project's guards/state: a one-shot recovery already used on the old
-    // project should get another chance on the new one, and the panel must
-    // not keep showing the old project's previewUrl while the new one boots.
-    coldRetryRef.current = false;
+    resumeColdBootsRef.current = 0;
     void (async () => {
       // Clear the previous project's previewUrl/sandboxId/error/logs so the
       // panel never renders another project's app while this one boots —
@@ -404,36 +509,21 @@ export function useSandboxPreview(projectId: string) {
       // this effect doesn't re-derive it.
       setState((s) => emptyState({ enabled: s.enabled, loading: true, phase: "creating", phaseDetail: "Connecting…" }));
 
-      // Only try to reconnect when there is something to reconnect TO.
-      //
-      // On a first-ever preview sessionStorage is empty, so this reconnect was
-      // a GET that could not possibly succeed — and it was not cheap. The
-      // route pays the full auth stack (getSession then getUser, sequential),
-      // the project-access lookup and a projects read before it reaches the
-      // line that says "no sandbox id" and gives up: four sequential database
-      // round trips blocking the cold boot, to learn what an empty
-      // sessionStorage key already said.
-      //
-      // The warm path is untouched — a stored id still reconnects first, and
-      // "starting" still short-circuits the cold boot.
-      let storedId: string | null = null;
-      try {
-        storedId = sessionStorage.getItem(storageKey(projectId));
-      } catch { /* private mode */ }
-
-      if (storedId) {
-        const reconnected = await reconnectPreview();
-        if (reconnected.previewUrl) return;
-        // "starting" means reconnect found a live sandbox whose app hasn't
-        // answered yet. Cold-booting on top of that would delete the container
-        // it just found and restart a boot that is already nearly done.
-        if (reconnected.phase === "starting") return;
-      }
+      // Always try a warm reconnect first. Docker keeps one container per
+      // project across reloads; skipping GET when sessionStorage was empty
+      // started a cold POST that sat on "Syncing changed files" while Vite
+      // was already serving — the editor showed a blank starting pane.
+      const reconnected = await reconnectPreview();
+      if (reconnected.previewUrl) return;
+      // "starting" means reconnect found a live sandbox whose app hasn't
+      // answered yet. Cold-booting on top of that would delete the container
+      // it just found and restart a boot that is already nearly done.
+      if (reconnected.phase === "starting") return;
 
       setState((s) => ({ ...s, phase: "creating", phaseDetail: "Cold start…" }));
       await requestPreview();
     })();
-  }, [projectId, reconnectPreview, requestPreview, statusResolved]);
+  }, [projectId, reconnectPreview, requestPreview, statusResolved, state.enabled]);
 
   /** Keep-alive heartbeat: while a live preview is up AND the tab is visible,
    *  ping the sandbox so Modal's idle timer never fires (sandboxes were expiring
@@ -462,20 +552,13 @@ export function useSandboxPreview(projectId: string) {
           // tunnel. (2) Tunnel dead and the in-place Vite restart didn't recover
           // it — also reboot. Either way, get a working preview automatically.
           if (d.alive === false || d.tunnelHealthy === false) {
-            sandboxIdRef.current = null;
-            try { sessionStorage.removeItem(storageKey(projectId)); } catch { /* private */ }
-            // Drop the dead tunnel URL immediately so the iframe stops showing a
-            // blank/connection-reset page while the cold boot runs.
-            setState((s) => ({
-              ...s,
-              previewUrl: null,
-              sandboxId: null,
-              loading: true,
-              error: null,
-              phase: "creating",
-              phaseDetail: "Sandbox expired — restarting…",
-            }));
-            void requestPreview();
+            // Idle reclaim: pause (keep sandbox id for warm resume). Do not
+            // cold-POST in a loop — that was the install spinner death spiral.
+            enterPaused(
+              d.alive === false
+                ? "Preview session expired"
+                : "Preview tunnel paused",
+            );
           } else if (d.restarted && d.tunnelHealthy) {
             // Zombie healed in place: Vite was restarted and the tunnel serves
             // again, but the iframe is still showing the stale connection-reset
@@ -497,7 +580,7 @@ export function useSandboxPreview(projectId: string) {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [projectId, state.enabled, state.previewUrl, requestPreview]);
+  }, [projectId, state.enabled, state.previewUrl, enterPaused]);
 
   /** PAINT WATCHDOG — the last blank-preview class standing after server-side
    *  hardening. Observed live: sandbox healthy, tunnel probe "verified", phase
@@ -705,12 +788,21 @@ export function useSandboxPreview(projectId: string) {
             return;
           }
           if (typeof data.phase === "string") {
-            setState((s) => ({
-              ...s,
-              phase: data.phase ?? s.phase,
-              phaseDetail:
-                typeof data.phaseDetail === "string" ? data.phaseDetail : s.phaseDetail,
-            }));
+            setState((s) => {
+              if (
+                s.previewUrl &&
+                !s.loading &&
+                (data.phase === "installing" || data.phase === "creating" || data.phase === "writing")
+              ) {
+                return s;
+              }
+              return {
+                ...s,
+                phase: data.phase ?? s.phase,
+                phaseDetail:
+                  typeof data.phaseDetail === "string" ? data.phaseDetail : s.phaseDetail,
+              };
+            });
           }
           // Dead-sandbox auto-recovery: when Modal reclaims the sandbox
           // MID-SESSION, phase sticks at "error" ("Sandbox has already finished
@@ -724,34 +816,20 @@ export function useSandboxPreview(projectId: string) {
           // heartbeat needs one) had NO recovery path — the pane stayed blank
           // polling forever. Treat it as dead so the cold-reboot fires.
           const deadPhase =
-            data.phase === "error" ||
-            data.phase === "unreachable" ||
-            /already finished|already completed|FAILED_PRECONDITION|terminated|Container no longer exists|no longer responding/i.test(
-              `${data.phaseDetail ?? ""} ${data.error ?? ""}`,
+            !isAppBuildFailure(data.phase) &&
+            isDeadSandboxPhase(data.phase, `${data.phaseDetail ?? ""} ${data.error ?? ""}`);
+          if (deadPhase && !stateRef.current.paused && !stateRef.current.resuming) {
+            enterPaused(
+              isIdleReclaimText(`${data.phaseDetail ?? ""} ${data.error ?? ""}`)
+                ? (typeof data.error === "string" && data.error ? data.error : "Preview session expired")
+                : "Preview session expired",
             );
-          if (deadPhase && !coldRetryRef.current) {
-            coldRetryRef.current = true;
-            sandboxIdRef.current = null;
-            try { sessionStorage.removeItem(storageKey(projectId)); } catch { /* private */ }
-            setState((s) => ({
-              ...s,
-              previewUrl: null,
-              sandboxId: null,
-              loading: true,
-              error: null,
-              phase: "creating",
-              phaseDetail: "Sandbox expired — restarting…",
-            }));
-            void requestPreview().then((next) => {
-              // Allow another recovery on the NEXT death only after success.
-              if (next.previewUrl) coldRetryRef.current = false;
-            });
           }
         })
         .catch(() => {});
     }, 1200);
     return () => window.clearInterval(timer);
-  }, [projectId, state.enabled, state.previewUrl, state.loading, state.error, state.phase, state.provider, applyState, requestPreview]);
+  }, [projectId, state.enabled, state.previewUrl, state.loading, state.error, state.phase, state.provider, applyState, enterPaused]);
 
   const stopPreview = useCallback(() => {
     const sandboxId = sandboxIdRef.current;
@@ -838,5 +916,53 @@ export function useSandboxPreview(projectId: string) {
     [projectId, reconnectPreview],
   );
 
-  return { ...state, reloadNonce, statusResolved, requestPreview, reconnectPreview, stopPreview, syncFiles };
+  useEffect(() => {
+    const life = deriveSandboxLifecycle({
+      enabled: state.enabled,
+      loading: state.loading,
+      previewUrl: state.previewUrl,
+      phase: state.phase,
+      error: state.error,
+      phaseDetail: state.phaseDetail,
+      paused: state.paused,
+      resuming: state.resuming,
+    });
+    if (life === "booting" && bootStartedAtRef.current == null) {
+      bootStartedAtRef.current = Date.now();
+    }
+    if (lastLifecycleRef.current === life) return;
+    const prev = lastLifecycleRef.current;
+    lastLifecycleRef.current = life;
+    announcePreviewLifecycle(life);
+    if (life === "ready") {
+      announcePreviewSettled(true);
+      resumeColdBootsRef.current = 0;
+      const now = Date.now();
+      if (bootStartedAtRef.current != null) {
+        const ms = now - bootStartedAtRef.current;
+        reportPreviewSlo("preview.boot_ms", { ms, projectId });
+        reportPreviewSlo("preview.settle_ms", { ms, projectId });
+        bootStartedAtRef.current = null;
+      }
+      if (resumeStartedAtRef.current != null) {
+        reportPreviewSlo("preview.resume_ms", { ms: now - resumeStartedAtRef.current, projectId });
+        resumeStartedAtRef.current = null;
+      }
+    }
+    if (life === "paused" && prev !== "paused") {
+      reportPreviewSlo("preview.pause", { projectId });
+    }
+  }, [state, projectId]);
+
+  return {
+    ...state,
+    lifecycle: deriveSandboxLifecycle(state),
+    reloadNonce,
+    statusResolved,
+    requestPreview,
+    reconnectPreview,
+    resumePreview,
+    stopPreview,
+    syncFiles,
+  };
 }

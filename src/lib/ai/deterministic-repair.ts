@@ -22,10 +22,10 @@
  * Scope discipline, because a deterministic pass that overreaches is worse
  * than none:
  *
- *   - It runs ONLY when at least one error is in the class these fixers can
- *     address (unresolved local import / missing module / missing export).
- *     Runtime crashes, type mismatches and logic bugs pass through untouched —
- *     rewriting files on those signals would be guessing with extra steps.
+ *   - It always scans the file set for local defects (broken imports, missing
+ *     assets, missing allowed deps). Reported errors still gate the pass when
+ *     they match a fixable class; a runtime crash with a clean file set is
+ *     left untouched. Rewriting on type/logic bugs would be guessing.
  *   - It never RENAMES a file. ensureCommonGeneratedSupportFiles may rename
  *     `.ts` → `.tsx` when it finds JSX; on the build path that is fine (the
  *     set is fresh), but on the repair path the old row would survive in
@@ -42,7 +42,11 @@
 
 import { normalizeProjectImports } from "../preview/normalize-imports.ts";
 import { ensureCommonGeneratedSupportFiles } from "./generated-support-files.ts";
-import { syncProjectDependencies } from "../verify/dependency-gate.ts";
+import { findDependencyIssues, syncProjectDependencies } from "../verify/dependency-gate.ts";
+import { findMissingAssets, repairMissingAssets } from "../verify/asset-gate.ts";
+import { findUnresolvedLocalImports } from "../verify/typecheck-gate.ts";
+import { findContractErrors } from "../preview/export-contract.ts";
+import { findJsxPreviewDefects, repairJsxPreviewDefects } from "../verify/jsx-gate.ts";
 
 export interface RepairableFile {
   path: string;
@@ -59,10 +63,29 @@ export interface RepairableFile {
  *   - sandbox tsc:     `TS2307: Cannot find module './X'` / `TS2305: … has no exported member`
  */
 const FIXABLE_ERROR_RE =
-  /imports "|is imported by .+ but is not exported|TS2307|TS2305|Cannot find module|Failed to resolve import/;
+  /imports "|is imported by .+ but is not exported|TS2307|TS2305|Cannot find module|Failed to resolve import|missing asset|Failed to load resource|HTML attributes in JSX|has no `key` prop/;
 
 export function hasDeterministicallyFixableErrors(errors: readonly string[]): boolean {
   return errors.some((e) => FIXABLE_ERROR_RE.test(e));
+}
+
+/** Static defects we can see without tsc or a browser. */
+export function collectLocalDefects(files: RepairableFile[]): string[] {
+  const codeFiles = files.filter(
+    (file): file is RepairableFile & { content: string } =>
+      typeof file.path === "string" && typeof file.content === "string",
+  );
+  const deps = findDependencyIssues(files);
+  return [
+    ...findUnresolvedLocalImports(codeFiles).map(
+      (item) => item.formatted,
+    ),
+    ...findMissingAssets(files).map((item) => item.formatted),
+    ...findContractErrors(codeFiles.map((file) => ({ path: file.path, content: file.content }))),
+    ...deps.disallowed.map((item) => item.formatted),
+    ...deps.missingAllowed.map((name) => `package.json is missing allowed dependency "${name}"`),
+    ...findJsxPreviewDefects(files).map((item) => item.formatted),
+  ];
 }
 
 export interface DeterministicRepairResult<T extends RepairableFile> {
@@ -81,7 +104,17 @@ export function deterministicRepair<T extends RepairableFile>(
   files: T[],
   errors: readonly string[],
 ): DeterministicRepairResult<T> {
-  if (!hasDeterministicallyFixableErrors(errors)) return untouched(files);
+  const localDefects = collectLocalDefects(files);
+  const combinedErrors = [...errors, ...localDefects];
+  const missingAssets = findMissingAssets(files);
+  const jsxDefects = findJsxPreviewDefects(files);
+  if (
+    !hasDeterministicallyFixableErrors(combinedErrors) &&
+    missingAssets.length === 0 &&
+    jsxDefects.length === 0
+  ) {
+    return untouched(files);
+  }
 
   const before = new Map(files.map((f) => [f.path, f.content ?? ""]));
 
@@ -111,6 +144,14 @@ export function deterministicRepair<T extends RepairableFile>(
   // and findDependencyIssues turns each into a precise, located error for the
   // model instead. (dependency-gate.ts)
   out = syncProjectDependencies(out).files;
+
+  // Pass 4 — missing images/CSS/JSON that the bundler would 404.
+  const assets = repairMissingAssets(out);
+  out = assets.files;
+
+  // Pass 5 — HTML pasted into JSX and missing list keys. Unique renames
+  // (class→className, for→htmlFor, onclick→onClick) plus key={i} on .map().
+  out = repairJsxPreviewDefects(out).files;
 
   const changedPaths: string[] = [];
   const createdPaths: string[] = [];

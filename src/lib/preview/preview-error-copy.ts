@@ -81,11 +81,11 @@ const RULES: Rule[] = [
     },
   },
   {
-    match: /already shut down|sandbox .*not found|container .*not found|expired/i,
+    match: /already shut down|sandbox .*not found|container .*not found|expired|idle/i,
     copy: {
-      title: "Preview session expired",
+      title: "Still building?",
       description:
-        "The preview environment was reclaimed after being idle. Starting a fresh one takes a few seconds.",
+        "The live preview paused after sitting idle. Resume to boot the origin again — your files are unchanged.",
       blame: "platform",
     },
   },

@@ -10,6 +10,7 @@ import appCss from "../styles.css?url";
 import { PreviewBooting } from "@/components/preview-booting";
 import { useEffect } from "react";
 import { initClientTelemetry } from "@/lib/analytics/client-telemetry";
+import { ThemeProvider } from "@/components/providers/theme-provider";
 import {
 isSandboxPreviewHost,
 previewHostOptionsFromEnv,
@@ -100,17 +101,24 @@ function RootComponent() {
 
 function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <RuntimeEnvScript />
         <HeadContent />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem("theme");if(t==="light")document.documentElement.classList.remove("dark");else document.documentElement.classList.add("dark");}catch(e){document.documentElement.classList.add("dark");}})();`,
+          }}
+        />
       </head>
       {/* suppressHydrationWarning: browser extensions (wallets, ColorZilla's
           cz-shortcut-listen, etc.) mutate <body> attributes before React
           hydrates, producing a noisy attribute-mismatch warning for every
           affected user. Attribute-level only — children are still checked. */}
       <body suppressHydrationWarning>
-        {children}
+        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
+          {children}
+        </ThemeProvider>
         <Scripts />
       </body>
     </html>

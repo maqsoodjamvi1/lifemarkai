@@ -40,7 +40,9 @@ export function isWebContainerPreviewEnabled(): boolean {
 /** True when the project looks like a Vite/Node app (legacy WC eligibility). */
 export function shouldUseWebContainer(files: Pick<ProjectFile, "path">[]): boolean {
   if (files.length === 0) return false;
-  const paths = files.map((f) => f.path.replace(/\\/g, "/"));
+  const paths = files
+    .map((f) => (typeof f.path === "string" ? f.path.replace(/\\/g, "/") : ""))
+    .filter(Boolean);
   const hasPackageJson = paths.some((p) => p === "package.json" || p.endsWith("/package.json"));
   const hasVite = paths.some((p) => /vite\.config\.(t|j)sx?$/.test(p));
   const hasNodeEntry =
@@ -75,23 +77,5 @@ export function resolvePreviewEngine(
     return "sandbox";
   }
 
-  // Browser fallback — explicit, isolated, and never part of the release proof.
-  const allowWc =
-    opts?.allowWebContainer === true && isWebContainerPreviewEnabled();
-  const prefer = opts?.preferWebContainers === true;
-  const isolated = opts?.crossOriginIsolated ?? false;
-
-  if (
-    typeof window !== "undefined" &&
-    window.sessionStorage.getItem(WC_UNAVAILABLE_KEY) === "1"
-  ) {
-    return "unavailable";
-  }
-
-  if (allowWc && prefer && isolated && shouldUseWebContainer(files)) {
-    return "webcontainer";
-  }
-
-  // No configured server and no explicit browser fallback.
   return "unavailable";
 }

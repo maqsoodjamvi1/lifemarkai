@@ -1,5 +1,6 @@
 
 import type { Message } from "@/types/database";
+import { previewSnippet } from "./message-utils";
 import { LovableBookmarksEmpty } from "./bookmarks-empty";
 import { LovableChatEmptyState } from "./empty-state";
 import { LovableChatLoadingSkeleton } from "./chat-loading-skeleton";
@@ -56,9 +57,7 @@ export function LovableChatTimelineHeader({
   searchMatchCount = 0,
 }: LovableChatTimelineHeaderProps) {
   const pinned = pinnedMsgId ? visibleMessages.find((m) => m.id === pinnedMsgId) : null;
-  const pinnedPreview = pinned
-    ? pinned.content.replace(/\s+/g, " ").slice(0, 90) + (pinned.content.length > 90 ? "…" : "")
-    : null;
+  const pinnedPreview = pinned ? previewSnippet(pinned.content, 90) : null;
 
   const showSearchEmpty =
     showSearch &&

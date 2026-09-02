@@ -85,8 +85,9 @@ export function useThreadMessageProps(args: UseThreadMessagePropsArgs) {
       const preSnapshotId = (msg.metadata as { snapshot_id?: string } | null)?.snapshot_id;
       const afterSnapshotId = args.afterSnapshotByMessageId.get(msg.id) ?? null;
       const isCurrentVersion = msg.id === args.latestSnapshotMessageId || !afterSnapshotId;
-      const stepPlanSteps = msg.content.includes("<!-- STEP_PLAN -->")
-        ? parseLovableStepPlan(msg.content)
+      const body = typeof msg.content === "string" ? msg.content : "";
+      const stepPlanSteps = body.includes("<!-- STEP_PLAN -->")
+        ? parseLovableStepPlan(body)
         : [];
 
       return {

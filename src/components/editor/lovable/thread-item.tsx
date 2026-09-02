@@ -4,6 +4,7 @@ import type { Message } from "@/types/database";
 import { LovableDateSeparator,formatLovableDateSeparator,sameLovableCalendarDay } from "./date-separator";
 import { LovableThreadDivider } from "./thread-divider";
 import { LovableMessageRow,type LovableMessageRowProps } from "./message-row";
+import { previewSnippet } from "./message-utils";
 
 export interface LovableThreadItemProps {
   thread: Message[];
@@ -29,9 +30,7 @@ export function LovableThreadItem({
   getMessageProps,
 }: LovableThreadItemProps) {
   const userMsg = thread.find((m) => m.role === "user");
-  const preview = userMsg
-    ? userMsg.content.replace(/\s+/g, " ").slice(0, 65) + (userMsg.content.length > 65 ? "…" : "")
-    : "";
+  const preview = userMsg ? previewSnippet(userMsg.content, 65) : "";
   const threadMatchCount = searchQuery.trim() ? thread.length : 0;
 
   // Dump chat is message cards, not a turn-label list. Only show the turn

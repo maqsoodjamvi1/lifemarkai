@@ -100,7 +100,7 @@ function HeroPromptCreateBox() {
   }
 
   return (
-    <div className="rounded-2xl border shadow-sm bg-white/90 border-white/80 backdrop-blur-sm">
+    <div className="rounded-2xl border border-white/10 bg-background/70 shadow-[0_20px_50px_rgba(0,0,0,0.35)] backdrop-blur-xl">
       <textarea
         ref={textareaRef}
         value={prompt}
@@ -113,10 +113,10 @@ function HeroPromptCreateBox() {
         }}
         placeholder="Describe the app you want to build…"
         rows={4}
-        className="w-full resize-none bg-transparent px-4 pt-4 text-sm outline-none placeholder:text-muted-foreground/70 text-slate-900"
+        className="w-full resize-none bg-transparent px-4 pt-4 text-sm outline-none placeholder:text-muted-foreground text-foreground"
       />
       <div className="flex flex-wrap items-center gap-2 px-3 pb-3">
-        <span className="text-[11px] text-muted-foreground/70">
+        <span className="text-[11px] text-muted-foreground">
           LifemarkAI picks the right stack for your app automatically
         </span>
         <div className="ml-auto flex items-center gap-2">
@@ -130,7 +130,7 @@ function HeroPromptCreateBox() {
           <div
             role="radiogroup"
             aria-label="Start mode"
-            className="flex items-center gap-0.5 p-0.5 rounded-full bg-black/5"
+            className="flex items-center gap-0.5 p-0.5 rounded-full bg-white/5"
           >
             <button
               type="button"
@@ -139,7 +139,7 @@ function HeroPromptCreateBox() {
               onClick={() => setStartMode("build")}
               className={cn(
                 "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors",
-                startMode === "build" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900",
+                startMode === "build" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
               )}
             >
               Build
@@ -151,7 +151,7 @@ function HeroPromptCreateBox() {
               onClick={() => setStartMode("chat")}
               className={cn(
                 "px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors",
-                startMode === "chat" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900",
+                startMode === "chat" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
               )}
               title="Talk it through first — nothing gets built until you're ready"
             >
@@ -177,13 +177,13 @@ function HeroPromptCreateBox() {
           </Button>
         </div>
       </div>
-      <div className="flex flex-wrap gap-1.5 px-3 pb-3 border-t border-black/5 pt-2">
+      <div className="flex flex-wrap gap-1.5 px-3 pb-3 border-t border-white/10 pt-2">
         {SUGGESTIONS.map((s) => (
           <button
             key={s}
             type="button"
             onClick={() => setPrompt(s)}
-            className="text-[11px] px-2 py-1 rounded-full bg-black/5 text-slate-600 hover:bg-black/10 transition-colors"
+            className="text-[11px] px-2 py-1 rounded-full bg-white/5 text-muted-foreground hover:bg-white/10 hover:text-foreground transition-colors"
           >
             {s}
           </button>
@@ -195,26 +195,26 @@ function HeroPromptCreateBox() {
 
 export function DashboardHero({ firstName }: DashboardHeroProps) {
   return (
-    <section className="relative overflow-hidden rounded-2xl border border-border/40 mb-8">
+    <section className="relative overflow-hidden rounded-2xl border border-border mb-8">
       <div
-        className="absolute inset-0 opacity-90"
+        className="absolute inset-0"
         style={{
           background:
-            "linear-gradient(135deg, #dbeafe 0%, #e9d5ff 35%, #fbcfe8 60%, #fef3c7 85%, #ffffff 100%)",
+            "radial-gradient(ellipse 80% 70% at 20% -10%, rgba(59,130,246,0.28), transparent 50%), radial-gradient(ellipse 70% 60% at 90% 120%, rgba(124,58,237,0.22), transparent 46%), hsl(var(--background))",
         }}
       />
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(255,255,255,0.5),transparent_60%)]" />
+      <div className="absolute inset-0 bg-[linear-gradient(to_bottom,transparent,hsl(var(--background)/0.35))]" />
 
       <div className="relative px-6 py-10 md:py-14 flex flex-col items-center text-center max-w-3xl mx-auto">
         <Link
           to="/connectors"
-          className="inline-flex items-center gap-1.5 mb-4 px-3 py-1 rounded-full bg-white/70 border border-white/80 text-[11px] font-medium text-violet-800 shadow-sm hover:bg-white transition-colors"
+          className="inline-flex items-center gap-1.5 mb-4 px-3 py-1 rounded-full bg-white/5 border border-white/10 text-[11px] font-medium text-foreground/80 hover:bg-white/10 transition-colors"
         >
           <Link2 className="w-3 h-3" />
           Power your app with connectors
         </Link>
 
-        <h1 className="text-2xl md:text-3xl font-semibold text-slate-900 mb-6 tracking-tight">
+        <h1 className="text-2xl md:text-3xl font-semibold text-foreground mb-6 tracking-tight">
           Got an idea, {firstName}?
         </h1>
 

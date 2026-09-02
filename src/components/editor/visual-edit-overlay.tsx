@@ -26,6 +26,8 @@ export interface SelectedElement {
   classList: string[];
   xpath: string;
   rect: { top: number; left: number; width: number; height: number };
+  sourceFile?: string | null;
+  sourceLine?: number | null;
 }
 
 const TAILWIND_COLORS = [

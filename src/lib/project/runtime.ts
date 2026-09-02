@@ -9,7 +9,10 @@ export function isStaticProject(
   files: Array<{ path: string }>,
 ): boolean {
   if (runtimeForFramework(framework) === "static") return true;
-  const paths = files.map((file) => file.path.replace(/\\/g, "/").replace(/^\.\//, ""));
+  const paths = files
+    .map((file) => (typeof file.path === "string" ? file.path : ""))
+    .filter(Boolean)
+    .map((path) => path.replace(/\\/g, "/").replace(/^\.\//, ""));
   const hasHtml = paths.includes("index.html");
   const hasPackageRuntime = paths.some((path) => path === "package.json" || /vite\.config\./.test(path));
   return hasHtml && !hasPackageRuntime;

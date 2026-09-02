@@ -1,5 +1,16 @@
 import type { ProjectFile } from "../../types/database.ts";
 
+/** Coerce file fields for hashing — streaming/AI payloads may omit path or send non-strings. */
+export function previewFileText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  try {
+    return String(value);
+  } catch {
+    return "";
+  }
+}
+
 /** FNV-1a 32-bit — fast, good enough to catch middle-of-file surgical edits. */
 function hashContent(s: string): string {
   let h = 2166136261;
@@ -18,11 +29,12 @@ function hashContent(s: string): string {
  * so the srcdoc iframe never remounted and the preview looked frozen.
  */
 export function filesContentSignature(files: Pick<ProjectFile, "path" | "content">[]): string {
-  return [...files]
+  return files
+    .map((f) => ({
+      path: previewFileText(f.path),
+      content: previewFileText(f.content),
+    }))
     .sort((a, b) => a.path.localeCompare(b.path))
-    .map((f) => {
-      const content = f.content ?? "";
-      return `${f.path}:${content.length}:${hashContent(content)}`;
-    })
+    .map((f) => `${f.path}:${f.content.length}:${hashContent(f.content)}`)
     .join("\n");
 }

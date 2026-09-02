@@ -166,6 +166,75 @@ export async function handleAiFix(req: Request) {
     );
   }
 
+  const buildErrorText = String(buildError);
+  const { data: dbFiles } = await supabase
+    .from("project_files")
+    .select("path, content, language")
+    .eq("project_id", projectId);
+  const workingByPath = new Map<string, { path: string; content: string; language?: string }>();
+  for (const row of dbFiles ?? []) {
+    if (row && typeof row.path === "string" && typeof row.content === "string") {
+      workingByPath.set(row.path, {
+        path: row.path,
+        content: row.content,
+        language: typeof row.language === "string" ? row.language : undefined,
+      });
+    }
+  }
+  if (Array.isArray(files)) {
+    for (const file of files as Array<{ path?: string; content?: string; language?: string }>) {
+      if (typeof file?.path === "string" && typeof file.content === "string") {
+        workingByPath.set(file.path, {
+          path: file.path,
+          content: file.content,
+          language: file.language,
+        });
+      }
+    }
+  }
+  const workingFiles = [...workingByPath.values()];
+  const runtimeMessages = normalizeRuntimeErrors(runtimeErrors, buildErrorText).map((err) => err.message);
+  const { deterministicRepair } = await import("@/lib/ai/deterministic-repair");
+  const local = deterministicRepair(workingFiles, [buildErrorText, ...runtimeMessages]);
+  if (local.changedPaths.length > 0 || local.createdPaths.length > 0) {
+    const touched = new Set([...local.changedPaths, ...local.createdPaths]);
+    const written: string[] = [];
+    for (const next of local.files) {
+      if (!touched.has(next.path) || typeof next.content !== "string") continue;
+      const previous = workingByPath.get(next.path)?.content ?? null;
+      const verdict = guardFileWrite({ path: next.path, next: next.content, previous });
+      if (!verdict.ok) continue;
+      written.push(next.path);
+      const language =
+        next.language ??
+        (next.path.endsWith(".tsx")
+          ? "typescriptreact"
+          : next.path.endsWith(".ts")
+            ? "typescript"
+            : next.path.endsWith(".css")
+              ? "css"
+              : next.path.endsWith(".svg")
+                ? "xml"
+                : "javascript");
+      await supabase.from("project_files").upsert(
+        { project_id: projectId, path: next.path, content: next.content, language },
+        { onConflict: "project_id,path" },
+      );
+      pushFileToRunningSandbox(supabase, projectId, next.path, next.content);
+    }
+    if (written.length > 0) {
+      logger.info("ai.fix.local_repair", { projectId, files: written });
+      return Response.json({
+        files: local.files.filter((file) => touched.has(file.path) && typeof file.content === "string"),
+        explanation: `Fixed ${written.length} file${written.length === 1 ? "" : "s"} on the server without AI (imports, assets, or dependencies).`,
+        tokensUsed: 0,
+        free: true,
+        deterministic: true,
+        freeFixesRemainingToday: FREE_FIXES_PER_DAY,
+      });
+    }
+  }
+
   let freeUseNumber: number;
   try {
     freeUseNumber = await claimFreeCreditAction(supabase, {
@@ -198,8 +267,7 @@ export async function handleAiFix(req: Request) {
     }
   }
 
-  const buildErrorText = String(buildError);
-  const fileList = Array.isArray(files) ? files : [];
+  const fileList = workingFiles;
   const fileContext = fileList
     .slice(0, 10)
     .map((f: { path: string; content: string }) => `=== ${f.path} ===\n${f.content}`)

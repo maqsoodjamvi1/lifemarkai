@@ -1,11 +1,16 @@
 /** Sentinel key for the design-directions slash action (not inserted as prompt text). */
 export const LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY = "__design_directions__";
+export const LOVABLE_PUBLISH_SLASH_KEY = "__publish__";
 
 /** Lovable-parity slash-command prompt templates grouped by category. */
 export const LOVABLE_PROMPT_TEMPLATES: { category: string; prompts: string[] }[] = [
   {
     category: "Design",
     prompts: [LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY],
+  },
+  {
+    category: "Publish",
+    prompts: [LOVABLE_PUBLISH_SLASH_KEY],
   },
   {
     category: "UI & Design",

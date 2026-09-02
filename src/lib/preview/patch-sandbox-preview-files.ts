@@ -7,6 +7,7 @@ import { ensureTypecheckToolchain } from "./ensure-toolchain.ts";
 import { LOVABLE_VITE_DEV_DEPENDENCIES } from "../templates/lovable-vite-scaffold.ts";
 import { normalizeProjectImports } from "./normalize-imports.ts";
 import { ensureLifemarkDataSdkInFiles } from "./lifemark-data.ts";
+import { stripConflictingGeneratedDataStubs } from "../ai/generated-support-files.ts";
 import { stripGeneratedRouteTree } from "./align-package-json.ts";
 import { sandboxUsesTlsHmr, stripForcedTlsHmr } from "./sandbox-tls-hmr.ts";
 
@@ -393,7 +394,7 @@ export function patchSandboxPreviewFiles<T extends { path: string; content?: str
             ensureTypecheckToolchain(
               stripGeneratedRouteTree(
                 ensureTanStackStylesFile(
-                  ensureViteEntryFiles(normalizeProjectImports(files)),
+                  ensureViteEntryFiles(normalizeProjectImports(stripDataInitStubs(files))),
                 ),
               ),
               LOVABLE_VITE_DEV_DEPENDENCIES,
@@ -404,4 +405,13 @@ export function patchSandboxPreviewFiles<T extends { path: string; content?: str
     ),
     opts,
   );
+}
+
+function stripDataInitStubs<T extends { path: string; content?: string | null }>(files: T[]): T[] {
+  return files.map((file) => {
+    const content = file.content;
+    if (typeof content !== "string") return file;
+    const cleaned = stripConflictingGeneratedDataStubs(content);
+    return cleaned === content ? file : { ...file, content: cleaned };
+  });
 }

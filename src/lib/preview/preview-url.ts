@@ -12,6 +12,8 @@
  * Query params mirror the standard signed-preview shape: token + sha + load_id.
  */
 
+import { sandboxUrlWithPath } from "./sandbox-url";
+
 export interface BuildPreviewUrlOpts {
   projectId: string;
   /** Signed preview token from /api/preview/token (omit for unauthenticated/local). */
@@ -83,7 +85,8 @@ export interface PreviewBarLabelOpts {
  * otherwise the in-app route (fallback iframe) or sandbox host.
  */
 export function getPreviewBarLabel(opts: PreviewBarLabelOpts): string {
-  const path = opts.previewPath.startsWith("/") ? opts.previewPath : `/${opts.previewPath}`;
+  const rawPath = typeof opts.previewPath === "string" ? opts.previewPath : "/";
+  const path = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
   if (opts.deployedUrl) {
     try {
       const u = new URL(opts.deployedUrl);
@@ -113,4 +116,21 @@ export function getPreviewBarLabel(opts: PreviewBarLabelOpts): string {
     return `${host}/preview/${opts.projectId.slice(0, 8)}${path === "/" ? "" : path}`;
   }
   return path;
+}
+
+/**
+ * HTTP(S) src for the editor preview iframe. The generated app only loads on
+ * the sandbox tunnel origin — never the editor `/preview/:id` Babel host.
+ */
+export function resolveEditorPreviewSrc(opts: {
+  projectId?: string | null;
+  sandboxOrigin?: string | null;
+  iframePath?: string;
+  pageOrigin?: string | null;
+  loadId?: string;
+}): string | null {
+  if (opts.sandboxOrigin) {
+    return sandboxUrlWithPath(opts.sandboxOrigin, opts.iframePath || "/");
+  }
+  return null;
 }

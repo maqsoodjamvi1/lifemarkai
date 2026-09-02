@@ -6,7 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { LovableMessageContent } from "./message-content";
 
 export function parseLovableStepPlan(raw: string): string[] {
-  const body = raw.replace("<!-- STEP_PLAN -->", "").trim();
+  const body = (typeof raw === "string" ? raw : "").replace("<!-- STEP_PLAN -->", "").trim();
   const lines = body.split("\n");
   const steps: string[] = [];
   let current = "";

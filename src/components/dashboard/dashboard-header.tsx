@@ -21,7 +21,7 @@ export function DashboardHeader({ user, profile, compact }: DashboardHeaderProps
   const avatarFallback = (profile?.full_name ?? user.email ?? "U")[0].toUpperCase();
 
   return (
-    <div className={`border-b border-border px-6 py-3 flex items-center justify-between gap-4 bg-background/50 backdrop-blur-sm sticky top-0 z-10 ${compact ? "py-2.5" : "py-4"}`}>
+    <div className={`border-b border-border px-6 py-3 flex items-center justify-between gap-4 bg-background/70 backdrop-blur-md sticky top-0 z-10 ${compact ? "py-2.5" : "py-4"}`}>
       {!compact ? (
         <div>
           <h1 className="text-lg font-semibold">{greeting}, {firstName} 👋</h1>

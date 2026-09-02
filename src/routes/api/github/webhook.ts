@@ -93,17 +93,23 @@ export const Route = createFileRoute("/api/github/webhook")({
 
         const { data: profile } = await admin
           .from("profiles")
-          .select("github_access_token")
+          .select("github_access_token, github_api_base")
           .eq("id", match.user_id)
           .single();
-        const token = (profile as { github_access_token?: string | null } | null)?.github_access_token;
+        const token = (profile as { github_access_token?: string | null; github_api_base?: string | null } | null)?.github_access_token;
         if (!token) {
           logger.info("github.webhook.no_token", { projectId: match.id, deliveryId });
           return Response.json({ ok: true });
         }
 
         try {
-          const { fileCount, failedPaths } = await pullAndStoreFiles(admin, match.id, token, repoFullName, trackedBranch);
+          const { fileCount, failedPaths } = await pullAndStoreFiles(
+            admin,
+            match.id,
+            { token, apiBase: (profile as { github_api_base?: string | null } | null)?.github_api_base },
+            repoFullName,
+            trackedBranch,
+          );
           logger.info("github.webhook.pulled", { projectId: match.id, branch: trackedBranch, fileCount, failed: failedPaths.length, deliveryId });
         } catch (error) {
           logger.error("github.webhook.pull_failed", error instanceof Error ? error : new Error(String(error)), {

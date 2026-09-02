@@ -149,6 +149,16 @@ async function handlePATCH(req: Request, params: any) {
   const syncFiles: SandboxFile[] = patchSandboxPreviewFiles(files, patchOpts);
   const provider = getSandboxProvider();
   try {
+    const incomingPkg =
+      syncFiles.find((f) => f.path.replace(/\\/g, "/") === "package.json")?.content ?? "";
+    let previousPkg = "";
+    try {
+      const existing = await provider.exec(sandboxId, "cat package.json 2>/dev/null || true");
+      previousPkg = typeof existing.stdout === "string" ? existing.stdout : "";
+    } catch {
+      /* no existing manifest — treat as a real install if package.json lands */
+    }
+
     const writeResult = await provider.writeFiles(sandboxId, syncFiles);
 
     const norm = (p: string) => p.replace(/\\/g, "/");
@@ -171,15 +181,17 @@ async function handlePATCH(req: Request, params: any) {
     const diskChangedConfig = changed.some((p) =>
       /(^|\/)(vite|tailwind|postcss)\.config\.(ts|js|cjs|mjs)$/.test(p),
     );
-    const pkgChanged = reconciledPackageJson != null || diskChangedPkg;
-    // NOTE: do NOT restart for `.env`. The preview patcher injects an idempotent
-    // placeholder .env on EVERY sync, so keying a restart on ".env present"
-    // caused a restart loop that raced the tunnel down. The .env is consumed at
-    // cold-boot startup; real creds are rare and Vite's watcher handles those.
+    // Formatting-only package.json rewrites (JSON.stringify from the patcher)
+    // used to look like a real dep change: every project switch ran npm install
+    // and painted "Installing dependencies…" over an already-running preview.
+    const { dependenciesAlreadySatisfied } = await import("@/lib/sandbox/deps-satisfied");
+    const depsUnchanged = dependenciesAlreadySatisfied(previousPkg, incomingPkg, true).satisfied;
+    const needInstall =
+      reconciledPackageJson != null || (diskChangedPkg && !depsUnchanged);
     const buildConfigChanged = diskChangedConfig;
-    if (pkgChanged || buildConfigChanged) {
+    if (needInstall || buildConfigChanged) {
       const steps: string[] = [];
-      if (pkgChanged) steps.push("npm install");
+      if (needInstall) steps.push("npm install");
       if (buildConfigChanged) {
         // App dir differs by provider: Docker = /home/node/app, Modal =
         // /workspace. Hardcoding /workspace made this `cd` fail on Docker, so the
@@ -197,7 +209,7 @@ async function handlePATCH(req: Request, params: any) {
       enabled: true,
       ok: true,
       fileCount: syncFiles.length,
-      installing: pkgChanged || buildConfigChanged,
+      installing: needInstall,
       ...(reconciledPackages.length > 0 ? { addedDependencies: reconciledPackages } : {}),
       ...(rejectedPackages.length > 0 ? { rejectedDependencies: rejectedPackages } : {}),
     });

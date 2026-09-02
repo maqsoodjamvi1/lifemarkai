@@ -1,6 +1,6 @@
 import type { EditorMode } from "@/components/editor/editor-layout";
 import type { ProjectFile } from "../../types/database.ts";
-import { classifyBuildIntent, isInformationalQuery, isMajorGreenfieldBuild, shouldAutoBuildMode, shouldClarifyBeforeBuild } from "./build-intent.ts";
+import { classifyBuildIntent, isConfidentBuildClassification, isInformationalQuery, isMajorGreenfieldBuild, shouldAutoBuildMode, shouldClarifyBeforeBuild } from "./build-intent.ts";
 import type { AIModel } from "./provider.ts";
 import {
 BALANCED_CODING_MODEL,
@@ -147,7 +147,7 @@ const GENERIC_BUILD_REQUEST =
   /\b(?:build|create|make|design|generate|develop|start|launch|set up|setup)\b[\s\S]{0,80}?\b(?:app|website|site|landing page|store|shop|platform|portal)\b/i;
 
 const SPECIFIC_BUILD_DETAILS =
-  /\b(checkout|cart|dashboard|login|signup|booking|appointment|menu|blog|portfolio|crm|erp|payment|subscription|membership|orders?|product|inventory|profile|database|api|backend|admin|course|lesson|ticket|reservation|service|pricing|testimonials|gallery|contact form|features|about|pricing|team|faq|support)\b/i;
+  /\b(checkout|cart|dashboard|login|signup|booking|appointment|menu|blog|portfolio|crm|erp|pos|point[- ]of[- ]sale|cashier|payment|subscription|membership|orders?|product|inventory|profile|database|api|backend|admin|course|lesson|ticket|reservation|service|pricing|testimonials|gallery|contact form|features|about|pricing|team|faq|support)\b/i;
 
 function isGreetingPrompt(prompt: string): boolean {
   const trimmed = prompt.trim();
@@ -204,10 +204,10 @@ const ENTRYPOINTS = [
 /** Rough project maturity from file list. */
 export function inferProjectStage(files: Pick<ProjectFile, "path">[]): ProjectStage {
   if (files.length === 0) return "empty";
-  const paths = files.map((f) => f.path);
+  const paths = files.map((f) => (typeof f.path === "string" ? f.path : ""));
   const hasEntry = paths.some((p) => ENTRYPOINTS.includes(p));
   const hasMultiplePages =
-    paths.filter((p) => /pages\/|components\/|src\//.test(p)).length >= 3;
+    paths.filter((p) => p && /pages\/|components\/|src\//.test(p)).length >= 3;
   if (hasEntry && (hasMultiplePages || files.length >= 6)) return "app";
   return "scaffold";
 }
@@ -445,32 +445,42 @@ export function resolvePromptMode(
   if (/^\/build\b/i.test(trimmed)) return "build";
   if (/^\/agent\b/i.test(trimmed)) return "agent";
 
+  // Empty first messages ("hello") must interview, not chat and not generate.
+  if (ctx.fileCount === 0 && shouldClarifyBeforeBuild(trimmed, ctx.fileCount)) {
+    return "build";
+  }
+
   if (isCasualConversation(trimmed)) {
     return "chat";
   }
 
+  // Vague greenfield ("build a website") used to stay in Chat so we would not
+  // invent the wrong architecture. Lovable interviews instead: pin Build so
+  // the clarify-first questionnaire runs, then generate after they answer.
   if (ctx.fileCount === 0 && isVagueGreenfieldProjectPrompt(trimmed)) {
+    if (shouldClarifyBeforeBuild(trimmed, ctx.fileCount)) return "build";
     return "chat";
   }
 
   // Honor explicitly selected Agent tab — don't downgrade to build/chat via keywords
   if (ctx.currentMode === "agent") return "agent";
 
-  // Chat tab: Q&A by default. Explicit slash commands escape to other modes.
-  // Surgical edit intents auto-promote so "add a menu item" actually writes
-  // files — Chat mode itself never persists project_files. Vague greenfield
-  // "build a website" stays in Chat (parity); specific product asks promote.
+  // Chat tab: Lovable-style — questions stay in Chat; anything that should
+  // change the preview is promoted so files actually update. Vague greenfield
+  // "build a website" stays in Chat until the product is specific.
   if (ctx.currentMode === "chat") {
     if (/^\/build\b/i.test(trimmed)) return "build";
     if (/^\/agent\b/i.test(trimmed)) return "agent";
     if (/^\/plan\b/i.test(trimmed)) return "plan";
+    if (shouldClarifyBeforeBuild(trimmed, ctx.fileCount)) return "build";
     if (
       shouldAutoBuildMode(trimmed) &&
-      !isVagueGreenfieldProjectPrompt(trimmed)
+      !isVagueGreenfieldProjectPrompt(trimmed) &&
+      isConfidentBuildClassification(trimmed)
     ) {
       return stageFromCtx(ctx) === "app" ? "agent" : "build";
     }
-    if (ctx.fileCount > 0 && isSurgicalEditFromChat(trimmed)) {
+    if (ctx.fileCount > 0 && looksLikeEditRequest(trimmed)) {
       return shouldUseAgentForEdit(trimmed, ctx) ? "agent" : "build";
     }
     return "chat";
@@ -565,7 +575,7 @@ export function resolvePromptMode(
     return "build";
   }
 
-  if (shouldAutoBuildMode(trimmed)) {
+  if (shouldAutoBuildMode(trimmed) && isConfidentBuildClassification(trimmed)) {
     // Lovable parity: Agent is default for edits on existing apps (Aug 2025+).
     if (stageFromCtx(ctx) === "app") {
       return "agent";
@@ -618,12 +628,12 @@ export function getSmartPlaceholder(
       return "Describe a small change — e.g. 'Make the header sticky'…";
     default:
       if (stage === "empty") {
-        return "Describe your app idea, or switch to Build mode to generate files…";
+        return "Describe the app you want — I'll build it…";
       }
       if (ctx.activeFilePath) {
-        return `Ask about @${ctx.activeFilePath}, or describe what to change…`;
+        return `Ask about @${ctx.activeFilePath}, or tell me what to change…`;
       }
-      return "Ask me anything about your project…";
+      return "Ask a question, or describe a change — I'll update the preview…";
   }
 }
 
@@ -710,7 +720,7 @@ export function shouldFocusPreviewAfterGeneration(
   mode: EditorMode,
   filesGenerated: number,
 ): boolean {
-  return filesGenerated > 0 && (mode === "build" || mode === "patch" || mode === "agent");
+  return filesGenerated > 0 && (mode === "build" || mode === "patch" || mode === "agent" || mode === "chat");
 }
 
 /** Compact project summary injected into AI messages. */

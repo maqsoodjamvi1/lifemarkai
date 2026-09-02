@@ -4,10 +4,11 @@ import {
 Globe,Lock,Shield,ChevronDown,ChevronUp,CheckCircle2,
 AlertTriangle,Upload,Image,Type,FileText,ExternalLink,
 Copy,Check,Rocket,RefreshCw,Eye,EyeOff,History,
-Loader2,HelpCircle,Info,BarChart3
+Loader2,HelpCircle,Info,BarChart3,Users,Trash2
 } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
-import type { Project } from "@/types/database";
+import type { Project, ProjectFile } from "@/types/database";
+import { inferSeoPagePaths, mergeSeoPageCards, type SeoPageCard } from "@/lib/editor/seo-pages";
 import { LovableGuestCommentsSetup } from "@/components/editor/lovable/guest-comments-setup";
 
 /* ─── Data ─────────────────────────────────────────────── */
@@ -24,6 +25,7 @@ const FAQ_ITEMS = [
 
 interface PublishPanelProps {
   project: Project;
+  files?: ProjectFile[];
   onSwitchPanel?: (panel: string) => void;
   onDeploy?: () => void;
   /** Optional override — when omitted, panel compares project.updated_at vs last deploy. */
@@ -32,20 +34,36 @@ interface PublishPanelProps {
 
 /* ─── Component ─────────────────────────────────────────── */
 
-export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedChanges: hasUnpublishedProp }: PublishPanelProps) {
+export function PublishPanel({ project, files = [], onSwitchPanel, onDeploy, hasUnpublishedChanges: hasUnpublishedProp }: PublishPanelProps) {
   const [activeSection, setActiveSection] = useState<"publish" | "settings" | "faq">("publish");
   // Mirrors projects.publish_audience (migration 157). "custom" defers to
   // project_publish_grants and is managed from the audience endpoint.
   const [websiteAccess, setWebsiteAccess] = useState<"public" | "workspace" | "private" | "custom">("public");
-  const [siteTitle, setSiteTitle]  = useState(project.name ?? "");
-  const [siteDesc,  setSiteDesc]   = useState("");
-  const [faviconUrl, setFaviconUrl] = useState("");
-  const [ogImageUrl, setOgImageUrl] = useState("");
+  const [siteTitle, setSiteTitle]  = useState(project.seo_title || project.name || "");
+  const [siteDesc,  setSiteDesc]   = useState(project.seo_description || project.description || "");
+  const [faviconUrl, setFaviconUrl] = useState(project.favicon_url || "");
+  const [ogImageUrl, setOgImageUrl] = useState(project.og_image_url || "");
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null);
   const [copiedUrl, setCopiedUrl]  = useState(false);
   const [isDeploying, setIsDeploying] = useState(false);
+  const [isUnpublishing, setIsUnpublishing] = useState(false);
   const [savedMeta, setSavedMeta]  = useState(false);
   const [hasUnpublishedFetched, setHasUnpublishedFetched] = useState(false);
+  const [grants, setGrants] = useState<Array<{ id: string; email: string | null; is_external?: boolean }>>([]);
+  const [grantEmail, setGrantEmail] = useState("");
+  const [grantBusy, setGrantBusy] = useState(false);
+  const [pageCards, setPageCards] = useState<SeoPageCard[]>(() => {
+    const meta = project.metadata;
+    const existing =
+      meta && typeof meta === "object" && !Array.isArray(meta)
+        ? (meta as { seo_pages?: SeoPageCard[] }).seo_pages
+        : undefined;
+    return mergeSeoPageCards(existing, inferSeoPagePaths(files), {
+      title: project.seo_title || project.name || "",
+      description: project.seo_description || project.description || "",
+      ogImageUrl: project.og_image_url || "",
+    });
+  });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ogInputRef   = useRef<HTMLInputElement>(null);
@@ -84,8 +102,12 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
     void fetch(`/api/projects/${project.id}/publish-audience`, { credentials: "include" })
       .then(async (res) => {
         if (!res.ok) return;
-        const data = (await res.json().catch(() => ({}))) as { audience?: "public" | "workspace" | "private" | "custom" };
+        const data = (await res.json().catch(() => ({}))) as {
+          audience?: "public" | "workspace" | "private" | "custom";
+          grants?: Array<{ id: string; email: string | null; is_external?: boolean }>;
+        };
         if (!cancelled && data.audience) setWebsiteAccess(data.audience);
+        if (!cancelled && Array.isArray(data.grants)) setGrants(data.grants);
       })
       .catch(() => null);
     return () => { cancelled = true; };
@@ -142,11 +164,96 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
       }
 
       toast({ title: isPublished ? "Update queued" : "Deployment started", description: "Your project is being deployed." });
+      if (project.github_repo) {
+        void fetch("/api/github/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId: project.id, action: "push" }),
+        }).then(async (gitRes) => {
+          if (!gitRes.ok) return;
+          toast({ title: "Pushed to GitHub", description: "The published snapshot is on your connected repo." });
+        }).catch(() => {});
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Deploy failed";
       toast({ title: "Deploy error", description: msg, variant: "destructive" });
     } finally {
       setIsDeploying(false);
+    }
+  };
+
+  const persistAudience = async (audience: typeof websiteAccess) => {
+    try {
+      const res = await fetch(`/api/projects/${project.id}/publish-audience`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audience }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast({
+          title: "Access setting not saved",
+          description: (body as { error?: string }).error ?? "Try again.",
+          variant: "destructive",
+        });
+      }
+    } catch {
+      toast({ title: "Access setting not saved", variant: "destructive" });
+    }
+  };
+
+  const addGrantEmail = async () => {
+    const email = grantEmail.trim().toLowerCase();
+    if (!email) return;
+    setGrantBusy(true);
+    try {
+      const res = await fetch(`/api/projects/${project.id}/publish-audience`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast({ title: "Could not add email", description: (data as { error?: string }).error, variant: "destructive" });
+        return;
+      }
+      setGrantEmail("");
+      const listed = await fetch(`/api/projects/${project.id}/publish-audience`);
+      if (listed.ok) {
+        const body = (await listed.json()) as { grants?: Array<{ id: string; email: string | null; is_external?: boolean }> };
+        setGrants(body.grants ?? []);
+      }
+    } finally {
+      setGrantBusy(false);
+    }
+  };
+
+  const removeGrant = async (grantId: string) => {
+    await fetch(`/api/projects/${project.id}/publish-audience?grantId=${encodeURIComponent(grantId)}`, { method: "DELETE" });
+    setGrants((prev) => prev.filter((g) => g.id !== grantId));
+  };
+
+  const handleUnpublish = async () => {
+    if (!window.confirm("Take this app offline? The published URL will stop serving until you publish again.")) return;
+    setIsUnpublishing(true);
+    try {
+      const res = await fetch("/api/deploy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: project.id, action: "unpublish" }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? "Unpublish failed");
+      toast({ title: "Unpublished", description: "The live URL is no longer attached to this project." });
+      onDeploy?.();
+    } catch (err) {
+      toast({
+        title: "Could not unpublish",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    } finally {
+      setIsUnpublishing(false);
     }
   };
 
@@ -170,20 +277,23 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
   };
 
   const handleSaveMeta = async () => {
-    // Persist metadata via projects API. Only description/favicon/OG image
-    // are included when the user actually typed/picked something this
-    // session — these fields aren't hydrated from `project` on mount, so
-    // unconditionally sending the (blank) initial state would silently wipe
-    // out whatever was saved previously.
     try {
       const res = await fetch(`/api/projects/${project.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: siteTitle || project.name,
-          ...(siteDesc.trim() ? { description: siteDesc.trim() } : {}),
-          ...(faviconUrl ? { favicon_url: faviconUrl } : {}),
-          ...(ogImageUrl ? { og_image_url: ogImageUrl } : {}),
+          description: siteDesc.trim() || null,
+          seo_title: siteTitle.trim() || null,
+          seo_description: siteDesc.trim() || null,
+          favicon_url: faviconUrl || null,
+          og_image_url: ogImageUrl || null,
+          metadata: {
+            ...((project.metadata && typeof project.metadata === "object" && !Array.isArray(project.metadata)
+              ? project.metadata
+              : {}) as Record<string, unknown>),
+            seo_pages: pageCards,
+          },
         }),
       });
       if (!res.ok) {
@@ -315,12 +425,16 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
                   { key: "public"    as const, label: "Anyone",         desc: "Anyone with the URL can visit",             icon: Globe },
                   { key: "workspace" as const, label: "Workspace only", desc: "Only authenticated workspace members",      icon: Lock  },
                   { key: "private"   as const, label: "Private",         desc: "Only you (the owner) can access",           icon: Lock  },
+                  { key: "custom"    as const, label: "Specific people", desc: "Only emails you add below",                 icon: Users },
                 ].map((opt) => {
                   const Icon = opt.icon;
                   return (
                     <button
                       key={opt.key}
-                      onClick={() => setWebsiteAccess(opt.key)}
+                      onClick={() => {
+                        setWebsiteAccess(opt.key);
+                        void persistAudience(opt.key);
+                      }}
                       className={`w-full text-left p-2.5 rounded-lg border-2 transition flex items-center gap-2.5 ${
                         websiteAccess === opt.key
                           ? "border-blue-500/50 bg-blue-500/10"
@@ -337,6 +451,38 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
                   );
                 })}
               </div>
+              {websiteAccess === "custom" && (
+                <div className="mt-2 space-y-1.5 rounded-lg border border-border bg-muted/30 p-2">
+                  <p className="text-[9px] text-muted-foreground">
+                    Custom with an empty list is the same as Private — only you can view the app.
+                  </p>
+                  <div className="flex gap-1.5">
+                    <input
+                      value={grantEmail}
+                      onChange={(e) => setGrantEmail(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && void addGrantEmail()}
+                      placeholder="email@example.com"
+                      className="flex-1 text-[11px] border border-border rounded-lg px-2 py-1.5 bg-background outline-none"
+                    />
+                    <button
+                      type="button"
+                      disabled={grantBusy || !grantEmail.trim()}
+                      onClick={() => void addGrantEmail()}
+                      className="h-8 px-2 rounded-lg border border-border text-[10px] font-medium disabled:opacity-50"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  {grants.filter((g) => g.email).map((g) => (
+                    <div key={g.id} className="flex items-center justify-between text-[10px] px-0.5">
+                      <span className="truncate font-mono">{g.email}{g.is_external ? " · guest" : ""}</span>
+                      <button type="button" onClick={() => void removeGrant(g.id)} className="text-destructive p-0.5">
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Site preview card */}
@@ -429,6 +575,16 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
                   : <><Rocket size={14} /> Publish Project</>
               }
             </button>
+            {isPublished && (
+              <button
+                type="button"
+                onClick={() => void handleUnpublish()}
+                disabled={isUnpublishing}
+                className="w-full py-2 text-[11px] font-medium text-muted-foreground hover:text-destructive disabled:opacity-50"
+              >
+                {isUnpublishing ? "Unpublishing…" : "Unpublish — take the live URL offline"}
+              </button>
+            )}
 
             {/* Info note */}
             <div className="p-2.5 bg-blue-500/10 border border-blue-500/20 rounded-lg">
@@ -521,6 +677,50 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
               <p className="text-[8px] text-muted-foreground mt-1">Shown when your link is shared on social media (1200×630 recommended)</p>
             </div>
 
+            <div className="p-3 bg-muted/50 rounded-xl border border-border">
+              <div className="flex items-center gap-1.5 mb-2">
+                <Globe size={11} className="text-muted-foreground" />
+                <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Per-page social cards</span>
+              </div>
+              <p className="text-[10px] text-muted-foreground mb-2">
+                Title, description, and image for each route. Saved on the project and used when sharing those URLs.
+              </p>
+              <div className="space-y-2 max-h-56 overflow-y-auto">
+                {pageCards.map((card, index) => (
+                  <div key={card.path} className="rounded-lg border border-border bg-background p-2 space-y-1">
+                    <p className="text-[10px] font-mono text-muted-foreground">{card.path}</p>
+                    <input
+                      value={card.title}
+                      onChange={(e) => {
+                        const title = e.target.value;
+                        setPageCards((rows) => rows.map((row, i) => (i === index ? { ...row, title } : row)));
+                      }}
+                      className="w-full text-[11px] border border-border rounded px-2 py-1 bg-background"
+                      placeholder="Page title"
+                    />
+                    <input
+                      value={card.description}
+                      onChange={(e) => {
+                        const description = e.target.value;
+                        setPageCards((rows) => rows.map((row, i) => (i === index ? { ...row, description } : row)));
+                      }}
+                      className="w-full text-[11px] border border-border rounded px-2 py-1 bg-background"
+                      placeholder="Description"
+                    />
+                    <input
+                      value={card.ogImageUrl}
+                      onChange={(e) => {
+                        const ogImageUrl = e.target.value;
+                        setPageCards((rows) => rows.map((row, i) => (i === index ? { ...row, ogImageUrl } : row)));
+                      }}
+                      className="w-full text-[11px] border border-border rounded px-2 py-1 bg-background"
+                      placeholder="OG image URL (optional)"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
             {/* Website Access */}
             <div className="p-3 bg-muted/50 rounded-xl border border-border">
               <div className="flex items-center gap-1.5 mb-2">
@@ -532,10 +732,14 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
                   { key: "public"    as const, label: "Public",    desc: "Anyone with URL" },
                   { key: "workspace" as const, label: "Workspace", desc: "Members only" },
                   { key: "private"   as const, label: "Private",   desc: "Owner only" },
+                  { key: "custom"    as const, label: "Custom",    desc: "Added emails" },
                 ].map((opt) => (
                   <button
                     key={opt.key}
-                    onClick={() => setWebsiteAccess(opt.key)}
+                    onClick={() => {
+                      setWebsiteAccess(opt.key);
+                      void persistAudience(opt.key);
+                    }}
                     className={`flex-1 p-2 rounded-lg border-2 text-center transition ${
                       websiteAccess === opt.key
                         ? "border-blue-500/50 bg-blue-500/10"
@@ -547,6 +751,35 @@ export function PublishPanel({ project, onSwitchPanel, onDeploy, hasUnpublishedC
                   </button>
                 ))}
               </div>
+              {websiteAccess === "custom" && (
+                <div className="mt-2 space-y-1.5">
+                  <div className="flex gap-1.5">
+                    <input
+                      value={grantEmail}
+                      onChange={(e) => setGrantEmail(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && void addGrantEmail()}
+                      placeholder="email@example.com"
+                      className="flex-1 text-[11px] border border-border rounded-lg px-2 py-1.5 bg-background outline-none"
+                    />
+                    <button
+                      type="button"
+                      disabled={grantBusy || !grantEmail.trim()}
+                      onClick={() => void addGrantEmail()}
+                      className="h-8 px-2 rounded-lg border border-border text-[10px] font-medium disabled:opacity-50"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  {grants.filter((g) => g.email).map((g) => (
+                    <div key={g.id} className="flex items-center justify-between text-[10px]">
+                      <span className="truncate font-mono">{g.email}</span>
+                      <button type="button" onClick={() => void removeGrant(g.id)} className="text-destructive p-0.5">
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Guest preview comments */}

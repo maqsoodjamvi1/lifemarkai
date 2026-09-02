@@ -968,6 +968,7 @@ export function classifyBuildIntent(prompt: string): BuildIntent {
     return {
       appType: "general-app",
       ...buildIntentMetadata(prompt, "general-app", false),
+      confidence: 0.95,
       niche: extractNiche(prompt),
       statusLabel: "Designing Lovable-inspired builder UI…",
       blueprint: BLUEPRINTS["general-app"](extractNiche(prompt)),
@@ -1265,6 +1266,32 @@ export function isMajorGreenfieldBuild(prompt: string, userAuthoredFileCount: nu
 }
 
 /**
+ * Greeting / noise on a brand-new project: "hello", "hi", "thanks".
+ * These must never generate an app. They must open a "what do you want
+ * to create?" interview instead.
+ */
+export function isOpenEndedGreenfieldStart(
+  prompt: string,
+  userAuthoredFileCount: number,
+): boolean {
+  if (userAuthoredFileCount > 0) return false;
+  const trimmed = prompt.trim();
+  if (!trimmed || trimmed.length > 80) return false;
+  if (
+    /^(?:hi|hello|hey|hiya|yo|sup|howdy|greetings|good (?:morning|afternoon|evening)|what'?s up|thanks?|thank you|ok(?:ay)?|cool|nice|great|please help|help(?: me)?(?: please)?|start|begin|go|test|testing|asdf|hmm+)\s*[!.]*$/i.test(
+      trimmed,
+    )
+  ) {
+    return true;
+  }
+  return (
+    /^(?:hi|hello|hey|yo)\b/i.test(trimmed) &&
+    trimmed.length <= 40 &&
+    !/\b(app|website|site|page|store|shop|dashboard|erp|crm|pos|booking|landing)\b/i.test(trimmed)
+  );
+}
+
+/**
  * Lovable-style pre-build questionnaire: ask design/scope questions on a brand-new
  * project before subagents or file generation run.
  */
@@ -1277,8 +1304,10 @@ export function shouldClarifyBeforeBuild(
   if (userAuthoredFileCount > 0) return false;
   const trimmed = prompt.trim();
   if (!trimmed || trimmed.length > 4000) return false;
+  // Greetings have no product meaning — still interview, never skip to chat
+  // or to generating a generic website.
+  if (isOpenEndedGreenfieldStart(trimmed, userAuthoredFileCount)) return true;
   if (isInformationalQuery(trimmed)) return false;
-  if (/^(?:hi|hello|hey|thanks|thank you|ok(?:ay)?)\b/i.test(trimmed)) return false;
   // The dashboard's own prompt box is labeled "Describe the app you want to
   // build" next to a "Build" button, so real users routinely type a bare
   // noun-phrase description with no "build"/"create"/"make" verb at all —
@@ -1336,6 +1365,21 @@ export function isSmallSurgicalEdit(prompt: string): boolean {
 
 /** Detect prompts that should run in build mode even if chat is selected. */
 export function shouldAutoBuildMode(prompt: string): boolean {
-  return /\b(create|build|make|design|develop|rebrand|change)\b/i.test(prompt) &&
-    /\b(website|site|app|erp|pos|crm|system|platform|dashboard|portal|landing|management|store|shop|business|marketplace|booking|course|community|forum)\b/i.test(prompt);
+  const p = prompt.trim();
+  if (!p) return false;
+  // "change" is an edit verb. Treating it as greenfield sent "change the site
+  // header color" into a full rebuild. Only construction verbs auto-build.
+  if (!/\b(create|build|make|design|develop|rebrand|generate|scaffold)\b/i.test(p)) return false;
+  return /\b(website|site|app|erp|pos|crm|system|platform|dashboard|portal|landing|management|store|shop|business|marketplace|booking|course|community|forum|point[- ]of[- ]sale)\b/i.test(p);
+}
+
+/**
+ * True when the classifier named a specific product (POS, CRM, landing page…)
+ * rather than guessing "general-app". Ambiguous prompts must stay in chat so
+ * we ask instead of generating the wrong architecture.
+ */
+export function isConfidentBuildClassification(prompt: string): boolean {
+  const intent = classifyBuildIntent(prompt);
+  if (intent.confidence >= 0.9) return true;
+  return intent.appType !== "general-app" && intent.confidence >= 0.85;
 }

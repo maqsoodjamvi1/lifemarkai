@@ -44,6 +44,57 @@ interface AppAuthPanelProps {
 
 const APP_URL = typeof window !== "undefined" ? window.location.origin : "";
 
+function AppUsersList({ projectId }: { projectId: string }) {
+  const [users, setUsers] = useState<Array<{
+    id: string;
+    email: string | null;
+    created_at: string | null;
+    last_sign_in_at: string | null;
+  }>>([]);
+  const [note, setNote] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`/api/projects/${projectId}/database?action=auth_users`)
+      .then((r) => r.json())
+      .then((data: { users?: typeof users; note?: string; error?: string }) => {
+        if (cancelled) return;
+        setUsers(Array.isArray(data.users) ? data.users : []);
+        setNote(data.note ?? data.error ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setNote("Could not load users.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  return (
+    <div className="rounded-xl border border-border/60 p-3 space-y-2">
+      <p className="text-xs font-semibold">Users</p>
+      {loading ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+      ) : users.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground">{note ?? "No end users yet."}</p>
+      ) : (
+        <ul className="max-h-40 overflow-auto space-y-1 text-[11px]">
+          {users.map((u) => (
+            <li key={u.id} className="flex justify-between gap-2 border-b border-border/50 py-1">
+              <span className="truncate">{u.email ?? u.id}</span>
+              <span className="shrink-0 text-muted-foreground">{(u.last_sign_in_at ?? u.created_at ?? "").slice(0, 10)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 const PROVIDER_META: Record<Provider, { label: string; description: string; docs: string }> = {
   google: {
     label: "Google",
@@ -187,6 +238,8 @@ export function AppAuthPanel({ project }: AppAuthPanelProps) {
         <p className="text-[11px] text-muted-foreground">
           Configure how END USERS of {project.name} sign in. These are separate from your own LifemarkAI workspace auth.
         </p>
+
+        <AppUsersList projectId={project.id} />
 
         {/* ── Google ───────────────────────────────────────────────────── */}
         {(() => {

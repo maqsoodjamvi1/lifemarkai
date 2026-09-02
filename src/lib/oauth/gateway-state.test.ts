@@ -58,3 +58,20 @@ test("rejects a returnTo that isn't a same-origin path (open-redirect guard)", (
   const token2 = signGatewayOAuthState(payload({ returnTo: "//evil.example/phish" }), SECRET);
   assert.equal(verifyGatewayOAuthState(token2, SECRET, { now: 1700000000 }), null);
 });
+
+test("round-trips githubHost for GitHub Enterprise OAuth", () => {
+  const token = signGatewayOAuthState(
+    payload({ connector: "github", githubHost: "https://github.acme.internal" }),
+    SECRET,
+  );
+  const decoded = verifyGatewayOAuthState(token, SECRET, { now: 1700000000 });
+  assert.equal(decoded?.githubHost, "https://github.acme.internal");
+});
+
+test("rejects a githubHost that is not an https origin", () => {
+  const token = signGatewayOAuthState(
+    payload({ connector: "github", githubHost: "http://github.acme.internal" }),
+    SECRET,
+  );
+  assert.equal(verifyGatewayOAuthState(token, SECRET, { now: 1700000000 }), null);
+});

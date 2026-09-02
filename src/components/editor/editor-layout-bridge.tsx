@@ -1,19 +1,22 @@
 /**
- * Mounts the LOCAL EditorLayout (src/components/editor — fully internalized).
- * Client-only: shared Framer/React graph must not enter Start SSR.
- * Import/render failures surface as retryable errors — no silent EditorShell demotion.
- * EditorShell remains an explicit diagnostic escape hatch (?shell=1).
+ * Mounts the local EditorLayout on the client only.
  *
- * Next.js coupling removed: the local editor tree has zero next/* imports, so the
- * @lifemark/editor alias and the next/* Vite shims are no longer required by it.
+ * The editor route uses `ssr: "data-only"`, but this extra `mounted` gate
+ * still avoids touching window/workers if the module is evaluated during SSR.
+ * EditorLayout is a static import (not React.lazy): Vite HMR invalidates
+ * `import()` URLs with a stale `?t=` and lazy caches the 404, which painted
+ * "Editor failed to render" with Retry doing nothing.
+ *
+ * EditorShell remains an explicit diagnostic escape hatch (`?shell=1`).
  */
-import { lazy,Suspense,Component,useEffect,useState,type ReactNode,type ErrorInfo } from "react";
-import { Loader2,AlertTriangle,RefreshCw } from "lucide-react";
-import { EditorShell,type EditorShellProps } from "./editor-shell";
+import { Component,Fragment,useEffect,useState,type ErrorInfo,type ReactNode } from "react";
+import { AlertTriangle,Loader2,RefreshCw } from "lucide-react";
 import { ConfirmDialogProvider } from "@/components/ui/confirm-dialog";
 import { QueryProvider } from "@/components/providers/query-provider";
-import { ThemeProvider } from "@/components/providers/theme-provider";
 import { Toaster } from "@/components/ui/toaster";
+import { EditorLayout } from "./editor-layout";
+import { EditorShell,type EditorShellProps } from "./editor-shell";
+import { clearChunkReloadFlag,installChunkErrorRecovery } from "@/lib/import-with-retry";
 
 export type EditorLayoutBridgeProps = EditorShellProps & {
   /** Explicit diagnostic escape hatch — never the default path. */
@@ -58,51 +61,16 @@ function EditorLoadError({
   );
 }
 
-const RemoteEditorLayout = lazy(async () => {
-  const mod = await import("@/components/editor/editor-layout");
-  void fetch("/api/debug-log", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      hypothesisId: "H4",
-      location: "editor-layout-bridge.tsx:lazy-ok",
-      message: "shared EditorLayout module loaded",
-      data: { hasEditorLayout: typeof mod.EditorLayout === "function" },
-      runId: "tanstack-editor-fix",
-    }),
-  }).catch(() => {});
-  if (typeof mod.EditorLayout !== "function") {
-    throw new Error("EditorLayout export missing from @/components/editor/editor-layout");
-  }
-  return { default: mod.EditorLayout as React.ComponentType<any> };
-});
-
 class BridgeErrorBoundary extends Component<
-  { children: ReactNode; projectId?: string },
-  { error: Error | null }
+  { children: ReactNode },
+  { error: Error | null; remount: number }
 > {
-  state = { error: null as Error | null };
+  state = { error: null as Error | null, remount: 0 };
   static getDerivedStateFromError(error: Error) {
     return { error };
   }
   componentDidCatch(error: Error, info: ErrorInfo) {
-    void fetch("/api/debug-log", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        hypothesisId: "H4",
-        location: "editor-layout-bridge.tsx:error-boundary",
-        message: "shared EditorLayout crashed",
-        data: {
-          projectId: this.props.projectId ?? null,
-          error: error.message,
-          name: error.name,
-          stack: (error.stack ?? "").slice(0, 500),
-          componentStack: (info.componentStack ?? "").slice(0, 400),
-        },
-        runId: "tanstack-editor-fix",
-      }),
-    }).catch(() => {});
+    console.error("[editor-layout-bridge] EditorLayout crashed", error, info);
   }
   render() {
     if (this.state.error) {
@@ -110,11 +78,11 @@ class BridgeErrorBoundary extends Component<
         <EditorLoadError
           title="Editor failed to render"
           detail={this.state.error.message}
-          onRetry={() => this.setState({ error: null })}
+          onRetry={() => this.setState((s) => ({ error: null, remount: s.remount + 1 }))}
         />
       );
     }
-    return this.props.children;
+    return <Fragment key={this.state.remount}>{this.props.children}</Fragment>;
   }
 }
 
@@ -123,19 +91,10 @@ export function EditorLayoutBridge(props: EditorLayoutBridgeProps) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    void fetch("/api/debug-log", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        hypothesisId: "H4",
-        location: "editor-layout-bridge.tsx:mount",
-        message: "client mounted before shared editor import",
-        data: { projectId: props.project.id, forceShell },
-        runId: "tanstack-editor-fix",
-      }),
-    }).catch(() => {});
     setMounted(true);
-  }, [props.project.id, forceShell]);
+    clearChunkReloadFlag();
+    return installChunkErrorRecovery();
+  }, []);
 
   if (forceShell) {
     return <EditorShell {...shellProps} />;
@@ -151,36 +110,26 @@ export function EditorLayoutBridge(props: EditorLayoutBridgeProps) {
   }
 
   return (
-    <ThemeProvider attribute="class" defaultTheme="light" enableSystem disableTransitionOnChange>
-      <QueryProvider>
-        <ConfirmDialogProvider>
-          <BridgeErrorBoundary projectId={props.project.id}>
-            <Suspense
-              fallback={
-                <div className="h-screen flex items-center justify-center text-muted-foreground gap-2">
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Loading editor…
-                </div>
-              }
-            >
-              <RemoteEditorLayout
-                project={props.project}
-                initialFiles={props.files}
-                initialMessages={props.messages}
-                initialHasMoreMessages={props.hasMore}
-                profile={props.profile}
-                starterPrompt={props.starterPrompt}
-                starterMode={props.starterMode}
-                autoDeploy={props.autoDeploy}
-                initialFilePath={props.initialFilePath}
-                initialView={props.initialView}
-                initialPanel={props.initialPanel}
-              />
-            </Suspense>
-          </BridgeErrorBoundary>
-          <Toaster />
-        </ConfirmDialogProvider>
-      </QueryProvider>
-    </ThemeProvider>
+    <QueryProvider>
+      <ConfirmDialogProvider>
+        <BridgeErrorBoundary>
+          <EditorLayout
+            key={props.project.id}
+            project={props.project}
+            initialFiles={props.files}
+            initialMessages={props.messages}
+            initialHasMoreMessages={props.hasMore}
+            profile={props.profile}
+            starterPrompt={props.starterPrompt}
+            starterMode={props.starterMode}
+            autoDeploy={props.autoDeploy}
+            initialFilePath={props.initialFilePath}
+            initialView={props.initialView}
+            initialPanel={props.initialPanel}
+          />
+        </BridgeErrorBoundary>
+        <Toaster />
+      </ConfirmDialogProvider>
+    </QueryProvider>
   );
 }

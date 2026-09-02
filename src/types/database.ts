@@ -16,6 +16,7 @@ type DatabaseOverrides = {
           credits_reset_at: string | null;
           github_username: string | null;
           github_access_token: string | null;
+          github_api_base: string | null;
           gitlab_username: string | null;
           gitlab_access_token: string | null;
           stripe_customer_id: string | null;

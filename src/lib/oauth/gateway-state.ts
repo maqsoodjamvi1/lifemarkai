@@ -33,6 +33,12 @@ export interface GatewayOAuthStatePayload {
   returnTo: string;
   /** PKCE code_verifier, only for providers that need it (e.g. supabase). */
   codeVerifier?: string;
+  /**
+   * GitHub Enterprise Server https origin (no path). Omit for github.com.
+   * Bound into state so the callback exchanges the code on the same host
+   * the user authorized, not a different instance.
+   */
+  githubHost?: string;
 }
 
 function base64url(input: Buffer | string): string {
@@ -45,6 +51,21 @@ function fromBase64url(input: string): string {
 
 function sign(payloadB64: string, secret: string): string {
   return base64url(createHmac("sha256", secret).update(payloadB64).digest());
+}
+
+function isHttpsOrigin(value: string): boolean {
+  try {
+    const u = new URL(value);
+    if (u.protocol !== "https:") return false;
+    if (u.username || u.password) return false;
+    if (u.search || u.hash) return false;
+    if (u.pathname !== "/" && u.pathname !== "") return false;
+    const host = u.hostname.toLowerCase();
+    if (host === "localhost" || host === "127.0.0.1" || host.endsWith(".localhost")) return false;
+    return u.origin === value.replace(/\/$/, "");
+  } catch {
+    return false;
+  }
 }
 
 export function signGatewayOAuthState(payload: GatewayOAuthStatePayload, secret: string): string {
@@ -83,6 +104,10 @@ export function verifyGatewayOAuthState(
   // returnTo must stay a same-origin path — never let a signed state carry an
   // absolute/external URL out through the callback's redirect.
   if (!payload.returnTo.startsWith("/") || payload.returnTo.startsWith("//")) return null;
+
+  if (payload.githubHost != null) {
+    if (typeof payload.githubHost !== "string" || !isHttpsOrigin(payload.githubHost)) return null;
+  }
 
   const { maxAgeSeconds = 10 * 60, now = Math.floor(Date.now() / 1000) } = opts;
   if (maxAgeSeconds > 0 && now - payload.issuedAt > maxAgeSeconds) return null;

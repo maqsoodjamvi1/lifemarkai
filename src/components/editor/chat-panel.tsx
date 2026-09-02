@@ -1,9 +1,6 @@
 
 import React,{ useState,useRef,useEffect,useMemo,useCallback } from "react";
 import { AnimatePresence } from "framer-motion";
-import {
-X
-} from "lucide-react";
 import { suggestFollowUps } from "@/lib/ai/follow-up-suggestions";
 import { appendAttachedFile, combineAttachedFiles, MAX_ATTACHED_FILES } from "@/lib/editor/chat-attachments";
 import { readJSON, readString, writeJSON, writeString, removeKey } from "@/lib/editor/local-storage-json";
@@ -35,7 +32,7 @@ import { LovableThreadItem } from "./lovable/thread-item";
 import { LovableContextSummaryBanner } from "./lovable/context-summary-banner";
 import type { LovableFileDiffEntry } from "./lovable/types";
 import type { LovableFileGenResult } from "./lovable/file-gen-result-cards";
-import { LOVABLE_PROMPT_TEMPLATES,LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY } from "./lovable/prompt-templates";
+import { LOVABLE_PROMPT_TEMPLATES,LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY,LOVABLE_PUBLISH_SLASH_KEY } from "./lovable/prompt-templates";
 import type { LovableMentionItem } from "./lovable/composer-mention-autocomplete";
 import { mergeAgentStep,type AgentTaskStep } from "./lovable/agent-step-utils";
 import { groupIntoThreads,getDisplayMessageContent } from "./lovable/message-utils";
@@ -53,6 +50,7 @@ import type { VoiceModeHandle } from "@/components/editor/voice-mode";
 import { useThreadMessageProps } from "./lovable/use-thread-message-props";
 import { extractStreamingReasoning } from "./lovable/streaming-utils";
 import type { ClarifySession,ClarifyQuestion } from "./lovable/clarify-session-card";
+import { currentClarifyQuestion,normalizeClarifyInterview,buildClarifyTimeline,messageClarifyTurnId,appendLiveClarifyQuestion,buildClarifyEnrichedPrompt,liveClarifyQuestionTurn,CLARIFY_BUILD_LEAD_IN,type ClarifyTimelineTurn } from "@/lib/ai/chat/clarify-turn";
 import type { LovableQueueItem } from "./lovable/prompt-queue";
 import type { LovableSecretBannerState } from "./lovable/composer-secret-banner";
 import { parseLineRefs,removeLineRefFromInput } from "@/lib/editor/parse-line-refs";
@@ -70,7 +68,7 @@ import { useGuestCommentCount } from "@/hooks/use-guest-comment-count";
 import { useKeyboardInset } from "@/hooks/use-keyboard-inset";
 import { AGENT_MIN_CREDITS } from "@/lib/ai/credit-cost";
 import { findMissingPackages,syncPackageJsonDeps,describeRejectedPackages } from "@/lib/ai/npm-auto-install";
-import { classifyBuildIntent,isInformationalQuery,isSmallSurgicalEdit,type BuildIntent } from "@/lib/ai/build-intent";
+import { classifyBuildIntent,isInformationalQuery,isOpenEndedGreenfieldStart,isSmallSurgicalEdit,shouldClarifyBeforeBuild,type BuildIntent } from "@/lib/ai/build-intent";
 import { buildDesignBrief,shouldOfferDesignPreviews,type DesignPreviewDirection } from "@/lib/ai/design-previews";
 import type { AgentStep } from "@/lib/ai/agent";
 import {
@@ -86,7 +84,6 @@ looksLikeEditRequest,
 DEFAULT_CODING_MODEL,
 } from "@/lib/ai/editor-intelligence";
 import { countUserAuthoredFiles,isGreenfieldProject } from "@/lib/ai/scaffold-files";
-import { shouldClarifyBeforeBuild } from "@/lib/ai/build-intent";
 import { isNoisePreviewError,type PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import {
 getAutoFixAttempts,
@@ -94,6 +91,7 @@ recordAutoFixAttempt,
 clearAutoFixLedger,
 } from "@/lib/preview/autofix-ledger";
 import { appendPreviewDiagnosis } from "@/lib/preview/diagnose-preview";
+import { GENERATION_PREVIEW_WAIT_MS,waitForPreviewSuccess } from "@/lib/preview/wait-for-preview-success";
 import {
 getOpenRouterModelLabel,
 type OpenRouterModelId,
@@ -186,24 +184,54 @@ type QueueItem = LovableQueueItem;
 
 const MAX_AUTO_FIX_ATTEMPTS = 3;
 
-function waitForPreviewSuccess(timeoutMs = 10_000): Promise<boolean> {
-  return new Promise((resolve) => {
-    const timer = window.setTimeout(() => {
-      window.removeEventListener("message", onMsg);
-      resolve(false);
-    }, timeoutMs);
-    function onMsg(e: MessageEvent) {
-      const d = e.data as { source?: string; type?: string };
-      if (d?.source === "lifemark-preview" && d?.type === "success") {
-        window.clearTimeout(timer);
-        window.removeEventListener("message", onMsg);
-        resolve(true);
-      }
-    }
-    window.addEventListener("message", onMsg);
-  });
+function clarifySessionFromQuestions(
+  originalPrompt: string,
+  questions: Array<{
+    id?: string;
+    question: string;
+    type?: string;
+    kind?: string;
+    multiple?: boolean;
+    options?: ClarifyQuestion["options"];
+  }>,
+  openEnded = false,
+): ClarifySession {
+  return {
+    originalPrompt,
+    currentIndex: 0,
+    openEnded,
+    questions: questions.map((q) => ({
+      id: q.id ?? `q-${Math.random().toString(36).slice(2, 8)}`,
+      question: q.question,
+      type: q.type === "choice" ? "choice" : "text",
+      kind: (q.kind as ClarifyQuestion["kind"]) ?? "general",
+      options: q.options,
+      multiple: q.multiple === true,
+      answer: "",
+    })),
+  };
 }
 
+function syntheticClarifyMessage(
+  projectId: string,
+  id: string,
+  role: "user" | "assistant",
+  content: string,
+  extra?: Record<string, unknown>,
+): Message {
+  return {
+    id,
+    project_id: projectId,
+    role,
+    content,
+    tokens_used: null,
+    model: null,
+    mode: "chat",
+    metadata: { clarify: true, ...extra } as Json,
+    rating: null,
+    created_at: new Date().toISOString(),
+  };
+}
 
 function ChatPanelImpl({
   project, messages, files, activeFile, mode, credits, starterPrompt,
@@ -248,6 +276,44 @@ function ChatPanelImpl({
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
+  const persistClarifyTurns = useCallback(
+    (turns: ClarifyTimelineTurn[]) => {
+      if (turns.length === 0) return;
+      const existing = new Set<string>();
+      for (const message of messagesRef.current) {
+        const turnId = messageClarifyTurnId(message.metadata, message.id);
+        if (turnId) existing.add(turnId);
+      }
+      const fresh = turns.filter((turn) => !existing.has(turn.id));
+      if (fresh.length === 0) return;
+      const local = fresh.map((turn) =>
+        syntheticClarifyMessage(project.id, turn.id, turn.role, turn.content, {
+          clarifyTurnId: turn.id,
+          ...(turn.ack ? { clarifyAck: turn.ack } : {}),
+          ...(turn.id === "clarify-build-lead-in" ? { clarifyLeadIn: true } : {}),
+        }),
+      );
+      const next = [...messagesRef.current, ...local];
+      messagesRef.current = next;
+      onMessagesUpdate(next);
+      void fetch(`/api/projects/${project.id}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: local.map((message) => ({
+            role: message.role,
+            content: message.content,
+            mode: "chat",
+            metadata: message.metadata,
+          })),
+        }),
+      }).catch(() => {
+        /* best-effort — local timeline already has the turns */
+      });
+    },
+    [onMessagesUpdate, project.id],
+  );
+
   const refreshProjectFiles = useCallback(async () => {
     const res = await fetch(`/api/projects/${project.id}/files`, { cache: "no-store" });
     if (!res.ok) throw new Error("Failed to refresh project files");
@@ -260,10 +326,8 @@ function ChatPanelImpl({
       return files;
     }
     // Replace (not merge) so deleted/renamed paths don't linger in preview — Lovable parity.
+    // Layout owns `lifemark-refresh-preview`; do not dispatch it here.
     onFilesUpdate(updatedFiles, { replace: true });
-    window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
-      detail: { files: updatedFiles, reason: "chat-files-refreshed" },
-    }));
     return updatedFiles;
   }, [files, onFilesUpdate, project.id]);
 
@@ -289,28 +353,20 @@ function ChatPanelImpl({
   // single-model /api/ai/agent route. Only affects Agent mode.
   const [multiAgent, setMultiAgent] = useState(false);
   const [streaming, setStreaming] = useState(false);
+  const [clarifyStreaming, setClarifyStreaming] = useState(false);
+  /** True when this send applies streamed XML files live (build/agent/patch). */
+  const liveFileApplyRef = useRef(false);
 
-  // Message queueing (Lovable parity): if you send while the agent is still
-  // working, the message is queued and auto-sent when the current run finishes.
-  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
-  const autoSendRef = useRef<string | null>(null);
-  const prevStreamingRef = useRef(false);
-
-  // Lovable dump: fixed overlay placeholder on #chatinput (sibling span pattern).
-  // While generating, Lovable swaps the placeholder to "Queue follow-up...".
-  const smartPlaceholder = isLocked
-    ? "Switch to Test environment to edit…"
-    : streaming
-      ? "Queue follow-up..."
-      : "Ask LifemarkAI...";
   /** Tracks when the current build started so we know its duration for desktop notifications */
   const buildStartTimeRef = useRef<number | null>(null);
+  const streamGenerationStartedAtRef = useRef(0);
   /** Wrapper that also notifies the parent layout so PreviewPanel can show shimmer */
   function setStreamingWithCallback(value: boolean, fileCount?: number) {
     setStreaming(value);
     onStreamingChange?.(value, fileCount);
     if (value) {
       buildStartTimeRef.current = Date.now();
+      streamGenerationStartedAtRef.current = Date.now();
     } else if (buildStartTimeRef.current !== null) {
       const elapsed = Date.now() - buildStartTimeRef.current;
       buildStartTimeRef.current = null;
@@ -350,28 +406,6 @@ function ChatPanelImpl({
     }
   }, []);
 
-  // Queue flush — when a run finishes (streaming true→false), pop the next
-  // queued message into the composer and mark it for auto-send.
-  useEffect(() => {
-    const was = prevStreamingRef.current;
-    prevStreamingRef.current = streaming;
-    if (was && !streaming && queuedMessages.length > 0 && !isLocked) {
-      const next = queuedMessages[0];
-      setQueuedMessages((q) => q.slice(1));
-      setInput(next);
-      autoSendRef.current = next;
-    }
-
-  }, [streaming, queuedMessages, isLocked]);
-
-  // Auto-send the popped message once the composer holds it and we're idle.
-  useEffect(() => {
-    if (autoSendRef.current !== null && input === autoSendRef.current && !streaming && !isLocked) {
-      autoSendRef.current = null;
-      void handleSend();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [input, streaming, isLocked]);
   const [starterFired, setStarterFired] = useState(false);
   // Push the chat panel above the on-screen keyboard on mobile. 0 on desktop.
   const keyboardInset = useKeyboardInset();
@@ -653,6 +687,26 @@ function ChatPanelImpl({
   const [crossProjectFiles, setCrossProjectFiles] = useState<Record<string,Array<{path:string}>>>({});
   const [crossProjectsLoaded, setCrossProjectsLoaded] = useState(false);
   const [activeClarifySession, setActiveClarifySession] = useState<ClarifySession | null>(null);
+  const clarifySessionRef = useRef<ClarifySession | null>(null);
+  clarifySessionRef.current = activeClarifySession;
+  const answerClarifyRef = useRef<(answer: string) => void>(() => {});
+  const skipClarifyCurrentRef = useRef<() => void>(() => {});
+  const skipClarifyAllRef = useRef<() => void>(() => {});
+  const composerPlaceholder = isLocked
+    ? "Switch to Test environment to edit…"
+    : activeClarifySession?.awaitingDetails
+      ? "Describe it in a sentence…"
+      : streaming
+        ? activeClarifySession
+          ? "Thinking…"
+          : "Queue follow-up..."
+        : currentClarifyQuestion(
+            activeClarifySession ? normalizeClarifyInterview(activeClarifySession) : null,
+          )?.type === "text"
+          ? "Type your answer…"
+          : activeClarifySession
+            ? "Answer in your own words…"
+            : "Ask LifemarkAI to build or edit…";
   // Step-plan approval: msgId -> Set<stepIndex>
   const [approvedSteps, setApprovedSteps] = useState<Record<string, Set<number>>>({});
   // Patch mode: track how many patches were applied per assistant message
@@ -698,6 +752,23 @@ function ChatPanelImpl({
         .catch(() => setPreviewVerify(null));
     }, delayMs);
   }, [project.id]);
+
+  /** After files land: wait until THIS generation's preview paints, then verify + screenshot. */
+  const closeGenerationLoop = useCallback(async (
+    captureId: string,
+    skipScreenshot = false,
+    notBeforeMs?: number,
+  ) => {
+    const previewOk = await waitForPreviewSuccess(
+      GENERATION_PREVIEW_WAIT_MS,
+      typeof window === "undefined" ? new EventTarget() : window,
+      notBeforeMs,
+    );
+    runQuickPreviewVerify(previewOk ? 0 : 400);
+    if (!skipScreenshot) {
+      window.dispatchEvent(new CustomEvent("lifemark-request-screenshot", { detail: { messageId: captureId } }));
+    }
+  }, [runQuickPreviewVerify]);
   // Post-build pipeline status — backend wiring + self-verification progress
   // streamed from the server (wiring_status / verify_status events).
   const [postBuildStatus, setPostBuildStatus] = useState<string | null>(null);
@@ -1097,6 +1168,18 @@ function ChatPanelImpl({
             if (!row?.id) return;
             const current = messagesRef.current;
             if (current.some((m) => m.id === row.id)) return;
+            const incomingTurn = messageClarifyTurnId(row.metadata, row.id);
+            if (incomingTurn) {
+              const idx = current.findIndex(
+                (m) => messageClarifyTurnId(m.metadata, m.id) === incomingTurn,
+              );
+              if (idx >= 0) {
+                const next = [...current];
+                next[idx] = { ...current[idx], ...row, metadata: row.metadata ?? current[idx]?.metadata };
+                onMessagesUpdate(next);
+                return;
+              }
+            }
             if (
               row.role === "user" &&
               current.some(
@@ -1308,6 +1391,25 @@ function ChatPanelImpl({
     return () => clearInterval(id);
   }, [streaming]);
 
+  useEffect(() => {
+    if (streaming) return;
+    if (!streamingContent && streamingFiles.length === 0) return;
+    const startedAt = streamGenerationStartedAtRef.current;
+    const assistantLanded = messages.some(
+      (m) => m.role === "assistant" && Date.parse(m.created_at) >= startedAt - 500,
+    );
+    if (assistantLanded) {
+      setStreamingContent("");
+      setStreamingFiles([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setStreamingContent("");
+      setStreamingFiles([]);
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [streaming, messages, streamingContent, streamingFiles.length]);
+
   const [stoppedDraft, setStoppedDraft] = useState<string | null>(null);
 
   function stopGeneration() {
@@ -1511,9 +1613,6 @@ function ChatPanelImpl({
       if (Array.isArray(updatedFiles) && updatedFiles.length > 0) {
         onFilesUpdate(updatedFiles, { replace: true });
       }
-      window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
-        detail: { files: updatedFiles ?? undefined, reason: "project-reverted" },
-      }));
       window.dispatchEvent(new CustomEvent("lifemark-exit-version-preview"));
       toast({ title: "Project reverted", description: restoreMsg ?? "Files restored to the selected version." });
     } catch {
@@ -2265,9 +2364,11 @@ function ChatPanelImpl({
     clarifyDraftHydratedRef.current = true;
     const saved = readJSON<ClarifySession | null>(clarifyDraftKey, null);
     if (saved && Array.isArray(saved.questions) && saved.questions.length > 0) {
-      setActiveClarifySession(saved);
+      const session = normalizeClarifyInterview(saved) as ClarifySession;
+      setActiveClarifySession(session);
+      persistClarifyTurns(buildClarifyTimeline(session));
     }
-  }, [clarifyDraftKey]);
+  }, [clarifyDraftKey, persistClarifyTurns]);
 
   useEffect(() => {
     if (!clarifyDraftHydratedRef.current) return;
@@ -2395,7 +2496,7 @@ function ChatPanelImpl({
       id: `autofix-${Date.now()}`,
       project_id: project.id,
       role: "assistant",
-      content: `🔧 **Auto-fixing error** (attempt ${autoFixAttempts + 1}/${MAX_AUTO_FIX_ATTEMPTS})\n\n\`\`\`\n${fixPayload.slice(0, 400)}\n\`\`\``,
+      content: `Updating the preview…`,
       tokens_used: null,
       model: null,
       mode: "build",
@@ -2453,6 +2554,7 @@ function ChatPanelImpl({
         explanation: string;
         tokensUsed: number;
         free?: boolean;
+        deterministic?: boolean;
         freeFixesRemainingToday?: number;
       };
 
@@ -2470,6 +2572,11 @@ function ChatPanelImpl({
         } catch {
           onCreditsUpdate(Math.max(0, credits - 1));
         }
+      } else if (data.deterministic) {
+        toast({
+          title: "Fixed on the server",
+          description: data.explanation || "Imports, assets, or dependencies were corrected without AI.",
+        });
       } else {
         toast({
           title: "Free Try-to-fix applied",
@@ -2487,10 +2594,11 @@ function ChatPanelImpl({
         .select("*")
         .eq("project_id", project.id);
 
+      const previewWaitSince = Date.now();
       if (updatedFiles) onFilesUpdate(updatedFiles, { replace: true });
-      // Show success message
-      const freeNote =
-        data.free && typeof data.freeFixesRemainingToday === "number"
+      const freeNote = data.deterministic
+        ? " _(server · no AI)_"
+        : data.free && typeof data.freeFixesRemainingToday === "number"
           ? ` _(free · ${data.freeFixesRemainingToday} left today)_`
           : data.free
             ? " _(free)_"
@@ -2508,10 +2616,11 @@ function ChatPanelImpl({
         created_at: new Date().toISOString(),
       };
       onMessagesUpdate([...messagesWithFixing, successMsg]);
-      window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
-        detail: { files: updatedFiles ?? undefined, reason: "auto-fix-applied" },
-      }));
-      const previewOk = await waitForPreviewSuccess(12_000);
+      const previewOk = await waitForPreviewSuccess(
+        GENERATION_PREVIEW_WAIT_MS,
+        typeof window === "undefined" ? new EventTarget() : window,
+        previewWaitSince,
+      );
       healActiveRef.current = false;
       if (previewOk) {
         onAutoFixComplete?.();
@@ -2718,12 +2827,32 @@ function ChatPanelImpl({
       attachedText?: { name: string; content: string } | null;
       /** Skip server-side mode downgrades (used by the patch→build fallback retry). */
       forceBuild?: boolean;
+      /** Don't append a user bubble — used after the interview (original prompt is already in the thread). */
+      skipOptimisticUser?: boolean;
+      /** Don't persist that same prompt again as a user row. */
+      skipUserPersist?: boolean;
+      /** Live interview: ask the model for the next question given answers so far. */
+      clarifyContinue?: boolean;
+      originalPrompt?: string;
+      clarifyHistory?: Array<{ question: string; answer: string }>;
+      clarifySession?: ClarifySession;
     },
   ) {
     const queuedImage = opts?.imageBase64 ?? attachedImage;
     const queuedImageName = opts?.imageName ?? attachedImageName;
     const queuedText = opts?.attachedText ?? combinedAttachedText;
     if ((!userMessage.trim() && !queuedImage) || streaming || sendingRef.current) return;
+    if (
+      activeClarifySession &&
+      !opts?.forceBuild &&
+      !opts?.clarifyContinue &&
+      userMessage.trim() &&
+      !queuedImage
+    ) {
+      setInput("");
+      answerClarifyRef.current(userMessage.trim());
+      return;
+    }
     // Claim the re-entrancy guard IMMEDIATELY (synchronously, before any
     // `await`) rather than after the credits-refresh fetch below. The old
     // placement left a real window open: two overlapping sendMessage() calls
@@ -2734,9 +2863,13 @@ function ChatPanelImpl({
     // abortControllerRef/streamingContent state. Every early-return between
     // here and the streaming send below must reset this back to false.
     sendingRef.current = true;
+    if (opts?.clarifySession) {
+      clarifySessionRef.current = opts.clarifySession;
+    }
     // Set when an AUTO-routed surgical patch missed — after this stream ends we
     // silently retry the same request as a full build (agent resilience).
     let patchFallbackMessage: string | null = null;
+    let pendingClarifyBuild: string | null = null;
 
     // The user is giving a new instruction, so the code is about to change. Past
     // auto-fix failures were about the OLD code — forget them, and let the fixer
@@ -2766,18 +2899,24 @@ function ChatPanelImpl({
         userMessage,
       );
     const capabilityClarifyIntent = shouldClarifyCapabilities(userMessage, opts?.forceBuild === true);
-    // The smart router may map backend requests straight to AGENT — but the
-    // clarify pipeline lives in build mode. Ask first, build after (unless the
-    // user explicitly sits in Agent mode).
-    if ((dbClarifyIntent || capabilityClarifyIntent) && effectiveMode === "agent" && mode !== "agent") {
-      effectiveMode = "build";
+    const wantsClarify =
+      !opts?.forceBuild &&
+      !opts?.clarifyContinue &&
+      (dbClarifyIntent ||
+        capabilityClarifyIntent ||
+        isOpenEndedGreenfieldStart(userMessage, countUserAuthoredFiles(files)) ||
+        (clarifyFirst && shouldClarifyBeforeBuild(userMessage, countUserAuthoredFiles(files))));
+    const interviewing = wantsClarify || opts?.clarifyContinue === true;
+    // Interview is a chat turn. Forcing build mode made hello look like a
+    // generation (Working…, file steps) before any question appeared.
+    if (interviewing) {
+      effectiveMode = "chat";
     }
     if (
       effectiveMode === "build" &&
       countUserAuthoredFiles(files) > 0 &&
       !opts?.forceBuild &&
-      !dbClarifyIntent &&
-      !capabilityClarifyIntent &&
+      !wantsClarify &&
       process.env.NEXT_PUBLIC_AGENT_BUILDS !== "false" &&
       !isInformationalQuery(userMessage) &&
       !isSmallSurgicalEdit(userMessage)
@@ -2868,7 +3007,7 @@ function ChatPanelImpl({
     // Keep the mode chip in sync whenever intelligence upgrades Chat/Build → patch/agent
     // (otherwise the UI still says "Chat" while files are being written — or worse,
     // Chat stayed as Chat and only streamed prose with no file saves).
-    if (effectiveMode !== mode) {
+    if (!interviewing && effectiveMode !== mode) {
       onModeChange?.(effectiveMode);
       if (
         (mode === "chat" || mode === "build") &&
@@ -2884,6 +3023,7 @@ function ChatPanelImpl({
         });
       }
     } else if (
+      !interviewing &&
       effectiveMode === "chat" &&
       files.length > 0 &&
       looksLikeEditRequest(userMessage)
@@ -2903,6 +3043,7 @@ function ChatPanelImpl({
       void Notification.requestPermission();
     }
     setStreamingWithCallback(true, 0);
+    if (interviewing) setClarifyStreaming(true);
     genStartRef.current = Date.now();
     setStoppedDraft(null);
     setShowDraftBanner(false);
@@ -2927,7 +3068,11 @@ function ChatPanelImpl({
     setScrapedMeta(null);
 
     // Agent mode: initialise task step visibility
-    if (effectiveMode === "agent") {
+    if (interviewing) {
+      setAgentSteps([]);
+      setBuildStatus(null);
+      applyBuildSteps([]);
+    } else if (effectiveMode === "agent") {
       serverStreamedPathsRef.current = new Set<string>();
       setAgentSteps([{ label: "Starting agent...", status: "running", kind: "other", key: "start" }]);
       setBuildStatus(null);
@@ -3005,7 +3150,15 @@ function ChatPanelImpl({
       created_at: new Date().toISOString(),
     };
     const baseMessages = historyOverride ?? messages;
-    onMessagesUpdate([...baseMessages, tempUserMsg]);
+    const skipOptimisticUser = opts?.skipOptimisticUser === true;
+    if (!skipOptimisticUser) {
+      onMessagesUpdate([...baseMessages, tempUserMsg]);
+    }
+    const commitTurn = (...rest: Message[]) => {
+      onMessagesUpdate(
+        skipOptimisticUser ? [...baseMessages, ...rest] : [...baseMessages, tempUserMsg, ...rest],
+      );
+    };
 
     /**
      * Report a failure without erasing what the user typed.
@@ -3032,7 +3185,7 @@ function ChatPanelImpl({
         rating: null,
         created_at: new Date().toISOString(),
       };
-      onMessagesUpdate([...baseMessages, tempUserMsg, errMsg]);
+      commitTurn(errMsg);
       toast({
         title: described.title,
         description: described.summary,
@@ -3301,6 +3454,7 @@ ${(f.content ?? "").slice(0, 8000)}
                 setAgentSteps((prev) => prev.map((s) => ({ ...s, status: "done" as const })));
                 setTimeout(() => setAgentSteps([]), 5000);
 
+                const previewWaitSince = Date.now();
                 const supabase = createClient();
                 const { data: updatedFiles } = await supabase
                   .from("project_files")
@@ -3332,14 +3486,15 @@ ${(f.content ?? "").slice(0, 8000)}
                   }
                   if (Array.isArray(updatedFiles) && updatedFiles.length > 0) {
                     onFilesUpdate(updatedFiles, { replace: true });
-                    window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
-                      detail: { files: updatedFiles, reason: "agent-files-updated" },
-                    }));
                   }
                   if (healActiveRef.current) {
                     healSettlingRef.current = true;
                     void (async () => {
-                      const previewOk = await waitForPreviewSuccess(12_000);
+                      const previewOk = await waitForPreviewSuccess(
+                        GENERATION_PREVIEW_WAIT_MS,
+                        typeof window === "undefined" ? new EventTarget() : window,
+                        previewWaitSince,
+                      );
                       healActiveRef.current = false;
                       healSettlingRef.current = false;
                       if (previewOk) {
@@ -3415,8 +3570,6 @@ ${(f.content ?? "").slice(0, 8000)}
                   );
                 }
 
-                runQuickPreviewVerify();
-
                 const captureId = syncedMessages?.at(-1)?.id ?? `assistant-${Date.now()}`;
                 const browseShot = pendingBrowseShotRef.current;
                 pendingBrowseShotRef.current = null;
@@ -3433,11 +3586,8 @@ ${(f.content ?? "").slice(0, 8000)}
                       mergeMetadata: true,
                     }),
                   }).catch(() => {});
-                } else {
-                  setTimeout(() => {
-                    window.dispatchEvent(new CustomEvent("lifemark-request-screenshot", { detail: { messageId: captureId } }));
-                  }, 2500);
                 }
+                void closeGenerationLoop(captureId, Boolean(browseShot), previewWaitSince);
               }
 
               if (data.error) {
@@ -3468,6 +3618,14 @@ ${(f.content ?? "").slice(0, 8000)}
           mode: effectiveMode,
           ...(autoRoutedPatchClient ? { autoRouted: true } : {}),
           ...(opts?.forceBuild ? { forceBuild: true } : {}),
+          ...(opts?.skipUserPersist ? { skipUserPersist: true } : {}),
+          ...(opts?.clarifyContinue
+            ? {
+                clarifyContinue: true,
+                originalPrompt: opts.originalPrompt,
+                clarifyHistory: opts.clarifyHistory ?? [],
+              }
+            : {}),
           // Declares that this client can pick up an `initiative_routed` handoff
           // (see the handler below). The server only promotes a build to the
           // 11-role team when it knows someone will run it — without this flag a
@@ -3476,14 +3634,8 @@ ${(f.content ?? "").slice(0, 8000)}
           ...(modelManuallySelectedRef.current ? { model: effectiveModel } : {}),
           modelManuallySelected: modelManuallySelectedRef.current,
           framework: mobileMode ? "react-native" : (project.framework ?? "web"),
-          // Lovable-style: ask 2–4 tap-to-answer questions before research/build on
-          // greenfield apps. Toggle off with "Clarify" chip. Backend-only edits too.
-          clarifyFirst:
-            effectiveMode === "build" &&
-            !opts?.forceBuild &&
-            (dbClarifyIntent || capabilityClarifyIntent ||
-              (clarifyFirst &&
-                shouldClarifyBeforeBuild(userMessage, countUserAuthoredFiles(files)))),
+          // Live interview: one model-written question per turn (or continue).
+          clarifyFirst: wantsClarify,
           ...(effectiveMode === "build" && designTemplateId ? { templateId: designTemplateId } : {}),
           // If @mentions present, only send those files for context (saves tokens + focuses AI)
           files: mentionedFilesForAI
@@ -3583,15 +3735,19 @@ ${(f.content ?? "").slice(0, 8000)}
             if (count > 0) {
               toast({
                 title: "Edit applied",
-                description: `Updated ${data.count} file${(data.count as number) === 1 ? "" : "s"}. Preview is refreshing…`,
+                description: liveFileApplyRef.current
+                  ? `Updated ${data.count} file${(data.count as number) === 1 ? "" : "s"}.`
+                  : `Updated ${data.count} file${(data.count as number) === 1 ? "" : "s"}. Preview is refreshing…`,
               });
-              void refreshProjectFiles().catch(() => {
-                toast({
-                  title: "Refresh needed",
-                  description: "The edit saved, but the preview did not refresh automatically. Use the preview refresh button.",
-                  variant: "destructive",
+              if (!liveFileApplyRef.current) {
+                void refreshProjectFiles().catch(() => {
+                  toast({
+                    title: "Refresh needed",
+                    description: "The edit saved, but the preview did not refresh automatically. Use the preview refresh button.",
+                    variant: "destructive",
+                  });
                 });
-              });
+              }
             }
           }
 
@@ -3698,38 +3854,80 @@ ${(f.content ?? "").slice(0, 8000)}
             setPostBuildStatus((data.wiring_status ?? data.verify_status) as string);
           }
 
-          if (Array.isArray(data.clarifying_questions) && (data.clarifying_questions as unknown[]).length === 0) {
-            // Question generation came back empty — don't show a blank wizard;
-            // rebuild directly (forceBuild skips the clarify gate).
-            clarifyExited = true;
-            controller.abort();
-            setStreamingWithCallback(false);
-            setStreamingContent("");
-            onMessagesUpdate(baseMessages);
-            patchFallbackTimerRef.current = setTimeout(() => {
-              patchFallbackTimerRef.current = null;
-              if (unmountedRef.current) return;
-              void sendMessage(userMessage, "build", undefined, { forceBuild: true });
-            }, 250);
-            return;
-          }
-          if (data.clarifying_questions) {
-            setActiveClarifySession({
-              originalPrompt: (typeof data.originalPrompt === "string" ? data.originalPrompt : userMessage),
-              questions: (data.clarifying_questions as Array<{ id: string; question: string; type?: string; kind?: string; multiple?: boolean; options?: ClarifyQuestion["options"] }>).map((q) => ({
-                id: q.id ?? `q-${Math.random()}`,
-                question: q.question,
-                type: (q.type as "text" | "choice") ?? "text",
-                kind: q.kind as ClarifyQuestion["kind"],
-                options: q.options,
-                multiple: q.multiple === true,
-                answer: "",
-              })),
-            });
+          if (data.readyToBuild === true || Array.isArray(data.clarifying_questions)) {
+            const incoming = Array.isArray(data.clarifying_questions)
+              ? (data.clarifying_questions as Array<{
+                  id: string;
+                  question: string;
+                  type?: string;
+                  kind?: string;
+                  multiple?: boolean;
+                  options?: ClarifyQuestion["options"];
+                }>).slice(0, 1)
+              : [];
+            const ack = typeof data.ack === "string" && data.ack.trim() ? data.ack.trim() : undefined;
+            const original =
+              typeof data.originalPrompt === "string" ? data.originalPrompt : userMessage;
+
+            if (data.readyToBuild === true || incoming.length === 0) {
+              const session = opts?.clarifySession ?? clarifySessionRef.current;
+              persistClarifyTurns([
+                { id: "clarify-build-lead-in", role: "assistant", content: CLARIFY_BUILD_LEAD_IN },
+              ]);
+              setActiveClarifySession(null);
+              clarifySessionRef.current = null;
+              pendingClarifyBuild = session
+                ? buildClarifyEnrichedPrompt(normalizeClarifyInterview(session))
+                : original;
+              setStreamingWithCallback(false);
+              setStreamingContent("");
+              setStreamingFiles([]);
+              clarifyExited = true;
+              controller.abort();
+              return;
+            }
+
+            if (opts?.clarifyContinue) {
+              const session = opts?.clarifySession ?? clarifySessionRef.current;
+              if (session && incoming[0]) {
+                const next = appendLiveClarifyQuestion(
+                  normalizeClarifyInterview(session),
+                  incoming[0],
+                );
+                clarifySessionRef.current = next;
+                setActiveClarifySession(next);
+                persistClarifyTurns(liveClarifyQuestionTurn(normalizeClarifyInterview(next), ack));
+                setTimeout(() => textareaRef.current?.focus(), 50);
+              }
+              setStreamingWithCallback(false);
+              setStreamingContent("");
+              setStreamingFiles([]);
+              clarifyExited = true;
+              controller.abort();
+              return;
+            }
+
+            const openingSession = clarifySessionFromQuestions(
+              original,
+              incoming,
+              isOpenEndedGreenfieldStart(userMessage, countUserAuthoredFiles(files)),
+            );
+            clarifySessionRef.current = openingSession;
+            setActiveClarifySession(openingSession);
+            const keptUser =
+              typeof (data as { userMessageId?: string }).userMessageId === "string"
+                ? { ...tempUserMsg, id: (data as { userMessageId: string }).userMessageId }
+                : tempUserMsg;
+            const withHello = skipOptimisticUser ? [...baseMessages] : [...baseMessages, keptUser];
+            messagesRef.current = withHello;
+            onMessagesUpdate(withHello);
+            persistClarifyTurns(
+              liveClarifyQuestionTurn(normalizeClarifyInterview(openingSession), ack),
+            );
+            setTimeout(() => textareaRef.current?.focus(), 50);
             setStreamingWithCallback(false);
             setStreamingContent("");
             setStreamingFiles([]);
-            onMessagesUpdate(baseMessages);
             clarifyExited = true;
             controller.abort();
             return;
@@ -3838,7 +4036,9 @@ ${(f.content ?? "").slice(0, 8000)}
                   return { ...prev, [assistantId]: merged };
                 });
               }
+              let previewWaitSince: number | undefined;
               if ((data.files && (data.files as unknown[]).length > 0) || haveStreamedFiles || reportedFileCount > 0 || filesChanged) {
+                previewWaitSince = Date.now();
                 const updatedFiles = await refreshProjectFiles();
                 {
                   // Build diff entries. Prefer data.files (has fresh content from
@@ -3870,14 +4070,14 @@ ${(f.content ?? "").slice(0, 8000)}
                     setCanUndo(true);
                   }
 
-                  onFilesUpdate(updatedFiles);
-                  window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
-                    detail: { files: updatedFiles, reason: "agent-files-updated" },
-                  }));
                   if (healActiveRef.current) {
                     healSettlingRef.current = true;
                     void (async () => {
-                      const previewOk = await waitForPreviewSuccess(12_000);
+                      const previewOk = await waitForPreviewSuccess(
+                        GENERATION_PREVIEW_WAIT_MS,
+                        typeof window === "undefined" ? new EventTarget() : window,
+                        previewWaitSince,
+                      );
                       healActiveRef.current = false;
                       healSettlingRef.current = false;
                       if (previewOk) {
@@ -3959,7 +4159,7 @@ ${(f.content ?? "").slice(0, 8000)}
                 rating: null,
                 created_at: new Date().toISOString(),
               };
-              onMessagesUpdate([...baseMessages, tempUserMsg, assistantMsg]);
+              commitTurn(assistantMsg);
               {
                 const realUserId =
                   typeof (data as { userMessageId?: string }).userMessageId === "string"
@@ -3996,11 +4196,15 @@ ${(f.content ?? "").slice(0, 8000)}
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                       messages: [
-                        {
-                          role: "user",
-                          content: tempUserMsg.content,
-                          mode: effectiveMode === "patch" ? "build" : effectiveMode,
-                        },
+                        ...(skipOptimisticUser || opts?.skipUserPersist
+                          ? []
+                          : [
+                              {
+                                role: "user" as const,
+                                content: tempUserMsg.content,
+                                mode: effectiveMode === "patch" ? "build" : effectiveMode,
+                              },
+                            ]),
                         {
                           role: "assistant",
                           content: assistantMsg.content,
@@ -4015,11 +4219,7 @@ ${(f.content ?? "").slice(0, 8000)}
                   if (persistRes.ok) {
                     const persisted = (await persistRes.json()) as { assistantMessageId?: string };
                     if (persisted.assistantMessageId) {
-                      onMessagesUpdate([
-                        ...baseMessages,
-                        tempUserMsg,
-                        { ...assistantMsg, id: persisted.assistantMessageId },
-                      ]);
+                      commitTurn({ ...assistantMsg, id: persisted.assistantMessageId });
                     }
                   } else {
                     toast({
@@ -4037,34 +4237,6 @@ ${(f.content ?? "").slice(0, 8000)}
                 }
               }
               setGenTimes((prev) => ({ ...prev, [assistantId]: Math.round((Date.now() - genStartRef.current) / 100) / 10 }));
-
-              // Capture after Modal sync/HMR settles (not a blind timer).
-              if (effectiveMode === "build" || effectiveMode === "patch") {
-                const captureId = assistantId;
-                const requestShot = () => {
-                  window.dispatchEvent(
-                    new CustomEvent("lifemark-request-screenshot", {
-                      detail: { messageId: captureId },
-                    }),
-                  );
-                };
-                let settled = false;
-                const onSettled = () => {
-                  if (settled) return;
-                  settled = true;
-                  window.removeEventListener("lifemark-preview-settled", onSettled);
-                  window.setTimeout(requestShot, 400);
-                };
-                window.addEventListener("lifemark-preview-settled", onSettled);
-                // Fallback if sync never acks (srcdoc / stalled Modal).
-                window.setTimeout(() => {
-                  if (!settled) {
-                    settled = true;
-                    window.removeEventListener("lifemark-preview-settled", onSettled);
-                    requestShot();
-                  }
-                }, 8000);
-              }
 
               // Generate follow-up suggestion chips. The static pass below
               // paints instantly (zero AI cost/latency by design — see
@@ -4117,8 +4289,9 @@ ${(f.content ?? "").slice(0, 8000)}
                     ...(v.errors ?? []).map((e) => ({ name: e, pass: false, detail: undefined })),
                   ],
                 });
-              } else if ((["build", "patch", "agent"] as string[]).includes(effectiveMode)) {
-                runQuickPreviewVerify();
+              }
+              if (previewWaitSince) {
+                void closeGenerationLoop(assistantId, false, previewWaitSince);
               }
 
               // Multi-role test chips (Lovable best-practice: recheck multi-role behavior after big edits)
@@ -4153,9 +4326,11 @@ ${(f.content ?? "").slice(0, 8000)}
           } catch {}
         };
 
+      const liveApply = (["build", "agent", "patch"] as EditorMode[]).includes(effectiveMode);
+      liveFileApplyRef.current = liveApply;
       await consumeAIStream(res, {
         signal: controller.signal,
-        applyFileUpdates: (["build", "agent", "patch"] as EditorMode[]).includes(effectiveMode),
+        applyFileUpdates: liveApply,
         onFileUpdate: (update) => {
           const norm = update.path.replace(/\\/g, "/").replace(/^\//, "");
           if (streamedPathTracker.add(norm)) {
@@ -4231,13 +4406,13 @@ ${(f.content ?? "").slice(0, 8000)}
       }
     } finally {
       sendingRef.current = false;
+      liveFileApplyRef.current = false;
+      setClarifyStreaming(false);
       if (streamFlushTimer !== null) {
         clearTimeout(streamFlushTimer);
         streamFlushTimer = null;
       }
       setStreamingWithCallback(false);
-      setStreamingContent("");
-      setStreamingFiles([]);
       setBuildStatus(null);
       setSubagentSteps([]);
       setPreviewVerify(null);
@@ -4249,6 +4424,15 @@ ${(f.content ?? "").slice(0, 8000)}
           if (unmountedRef.current) return; // panel gone — drop the retry
           void sendMessage(retry, "build", undefined, { forceBuild: true });
         }, 250);
+      }
+      if (pendingClarifyBuild) {
+        const prompt = pendingClarifyBuild;
+        pendingClarifyBuild = null;
+        void sendMessage(prompt, "build", undefined, {
+          forceBuild: true,
+          skipOptimisticUser: true,
+          skipUserPersist: true,
+        });
       }
       // A self-repair send that never reached its completion handler — the
       // stream threw, the user pressed Stop, the response carried no files.
@@ -4352,6 +4536,11 @@ ${(f.content ?? "").slice(0, 8000)}
       setAttachedImage(null);
       setAttachedImageName(null);
       setAttachedFiles([]);
+      return;
+    }
+    if (activeClarifySession && text && !attachedImage) {
+      setInput("");
+      answerClarifyRef.current(text);
       return;
     }
     if (
@@ -4889,6 +5078,7 @@ ${(f.content ?? "").slice(0, 8000)}
   function selectSlashItem(item: SlashItem) {
     if (item.kind === "skill") applySkill(item.prompt, item.skillId);
     else if (item.prompt === LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY) openDesignDirections();
+    else if (item.prompt === LOVABLE_PUBLISH_SLASH_KEY) void handlePublishFromChat();
     else insertTemplate(item.prompt);
     setShowTemplates(false);
   }
@@ -5074,10 +5264,49 @@ ${(f.content ?? "").slice(0, 8000)}
     }
   }
 
-  const visibleMessages = useMemo(
-    () => messages.map((m) => ({ ...m, content: getDisplayMessageContent(m) })),
-    [messages],
+  const clarifyInterview = useMemo(
+    () => (activeClarifySession ? normalizeClarifyInterview(activeClarifySession) : null),
+    [activeClarifySession],
   );
+
+  const visibleMessages = useMemo(() => {
+    const raw = messages
+      .filter((m): m is Message => !!m && typeof m.id === "string")
+      .map((m) => ({ ...m, content: getDisplayMessageContent(m) }));
+    const lastByTurn = new Map<string, number>();
+    raw.forEach((message, index) => {
+      const turnId = messageClarifyTurnId(message.metadata, message.id);
+      if (turnId) lastByTurn.set(turnId, index);
+    });
+    const base = raw.filter((message, index) => {
+      const turnId = messageClarifyTurnId(message.metadata, message.id);
+      return !turnId || lastByTurn.get(turnId) === index;
+    });
+    if (!clarifyInterview) return base;
+    const persisted = new Set<string>();
+    for (const message of base) {
+      const turnId = messageClarifyTurnId(message.metadata, message.id);
+      if (turnId) persisted.add(turnId);
+    }
+    const turns: Message[] = [];
+    for (const turn of buildClarifyTimeline(clarifyInterview)) {
+      if (persisted.has(turn.id)) continue;
+      turns.push(
+        syntheticClarifyMessage(
+          project.id,
+          turn.id,
+          turn.role,
+          turn.content,
+          {
+            clarifyTurnId: turn.id,
+            ...(turn.current ? { clarifyCurrent: true } : {}),
+            ...(turn.ack ? { clarifyAck: turn.ack } : {}),
+          },
+        ),
+      );
+    }
+    return turns.length > 0 ? [...base, ...turns] : base;
+  }, [messages, clarifyInterview, project.id]);
 
   const searchHitMessageIds = useMemo(() => {
     const q = searchQuery.trim();
@@ -5251,9 +5480,16 @@ ${(f.content ?? "").slice(0, 8000)}
     let lastPrompt = "";
     const buildIdx = messages.findIndex((m) => m.id === latestSnapshotMessageId);
     for (let i = buildIdx; i >= 0; i--) {
-      if (messages[i]?.role === "user") { lastPrompt = messages[i].content; break; }
+      if (messages[i]?.role === "user") {
+        lastPrompt = typeof messages[i].content === "string" ? messages[i].content : "";
+        break;
+      }
     }
-    return suggestFollowUps(lastPrompt, files.map((f) => f.path), 4);
+    return suggestFollowUps(
+      lastPrompt,
+      files.map((f) => (typeof f.path === "string" ? f.path : "")).filter(Boolean),
+      4,
+    );
   }, [latestSnapshotMessageId, messages, files, securityIssueCount, scopeHeldPrompt, suggestionChipsEnabled]);
 
   const composerLineRefs = useMemo(() => parseLineRefs(input), [input]);
@@ -5668,11 +5904,11 @@ ${(f.content ?? "").slice(0, 8000)}
   // `[...messages].filter().pop()` ran once per assistant row per render
   // (O(n²) over the conversation).
   const lastAssistantMsgId = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant") return messages[i].id;
+    for (let i = visibleMessages.length - 1; i >= 0; i--) {
+      if (visibleMessages[i]?.role === "assistant") return visibleMessages[i].id;
     }
     return null;
-  }, [messages]);
+  }, [visibleMessages]);
 
   const chatThreads = useMemo(() => {
     let filtered = showBookmarks
@@ -5988,7 +6224,7 @@ ${(f.content ?? "").slice(0, 8000)}
     pruneCollapsedThreads,
   ]);
 
-  const getMessageProps = useThreadMessageProps({
+  const threadMessageProps = useThreadMessageProps({
     searchQuery,
     activeSearchHitId,
     focusedMessageId,
@@ -6113,23 +6349,13 @@ ${(f.content ?? "").slice(0, 8000)}
         `Validate recent changes for the ${role} role. Cover: ` +
         `1) login/auth for ${role}, 2) routes ${role} can/cannot reach, ` +
         `3) UI visible/hidden for ${role}, 4) role-specific actions.`;
-      // Open Browser Tests (e2e), not unit Testing — seed listener lives there.
-      try {
-        sessionStorage.setItem(
-          "lifemark-seed-browser-tests",
-          JSON.stringify({ description, autoGenerate: true }),
-        );
-      } catch { /* private mode */ }
-      onOpenPanel?.("e2e");
-      window.setTimeout(() => {
-        window.dispatchEvent(
-          new CustomEvent("lifemark-seed-browser-tests", {
-            detail: { description, autoGenerate: true },
-          }),
-        );
-      }, 50);
+      void sendMessage(description);
     },
-    onOpenTestingPanel: () => onOpenPanel?.("e2e"),
+    onOpenTestingPanel: () => {
+      void sendMessage(
+        "Check the latest UI changes: auth, main flows, empty/error states, and anything that looks broken.",
+      );
+    },
     onSaveAnalyzeFile: saveGeneratedFileToProject,
     onOpenBranchSnapshot: (snapshotId) => {
       onOpenPanel?.("history");
@@ -6175,7 +6401,42 @@ ${(f.content ?? "").slice(0, 8000)}
     runtimeErrorsDismissed,
     onFixRuntimeErrors: handleFixRuntimeErrors,
     onDismissRuntimeErrors: () => setRuntimeErrorsDismissed(true),
+    persistClarifyTurns,
   });
+  answerClarifyRef.current = composerDock.onAnswerClarifyTurn;
+  skipClarifyCurrentRef.current = composerDock.onSkipClarifyCurrent;
+  skipClarifyAllRef.current = () => {
+    if (activeClarifySession) composerDock.onClarifySkipAndBuild(activeClarifySession.originalPrompt);
+  };
+
+  const getMessageProps = useCallback(
+    (msg: Message, msgIdx: number, thread: Message[]) => {
+      const base = threadMessageProps(msg, msgIdx, thread);
+      const meta = msg.metadata as { clarifyCurrent?: boolean; clarifyAck?: string; clarifyTurnId?: string } | null;
+      const current = currentClarifyQuestion(clarifyInterview);
+      const turnId = messageClarifyTurnId(meta, msg.id);
+      const isCurrentQuestion =
+        !!current &&
+        (meta?.clarifyCurrent === true || turnId === `clarify-q-${current.id}`);
+      if (!isCurrentQuestion || !current || !clarifyInterview) return base;
+      const timelineAck = buildClarifyTimeline(clarifyInterview).find((turn) => turn.current)?.ack;
+      return {
+        ...base,
+        clarifyTurn: {
+          question: current,
+          step: clarifyInterview.currentIndex + 1,
+          total: Math.max(clarifyInterview.questions.length, clarifyInterview.currentIndex + 1),
+          isFirst: clarifyInterview.currentIndex === 0,
+          ack: typeof meta?.clarifyAck === "string" ? meta.clarifyAck : timelineAck,
+          awaitingDetails: clarifyInterview.awaitingDetails === true,
+          onAnswer: (answer: string) => answerClarifyRef.current(answer),
+          onSkip: () => skipClarifyCurrentRef.current(),
+          onSkipAll: () => skipClarifyAllRef.current(),
+        },
+      };
+    },
+    [threadMessageProps, clarifyInterview],
+  );
 
   return (
     <LovableChatPanelShell
@@ -6414,18 +6675,18 @@ ${(f.content ?? "").slice(0, 8000)}
         )}
         footer={
           <LovableChatStreamingFooter
-            streaming={streaming}
+            streaming={streaming || streamingContent.length > 0 || streamingFiles.length > 0}
             thoughtSeconds={thoughtSeconds}
             reasoningText={streamingReasoning}
             streamingContent={streamingContent}
             streamingFiles={streamingFiles}
             pendingSkills={pendingSkills}
-            agentSteps={agentSteps}
+            agentSteps={clarifyStreaming ? [] : agentSteps}
             subagentSteps={subagentSteps}
             previewVerify={previewVerify}
-            buildActivitySteps={buildActivitySteps}
-            mode={mode}
-            buildStatus={buildStatus}
+            buildActivitySteps={clarifyStreaming ? [] : buildActivitySteps}
+            mode={clarifyStreaming ? "chat" : mode}
+            buildStatus={clarifyStreaming ? null : buildStatus}
             postBuildStatus={postBuildStatus}
             messagesEndRef={messagesEndRef}
           />
@@ -6438,31 +6699,6 @@ ${(f.content ?? "").slice(0, 8000)}
         onClick={scrollToBottom}
       />
       </div>{/* end messages wrapper */}
-
-      {queuedMessages.length > 0 && (
-        <div className="px-3 pb-1.5 flex flex-col gap-1">
-          {queuedMessages.map((m, i) => (
-            <div
-              key={`${i}-${m.slice(0, 12)}`}
-              className="flex items-center gap-2 rounded-[var(--radius-3)] bg-[var(--bg-muted)]/60 px-2.5 py-1.5 text-xs text-[var(--fg-tertiary)]"
-            >
-              <span className="shrink-0 tabular-nums text-[10px] opacity-70">{i + 1}</span>
-              <span className="flex-1 truncate">{m}</span>
-              <button
-                type="button"
-                aria-label="Remove queued message"
-                onClick={() => setQueuedMessages((q) => q.filter((_, idx) => idx !== i))}
-                className="shrink-0 rounded-full p-0.5 hover:bg-[var(--bg-muted)]"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-          <span className="px-0.5 text-[10px] text-[var(--fg-tertiary)]">
-            Queued — sends automatically when the current run finishes
-          </span>
-        </div>
-      )}
 
       {stoppedDraft && !streaming && (
         <LovableContinueBanner
@@ -6572,7 +6808,7 @@ ${(f.content ?? "").slice(0, 8000)}
           onOpenLineRefAtLine={handleOpenLineRefAtLine}
           secretBanner={secretBanner}
           onDismissSecretBanner={() => setSecretBanner(null)}
-          onOpenSecrets={() => onOpenPanel?.("secrets")}
+          onOpenSecrets={() => onOpenPanel?.("cloud")}
         />
 
         {/* Above the card, not inside it. Lovable's composer card holds exactly
@@ -6603,7 +6839,7 @@ ${(f.content ?? "").slice(0, 8000)}
             onInputChange={handleInputChange}
             onKeyDown={handleKeyDown}
             onPasteText={handlePromptPaste}
-            placeholder={smartPlaceholder}
+            placeholder={composerPlaceholder}
             noCredits={noCredits}
             isLocked={isLocked}
             securityIssueCount={securityIssueCount}
@@ -6636,7 +6872,10 @@ ${(f.content ?? "").slice(0, 8000)}
             showTemplates={showTemplates}
             slashSelectedKey={slashSelectedKey}
             onTemplateSkillSelect={applySkill}
-            onTemplateSelect={insertTemplate}
+            onTemplateSelect={(prompt) => {
+              if (prompt === LOVABLE_PUBLISH_SLASH_KEY) void handlePublishFromChat();
+              else insertTemplate(prompt);
+            }}
             onExploreDesignDirections={() => openDesignDirections()}
             onTemplatesClose={() => setShowTemplates(false)}
             showSnippets={showSnippets}

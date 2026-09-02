@@ -15,22 +15,19 @@ import { useState,useEffect,useRef,useCallback } from "react";
 import {
 HardDrive,FolderOpen,Folder,File,Upload,Trash2,
 Copy,Check,ChevronRight,RefreshCw,Loader2,Plus,
-ExternalLink,Image,FileText,Music,Video,Archive,Lock,Globe
+Image,FileText,Music,Video,Archive,Lock,Globe
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { createClient } from "@/lib/supabase/client";
 import { toast } from "@/hooks/use-toast";
-
-// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Bucket {
   id: string;
   name: string;
   public: boolean;
-  created_at: string;
+  created_at?: string;
   file_size_limit?: number | null;
 }
 
@@ -72,7 +69,7 @@ function fileIcon(name: string) {
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function StoragePanel({ projectId }: StoragePanelProps) {
-  const supabase = createClient();
+  const api = `/api/projects/${projectId}/storage`;
 
   const [buckets, setBuckets] = useState<Bucket[]>([]);
   const [selectedBucket, setSelectedBucket] = useState<Bucket | null>(null);
@@ -85,22 +82,31 @@ export function StoragePanel({ projectId }: StoragePanelProps) {
   const [newFolderName, setNewFolderName] = useState("");
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [newBucketName, setNewBucketName] = useState("");
+  const [newBucketPublic, setNewBucketPublic] = useState(false);
+  const [creatingBucket, setCreatingBucket] = useState(false);
+  const [backendNone, setBackendNone] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // ── Load buckets ───────────────────────────────────────────────────────────
 
   const loadBuckets = useCallback(async () => {
     setLoadingBuckets(true);
     try {
-      const { data, error } = await supabase.storage.listBuckets();
-      if (error) throw error;
-      setBuckets((data ?? []) as Bucket[]);
+      const res = await fetch(`${api}?action=buckets`);
+      const data = await res.json().catch(() => ({}));
+      if (data.backend === "none") {
+        setBackendNone(data.error ?? "Enable Cloud or link a Supabase project to use Storage.");
+        setBuckets([]);
+        return;
+      }
+      setBackendNone(null);
+      if (!res.ok) throw new Error(data.error ?? "Failed to load buckets");
+      setBuckets((data.buckets ?? []) as Bucket[]);
     } catch (e) {
       toast({ title: "Failed to load buckets", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
     } finally {
       setLoadingBuckets(false);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => { void loadBuckets(); }, [loadBuckets]);
 
@@ -109,19 +115,19 @@ export function StoragePanel({ projectId }: StoragePanelProps) {
   const loadFiles = useCallback(async (bucket: Bucket, path: string[]) => {
     setLoadingFiles(true);
     try {
-      const prefix = path.length > 0 ? path.join("/") + "/" : "";
-      const { data, error } = await supabase.storage
-        .from(bucket.name)
-        .list(prefix || undefined, { sortBy: { column: "name", order: "asc" } });
-      if (error) throw error;
-      setFiles((data ?? []) as StorageFile[]);
+      const prefix = path.length > 0 ? path.join("/") : "";
+      const qs = new URLSearchParams({ action: "list", bucket: bucket.name, prefix });
+      const res = await fetch(`${api}?${qs}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Failed to list files");
+      setFiles((data.files ?? []) as StorageFile[]);
     } catch (e) {
       toast({ title: "Failed to list files", description: e instanceof Error ? e.message : "Unknown error", variant: "destructive" });
       setFiles([]);
     } finally {
       setLoadingFiles(false);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
     if (selectedBucket) void loadFiles(selectedBucket, currentPath);
@@ -136,11 +142,30 @@ export function StoragePanel({ projectId }: StoragePanelProps) {
     for (const file of Array.from(fileList)) {
       const prefix = currentPath.length > 0 ? currentPath.join("/") + "/" : "";
       const filePath = prefix + file.name;
-      const { error } = await supabase.storage
-        .from(selectedBucket.name)
-        .upload(filePath, file, { upsert: true });
-      if (!error) successCount++;
-      else toast({ title: `Failed to upload ${file.name}`, description: error.message, variant: "destructive" });
+      const contentBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result ?? "");
+          const comma = result.indexOf(",");
+          resolve(comma >= 0 ? result.slice(comma + 1) : result);
+        };
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+      const res = await fetch(api, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "upload",
+          bucket: selectedBucket.name,
+          path: filePath,
+          contentBase64,
+          contentType: file.type || "application/octet-stream",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) successCount++;
+      else toast({ title: `Failed to upload ${file.name}`, description: data.error, variant: "destructive" });
     }
     if (successCount > 0) {
       toast({ title: `Uploaded ${successCount} file${successCount !== 1 ? "s" : ""}` });
@@ -154,11 +179,14 @@ export function StoragePanel({ projectId }: StoragePanelProps) {
   async function deleteFile(file: StorageFile) {
     if (!selectedBucket) return;
     const prefix = currentPath.length > 0 ? currentPath.join("/") + "/" : "";
-    const { error } = await supabase.storage
-      .from(selectedBucket.name)
-      .remove([prefix + file.name]);
-    if (error) {
-      toast({ title: "Delete failed", description: error.message, variant: "destructive" });
+    const res = await fetch(api, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "delete", bucket: selectedBucket.name, path: prefix + file.name }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast({ title: "Delete failed", description: data.error, variant: "destructive" });
     } else {
       toast({ title: `Deleted "${file.name}"` });
       void loadFiles(selectedBucket, currentPath);
@@ -172,17 +200,22 @@ export function StoragePanel({ projectId }: StoragePanelProps) {
     const prefix = currentPath.length > 0 ? currentPath.join("/") + "/" : "";
     const filePath = prefix + file.name;
 
-    let url: string;
-    if (selectedBucket.public) {
-      const { data } = supabase.storage.from(selectedBucket.name).getPublicUrl(filePath);
-      url = data.publicUrl;
-    } else {
-      const { data, error } = await supabase.storage
-        .from(selectedBucket.name)
-        .createSignedUrl(filePath, 3600);
-      if (error || !data) { toast({ title: "Failed to create signed URL", variant: "destructive" }); return; }
-      url = data.signedUrl;
+    const res = await fetch(api, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "url",
+        bucket: selectedBucket.name,
+        path: filePath,
+        public: selectedBucket.public,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.url) {
+      toast({ title: "Failed to create signed URL", description: data.error, variant: "destructive" });
+      return;
     }
+    const url = data.url as string;
 
     await navigator.clipboard.writeText(url);
     setCopiedUrl(file.name);
@@ -196,16 +229,45 @@ export function StoragePanel({ projectId }: StoragePanelProps) {
     if (!selectedBucket || !newFolderName.trim()) return;
     const prefix = currentPath.length > 0 ? currentPath.join("/") + "/" : "";
     const placeholderPath = prefix + newFolderName.trim() + "/.gitkeep";
-    const { error } = await supabase.storage
-      .from(selectedBucket.name)
-      .upload(placeholderPath, new Blob([""]), { upsert: true });
-    if (error) {
-      toast({ title: "Failed to create folder", description: error.message, variant: "destructive" });
+    const res = await fetch(api, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "mkdir", bucket: selectedBucket.name, path: placeholderPath }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast({ title: "Failed to create folder", description: data.error, variant: "destructive" });
     } else {
       toast({ title: `Folder "${newFolderName}" created` });
       setNewFolderName("");
       setShowNewFolder(false);
       void loadFiles(selectedBucket, currentPath);
+    }
+  }
+
+  async function createBucket() {
+    const name = newBucketName.trim().toLowerCase();
+    if (!name) return;
+    setCreatingBucket(true);
+    try {
+      const res = await fetch(api, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create_bucket", name, public: newBucketPublic }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Could not create bucket");
+      toast({ title: `Bucket "${name}" created` });
+      setNewBucketName("");
+      void loadBuckets();
+    } catch (e) {
+      toast({
+        title: "Could not create bucket",
+        description: e instanceof Error ? e.message : "",
+        variant: "destructive",
+      });
+    } finally {
+      setCreatingBucket(false);
     }
   }
 
@@ -231,31 +293,42 @@ export function StoragePanel({ projectId }: StoragePanelProps) {
           <div className="flex-1 flex items-center justify-center">
             <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
           </div>
-        ) : buckets.length === 0 ? (
-          <div className="flex-1 flex flex-col items-center justify-center gap-3 px-4 text-center">
-            <HardDrive className="w-8 h-8 text-muted-foreground/30" />
-            <div>
-              <p className="text-xs font-medium">No storage buckets</p>
-              <p className="text-[10px] text-muted-foreground mt-0.5">
-                Create a bucket in your Supabase dashboard to get started.
-              </p>
-            </div>
-            <a
-              href="https://supabase.com/dashboard/project/_/storage/buckets"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[10px] text-violet-400 hover:underline flex items-center gap-1"
-            >
-              Open Supabase Storage <ExternalLink className="w-2.5 h-2.5" />
-            </a>
-          </div>
         ) : (
           <ScrollArea className="flex-1">
-            <div className="p-2 space-y-1">
-              <p className="text-[10px] text-muted-foreground uppercase tracking-wide px-2 py-1">
-                {buckets.length} bucket{buckets.length !== 1 ? "s" : ""}
-              </p>
-              {buckets.map((bucket) => (
+            <div className="p-2 space-y-2">
+              {backendNone ? (
+                <p className="text-[11px] text-muted-foreground px-2 py-2 leading-relaxed">{backendNone}</p>
+              ) : (
+                <div className="rounded-lg border border-border p-2 space-y-1.5">
+                  <p className="text-[10px] font-medium text-muted-foreground px-0.5">New bucket</p>
+                  <Input
+                    placeholder="avatars"
+                    value={newBucketName}
+                    onChange={(e) => setNewBucketName(e.target.value)}
+                    className="h-7 text-xs"
+                  />
+                  <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={newBucketPublic}
+                      onChange={(e) => setNewBucketPublic(e.target.checked)}
+                    />
+                    Public
+                  </label>
+                  <Button
+                    size="sm"
+                    className="h-6 text-[10px] w-full"
+                    disabled={!newBucketName.trim() || creatingBucket}
+                    onClick={() => void createBucket()}
+                  >
+                    {creatingBucket ? <Loader2 className="w-3 h-3 animate-spin" /> : "Create bucket"}
+                  </Button>
+                </div>
+              )}
+              {buckets.length === 0 && !backendNone ? (
+                <p className="text-[10px] text-muted-foreground px-2">No buckets yet — create one above.</p>
+              ) : (
+                buckets.map((bucket) => (
                 <button
                   key={bucket.id}
                   onClick={() => { setSelectedBucket(bucket); setCurrentPath([]); }}
@@ -275,7 +348,8 @@ export function StoragePanel({ projectId }: StoragePanelProps) {
                   </div>
                   <ChevronRight className="w-3 h-3 text-muted-foreground/40 group-hover:text-foreground transition-colors" />
                 </button>
-              ))}
+              ))
+              )}
             </div>
           </ScrollArea>
         )}

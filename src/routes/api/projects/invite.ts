@@ -4,7 +4,7 @@ import { sendCollaborationInviteEmail } from "@/lib/email/resend";
 import { logAuditFromRequest } from "@/lib/audit/log";
 
 /**
- * Native /api/projects/invite — email a single-use collaboration invite (POST)
+ * Native /api/projects/invite — invite (POST), change role (PATCH),
  * or remove a collaborator (DELETE ?projectId=&collaboratorId=). Owner-only.
  */
 const INVITE_ROLES = new Set(["viewer", "editor"]);
@@ -121,6 +121,66 @@ export const Route = createFileRoute("/api/projects/invite")({
         } catch (error) {
           console.error("Remove collaborator error:", error);
           return Response.json({ error: "Internal server error" }, { status: 500 });
+        }
+      },
+
+      PATCH: async ({ request }) => {
+        try {
+          const supabase = await createClient();
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
+
+          const body = (await request.json().catch(() => ({}))) as {
+            projectId?: string;
+            collaboratorId?: string;
+            role?: string;
+          };
+          const projectId = body.projectId?.trim();
+          const collaboratorId = body.collaboratorId?.trim();
+          const role = body.role ?? "";
+          if (!projectId || !collaboratorId) {
+            return Response.json({ error: "Missing required fields" }, { status: 400 });
+          }
+          if (!INVITE_ROLES.has(role)) {
+            return Response.json({ error: "Role must be viewer or editor" }, { status: 400 });
+          }
+
+          const admin = createAdminClient();
+          const { data: project } = await admin
+            .from("projects").select("user_id").eq("id", projectId).maybeSingle();
+          if (!project || project.user_id !== user.id) {
+            return Response.json({ error: "Only the project owner can change roles" }, { status: 403 });
+          }
+
+          const { data: row } = await admin
+            .from("collaborators")
+            .select("id, user_id")
+            .eq("id", collaboratorId)
+            .eq("project_id", projectId)
+            .maybeSingle();
+          if (!row) return Response.json({ error: "Collaborator not found" }, { status: 404 });
+          if (row.user_id === user.id) {
+            return Response.json({ error: "Cannot change the owner's role" }, { status: 400 });
+          }
+
+          const { error } = await admin
+            .from("collaborators")
+            .update({ role })
+            .eq("id", collaboratorId)
+            .eq("project_id", projectId);
+          if (error) return Response.json({ error: error.message }, { status: 500 });
+
+          void logAuditFromRequest(request, {
+            userId: user.id,
+            action: "member.role_change",
+            resourceType: "project",
+            resourceId: projectId,
+            metadata: { collaboratorId, role },
+          });
+          return Response.json({ ok: true, role });
+        } catch (error) {
+          console.error("Change collaborator role error:", error);
+          return Response.json({ error: "Unable to update role" }, { status: 500 });
         }
       },
     },

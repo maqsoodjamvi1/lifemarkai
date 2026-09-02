@@ -5,12 +5,7 @@ import { LovableLoopRecoveryBanner } from "./loop-recovery-banner";
 import { LovableNoCreditsBanner } from "./composer-banners";
 import { LovableFileGenResultCards,type LovableFileGenResult } from "./file-gen-result-cards";
 import { downloadLovableGeneratedFile,formatLovableFileSize } from "./file-size-utils";
-import {
-LovableClarifySessionCard,
-type ClarifySession,
-type ClarifyQuestion,
-} from "./clarify-session-card";
-import { LovableQuestionsAnsweredCard } from "./questions-answered-card";
+import type { ClarifyQuestion,ClarifySession } from "./clarify-session-card";
 import { LovablePromptQueue,type LovableQueueItem } from "./prompt-queue";
 import { LovableSuggestionChips } from "./suggestion-chips";
 import { LovableRecoveryChips,LOVABLE_RECOVERY_CHIPS } from "./recovery-chips";
@@ -37,10 +32,6 @@ interface LovableComposerDockProps {
   fileGenResults: LovableFileGenResult[];
   onDismissFileGen: (id: string) => void;
   activeClarifySession: ClarifySession | null;
-  onDismissClarify: () => void;
-  onUpdateClarifyQuestion: (questionId: string, answer: string) => void;
-  onClarifyBuildNow: (enrichedPrompt: string) => void;
-  onClarifySkipAndBuild: (originalPrompt: string) => void;
   /** Lovable dump: collapsed “Questions answered” after clarify completes */
   answeredClarifyQuestions?: ClarifyQuestion[] | null;
   onDismissAnsweredClarify?: () => void;
@@ -98,11 +89,7 @@ export function LovableComposerDock({
   fileGenResults,
   onDismissFileGen,
   activeClarifySession,
-  onDismissClarify,
-  onUpdateClarifyQuestion,
-  onClarifyBuildNow,
-  onClarifySkipAndBuild,
-  answeredClarifyQuestions = null,
+  answeredClarifyQuestions: _answeredClarifyQuestions = null,
   promptQueue,
   streaming,
   queuePaused,
@@ -208,20 +195,6 @@ export function LovableComposerDock({
       />
 
       <AnimatePresence>
-        {activeClarifySession && (
-          <LovableClarifySessionCard
-            session={activeClarifySession}
-            onDismiss={onDismissClarify}
-            onUpdateQuestion={onUpdateClarifyQuestion}
-            onBuildNow={onClarifyBuildNow}
-            onSkipAndBuild={onClarifySkipAndBuild}
-          />
-        )}
-
-        {!activeClarifySession && answeredClarifyQuestions && answeredClarifyQuestions.length > 0 && (
-          <LovableQuestionsAnsweredCard questions={answeredClarifyQuestions} />
-        )}
-
         <LovablePromptQueue
           items={promptQueue}
           streaming={streaming}

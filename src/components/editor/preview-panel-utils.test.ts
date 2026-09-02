@@ -1,7 +1,28 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { ProjectFileLike } from "./preview-panel-utils.ts";
-import { getRefreshEffectiveFiles } from "./preview-panel-utils.ts";
+import { filesBelongToProject, getRefreshEffectiveFiles } from "./preview-panel-utils.ts";
+
+test("filesBelongToProject skips a leftover tree from the previous editor project", () => {
+  assert.equal(
+    filesBelongToProject(
+      [{ path: "store.js", content: "", project_id: "project-a" }],
+      "project-b",
+    ),
+    false,
+  );
+  assert.equal(
+    filesBelongToProject(
+      [{ path: "store.js", content: "", project_id: "project-b" }],
+      "project-b",
+    ),
+    true,
+  );
+  assert.equal(
+    filesBelongToProject([{ path: "store.js", content: "" }], "project-b"),
+    true,
+  );
+});
 
 test("getRefreshEffectiveFiles returns latest files when version preview is active", () => {
   const propFiles: ProjectFileLike[] = [

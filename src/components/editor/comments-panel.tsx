@@ -242,10 +242,11 @@ export function CommentsPanel({ projectId, currentUserId, isPublic = false }: Co
   const bottomRef = useRef<HTMLDivElement>(null);
 
   // Load comments
-  const loadComments = useCallback(async () => {
+  const loadComments = useCallback(async (signal?: AbortSignal) => {
     setLoadError(null);
     try {
-      const res = await fetch(`/api/projects/${projectId}/comments`);
+      const res = await fetch(`/api/projects/${projectId}/comments`, { signal });
+      if (signal?.aborted) return;
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         setLoadError(body.error || `Failed to load comments (${res.status})`);
@@ -253,31 +254,38 @@ export function CommentsPanel({ projectId, currentUserId, isPublic = false }: Co
       } else {
         setComments(await res.json());
       }
-    } catch {
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       setLoadError("Failed to load comments");
       setComments([]);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
   }, [projectId]);
 
   useEffect(() => {
-    loadComments();
+    const ac = new AbortController();
+    void loadComments(ac.signal);
+    return () => ac.abort();
   }, [loadComments]);
 
   // Real-time subscription
   useEffect(() => {
     const supabase = createClient();
+    const ac = new AbortController();
     const channel = supabase
       .channel(`comments:${projectId}:${crypto.randomUUID()}`)
       .on(
         "postgres_changes" as any,
         { event: "*", schema: "public", table: "project_comments", filter: `project_id=eq.${projectId}` },
-        () => { loadComments(); }
+        () => { void loadComments(ac.signal); },
       )
       .subscribe();
 
-    return () => { supabase.removeChannel(channel); };
+    return () => {
+      ac.abort();
+      supabase.removeChannel(channel);
+    };
   }, [projectId, loadComments]);
 
   // Focus textarea when replying

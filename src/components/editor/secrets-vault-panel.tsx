@@ -38,16 +38,24 @@ export function SecretsVaultPanel({ projectId }: SecretsVaultPanelProps) {
   const [activeTab, setActiveTab] = useState<"secrets" | "log">("secrets");
   const [accessLog, setAccessLog] = useState<{ action: string; accessed_at: string; key?: string }[]>([]);
 
-  useEffect(() => { loadSecrets(); }, [projectId]);
+  useEffect(() => {
+    const ac = new AbortController();
+    void loadSecrets(ac.signal);
+    return () => ac.abort();
+  }, [projectId]);
 
-  async function loadSecrets() {
+  async function loadSecrets(signal?: AbortSignal) {
     setLoading(true);
     try {
-      const res = await fetch(`/api/projects/${projectId}/secrets`);
+      const res = await fetch(`/api/projects/${projectId}/secrets`, { signal });
+      if (signal?.aborted) return;
       const data = await res.json() as { secrets: Secret[] };
       setSecrets(data.secrets ?? []);
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+    } finally {
+      if (!signal?.aborted) setLoading(false);
+    }
   }
 
   async function revealSecret(id: string) {
@@ -279,7 +287,7 @@ export function SecretsVaultPanel({ projectId }: SecretsVaultPanelProps) {
       )}
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" variant="outline" className="w-full gap-1.5" onClick={loadSecrets}>
+        <Button size="sm" variant="outline" className="w-full gap-1.5" onClick={() => void loadSecrets()}>
           <RefreshCw className="w-3.5 h-3.5" /> Refresh
         </Button>
       </div>

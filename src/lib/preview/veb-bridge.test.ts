@@ -114,3 +114,23 @@ test("the bridge no longer touches the DOM at parse time", () => {
   const beforeHelper = script.slice(0, script.indexOf("function ensureVebStyle"));
   assert.equal(/document\.head\.appendChild/.test(beforeHelper), false);
 });
+
+test("html injection does not interpret $' in the bridge as a replace pattern", () => {
+  const html = injectVebBridgeIntoHtml("<!doctype html><html><body></body></html>");
+  assert.match(html, /__reactFiber\$/);
+  const start = html.indexOf("<script>") + "<script>".length;
+  const end = html.lastIndexOf("</script>");
+  const body = html.slice(start, end);
+  assert.equal(body.includes("</html>"), false);
+  assert.equal(body.includes("</body>"), false);
+  assert.match(body, /hops < 50/);
+});
+
+test("html injection rewrites an older bridge in place", () => {
+  const stale =
+    "<!doctype html><html><body><script>/* lifemark-veb-ready STALE */</script></body></html>";
+  const out = injectVebBridgeIntoHtml(stale);
+  assert.equal(out.includes("STALE"), false);
+  assert.match(out, /__reactFiber\$/);
+  assert.equal((out.match(/<script>/gi) ?? []).length, 1);
+});

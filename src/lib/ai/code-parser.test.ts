@@ -14,7 +14,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { assessGenerationQuality,parseAIResponse,validateGeneratedFiles } from "./code-parser.ts";
-import { ensureCommonGeneratedSupportFiles } from "./generated-support-files.ts";
+import { ensureCommonGeneratedSupportFiles, stripConflictingGeneratedDataStubs } from "./generated-support-files.ts";
 
 test("extracts files from backtick-labeled prose+fence response (Lovable style)", () => {
   // Exact shape the user pasted when reporting the bug:
@@ -292,6 +292,55 @@ test("ensureCommonGeneratedSupportFiles repairs missing pages, utilities, data, 
 
   const errors = validateGeneratedFiles(repaired, existing);
   assert.ok(!errors.some((e) => e.type === "broken_import" || e.type === "missing_named_export" || e.type === "missing_default_export"), JSON.stringify(errors));
+});
+
+test("does not stub initializeData as an empty array when the function already exists", () => {
+  const source = [
+    "export async function initializeData(){",
+    "  await LifemarkData.defineSchema('plots', { name: { type: 'string', required: true } });",
+    "}",
+    "",
+    "// LifemarkAI generated missing data exports",
+    "export const initializeData = [];",
+    "",
+  ].join("\n");
+
+  assert.equal(stripConflictingGeneratedDataStubs(source).includes("export const initializeData"), false);
+  assert.match(stripConflictingGeneratedDataStubs(source), /export async function initializeData/);
+
+  const repaired = ensureCommonGeneratedSupportFiles(
+    [
+      {
+        path: "app.js",
+        language: "javascript",
+        content: "import { initializeData } from './data/schema.js';\nawait initializeData();",
+      },
+    ],
+    [{ path: "data/schema.js", language: "javascript", content: source }],
+  );
+  const schema = repaired.find((file) => file.path.replace(/\\/g, "/") === "data/schema.js")?.content ?? source;
+  assert.match(schema, /export async function initializeData/);
+  assert.doesNotMatch(schema, /export const initializeData/);
+});
+
+test("strips generated lib export stubs that duplicate real implementations", () => {
+  const duplicateLibStubs = [
+    "export async function submitLead(lead) { return { ok: true }; }",
+    "export async function subscribeNewsletter(email) { return { ok: true }; }",
+    "",
+    "// LifemarkAI generated missing lib exports",
+    "export async function submitLead(..._args) { return null; }",
+    "",
+    "export async function subscribeNewsletter(email) {",
+    "  return { ok: true, email: String(email ?? \"\") };",
+    "}",
+    "",
+  ].join("\n");
+  const strippedLib = stripConflictingGeneratedDataStubs(duplicateLibStubs);
+  assert.equal(strippedLib.includes("LifemarkAI generated missing lib exports"), false);
+  assert.equal(strippedLib.includes("..._args"), false);
+  assert.match(strippedLib, /export async function submitLead\(lead\)/);
+  assert.match(strippedLib, /export async function subscribeNewsletter\(email\) \{ return \{ ok: true \}/);
 });
 
 test("ensureCommonGeneratedSupportFiles normalizes model default imports from the shared types module", () => {

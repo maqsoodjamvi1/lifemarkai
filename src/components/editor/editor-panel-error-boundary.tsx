@@ -1,14 +1,17 @@
-import { Component,type ErrorInfo,type ReactNode } from "react";
+import { Component,Fragment,type ErrorInfo,type ReactNode } from "react";
 import { AlertTriangle,RefreshCw } from "lucide-react";
 
 interface EditorPanelErrorBoundaryProps {
   children: ReactNode;
   name: string;
   resetKey?: string;
+  /** When set, shown instead of the default blank card so the pane still has content. */
+  fallback?: (error: Error, retry: () => void) => ReactNode;
 }
 
 interface EditorPanelErrorBoundaryState {
   error: Error | null;
+  remount: number;
 }
 
 /**
@@ -20,9 +23,9 @@ export class EditorPanelErrorBoundary extends Component<
   EditorPanelErrorBoundaryProps,
   EditorPanelErrorBoundaryState
 > {
-  state: EditorPanelErrorBoundaryState = { error: null };
+  state: EditorPanelErrorBoundaryState = { error: null, remount: 0 };
 
-  static getDerivedStateFromError(error: Error): EditorPanelErrorBoundaryState {
+  static getDerivedStateFromError(error: Error): Partial<EditorPanelErrorBoundaryState> {
     return { error };
   }
 
@@ -32,12 +35,19 @@ export class EditorPanelErrorBoundary extends Component<
 
   componentDidUpdate(previous: EditorPanelErrorBoundaryProps) {
     if (this.state.error && previous.resetKey !== this.props.resetKey) {
-      this.setState({ error: null });
+      this.setState((s) => ({ error: null, remount: s.remount + 1 }));
     }
   }
 
   render() {
-    if (!this.state.error) return this.props.children;
+    if (!this.state.error) {
+      return <Fragment key={this.state.remount}>{this.props.children}</Fragment>;
+    }
+
+    const retry = () => this.setState((s) => ({ error: null, remount: s.remount + 1 }));
+    if (this.props.fallback) {
+      return <Fragment key={this.state.remount}>{this.props.fallback(this.state.error, retry)}</Fragment>;
+    }
 
     return (
       <div
@@ -50,9 +60,14 @@ export class EditorPanelErrorBoundary extends Component<
           <p className="mt-1 text-xs text-muted-foreground">
             The rest of the editor is still available. Retry this panel without reloading the page.
           </p>
+          {this.state.error?.message ? (
+            <p className="mt-2 max-h-24 overflow-auto break-words font-mono text-[10px] text-muted-foreground/80">
+              {this.state.error.message}
+            </p>
+          ) : null}
           <button
             type="button"
-            onClick={() => this.setState({ error: null })}
+            onClick={() => this.setState((s) => ({ error: null, remount: s.remount + 1 }))}
             className="mx-auto mt-4 inline-flex h-8 items-center gap-1.5 rounded-md bg-foreground px-3 text-xs font-medium text-background"
           >
             <RefreshCw className="size-3.5" aria-hidden />

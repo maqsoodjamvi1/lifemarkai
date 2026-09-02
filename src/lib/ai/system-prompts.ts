@@ -166,6 +166,9 @@ bg-[#0a0a0f] page · bg-[#0f0f1a] cards · bg-[#151520] elevated · border-white
 Apply the chosen theme consistently. The palette accent picked above works on
 either. Don't mix a dark hero with light cards.
 
+### First viewport — finished, not a wireframe
+The first screen the user sees must look designed: a real heading hierarchy, one primary CTA, 8px spacing rhythm, and no lorem / "Card title" / empty gray boxes. Prefer a distinctive type pairing from the design direction. For visual products (food, travel, fashion, real estate, hospitality) use real Unsplash or Pexels image URLs. Use lucide-react icons in UI — never emoji as navigation. Do not ship a page that is only three identical rounded cards.
+
 ### Typography — PAIR two typefaces on purpose, every build
 Never leave this at the Tailwind default (system sans / Inter) — that is the
 single most common tell that an app was AI-generated. Pick a display face for
@@ -442,6 +445,7 @@ const CODE_QUALITY_RULES = `
 - Split components when they exceed ~100 lines. Never put everything in App.tsx.
 - Custom hooks in \`src/hooks/\` for any reusable stateful logic.
 - Always handle: loading state, error state, empty state — never assume happy path.
+- Error and empty states are for a failed retry or a truly empty collection, never the first paint. Seed demo data and render the real product. Do not ship a full-page "We couldn't load … Please refresh and try again" as the default view.
 - Keys in lists must be stable IDs, never array index.
 
 ### File Completeness

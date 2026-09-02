@@ -4,7 +4,7 @@
  * Search params are Zod-validated (editorSearchValidator) so URL changes
  * drive typed React updates without a Next.js RSC prefetch cycle.
  */
-import { lazy,Suspense,useEffect } from "react";
+import { useEffect } from "react";
 import {
 createFileRoute,
 redirect,
@@ -18,12 +18,7 @@ import {
 editorSearchValidator,
 normalizeEditorSearchInput,
 } from "@/lib/editor-search";
-
-const EditorLayoutBridge = lazy(() =>
-  import("@/components/editor/editor-layout-bridge").then((m) => ({
-    default: m.EditorLayoutBridge,
-  })),
-);
+import { EditorLayoutBridge } from "@/components/editor/editor-layout-bridge";
 
 export const Route = createFileRoute("/editor/$projectId")({
   /**
@@ -85,22 +80,20 @@ function EditorPage() {
   }
 
   return (
-    <Suspense fallback={<EditorPending />}>
-      <EditorLayoutBridge
-        project={data.project}
-        files={data.files}
-        messages={data.messages}
-        hasMore={data.hasMore}
-        profile={data.profile}
-        starterPrompt={search.prompt}
-        starterMode={search.mode}
-        autoDeploy={search.deploy === "true"}
-        initialFilePath={search.file}
-        initialView={search.view}
-        initialPanel={search.panel}
-        forceShell={search.shell === true || search.shell === "1" || search.shell === "true"}
-      />
-    </Suspense>
+    <EditorLayoutBridge
+      project={data.project}
+      files={data.files}
+      messages={data.messages}
+      hasMore={data.hasMore}
+      profile={data.profile}
+      starterPrompt={search.prompt}
+      starterMode={search.mode}
+      autoDeploy={search.deploy === "true"}
+      initialFilePath={search.file}
+      initialView={search.view}
+      initialPanel={search.panel}
+      forceShell={search.shell === true || search.shell === "1" || search.shell === "true"}
+    />
   );
 }
 

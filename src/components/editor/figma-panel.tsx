@@ -20,6 +20,7 @@ interface FigmaSummary {
   pages: string[];
   componentCount: number;
   generatedComponents?: Array<{ componentName: string; code: string; page: string }>;
+  appliedFiles?: string[];
   aiPrompt: string;
 }
 
@@ -42,7 +43,7 @@ export function FigmaPanel({ projectId, onGenerateFromFigma }: FigmaPanelProps) 
       const res = await fetch("/api/figma", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ figmaUrl, figmaToken }),
+        body: JSON.stringify({ figmaUrl, figmaToken, projectId }),
       });
       const data = await res.json() as FigmaSummary & { error?: string };
       if (!res.ok) {
@@ -51,6 +52,9 @@ export function FigmaPanel({ projectId, onGenerateFromFigma }: FigmaPanelProps) 
       }
       setSummary(data);
       setCustomPrompt(data.aiPrompt);
+      if ((data.appliedFiles ?? []).length > 0) {
+        window.dispatchEvent(new CustomEvent("lifemark-files-changed", { detail: { projectId } }));
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Network error");
     } finally {
@@ -77,8 +81,8 @@ export function FigmaPanel({ projectId, onGenerateFromFigma }: FigmaPanelProps) 
         {/* Intro */}
         <div className="rounded-xl border border-border bg-muted/30 p-3">
           <p className="text-xs text-muted-foreground leading-relaxed">
-            Paste your Figma file URL and a personal access token to import the design
-            and let AI convert it into React components.
+            Paste a Figma file URL and a personal access token. Import writes the
+            first screen into this project so preview can run it immediately.
           </p>
           <a
             href="https://www.figma.com/settings"
@@ -158,10 +162,15 @@ export function FigmaPanel({ projectId, onGenerateFromFigma }: FigmaPanelProps) 
                   <p className="text-xs text-muted-foreground">
                     {summary.pages.length} page{summary.pages.length !== 1 ? "s" : ""} ·{" "}
                     {summary.componentCount} components
-                    {summary.generatedComponents && summary.generatedComponents.length > 0 && (
-                      <> · {summary.generatedComponents.length} real component{summary.generatedComponents.length !== 1 ? "s" : ""} generated from the layer tree</>
-                    )}
+                    {summary.generatedComponents && summary.generatedComponents.length > 0
+                      ? ` · ${summary.generatedComponents.length} frames translated`
+                      : ""}
                   </p>
+                  {summary.appliedFiles && summary.appliedFiles.length > 0 ? (
+                    <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-1">
+                      Wrote {summary.appliedFiles.length} files — the first frame is now App. Preview it, then optionally ask AI to add interactivity.
+                    </p>
+                  ) : null}
                 </div>
               </div>
 
@@ -211,7 +220,7 @@ export function FigmaPanel({ projectId, onGenerateFromFigma }: FigmaPanelProps) 
                 onClick={handleGenerate}
               >
                 <Sparkles className="w-3.5 h-3.5" />
-                Generate React Components
+                Make this interactive with AI
                 <ArrowRight className="w-3.5 h-3.5 ml-auto" />
               </Button>
             </motion.div>

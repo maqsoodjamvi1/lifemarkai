@@ -64,10 +64,11 @@ test("an app that never serves is the project's problem, not ours", () => {
   assert.equal(describePreviewError("[preview] container OOMKilled=true").blame, "project");
 });
 
-test("a reclaimed session reads as routine, not as a failure", () => {
+test("a reclaimed session reads as paused, not as a crash", () => {
   const copy = describePreviewError(REAL_ERRORS.gone);
   assert.equal(copy.blame, "platform");
-  assert.match(copy.description, /idle|expired|fresh/i);
+  assert.equal(copy.title, "Still building?");
+  assert.match(copy.description, /idle|paused|resume/i);
 });
 
 test("a failed upload tells the user nothing was lost", () => {

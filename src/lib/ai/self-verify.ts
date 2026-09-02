@@ -22,6 +22,7 @@ import { verifyPreviewHtml } from "./preview-verify.ts";
 import { isStaticProject } from "../project/runtime.ts";
 import { findContractErrors } from "../preview/export-contract.ts";
 import { filesWithSyntaxErrors, findMissingListKeys, findUnresolvedLocalImports, runTypecheckGate } from "../verify/typecheck-gate.ts";
+import { findJsxHtmlAttributeDefects } from "../verify/jsx-gate.ts";
 import { typecheckRunningSandbox } from "../preview/typecheck-project.ts";
 import { pushFileToRunningSandbox } from "../preview/push-to-sandbox.ts";
 import { generateAI } from "./generate.ts";
@@ -866,6 +867,7 @@ export async function runSelfVerification(opts: {
       // render failure whose app was genuinely usable. Free to detect, so it
       // never justifies a model call.
       const keyWarnings = findMissingListKeys(files).map((k) => k.formatted);
+      const jsxHtmlWarnings = findJsxHtmlAttributeDefects(files).map((item) => item.formatted);
 
       // ── Which compiler ────────────────────────────────────────────────────
       // Two type-checkers exist and they are NOT equivalent:
@@ -930,7 +932,7 @@ export async function runSelfVerification(opts: {
         }
       }
 
-      const typeErrors = [...importErrors, ...dependencyErrors, ...typeErrorList, ...keyWarnings];
+      const typeErrors = [...importErrors, ...dependencyErrors, ...typeErrorList, ...keyWarnings, ...jsxHtmlWarnings];
 
       // Which compiler ran is worth knowing in production. "local" on a live
       // build means the sandbox check silently returned null — no container,

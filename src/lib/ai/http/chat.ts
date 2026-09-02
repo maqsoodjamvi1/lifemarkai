@@ -18,6 +18,7 @@ buildReactNativePrompt,
 buildProjectContext,
 } from "@/lib/ai/system-prompts";
 import { CHAT_SYSTEM_PROMPT } from "../prompts/chat.ts";
+import { detectMentionedConnectors, formatConnectorTurnBlock } from "../mentioned-connectors.ts";
 import { PLAN_SYSTEM_PROMPT } from "../prompts/plan.ts";
 import { EDIT_SYSTEM_PROMPT } from "../prompts/edit.ts";
 import { buildReactGenerationPrompt } from "../prompts/react-build.ts";
@@ -26,7 +27,7 @@ import { buildNextGenerationPrompt } from "../prompts/next-build.ts";
 import { buildTemplateRefinementBlock } from "../template-refine.ts";
 import { pickStarterTemplate } from "../../templates/starter-catalog.ts";
 import { buildDesignDirectionBlock } from "../design-directions.ts";
-import { classifyBuildIntent,isAppShellAppType,isMajorGreenfieldBuild } from "../build-intent.ts";
+import { classifyBuildIntent,isAppShellAppType,isMajorGreenfieldBuild,isOpenEndedGreenfieldStart } from "../build-intent.ts";
 import { countUserAuthoredFiles,isGreenfieldProject } from "../scaffold-files.ts";
 import { resolvePromptMode } from "../editor-intelligence.ts";
 import { assessRequestScope,formatScopeAssessment } from "../scope-guard.ts";
@@ -59,6 +60,7 @@ parseHeadingDescriptor,
 } from "@/lib/ai/text-edit";
 import { parseAIResponse,shouldAutoFix,needsBuildContinuation,detectLanguage,type ParsedFile } from "../code-parser.ts";
 import { generationValidationSignature,normalizeGenerationStage,prepareGeneratedFiles,validateGenerationStage } from "../chat/validation-service.ts";
+import { deterministicRepair } from "../deterministic-repair.ts";
 import { StreamingFileExtractor } from "../streaming-file-extractor.ts";
 import { logger } from "../../logger.ts";
 import { getProjectSchemaContext } from "../../supabase/schema-reader.ts";
@@ -113,7 +115,15 @@ import { fireProjectWebhookEvent } from "../../webhooks/dispatch.ts";
 import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 import { buildStaticGenerationPrompt } from "../prompts/static-build.ts";
 import { runRepairStage } from "../chat/repair-service.ts";
-import { buildClarificationPrompt,parseClarifyingQuestions } from "../chat/clarification.ts";
+import {
+  buildClarificationPrompt,
+  buildClarifyContinueUserContent,
+  fallbackClarifyTurn,
+  fallbackClarifyingQuestions,
+  MAX_CLARIFY_TURNS,
+  parseClarifyHistory,
+  parseClarifyTurn,
+} from "../chat/clarification.ts";
 import { resolveChatRequestContext } from "../chat/request-context.ts";
 import { createStreamSink } from "../chat/sse-stream.ts";
 import { createDeployActionResponse } from "../chat/deploy-action.ts";
@@ -226,10 +236,16 @@ export async function handleAiChat(req: Request) {
       return Response.json({ error: "Image too large (max 5MB)" }, { status: 413 });
     }
     const persistedUserMessage = typeof costPrompt === "string" && costPrompt.trim() ? costPrompt : message;
+    const skipUserPersist = body.skipUserPersist === true;
+    const isClarifyContinue = body.clarifyContinue === true && body.forceBuild !== true;
+    const persistUserRow = () =>
+      skipUserPersist
+        ? []
+        : [{ project_id: projectId, role: "user" as const, content: persistedUserMessage, mode }];
 
     // Mirror the client smart router so Build-tab chit-chat ("hello", "thanks")
     // cannot trigger a full regeneration when the UI still says Build.
-    if (!coreLoop && body.forceBuild !== true && typeof persistedUserMessage === "string") {
+    if (!coreLoop && body.forceBuild !== true && !isClarifyContinue && typeof persistedUserMessage === "string") {
       const authoredCount = Array.isArray(files) ? countUserAuthoredFiles(files) : 0;
       const resolved = resolvePromptMode(persistedUserMessage, {
         fileCount: authoredCount,
@@ -238,7 +254,12 @@ export async function handleAiChat(req: Request) {
           mode === "agent" ? "agent" : mode === "plan" ? "plan" : mode === "chat" ? "chat" : "build",
         files: Array.isArray(files) ? files.map((f: { path: string }) => ({ path: f.path })) : undefined,
       });
-      if (resolved === "chat" || resolved === "plan") {
+      // Promote Chat → Build/Agent when the prompt is an edit (Lovable: one
+      // box both talks and writes). Still allow Build → Chat for questions.
+      if (mode === "chat" && (resolved === "build" || resolved === "agent" || resolved === "patch")) {
+        mode = resolved;
+        autoRoutedPatch = resolved === "patch";
+      } else if (resolved === "chat" || resolved === "plan") {
         if (mode === "build" || mode === "agent" || mode === "patch") {
           mode = resolved;
           autoRoutedPatch = false;
@@ -254,6 +275,7 @@ export async function handleAiChat(req: Request) {
     // (publishing is free) and BEFORE the Live-environment lock (publishing
     // is allowed on Live — it's not a code write).
     if (
+      !isClarifyContinue &&
       (mode === "chat" || mode === "build") &&
       Array.isArray(files) &&
       files.length > 0 &&
@@ -273,7 +295,7 @@ export async function handleAiChat(req: Request) {
     // card). Zero AI cost, zero credits: detect the intent, emit an approval
     // card over SSE, and let the panel call the Cloud APIs after the user
     // approves. Nothing executes without the click.
-    if (mode === "chat" || mode === "build") {
+    if (!isClarifyContinue && (mode === "chat" || mode === "build")) {
       const cloudIntent = detectCloudIntent(persistedUserMessage);
       if (cloudIntent) {
         const { data: cloudProject } = await supabase
@@ -307,7 +329,7 @@ export async function handleAiChat(req: Request) {
                 const persisted = await persistChatTurnMessages(
                   supabase,
                   [
-                    { project_id: projectId, role: "user", content: persistedUserMessage, mode },
+                    ...persistUserRow(),
                     {
                       project_id: projectId,
                       role: "assistant",
@@ -523,7 +545,7 @@ export async function handleAiChat(req: Request) {
       await persistChatTurnMessages(
         supabase,
         [
-          { project_id: projectId, role: "user", content: persistedUserMessage, mode },
+          ...persistUserRow(),
           { project_id: projectId, role: "assistant", content: blockText, mode },
         ],
         { projectId, label: "cloud-block" },
@@ -575,7 +597,7 @@ export async function handleAiChat(req: Request) {
         await persistChatTurnMessages(
           supabase,
           [
-            { project_id: projectId, role: "user", content: persistedUserMessage, mode },
+            ...persistUserRow(),
             { project_id: projectId, role: "assistant", content: scopeText, mode },
           ],
           { projectId, label: "scope-guard" },
@@ -631,41 +653,57 @@ export async function handleAiChat(req: Request) {
     });
 
     const runClarifyFirst =
-      !coreLoop && mode === "build" && body.forceBuild !== true && clarifyFirst === true;
+      !isClarifyContinue &&
+      !coreLoop &&
+      (mode === "build" || mode === "chat") &&
+      body.forceBuild !== true &&
+      (clarifyFirst === true || isOpenEndedGreenfieldStart(persistedUserMessage, fileCount));
 
-    // ── Clarify-first (Lovable): questionnaire BEFORE research/subagents/build ──
-    if (runClarifyFirst) {
-      const clarifyReservation = await reserveStageCredits(supabase, {
-        userId,
-        amount: maxCreditCostForMode("chat"),
-        action: "clarify_message",
-        projectId,
-      });
-      if (!clarifyReservation) {
+    // ── Clarify (Lovable): one live question per turn, then build ──
+    if (isClarifyContinue || runClarifyFirst) {
+      const clarifyHistory = parseClarifyHistory(body.clarifyHistory);
+      const originalPrompt =
+        typeof body.originalPrompt === "string" && body.originalPrompt.trim()
+          ? body.originalPrompt.trim()
+          : persistedUserMessage;
+      const intentSource = isClarifyContinue ? originalPrompt : persistedUserMessage;
+      const clarifyIntent = classifyBuildIntent(intentSource);
+      const appShell = isAppShellAppType(clarifyIntent.appType);
+      const openEnded =
+        !isClarifyContinue && isOpenEndedGreenfieldStart(persistedUserMessage, fileCount);
+      const hitTurnCap = isClarifyContinue && clarifyHistory.length >= MAX_CLARIFY_TURNS;
+
+      const clarifyReservation = hitTurnCap
+        ? null
+        : await reserveStageCredits(supabase, {
+            userId,
+            amount: maxCreditCostForMode("chat"),
+            action: "clarify_message",
+            projectId,
+          });
+      if (!hitTurnCap && !clarifyReservation) {
         return Response.json(
           { error: "Insufficient credits", requiredCredits: maxCreditCostForMode("chat") },
           { status: 402 },
         );
       }
 
-      const clarifyIntent = classifyBuildIntent(persistedUserMessage);
-      const appShell = isAppShellAppType(clarifyIntent.appType);
-      const clarifySystemPrompt = buildClarificationPrompt(clarifyIntent.appType, appShell);
-      /* Legacy inline prompt retained temporarily for blame context. [
-        "You are an expert product designer + software architect asking a user a few quick questions before building, exactly like Lovable's pre-build questionnaire.",
-        "Do NOT research, plan implementation, or generate code in this step — ONLY output the JSON question array.",
-        "Given a user's build request, generate 1-4 targeted questions only for decisions that materially change the product. Prefer CHOICE questions with 3-5 concrete options.",
-        'Return ONLY a JSON array of question objects, no prose, no code fences.',
-        'Each object: id (string), question (string), type ("text"|"choice"), kind ("palette"|"typography"|"layout"|"structure"|"database"|"general"), multiple (boolean), options ({label, description, value?}[] for choice).',
-        appShell
-          ? `This is a ${clarifyIntent.appType} / operations app. Ask kind structure or database questions: which modules to include first (offer 3-4 concrete bundles), authentication (email / OAuth / invite-only), and roles (admin vs staff vs read-only). Do NOT ask marketing palette/hero layout unless they explicitly wanted a public website.`
-          : "For NEW WEBSITE/APP builds ask design questions: one palette question (kind palette — each option is a named palette followed by 2-3 hex codes in parentheses), one typography pairing (kind typography), and one homepage layout (kind layout).",
-        "For DATABASE/BACKEND-heavy requests add kind database questions: core entities/tables, auth method, roles & permissions.",
-        "For connectors/integrations, first determine what the user means. Offer capability choices such as: generated apps access shared real data; each end user connects their own OAuth account; published apps receive a persistent backend/auth; add more AI providers. Use multiple:true when choices can be combined. Give every choice a concise outcome-focused description.",
-        "Do not ask about decisions already explicit in the request. Do not ask cosmetic questions for an existing app unless design is ambiguous and requested.",
-        "Keep every question short and answerable in one tap.",
-        "Respond ONLY with a valid JSON array.",
-      ].join("\n"); */
+      const clarifySystemPrompt = buildClarificationPrompt(
+        clarifyIntent.appType,
+        appShell,
+        openEnded,
+        isClarifyContinue,
+      );
+      const clarifyUserContent = isClarifyContinue
+        ? buildClarifyContinueUserContent({
+            originalPrompt,
+            history: clarifyHistory,
+            latestAnswer: persistedUserMessage,
+          })
+        : `User said: ${persistedUserMessage}\n` +
+          `Detected app type: ${clarifyIntent.appType}\n` +
+          `User-authored files so far: ${fileCount} (0 = brand-new project).\n` +
+          `This is the first interview turn.`;
 
       const clarifyEncoder = new TextEncoder();
       const clarifyStream = new ReadableStream({
@@ -677,19 +715,61 @@ export async function handleAiChat(req: Request) {
           );
           let questionsJson = "";
           let reservationFinalized = false;
+          const persistOpeningUser = async (): Promise<string | undefined> => {
+            if (isClarifyContinue || skipUserPersist) return undefined;
+            try {
+              const persisted = await persistChatTurnMessages(
+                supabase,
+                [{ project_id: projectId, role: "user", content: persistedUserMessage, mode: "chat" }],
+                { projectId, label: "clarify-start" },
+              );
+              return persisted.userMessageId;
+            } catch {
+              return undefined;
+            }
+          };
+          const sendReadyToBuild = async (ack?: string, extras?: Record<string, unknown>) => {
+            const userMessageId = await persistOpeningUser();
+            const qPayload = JSON.stringify({
+              readyToBuild: true,
+              originalPrompt,
+              ack,
+              done: true,
+              clarifyLive: true,
+              ...(userMessageId ? { userMessageId } : {}),
+              ...extras,
+            });
+            clarifyEnqueue(clarifyEncoder.encode(`data: ${qPayload}\n\n`));
+          };
+          const sendQuestion = async (
+            question: NonNullable<ReturnType<typeof parseClarifyTurn>["question"]>,
+            ack?: string,
+            extras?: Record<string, unknown>,
+          ) => {
+            const userMessageId = await persistOpeningUser();
+            const qPayload = JSON.stringify({
+              clarifying_questions: [question],
+              originalPrompt,
+              ack,
+              done: true,
+              clarifyLive: true,
+              ...(userMessageId ? { userMessageId } : {}),
+              ...extras,
+            });
+            clarifyEnqueue(clarifyEncoder.encode(`data: ${qPayload}\n\n`));
+          };
           try {
+            if (hitTurnCap) {
+              await sendReadyToBuild();
+              return;
+            }
+
             const clarifyResult = await runGenerationStage(
               {
                 model: DEFAULT_CHAT_MODEL,
                 messages: [
                   { role: "system", content: clarifySystemPrompt },
-                  {
-                    role: "user",
-                    content:
-                      `Build request: ${persistedUserMessage}\n` +
-                      `Detected app type: ${clarifyIntent.appType}\n` +
-                      `User-authored files so far: ${fileCount} (0 = brand-new project).`,
-                  },
+                  { role: "user", content: clarifyUserContent },
                 ],
                 maxTokens: 800,
                 stream: true,
@@ -705,83 +785,28 @@ export async function handleAiChat(req: Request) {
             });
             const remaining = await settleStageCredits(
               supabase,
-              clarifyReservation.id,
+              clarifyReservation!.id,
               clarifyCost,
             );
             if (remaining == null) throw new Error("Unable to settle clarification credits");
             reservationFinalized = true;
 
-            const questions = parseClarifyingQuestions(questionsJson);
-            /* Legacy parser retained temporarily for blame context.
-            try {
-              const parsed: unknown = JSON.parse(questionsJson);
-              if (Array.isArray(parsed)) {
-                questions = parsed;
-              } else if (parsed && typeof parsed === "object") {
-                const arr = Object.values(parsed as Record<string, unknown>).find(Array.isArray);
-                if (arr) questions = arr as unknown[];
-              }
-            } catch { questions = []; }
-            questions = questions
-              .map((raw, i) => {
-                if (!raw || typeof raw !== "object") return null;
-                const r = raw as Record<string, unknown>;
-                const text = [r.question, r.q, r.text, r.prompt, r.label].find(
-                  (v): v is string => typeof v === "string" && v.trim() !== "",
-                );
-                if (!text) return null;
-                const rawOpts = Array.isArray(r.options)
-                  ? r.options
-                  : Array.isArray(r.choices)
-                    ? r.choices
-                    : [];
-                const options = (rawOpts as unknown[])
-                  .map((o) =>
-                    typeof o === "string"
-                      ? o
-                      : o && typeof o === "object"
-                        ? (() => {
-                            const option = o as Record<string, unknown>;
-                            const label = [option.label, option.text, option.value].find(
-                              (v): v is string => typeof v === "string" && v.trim() !== "",
-                            );
-                            return label ? {
-                              label: label.trim(),
-                              ...(typeof option.description === "string" && option.description.trim()
-                                ? { description: option.description.trim() }
-                                : {}),
-                              ...(typeof option.value === "string" && option.value.trim()
-                                ? { value: option.value.trim() }
-                                : {}),
-                            } : undefined;
-                          })()
-                        : undefined,
-                  )
-                  .filter((option): option is string | { label: string; description?: string; value?: string } =>
-                    typeof option === "string" ? option.trim() !== "" : !!option,
-                  );
-                return {
-                  id: typeof r.id === "string" ? r.id : `q${i + 1}`,
-                  question: text.trim(),
-                  type: options.length > 0 ? "choice" : "text",
-                  kind: typeof r.kind === "string" ? r.kind : "general",
-                  multiple: r.multiple === true,
-                  ...(options.length > 0 ? { options } : {}),
-                };
-              })
-              .filter((q): q is NonNullable<typeof q> => q !== null); */
-
-            const qPayload = JSON.stringify({
-              clarifying_questions: questions,
-              originalPrompt: message,
+            const turn = parseClarifyTurn(questionsJson);
+            const extras = {
               creditsUsed: clarifyCost,
               remainingCredits: remaining,
-              done: true,
               tokensUsed: clarifyResult.tokensUsed,
-            });
-            clarifyEnqueue(clarifyEncoder.encode(`data: ${qPayload}\n\n`));
+            };
+            if (turn.readyToBuild || (!turn.question && isClarifyContinue && clarifyHistory.length > 0)) {
+              await sendReadyToBuild(turn.ack, extras);
+              return;
+            }
+            const question =
+              turn.question ??
+              fallbackClarifyTurn(clarifyIntent.appType, appShell, openEnded, clarifyHistory.length);
+            await sendQuestion(question, turn.ack, extras);
           } catch {
-            if (!reservationFinalized) {
+            if (clarifyReservation && !reservationFinalized) {
               try {
                 if (questionsJson.trim()) {
                   await settleStageCredits(
@@ -801,8 +826,13 @@ export async function handleAiChat(req: Request) {
                 );
               }
             }
-            const errPayload = JSON.stringify({ error: "Failed to generate clarifying questions" });
-            clarifyEnqueue(clarifyEncoder.encode(`data: ${errPayload}\n\n`));
+            if (isClarifyContinue && clarifyHistory.length >= fallbackClarifyingQuestions(clarifyIntent.appType, appShell, openEnded).length) {
+              await sendReadyToBuild();
+            } else {
+              await sendQuestion(
+                fallbackClarifyTurn(clarifyIntent.appType, appShell, openEnded, clarifyHistory.length),
+              );
+            }
           } finally {
             clarifyClose();
           }
@@ -1099,15 +1129,9 @@ export async function handleAiChat(req: Request) {
       }
     }
 
-    // @connector:<id> mentions (Lovable parity: reference a connector in chat)
-    // — steer the AI toward the referenced connector explicitly.
     {
-      const connectorMentions = [...new Set(
-        [...(message ?? "").matchAll(/@connector:([\w-]+)/g)].map((m) => m[1]),
-      )];
-      if (connectorMentions.length > 0) {
-        systemPrompt += `\n\n---\n# Referenced Connectors\nThe user explicitly referenced these app connectors: ${connectorMentions.join(", ")}.\nBuild the requested functionality against them. All API calls MUST go through the project's connector gateway (POST /api/projects/${projectId}/connector-proxy with { "connector": "<id>", "path": "...", "method": "...", "body": ... }) — never embed credentials in app code. If the connector's credentials are not configured yet, still write the integration against the gateway and tell the user to add the key in the Connectors panel.\n---`;
-      }
+      const named = detectMentionedConnectors(message ?? "");
+      systemPrompt += formatConnectorTurnBlock(projectId, named);
     }
 
     // Reference pages (Build-with-URL html= links): fetch the user-provided
@@ -2096,6 +2120,28 @@ The user has expressed frustration. Do the following:
                   singlePage: buildIntent?.singlePage,
                 });
 
+                // Local scan first: missing imports/assets/deps are fixed on
+                // this server with no model, even when validation is otherwise green.
+                const local = deterministicRepair(finalFiles, validationErrors.map((error) => error.message));
+                if (local.changedPaths.length > 0 || local.createdPaths.length > 0) {
+                  logger.info("ai.chat.local_repair", {
+                    projectId,
+                    pass: enrichPass + 1,
+                    changed: local.changedPaths,
+                    created: local.createdPaths,
+                  });
+                  safeEnqueue(
+                    encoder.encode(
+                      `data: ${JSON.stringify({
+                        status: "fixing",
+                        message: `Fixing ${local.changedPaths.length + local.createdPaths.length} issue(s) on the server (no AI)…`,
+                      })}\n\n`,
+                    ),
+                  );
+                  finalFiles = normalizeBuildCandidate(local.files);
+                  continue;
+                }
+
                 if (!shouldAutoFix(validationErrors) || validationErrors.length === 0) {
                   break;
                 }
@@ -2596,7 +2642,7 @@ The user has expressed frustration. Do the following:
           const { assistantMessageId } = await persistChatTurnMessages(
             supabase,
             [
-              { project_id: projectId, role: "user", content: persistedUserMessage, mode },
+              ...persistUserRow(),
               {
                 project_id: projectId,
                 role: "assistant",

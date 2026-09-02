@@ -1,5 +1,6 @@
 /** Model thinking blocks stripped from visible stream prose. */
 export function extractStreamingReasoning(content: string): string | null {
+  if (typeof content !== "string" || !content) return null;
   const patterns = [
     /<thinking>([\s\S]*?)<\/thinking>/i,
     /([\s\S]*?)<\/think>/i,

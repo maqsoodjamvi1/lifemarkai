@@ -32,7 +32,7 @@ function DashboardLayout() {
   const { user, profile, recentProjects } = Route.useLoaderData();
 
   return (
-    <div className="flex h-screen bg-background">
+    <div className="flex h-screen bg-background text-foreground">
       <DashboardSidebar
         user={user!}
         profile={profile}

@@ -14,6 +14,7 @@ import { LovableComposerModelMenu } from "./composer-model-menu";
 import { LovableComposerFileGenPicker } from "./composer-file-gen-picker";
 import type { LovableFileGenFormat } from "./composer-file-gen-picker";
 import { LovableComposerSendControls } from "./composer-send-controls";
+import { LovableComposerConnectorChips } from "./composer-connector-chips";
 
 export interface LovableComposerBottomRowProps {
   onOpenPanel?: (panel: LeftPanel) => void;
@@ -164,6 +165,7 @@ export function LovableComposerBottomRow({
       )}
 
       <LovableComposerContextMenu actions={contextActions} />
+      <LovableComposerConnectorChips onOpenPanel={onOpenPanel} />
 
       {/* Web / React Native target — persistent chip (also in the "+" menu) */}
       <LovableComposerMobileToggle

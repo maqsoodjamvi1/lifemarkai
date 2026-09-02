@@ -2,11 +2,13 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { canReadProjectFiles,canWriteProjectFiles,getProjectAccess } from "@/lib/project/access";
+import { resolveLinkedSupabaseManagement } from "@/lib/cloud/project-backend";
 import {
 deployManagedEdgeFunction,
 isManagementTokenConfigured,
 listManagedEdgeFunctions,
 } from "@/lib/cloud/management";
+import { deployUserEdgeFunction,listUserEdgeFunctions } from "@/lib/cloud/user-supabase";
 
 /**
  * Native /api/projects/:id/edge-functions — list (GET) / save+deploy (POST)
@@ -14,7 +16,10 @@ listManagedEdgeFunctions,
  */
 async function loadProjectCloud(supabase: any, projectId: string) {
   const { data } = await supabase
-    .from("projects").select("id, cloud_enabled, cloud_project_ref").eq("id", projectId).maybeSingle();
+    .from("projects")
+    .select("id, user_id, environment, cloud_enabled, cloud_project_ref")
+    .eq("id", projectId)
+    .maybeSingle();
   return data;
 }
 
@@ -51,10 +56,17 @@ export const Route = createFileRoute("/api/projects/$id/edge-functions")({
           return Response.json({ error: result.error ?? "Could not list managed functions" }, { status: 502 });
         }
 
+        const linked = await resolveLinkedSupabaseManagement(supabase, user.id, project);
+        if (linked) {
+          const result = await listUserEdgeFunctions(linked.accessToken, linked.ref);
+          if (result.ok) return Response.json({ functions: result.functions, managed: true, backend: "supabase" });
+          return Response.json({ error: result.error ?? "Could not list functions on your Supabase project" }, { status: 502 });
+        }
+
         return Response.json({
           functions: await listLocalFunctions(supabase, projectId),
           managed: false,
-          message: "Cloud function deployment needs a managed Cloud project and management token.",
+          message: "Source is saved in the project. Enable Lifemark Cloud or connect your Supabase account (Cloud → Connect existing) to deploy.",
         });
       },
 
@@ -87,26 +99,39 @@ export const Route = createFileRoute("/api/projects/$id/edge-functions")({
         }, { onConflict: "project_id,path" });
         if (saveError) return Response.json({ error: saveError.message }, { status: 500 });
 
-        if (!project.cloud_project_ref || !isManagementTokenConfigured()) {
-          return Response.json({
-            ok: true,
-            deployed: false,
+        if (project.cloud_project_ref && isManagementTokenConfigured()) {
+          const deployment = await deployManagedEdgeFunction(project.cloud_project_ref, {
             slug,
-            message: "Function source saved. Enable managed Lifemark Cloud to deploy it.",
+            name: body?.name?.trim() || slug,
+            code,
+            verifyJwt: body?.verifyJwt,
           });
+          if (!deployment.ok) {
+            return Response.json({ error: deployment.error ?? "Supabase rejected the function deployment", sourceSaved: true }, { status: 502 });
+          }
+          return Response.json({ ok: true, deployed: true, function: deployment.function });
         }
 
-        const deployment = await deployManagedEdgeFunction(project.cloud_project_ref, {
+        const linked = await resolveLinkedSupabaseManagement(supabase, user.id, project);
+        if (linked) {
+          const deployment = await deployUserEdgeFunction(linked.accessToken, linked.ref, {
+            slug,
+            name: body?.name?.trim() || slug,
+            code,
+            verifyJwt: body?.verifyJwt,
+          });
+          if (!deployment.ok) {
+            return Response.json({ error: deployment.error ?? "Supabase rejected the function deployment", sourceSaved: true }, { status: 502 });
+          }
+          return Response.json({ ok: true, deployed: true, function: deployment.function, backend: "supabase" });
+        }
+
+        return Response.json({
+          ok: true,
+          deployed: false,
           slug,
-          name: body?.name?.trim() || slug,
-          code,
-          verifyJwt: body?.verifyJwt,
+          message: "Function source saved. Enable Lifemark Cloud or connect your Supabase account to deploy it.",
         });
-        if (!deployment.ok) {
-          return Response.json({ error: deployment.error ?? "Supabase rejected the function deployment", sourceSaved: true }, { status: 502 });
-        }
-
-        return Response.json({ ok: true, deployed: true, function: deployment.function });
       },
     },
   },

@@ -4,6 +4,9 @@ export interface VisualEditSelection {
   tagName: string;
   textContent: string;
   classList: string[];
+  /** Preview-bridge hint (React _debugSource / data-source-file). */
+  sourceFile?: string | null;
+  sourceLine?: number | null;
 }
 
 export interface VisualEditChange {
@@ -28,9 +31,10 @@ export function applyVisualEdit(
   selection: VisualEditSelection,
   change: VisualEditChange
 ): { path: string; content: string } | null {
-  const sourceFiles = files.filter((f) =>
+  const allSource = files.filter((f) =>
     /\.(tsx|jsx|ts|js|html)$/.test(f.path) && typeof f.content === "string"
   );
+  const sourceFiles = scopedSourceFiles(allSource, selection);
 
   // ── Class change: find the exact className attribute ──────────────────────
   if (change.classes !== undefined) {
@@ -52,6 +56,8 @@ export function applyVisualEdit(
         }
       }
     }
+    const injected = injectClassOnUniqueElement(sourceFiles, selection, change.classes);
+    if (injected) return injected;
   }
 
   // ── Image src change ───────────────────────────────────────────────────────
@@ -124,9 +130,171 @@ export function applyVisualEdit(
         content: (file.content as string).replace(target, change.text),
       };
     }
+    const near = replaceTextNearClassHint(sourceFiles, selection, change.text);
+    if (near) return near;
+    const atLine = replaceTextNearSourceLine(sourceFiles, selection, change.text);
+    if (atLine) return atLine;
   }
 
   return null;
+}
+
+/** When `>text<` appears more than once, rewrite the occurrence next to this element's classes. */
+function replaceTextNearClassHint(
+  files: ProjectFile[],
+  selection: VisualEditSelection,
+  newText: string,
+): { path: string; content: string } | null {
+  const hint = selection.classList.join(" ").trim();
+  const oldText = selection.textContent.trim();
+  if (!hint || !oldText) return null;
+  const needle = `>${oldText}<`;
+  const replacement = `>${newText}<`;
+  let found: { path: string; content: string } | null = null;
+  for (const file of files) {
+    const content = file.content as string;
+    if (!content.includes(hint) || !content.includes(needle)) continue;
+    const idx = content.indexOf(hint);
+    const afterHint = content.slice(idx + hint.length, idx + hint.length + 180);
+    const rel = afterHint.indexOf(needle);
+    if (rel === -1) continue;
+    if (found) return null;
+    const abs = idx + hint.length + rel;
+    found = {
+      path: file.path,
+      content: content.slice(0, abs) + replacement + content.slice(abs + needle.length),
+    };
+  }
+  return found;
+}
+
+function replaceTextNearSourceLine(
+  files: ProjectFile[],
+  selection: VisualEditSelection,
+  newText: string,
+): { path: string; content: string } | null {
+  const oldText = selection.textContent.trim();
+  if (!oldText) return null;
+  const needle = `>${oldText}<`;
+  const replacement = `>${newText}<`;
+  for (const file of files) {
+    const content = file.content as string;
+    const idx = occurrenceIndexNearLine(content, needle, selection.sourceLine);
+    if (idx < 0) continue;
+    return {
+      path: file.path,
+      content: content.slice(0, idx) + replacement + content.slice(idx + needle.length),
+    };
+  }
+  return null;
+}
+
+function scopedSourceFiles(
+  files: ProjectFile[],
+  selection: VisualEditSelection,
+): ProjectFile[] {
+  const hint = (selection.sourceFile ?? "").replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!hint) return files;
+  const hit =
+    files.find((f) => f.path === hint) ??
+    files.find((f) => f.path.endsWith("/" + hint)) ??
+    files.find((f) => hint.endsWith("/" + f.path));
+  return hit ? [hit] : files;
+}
+
+function occurrenceIndexNearLine(
+  content: string,
+  needle: string,
+  sourceLine: number | null | undefined,
+): number {
+  const matches: number[] = [];
+  let from = 0;
+  while (from < content.length) {
+    const idx = content.indexOf(needle, from);
+    if (idx === -1) break;
+    matches.push(idx);
+    from = idx + Math.max(needle.length, 1);
+  }
+  if (matches.length === 0) return -1;
+  if (matches.length === 1) return matches[0]!;
+  if (typeof sourceLine !== "number" || sourceLine < 1) return -1;
+  let best = matches[0]!;
+  let bestDist = Infinity;
+  for (const idx of matches) {
+    const atLine = content.slice(0, idx).split("\n").length;
+    const dist = Math.abs(atLine - sourceLine);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = idx;
+    }
+  }
+  return best;
+}
+
+/**
+ * When the live DOM class string is empty or no longer matches source
+ * (Tailwind merge, extra runtime classes), find a unique text node and
+ * write className onto its opening tag.
+ */
+function injectClassOnUniqueElement(
+  files: ProjectFile[],
+  selection: VisualEditSelection,
+  classes: string,
+): { path: string; content: string } | null {
+  const text = selection.textContent.trim();
+  const tag = selection.tagName.trim().toLowerCase();
+  if (!classes.trim() || !tag || !/^[a-z][a-z0-9]*$/.test(tag) || !text || text.length > 240) {
+    return null;
+  }
+  const needle = `>${text}<`;
+  const file = uniqueFileContaining(files, needle);
+  if (file) {
+    const content = file.content as string;
+    const textIdx = content.indexOf(needle);
+    return rewriteClassOnTagBefore(file.path, content, textIdx, tag, classes);
+  }
+  for (const f of files) {
+    const content = f.content as string;
+    const textIdx = occurrenceIndexNearLine(content, needle, selection.sourceLine);
+    if (textIdx < 0) continue;
+    return rewriteClassOnTagBefore(f.path, content, textIdx, tag, classes);
+  }
+  return null;
+}
+
+function rewriteClassOnTagBefore(
+  path: string,
+  content: string,
+  textIdx: number,
+  tag: string,
+  classes: string,
+): { path: string; content: string } | null {
+  if (textIdx < 0) return null;
+  const before = content.slice(0, textIdx);
+  const openNeedle = `<${tag}`;
+  const openIdx = before.toLowerCase().lastIndexOf(openNeedle);
+  if (openIdx < 0) return null;
+  const gt = content.indexOf(">", openIdx);
+  if (gt < 0 || gt > textIdx) return null;
+  const openTag = content.slice(openIdx, gt);
+  if (openTag.includes("</")) return null;
+
+  const attr = /\.[jt]sx$/.test(path) || openTag.includes("className") ? "className" : "class";
+  const escaped = classes.replace(/"/g, "'");
+  let nextOpen: string;
+  if (/className\s*=/.test(openTag) || /\bclass\s*=/.test(openTag)) {
+    nextOpen = openTag.replace(
+      /(?:className|class)\s*=\s*(["'])[^"']*\1/,
+      `${attr}="${escaped}"`,
+    );
+  } else {
+    const afterName = openIdx + 1 + tag.length;
+    nextOpen = `${content.slice(openIdx, afterName)} ${attr}="${escaped}"${content.slice(afterName, gt)}`;
+  }
+  return {
+    path,
+    content: content.slice(0, openIdx) + nextOpen + content.slice(gt),
+  };
 }
 
 /**

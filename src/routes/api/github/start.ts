@@ -2,6 +2,12 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { redirectResponse } from "@/lib/api/redirect";
 import { signGatewayOAuthState } from "@/lib/oauth/gateway-state";
+import {
+  envGitHubWebHost,
+  githubOAuthAuthorizeUrl,
+  githubOAuthClientId,
+  normalizeGitHubWebOrigin,
+} from "@/lib/github/host";
 import { randomBytes } from "node:crypto";
 
 /**
@@ -31,9 +37,24 @@ export const Route = createFileRoute("/api/github/start")({
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return redirectResponse("/login", origin);
 
-        const clientId = process.env.GITHUB_CLIENT_ID;
+        const hostParam = searchParams.get("host");
+        const webOrigin = hostParam
+          ? normalizeGitHubWebOrigin(hostParam)
+          : (envGitHubWebHost() ?? "https://github.com");
+        if (hostParam && !webOrigin) {
+          return Response.json(
+            { error: "Invalid GitHub host. Use an https origin such as https://github.mycompany.com." },
+            { status: 400 },
+          );
+        }
+        const clientId = githubOAuthClientId(webOrigin);
         if (!clientId) {
-          return Response.json({ error: "GitHub OAuth isn't configured on this deployment — set GITHUB_CLIENT_ID." }, { status: 503 });
+          const ghe = webOrigin !== "https://github.com";
+          return Response.json({
+            error: ghe
+              ? "GitHub Enterprise OAuth isn't configured — set GITHUB_ENTERPRISE_CLIENT_ID (or GITHUB_CLIENT_ID) on an OAuth app registered on that host, or connect with a personal access token."
+              : "GitHub OAuth isn't configured on this deployment — set GITHUB_CLIENT_ID.",
+          }, { status: 503 });
         }
         const stateSecret = process.env.OAUTH_STATE_SECRET;
         if (!stateSecret) {
@@ -43,6 +64,7 @@ export const Route = createFileRoute("/api/github/start")({
         const projectId = searchParams.get("projectId");
         const returnTo = projectId ? `/editor/${projectId}?github=connected` : "/dashboard?github=connected";
 
+        const githubHost = webOrigin;
         const state = signGatewayOAuthState(
           {
             connector: "github",
@@ -50,15 +72,16 @@ export const Route = createFileRoute("/api/github/start")({
             nonce: randomBytes(9).toString("hex"),
             issuedAt: Math.floor(Date.now() / 1000),
             returnTo,
+            githubHost,
           },
           stateSecret,
         );
 
         const redirectUri = `${origin}/api/github/connect`;
-        const authorizeUrl = new URL("https://github.com/login/oauth/authorize");
+        const authorizeUrl = new URL(githubOAuthAuthorizeUrl(webOrigin));
         authorizeUrl.searchParams.set("client_id", clientId);
         authorizeUrl.searchParams.set("redirect_uri", redirectUri);
-        authorizeUrl.searchParams.set("scope", "repo");
+        authorizeUrl.searchParams.set("scope", "repo admin:repo_hook");
         authorizeUrl.searchParams.set("state", state);
 
         return redirectResponse(authorizeUrl.toString());

@@ -14,8 +14,8 @@ export function LovableChatHeaderStatus(_props: LovableChatHeaderStatusProps) {
 
   useEffect(() => {
     function onStatus(e: Event) {
-      const text = (e as CustomEvent<{ text?: string }>).detail?.text ?? null;
-      setPreviewStatus(text);
+      const text = (e as CustomEvent<{ text?: unknown }>).detail?.text;
+      setPreviewStatus(typeof text === "string" && text.trim() ? text : null);
     }
     window.addEventListener("lifemark-preview-status", onStatus);
     return () => window.removeEventListener("lifemark-preview-status", onStatus);

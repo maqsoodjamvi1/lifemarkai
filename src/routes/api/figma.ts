@@ -3,6 +3,11 @@ import { createClient } from "@/lib/supabase/server";
 import { rateLimit } from "@/lib/rate-limit";
 import { describeFigmaTree, type FigmaNode } from "@/lib/figma/describe-tree";
 import { generateComponentFromFigmaNode } from "@/lib/figma/generate-component";
+import { buildFigmaImportFiles } from "@/lib/figma/apply-import";
+import { listProjectFiles, upsertProjectFile } from "@/lib/server-fns/project-files";
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Native /api/figma — fetch a Figma file, summarize into an AI clone prompt. */
 const FIGMA_API = "https://api.figma.com/v1";
@@ -26,7 +31,7 @@ export const Route = createFileRoute("/api/figma")({
           return Response.json({ error: "Rate limit exceeded." }, { status: 429, headers: { "X-RateLimit-Reset": String(rl.resetAt) } });
         }
 
-        const { figmaUrl, figmaToken } = await request.json();
+        const { figmaUrl, figmaToken, projectId } = await request.json();
         if (!figmaUrl || !figmaToken) {
           return Response.json({ error: "figmaUrl and figmaToken are required" }, { status: 400 });
         }
@@ -101,7 +106,23 @@ ${generatedComponentsBlock}
 Use these as the real starting point (adjust file names/paths to fit the project) rather than rewriting their structure from the description above — the description is there to explain what's THERE, these components are the actual translation. Then make them functional: wire up real interactivity, state, routing, and data instead of leaving them static.` : `Please generate React components that faithfully reproduce this UI using Tailwind CSS classes, using the exact colors, fonts, spacing, and copy given above rather than approximating them. Use semantic HTML and accessible markup, and match the visual hierarchy and layout direction shown above.`}`,
         };
 
-        return Response.json(summary);
+        let appliedFiles: string[] = [];
+        if (typeof projectId === "string" && UUID_RE.test(projectId) && generatedComponents.length > 0) {
+          const listed = await listProjectFiles(projectId);
+          const paths = listed.status === "ok" ? listed.files.map((f) => f.path) : [];
+          const writes = buildFigmaImportFiles(paths, generatedComponents);
+          for (const w of writes) {
+            const saved = await upsertProjectFile({
+              projectId,
+              path: w.path,
+              content: w.content,
+              language: w.language,
+            });
+            if (saved.status === "ok") appliedFiles.push(w.path);
+          }
+        }
+
+        return Response.json({ ...summary, appliedFiles });
       },
     },
   },

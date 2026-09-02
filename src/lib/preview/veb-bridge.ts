@@ -706,12 +706,22 @@ export function getPreviewBridgeScripts(): string {
   );
 }
 
+const PREVIEW_BRIDGE_SCRIPT_RE =
+  /<script>([\s\S]*?lifemark-veb-ready[\s\S]*?)<\/script>\s*/g;
+
 /** Inject both bridges into an index.html document (idempotent). */
 export function injectVebBridgeIntoHtml(html: string): string {
-  if (html.includes("lifemark-veb-ready")) return html;
   const tag = `<script>${getPreviewBridgeScripts()}</script>`;
-  if (html.includes("</body>")) return html.replace("</body>", `${tag}\n</body>`);
-  return `${html}\n${tag}`;
+  // Always rewrite so a copy corrupted by String.replace `$` patterns
+  // (`__reactFiber$'` → spilled `</html>`) cannot stick via the
+  // `lifemark-veb-ready` marker.
+  const stripped = html.replace(PREVIEW_BRIDGE_SCRIPT_RE, "");
+  // Function replacer: the bridge contains `$'` (`__reactFiber$'`). String
+  // replace treats that as "insert the rest of the HTML", which spilled
+  // `</html>` into the script, closed the document, and left `hops < 50`
+  // to be parsed as markup (blank live preview).
+  if (stripped.includes("</body>")) return stripped.replace("</body>", () => `${tag}\n</body>`);
+  return `${stripped}\n${tag}`;
 }
 
 /**
@@ -745,7 +755,7 @@ export function injectVebBridgeIntoNextLayout(source: string): string {
   // JSX closing tag for <Body>"). Preserve whatever closing tag the file uses.
   const bodyClose = source.match(/<\/body>/i);
   if (bodyClose) {
-    return source.replace(bodyClose[0], `${tag}\n${bodyClose[0]}`);
+    return source.replace(bodyClose[0], () => `${tag}\n${bodyClose[0]}`);
   }
   // Common pattern: <body>{children}</body> already handled; otherwise append
   // before the final closing </html>/</Html>, whichever case the file uses.

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
-import { isManagementConfigured,queryManagedSql } from "@/lib/cloud/management";
+import { isManagementConfigured,queryManagedSql,fetchManagedLogs } from "@/lib/cloud/management";
 
 /**
  * GET /api/cloud/health — MEASURED database health for a Cloud project.
@@ -52,9 +52,21 @@ export const Route = createFileRoute("/api/cloud/health")({
           return Response.json({ error: "Cloud not enabled for this project" }, { status: 400 });
         }
 
+        const view = new URL(request.url).searchParams.get("view");
+
         // No dedicated instance, or no Management API credentials → nothing to
         // measure. Say that, rather than filling the panel with plausible numbers.
         if (!project.cloud_project_ref || !isManagementConfigured()) {
+          if (view === "logs") {
+            return Response.json({
+              available: false,
+              activity: [],
+              logs: [],
+              reason: project.cloud_project_ref
+                ? "Logs need the Supabase Management API to be configured on the server."
+                : "This project runs in local Cloud mode, so there is no dedicated Postgres to query.",
+            });
+          }
           return Response.json({
             status: "unknown",
             measured: false,
@@ -64,6 +76,47 @@ export const Route = createFileRoute("/api/cloud/health")({
             summary: project.cloud_project_ref
               ? "Health metrics need the Supabase Management API to be configured on the server."
               : "This project runs in local Cloud mode, so there is no dedicated instance to measure.",
+          });
+        }
+
+        if (view === "logs") {
+          const source =
+            new URL(request.url).searchParams.get("source") === "edge_logs"
+              ? "edge_logs"
+              : "postgres_logs";
+          const [activity, hist] = await Promise.all([
+            queryManagedSql<{
+              pid: number;
+              usename: string | null;
+              application_name: string | null;
+              state: string | null;
+              query: string | null;
+              query_start: string | null;
+            }>(
+              project.cloud_project_ref,
+              `SELECT pid, usename, application_name, state, left(query, 500) AS query, query_start::text
+               FROM pg_stat_activity
+               WHERE datname IS NOT NULL AND pid <> pg_backend_pid()
+               ORDER BY query_start DESC NULLS LAST
+               LIMIT 40`,
+            ),
+            fetchManagedLogs(project.cloud_project_ref, source, 1),
+          ]);
+          const activityRows = activity.ok ? activity.rows : [];
+          const analyticsLogs = hist.ok ? hist.rows : [];
+          const fallbackLogs = activityRows.map((row) => ({
+            timestamp: row.query_start ?? undefined,
+            event_message: row.query ?? "(idle)",
+            error_severity: row.state ?? "LOG",
+          }));
+          return Response.json({
+            available: true,
+            activity: activityRows,
+            logs: analyticsLogs.length > 0 ? analyticsLogs : fallbackLogs,
+            logsSource: analyticsLogs.length > 0 ? "analytics" : "pg_stat_activity",
+            reason: hist.ok
+              ? (activity.ok ? null : activity.error)
+              : hist.error ?? (activity.ok ? null : activity.error),
           });
         }
 

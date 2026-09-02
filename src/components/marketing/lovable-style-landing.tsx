@@ -76,7 +76,7 @@ function HeroPrompt({ placeholder }: { placeholder?: string }) {
             size="sm"
             onClick={submit}
             disabled={!value.trim() || submitting}
-            className="ml-auto bg-foreground text-background hover:bg-foreground/90 px-4 h-9"
+            className="ml-auto bg-primary text-primary-foreground hover:bg-primary/90 px-4 h-9"
           >
             {submitting ? (
               <Loader2 className="w-4 h-4 animate-spin" />

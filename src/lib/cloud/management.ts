@@ -269,6 +269,48 @@ export async function queryManagedSql<T = Record<string, unknown>>(
   }
 }
 
+export type ManagedLogRow = {
+  timestamp?: string;
+  event_message?: string;
+};
+
+/**
+ * Historical logs from the unified Management API stream (ClickHouse SQL).
+ * Window is at most 24 hours — that is the API limit.
+ */
+export async function fetchManagedLogs(
+  ref: string,
+  source: "postgres_logs" | "edge_logs" = "postgres_logs",
+  hours = 1,
+): Promise<{ ok: boolean; rows: ManagedLogRow[]; error?: string }> {
+  const end = new Date();
+  const span = Math.min(Math.max(hours, 1 / 60), 24);
+  const start = new Date(end.getTime() - span * 3600_000);
+  const sql =
+    `SELECT timestamp, event_message FROM logs WHERE source = '${source}' ORDER BY timestamp DESC LIMIT 80`;
+  const qs = new URLSearchParams({
+    sql,
+    iso_timestamp_start: start.toISOString(),
+    iso_timestamp_end: end.toISOString(),
+  });
+  try {
+    const res = await mgmtFetch(`/projects/${ref}/analytics/endpoints/logs?${qs.toString()}`);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { ok: false, rows: [], error: `HTTP ${res.status}: ${body.slice(0, 300)}` };
+    }
+    const data = (await res.json().catch(() => null)) as unknown;
+    const rows = Array.isArray(data)
+      ? data
+      : Array.isArray((data as { result?: unknown[] } | null)?.result)
+        ? (data as { result: unknown[] }).result
+        : [];
+    return { ok: true, rows: rows as ManagedLogRow[] };
+  } catch (err) {
+    return { ok: false, rows: [], error: err instanceof Error ? err.message : "request failed" };
+  }
+}
+
 /**
  * Configure auth redirect URLs on a managed project so login flows work on
  * the published app without manual setup (Lovable parity).

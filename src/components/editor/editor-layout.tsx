@@ -32,6 +32,12 @@ resolvePromptMode,
 shouldFocusPreviewAfterGeneration
 } from "@/lib/ai/editor-intelligence";
 import { countUserAuthoredFiles } from "@/lib/ai/scaffold-files";
+import { ChatPanel } from "./chat-panel";
+import { PreviewPanel } from "./preview-panel";
+import { PreviewCrashFallback } from "./instant-srcdoc-preview";
+import { CodePanel } from "./code-panel";
+import { productionPanelLabel, resolvePanelOpen } from "@/lib/editor/production-panel";
+import { announceCloudSubtab, CLOUD_SUBTABS } from "@/lib/editor/design-themes";
 
 const EMPTY_PREVIEW_ERRORS: PreviewRuntimeError[] = [];
 
@@ -67,40 +73,9 @@ const FileTreePanel = dynamic(
   }
 );
 
-const ChatPanel = dynamic(
-  importWithRetry(() => import("./chat-panel").then((m) => m.ChatPanel)),
-  {
-    ssr: false,
-    loading: () => (
-      // Lovable dump loading overlay: centered spinner, flex-col gap-2 text-sm bg-base-pulse
-      <div className="flex-1 flex flex-col items-center justify-center gap-2 text-sm bg-[var(--bg-base)] text-[var(--fg-tertiary)]">
-        <svg
-          className="size-5 animate-spin"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          aria-hidden
-        >
-          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-        </svg>
-      </div>
-    ),
-  }
-);
-
-const CodePanel = dynamic(
-  importWithRetry(() => import("./code-panel").then((m) => m.CodePanel)),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex-1 flex items-center justify-center bg-[#1e1e1e]">
-        <div className="text-muted-foreground text-sm">Loading editor...</div>
-      </div>
-    ),
-  }
-);
+// Chat, preview, and code stay on screen for the whole editor session.
+// Dynamic import() of those files 404s after Vite HMR (`?t=` stale @fs URL)
+// and React.lazy caches the rejection, so Retry never recovers.
 
 const LazyLovablePanel = dynamic(
   importWithRetry(() => import("./lazy-editor-panels").then((m) => m.LovableToolPanelContent)),
@@ -112,17 +87,6 @@ const LazySecondaryPanel = dynamic(
   { ssr: false }
 );
 
-const PreviewPanel = dynamic(
-  importWithRetry(() => import("./preview-panel").then((m) => m.PreviewPanel)),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="flex-1 flex items-center justify-center bg-background">
-        <div className="text-muted-foreground text-sm">Loading preview...</div>
-      </div>
-    ),
-  }
-);
 
 export type EditorMode = "chat" | "plan" | "build" | "agent" | "patch";
 export type ViewMode = "preview" | "code" | "both" | "files";
@@ -146,69 +110,26 @@ interface EditorLayoutProps {
   initialPanel?: LeftPanel | string;
 }
 
-// Static tab metadata — independent of any prop/state, so it lives at module
-// scope instead of being re-allocated (a ~60-object array plus a filter pass)
-// on every EditorLayout render. Was a `const` inside the component body.
-const LEFT_PANEL_TABS: { id: LeftPanel; label: string; emoji: string }[] = [
-  { id: "chat",      label: "Chat",     emoji: "💬" },
-  { id: "plan",      label: "Plan",     emoji: "🗺️" },
-  { id: "agent",     label: "Agent",    emoji: "🤖" },
-  { id: "intelligence", label: "Intelligence", emoji: "AI" },
-  { id: "healing",   label: "Self-Heal", emoji: "🩹" },
-  { id: "knowledge", label: "Knowledge",emoji: "🧠" },
-  { id: "activity",  label: "Activity", emoji: "📋" },
-  { id: "github",    label: "Git",      emoji: "🐙" },
-  { id: "collab",    label: "Live",     emoji: "👥" },
-  { id: "image",     label: "Image",    emoji: "🎨" },
-  { id: "supabase",  label: "DB",       emoji: "🗄" },
-  { id: "env",       label: "Env",      emoji: "🔑" },
-  { id: "figma",     label: "Figma",    emoji: "🎭" },
-  { id: "domains",   label: "Domains",  emoji: "🌐" },
-  { id: "history",   label: "History",  emoji: "⏱️" },
-  { id: "deploys",    label: "Deploys",    emoji: "🚀" },
-  { id: "analytics",  label: "Analytics",  emoji: "📊" },
-  { id: "security",   label: "Security",   emoji: "🔒" },
-  { id: "settings",  label: "Settings", emoji: "⚙️" },
-  { id: "search",     label: "Search",     emoji: "🔍" },
-  { id: "components", label: "Components", emoji: "🧩" },
-  { id: "design",     label: "Design",     emoji: "🖌️" },
-  { id: "comments",   label: "Comments",   emoji: "💬" },
-  { id: "crossref",   label: "Import",     emoji: "🔗" },
-  { id: "email",      label: "Email",      emoji: "✉️" },
-  { id: "testing",    label: "Testing",    emoji: "🧪" },
-  { id: "guidance",   label: "Design AI",  emoji: "✨" },
-  { id: "e2e",        label: "E2E Tests",  emoji: "🌐" },
-  { id: "packages",   label: "Packages",   emoji: "📦" },
-  { id: "review",     label: "Review",     emoji: "🔍" },
-  { id: "mcp",        label: "MCP",        emoji: "🔌" },
-  { id: "seo",        label: "SEO",        emoji: "📈" },
-  { id: "customemail",label: "Emails",     emoji: "📧" },
-  { id: "designdir",  label: "Design Dir", emoji: "🎯" },
-  { id: "designpanel",  label: "Design",       emoji: "🖌️" },
-  { id: "visualedits",   label: "Visual Edits", emoji: "✏️" },
-  { id: "publishpanel",  label: "Publish",      emoji: "🚀" },
-  { id: "payments",      label: "Billing",      emoji: "💳" },
-  { id: "problems",   label: "Problems",   emoji: "⚠️" },
-  // Runtime errors real visitors hit on the PUBLISHED app, as opposed to
-  // "Problems", which is Monaco's compile-time markers. The panel shipped
-  // with no union member and no menu row, so it was unreachable.
-  { id: "apperrors",  label: "App Errors", emoji: "🐞" },
-  { id: "connectors", label: "Connectors", emoji: "🔗" },
-  { id: "accessibility", label: "A11y", emoji: "♿" },
-  { id: "schema",        label: "Schema",  emoji: "🗃️" },
-  { id: "webhooks",      label: "Webhooks", emoji: "🪝" },
-  { id: "performance",   label: "Perf",     emoji: "🚀" },
-  { id: "cloud",         label: "Cloud",     emoji: "☁️" },
-  { id: "dbmanager",     label: "Data",      emoji: "🗃️" },
-  { id: "storage",       label: "Storage",   emoji: "🗄️" },
-  { id: "media",         label: "Media",     emoji: "🖼️" },
-  { id: "appconnectors", label: "Connectors", emoji: "🔌" },
-  { id: "monetize",      label: "Monetize",   emoji: "💰" },
-  { id: "edgefn",       label: "Edge Fns",   emoji: "⚡" },
-  { id: "dbquery",      label: "DB Query",   emoji: "🔍" },
-  { id: "secrets",      label: "Secrets",    emoji: "🔐" },
-  { id: "savetemplate", label: "Publish Template", emoji: "🌐" },
-  { id: "diffviewer",   label: "Diff Viewer",      emoji: "🔀" },
+// Labels for production panels only. Extra catalog ids cannot open.
+const LEFT_PANEL_TABS: { id: LeftPanel; label: string }[] = [
+  { id: "chat", label: "Chat" },
+  { id: "plan", label: "Plan" },
+  { id: "agent", label: "Agent" },
+  { id: "analytics", label: "Analytics" },
+  { id: "cloud", label: "Cloud" },
+  { id: "payments", label: "Payments" },
+  { id: "security", label: "Security" },
+  { id: "seo", label: "SEO" },
+  { id: "github", label: "Git" },
+  { id: "collab", label: "People" },
+  { id: "comments", label: "Comments" },
+  { id: "settings", label: "Settings" },
+  { id: "publishpanel", label: "Publish" },
+  { id: "domains", label: "Domains" },
+  { id: "connectors", label: "Connectors" },
+  { id: "figma", label: "Figma" },
+  { id: "intelligence", label: "Team" },
+  { id: "diffviewer", label: "Diff" },
 ];
 
 export function EditorLayout({
@@ -513,6 +434,8 @@ export function EditorLayout({
   const [pendingBuildFromFile, setPendingBuildFromFile] = useState<{ prompt: string; imageBase64?: string } | null>(null);
   const [pendingFileRef, setPendingFileRef] = useState<import("@/types/database").ProjectFile | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const isGeneratingRef = useRef(false);
+  const previewRefreshDeferredRef = useRef(false);
   const [generatingFileCount, setGeneratingFileCount] = useState(0);
   // Lovable parity: browser-tab favicon shows build status (amber → green flash).
   useFaviconStatus(isGenerating);
@@ -653,20 +576,55 @@ export function EditorLayout({
   const handleChatPendingFixConsumed = useCallback(() => setPendingFix(null), []);
   const handleChatPendingFileRefConsumed = useCallback(() => setPendingFileRef(null), []);
   const handleChatStreamingChange = useCallback((s: boolean, fc?: number) => {
+    isGeneratingRef.current = s;
     setIsGenerating(s);
     if (fc !== undefined) setGeneratingFileCount(fc);
+    if (!s && previewRefreshDeferredRef.current) {
+      previewRefreshDeferredRef.current = false;
+      const next = filesRef.current;
+      queueMicrotask(() => {
+        window.dispatchEvent(
+          new CustomEvent("lifemark-refresh-preview", {
+            detail: { files: next, reason: "generation-idle" },
+          }),
+        );
+      });
+    }
   }, []);
   const handleChatPendingBuildFromFileConsumed = useCallback(() => setPendingBuildFromFile(null), []);
+
+  const applyRightPanel = useCallback((panel: LeftPanel | null) => {
+    if (panel == null) {
+      setRightPanel(null);
+      return;
+    }
+    const result = resolvePanelOpen(panel);
+    if (result.kind === "history") {
+      setLeftChatOverlay("history");
+      setRightPanel(null);
+      return;
+    }
+    if (result.kind === "chat-mode") {
+      setLeftPanel(result.panel);
+      setRightPanel(null);
+      return;
+    }
+    if (result.kind === "right") {
+      const subtab = CLOUD_SUBTABS[panel];
+      if (result.panel === "cloud" && subtab) announceCloudSubtab(subtab);
+      setRightPanel(result.panel as LeftPanel);
+      setLeftChatOverlay(null);
+    }
+  }, []);
 
   const handleOpenPanel = useCallback((panel: string) => {
     if (panel === "history") {
       setLeftChatOverlay("history");
       setRightPanel(null);
-    } else {
-      setRightPanel(panel as LeftPanel);
-      setLeftChatOverlay(null);
+      return;
     }
-  }, []);
+    applyRightPanel(panel as LeftPanel);
+  }, [applyRightPanel]);
 
   const handleFocusPreview = useCallback(() => {
     // Focus only — do NOT fire bare lifemark-refresh-preview here.
@@ -718,12 +676,13 @@ export function EditorLayout({
     setActiveFile(filesRef.current.find((f) => f.id === file.id) || null);
   }, []);
   const handleCommandOpenPanel = useCallback((panel: string) => {
-    const chatPanels: LeftPanel[] = ["chat", "plan", "agent"];
-    if (chatPanels.includes(panel as LeftPanel)) {
-      setLeftPanel(panel as LeftPanel);
-    } else {
-      handleOpenPanel(panel);
+    const result = resolvePanelOpen(panel);
+    if (result.kind === "chat-mode") {
+      setLeftPanel(result.panel);
+      setEditorMode(result.panel);
+      return;
     }
+    handleOpenPanel(panel);
   }, [handleOpenPanel]);
   const handleCommandSetViewMode = useCallback((mode: "preview" | "code" | "both" | "files") => {
     setViewMode(mode);
@@ -1072,9 +1031,13 @@ export function EditorLayout({
       queueMicrotask(() => {
         setPreviewVersion(null);
         setActiveFile((current) => pickActiveFileAfterUpdate(next, changedPaths, current) ?? current);
-        window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
-          detail: { files: next, reason: replace ? "files-replaced" : "files-updated" },
-        }));
+        if (isGeneratingRef.current) {
+          previewRefreshDeferredRef.current = true;
+        } else {
+          window.dispatchEvent(new CustomEvent("lifemark-refresh-preview", {
+            detail: { files: next, reason: replace ? "files-replaced" : "files-updated" },
+          }));
+        }
         if (shouldFocusPreviewAfterGeneration(editorMode, changedPaths.length)) {
           handleFocusPreview();
         }
@@ -1439,7 +1402,7 @@ export function EditorLayout({
   }, []);
 
   return (
-    <div className="flex flex-col h-screen bg-background overflow-hidden">
+    <div className="flex flex-col h-screen bg-background overflow-hidden text-foreground">
       {/* File-to-app global drop zone */}
       <FileToAppDropZone
         disabled={isGenerating}
@@ -1492,7 +1455,7 @@ export function EditorLayout({
           onDevModeToggle={handleDevModeToggle}
           onEnvironmentChange={setEnvironment}
           rightPanel={rightPanel}
-          onRightPanelChange={(p) => setRightPanel(p)}
+          onRightPanelChange={applyRightPanel}
           securityIssueCount={securityIssueCount}
           criticalSecurityCount={criticalSecurityCount}
           chatOverlayActive={leftChatOverlay === "history"}
@@ -1634,7 +1597,11 @@ export function EditorLayout({
 
             {/* Preview pane */}
             <div className={`absolute inset-0 ${mobilePaneActive === "preview" ? "" : "hidden"}`}>
-              <EditorPanelErrorBoundary name="Preview" resetKey={project.id}>
+              <EditorPanelErrorBoundary
+                name="Preview"
+                resetKey={project.id}
+                fallback={(error, retry) => <PreviewCrashFallback error={error} onRetry={retry} />}
+              >
               <PreviewPanel
                 files={previewVersion?.files ?? files}
                 framework={project.framework}
@@ -1658,7 +1625,6 @@ export function EditorLayout({
                 badgeHidden={(project as { badge_hidden?: boolean }).badge_hidden ?? false}
                 projectId={project.id}
                 credits={uiCredits}
-                useWebContainers
                 isPublic={!!project.is_public}
                 onOpenPanel={handleOpenPanel}
                 onSendAnnotatedToChat={(prompt, img) => { setMobilePaneActive("left"); setLeftPanel("chat"); setPendingBuildFromFile({ prompt, imageBase64: img }); }}
@@ -1672,7 +1638,7 @@ export function EditorLayout({
                 {isLovableToolPanel(rightPanel) ? (
                   <LovableToolsOverlay
                     activeTab={rightPanel}
-                    onTabChange={(tab) => setRightPanel(tab)}
+                    onTabChange={(tab) => applyRightPanel(tab)}
                     onClose={() => setRightPanel(null)}
                   >
                     <LazyLovablePanel
@@ -1681,8 +1647,9 @@ export function EditorLayout({
                       profile={profile}
                       files={files}
                       pid={pid}
-                      setRightPanel={setRightPanel}
+                      setRightPanel={applyRightPanel}
                       handleFilesUpdate={handleFilesUpdate}
+                      handleEnvUpdateFile={handleEnvUpdateFile}
                       sendPromptToChat={sendPromptToChat}
                     />
                   </LovableToolsOverlay>
@@ -1690,7 +1657,7 @@ export function EditorLayout({
                   <>
                     <div className="flex items-center justify-between px-4 h-9 border-b border-border shrink-0">
                       <span className="text-xs font-semibold text-foreground">
-                        {LEFT_PANEL_TABS.find((t) => t.id === rightPanel)?.label ?? rightPanel}
+                        {LEFT_PANEL_TABS.find((t) => t.id === rightPanel)?.label ?? productionPanelLabel(rightPanel)}
                       </span>
                       <button
                         onClick={() => setRightPanel(null)}
@@ -1712,7 +1679,7 @@ export function EditorLayout({
                         credits={uiCredits}
                         isLiveLocked={isLiveLocked}
                         yjsCollaborators={yjsCollaborators}
-                        setRightPanel={setRightPanel}
+                        setRightPanel={applyRightPanel}
                         setViewMode={setViewMode}
                         setActiveFile={setActiveFile}
                         setFiles={setFiles}
@@ -1788,7 +1755,7 @@ export function EditorLayout({
           >
             <div
               data-panel-id="sidebar-panel"
-              className="relative flex flex-col h-full border-r border-border bg-background"
+              className="relative flex flex-col h-full border-r border-border/80 bg-[var(--bg-base)]"
             >
               <EditorPanelErrorBoundary name="Chat" resetKey={currentProject.id}>
               <ChatPanel
@@ -1869,7 +1836,7 @@ export function EditorLayout({
                   {isLovableToolPanel(rightPanel) ? (
                     <LovableToolsOverlay
                       activeTab={rightPanel}
-                      onTabChange={(tab) => setRightPanel(tab)}
+                      onTabChange={(tab) => applyRightPanel(tab)}
                       onClose={() => setRightPanel(null)}
                     >
                       <LazyLovablePanel
@@ -1878,8 +1845,9 @@ export function EditorLayout({
                         profile={profile}
                         files={files}
                         pid={pid}
-                        setRightPanel={setRightPanel}
+                        setRightPanel={applyRightPanel}
                         handleFilesUpdate={handleFilesUpdate}
+                        handleEnvUpdateFile={handleEnvUpdateFile}
                         sendPromptToChat={sendPromptToChat}
                       />
                     </LovableToolsOverlay>
@@ -1887,7 +1855,7 @@ export function EditorLayout({
                     <>
                   <div className="flex items-center justify-between px-4 h-9 border-b border-border shrink-0">
                     <span className="text-xs font-semibold text-foreground">
-                      {LEFT_PANEL_TABS.find((t) => t.id === rightPanel)?.label ?? rightPanel}
+                      {LEFT_PANEL_TABS.find((t) => t.id === rightPanel)?.label ?? productionPanelLabel(rightPanel)}
                     </span>
                     <button
                       onClick={() => setRightPanel(null)}
@@ -1909,7 +1877,7 @@ export function EditorLayout({
                       credits={uiCredits}
                       isLiveLocked={isLiveLocked}
                       yjsCollaborators={yjsCollaborators}
-                      setRightPanel={setRightPanel}
+                      setRightPanel={applyRightPanel}
                       setViewMode={setViewMode}
                       setActiveFile={setActiveFile}
                       setFiles={setFiles}
@@ -1950,7 +1918,11 @@ export function EditorLayout({
                   id="preview-frame"
                   style={viewMode === "code" ? { display: "none" } : undefined}
                 >
-                  <EditorPanelErrorBoundary name="Preview" resetKey={currentProject.id}>
+                  <EditorPanelErrorBoundary
+                    name="Preview"
+                    resetKey={currentProject.id}
+                    fallback={(error, retry) => <PreviewCrashFallback error={error} onRetry={retry} />}
+                  >
                   <PreviewPanel
                     files={previewVersion?.files ?? files}
                     framework={project.framework}
@@ -1971,7 +1943,6 @@ export function EditorLayout({
                     deployedUrl={currentProject.deployed_url ?? undefined}
                     badgeHidden={(currentProject as { badge_hidden?: boolean }).badge_hidden ?? false}
                     credits={uiCredits}
-                    useWebContainers
                     isPublic={!!currentProject.is_public}
                     onOpenPanel={handleOpenPanel}
                     onSendAnnotatedToChat={(prompt, img) => {

@@ -1,12 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { completeGithubConnect } from "@/lib/server-fns/github";
+import { completeGithubConnect,completeGithubPatConnect } from "@/lib/server-fns/github";
+import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 
 /**
- * Native /api/github/connect — OAuth callback: verify the signed state
- * minted by /api/github/start, exchange code, save token, redirect. The
- * `state` query param is passed straight through to completeGithubConnect
- * for verification there (see that function's header comment) rather than
- * trusted directly as a project id.
+ * Native /api/github/connect
+ *   GET  — OAuth callback (signed state from /api/github/start)
+ *   POST — personal access token + optional GitHub Enterprise Server host
  */
 export const Route = createFileRoute("/api/github/connect")({
   server: {
@@ -18,6 +17,18 @@ export const Route = createFileRoute("/api/github/connect")({
           status: 302,
           headers: { Location: new URL(r.redirectPath, request.url).toString() },
         });
+      },
+      POST: async ({ request }) => {
+        const rl = await rateLimitAsync("github-pat-connect", RATE_LIMITS.api);
+        if (!rl.success) return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
+        const body = await request.json().catch(() => ({})) as { token?: string; host?: string };
+        const r = await completeGithubPatConnect(body);
+        if (r.status === "unauthorized") return Response.json({ error: "Unauthorized" }, { status: 401 });
+        if (r.status === "bad_request" || r.status === "bad_token") {
+          return Response.json({ error: r.message }, { status: 400 });
+        }
+        if (r.status === "error") return Response.json({ error: r.message }, { status: 500 });
+        return Response.json({ ok: true, username: r.username, enterprise: r.enterprise });
       },
     },
   },

@@ -1,19 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolvePromptMode } from "./editor-intelligence.ts";
+import { resolvePromptMode,shouldFocusPreviewAfterGeneration } from "./editor-intelligence.ts";
 
-test("resolvePromptMode keeps hello in chat on an empty project", () => {
+test("resolvePromptMode interviews hello from the chat tab on an empty project", () => {
   const mode = resolvePromptMode("hello", {
     fileCount: 0,
     hasPreviewError: false,
     hasCredits: true,
-    currentMode: "build",
+    currentMode: "chat",
   });
 
-  assert.equal(mode, "chat");
+  assert.equal(mode, "build");
 });
 
-test("resolvePromptMode keeps vague website request in chat on an empty project", () => {
+test("resolvePromptMode interviews a vague website request on an empty project instead of chatting", () => {
   const mode = resolvePromptMode("build a website", {
     fileCount: 0,
     hasPreviewError: false,
@@ -21,7 +21,7 @@ test("resolvePromptMode keeps vague website request in chat on an empty project"
     currentMode: "build",
   });
 
-  assert.equal(mode, "chat");
+  assert.equal(mode, "build");
 });
 
 test("resolvePromptMode allows build when a specific feature is described", () => {
@@ -90,7 +90,7 @@ test("resolvePromptMode promotes explicit ERP from chat tab to build", () => {
   assert.equal(mode, "build");
 });
 
-test("resolvePromptMode keeps vague website request in chat tab on greenfield", () => {
+test("resolvePromptMode interviews a vague website request from the chat tab on greenfield", () => {
   const mode = resolvePromptMode("build a website", {
     fileCount: 0,
     hasPreviewError: false,
@@ -98,7 +98,7 @@ test("resolvePromptMode keeps vague website request in chat tab on greenfield", 
     currentMode: "chat",
   });
 
-  assert.equal(mode, "chat");
+  assert.equal(mode, "build");
 });
 
 test("resolvePromptMode keeps informational questions on build tab in chat", () => {
@@ -164,7 +164,8 @@ test("shouldClarifyBeforeBuild triggers for new ERP request", async () => {
     shouldClarifyBeforeBuild("create an erp for inventory", 0, { userOptOut: true }),
     false,
   );
-  assert.equal(shouldClarifyBeforeBuild("hello", 0), false);
+  assert.equal(shouldClarifyBeforeBuild("hello", 0), true);
+  assert.equal(shouldClarifyBeforeBuild("hello", 5), false);
 });
 
 test("shouldClarifyBeforeBuild triggers on a verb-less description of a new app (confirmed live bug)", async () => {
@@ -184,6 +185,52 @@ test("shouldClarifyBeforeBuild triggers on a verb-less description of a new app 
   );
   // Still correctly skips non-build content on a fresh project.
   assert.equal(shouldClarifyBeforeBuild("what does this button do?", 0), false);
-  assert.equal(shouldClarifyBeforeBuild("thanks!", 0), false);
+  assert.equal(shouldClarifyBeforeBuild("thanks!", 0), true);
   assert.equal(shouldClarifyBeforeBuild("", 0), false);
+});
+
+test("resolvePromptMode interviews an ambiguous 'build an app' from chat instead of chatting", () => {
+  const mode = resolvePromptMode("build me an app", {
+    fileCount: 0,
+    hasPreviewError: false,
+    hasCredits: true,
+    currentMode: "chat",
+  });
+  assert.equal(mode, "build");
+});
+
+test("resolvePromptMode auto-builds an explicit POS request from chat", () => {
+  const mode = resolvePromptMode("build a point of sale system for a retail store", {
+    fileCount: 0,
+    hasPreviewError: false,
+    hasCredits: true,
+    currentMode: "chat",
+  });
+  assert.equal(mode, "build");
+});
+
+test("resolvePromptMode promotes visual polish from chat on an existing app", () => {
+  const mode = resolvePromptMode("make it look more premium", {
+    fileCount: 8,
+    hasPreviewError: false,
+    hasCredits: true,
+    currentMode: "chat",
+  });
+  assert.equal(mode, "build");
+});
+
+test("resolvePromptMode keeps a question in chat on an existing app", () => {
+  const mode = resolvePromptMode("why is the header blue?", {
+    fileCount: 8,
+    hasPreviewError: false,
+    hasCredits: true,
+    currentMode: "chat",
+  });
+  assert.equal(mode, "chat");
+});
+
+test("shouldFocusPreviewAfterGeneration snaps to preview after chat writes files", () => {
+  assert.equal(shouldFocusPreviewAfterGeneration("chat", 2), true);
+  assert.equal(shouldFocusPreviewAfterGeneration("chat", 0), false);
+  assert.equal(shouldFocusPreviewAfterGeneration("plan", 3), false);
 });

@@ -551,11 +551,33 @@ function libModuleExport(name: string): string {
   return `export async function ${name}(..._args) { return null; }`;
 }
 
+function declaredValueNames(content: string): Set<string> {
+  const names = new Set<string>(exportedNames(content));
+  for (const match of content.matchAll(
+    /(?:^|\n)\s*(?:export\s+)?(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)\b/g,
+  )) {
+    names.add(match[1]);
+  }
+  return names;
+}
+
 function appendLibExports(content: string, names: string[]): string {
-  const missing = names.filter((name) => !exportedNames(content).has(name));
-  if (missing.length === 0) return content;
+  const already = declaredValueNames(content);
+  const missing = names.filter((name) => !already.has(name));
+  const toReexport = names.filter(
+    (name) => !exportedNames(content).has(name) && already.has(name),
+  );
+  let next = content;
+  if (toReexport.length > 0) {
+    next = appendBlock(
+      next,
+      "// LifemarkAI generated missing named exports",
+      `export { ${toReexport.join(", ")} };`,
+    );
+  }
+  if (missing.length === 0) return next;
   const block = missing.map(libModuleExport).join("\n\n");
-  return appendBlock(content, "// LifemarkAI generated missing lib exports", block);
+  return appendBlock(next, "// LifemarkAI generated missing lib exports", block);
 }
 
 function isMissingComponentPath(resolved: string): boolean {
@@ -763,9 +785,20 @@ export function ensureCommonGeneratedSupportFiles<T extends MinimalGeneratedFile
   for (let i = 0; i < out.length; i++) {
     const file = out[i]!;
     const content = file.content ?? "";
-    const cleaned = stripRedundantNamedReExports(content);
+    const cleaned = stripConflictingGeneratedDataStubs(stripRedundantNamedReExports(content));
     if (cleaned !== content) {
       out[i] = { ...file, content: cleaned };
+    }
+  }
+
+  // Existing data files are not always in `out`. A later `export async function
+  // initializeData` plus a leftover `export const initializeData = []` stub is a
+  // SyntaxError — the preview then dies on a full-page "couldn't load" state.
+  for (const file of allInputFiles) {
+    const content = file.content ?? "";
+    const cleaned = stripConflictingGeneratedDataStubs(content);
+    if (cleaned !== content) {
+      upsertSupportFile(out, paths, file.path, file.language ?? "typescript", cleaned);
     }
   }
 
@@ -1105,11 +1138,21 @@ function sampleArrayFor(name: string): string {
   return "[]";
 }
 
+function isVerbishDataExport(name: string): boolean {
+  return (
+    /^(initialize|init|load|fetch|seed|save|create|update|delete|remove)[A-Z_]/.test(name) ||
+    /^(initialize|init)[A-Za-z]*Data$/.test(name)
+  );
+}
+
 function dataExport(name: string): string {
+  if (isVerbishDataExport(name)) {
+    return `export async function ${name}() { return; }`;
+  }
   if (
     /^[A-Z0-9_]+S$/.test(name) ||
     /^MOCK_/i.test(name) ||
-    /(LIST|ITEMS|DATA|products|PRODUCTS)$/i.test(name) ||
+    /(LIST|ITEMS|_DATA|products|PRODUCTS)$/i.test(name) ||
     /^[a-z].*s$/i.test(name)
   ) {
     return `export const ${name} = ${sampleArrayFor(name)};`;
@@ -1118,11 +1161,78 @@ function dataExport(name: string): string {
 }
 
 function appendDataExports(content: string, names: string[]): string {
+  const already = exportedNames(content);
   const block = names
-    .filter((name) => /^[A-Za-z_$][\w$]*$/.test(name))
+    .filter((name) => /^[A-Za-z_$][\w$]*$/.test(name) && !already.has(name))
     .map(dataExport)
     .join("\n\n");
   return block ? appendBlock(content, "// LifemarkAI generated missing data exports", block) : content;
+}
+
+const GENERATED_EXPORT_MARKERS = [
+  "// LifemarkAI generated missing lib exports",
+  "// LifemarkAI generated missing data exports",
+  "// LifemarkAI generated missing utility exports",
+  "// LifemarkAI generated missing hook exports",
+  "// LifemarkAI generated missing context exports",
+  "// LifemarkAI generated missing named exports",
+];
+
+function dropDuplicateExportStubs(section: string, declared: Set<string>): string {
+  const stubNames = [...section.matchAll(
+    /\bexport\s+(?:async\s+)?(?:function|const|let|var)\s+([A-Za-z_$][\w$]*)\b/g,
+  )].map((match) => match[1]);
+  if (stubNames.length > 0 && stubNames.every((name) => declared.has(name))) {
+    return "";
+  }
+  return section;
+}
+
+function stripDuplicateGeneratedExportStubs(content: string): string {
+  let next = content;
+  for (const marker of GENERATED_EXPORT_MARKERS) {
+    const idx = next.indexOf(marker);
+    if (idx < 0) continue;
+    const before = next.slice(0, idx);
+    const declared = declaredValueNames(before);
+    if (declared.size === 0) continue;
+    const rest = next.slice(idx + marker.length);
+    const follow = rest.search(/\n\/\/ LifemarkAI generated /);
+    const section = follow >= 0 ? rest.slice(0, follow) : rest;
+    const after = follow >= 0 ? rest.slice(follow) : "";
+    const cleaned = dropDuplicateExportStubs(section, declared);
+    next = cleaned.trim()
+      ? `${before}${marker}${cleaned}${after}`
+      : `${before.trimEnd()}\n${after}`;
+  }
+  return next;
+}
+
+/**
+ * Drop `export const initializeData = []` (and similar) when the file already
+ * exports that name as a function. The DATA$ stub matcher used to treat
+ * `initializeData` as an array constant; awaiting `[]` or a duplicate
+ * declaration crashes the generated app on first paint.
+ *
+ * Also drop generated "missing lib/data/…" function stubs that duplicate a
+ * real implementation earlier in the same file (Vite: multiple exports /
+ * already been declared).
+ */
+export function stripConflictingGeneratedDataStubs(content: string): string {
+  const fns = new Set(
+    [...content.matchAll(/\bexport\s+(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\b/g)].map(
+      (match) => match[1],
+    ),
+  );
+  let next = content;
+  if (fns.size > 0) {
+    next = next.replace(
+      /^export const ([A-Za-z_$][\w$]*) = (?:\[\s*\]|\{\s*\});?[ \t]*(?:\r?\n|$)/gm,
+      (full, name: string) => (fns.has(name) ? "" : full),
+    );
+    next = next.replace(/\n\/\/ LifemarkAI generated missing data exports\n(?!\s*export)/g, "\n");
+  }
+  return stripDuplicateGeneratedExportStubs(next);
 }
 
 function typesFile(names: string[]) {

@@ -1,11 +1,32 @@
 import type { Message } from "@/types/database";
 
+/** Chat rows sometimes arrive with null/object content from streaming or old rows. */
+export function coerceMessageContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (content == null) return "";
+  try {
+    return typeof content === "object" ? JSON.stringify(content) : String(content);
+  } catch {
+    return "";
+  }
+}
+
+/** One-line preview for thread headers / pinned banners. */
+export function previewSnippet(content: unknown, max = 65): string {
+  const text = coerceMessageContent(content).replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
 /** Group a flat message array into per-turn threads (each user message starts a new thread). */
 export function groupIntoThreads(msgs: Message[]): Message[][] {
   const threads: Message[][] = [];
   let current: Message[] = [];
   for (const msg of msgs) {
-    if (msg.role === "user" && current.length > 0) {
+    if (!msg) continue;
+    const clarify = !!(msg.metadata as { clarify?: boolean } | null)?.clarify;
+    // Interview answers stay in the same thread as the opening prompt.
+    if (msg.role === "user" && current.length > 0 && !clarify) {
       threads.push(current);
       current = [msg];
     } else {
@@ -16,8 +37,8 @@ export function groupIntoThreads(msgs: Message[]): Message[][] {
   return threads;
 }
 
-export function stripInternalChatContext(content: string): string {
-  let text = content ?? "";
+export function stripInternalChatContext(content: unknown): string {
+  let text = coerceMessageContent(content);
   text = text
     .replace(/<project_context>[\s\S]*?<\/project_context>\s*/gi, "")
     .replace(/<attached_file\b[^>]*>[\s\S]*?<\/attached_file>\s*/gi, (block) => {
@@ -79,15 +100,19 @@ function firstSentences(content: string, maxSentences = 2, maxChars = 260): stri
 export function getDisplayMessageContent(
   msg: Pick<Message, "role" | "content" | "mode">,
 ): string {
-  const stripped = stripInternalChatContext(msg.content ?? "");
-  if (msg.role === "user") return stripped || "Continue";
+  try {
+    const stripped = stripInternalChatContext(msg.content);
+    if (msg.role === "user") return stripped || "Continue";
 
-  const jsonMessage = tryExtractJsonMessage(stripped);
-  if (jsonMessage) return jsonMessage;
+    const jsonMessage = tryExtractJsonMessage(stripped);
+    if (jsonMessage) return jsonMessage;
 
-  if (msg.mode === "build" || msg.mode === "agent" || msg.mode === "patch") {
-    return firstSentences(stripped, 2, 260) || "Done. Open preview to see the result.";
+    if (msg.mode === "build" || msg.mode === "agent" || msg.mode === "patch") {
+      return firstSentences(stripped, 2, 260) || "Done. Open preview to see the result.";
+    }
+
+    return stripped;
+  } catch {
+    return msg.role === "user" ? "Continue" : "";
   }
-
-  return stripped;
 }

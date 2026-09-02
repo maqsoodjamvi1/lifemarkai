@@ -261,14 +261,36 @@ async function handlePOST(req: Request) {
     );
   }
 
-  const {
-    projectId,
-    provider = "netlify",
-    allowCriticalSecurityFindings = false,
-    // Separate from the critical override on purpose: accepting "this API key is
-    // fake" is a different decision from "yes, publish these card numbers".
-    allowPersonalDataFindings = false,
-  } = await req.json();
+  const body = (await req.json().catch(() => ({}))) as {
+    projectId?: string;
+    provider?: string;
+    action?: string;
+    allowCriticalSecurityFindings?: boolean;
+    allowPersonalDataFindings?: boolean;
+  };
+  const projectId = body.projectId;
+  const provider = body.provider ?? "netlify";
+  const allowCriticalSecurityFindings = body.allowCriticalSecurityFindings === true;
+  const allowPersonalDataFindings = body.allowPersonalDataFindings === true;
+
+  if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
+
+  if (body.action === "unpublish") {
+    const { data: owned } = await supabase
+      .from("projects")
+      .select("id")
+      .eq("id", projectId)
+      .eq("user_id", user.id)
+      .maybeSingle();
+    if (!owned) return Response.json({ error: "Project not found" }, { status: 404 });
+    await supabase
+      .from("projects")
+      .update({ deployed_url: null })
+      .eq("id", projectId)
+      .eq("user_id", user.id);
+    logger.info("deploy.unpublish", { projectId, userId: user.id });
+    return Response.json({ ok: true, unpublished: true });
+  }
 
   // Fetch project + files
   const { data: project } = await supabase

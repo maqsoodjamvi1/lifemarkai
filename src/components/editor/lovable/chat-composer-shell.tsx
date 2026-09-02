@@ -28,7 +28,7 @@ export function LovableChatComposerShell({
         "relative mx-auto w-full max-w-3xl shrink-0 px-2 pb-2 pt-2",
         "max-h-[calc(100%-37px)]",
         "border-t border-[color:var(--border-translucent)]",
-        "bg-[var(--bg-base)]/80 backdrop-blur-sm",
+        "bg-[var(--bg-base)]/70 backdrop-blur-md",
         className,
       )}
       onDragOver={onDragOver}

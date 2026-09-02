@@ -466,7 +466,9 @@ export interface UnresolvedImport {
  * Pure function over the file set — no temp dir, no child process, so it is
  * safe to run on every build regardless of what tooling the image has.
  */
-export function findUnresolvedLocalImports(files: ProjectFile[]): UnresolvedImport[] {
+export function findUnresolvedLocalImports(
+  files: Array<{ path: string; content?: string | null }>,
+): UnresolvedImport[] {
   const known = new Set(
     files.filter((f) => typeof f?.path === "string").map((f) => normalisePath(f.path)),
   );
@@ -559,7 +561,9 @@ export interface MissingKeyWarning {
   formatted: string;
 }
 
-export function findMissingListKeys(files: ProjectFile[]): MissingKeyWarning[] {
+export function findMissingListKeys(
+  files: Array<{ path: string; content?: string | null }>,
+): MissingKeyWarning[] {
   const out: MissingKeyWarning[] = [];
   for (const f of files) {
     if (typeof f?.path !== "string" || typeof f.content !== "string") continue;

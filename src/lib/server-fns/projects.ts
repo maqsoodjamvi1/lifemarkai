@@ -541,14 +541,13 @@ export async function deleteProject(data: any) {
     if (cleanup?.github_repo && cleanup?.github_webhook_id) {
       const { data: profile } = await supabase
         .from("profiles")
-        .select("github_access_token")
+        .select("github_access_token, github_api_base")
         .eq("id", user.id)
         .single();
       const token = profile?.github_access_token;
       if (token) {
-        // Best-effort, never blocks the delete response — deleteWebhook
-        // itself never throws (see its own doc comment).
-        deleteWebhook(token, cleanup.github_repo, cleanup.github_webhook_id).catch((err) => {
+        const apiBase = (profile as { github_api_base?: string | null } | null)?.github_api_base;
+        deleteWebhook({ token, apiBase }, cleanup.github_repo, cleanup.github_webhook_id).catch((err) => {
           logger.info("github.webhook.cleanup_failed", {
             projectId: data.id,
             message: err instanceof Error ? err.message : String(err),

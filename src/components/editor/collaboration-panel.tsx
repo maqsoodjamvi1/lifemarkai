@@ -70,10 +70,23 @@ export function CollaborationPanel({ project, currentUserId, yjsCollaborators = 
   const shareLink = `${typeof window !== "undefined" ? window.location.origin : ""}/editor/${project.id}`;
 
   useEffect(() => {
-    loadCollaborators();
+    let cancelled = false;
+    void (async () => {
+      setLoading(true);
+      const { data } = await supabase
+        .from("collaborators")
+        .select("*, profile:profiles(full_name, email, avatar_url)")
+        .eq("project_id", project.id);
+      if (cancelled) return;
+      if (data) setCollaborators(data as unknown as Collaborator[]);
+      setLoading(false);
+    })();
     const cleanupPresence = setupPresence();
-    return () => { cleanupPresence(); };
-  }, []);
+    return () => {
+      cancelled = true;
+      cleanupPresence();
+    };
+  }, [project.id, currentUserId]);
 
   async function loadCollaborators() {
     setLoading(true);
@@ -144,11 +157,43 @@ export function CollaborationPanel({ project, currentUserId, yjsCollaborators = 
     }
   }
 
+  const isOwner = project.user_id === currentUserId;
+
+  async function changeCollaboratorRole(collaboratorId: string, role: "editor" | "viewer") {
+    try {
+      const res = await fetch("/api/projects/invite", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectId: project.id, collaboratorId, role }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? "Could not update role");
+      setCollaborators((prev) => prev.map((c) => (c.id === collaboratorId ? { ...c, role } : c)));
+    } catch (err: unknown) {
+      toast({
+        title: "Role not updated",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
+    }
+  }
+
   async function removeCollaborator(collaboratorId: string) {
-    const { error } = await supabase.from("collaborators").delete().eq("id", collaboratorId);
-    if (!error) {
+    try {
+      const res = await fetch(
+        `/api/projects/invite?projectId=${encodeURIComponent(project.id)}&collaboratorId=${encodeURIComponent(collaboratorId)}`,
+        { method: "DELETE" },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error((data as { error?: string }).error ?? "Could not remove collaborator");
       setCollaborators((prev) => prev.filter((c) => c.id !== collaboratorId));
       toast({ title: "Collaborator removed" });
+    } catch (err: unknown) {
+      toast({
+        title: "Could not remove",
+        description: err instanceof Error ? err.message : undefined,
+        variant: "destructive",
+      });
     }
   }
 
@@ -431,11 +476,25 @@ export function CollaborationPanel({ project, currentUserId, yjsCollaborators = 
                       <p className="text-sm font-medium truncate">{collab.profile.full_name}</p>
                       <p className="text-xs text-muted-foreground truncate">{collab.profile.email}</p>
                     </div>
-                    <div className="flex items-center gap-1 text-xs text-muted-foreground capitalize">
-                      <RoleIcon className="w-3 h-3" />
-                      {collab.role}
-                    </div>
-                    {collab.user_id !== currentUserId && (
+                    {isOwner && collab.role !== "owner" && collab.user_id !== currentUserId ? (
+                      <select
+                        value={collab.role === "viewer" ? "viewer" : "editor"}
+                        onChange={(e) =>
+                          void changeCollaboratorRole(collab.id, e.target.value as "editor" | "viewer")
+                        }
+                        className="h-7 text-[10px] rounded-md border border-border bg-background px-1 capitalize"
+                        aria-label={`Role for ${collab.profile.full_name || collab.profile.email}`}
+                      >
+                        <option value="editor">editor</option>
+                        <option value="viewer">viewer</option>
+                      </select>
+                    ) : (
+                      <div className="flex items-center gap-1 text-xs text-muted-foreground capitalize">
+                        <RoleIcon className="w-3 h-3" />
+                        {collab.role}
+                      </div>
+                    )}
+                    {isOwner && collab.user_id !== currentUserId && (
                       <button
                         onClick={() => removeCollaborator(collab.id)}
                         className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10 hover:text-destructive"

@@ -13,12 +13,29 @@ pushChangedFiles,
 getBranchStatus,
 createOrGetPR,
 createWebhook,
+deleteWebhook,
+type GitHubAuth,
 } from "@/lib/github/client";
 import { logger } from "../logger.ts";
 import { randomBytes } from "node:crypto";
 import { verifyGatewayOAuthState } from "../oauth/gateway-state.ts";
-import { deleteWebhook } from "@/lib/github/client";
 import { getProjectAccess,canWriteProjectFiles } from "@/lib/project/access";
+import {
+  githubOAuthClientId,
+  githubOAuthClientSecret,
+  githubOAuthTokenUrl,
+  githubUserEndpoint,
+  normalizeGitHubApiBase,
+  normalizeGitHubWebOrigin,
+  resolveGitHubApiBase,
+} from "@/lib/github/host";
+
+function githubAuthFromProfile(profile: {
+  github_access_token: string;
+  github_api_base?: string | null;
+}) {
+  return { token: profile.github_access_token, apiBase: profile.github_api_base ?? null };
+}
 
 // ── OAuth callback: exchange code → token, save to profile ───────────────────
 // `data.state` is the signed token minted by /api/github/start (see that
@@ -48,12 +65,24 @@ export async function completeGithubConnect(data: any) {
       return { status: "invalid_state" as const, redirectPath: "/dashboard?error=github_state_user_mismatch" };
     }
 
-    const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+    const oauthOrigin = state.githubHost
+      ? normalizeGitHubWebOrigin(state.githubHost)
+      : "https://github.com";
+    if (!oauthOrigin) {
+      return { status: "invalid_state" as const, redirectPath: "/dashboard?error=github_invalid_host" };
+    }
+    const clientId = githubOAuthClientId(oauthOrigin);
+    const clientSecret = githubOAuthClientSecret(oauthOrigin);
+    if (!clientId || !clientSecret) {
+      return { status: "no_token" as const, redirectPath: "/dashboard?error=github_oauth_config" };
+    }
+
+    const tokenRes = await fetch(githubOAuthTokenUrl(oauthOrigin), {
       method: "POST",
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({
-        client_id: process.env.GITHUB_CLIENT_ID,
-        client_secret: process.env.GITHUB_CLIENT_SECRET,
+        client_id: clientId,
+        client_secret: clientSecret,
         code: data.code,
       }),
     });
@@ -61,17 +90,79 @@ export async function completeGithubConnect(data: any) {
     const accessToken = tokenData.access_token;
     if (!accessToken) return { status: "no_token" as const, redirectPath: "/dashboard?error=github_token" };
 
-    const userRes = await fetch("https://api.github.com/user", {
+    const apiBase = oauthOrigin !== "https://github.com"
+      ? resolveGitHubApiBase(oauthOrigin)
+      : null;
+    const userRes = await fetch(githubUserEndpoint(apiBase), {
       headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
     });
     const githubUser = await userRes.json();
 
     await supabase
       .from("profiles")
-      .update({ github_username: githubUser.login, github_access_token: accessToken })
+      .update({
+        github_username: githubUser.login,
+        github_access_token: accessToken,
+        github_api_base: apiBase,
+      } as never)
       .eq("id", user.id);
 
     return { status: "ok" as const, redirectPath: state.returnTo };
+}
+
+/**
+ * GitHub Enterprise Server (and github.com) personal-access-token connect.
+ * OAuth apps are registered per GHE hostname; a PAT is the portable path.
+ */
+export async function completeGithubPatConnect(data: { token?: string; host?: string }) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { status: "unauthorized" as const };
+
+  const token = String(data.token ?? "").trim();
+  if (!token || token.length < 20 || token.length > 256) {
+    return { status: "bad_request" as const, message: "A valid personal access token is required." };
+  }
+  const looksLikeGithubToken =
+    /^(gh[pousr]_|github_pat_)/.test(token) || token.startsWith("github_pat_");
+  if (!looksLikeGithubToken) {
+    return { status: "bad_request" as const, message: "That does not look like a GitHub personal access token." };
+  }
+
+  const hostRaw = data.host?.trim() ?? "";
+  const apiBase = hostRaw ? normalizeGitHubApiBase(hostRaw) : resolveGitHubApiBase(null);
+  if (hostRaw && apiBase === null) {
+    const isPublic = /^https:\/\/(www\.)?(github|api\.github)\.com/i.test(hostRaw);
+    if (!isPublic) {
+      return { status: "bad_request" as const, message: "Enterprise host must be an https URL (e.g. https://github.mycompany.com)." };
+    }
+  }
+
+  const userRes = await fetch(githubUserEndpoint(apiBase), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (!userRes.ok) {
+    return { status: "bad_token" as const, message: "GitHub rejected that token. Check the host URL and repo scope." };
+  }
+  const githubUser = await userRes.json() as { login?: string };
+  if (!githubUser.login) {
+    return { status: "bad_token" as const, message: "GitHub did not return a username for that token." };
+  }
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({
+      github_username: githubUser.login,
+      github_access_token: token,
+      github_api_base: apiBase,
+    } as never)
+    .eq("id", user.id);
+  if (error) return { status: "error" as const, message: error.message };
+  return { status: "ok" as const, username: githubUser.login, enterprise: Boolean(apiBase) };
 }
 
 // ── Commit history ──────────────────────────────────────────────────────────
@@ -85,13 +176,16 @@ export async function getRepoCommits(data: any) {
 
     const { data: profile } = await supabase
       .from("profiles")
-      .select("github_access_token, github_username")
+      .select("github_access_token, github_username, github_api_base")
       .eq("id", user.id)
       .single();
     if (!profile?.github_access_token) return { status: "not_connected" as const };
 
     try {
-      const commits = await getCommitHistory(profile.github_access_token, data.owner, data.repo, data.perPage);
+      const commits = await getCommitHistory(githubAuthFromProfile({
+        github_access_token: profile.github_access_token,
+        github_api_base: (profile as { github_api_base?: string | null }).github_api_base,
+      }), data.owner, data.repo, data.perPage);
       return { status: "ok" as const, commits };
     } catch (error: any) {
       return { status: "error" as const, message: error?.message ?? "Failed to fetch commits" };
@@ -126,11 +220,11 @@ const LANG_MAP: Record<string, string> = {
 export async function pullAndStoreFiles(
   supabase: Awaited<ReturnType<typeof createClient>>,
   projectId: string,
-  token: string,
+  auth: GitHubAuth,
   repo: string,
   branch: string,
 ): Promise<{ fileCount: number; failedPaths: string[] }> {
-  const files = await pullFiles(token, repo, branch);
+  const files = await pullFiles(auth, repo, branch);
   const failedPaths: string[] = [];
   for (const file of files) {
     const ext = file.path.split(".").pop()?.toLowerCase() ?? "";
@@ -153,7 +247,7 @@ export async function pullAndStoreFiles(
 async function ensureWebhookRegistered(
   supabase: Awaited<ReturnType<typeof createClient>>,
   projectId: string,
-  token: string,
+  auth: GitHubAuth,
   repo: string,
 ): Promise<void> {
   const { data: existing } = await supabase
@@ -166,7 +260,7 @@ async function ensureWebhookRegistered(
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const secret = randomBytes(24).toString("hex");
   try {
-    const hook = await createWebhook(token, repo, `${appUrl}/api/github/webhook`, secret);
+    const hook = await createWebhook(auth, repo, `${appUrl}/api/github/webhook`, secret);
     const { error: persistError } = await supabase
       .from("projects")
       // github_webhook_secret/github_webhook_id aren't in the committed
@@ -185,7 +279,7 @@ async function ensureWebhookRegistered(
       logger.info("github.webhook.persist_failed", {
         projectId, repo, message: persistError.message,
       });
-      deleteWebhook(token, repo, hook.id).catch(() => undefined);
+      deleteWebhook(auth, repo, hook.id).catch(() => undefined);
     }
   } catch (error) {
     logger.info("github.webhook.register_failed", {
@@ -204,7 +298,7 @@ export async function githubSync(data: any) {
 
     const { data: profile } = await supabase
       .from("profiles")
-      .select("github_access_token, github_username")
+      .select("github_access_token, github_username, github_api_base")
       .eq("id", user.id)
       .single();
     if (!profile?.github_access_token) return { status: "not_connected" as const };
@@ -228,23 +322,26 @@ export async function githubSync(data: any) {
     const access = await getProjectAccess(supabase, data.projectId, user.id);
     if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
 
-    const token = profile.github_access_token;
+    const auth = githubAuthFromProfile({
+      github_access_token: profile.github_access_token,
+      github_api_base: (profile as { github_api_base?: string | null }).github_api_base,
+    });
     const { projectId, action } = data;
 
     if (action === "create") {
       const repoSlug = project.name.toLowerCase().replace(/\s+/g, "-");
-      const repo = await createRepo(token, repoSlug, project.description ?? undefined);
+      const repo = await createRepo(auth, repoSlug, project.description ?? undefined);
       const files = (project.project_files ?? []).map((f: { path: string; content: string }) => ({
         path: f.path, content: f.content,
       }));
-      await pushFiles(token, repo.full_name, files, "Initial commit from LifemarkAI 🚀");
+      await pushFiles(auth, repo.full_name, files, "Initial commit from LifemarkAI 🚀");
       const branch = projectBranchName(project.name, projectId);
-      await ensureBranch(token, repo.full_name, branch, "main");
+      await ensureBranch(auth, repo.full_name, branch, "main");
       await supabase
         .from("projects")
         .update({ github_repo: repo.full_name, github_branch: branch })
         .eq("id", projectId);
-      await ensureWebhookRegistered(supabase, projectId, token, repo.full_name);
+      await ensureWebhookRegistered(supabase, projectId, auth, repo.full_name);
       logger.info("github.sync.create", { projectId, repo: repo.full_name, branch });
       return { status: "ok" as const, payload: { repo: repo.full_name, url: repo.html_url, branch } };
     }
@@ -257,18 +354,18 @@ export async function githubSync(data: any) {
         : projectBranchName(project.name, projectId);
 
     if (action === "push") {
-      await ensureBranch(token, repo, branch, "main");
+      await ensureBranch(auth, repo, branch, "main");
       const files = (project.project_files ?? []).map((f: { path: string; content: string }) => ({
         path: f.path, content: f.content,
       }));
       const { changed, commitSha, conflictBranch } = await pushChangedFiles(
-        token, repo, branch, files,
+        auth, repo, branch, files,
         `Update from LifemarkAI · ${new Date().toISOString()}`,
       );
       await supabase.from("projects").update({ github_branch: branch }).eq("id", projectId);
       // Lazily registers on the first push after this feature shipped, for
       // projects that connected a repo before webhook sync existed.
-      await ensureWebhookRegistered(supabase, projectId, token, repo);
+      await ensureWebhookRegistered(supabase, projectId, auth, repo);
       if (conflictBranch) {
         logger.info("github.sync.push_conflict", { projectId, branch, conflictBranch, commitSha });
       }
@@ -277,7 +374,7 @@ export async function githubSync(data: any) {
     }
 
     if (action === "pull") {
-      const files = await pullFiles(token, repo, branch);
+      const files = await pullFiles(auth, repo, branch);
       // Every upsert's `{ error }` was discarded and the count returned was
       // the number FETCHED from GitHub, not the number written. A pull that
       // stored nothing reported "N files updated".
@@ -325,9 +422,9 @@ export async function githubSync(data: any) {
     }
 
     if (action === "pr") {
-      await ensureBranch(token, repo, branch, "main");
+      await ensureBranch(auth, repo, branch, "main");
       const pr = await createOrGetPR(
-        token, repo, branch, "main",
+        auth, repo, branch, "main",
         `Changes from LifemarkAI · ${project.name}`,
         `This pull request was generated by [LifemarkAI](https://lifemarkai.app).\n\n**Project:** ${project.name}`,
       );
@@ -337,8 +434,8 @@ export async function githubSync(data: any) {
 
     if (action === "status") {
       try {
-        await ensureBranch(token, repo, branch, "main");
-        const st = await getBranchStatus(token, repo, branch, "main");
+        await ensureBranch(auth, repo, branch, "main");
+        const st = await getBranchStatus(auth, repo, branch, "main");
         return { status: "ok" as const, payload: { branch, ...st } };
       } catch {
         return { status: "ok" as const, payload: { branch, ahead: 0, behind: 0, diverged: false } };

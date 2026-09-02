@@ -32,13 +32,19 @@ describe("error-class gate", () => {
     }
   });
 
-  it("a runtime crash is NOT fixable — no strings get rewritten on a guess", () => {
+  it("a runtime crash with no local defects is NOT rewritten", () => {
     assert.equal(hasDeterministicallyFixableErrors([RUNTIME_ERROR]), false);
-    const files = [f("src/App.tsx", 'import { X } from "./X";\nexport default () => null;')];
+    const files = [f("src/App.tsx", "export default function App() { return <div>ok</div>; }")];
     const out = deterministicRepair(files, [RUNTIME_ERROR]);
     assert.equal(out.files, files); // identity — not even a copy
     assert.deepEqual(out.changedPaths, []);
     assert.deepEqual(out.createdPaths, []);
+  });
+
+  it("still repairs a missing import when the reported error is a runtime crash", () => {
+    const files = [f("src/App.tsx", 'import { formatPrice } from "./lib/utils";\nexport default () => <div>{formatPrice(1)}</div>;')];
+    const out = deterministicRepair(files, [RUNTIME_ERROR]);
+    assert.ok(out.createdPaths.some((path) => /lib\/utils/.test(path)));
   });
 });
 
@@ -120,6 +126,16 @@ describe("library maturity", () => {
     assert.equal(pkg.dependencies.recharts, "^2.12.7"); // the allowlist pin
   });
 
+  it("creates a placeholder for a missing image without a model", () => {
+    const files = [
+      f("src/App.tsx", 'import logo from "./logo.png";\nexport default () => <img src={logo} />;'),
+    ];
+    const out = deterministicRepair(files, []);
+    assert.ok(out.createdPaths.some((path) => path.endsWith(".svg")));
+    const app = out.files.find((file) => file.path === "src/App.tsx")!;
+    assert.match(app.content!, /\.svg/);
+  });
+
   it("never adds a refused package — that error must reach the model as a rewrite", () => {
     const files = [
       f("package.json", PKG),
@@ -130,5 +146,14 @@ describe("library maturity", () => {
     ]);
     assert.deepEqual(out.changedPaths, []);
     assert.deepEqual(out.createdPaths, []);
+  });
+});
+
+describe("jsx preview gate — zero model involvement", () => {
+  it("rewrites HTML class attributes in TSX without a model", () => {
+    const files = [f("src/App.tsx", 'export default () => <div class="hero">Hi</div>;')];
+    const out = deterministicRepair(files, []);
+    assert.deepEqual(out.changedPaths, ["src/App.tsx"]);
+    assert.match(out.files[0]!.content!, /className="hero"/);
   });
 });

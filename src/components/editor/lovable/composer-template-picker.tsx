@@ -1,7 +1,7 @@
 
 import { AnimatePresence,motion } from "framer-motion";
 import { Palette,Sparkles } from "lucide-react";
-import { LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY,LOVABLE_PROMPT_TEMPLATES } from "./prompt-templates";
+import { LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY,LOVABLE_PROMPT_TEMPLATES,LOVABLE_PUBLISH_SLASH_KEY } from "./prompt-templates";
 
 export interface LovableSkillOption {
   id: string;
@@ -92,6 +92,23 @@ export function LovableComposerTemplatePicker({
                     </span>
                   </div>
                   {group.prompts.map((prompt) => {
+                    if (prompt === LOVABLE_PUBLISH_SLASH_KEY) {
+                      return (
+                        <button
+                          key={prompt}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            onSelectTemplate(prompt);
+                          }}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-xs text-left hover:bg-accent hover:text-accent-foreground transition-colors ${
+                            selectedKey === `tpl:${prompt}` ? "bg-accent text-accent-foreground" : ""
+                          }`}
+                        >
+                          <span className="text-muted-foreground/40 font-mono text-[10px] shrink-0">/</span>
+                          <span className="truncate">Publish this project</span>
+                        </button>
+                      );
+                    }
                     if (prompt === LOVABLE_DESIGN_DIRECTIONS_SLASH_KEY) {
                       return (
                         <button

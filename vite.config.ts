@@ -109,7 +109,9 @@ export default defineConfig(({ mode }) => {
       e.NEXT_PUBLIC_PREVIEW_WEBCONTAINER ||
       process.env.NEXT_PUBLIC_PREVIEW_WEBCONTAINER ||
       "";
-    return v === "1" || v === "true";
+    // Default ON so local/dev can preview without a paid Modal sandbox.
+    // Set NEXT_PUBLIC_PREVIEW_WEBCONTAINER=0 to disable COOP/COEP headers.
+    return v !== "0" && v !== "false";
   })();
   const env = mergeEnv(mode);
   const supabaseUrl =
@@ -161,20 +163,9 @@ export default defineConfig(({ mode }) => {
         // PHASE 2: the Start app no longer serves files from the main repo.
         allow: [rootDir],
       },
-      // Cross-origin isolation — required for WebContainer (SharedArrayBuffer).
-      //
-      // Applied ONLY when the WebContainer engine is switched on, because
-      // isolation is not free: it changes how every cross-origin resource on
-      // the page loads. Modal is the default engine and its preview is a
-      // cross-origin iframe, so turning this on unconditionally could break the
-      // primary path in order to enable a fallback — the wrong trade.
-      //
-      // COEP is `credentialless` rather than `require-corp` on purpose:
-      // require-corp REJECTS any cross-origin resource that doesn't send a
-      // CORP header (the Modal tunnel, Supabase, remote images, fonts), which
-      // would break far more than it fixes. credentialless loads them without
-      // credentials instead. Note it is not supported in every browser — Safari
-      // in particular — so treat WebContainer as a Chromium-first fallback.
+      // Cross-origin isolation — required for the free in-browser WebContainer.
+      // Default on (unless NEXT_PUBLIC_PREVIEW_WEBCONTAINER=0). COEP is
+      // `credentialless` so a later Modal iframe can still load.
       ...(webContainerEnabled
         ? {
             headers: {
@@ -239,6 +230,13 @@ export default defineConfig(({ mode }) => {
         env.VITE_PREVIEW_WEBCONTAINER ||
           env.NEXT_PUBLIC_PREVIEW_WEBCONTAINER ||
           process.env.NEXT_PUBLIC_PREVIEW_WEBCONTAINER ||
+          "",
+      ),
+      "process.env.NEXT_PUBLIC_GITHUB_ENTERPRISE_HOST": JSON.stringify(
+        env.NEXT_PUBLIC_GITHUB_ENTERPRISE_HOST ||
+          env.GITHUB_ENTERPRISE_HOST ||
+          process.env.NEXT_PUBLIC_GITHUB_ENTERPRISE_HOST ||
+          process.env.GITHUB_ENTERPRISE_HOST ||
           "",
       ),
     },

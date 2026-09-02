@@ -569,9 +569,10 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
     enabled: true,
     ok: true,
     ready: bootReady,
-    // Withhold the URL until the app answers. Handing it over early is the
-    // whole "Bad Gateway in the preview pane" failure.
-    previewUrl: bootReady ? result.previewUrl : null,
+    // Always include the origin. Withholding it until the in-container probe
+    // wins left a blank "Starting live preview" pane while Vite was already
+    // bound — the browser will wait longer than our probe budget.
+    previewUrl: result.previewUrl ?? null,
     sandboxId: result.sandboxId,
     logs: result.logs,
     provider: getSandboxProviderId(),
@@ -877,12 +878,8 @@ async function handleGET(req: Request, params: any) {
         metadata: {
           ...meta,
           sandbox_id: result.sandboxId ?? sandboxId,
-          ...(warmReady
-            ? {}
-            : {
-                sandbox_phase: "starting",
-                sandbox_phase_detail: "Waking your app…",
-              }),
+          sandbox_phase: warmReady ? "ready" : "starting",
+          sandbox_phase_detail: warmReady ? null : "Waking your app…",
           sandbox_updated_at: new Date().toISOString(),
         },
       })
@@ -897,6 +894,10 @@ async function handleGET(req: Request, params: any) {
         // latter and cold-boots — tearing down a perfectly good container
         // because its dev server happened to be mid-restart.
         waking: true,
+        // Hand the URL over anyway. Withholding it left the editor on
+        // "Starting live preview" while Vite was already serving — the in-
+        // container probe budget is shorter than a cold HTML transform.
+        previewUrl: result.previewUrl,
         sandboxId: result.sandboxId ?? sandboxId,
         reconnected: true,
         provider: getSandboxProviderId(),
@@ -912,9 +913,8 @@ async function handleGET(req: Request, params: any) {
       sandboxId: result.sandboxId ?? sandboxId,
       reconnected: true,
       provider: getSandboxProviderId(),
-      phase: typeof meta.sandbox_phase === "string" ? meta.sandbox_phase : "ready",
-      phaseDetail:
-        typeof meta.sandbox_phase_detail === "string" ? meta.sandbox_phase_detail : null,
+      phase: "ready",
+      phaseDetail: null,
     });
   }
 

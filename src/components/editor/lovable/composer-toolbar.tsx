@@ -4,6 +4,9 @@ import {
 DropdownMenu,
 DropdownMenuContent,
 DropdownMenuItem,
+DropdownMenuSub,
+DropdownMenuSubContent,
+DropdownMenuSubTrigger,
 DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { EditorMode,LeftPanel } from "@/components/editor/editor-layout";
@@ -85,40 +88,9 @@ export function LovableComposerContextMenu({ actions }: { actions: ComposerConte
           Clear chat
         </DropdownMenuItem>
         <div className="h-px bg-[color:var(--border-default)] my-1" />
-        <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => actions.onOpenPanel?.("settings")}>
-          <span className="flex-1">Settings</span>
-          <span className="text-[10px] text-[var(--fg-tertiary)]/60">Ctrl+.</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => actions.onOpenPanel?.("history")}>
-          History
-        </DropdownMenuItem>
-        <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => actions.onOpenPanel?.("knowledge")}>
-          Knowledge
-        </DropdownMenuItem>
-        <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => actions.onOpenPanel?.("github")}>
-          GitHub
-        </DropdownMenuItem>
-        <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => actions.onOpenPanel?.("connectors")}>
-          <span className="flex-1">Connectors</span>
-        </DropdownMenuItem>
-        <div className="h-px bg-[color:var(--border-default)] my-1" />
         <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onScreenshot}>
           Take a screenshot
         </DropdownMenuItem>
-        <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onAddReference}>
-          Add reference
-        </DropdownMenuItem>
-        <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onAddSkill}>
-          Add skill
-        </DropdownMenuItem>
-        <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onAnalyzeData}>
-          Analyze data
-        </DropdownMenuItem>
-        {actions.onDesignDirections && (
-          <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onDesignDirections}>
-            Design directions…
-          </DropdownMenuItem>
-        )}
         <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onAttach}>
           Attach
         </DropdownMenuItem>
@@ -127,32 +99,56 @@ export function LovableComposerContextMenu({ actions }: { actions: ComposerConte
             {actions.isVisualEditActive ? "Exit visual edits" : "Visual edits"}
           </DropdownMenuItem>
         )}
-        {actions.onToggleMobileMode && (
-          <DropdownMenuItem
-            className="text-xs gap-2.5 py-2"
-            disabled={actions.mobileDisabled}
-            onClick={actions.onToggleMobileMode}
-          >
-            {actions.mobileMode ? "Desktop composer" : "Mobile composer"}
-          </DropdownMenuItem>
-        )}
-        {actions.onToggleFileGenPicker && (
-          <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onToggleFileGenPicker}>
-            {actions.showFileGenPicker ? "Hide file generator" : "Generate file"}
-          </DropdownMenuItem>
-        )}
-        {actions.onToggleModelMenu && (
-          <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onToggleModelMenu}>
-            {actions.showModelMenu ? "Hide model options" : "Model & multi-agent"}
-          </DropdownMenuItem>
-        )}
-        <div className="h-px bg-[color:var(--border-default)] my-1" />
-        <div className="px-2 py-2">
-          <p className="text-[10px] font-medium text-[var(--fg-primary)]/80">Connectors have moved</p>
-          <p className="text-[10px] text-[var(--fg-tertiary)] leading-snug">
-            Find the new connector experience on the homepage.
-          </p>
-        </div>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger className="text-xs py-2">More</DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="w-48">
+            <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => actions.onOpenPanel?.("settings")}>
+              Settings
+            </DropdownMenuItem>
+            <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => actions.onOpenPanel?.("history")}>
+              History
+            </DropdownMenuItem>
+            <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => actions.onOpenPanel?.("github")}>
+              GitHub
+            </DropdownMenuItem>
+            <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={() => actions.onOpenPanel?.("connectors")}>
+              Connectors
+            </DropdownMenuItem>
+            <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onAddReference}>
+              Add reference
+            </DropdownMenuItem>
+            <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onAddSkill}>
+              Add skill
+            </DropdownMenuItem>
+            <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onAnalyzeData}>
+              Analyze data
+            </DropdownMenuItem>
+            {actions.onDesignDirections && (
+              <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onDesignDirections}>
+                Design directions…
+              </DropdownMenuItem>
+            )}
+            {actions.onToggleMobileMode && (
+              <DropdownMenuItem
+                className="text-xs gap-2.5 py-2"
+                disabled={actions.mobileDisabled}
+                onClick={actions.onToggleMobileMode}
+              >
+                {actions.mobileMode ? "Desktop composer" : "Mobile composer"}
+              </DropdownMenuItem>
+            )}
+            {actions.onToggleFileGenPicker && (
+              <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onToggleFileGenPicker}>
+                {actions.showFileGenPicker ? "Hide file generator" : "Generate file"}
+              </DropdownMenuItem>
+            )}
+            {actions.onToggleModelMenu && (
+              <DropdownMenuItem className="text-xs gap-2.5 py-2" onClick={actions.onToggleModelMenu}>
+                {actions.showModelMenu ? "Hide model options" : "Model & multi-agent"}
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
       </DropdownMenuContent>
     </DropdownMenu>
   );

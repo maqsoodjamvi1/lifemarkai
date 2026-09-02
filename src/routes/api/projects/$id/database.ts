@@ -1,8 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { resolveAppBackend } from "@/lib/cloud/project-backend";
 import { queryManagedSql,runManagedSql } from "@/lib/cloud/management";
-import { ENV_FILE_PATH,parseEnvFile } from "@/lib/project/env-file";
+import { getOrRefreshGatewayToken } from "@/lib/oauth/gateway-tokens";
+import { queryUserSupabaseSql,supabaseRefFromProjectUrl } from "@/lib/cloud/user-supabase";
 
 
 interface Params { params: Promise<{ id: string }> }
@@ -37,12 +39,7 @@ function badIdent(name: string): boolean {
   return typeof name !== "string" || !IDENT_RE.test(name);
 }
 
-// ── Backend resolution ───────────────────────────────────────────────────────
-type Backend =
-  | { kind: "cloud"; ref: string }
-  | { kind: "supabase"; url: string; key: string; rls: boolean }
-  | { kind: "none" };
-
+type Backend = Awaited<ReturnType<typeof resolveAppBackend>>;
 type Supabase = Awaited<ReturnType<typeof createClient>>;
 interface OwnedProject {
   id: string;
@@ -53,26 +50,7 @@ interface OwnedProject {
 }
 
 async function resolveBackend(supabase: Supabase, project: OwnedProject): Promise<Backend> {
-  if (project.cloud_enabled && project.cloud_project_ref) {
-    return { kind: "cloud", ref: project.cloud_project_ref };
-  }
-  // The app's own Supabase — creds live in the project's .env.local file
-  // (same storage the Env panel uses: project_files at ENV_FILE_PATH).
-  const { data: envRow } = await supabase
-    .from("project_files")
-    .select("content")
-    .eq("project_id", project.id)
-    .eq("path", ENV_FILE_PATH)
-    .maybeSingle();
-  const vars = parseEnvFile(envRow?.content ?? "");
-  const url = (vars.VITE_SUPABASE_URL ?? vars.NEXT_PUBLIC_SUPABASE_URL ?? "").trim().replace(/\/+$/, "");
-  const serviceKey = (vars.SUPABASE_SERVICE_ROLE_KEY ?? "").trim();
-  const anonKey = (vars.VITE_SUPABASE_ANON_KEY ?? vars.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "").trim();
-  const key = serviceKey || anonKey;
-  if (/^https:\/\/[\w.-]+/.test(url) && key) {
-    return { kind: "supabase", url, key, rls: !serviceKey };
-  }
-  return { kind: "none" };
+  return resolveAppBackend(supabase, project);
 }
 
 function restHeaders(key: string): Record<string, string> {
@@ -113,6 +91,50 @@ async function handleGET(req: Request, params: any) {
   const action = new URL(req.url).searchParams.get("action") ?? "tables";
 
   try {
+    if (action === "auth_users") {
+      if (backend.kind === "none") {
+        return Response.json({ backend: "none", users: [] });
+      }
+      if (backend.kind === "cloud") {
+        const res = await queryManagedSql<{
+          id: string;
+          email: string | null;
+          created_at: string | null;
+          last_sign_in_at: string | null;
+        }>(
+          backend.ref,
+          `SELECT id::text, email, created_at::text, last_sign_in_at::text
+           FROM auth.users
+           ORDER BY created_at DESC NULLS LAST
+           LIMIT 100`,
+        );
+        if (!res.ok) return Response.json({ error: res.error }, { status: 502 });
+        return Response.json({ backend: "cloud", users: res.rows ?? [] });
+      }
+      if (backend.rls) {
+        return Response.json({
+          backend: "supabase",
+          users: [],
+          note: "Listing users needs the project's service role key (Connect Supabase with OAuth, or add SUPABASE_SERVICE_ROLE_KEY).",
+        });
+      }
+      const res = await fetch(`${backend.url}/auth/v1/admin/users?page=1&per_page=100`, {
+        headers: restHeaders(backend.key),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        return Response.json({ error: `Auth admin ${res.status}: ${body.slice(0, 300)}` }, { status: 502 });
+      }
+      const payload = (await res.json()) as { users?: Array<{ id: string; email?: string; created_at?: string; last_sign_in_at?: string }> };
+      const users = (payload.users ?? []).map((u) => ({
+        id: u.id,
+        email: u.email ?? null,
+        created_at: u.created_at ?? null,
+        last_sign_in_at: u.last_sign_in_at ?? null,
+      }));
+      return Response.json({ backend: "supabase", users });
+    }
+
     if (action === "tables") {
       if (backend.kind === "none") {
         return Response.json({ backend: "none", tables: [] });
@@ -206,20 +228,33 @@ async function handlePOST(req: Request, params: any) {
   }
 
   try {
-    // ── SQL runner (managed Cloud only — Management API executes raw SQL) ──
+    // SQL runner: managed Cloud (platform token) or own Supabase (user OAuth).
     if (action === "sql") {
-      if (backend.kind !== "cloud") {
-        return Response.json(
-          { error: "The SQL editor is only available on managed Lifemark Cloud backends." },
-          { status: 400 },
-        );
-      }
       const sql = String(body?.sql ?? "").trim();
       if (!sql) return Response.json({ error: "sql is required" }, { status: 400 });
       if (BLOCKED_SQL_RE.test(sql)) {
         return Response.json({ error: "This statement is blocked for safety." }, { status: 400 });
       }
-      const res = await queryManagedSql(backend.ref, sql);
+      if (backend.kind === "cloud") {
+        const res = await queryManagedSql(backend.ref, sql);
+        if (!res.ok) return Response.json({ error: res.error }, { status: 502 });
+        return Response.json({ ok: true, rows: res.rows ?? [] });
+      }
+      const ref = supabaseRefFromProjectUrl(backend.url);
+      if (!ref) {
+        return Response.json(
+          { error: "Could not read a Supabase project ref from VITE_SUPABASE_URL. SQL needs a hosted *.supabase.co project." },
+          { status: 400 },
+        );
+      }
+      const token = await getOrRefreshGatewayToken(supabase, user.id, "supabase");
+      if (!token) {
+        return Response.json(
+          { error: "Connect your Supabase account (Cloud → Connect existing) to run SQL on this project." },
+          { status: 400 },
+        );
+      }
+      const res = await queryUserSupabaseSql(token, ref, sql);
       if (!res.ok) return Response.json({ error: res.error }, { status: 502 });
       return Response.json({ ok: true, rows: res.rows ?? [] });
     }

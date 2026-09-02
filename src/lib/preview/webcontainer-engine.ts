@@ -148,8 +148,8 @@ export function webContainerBlocker(): string | null {
   if (typeof SharedArrayBuffer === "undefined" || !isCrossOriginIsolated()) {
     return (
       "This page is not cross-origin isolated, so SharedArrayBuffer is unavailable. " +
-      "Set NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1 and restart the dev server (vite.config " +
-      "only sends the COOP/COEP headers when that flag is on)."
+      "Restart the dev server after a config change. WebContainer needs Chromium " +
+      "(COOP/COEP). Set NEXT_PUBLIC_PREVIEW_WEBCONTAINER=0 to disable this engine."
     );
   }
   if (wcFatal) return wcFatal;

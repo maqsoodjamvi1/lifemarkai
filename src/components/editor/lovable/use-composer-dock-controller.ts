@@ -7,6 +7,17 @@ import type { PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 import { REPEAT_STEPS,type LovableQueueItem } from "./prompt-queue";
 import type { ClarifyQuestion,ClarifySession } from "./clarify-session-card";
 import type { LovableFileGenResult } from "./file-gen-result-cards";
+import {
+answerCurrentClarifyQuestion,
+clarifyPersistDelta,
+currentClarifyQuestion,
+formatClarifyAnswer,
+isClarifyDeferredChoice,
+isClarifySkipAllText,
+normalizeClarifyInterview,
+skipAllClarify,
+type ClarifyTimelineTurn,
+} from "@/lib/ai/chat/clarify-turn";
 
 export interface UseComposerDockControllerArgs {
   textareaRef: RefObject<ChatInputHandle | null>;
@@ -54,8 +65,17 @@ export interface UseComposerDockControllerArgs {
     // overrides history, and naming the type here would drag chat-panel's
     // message shape into the composer's public surface for no benefit.
     historyOverride?: undefined,
-    opts?: { forceBuild?: boolean },
+    opts?: {
+      forceBuild?: boolean;
+      skipOptimisticUser?: boolean;
+      skipUserPersist?: boolean;
+      clarifyContinue?: boolean;
+      originalPrompt?: string;
+      clarifyHistory?: Array<{ question: string; answer: string }>;
+      clarifySession?: ClarifySession;
+    },
   ) => void | Promise<void>;
+  persistClarifyTurns?: (turns: ClarifyTimelineTurn[]) => void;
   runtimeErrorsDismissed?: boolean;
   onFixRuntimeErrors?: () => void;
   onDismissRuntimeErrors?: () => void;
@@ -97,6 +117,7 @@ export function useComposerDockController(args: UseComposerDockControllerArgs) {
     setEditingQueueId,
     setEditingQueueText,
     sendMessage,
+    persistClarifyTurns,
   } = args;
 
   const fillFromPreviewError = useCallback(
@@ -135,6 +156,55 @@ export function useComposerDockController(args: UseComposerDockControllerArgs) {
     null,
   );
 
+  const finishClarifyTurn = useCallback(
+    (result: ReturnType<typeof skipAllClarify>) => {
+      if (!activeClarifySession) return;
+      const before = normalizeClarifyInterview(activeClarifySession);
+      persistClarifyTurns?.(clarifyPersistDelta(before, result.session, result.status === "complete"));
+      if (result.status === "complete") {
+        const answered = result.session.questions.filter((q) => q.answer.trim()) as ClarifyQuestion[];
+        setAnsweredClarifyQuestions(answered.length > 0 ? answered : null);
+        setActiveClarifySession(null);
+        setClarifyFirst(false);
+        void sendMessage(result.enrichedPrompt, "build", undefined, {
+          forceBuild: true,
+          skipOptimisticUser: true,
+          skipUserPersist: true,
+        });
+        return;
+      }
+      setActiveClarifySession(result.session as ClarifySession);
+      focusComposer(textareaRef);
+    },
+    [activeClarifySession, persistClarifyTurns, sendMessage, setActiveClarifySession, setClarifyFirst, textareaRef],
+  );
+
+  const continueLiveInterview = useCallback(
+    (answer: string) => {
+      if (!activeClarifySession) return;
+      const before = normalizeClarifyInterview(activeClarifySession);
+      const stepped = answerCurrentClarifyQuestion(before, answer);
+      const after = {
+        ...stepped,
+        questions: stepped.questions.slice(0, stepped.currentIndex),
+      };
+      persistClarifyTurns?.(clarifyPersistDelta(before, after, false));
+      setActiveClarifySession(after as ClarifySession);
+      const history = after.questions
+        .filter((q) => q.answer.trim())
+        .map((q) => ({ question: q.question, answer: formatClarifyAnswer(q) }));
+      void sendMessage(answer.trim() || "(skipped)", "chat", undefined, {
+        clarifyContinue: true,
+        skipOptimisticUser: true,
+        skipUserPersist: true,
+        originalPrompt: after.originalPrompt,
+        clarifyHistory: history,
+        clarifySession: after as ClarifySession,
+      });
+    },
+    [activeClarifySession, persistClarifyTurns, sendMessage, setActiveClarifySession],
+  );
+
   return useMemo(
     () => ({
       autoFixing,
@@ -162,34 +232,45 @@ export function useComposerDockController(args: UseComposerDockControllerArgs) {
       fileGenResults,
       onDismissFileGen: (id: string) => setFileGenResults((prev) => prev.filter((g) => g.id !== id)),
       activeClarifySession,
+      onAnswerClarifyTurn: (answer: string) => {
+        if (!activeClarifySession) return;
+        const normalized = normalizeClarifyInterview(activeClarifySession);
+        if (isClarifySkipAllText(answer)) {
+          finishClarifyTurn(skipAllClarify(normalized));
+          return;
+        }
+        const current = currentClarifyQuestion(normalized);
+        if (
+          current &&
+          !normalized.awaitingDetails &&
+          isClarifyDeferredChoice(current, answer)
+        ) {
+          setActiveClarifySession({ ...normalized, awaitingDetails: true } as ClarifySession);
+          focusComposer(textareaRef);
+          return;
+        }
+        continueLiveInterview(answer);
+      },
+      onSkipClarifyCurrent: () => {
+        if (!activeClarifySession) return;
+        continueLiveInterview("(skipped)");
+      },
       onDismissClarify: () => setActiveClarifySession(null),
-      onUpdateClarifyQuestion: (questionId: string, answer: string) =>
-        setActiveClarifySession((prev) =>
-          prev
-            ? {
-                ...prev,
-                questions: prev.questions.map((cq) =>
-                  cq.id === questionId ? { ...cq, answer } : cq,
-                ),
-              }
-            : null,
-        ),
       answeredClarifyQuestions,
       onDismissAnsweredClarify: () => setAnsweredClarifyQuestions(null),
-      onClarifyBuildNow: (enrichedPrompt: string) => {
-        const answered = activeClarifySession?.questions.filter((q) => q.answer.trim()) ?? [];
-        if (answered.length > 0) setAnsweredClarifyQuestions(answered);
-        setActiveClarifySession(null);
-        setClarifyFirst(false);
-        // forceBuild: the enriched prompt still matches clarify triggers (e.g.
-        // "authentication"/"database") — without it the questions loop forever.
-        void sendMessage(enrichedPrompt, "build", undefined, { forceBuild: true });
-      },
       onClarifySkipAndBuild: (originalPrompt: string) => {
+        if (activeClarifySession) {
+          finishClarifyTurn(skipAllClarify(normalizeClarifyInterview(activeClarifySession)));
+          return;
+        }
         setAnsweredClarifyQuestions(null);
         setActiveClarifySession(null);
         setClarifyFirst(false);
-        void sendMessage(originalPrompt, "build", undefined, { forceBuild: true });
+        void sendMessage(originalPrompt, "build", undefined, {
+          forceBuild: true,
+          skipOptimisticUser: true,
+          skipUserPersist: true,
+        });
       },
       promptQueue,
       streaming,
@@ -257,6 +338,9 @@ export function useComposerDockController(args: UseComposerDockControllerArgs) {
       editingQueueText,
       fileGenResults,
       fillFromPreviewError,
+      finishClarifyTurn,
+      continueLiveInterview,
+      persistClarifyTurns,
       maxAutoFixAttempts,
       messagesLength,
       noCredits,
@@ -281,6 +365,7 @@ export function useComposerDockController(args: UseComposerDockControllerArgs) {
       setPromptQueue,
       setQueuePaused,
       streaming,
+      textareaRef,
     ],
   );
 }

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import type { Project,ProjectFile } from "@/types/database";
+import { githubRepoHtmlUrl } from "@/lib/github/host";
 
 // ── GitLab icon (simple inline SVG) ──────────────────────────────────────────
 function GitLabIcon({ className }: { className?: string }) {
@@ -26,6 +27,8 @@ interface GitHubPanelProps {
   project: Project;
   githubUsername: string | null;
   githubToken: string | null;
+  /** REST API base for GitHub Enterprise (`https://host/api/v3`), else github.com. */
+  githubApiBase?: string | null;
   gitlabUsername?: string | null;
   gitlabToken?: string | null;
   onProjectUpdated: (project: Partial<Project>) => void;
@@ -68,6 +71,7 @@ export function GitHubPanel({
   project,
   githubUsername,
   githubToken,
+  githubApiBase = null,
   gitlabUsername = null,
   gitlabToken = null,
   onProjectUpdated,
@@ -131,9 +135,12 @@ export function GitHubPanel({
   // server mints a signed, user-bound state there so the callback can
   // reject a code/state pair that didn't originate from this session (see
   // /api/github/start's header comment).
-  function connectProvider() {
+  function connectProvider(host?: string) {
     const startEndpoint = isGitHub ? "/api/github/start" : "/api/gitlab/start";
-    window.location.href = `${startEndpoint}?projectId=${encodeURIComponent(project.id)}`;
+    const qs = new URLSearchParams({ projectId: project.id });
+    const trimmed = host?.trim();
+    if (isGitHub && trimmed) qs.set("host", trimmed);
+    window.location.href = `${startEndpoint}?${qs.toString()}`;
   }
 
   // ── AI commit message ────────────────────────────────────────────────────
@@ -304,7 +311,7 @@ export function GitHubPanel({
       // We stored "gitlab:<id>" — we can't easily reconstruct URL without namespace
       return "https://gitlab.com";
     }
-    return `https://github.com/${project.github_repo}`;
+    return githubRepoHtmlUrl(project.github_repo, githubApiBase);
   }
 
   // ── Derive display name for repo ─────────────────────────────────────────
@@ -373,12 +380,13 @@ export function GitHubPanel({
             <p className="text-xs text-muted-foreground mb-4">
               Link your {isGitHub ? "GitHub" : "GitLab"} account to push code, create repos, and enable two-way sync.
             </p>
-            <Button onClick={connectProvider} className="gap-2">
+            <Button onClick={() => connectProvider()} className="gap-2">
               {isGitHub
                 ? <Github className="w-4 h-4" />
                 : <GitLabIcon className="w-4 h-4" />}
               Connect {isGitHub ? "GitHub" : "GitLab"}
             </Button>
+            {isGitHub && <GitHubEnterpriseConnect onOauth={connectProvider} />}
           </motion.div>
         )}
 
@@ -587,6 +595,87 @@ export function GitHubPanel({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function GitHubEnterpriseConnect({ onOauth }: { onOauth: (host: string) => void }) {
+  const { toast } = useToast();
+  const defaultHost = (process.env.NEXT_PUBLIC_GITHUB_ENTERPRISE_HOST ?? "").trim();
+  const [open, setOpen] = useState(Boolean(defaultHost));
+  const [host, setHost] = useState(defaultHost);
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submitPat() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/github/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, host: host.trim() || undefined }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Could not connect");
+      toast({ title: "GitHub connected", description: data.username ? `@${data.username}` : undefined });
+      window.location.reload();
+    } catch (err) {
+      toast({
+        title: "Could not connect",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-6 text-left">
+      <button
+        type="button"
+        className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? "Hide" : "GitHub Enterprise Server"}
+      </button>
+      {open && (
+        <div className="mt-3 space-y-2 rounded-lg border border-border p-3">
+          <p className="text-[11px] text-muted-foreground">
+            Same Connect flow as github.com — OAuth on your instance, or a personal access token if you do not have an OAuth app registered there.
+          </p>
+          <label className="block text-[11px] text-muted-foreground">
+            Enterprise host
+            <input
+              className="mt-1 h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
+              placeholder="https://github.mycompany.com"
+              value={host}
+              onChange={(e) => setHost(e.target.value)}
+            />
+          </label>
+          <Button
+            size="sm"
+            className="h-7 text-xs w-full"
+            disabled={!host.trim()}
+            onClick={() => onOauth(host.trim())}
+          >
+            Connect with OAuth
+          </Button>
+          <label className="block text-[11px] text-muted-foreground">
+            Or personal access token (repo + admin:repo_hook)
+            <input
+              type="password"
+              autoComplete="off"
+              className="mt-1 h-8 w-full rounded-md border border-border bg-background px-2 text-xs"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+            />
+          </label>
+          <Button size="sm" variant="outline" className="h-7 text-xs w-full" disabled={busy || !token.trim()} onClick={() => void submitPat()}>
+            {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save token"}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

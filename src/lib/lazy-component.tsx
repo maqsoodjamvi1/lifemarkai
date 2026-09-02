@@ -25,7 +25,7 @@
  * guard with `typeof window !== "undefined"` or render the route client-only
  * (the editor route uses `ssr: "data-only"` for exactly this reason).
  */
-import { createElement,lazy,Suspense,type ComponentType,type ReactNode } from "react";
+import { createElement,lazy,Suspense,useMemo,type ComponentType,type ReactNode } from "react";
 
 interface DynamicOptions {
   ssr?: boolean;
@@ -51,12 +51,20 @@ export default function dynamic<T>(
   loader: () => Promise<T>,
   options: DynamicOptions = {},
 ): ComponentType<ComponentPropsFromModule<T>> {
-  const Lazy = lazy(async (): Promise<{ default: ComponentType<ComponentPropsFromModule<T>> }> =>
-    normalize<T>(await loader())
-  );
   const Loading = options.loading;
 
   return function DynamicComponent(props: ComponentPropsFromModule<T>) {
+    // React.lazy caches the first promise. If that import() 404s (Vite HMR
+    // stale `?t=` URL), remounting the same Lazy object just rethrows. Create
+    // the lazy wrapper per mount so Retry / error-boundary remounts fetch again.
+    const Lazy = useMemo(
+      () =>
+        lazy(async (): Promise<{ default: ComponentType<ComponentPropsFromModule<T>> }> =>
+          normalize<T>(await loader()),
+        ),
+      [],
+    );
+
     return (
       <Suspense fallback={Loading ? <Loading /> : null}>
         {createElement(Lazy as unknown as ComponentType<ComponentPropsFromModule<T>>, props)}

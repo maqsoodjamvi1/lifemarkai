@@ -5,10 +5,12 @@ import {
   applyDimensionToken,
   applyFontFamilyToken,
   applySpacingToken,
+  applyVisualEdit,
   ensureResizableDisplay,
   normalizeHex,
   resolveDisplayHex,
 } from "./apply-visual-edit";
+import type { ProjectFile } from "../../types/database.ts";
 
 // ── normalizeHex ─────────────────────────────────────────────────────────
 
@@ -161,4 +163,98 @@ test("resolveDisplayHex returns null when no color utility of that kind is prese
 
 test("resolveDisplayHex does not cross kinds — a bg color doesn't answer a text lookup", () => {
   assert.equal(resolveDisplayHex("bg-red-500", "text"), null);
+});
+
+function srcFile(path: string, content: string): ProjectFile {
+  return {
+    id: path,
+    project_id: "p",
+    path,
+    content,
+    language: "tsx",
+    created_at: "",
+    updated_at: "",
+  } as ProjectFile;
+}
+
+test("applyVisualEdit injects className on a unique text node when classList is empty", () => {
+  const files = [srcFile("src/App.tsx", `export default function App() {\n  return <h1>Hello</h1>;\n}`)];
+  const result = applyVisualEdit(
+    files,
+    { tagName: "h1", textContent: "Hello", classList: [] },
+    { classes: "text-lg font-bold" },
+  );
+  assert.ok(result);
+  assert.match(result!.content, /<h1 className="text-lg font-bold">Hello<\/h1>/);
+});
+
+test("applyVisualEdit still replaces an exact className match first", () => {
+  const files = [srcFile("src/App.tsx", `<p className="text-sm">Hi</p>`)];
+  const result = applyVisualEdit(
+    files,
+    { tagName: "p", textContent: "Hi", classList: ["text-sm"] },
+    { classes: "text-xl" },
+  );
+  assert.ok(result);
+  assert.equal(result!.content, `<p className="text-xl">Hi</p>`);
+});
+
+test("applyVisualEdit rewrites duplicate text next to the selected classes", () => {
+  const files = [srcFile(
+    "src/App.tsx",
+    `<button className="btn-a">Save</button><button className="btn-b">Save</button>`,
+  )];
+  const result = applyVisualEdit(
+    files,
+    { tagName: "button", textContent: "Save", classList: ["btn-b"] },
+    { text: "Done" },
+  );
+  assert.ok(result);
+  assert.equal(
+    result!.content,
+    `<button className="btn-a">Save</button><button className="btn-b">Done</button>`,
+  );
+});
+
+test("applyVisualEdit uses sourceLine when the same label appears twice without unique classes", () => {
+  const files = [srcFile(
+    "src/App.tsx",
+    `<h1>Hello</h1>\n<h1>Hello</h1>\n`,
+  )];
+  const result = applyVisualEdit(
+    files,
+    { tagName: "h1", textContent: "Hello", classList: [], sourceFile: "src/App.tsx", sourceLine: 2 },
+    { text: "World" },
+  );
+  assert.ok(result);
+  assert.equal(result!.content, `<h1>Hello</h1>\n<h1>World</h1>\n`);
+});
+
+test("applyVisualEdit injects className on the duplicate label nearest sourceLine", () => {
+  const files = [srcFile(
+    "src/App.tsx",
+    `<p>Save</p>\n<p>Save</p>\n`,
+  )];
+  const result = applyVisualEdit(
+    files,
+    { tagName: "p", textContent: "Save", classList: [], sourceFile: "src/App.tsx", sourceLine: 1 },
+    { classes: "font-bold" },
+  );
+  assert.ok(result);
+  assert.equal(result!.content, `<p className="font-bold">Save</p>\n<p>Save</p>\n`);
+});
+
+test("applyVisualEdit scopes a sourceFile hint so a twin in another file is left alone", () => {
+  const files = [
+    srcFile("src/App.tsx", `<h1>Title</h1>`),
+    srcFile("src/Other.tsx", `<h1>Title</h1>`),
+  ];
+  const result = applyVisualEdit(
+    files,
+    { tagName: "h1", textContent: "Title", classList: [], sourceFile: "src/Other.tsx", sourceLine: 1 },
+    { classes: "text-xl" },
+  );
+  assert.ok(result);
+  assert.equal(result!.path, "src/Other.tsx");
+  assert.match(result!.content, /className="text-xl"/);
 });

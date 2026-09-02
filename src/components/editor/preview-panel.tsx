@@ -3,8 +3,8 @@ import { useState,useMemo,useCallback,useEffect,useRef,memo } from "react";
 import {
 RefreshCw,Smartphone,Tablet,Monitor,
 ExternalLink,MousePointer,Terminal,Loader2,
-Check,X,
-AlertTriangle,Wrench,Frame,MessageSquarePlus,Pencil,Pin,Globe,ChevronDown,ChevronUp,ChevronLeft,ChevronRight,Maximize2,Minimize2
+X,
+Frame,MessageSquarePlus,Pencil,Pin,Globe,ChevronDown,ChevronUp,ChevronLeft,ChevronRight,Maximize2,Minimize2
 } from "lucide-react";
 import {
 Tooltip,TooltipContent,TooltipProvider,TooltipTrigger,
@@ -32,18 +32,21 @@ import { buildFallbackHtml, EMPTY_PREVIEW_HTML } from "@/lib/preview/build-fallb
 import { buildStaticPreview } from "@/lib/preview/build-static-preview";
 import type { ProjectRuntime } from "@/lib/project/runtime";
 import { filesContentSignature } from "@/lib/preview/files-signature";
-import { getRefreshEffectiveFiles } from "./preview-panel-utils";
+import { filesBelongToProject, getRefreshEffectiveFiles } from "./preview-panel-utils";
 import type { PreviewEngine } from "@/lib/preview/resolve-preview-engine";
 import { PhoneFrame,TabletFrame,type DeviceSize } from "./preview-device-frame";
 import { PreviewVisualEditPopover as VebPopover,type VebElement } from "./preview-visual-edit-popover";
-import { usePreviewEnginePolicy } from "./use-preview-engine-policy";
+import { LivePreviewWaiting } from "./instant-srcdoc-preview";
+import { PreviewDesignView } from "./preview-design-view";
+import { announcePreviewSettled } from "@/lib/preview/wait-for-preview-success";
 import { usePreviewMachine } from "./use-preview-machine";
+import { usePreviewEnginePolicy } from "./use-preview-engine-policy";
 import {
 isSamePreviewOrigin,
 normalizeSandboxPathname,
 sandboxUrlWithPath,
 } from "@/lib/preview/sandbox-url";
-import { getPreviewBarLabel } from "@/lib/preview/preview-url";
+import { getPreviewBarLabel, resolveEditorPreviewSrc } from "@/lib/preview/preview-url";
 import { useSandboxPreview } from "@/lib/preview/use-sandbox-preview";
 import { usePreviewErrorGuard } from "@/hooks/use-preview-error-guard";
 import { isNoisePreviewError,type PreviewErrorReport } from "@/lib/preview/preview-error-bridge";
@@ -56,10 +59,6 @@ import { LovablePreviewInteractionToolbar } from "./lovable/preview-interaction-
 import { LovablePreviewStatusPill } from "./lovable/preview-status-pill";
 import { LovableVersionPreviewBanner } from "./lovable/version-preview-banner";
 import { type PreviewPerfSnapshot } from "@/lib/preview/preview-perf-bridge";
-import {
-describePreviewError,
-shouldShowRawPreviewDiagnostics,
-} from "@/lib/preview/preview-error-copy";
 import { createClient } from "@/lib/supabase/client";
 
 // Visual Edit Bridge — injected into Sandpack iframe via files map
@@ -68,6 +67,7 @@ const PREVIEW_RELEVANT_FILE_RE = /(^|\/)(package\.json|index\.html|vite\.config\
 const PREVIEW_RELEVANT_EXT_RE = /\.(tsx?|jsx?|css|scss|sass|html|json|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf)$/i;
 
 function isPreviewRelevantFile(path: string): boolean {
+  if (typeof path !== "string" || !path) return false;
   const clean = path.replace(/\\/g, "/");
   if (/\.(md|mdx|sql|log|txt|csv|yml|yaml)$/i.test(clean)) return false;
   if (/^(supabase|docs|outputs|scripts|\.github)\//i.test(clean)) return false;
@@ -165,6 +165,7 @@ function PreviewPanelImpl({
   const [previewToolbarVisible, setPreviewToolbarVisible] = useState(() => {
     try { return localStorage.getItem("lifemark-preview-interaction-toolbar-hidden") !== "1"; } catch { return true; }
   });
+  const [designViewOpen, setDesignViewOpen] = useState(false);
   useEffect(() => {
     const show = () => {
       setPreviewToolbarVisible(true);
@@ -229,7 +230,7 @@ function PreviewPanelImpl({
   const [pinResolving, setPinResolving] = useState(false);
   const { toast } = useToast();
   const [previewEngine, setPreviewEngine] = useState<PreviewEngine>(() => {
-    return "unavailable";
+    return files.length > 0 ? "static" : "unavailable";
   });
   const [consoleLines, setConsoleLines] = useState<{ type: string; text: string }[]>([]);
   const [networkLines, setNetworkLines] = useState<
@@ -319,6 +320,7 @@ function PreviewPanelImpl({
     syncFiles: syncSandboxFiles,
     requestPreview: requestSandboxPreview,
     reconnectPreview: reconnectSandboxPreview,
+    resumePreview: resumeSandboxPreview,
     sandboxId,
     loading: sandboxLoading,
     error: sandboxError,
@@ -327,16 +329,10 @@ function PreviewPanelImpl({
     phaseDetail: sandboxPhaseDetail,
     statusResolved: sandboxStatusResolved,
     reloadNonce: sandboxReloadNonce,
+    lifecycle: sandboxLifecycle,
   } = useSandboxPreview(projectId ?? "");
   const sandboxIdLiveRef = useRef(sandboxId);
   sandboxIdLiveRef.current = sandboxId;
-  const previewErrorCopy = useMemo(
-    () => describePreviewError(sandboxError),
-    [sandboxError],
-  );
-  const showRawDiagnostics = shouldShowRawPreviewDiagnostics(
-    process.env.NODE_ENV === "development",
-  );
   /** Hard iframe path — soft-nav updates previewPath only (VEB postMessage). */
   const [sandboxIframePath, setSandboxIframePath] = useState("/");
   const [sandboxSyncInstalling, setSandboxSyncInstalling] = useState(false);
@@ -348,6 +344,15 @@ function PreviewPanelImpl({
   const sandboxEscapeRemountAtRef = useRef(0);
   const sandboxUrlLiveRef = useRef(sandboxUrl);
   sandboxUrlLiveRef.current = sandboxUrl;
+  const [stickySandboxUrl, setStickySandboxUrl] = useState<string | null>(null);
+  useEffect(() => {
+    setStickySandboxUrl(null);
+    setSandboxSyncInstalling(false);
+  }, [projectId]);
+  useEffect(() => {
+    if (sandboxUrl) setStickySandboxUrl(sandboxUrl);
+  }, [sandboxUrl]);
+  const liveSandboxOrigin = sandboxUrl ?? stickySandboxUrl;
 
   // Reset hard path when a new Modal tunnel comes up.
   useEffect(() => {
@@ -364,9 +369,9 @@ function PreviewPanelImpl({
         projectId: projectId ?? undefined,
         previewPath,
         deployedUrl: deployedUrl ?? null,
-        sandboxUrl: previewEngine === "sandbox" ? sandboxUrl : null,
+        sandboxUrl: previewEngine === "sandbox" ? liveSandboxOrigin : null,
       }),
-    [projectId, previewPath, deployedUrl, previewEngine, sandboxUrl],
+    [projectId, previewPath, deployedUrl, previewEngine, liveSandboxOrigin],
   );
   const [vebSelected, setVebSelected] = useState<VebElement | null>(null);
   const [vebSelectedList, setVebSelectedList] = useState<VebElement[]>([]);
@@ -773,16 +778,9 @@ function PreviewPanelImpl({
     })();
   }, [toast, projectId]);
 
-  // Docker-backed remote sandbox is the authoritative product preview and
-  // stays preferred while it's healthy or still booting. WebContainer is an
-  // explicit fallback that is now also used automatically once the sandbox
-  // has a SETTLED error (sandboxError, set only after useSandboxPreview's
-  // own internal self-heal has already run) — previously `sandboxEnabled`
-  // alone pinned the engine to "sandbox" for the rest of the session no
-  // matter how long or how badly it kept failing, leaving the (already
-  // free, already hardened) WebContainer fallback permanently unreachable
-  // whenever a caller passed useWebContainers. See selectPreviewEngine's own
-  // doc comment for the exact precedence.
+  // Docker-backed remote sandbox is the only live origin. Keep that engine
+  // through settled errors so the last-good iframe stays mounted; WebContainer
+  // is opt-in only when no sandbox is configured.
   const {
     engine: selectedPreviewEngine,
     staticRuntime,
@@ -860,10 +858,7 @@ function PreviewPanelImpl({
     if (previewEngine === "webcontainer") {
       return runtimeContainerRef.current?.querySelector("iframe") ?? null;
     }
-    if (previewEngine === "sandbox") {
-      return sandboxIframeRef.current;
-    }
-    return iframeRef.current;
+    return sandboxIframeRef.current ?? iframeRef.current;
   }, [previewEngine]);
 
   // The engines report different location shapes (srcdoc: virtual hash path;
@@ -1028,6 +1023,7 @@ function PreviewPanelImpl({
         stagePendingTextEditRef.current(data, text);
       }
       if (d.type === "lifemark-veb-ready") {
+        announcePreviewSettled(true);
         getPreviewContentWindow()?.postMessage(
           { type: "lifemark-veb-mode", enabled: visualEditEnabled },
           "*",
@@ -1059,7 +1055,15 @@ function PreviewPanelImpl({
       }
       if (d.source === "lifemark-preview" && typeof d.type === "string") {
         const type = d.type;
-        const text = typeof d.text === "string" ? d.text : String(d.text ?? "");
+        const text = typeof d.text === "string"
+          ? d.text
+          : (() => {
+              try {
+                return String(d.text ?? "");
+              } catch {
+                return "";
+              }
+            })();
         setConsoleLines((prev) => [...prev.slice(-99), { type, text }]);
         if (projectId && (type === "log" || type === "warn" || type === "error" || type === "console-error" || type === "info")) {
           void fetch(`/api/projects/${projectId}/preview-telemetry`, {
@@ -1140,6 +1144,7 @@ function PreviewPanelImpl({
         if (typeof token === "number") {
           sandboxPongTokenRef.current = token;
           sandboxBridgeAliveRef.current = true;
+          announcePreviewSettled(true);
         }
       }
       if (d.type === "lifemark-preview-location") {
@@ -1282,7 +1287,7 @@ function PreviewPanelImpl({
     }
     const sig = filesContentSignature(relevantFiles);
     // Prefer files-bearing refresh over a bare remount that just fired.
-    if (now - lastRefreshAtRef.current < 120 && lastRefreshSigRef.current === sig) {
+    if (now - lastRefreshAtRef.current < 280 && lastRefreshSigRef.current === sig) {
       return;
     }
     lastRefreshAtRef.current = now;
@@ -1386,6 +1391,7 @@ function PreviewPanelImpl({
   // Modal live sync — push debounced file changes, then clear Loading (HMR in-place).
   useEffect(() => {
     if (previewEngine !== "sandbox" || !sandboxId || previewFiles.length === 0) return;
+    if (projectId && !filesBelongToProject(previewFiles, projectId)) return;
     const payload = previewFiles.map((f) => ({ path: f.path, content: f.content ?? "" }));
     // Clearing the 800ms debounce is not enough. Once a sync is in flight this
     // effect can be torn down and re-run (every edit changes previewFiles), and
@@ -1414,7 +1420,7 @@ function PreviewPanelImpl({
             variant: "destructive",
           });
           transitionPreviewMachine("ready", "sandbox sync failed — keep previous preview");
-          window.dispatchEvent(new CustomEvent("lifemark-preview-settled", { detail: { ok: false } }));
+          announcePreviewSettled(false);
           return;
         }
         if (result.recovered) {
@@ -1437,11 +1443,7 @@ function PreviewPanelImpl({
           window.setTimeout(() => {
             if (superseded) return;
             transitionPreviewMachine("ready", "sandbox sync applied");
-            window.dispatchEvent(
-              new CustomEvent("lifemark-preview-settled", {
-                detail: { ok: true, installing: !!result.installing },
-              }),
-            );
+            announcePreviewSettled(true);
           }, result.installing ? 2500 : 600),
         );
       })();
@@ -1451,7 +1453,7 @@ function PreviewPanelImpl({
       window.clearTimeout(timer);
       for (const t of trailing) window.clearTimeout(t);
     };
-  }, [previewEngine, sandboxId, previewFiles, syncSandboxFiles, transitionPreviewMachine]);
+  }, [previewEngine, sandboxId, previewFiles, projectId, syncSandboxFiles, transitionPreviewMachine]);
 
   // Pull Modal Vite/Next logs into the Console tab + agent telemetry (Lovable parity).
   const lastModalTelemetryKeyRef = useRef("");
@@ -1508,8 +1510,8 @@ function PreviewPanelImpl({
   }, [previewEngine]);
   useEffect(() => {
     const url =
-      previewEngine === "sandbox" && sandboxUrl
-        ? sandboxUrl
+      previewEngine === "sandbox" && liveSandboxOrigin
+        ? liveSandboxOrigin
         : previewEngine === "webcontainer" && wcPreviewUrl
           ? wcPreviewUrl
           : null;
@@ -1520,7 +1522,7 @@ function PreviewPanelImpl({
     window.dispatchEvent(
       new CustomEvent("lifemark-live-preview-url", { detail: { url } }),
     );
-  }, [previewEngine, sandboxUrl, wcPreviewUrl]);
+  }, [previewEngine, liveSandboxOrigin, wcPreviewUrl]);
 
   const captureForAnnotation = useCallback(() => {
     const msgId = `ann-${Date.now()}`;
@@ -1735,11 +1737,8 @@ function PreviewPanelImpl({
   }, [previewEngine, refreshKey, filesSignature, toast, transitionPreviewMachine, hideTopChrome]);
 
   useEffect(() => {
-    unifiedIframeRef.current =
-      previewEngine === "webcontainer"
-        ? runtimeContainerRef.current?.querySelector("iframe") ?? null
-        : iframeRef.current;
-  }, [previewEngine, refreshKey, filesSignature]);
+    unifiedIframeRef.current = getActivePreviewIframe();
+  }, [getActivePreviewIframe, previewEngine, refreshKey, filesSignature, liveSandboxOrigin]);
 
   useEffect(() => {
     setPreviewCompileFailed(false);
@@ -1782,23 +1781,23 @@ function PreviewPanelImpl({
 
   const previewStatusText =
     hideTopChrome
-      ? previewEngine === "sandbox" && sandboxError
-        ? "Preview failed"
-        : previewEngine === "sandbox" && !sandboxUrl
-          ? (modalPhaseLabel || "Starting live preview…")
+      ? previewEngine === "sandbox" && !sandboxUrl
+        ? (modalPhaseLabel || "Starting live preview…")
         : previewEngine === "sandbox" && sandboxSyncInstalling
           ? "Installing dependencies…"
             : previewMachineState === "building" || previewMachineState === "loading" || (previewEngine === "sandbox" && sandboxLoading)
               ? ((previewEngine === "sandbox" ? modalPhaseLabel : null) || (previewMachineState === "loading" ? "Updating preview…" : "Loading preview…"))
+              : previewMachineState === "error"
+                ? "Updating preview…"
               : null
       : previewMachineState === "building"
         ? "Preparing preview"
         : previewMachineState === "loading"
           ? (modalPhaseLabel || "Updating preview…")
           : previewMachineState === "unavailable"
-            ? "Preview unavailable"
+            ? "Starting live preview…"
             : previewMachineState === "error"
-              ? "Preview needs repair"
+              ? "Updating preview…"
               : null;
 
   // Broadcast preview boot status to top-bar UrlBarPill (Lovable parity).
@@ -1808,12 +1807,22 @@ function PreviewPanelImpl({
     );
   }, [previewStatusText]);
 
-  const showRecoveryOverlay =
-    !showDeployedPreview &&
-    !errorGuard.freezePreview &&
-    (previewMachineState === "error" ||
-      errorGuard.phase === "frozen" ||
-      (!!activeError && !errorDismissed && !outOfCredits));
+  // Never freeze the pane on a red error card. Retry quietly while we keep
+  // showing a waiting state — 20% slower is fine; a failed overlay is not.
+  const [previewFailTick, setPreviewFailTick] = useState(0);
+  useEffect(() => {
+    if (sandboxLifecycle === "ready") setPreviewFailTick((n) => (n === 0 ? n : 0));
+  }, [sandboxLifecycle]);
+  useEffect(() => {
+    if (sandboxLifecycle !== "failed" || !sandboxEnabled) return;
+    const delay = Math.min(20_000, 2800 * Math.pow(1.35, previewFailTick));
+    const timer = window.setTimeout(() => {
+      void resumeSandboxPreview().finally(() => {
+        setPreviewFailTick((n) => n + 1);
+      });
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [sandboxLifecycle, previewFailTick, resumeSandboxPreview, sandboxEnabled]);
 
   async function submitElementComment() {
     if (!projectId || !pendingComment || !commentDraft.trim()) return;
@@ -1933,7 +1942,16 @@ function PreviewPanelImpl({
   }, [renderedStaticHtml, refreshKey]);
 
   const hasFiles = files.length > 0;
-  const useStaticPreview = previewEngine === "static";
+  const editorPreviewSrc = resolveEditorPreviewSrc({
+    projectId,
+    sandboxOrigin: liveSandboxOrigin,
+    iframePath: sandboxIframePath,
+    pageOrigin: typeof window !== "undefined" ? window.location.origin : "",
+  });
+  const useLiveHttpPreview =
+    Boolean(editorPreviewSrc) &&
+    previewEngine !== "webcontainer" &&
+    sandboxPhase !== "app_error";
   // Draft/legacy WebContainer path — hidden unless NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1.
   function refresh() {
     if (previewEngine === "sandbox" && sandboxIframeRef.current?.contentWindow) {
@@ -1962,22 +1980,17 @@ function PreviewPanelImpl({
   }
 
   function openInNewTab() {
-    // Lovable parity: open the live Modal tunnel (never srcdoc blob / /preview Babel).
-    const modalLive =
-      previewEngine === "sandbox" && sandboxUrl
-        ? sandboxUrlWithPath(sandboxUrl, sandboxIframePath || previewPath || "/")
+    const live =
+      previewEngine === "sandbox" && liveSandboxOrigin
+        ? sandboxUrlWithPath(liveSandboxOrigin, sandboxIframePath || previewPath || "/")
         : null;
-    const draftWc =
-      previewEngine === "webcontainer" && wcPreviewUrl ? wcPreviewUrl : null;
-    const target = modalLive || draftWc || deployedUrl || null;
+    const target = live || deployedUrl || null;
     if (!target) {
       toast({
         title: "Preview not ready",
         description: sandboxEnabled
           ? "The live preview is still starting — try again in a moment."
-          : process.env.NODE_ENV === "development"
-            ? "Set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in .env.local"
-            : "The live preview service is not available right now.",
+          : "Start Docker Desktop so this project can boot on a live preview origin.",
         variant: "destructive",
       });
       return;
@@ -2408,268 +2421,23 @@ function PreviewPanelImpl({
               </p>
             </div>
           </div>
-        ) : previewEngine === "detecting" ? (
-          <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
-            <div className="text-center">
-              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground/50 mx-auto mb-2" />
-              <p className="text-xs text-muted-foreground/40">Loading preview…</p>
-            </div>
-          </div>
-        ) : useStaticPreview && staticRuntime ? (
-          <div className="flex flex-col flex-1 min-h-0 overflow-hidden relative">
-            {withDeviceFrame(
-              <iframe
-                id="static-preview-panel"
-                key={`static-${filesSignature}-${refreshKey}`}
-                ref={iframeRef}
-                srcDoc={renderedStaticHtml}
-                className="w-full h-full min-h-0 border-0 bg-white"
-                title="Static app preview"
-                sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
-                allow="clipboard-read; clipboard-write; fullscreen"
-                onLoad={() => {
-                  transitionPreviewMachine("ready", "static srcdoc loaded");
-                  window.dispatchEvent(new CustomEvent("lifemark-preview-settled", { detail: { ok: true } }));
-                }}
-              />,
-            )}
-            <PreviewCommentPins
-              iframeRef={iframeRef}
-              pins={srcdocCommentPins}
-              enabled={!commentPinMode}
-              onPinClick={(commentId) => {
-                const match = elementCommentPins.find((c) => c.id === commentId);
-                if (match) setActivePinComment(match);
-              }}
-            />
-          </div>
-        ) : previewEngine === "sandbox" &&
-          !sandboxUrl &&
-          // `previewEngine` flips to "sandbox" the moment the project has ANY
-          // files — it is a statement about which engine we would use, NOT
-          // about whether that engine is reachable. So when the backend is
-          // down or unconfigured (`enabled: false`, and no error because
-          // nothing was ever attempted) this branch used to swallow the case
-          // and paint "Starting live preview" with a spinner forever: the
-          // `!sandboxStatusResolved` and "Live preview unavailable" panes
-          // below — the only ones with a Retry button — were unreachable.
-          // Fall through once the status check has come back negative, unless
-          // there is a real error to show here.
-          (sandboxEnabled || !sandboxStatusResolved || Boolean(sandboxError)) ? (
-          /* The live sandbox is booting or erroring — but the status card
-             below is no longer the ENTIRE pane. A degraded Babel-in-iframe
-             render of the current files (see fallbackPreviewHtml above) sits
-             behind it, so "must show preview not errors" holds even here:
-             the user sees an approximation of their app immediately, with
-             the real status/retry controls floating on top rather than
-             replacing it outright. */
-          <div className="relative flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)] overflow-hidden">
-            <iframe
-              key={`sandbox-fallback-${filesSignature}`}
-              srcDoc={fallbackPreviewHtml}
-              className="absolute inset-0 w-full h-full border-0 bg-white"
-              title="Simplified app preview"
-              tabIndex={-1}
-              sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
-            />
-            <div className="relative z-10 text-center max-w-sm px-4 py-4 rounded-xl bg-[var(--bg-base,#0a0a0a)]/90 backdrop-blur-sm border border-border/40 shadow-lg">
-              {!sandboxError && (
-                <Loader2 className="w-6 h-6 animate-spin text-violet-400/70 mx-auto mb-3" />
-              )}
-              {/* The generic "Something went wrong while starting your app"
-                  that used to live here threw away everything the docker
-                  provider deliberately collects — the dev-log tail, the
-                  process table, OOMKilled — and left nobody, user or us, with
-                  any evidence. The first version of this fix over-corrected
-                  and painted the raw provider string, which names the
-                  container runtime, the missing environment variables and the
-                  exhausted host port range. `describePreviewError` is the
-                  middle: a sentence the user can act on, including whether
-                  retrying is even worth it, with the raw text and boot log
-                  kept for developers. */}
-              <p className="text-sm font-medium text-foreground/80 mb-1">
-                {sandboxError ? previewErrorCopy.title : "Starting live preview"}
-              </p>
-              <p className="text-xs text-muted-foreground/60 leading-relaxed">
-                {sandboxError
-                  ? previewErrorCopy.description
-                  : modalPhaseLabel || "Spinning up your app…"}
-              </p>
-              <p className="mt-2 text-[10px] text-muted-foreground/40">
-                Showing a simplified preview behind this card while the live app{" "}
-                {sandboxError ? "reconnects" : "starts"}.
-              </p>
-              {sandboxError && showRawDiagnostics && (
-                <details className="mt-3 text-left">
-                  <summary className="text-[11px] text-muted-foreground/70 cursor-pointer hover:text-foreground/80 select-none">
-                    Developer detail
-                  </summary>
-                  <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-black/40 p-2 text-[10px] leading-relaxed text-muted-foreground/80 whitespace-pre-wrap break-all">
-                    {sandboxError}
-                    {sandboxLogs ? `\n\n${sandboxLogs.slice(-4000)}` : ""}
-                  </pre>
-                </details>
-              )}
-              {sandboxError && (
-                <div className="mt-4 flex items-center justify-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void (async () => {
-                        const re = await reconnectSandboxPreview();
-                        if (!re.previewUrl) await requestSandboxPreview();
-                      })();
-                    }}
-                    className="h-8 px-3 rounded-md text-xs font-medium bg-violet-600 hover:bg-violet-500 text-white"
-                  >
-                    Retry
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      stopSandboxPreview();
-                      void requestSandboxPreview();
-                    }}
-                    className="h-8 px-3 rounded-md text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted/60"
-                  >
-                    Restart preview
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        ) : previewEngine === "webcontainer" ? (
-          /* In-browser runtime (WebContainer) — zero server cost, runs on the
-             user's own machine. `runtimeContainerRef` is the host the rest of
-             this file already queries for `querySelector("iframe")` (visual
-             edits, address bar, error bridge), so the iframe MUST live inside
-             it or those features silently target nothing. */
-          <div
-            ref={runtimeContainerRef}
-            className={`flex flex-col flex-1 min-h-0 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}
-          >
-            {/* This engine can now be reached automatically (not just via an
-                explicit choice) once the live sandbox has a settled error —
-                see selectPreviewEngine. Surface WHY, so switching engines
-                doesn't read as an unexplained change from the user's last
-                known state. */}
-            {sandboxError && (
-              <div className="absolute top-2 left-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-background/90 border border-border/70 text-[10px] text-muted-foreground shadow-sm">
-                <AlertTriangle className="w-3 h-3 text-amber-400" />
-                <span>Live sandbox unavailable — using in-browser preview</span>
-              </div>
-            )}
-            {wcUrl ? (
-              withDeviceFrame(
-                <iframe
-                  id="static-preview-panel"
-                  key={`wc-${wcUrl}-${refreshKey}`}
-                  src={wcUrl}
-                  data-preview-url={wcUrl}
-                  className="w-full h-full min-h-0 border-0 bg-[var(--bg-base,#0a0a0a)]"
-                  title="In-browser preview"
-                  // `allow-popups-to-escape-sandbox` lets a preview open OAuth
-                // (Supabase/Google/GitHub) in a NEW TAB that is NOT itself
-                // sandboxed, so the sign-in can actually complete. Without it,
-                // a same-frame OAuth redirect tries to embed the provider in
-                // this iframe and the provider's X-Frame-Options shows
-                // "<host> refused to connect" in the preview. OAuth providers
-                // never permit framing; a new tab is the only way it works
-                // inside a framed preview.
-                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation"
-                  allow="clipboard-read; clipboard-write; fullscreen"
-                  onLoad={() => {
-                    transitionPreviewMachine("ready", "webcontainer iframe loaded");
-                    window.dispatchEvent(
-                      new CustomEvent("lifemark-preview-settled", { detail: { ok: true } }),
-                    );
-                  }}
-                />,
-              )
-            ) : (
-              // Same "fallback render behind the status card" treatment as
-              // the sandbox engine's loading/error pane above — WebContainer
-              // failing is the second-tier engine failing, not a reason to
-              // go blank when a degraded render is still possible.
-              <div className="relative flex flex-1 items-center justify-center p-6 overflow-hidden">
-                <iframe
-                  key={`webcontainer-fallback-${filesSignature}`}
-                  srcDoc={fallbackPreviewHtml}
-                  className="absolute inset-0 w-full h-full border-0 bg-white"
-                  title="Simplified app preview"
-                  tabIndex={-1}
-                  sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
-                />
-                <div className="relative z-10 max-w-md text-center space-y-3 px-4 py-4 rounded-xl bg-[var(--bg-base,#0a0a0a)]/90 backdrop-blur-sm border border-border/40 shadow-lg">
-                  <div className="text-sm font-medium">
-                    {wcError ? "In-browser preview unavailable" : "Starting in-browser preview"}
-                  </div>
-                  <div className="text-xs text-muted-foreground whitespace-pre-wrap">
-                    {wcError ?? wcPhase ?? "Booting runtime…"}
-                  </div>
-                  <div className="text-[10px] text-muted-foreground/40">
-                    Showing a simplified preview behind this card while the in-browser runtime{" "}
-                    {wcError ? "reconnects" : "starts"}.
-                  </div>
-                  {wcError && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        // Clear the remembered boot failure BEFORE bumping the
-                        // nonce — the boot effect's own webContainerBlocker()
-                        // check runs synchronously once it re-fires, so if the
-                        // reset lands after that check, it replays the same
-                        // cached error and this button does nothing again
-                        // (see resetWebContainerFatal's own doc comment).
-                        void (async () => {
-                          const { resetWebContainerFatal } = await import(
-                            "@/lib/preview/webcontainer-engine"
-                          );
-                          resetWebContainerFatal();
-                          setWcNonce((n) => n + 1);
-                        })();
-                      }}
-                      className="text-xs px-3 py-1.5 rounded-md border hover:bg-muted"
-                    >
-                      Restart runtime
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        ) : previewEngine === "sandbox" && sandboxUrl ? (
-          /* Real Modal sandbox — live Vite/Next on Modal tunnel */
+        ) : useLiveHttpPreview && editorPreviewSrc ? (
+          /* Sandbox HTTPS origin only — waiting pane until the tunnel is ready */
           <div className={`flex flex-col flex-1 min-h-0 overflow-hidden relative${errorGuard.freezePreview ? " pointer-events-none" : ""}`}>
             {withDeviceFrame(
               <iframe
                 id="static-preview-panel"
-                // Prefer stable URL key — sandboxId churn from reclaim used to remount
-                // onto a dying tunnel and paint a white blank pane. reloadNonce bumps
-                // only when a zombie tunnel is healed in place, forcing a reconnect off
-                // the stale connection-reset page.
-                key={`sandbox-${sandboxUrl}-${refreshKey}-${sandboxReloadNonce}`}
+                key={`live-${editorPreviewSrc.split("?")[0]}-${sandboxReloadNonce}`}
                 ref={sandboxIframeRef}
-                src={sandboxUrlWithPath(sandboxUrl, sandboxIframePath)}
-                data-preview-url={sandboxUrl}
+                src={editorPreviewSrc}
+                data-preview-url={editorPreviewSrc}
                 className="w-full h-full min-h-0 border-0 bg-[var(--bg-base,#0a0a0a)]"
-                title="Live sandbox preview"
-                // `allow-popups-to-escape-sandbox` lets a preview open OAuth
-                // (Supabase/Google/GitHub) in a NEW TAB that is NOT itself
-                // sandboxed, so the sign-in can actually complete. Without it,
-                // a same-frame OAuth redirect tries to embed the provider in
-                // this iframe and the provider's X-Frame-Options shows
-                // "<host> refused to connect" in the preview. OAuth providers
-                // never permit framing; a new tab is the only way it works
-                // inside a framed preview.
+                title="Live preview"
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation"
                 allow="clipboard-read; clipboard-write; fullscreen"
                 onLoad={() => {
-                  transitionPreviewMachine("ready", "sandbox iframe loaded");
-                  window.dispatchEvent(new CustomEvent("lifemark-preview-settled", { detail: { ok: true } }));
-                  // Detect OAuth / external full-page navigations: after the
-                  // bridge has been alive once, a subsequent load with no pong
-                  // means the iframe left our app (e.g. supabase.co).
+                  transitionPreviewMachine("ready", liveSandboxOrigin ? "sandbox iframe loaded" : "preview host loaded");
+                  if (!liveSandboxOrigin) return;
                   const expectAlive = sandboxBridgeAliveRef.current;
                   const token = ++sandboxPingTokenRef.current;
                   sandboxIframeRef.current?.contentWindow?.postMessage(
@@ -2688,13 +2456,20 @@ function PreviewPanelImpl({
                   }, 900);
                 }}
                 onError={() => {
-                  // Dead tunnel (sandbox expired between renders) — reconnect to
-                  // the current sandbox instead of leaving a broken frame.
                   void reconnectSandboxPreview().then((re) => {
                     if (!re.previewUrl) void requestSandboxPreview();
                   });
                 }}
-              />
+              />,
+            )}
+            {(!liveSandboxOrigin || !sandboxUrl || sandboxSyncInstalling) && (
+              <div className="absolute top-2 left-1/2 z-20 flex max-w-[min(100%-1rem,28rem)] -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-background/95 px-2.5 py-1 text-[10px] text-muted-foreground">
+                <span className="truncate">
+                  {sandboxSyncInstalling
+                    ? "Installing dependencies…"
+                    : modalPhaseLabel || (liveSandboxOrigin ? "Updating live preview…" : "Starting live preview…")}
+                </span>
+              </div>
             )}
             {visualEditEnabled && vebSelected && (
               <VebBridgePopover
@@ -2739,102 +2514,59 @@ function PreviewPanelImpl({
                 src={deployedUrl}
                 className="w-full h-full border-0"
                 title="Live deployment"
-                // `allow-popups-to-escape-sandbox` lets a preview open OAuth
-                // (Supabase/Google/GitHub) in a NEW TAB that is NOT itself
-                // sandboxed, so the sign-in can actually complete. Without it,
-                // a same-frame OAuth redirect tries to embed the provider in
-                // this iframe and the provider's X-Frame-Options shows
-                // "<host> refused to connect" in the preview. OAuth providers
-                // never permit framing; a new tab is the only way it works
-                // inside a framed preview.
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation"
                 allow="clipboard-read; clipboard-write; fullscreen"
                 onLoad={() => transitionPreviewMachine("ready", "deployment iframe loaded")}
               />,
             )}
           </div>
-        ) : !sandboxStatusResolved ? (
-          /* Backend status still unknown — neutral loading only. This pane used
-             to flash setup instructions (env var names, provider) at every
-             editor open before the status check returned. */
-          <div className="flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)]">
-            <div className="text-center">
-              <Loader2 className="w-5 h-5 animate-spin text-muted-foreground/50 mx-auto mb-2" />
-              <p className="text-xs text-muted-foreground/40">Loading preview…</p>
-            </div>
-          </div>
         ) : (
-          /* Live preview backend not configured. Setup details (env vars,
-             provider name) are shown to DEVELOPERS only — end users get a
-             generic message that never reveals the underlying technology.
-             Same fallback-render-behind-the-card treatment as the sandbox
-             and webcontainer panes above: an unconfigured backend is just
-             another reason the live engine isn't reachable, not a reason to
-             show nothing at all. */
-          <div className="relative flex-1 flex items-center justify-center bg-[var(--bg-base,#0a0a0a)] overflow-hidden">
-            <iframe
-              key={`unconfigured-fallback-${filesSignature}`}
-              srcDoc={fallbackPreviewHtml}
-              className="absolute inset-0 w-full h-full border-0 bg-white"
-              title="Simplified app preview"
-              tabIndex={-1}
-              sandbox="allow-scripts allow-forms allow-popups allow-modals allow-downloads"
-            />
-            <div className="relative z-10 text-center max-w-md px-6 py-4 rounded-xl bg-[var(--bg-base,#0a0a0a)]/90 backdrop-blur-sm border border-border/40 shadow-lg">
-              <div className="mx-auto mb-4 flex size-12 items-center justify-center rounded-2xl border border-violet-500/30 bg-violet-500/10">
-                <Globe className="size-5 text-violet-700 dark:text-violet-300" />
-              </div>
-              <p className="text-sm font-semibold text-foreground/90 mb-1.5">
-                Live preview unavailable
-              </p>
-              <p className="text-xs text-muted-foreground/70 leading-relaxed mb-3">
-                {process.env.NODE_ENV === "development"
-                  ? "The live-sandbox backend is not configured for this server."
-                  : "The live preview service is temporarily unavailable. Your project and files are safe — try again in a moment."}
-              </p>
-              <p className="text-[10px] text-muted-foreground/40 mb-3">
-                Showing a simplified preview behind this card in the meantime.
-              </p>
-              {process.env.NODE_ENV === "development" && (
-                <>
-                  <pre className="text-left text-[11px] font-mono rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5 text-muted-foreground mb-4 overflow-x-auto">
-{`# .env.local
-MODAL_TOKEN_ID=ak-...
-MODAL_TOKEN_SECRET=...
-# optional:
-# MODAL_APP_NAME=lifemark-preview
-# SANDBOX_PROVIDER=modal`}
-                  </pre>
-                  <p className="text-[10px] text-muted-foreground/50 mb-4">
-                    Add tokens, restart <code className="text-muted-foreground/70">npm run dev</code>, then reload this editor.
-                  </p>
-                </>
-              )}
+          <LivePreviewWaiting
+            paused={sandboxLifecycle === "paused"}
+            title={
+              sandboxLifecycle === "paused"
+                ? "Still building?"
+                : sandboxLifecycle === "resuming"
+                  ? "Resuming live preview"
+                  : !sandboxEnabled && sandboxStatusResolved
+                    ? "Waiting for Docker"
+                    : "Starting live preview"
+            }
+            status={
+              sandboxLifecycle === "paused"
+                ? "The live preview paused to save resources. Resume when you are ready."
+                : sandboxLifecycle === "resuming"
+                  ? "Reconnecting to the live preview…"
+                  : !sandboxStatusResolved
+                    ? "Connecting to live preview…"
+                    : sandboxEnabled
+                      ? (modalPhaseLabel || "Starting live preview…")
+                      : (sandboxError || "Start Docker Desktop so this project can boot on a live preview origin.")
+            }
+            actions={
+              sandboxLifecycle === "paused" || sandboxLifecycle === "resuming" ? (
               <button
                 type="button"
                 onClick={() => {
-                  void (async () => {
-                    const re = await reconnectSandboxPreview();
-                    if (!re.enabled) {
-                      toast({
-                        title: "Preview unavailable",
-                        description:
-                          process.env.NODE_ENV === "development"
-                            ? "Set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET in .env.local"
-                            : "The live preview service is not available right now. Try again shortly.",
-                        variant: "destructive",
-                      });
-                      return;
-                    }
-                    if (!re.previewUrl) await requestSandboxPreview();
-                  })();
+                  void resumeSandboxPreview();
                 }}
-                className="h-8 px-4 rounded-md text-xs font-medium bg-violet-600 hover:bg-violet-500 text-white"
+                className="h-7 shrink-0 rounded-full bg-violet-600 px-3 text-xs font-medium text-white hover:bg-violet-500"
               >
-                Try again
+                Resume preview
               </button>
-            </div>
-          </div>
+              ) : !sandboxEnabled && sandboxStatusResolved ? (
+              <button
+                type="button"
+                onClick={() => {
+                  void requestSandboxPreview();
+                }}
+                className="h-7 shrink-0 rounded-full bg-violet-600 px-3 text-xs font-medium text-white hover:bg-violet-500"
+              >
+                Retry
+              </button>
+              ) : undefined
+            }
+          />
         )}
 
         {/* Console / Network / Perf — Modal live preview only */}
@@ -2863,8 +2595,15 @@ MODAL_TOKEN_SECRET=...
                 ))}
               </div>
               <div className="flex-1 overflow-y-auto p-2 font-mono text-xs space-y-0.5">
-                {previewBottomTab === "console" ? (
-                  consoleLines.length === 0 ? (
+    {previewBottomTab === "console" ? (
+                  <>
+                    {sandboxLifecycle ? (
+                      <p className="text-muted-foreground/80">
+                        [preview] lifecycle {sandboxLifecycle}
+                        {sandboxPhase ? ` · phase ${sandboxPhase}` : ""}
+                      </p>
+                    ) : null}
+                    {consoleLines.length === 0 ? (
                     <p className="text-muted-foreground">No console output yet…</p>
                   ) : (
                     consoleLines.map((line, i) => (
@@ -2879,7 +2618,8 @@ MODAL_TOKEN_SECRET=...
                         {line.text}
                       </div>
                     ))
-                  )
+                  )}
+                  </>
                 ) : previewBottomTab === "network" ? (
                   networkLines.length === 0 ? (
                     <p className="text-muted-foreground">No network activity yet…</p>
@@ -2961,71 +2701,12 @@ MODAL_TOKEN_SECRET=...
           logsVisible={showConsole}
         />
 
-        {previewStatusText && previewMachineState !== "ready" && (
+        {previewStatusText && previewMachineState !== "ready" && previewMachineState !== "error" && previewMachineState !== "unavailable" && (
           <div className="absolute top-2 left-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-background/90 border border-border/70 text-[10px] text-muted-foreground shadow-sm">
-            {previewMachineState === "building" || previewMachineState === "loading" ? (
-              <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
-            ) : previewMachineState === "error" || previewMachineState === "unavailable" ? (
-              <AlertTriangle className="w-3 h-3 text-red-400" />
-            ) : (
-              <Check className="w-3 h-3 text-amber-400" />
-            )}
+            <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
             <span>{previewStatusText}</span>
           </div>
         )}
-
-        <AnimatePresence>
-          {showRecoveryOverlay && (
-            <motion.div
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 12 }}
-              transition={{ duration: 0.18 }}
-              // Lovable-style neutral error card: bg-secondary-pulse + shadow-surface-xl, red dot, round "Try to fix" pill
-              className="absolute top-12 left-1/2 -translate-x-1/2 z-40 w-[min(420px,92%)] rounded-[var(--radius-6)] bg-[var(--bg-secondary-pulse)] shadow-surface-xl px-4 py-3"
-            >
-              <div className="flex items-start gap-2.5">
-                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-red-500" aria-hidden />
-                <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium text-[var(--fg-primary)]">Your preview has an error</div>
-                  <div className="mt-0.5 text-xs text-[var(--fg-tertiary)] truncate">
-                    {activeError ?? errorGuard.report?.errors[0]?.message ?? "The last update could not render cleanly."}
-                  </div>
-                  {previewDiagnosis && (
-                    <div className="mt-1 text-[11px] text-[var(--fg-tertiary)]/80 line-clamp-2">
-                      {previewDiagnosis.replace(/\n+/g, " ").slice(0, 180)}
-                    </div>
-                  )}
-                </div>
-              </div>
-              <div className="mt-2.5 flex flex-wrap items-center justify-end gap-1">
-                <button
-                  onClick={() => setShowConsole((value) => !value)}
-                  className="h-7 rounded-full px-3 text-xs text-[var(--fg-primary)] hover:bg-[var(--bg-muted)] transition-colors"
-                >
-                  Show error
-                </button>
-                <button
-                  onClick={() => refreshPreview(files)}
-                  className="h-7 rounded-full px-3 text-xs text-[var(--fg-primary)] hover:bg-[var(--bg-muted)] transition-colors"
-                >
-                  Refresh
-                </button>
-                {onFixWithAI && (
-                  <button
-                    onClick={() => {
-                      handleFixWithAI(activeError ?? errorGuard.report?.formatted ?? "Preview runtime error");
-                      setErrorDismissed(true);
-                    }}
-                    className="h-7 rounded-full px-3 text-xs font-medium bg-[var(--fg-primary)] text-[var(--bg-base)] hover:opacity-90 transition-opacity"
-                  >
-                    Try to fix
-                  </button>
-                )}
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         {hideTopChrome && <LovablePreviewStatusPill label={previewStatusText} />}
 
@@ -3049,6 +2730,8 @@ MODAL_TOKEN_SECRET=...
                 onVisualEditToggle?.();
               }
             }}
+            designView={designViewOpen}
+            onDesignViewToggle={() => setDesignViewOpen((v) => !v)}
             commentPinMode={commentPinMode}
             onCommentPinToggle={() => {
               setCommentPinMode((v) => !v);
@@ -3127,39 +2810,14 @@ MODAL_TOKEN_SECRET=...
             Live deployment
           </div>
         )}
-
-        {/* Fix-with-AI error banner */}
-        <AnimatePresence>
-          {activeError && !errorDismissed && !outOfCredits && !errorGuard.freezePreview && (
-            <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 16 }}
-              transition={{ duration: 0.2 }}
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 max-w-[90%] bg-red-950/95 backdrop-blur-sm border border-red-500/40 text-red-800 dark:text-red-200 text-xs px-3 py-2 rounded-xl shadow-2xl"
-            >
-              <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
-              <span className="flex-1 truncate min-w-0 font-mono opacity-80">
-                {activeError.length > 80 ? activeError.slice(0, 80) + "…" : activeError}
-              </span>
-              {onFixWithAI && (
-                <button
-                  onClick={() => { handleFixWithAI(activeError); setErrorDismissed(true); }}
-                  className="flex items-center gap-1 shrink-0 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-800 dark:text-red-200 px-2 py-1 rounded-lg transition-colors"
-                >
-                  <Wrench className="w-3 h-3" />
-                  Fix with AI
-                </button>
-              )}
-              <button
-                onClick={() => setErrorDismissed(true)}
-                className="shrink-0 text-red-400/60 hover:text-red-300 transition-colors ml-1"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
+        {designViewOpen && projectId ? (
+          <PreviewDesignView
+            projectId={projectId}
+            files={files}
+            onFileUpdate={onFileUpdate}
+            onClose={() => setDesignViewOpen(false)}
+          />
+        ) : null}
       </div>
     {/* Capture & annotate modal */}
     {annotateScreenshot && (

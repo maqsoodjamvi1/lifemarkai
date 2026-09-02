@@ -28,6 +28,7 @@ import { LovableFixErrorMessage,parseLovableFixMessage } from "./fix-error-messa
 import { LovableRoleTestBanner } from "./role-test-banner";
 import { LovableCollapsibleText } from "./collapsible-text";
 import { LovableBranchChip } from "./branch-chip";
+import { LovableClarifyTurnCard, type ClarifyQuestion } from "./clarify-session-card";
 import { computeLovableChangeCardMeta,type LovableFileDiffEntry } from "./types";
 
 function buildAssistantSummary(
@@ -178,6 +179,18 @@ export interface LovableMessageRowProps {
   onOpenTestingPanel?: () => void;
   onSaveAnalyzeFile?: (file: GeneratedFile) => void | Promise<void>;
   onOpenBranchSnapshot?: (snapshotId: string) => void;
+  /** Current unanswered interview question — rendered as the last assistant turn. */
+  clarifyTurn?: {
+    question: ClarifyQuestion;
+    step: number;
+    total: number;
+    isFirst: boolean;
+    ack?: string;
+    awaitingDetails?: boolean;
+    onAnswer: (answer: string) => void;
+    onSkip: () => void;
+    onSkipAll: () => void;
+  };
 }
 
 /** Lovable-parity single message row — bubble, traces, change cards, actions. */
@@ -250,10 +263,12 @@ export function LovableMessageRow({
   onOpenTestingPanel,
   onSaveAnalyzeFile,
   onOpenBranchSnapshot,
+  clarifyTurn,
 }: LovableMessageRowProps) {
   const verification = (msg.metadata as {
     verification?: { passed?: boolean; engine?: string; fixesApplied?: number; errors?: string[] };
   } | null)?.verification;
+  const isClarifyTurn = !!(msg.metadata as { clarify?: boolean } | null)?.clarify;
 
   const agentTrace = (msg.metadata as {
     agent_trace?: Array<{ t: string; tool?: string; c: string; path?: string }>;
@@ -266,8 +281,9 @@ export function LovableMessageRow({
     branch_from_snapshot_id?: string | null;
   } | null) ?? null;
 
-  const hasStepPlan = msg.role === "assistant" && msg.content.includes("<!-- STEP_PLAN -->");
-  const hasPlanReady = msg.role === "assistant" && msg.content.includes("<!-- PLAN_READY -->");
+  const body = typeof msg.content === "string" ? msg.content : "";
+  const hasStepPlan = msg.role === "assistant" && body.includes("<!-- STEP_PLAN -->");
+  const hasPlanReady = msg.role === "assistant" && body.includes("<!-- PLAN_READY -->");
 
   return (
     <motion.div
@@ -294,8 +310,34 @@ export function LovableMessageRow({
             {formatLovableStampTime(msg.created_at)}
           </div>
         )}
-        {hasStepPlan ? (() => {
-          const steps = parseLovableStepPlan(msg.content);
+        {clarifyTurn ? (
+          <>
+            <LovableMessageBubble role="assistant">
+              <LovableMessageContent
+                content={
+                  body.trim() ||
+                  [clarifyTurn.ack, clarifyTurn.question.question].filter(Boolean).join("\n\n")
+                }
+                mode={msg.mode ?? "chat"}
+              />
+            </LovableMessageBubble>
+            <LovableClarifyTurnCard
+              key={clarifyTurn.question.id}
+              question={clarifyTurn.question}
+              step={clarifyTurn.step}
+              total={clarifyTurn.total}
+              isFirst={clarifyTurn.isFirst}
+              ack={clarifyTurn.ack}
+              embedded
+              chipsOnly
+              awaitingDetails={clarifyTurn.awaitingDetails}
+              onAnswer={clarifyTurn.onAnswer}
+              onSkip={clarifyTurn.onSkip}
+              onSkipAll={clarifyTurn.onSkipAll}
+            />
+          </>
+        ) : hasStepPlan ? (() => {
+          const steps = parseLovableStepPlan(body);
           const approved = approvedSteps ?? new Set(steps.map((_, i) => i));
           return (
             <LovableStepPlanCard
@@ -311,7 +353,7 @@ export function LovableMessageRow({
 
         {hasPlanReady ? (
           <LovablePlanReadyCard
-            content={msg.content}
+            content={body}
             onRefine={(editedMarkdown) =>
               void onSendMessage(
                 `Continue refining this plan. Ask clarifying questions if needed.\n\nCurrent plan:\n\n${editedMarkdown}`,
@@ -324,7 +366,7 @@ export function LovableMessageRow({
               onModeChange?.("build");
             }}
           />
-        ) : (
+        ) : clarifyTurn ? null : (
           <>
             {msg.role === "user" && (branchMeta?.branched_at || branchMeta?.branch_from_snapshot_id) && (
               <LovableBranchChip
@@ -337,7 +379,7 @@ export function LovableMessageRow({
               {(() => {
                 // Lovable dump: fix requests render as a compact "Fix error"
                 // special message with the raw error collapsed behind a chevron.
-                const fixMeta = parseLovableFixMessage(msg.content);
+                const fixMeta = parseLovableFixMessage(body);
                 if (fixMeta) {
                   return <LovableFixErrorMessage title={fixMeta.title} detail={fixMeta.detail} />;
                 }
@@ -354,30 +396,30 @@ export function LovableMessageRow({
                 if (msg.role === "assistant" && (msg.mode === "build" || msg.mode === "agent" || msg.mode === "patch")) {
                   const diffCount = diffs?.length ?? 0;
                   const changedCount = changedPaths?.length ?? 0;
-                  const summary = buildAssistantSummary(msg.content ?? "", diffCount, changedCount);
+                  const summary = buildAssistantSummary(body, diffCount, changedCount);
                   return (
                     <BuildSummaryWithExpand
                       summary={summary}
-                      content={msg.content ?? ""}
+                      content={body}
                       mode={msg.mode ?? "chat"}
                       searchQuery={searchQuery}
                     />
                   );
                 }
                 if (searchQuery.trim()) {
-                  const highlighted = <LovableHighlightedText text={msg.content} query={searchQuery} />;
+                  const highlighted = <LovableHighlightedText text={body} query={searchQuery} />;
                   return (
-                    <LovableCollapsibleText text={msg.content ?? ""}>{highlighted}</LovableCollapsibleText>
+                    <LovableCollapsibleText text={body}>{highlighted}</LovableCollapsibleText>
                   );
                 }
                 if (msg.role === "user" || msg.role === "assistant") {
                   return (
-                    <LovableCollapsibleText text={msg.content ?? ""}>
-                      <LovableMessageContent content={msg.content} mode={msg.mode ?? "chat"} />
+                    <LovableCollapsibleText text={body}>
+                      <LovableMessageContent content={body} mode={msg.mode ?? "chat"} />
                     </LovableCollapsibleText>
                   );
                 }
-                return <LovableMessageContent content={msg.content} mode={msg.mode ?? "chat"} />;
+                return <LovableMessageContent content={body} mode={msg.mode ?? "chat"} />;
               })()}
             </LovableMessageBubble>
           </>
@@ -468,12 +510,12 @@ export function LovableMessageRow({
           <LovablePreviewSnapshotCard messageId={msg.id} src={screenshot} />
         )}
 
-        {(msg.role === "user" || msg.role === "assistant") && (
+        {(msg.role === "user" || msg.role === "assistant") && !clarifyTurn && (
           <LovableMessageActions
             role={msg.role}
             createdAt={msg.created_at}
-            statsText={msg.content}
-            copyText={msg.content}
+            statsText={body}
+            copyText={body}
             copied={copiedId === msg.id}
             linkCopied={copiedLinkId === msg.id}
             bookmarked={bookmarked}
@@ -533,7 +575,7 @@ export function LovableMessageRow({
           />
         )}
 
-        {msg.role === "assistant" && isLastAssistant && !streaming && !showBookmarks && !searchQuery && (
+        {msg.role === "assistant" && isLastAssistant && !streaming && !showBookmarks && !searchQuery && !isClarifyTurn && (
           <button
             onClick={onRegenerate}
             className="flex items-center gap-1.5 mt-1 px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground border border-border/40 hover:border-border rounded-full bg-muted/20 hover:bg-muted/40 transition-colors"

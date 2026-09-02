@@ -59,3 +59,11 @@ test("features named during a new app request do not shrink the whole build to o
   assert.equal(intent.operation, "create");
   assert.equal(intent.changeScope, "architecture");
 });
+
+test("shouldAutoBuildMode does not treat 'change' as a greenfield build", async () => {
+  const { shouldAutoBuildMode, isConfidentBuildClassification } = await import("./build-intent.ts");
+  assert.equal(shouldAutoBuildMode("change the website header color to blue"), false);
+  assert.equal(shouldAutoBuildMode("build a point of sale for a cafe"), true);
+  assert.equal(isConfidentBuildClassification("build a point of sale for a cafe"), true);
+  assert.equal(isConfidentBuildClassification("build me an app"), false);
+});

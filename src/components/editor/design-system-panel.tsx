@@ -4,12 +4,13 @@ import { Palette,Type,Sliders,Download,Sparkles,Check,Loader2,RefreshCw } from "
 import { Button } from "@/components/ui/button";
 import { Tabs,TabsList,TabsTrigger,TabsContent } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import type { ProjectFile } from "@/types/database";
+import { DESIGN_THEME_PACKS } from "@/lib/editor/design-themes";
 
 interface DesignSystemPanelProps {
   projectId: string;
   files: ProjectFile[];
   onFilesUpdate: (files: ProjectFile[]) => void;
+  compact?: boolean;
 }
 
 interface ColorToken {
@@ -200,7 +201,7 @@ function hslToHex(h: number, s: number, l: number): string {
   return `#${f(0)}${f(8)}${f(4)}`;
 }
 
-export function DesignSystemPanel({ projectId, files, onFilesUpdate }: DesignSystemPanelProps) {
+export function DesignSystemPanel({ projectId, files, onFilesUpdate, compact = false }: DesignSystemPanelProps) {
   const { toast } = useToast();
 
   const parsed = parseExistingTokens(files);
@@ -211,7 +212,7 @@ export function DesignSystemPanel({ projectId, files, onFilesUpdate }: DesignSys
   const [radius, setRadius] = useState<RadiusToken>(parsed.radius ?? { base: 8 });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [activeTab, setActiveTab] = useState("colors");
+  const [activeTab, setActiveTab] = useState(compact ? "themes" : "colors");
 
   const applyTokens = useCallback(async () => {
     setSaving(true);
@@ -253,6 +254,7 @@ export function DesignSystemPanel({ projectId, files, onFilesUpdate }: DesignSys
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
+      {!compact && (
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
         <div className="flex items-center gap-2">
           <Palette className="w-4 h-4 text-primary" />
@@ -269,11 +271,24 @@ export function DesignSystemPanel({ projectId, files, onFilesUpdate }: DesignSys
           </Button>
         </div>
       </div>
-
-      {/* Tabs */}
+      )}
+      {compact && (
+        <div className="flex h-8 shrink-0 items-center justify-end gap-1 border-b border-border px-2">
+          <Button variant="ghost" size="sm" onClick={resetToDefaults} className="h-6 px-2 text-[11px]">
+            Reset
+          </Button>
+          <Button size="sm" onClick={applyTokens} disabled={saving} className="h-6 px-2 text-[11px] gap-1">
+            {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : saved ? <Check className="w-3 h-3" /> : null}
+            {saved ? "Applied" : "Apply theme"}
+          </Button>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
           <TabsList className="w-full rounded-none border-b border-border bg-transparent h-9 px-2 shrink-0 justify-start gap-0">
+            <TabsTrigger value="themes" className="h-8 text-xs px-3 rounded-none data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none">
+              Themes
+            </TabsTrigger>
             <TabsTrigger value="colors" className="h-8 text-xs px-3 rounded-none data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none">
               <Palette className="w-3 h-3 mr-1.5" />Colors
             </TabsTrigger>
@@ -287,6 +302,35 @@ export function DesignSystemPanel({ projectId, files, onFilesUpdate }: DesignSys
               <Download className="w-3 h-3 mr-1.5" />Export
             </TabsTrigger>
           </TabsList>
+
+          <TabsContent value="themes" className="flex-1 overflow-y-auto mt-0 p-4 space-y-3">
+            <p className="text-[11px] text-muted-foreground">
+              Pick a full theme (colors, type, radius), then Apply to write tokens.css.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {DESIGN_THEME_PACKS.map((pack) => (
+                <button
+                  key={pack.id}
+                  type="button"
+                  onClick={() => {
+                    setColors((prev) => prev.map((c) => ({ ...c, value: pack.colors[c.key] ?? c.value })));
+                    setTypography((t) => ({ ...t, fontSans: pack.fontSans }));
+                    setRadius({ base: pack.radiusPx });
+                    setActiveTab("colors");
+                  }}
+                  className="rounded-lg border border-border p-2 text-left hover:bg-muted/50"
+                >
+                  <div className="mb-1.5 flex h-6 overflow-hidden rounded">
+                    {["primary", "accent", "muted", "background"].map((key) => (
+                      <span key={key} className="flex-1" style={{ backgroundColor: pack.colors[key] }} />
+                    ))}
+                  </div>
+                  <p className="text-xs font-medium">{pack.name}</p>
+                  <p className="text-[10px] text-muted-foreground">{pack.fontSans} · {pack.radiusPx}px</p>
+                </button>
+              ))}
+            </div>
+          </TabsContent>
 
           {/* ── Colors ── */}
           <TabsContent value="colors" className="flex-1 overflow-y-auto mt-0 p-4 space-y-5">
