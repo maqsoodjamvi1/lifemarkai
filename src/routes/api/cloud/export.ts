@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
+import { denyUnlessProjectAccess } from "@/lib/project/access";
 import { isManagementConfigured,queryManagedSql } from "@/lib/cloud/management";
 import { sendEmail } from "@/lib/email/resend";
 
@@ -23,9 +25,9 @@ function sqlLiteral(v: unknown): string {
   return `'${String(v).replace(/'/g, "''")}'`;
 }
 
-async function loadOwnedCloudProject(supabase: any, userId: string, projectId: string) {
+async function loadCloudProject(supabase: any, projectId: string) {
   const { data: project } = await supabase.from("projects")
-    .select("id, name, cloud_enabled, cloud_project_ref, cloud_status").eq("id", projectId).eq("user_id", userId).single();
+    .select("id, name, cloud_enabled, cloud_project_ref, cloud_status").eq("id", projectId).single();
   if (!project) return { error: Response.json({ error: "Project not found" }, { status: 404 }) };
   if (!project.cloud_enabled || !project.cloud_project_ref || !isManagementConfigured()) {
     return { error: Response.json({ error: "Export needs a provisioned Cloud backend. Local-mode Cloud has no managed database to export." }, { status: 400 }) };
@@ -93,12 +95,15 @@ export const Route = createFileRoute("/api/cloud/export")({
     handlers: {
       GET: async ({ request }) => {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
         const projectId = new URL(request.url).searchParams.get("projectId");
         if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
-        const loaded = await loadOwnedCloudProject(supabase, user.id, projectId);
+        const gate = await denyUnlessProjectAccess(supabase, projectId, user.id, "write");
+        if ("error" in gate) return gate.error;
+
+        const loaded = await loadCloudProject(supabase, projectId);
         if ("error" in loaded && loaded.error) return loaded.error;
         const project = loaded.project!;
         try {
@@ -116,14 +121,17 @@ export const Route = createFileRoute("/api/cloud/export")({
       },
       POST: async ({ request }) => {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const body = (await request.json().catch(() => ({}))) as { projectId?: string; email?: boolean };
         if (!body.projectId) return Response.json({ error: "projectId required" }, { status: 400 });
         if (!body.email) return Response.json({ error: "email: true required for POST" }, { status: 400 });
 
-        const loaded = await loadOwnedCloudProject(supabase, user.id, body.projectId);
+        const gate = await denyUnlessProjectAccess(supabase, body.projectId, user.id, "write");
+        if ("error" in gate) return gate.error;
+
+        const loaded = await loadCloudProject(supabase, body.projectId);
         if ("error" in loaded && loaded.error) return loaded.error;
         const project = loaded.project!;
 

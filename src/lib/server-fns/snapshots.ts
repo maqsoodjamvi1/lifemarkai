@@ -350,21 +350,16 @@ export async function restoreSnapshot(data: any) {
     const { user } = await getServerUser(supabase);
     if (!user) return { status: "unauthorized" as const };
 
-    // Match Next: restore is owner-only.
-    const { data: project } = await supabase
-      .from("projects")
-      .select("id")
-      .eq("id", data.projectId)
-      .eq("user_id", user.id)
-      .single();
-    if (!project) return { status: "not_found" as const, error: "Project not found" };
+    const access = await getProjectAccess(supabase, data.projectId, user.id);
+    if (!canWriteProjectFiles(access)) return { status: "not_found" as const, error: "Project not found" };
 
     const { data: snapMeta } = await supabase
       .from("project_snapshots")
-      .select("id, label, user_id")
+      .select("id, label, project_id")
       .eq("id", data.snapshotId)
+      .eq("project_id", data.projectId)
       .single();
-    if (!snapMeta || snapMeta.user_id !== user.id) {
+    if (!snapMeta) {
       return { status: "not_found" as const, error: "Snapshot not found" };
     }
 

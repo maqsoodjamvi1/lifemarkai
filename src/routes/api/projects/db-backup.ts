@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getServerUser } from "@/lib/supabase/server-user";
+import { denyUnlessProjectAccess } from "@/lib/project/access";
 import { parseSqlBackup } from "@/lib/backup/parse-sql-backup";
 
 /**
@@ -12,18 +14,20 @@ export const Route = createFileRoute("/api/projects/db-backup")({
     handlers: {
       GET: async ({ request }) => {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const projectId = new URL(request.url).searchParams.get("projectId");
         if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
+
+        const gate = await denyUnlessProjectAccess(supabase, projectId, user.id, "read");
+        if ("error" in gate) return gate.error;
 
         const admin = createAdminClient();
         const { data } = await admin
           .from("db_backups")
           .select("id, label, size_bytes, status, created_at, storage_path")
           .eq("project_id", projectId)
-          .eq("user_id", user.id)
           .order("created_at", { ascending: false })
           .limit(20);
 
@@ -32,17 +36,20 @@ export const Route = createFileRoute("/api/projects/db-backup")({
 
       POST: async ({ request }) => {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const body = (await request.json()) as { projectId: string; label?: string; action?: string; content?: string };
         const { projectId, label, action, content } = body;
         if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
+        const gate = await denyUnlessProjectAccess(supabase, projectId, user.id, "write");
+        if ("error" in gate) return gate.error;
+
         const admin = createAdminClient();
 
         const { data: project } = await admin
-          .from("projects").select("id, name").eq("id", projectId).eq("user_id", user.id).single();
+          .from("projects").select("id, name").eq("id", projectId).single();
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
         if (action === "restore") {
@@ -131,14 +138,24 @@ export const Route = createFileRoute("/api/projects/db-backup")({
 
       DELETE: async ({ request }) => {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const id = new URL(request.url).searchParams.get("id");
         if (!id) return Response.json({ error: "id required" }, { status: 400 });
 
         const admin = createAdminClient();
-        await admin.from("db_backups").delete().eq("id", id).eq("user_id", user.id);
+        const { data: backup } = await admin
+          .from("db_backups")
+          .select("id, project_id")
+          .eq("id", id)
+          .maybeSingle();
+        if (!backup?.project_id) return Response.json({ error: "Not found" }, { status: 404 });
+
+        const gate = await denyUnlessProjectAccess(supabase, backup.project_id, user.id, "write");
+        if ("error" in gate) return gate.error;
+
+        await admin.from("db_backups").delete().eq("id", id);
 
         return Response.json({ ok: true });
       },

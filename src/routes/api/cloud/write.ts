@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient,createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
+import { denyUnlessProjectAccess } from "@/lib/project/access";
 import { runManagedSql,queryManagedSql } from "@/lib/cloud/management";
 import { planSqlWrite } from "@/lib/cloud/sql-write-preview";
 
@@ -30,7 +32,7 @@ export const Route = createFileRoute("/api/cloud/write")({
     handlers: {
       POST: async ({ request }) => {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         let body: { proposalId?: string; decision?: string; acknowledgeCountChange?: boolean };
@@ -49,8 +51,6 @@ export const Route = createFileRoute("/api/cloud/write")({
 
         const admin = createAdminClient();
 
-        // Load the proposal. The join through projects is what enforces
-        // ownership — a proposal id alone is not authorisation.
         const { data: proposal } = await admin
           .from("project_data_writes")
           .select("id, project_id, statement, kind, target_table, previewed_rows, status")
@@ -58,11 +58,13 @@ export const Route = createFileRoute("/api/cloud/write")({
           .single();
         if (!proposal) return Response.json({ error: "Proposal not found" }, { status: 404 });
 
+        const gate = await denyUnlessProjectAccess(supabase, proposal.project_id, user.id, "write");
+        if ("error" in gate) return gate.error;
+
         const { data: project } = await supabase
           .from("projects")
           .select("id, cloud_enabled, cloud_project_ref")
           .eq("id", proposal.project_id)
-          .eq("user_id", user.id)
           .single();
         if (!project) return Response.json({ error: "Proposal not found" }, { status: 404 });
 
@@ -160,20 +162,20 @@ export const Route = createFileRoute("/api/cloud/write")({
         return Response.json({ ok: true, status: "executed", rowsAffected: proposal.previewed_rows });
       },
 
-      /** The audit trail, newest first. Readable by the project owner. */
+      /** Audit trail — owner and accepted collaborators, never a public-link visitor. */
       GET: async ({ request }) => {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const projectId = new URL(request.url).searchParams.get("projectId");
         if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
-        const { data: project } = await supabase
-          .from("projects").select("id").eq("id", projectId).eq("user_id", user.id).single();
-        if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
+        const gate = await denyUnlessProjectAccess(supabase, projectId, user.id, "read");
+        if ("error" in gate) return gate.error;
 
-        const { data: writes } = await supabase
+        const admin = createAdminClient();
+        const { data: writes } = await admin
           .from("project_data_writes")
           .select("id, statement, kind, target_table, previewed_rows, affected_rows, status, error, proposed_at, approved_at, executed_at")
           .eq("project_id", projectId)
