@@ -99,11 +99,11 @@ function EditorPage() {
 
 function EditorConnectivityError({ detail }: { detail?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 p-4">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
       <div className="max-w-md text-center space-y-4">
-        <AlertCircle className="w-12 h-12 text-amber-400 mx-auto" />
-        <h1 className="text-2xl font-bold text-slate-100">Connection hiccup</h1>
-        <p className="text-slate-400">
+        <AlertCircle className="w-12 h-12 text-amber-500 mx-auto" />
+        <h1 className="text-2xl font-bold">Connection hiccup</h1>
+        <p className="text-muted-foreground">
           {detail ?? "We couldn't reach the database. This is usually temporary."}
         </p>
         <div className="flex flex-col gap-2 pt-2">
@@ -126,11 +126,11 @@ function EditorErrorComponent({ error, reset }: { error: Error; reset: () => voi
     console.error("Editor error:", error);
   }, [error]);
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 p-4">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
       <div className="max-w-md text-center space-y-4">
-        <AlertCircle className="w-12 h-12 text-red-400 mx-auto" />
-        <h1 className="text-2xl font-bold text-slate-100">Editor Error</h1>
-        <p className="text-slate-400">
+        <AlertCircle className="w-12 h-12 text-destructive mx-auto" />
+        <h1 className="text-2xl font-bold">Editor Error</h1>
+        <p className="text-muted-foreground">
           {error.message || "An unexpected error occurred while loading the editor."}
         </p>
         <div className="flex flex-col gap-2 pt-4">
@@ -159,11 +159,11 @@ function EditorPending() {
 
 function EditorNotFound() {
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 p-4">
+    <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-4">
       <div className="max-w-md text-center space-y-4">
-        <AlertCircle className="w-12 h-12 text-slate-500 mx-auto" />
-        <h1 className="text-2xl font-bold text-slate-100">Project not found</h1>
-        <p className="text-slate-400">
+        <AlertCircle className="w-12 h-12 text-muted-foreground mx-auto" />
+        <h1 className="text-2xl font-bold">Project not found</h1>
+        <p className="text-muted-foreground">
           This project doesn't exist, or you don't have access to it.
         </p>
         <Link to="/dashboard">
