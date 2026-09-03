@@ -5934,6 +5934,27 @@ ${(f.content ?? "").slice(0, 8000)}
     return null;
   }, [visibleMessages]);
 
+  const ACTION_FOLLOW_UP_CHIPS = useMemo(
+    () => new Set([SCOPE_OVERRIDE_CHIP, "Re-run full security scan"]),
+    [],
+  );
+
+  const threadSuggestions = useMemo(() => {
+    if (!suggestionChipsEnabled || streaming) return suggestions;
+    if (!lastAssistantMsgId) return suggestions;
+    if ((suggestions[lastAssistantMsgId]?.length ?? 0) > 0) return suggestions;
+    const chips = followUpChips.filter((chip) => !ACTION_FOLLOW_UP_CHIPS.has(chip));
+    if (chips.length === 0) return suggestions;
+    return { ...suggestions, [lastAssistantMsgId]: chips };
+  }, [
+    ACTION_FOLLOW_UP_CHIPS,
+    followUpChips,
+    lastAssistantMsgId,
+    streaming,
+    suggestionChipsEnabled,
+    suggestions,
+  ]);
+
   const chatThreads = useMemo(() => {
     let filtered = showBookmarks
       ? visibleMessages.filter((m) => bookmarkedIds.has(m.id))
@@ -6271,7 +6292,7 @@ ${(f.content ?? "").slice(0, 8000)}
     messageSkills,
     messageCredits,
     genTimes,
-    suggestions: suggestionChipsEnabled ? suggestions : EMPTY_SUGGESTIONS,
+    suggestions: suggestionChipsEnabled ? threadSuggestions : EMPTY_SUGGESTIONS,
     roleTestChips,
     approvedSteps,
     fileStates,
@@ -6713,6 +6734,11 @@ ${(f.content ?? "").slice(0, 8000)}
             buildStatus={clarifyStreaming ? null : buildStatus}
             postBuildStatus={postBuildStatus}
             messagesEndRef={messagesEndRef}
+            onOpenStreamingPath={(path) => {
+              window.dispatchEvent(
+                new CustomEvent("lifemark-open-file-at-line", { detail: { path, line: 1 } }),
+              );
+            }}
           />
         }
       />
@@ -6800,8 +6826,7 @@ ${(f.content ?? "").slice(0, 8000)}
               );
               return;
             }
-            setInput(chip);
-            setTimeout(() => textareaRef.current?.focus(), 0);
+            void sendMessage(chip);
           }}
           attachedImage={attachedImage}
           attachedImageName={attachedImageName}

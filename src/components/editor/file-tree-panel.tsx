@@ -149,10 +149,10 @@ function InlineInput({
           if (e.key === "Enter") { e.preventDefault(); if (value.trim()) onConfirm(value.trim()); }
           if (e.key === "Escape") onCancel();
         }}
-        className="flex-1 min-w-0 bg-[#313244] border border-violet-500/60 rounded px-2 py-0.5 text-xs text-[#cdd6f4] outline-none font-mono"
+        className="flex-1 min-w-0 bg-muted border border-violet-500/60 rounded px-2 py-0.5 text-xs text-foreground outline-none font-mono"
       />
       <button onClick={() => value.trim() && onConfirm(value.trim())} className="text-emerald-400 hover:text-emerald-300"><Check className="w-3 h-3" /></button>
-      <button onClick={onCancel} className="text-[#585b70] hover:text-[#cdd6f4]"><X className="w-3 h-3" /></button>
+      <button onClick={onCancel} className="text-muted-foreground hover:text-foreground"><X className="w-3 h-3" /></button>
     </div>
   );
 }
@@ -162,10 +162,10 @@ function InlineInput({
 function DeleteConfirm({ name, onConfirm, onCancel }: { name: string; onConfirm: () => void; onCancel: () => void }) {
   return (
     <div className="px-3 py-2 space-y-2">
-      <p className="text-xs text-[#cdd6f4]">Delete <span className="font-mono text-red-400">{name}</span>?</p>
+      <p className="text-xs text-foreground">Delete <span className="font-mono text-red-400">{name}</span>?</p>
       <div className="flex gap-2">
         <button onClick={onConfirm} className="flex-1 py-1 bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 rounded text-xs text-red-400 transition-colors">Delete</button>
-        <button onClick={onCancel} className="flex-1 py-1 bg-[#313244] hover:bg-[#45475a] rounded text-xs text-[#cdd6f4] transition-colors">Cancel</button>
+        <button onClick={onCancel} className="flex-1 py-1 bg-muted hover:bg-muted rounded text-xs text-foreground transition-colors">Cancel</button>
       </div>
 
     </div>
@@ -247,12 +247,12 @@ function TreeNodeComponent({
                   }}
                   className={`flex items-center gap-1.5 w-full px-2 py-1 rounded text-xs transition-colors group ${
                     dropHover
-                      ? "bg-violet-500/20 outline outline-1 outline-violet-500/50 text-[#cdd6f4]"
-                      : "hover:bg-[#313244]/60 text-[#a6adc8] hover:text-[#cdd6f4]"
+                      ? "bg-violet-500/20 outline outline-1 outline-violet-500/50 text-foreground"
+                      : "hover:bg-muted text-muted-foreground hover:text-foreground"
                   }`}
                   style={{ paddingLeft: `${8 + depth * 12}px` }}
                 >
-                  <span className="text-[#585b70] shrink-0">
+                  <span className="text-muted-foreground shrink-0">
                     {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                   </span>
                   {open
@@ -261,14 +261,14 @@ function TreeNodeComponent({
                   <span className="truncate flex-1 text-left">{node.name}</span>
                   <div className="opacity-0 group-hover:opacity-100 flex items-center gap-0.5 shrink-0">
                     <span
-                      className="p-0.5 rounded hover:bg-[#45475a]"
+                      className="p-0.5 rounded hover:bg-muted"
                       onClick={(e) => { e.stopPropagation(); actions.onNewFile(node.path); }}
                       title="New file"
                     >
                       <FilePlus className="w-3 h-3" />
                     </span>
                     <span
-                      className="p-0.5 rounded hover:bg-[#45475a]"
+                      className="p-0.5 rounded hover:bg-muted"
                       onClick={(e) => { e.stopPropagation(); actions.onNewFolder(node.path); }}
                       title="New folder"
                     >
@@ -279,7 +279,7 @@ function TreeNodeComponent({
               )}
             </div>
           </ContextMenuTrigger>
-          <ContextMenuContent className="bg-[#181825] border-[#313244] text-[#cdd6f4] text-xs">
+          <ContextMenuContent className="bg-popover border-border text-foreground text-xs">
             <ContextMenuItem onClick={() => actions.onNewFile(node.path)} className="gap-2 text-xs cursor-pointer">
               <FilePlus className="w-3.5 h-3.5" /> New file
             </ContextMenuItem>
@@ -363,8 +363,8 @@ function TreeNodeComponent({
                 }}
                 className={`flex items-center gap-1.5 w-full py-1 rounded text-xs transition-colors group ${
                   isActive
-                    ? "bg-[#313244] text-[#cdd6f4]"
-                    : "text-[#a6adc8] hover:bg-[#313244]/60 hover:text-[#cdd6f4]"
+                    ? "bg-muted text-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 }`}
                 style={{ paddingLeft: `${8 + depth * 12}px`, paddingRight: "6px" }}
               >
@@ -374,7 +374,7 @@ function TreeNodeComponent({
             )}
           </div>
         </ContextMenuTrigger>
-        <ContextMenuContent className="bg-[#181825] border-[#313244] text-[#cdd6f4] text-xs">
+        <ContextMenuContent className="bg-popover border-border text-foreground text-xs">
           <ContextMenuItem onClick={() => setRenaming(true)} className="gap-2 text-xs cursor-pointer">
             <Pencil className="w-3.5 h-3.5" /> Rename
           </ContextMenuItem>
@@ -740,7 +740,7 @@ export function FileTreePanel({
   }, [projectId, apiBase, onFilesChange, toast]);
 
   return (
-    <div className="flex flex-col h-full bg-[#181825] border-r border-[#1e1e2e] select-none">
+    <div className="flex flex-col h-full bg-popover border-r border-border select-none">
       {/* Hidden ZIP input */}
       <input
         ref={zipInputRef}
@@ -753,14 +753,14 @@ export function FileTreePanel({
         }}
       />
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-[#1e1e2e] shrink-0">
-        <span className="text-[10px] font-semibold text-[#585b70] uppercase tracking-wider">Files</span>
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
+        <span className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Files</span>
         <div className="flex items-center gap-0.5">
           <button
             onClick={() => zipInputRef.current?.click()}
             disabled={importingZip}
             title="Import ZIP"
-            className="p-1 rounded hover:bg-[#313244] text-[#585b70] hover:text-amber-400 disabled:opacity-40 transition-colors"
+            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-amber-400 disabled:opacity-40 transition-colors"
           >
             {importingZip
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -771,7 +771,7 @@ export function FileTreePanel({
             onClick={generateReadme}
             disabled={generatingReadme}
             title="Generate README with AI"
-            className="p-1 rounded hover:bg-[#313244] text-[#585b70] hover:text-violet-400 disabled:opacity-40 transition-colors"
+            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-violet-400 disabled:opacity-40 transition-colors"
           >
             {generatingReadme
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -780,14 +780,14 @@ export function FileTreePanel({
           </button>
           <button
             onClick={() => window.dispatchEvent(new Event("collapse-all-folders"))}
-            className="p-1 rounded text-[#585b70] hover:text-[#cdd6f4] hover:bg-[#313244] transition-colors"
+            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             title="Collapse all folders"
           >
             <ChevronsUpDown className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={() => window.dispatchEvent(new Event("expand-all-folders"))}
-            className="p-1 rounded text-[#585b70] hover:text-[#cdd6f4] hover:bg-[#313244] transition-colors"
+            className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             title="Expand all folders"
           >
             <ChevronsUpDown className="w-3.5 h-3.5 rotate-90" />
@@ -795,14 +795,14 @@ export function FileTreePanel({
           <button
             onClick={() => setCreating({ type: "file", parentPath: "" })}
             title="New file"
-            className="p-1 rounded hover:bg-[#313244] text-[#585b70] hover:text-[#cdd6f4] transition-colors"
+            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
           >
             <FilePlus className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={() => setCreating({ type: "folder", parentPath: "" })}
             title="New folder"
-            className="p-1 rounded hover:bg-[#313244] text-[#585b70] hover:text-[#cdd6f4] transition-colors"
+            className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
           >
             <FolderPlus className="w-3.5 h-3.5" />
           </button>
@@ -810,21 +810,21 @@ export function FileTreePanel({
       </div>
 
       {/* Search input */}
-      <div className="px-2 py-1.5 border-b border-[#1e1e2e] shrink-0">
+      <div className="px-2 py-1.5 border-b border-border shrink-0">
         <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors ${
-          searchFocused ? "bg-[#313244] ring-1 ring-violet-500/40" : "bg-[#1e1e2e]"
+          searchFocused ? "bg-muted ring-1 ring-violet-500/40" : "bg-muted"
         }`}>
-          <Search className="w-3 h-3 text-[#585b70] shrink-0" />
+          <Search className="w-3 h-3 text-muted-foreground shrink-0" />
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onFocus={() => setSearchFocused(true)}
             onBlur={() => setSearchFocused(false)}
             placeholder="Search code..."
-            className="flex-1 bg-transparent text-[11px] text-[#cdd6f4] placeholder-[#45475a] outline-none font-mono"
+            className="flex-1 bg-transparent text-[11px] text-foreground placeholder:text-muted-foreground outline-none font-mono"
           />
           {searchQuery && (
-            <button onClick={() => setSearchQuery("")} className="text-[#585b70] hover:text-[#cdd6f4]">
+            <button onClick={() => setSearchQuery("")} className="text-muted-foreground hover:text-foreground">
               <X className="w-3 h-3" />
             </button>
           )}
@@ -861,8 +861,8 @@ export function FileTreePanel({
         {/* Search results view */}
         {filteredFiles !== null ? (
           filteredFiles.length === 0 ? (
-            <div className="text-center py-8 text-xs text-[#585b70]">
-              No files match <span className="font-mono text-[#cdd6f4]">&quot;{searchQuery}&quot;</span>
+            <div className="text-center py-8 text-xs text-muted-foreground">
+              No files match <span className="font-mono text-foreground">&quot;{searchQuery}&quot;</span>
             </div>
           ) : (
             filteredFiles.map((file) => {
@@ -874,12 +874,12 @@ export function FileTreePanel({
                 <button
                   key={file.id}
                   onClick={() => onFileSelect(file)}
-                  className={`w-full flex flex-col px-3 py-1.5 text-left hover:bg-[#313244]/60 transition-colors ${
-                    isActive ? "bg-[#313244]" : ""
+                  className={`w-full flex flex-col px-3 py-1.5 text-left hover:bg-muted transition-colors ${
+                    isActive ? "bg-muted" : ""
                   }`}
                 >
-                  <span className="font-mono text-[11px] text-[#cdd6f4] truncate">{filename}</span>
-                  {dir && <span className="text-[10px] text-[#585b70] truncate">{dir}</span>}
+                  <span className="font-mono text-[11px] text-foreground truncate">{filename}</span>
+                  {dir && <span className="text-[10px] text-muted-foreground truncate">{dir}</span>}
                 </button>
               );
             })

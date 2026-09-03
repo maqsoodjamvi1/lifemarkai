@@ -12,6 +12,7 @@ import { LovableRecoveryChips,LOVABLE_RECOVERY_CHIPS } from "./recovery-chips";
 import { LovablePostBuildPublishBanner } from "./post-build-publish-banner";
 import { LovableComposerGuestCommentsBanner } from "./composer-guest-comments-banner";
 import { LovableComposerRuntimeErrorsBanner } from "./composer-runtime-errors-banner";
+import { LovableQuestionsAnsweredCard } from "./questions-answered-card";
 import type { PreviewRuntimeError } from "@/lib/preview/preview-error-bridge";
 
 interface LovableComposerDockProps {
@@ -89,7 +90,8 @@ export function LovableComposerDock({
   fileGenResults,
   onDismissFileGen,
   activeClarifySession,
-  answeredClarifyQuestions: _answeredClarifyQuestions = null,
+  answeredClarifyQuestions = null,
+  onDismissAnsweredClarify: _onDismissAnsweredClarify,
   promptQueue,
   streaming,
   queuePaused,
@@ -193,6 +195,10 @@ export function LovableComposerDock({
         }
         onDismiss={onDismissFileGen}
       />
+
+      {answeredClarifyQuestions && answeredClarifyQuestions.length > 0 && (
+        <LovableQuestionsAnsweredCard questions={answeredClarifyQuestions} />
+      )}
 
       <AnimatePresence>
         <LovablePromptQueue

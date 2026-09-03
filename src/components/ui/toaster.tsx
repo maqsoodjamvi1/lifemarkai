@@ -10,7 +10,7 @@ import { useEffect,useState } from "react";
 import { Toaster as Sonner } from "sonner";
 
 export function Toaster() {
-  const [theme, setTheme] = useState<"light" | "dark">("dark");
+  const [theme, setTheme] = useState<"light" | "dark">("light");
 
   useEffect(() => {
     const el = document.documentElement;

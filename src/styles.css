@@ -4,8 +4,8 @@
 
 @layer base {
   :root {
-    /* Studio light: cool slate canvas, not paper white. Cards sit above it. */
-    --background: 222 20% 96%;
+    /* Lovable-like light: paper white canvas, light sidebar, dark ink. */
+    --background: 0 0% 100%;
     --foreground: 222 47% 11%;
     --card: 0 0% 100%;
     --card-foreground: 222 47% 11%;
@@ -13,16 +13,16 @@
     --popover-foreground: 222 47% 11%;
     --primary: 221 83% 53%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 220 16% 93%;
+    --secondary: 220 14% 96%;
     --secondary-foreground: 222 47% 11%;
-    --muted: 220 16% 93%;
+    --muted: 220 14% 96%;
     --muted-foreground: 220 9% 42%;
-    --accent: 221 83% 53%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 220 14% 96%;
+    --accent-foreground: 222 47% 11%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 20% 98%;
-    --border: 220 13% 88%;
-    --input: 220 13% 88%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
     --ring: 221 83% 53%;
     --radius: 0.75rem;
     --chart-1: 221 83% 53%;
@@ -30,14 +30,14 @@
     --chart-3: 197 37% 24%;
     --chart-4: 43 74% 66%;
     --chart-5: 27 87% 67%;
-    --sidebar-background: 228 22% 8%;
-    --sidebar-foreground: 210 20% 96%;
-    --sidebar-primary: 217 91% 60%;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 222 47% 11%;
+    --sidebar-primary: 221 83% 53%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 228 16% 14%;
-    --sidebar-accent-foreground: 210 20% 98%;
-    --sidebar-border: 228 14% 16%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-accent: 220 14% 96%;
+    --sidebar-accent-foreground: 222 47% 11%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 221 83% 53%;
   }
 
   .dark {
@@ -85,11 +85,11 @@
    ────────────────────────────────────────────────────────────────────────── */
 @layer base {
   :root {
-    /* Canvas slightly below cards so chrome has depth even in light mode. */
-    --bg-base: oklch(0.955 0.008 260);
-    --bg-primary-pulse: oklch(0.995 0.002 260);
-    --bg-secondary-pulse: oklch(1 0 0);
-    --bg-muted: oklch(0.935 0.01 260);
+    /* Paper-white editor chrome (chat column, composer, files pane). */
+    --bg-base: oklch(1 0 0);
+    --bg-primary-pulse: oklch(1 0 0);
+    --bg-secondary-pulse: oklch(0.985 0.004 260);
+    --bg-muted: oklch(0.965 0.006 260);
     --bg-translucent: oklch(1 0 0 / 0.72);
     --bg-accent: oklch(0.55 0.19 258);
     --bg-inverse: oklch(0.18 0.02 260);
@@ -141,7 +141,9 @@
     @apply bg-background text-foreground antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
     letter-spacing: -0.011em;
+    color-scheme: light;
   }
+  .dark body,
   .dark {
     color-scheme: dark;
   }
@@ -159,7 +161,7 @@
    would have been nearly invisible against the page. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgb(99, 99, 99) transparent;
+  scrollbar-color: rgb(180, 180, 180) transparent;
 }
 .dark * {
   scrollbar-color: oklch(0.48 0.02 260) transparent;
@@ -172,10 +174,16 @@
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgb(99, 99, 99);
+  background: rgb(180, 180, 180);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
+  background: rgb(150, 150, 150);
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgb(99, 99, 99);
+}
+.dark ::-webkit-scrollbar-thumb:hover {
   background: rgb(120, 120, 120);
 }
 
@@ -184,11 +192,17 @@
   width: 8px;
 }
 .editor-scrollbar::-webkit-scrollbar-track {
-  background: #1e1e2e;
+  background: transparent;
 }
 .editor-scrollbar::-webkit-scrollbar-thumb {
-  background: #45475a;
+  background: rgb(180, 180, 180);
   border-radius: 4px;
+}
+.dark .editor-scrollbar::-webkit-scrollbar-track {
+  background: #1e1e2e;
+}
+.dark .editor-scrollbar::-webkit-scrollbar-thumb {
+  background: #45475a;
 }
 
 /* Shimmer animation for loading states */
@@ -224,9 +238,9 @@
 
 /* Glass effect */
 .glass {
-  background: rgba(255, 255, 255, 0.05);
+  background: rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(15, 23, 42, 0.08);
 }
 
 .dark .glass {

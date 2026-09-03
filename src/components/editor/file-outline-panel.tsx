@@ -188,25 +188,25 @@ export function FileOutlinePanel({ file }: FileOutlinePanelProps) {
   };
 
   return (
-    <div className="border-t border-[#1e1e2e] shrink-0">
+    <div className="border-t border-border shrink-0">
       {/* Header */}
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 w-full px-3 py-1.5 text-[10px] font-semibold text-[#585b70] uppercase tracking-wider hover:text-[#a6adc8] transition-colors"
+        className="flex items-center gap-1.5 w-full px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider hover:text-foreground transition-colors"
       >
-        <span className="text-[#585b70]">
+        <span className="text-muted-foreground">
           {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
         </span>
         Outline
         {astSymbols && (
           <span
-            className="text-[8px] normal-case font-normal text-[#585b70] border border-[#313244] rounded px-1"
+            className="text-[8px] normal-case font-normal text-muted-foreground border border-border rounded px-1"
             title="Precise AST outline (tree-sitter)"
           >
             AST
           </span>
         )}
-        <span className="ml-auto text-[9px] normal-case font-normal text-[#45475a]">
+        <span className="ml-auto text-[9px] normal-case font-normal text-muted-foreground">
           {symbols.length}
         </span>
       </button>
@@ -220,16 +220,16 @@ export function FileOutlinePanel({ file }: FileOutlinePanelProps) {
                 key={idx}
                 onClick={() => handleClick(sym.line)}
                 title={`${sym.kind} — line ${sym.line}`}
-                className="flex items-center gap-1.5 w-full px-3 py-0.5 text-left hover:bg-[#313244]/60 transition-colors group"
+                className="flex items-center gap-1.5 w-full px-3 py-0.5 text-left hover:bg-muted transition-colors group"
                 style={sym.depth > 0 ? { paddingLeft: `${12 + sym.depth * 14}px` } : undefined}
               >
                 <span className={`text-[9px] font-bold w-4 shrink-0 text-center font-mono ${meta.color}`}>
                   {meta.label}
                 </span>
-                <span className="text-[11px] text-[#a6adc8] group-hover:text-[#cdd6f4] truncate font-mono">
+                <span className="text-[11px] text-muted-foreground group-hover:text-foreground truncate font-mono">
                   {sym.name}
                 </span>
-                <span className="ml-auto text-[9px] text-[#45475a] shrink-0 tabular-nums">
+                <span className="ml-auto text-[9px] text-muted-foreground shrink-0 tabular-nums">
                   {sym.line}
                 </span>
               </button>

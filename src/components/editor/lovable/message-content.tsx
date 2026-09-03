@@ -18,7 +18,7 @@ const SyntaxHighlighter = dynamic(
   ),
   {
     ssr: false,
-    loading: () => <div className="h-20 animate-pulse rounded bg-[#1e1e2e]" />,
+    loading: () => <div className="h-20 animate-pulse rounded bg-muted" />,
   },
 );
 
@@ -35,18 +35,23 @@ function MermaidBlock({ code }: { code: string }) {
         setLoading(true);
         setError(null);
         const mermaid = (await import("mermaid")).default;
+        const isDark =
+          typeof document !== "undefined" &&
+          document.documentElement.classList.contains("dark");
         mermaid.initialize({
           startOnLoad: false,
-          theme: "dark",
-          themeVariables: {
-            background: "#1e1e2e",
-            primaryColor: "#7c3aed",
-            primaryTextColor: "#cdd6f4",
-            primaryBorderColor: "#313244",
-            lineColor: "#6c7086",
-            secondaryColor: "#313244",
-            tertiaryColor: "#1e1e2e",
-          },
+          theme: isDark ? "dark" : "neutral",
+          themeVariables: isDark
+            ? {
+                background: "#1e1e2e",
+                primaryColor: "#7c3aed",
+                primaryTextColor: "#cdd6f4",
+                primaryBorderColor: "#313244",
+                lineColor: "#6c7086",
+                secondaryColor: "#313244",
+                tertiaryColor: "#1e1e2e",
+              }
+            : undefined,
         });
         const id = `mermaid-${Math.random().toString(36).slice(2)}`;
         const { svg: rendered } = await mermaid.render(id, code);
@@ -69,7 +74,7 @@ function MermaidBlock({ code }: { code: string }) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center gap-2 py-6 my-2 rounded-lg border border-border/40 bg-[#1e1e2e]">
+      <div className="flex items-center justify-center gap-2 py-6 my-2 rounded-lg border border-border/40 bg-muted">
         <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
         <span className="text-xs text-muted-foreground">Rendering diagram…</span>
       </div>
@@ -86,14 +91,14 @@ function MermaidBlock({ code }: { code: string }) {
   }
 
   return (
-    <div className="my-2 rounded-lg overflow-hidden border border-border/40 bg-[#1e1e2e]">
+    <div className="my-2 rounded-lg overflow-hidden border border-border/40 bg-muted/40">
       <div className="flex items-center justify-between px-3 py-1 border-b border-border/30">
-        <span className="text-[10px] text-[#6c7086] font-mono flex items-center gap-1">
+        <span className="text-[10px] text-muted-foreground font-mono flex items-center gap-1">
           <span>📊</span> mermaid diagram
         </span>
         <button
           onClick={() => navigator.clipboard.writeText(code).catch(() => {})}
-          className="text-[10px] text-[#6c7086] hover:text-[#cdd6f4] transition-colors px-1.5 py-0.5 rounded hover:bg-[#313244]/60"
+          className="text-[10px] text-muted-foreground hover:text-foreground transition-colors px-1.5 py-0.5 rounded hover:bg-muted"
         >
           Copy source
         </button>

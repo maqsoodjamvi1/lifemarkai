@@ -344,8 +344,6 @@ function PreviewPanelImpl({
   const sandboxPingTokenRef = useRef(0);
   const sandboxPongTokenRef = useRef(0);
   const sandboxEscapeRemountAtRef = useRef(0);
-  const sandboxUrlLiveRef = useRef(sandboxUrl);
-  sandboxUrlLiveRef.current = sandboxUrl;
   const [stickySandboxUrl, setStickySandboxUrl] = useState<string | null>(null);
   useEffect(() => {
     setStickySandboxUrl(null);

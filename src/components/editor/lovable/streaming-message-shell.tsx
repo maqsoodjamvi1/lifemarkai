@@ -37,6 +37,7 @@ interface LovableStreamingMessageShellProps {
   postBuildStatus: string | null;
   showGeneratingList: boolean;
   generatingPaths: string[];
+  onOpenStreamingPath?: (path: string) => void;
 }
 
 /** Lovable-parity live assistant message while AI is streaming. */
@@ -58,6 +59,7 @@ export function LovableStreamingMessageShell({
   postBuildStatus,
   showGeneratingList,
   generatingPaths,
+  onOpenStreamingPath,
 }: LovableStreamingMessageShellProps) {
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex justify-start">
@@ -107,7 +109,7 @@ export function LovableStreamingMessageShell({
         )}
 
         {buildActivitySlot}
-        <LovableStreamingFilesCard paths={streamingFiles} />
+        <LovableStreamingFilesCard paths={streamingFiles} onOpenPath={onOpenStreamingPath} />
 
         <div className="text-sm leading-relaxed py-0.5">
           {streamBody}
@@ -141,10 +143,15 @@ export function LovableStreamingMessageShell({
                   Generating files…
                 </div>
                 {generatingPaths.map((path) => (
-                  <div key={path} className="flex items-center gap-1 text-violet-700/70 dark:text-violet-300/70">
+                  <button
+                    key={path}
+                    type="button"
+                    onClick={() => onOpenStreamingPath?.(path)}
+                    className="flex items-center gap-1 text-violet-700/70 dark:text-violet-300/70 hover:text-foreground text-left w-full"
+                  >
                     <span className="text-violet-500">+</span>
                     <span className="truncate">{path}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </motion.div>

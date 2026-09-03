@@ -28,6 +28,7 @@ interface LovableChatStreamingFooterProps {
   postBuildStatus: string | null;
   messagesEndRef: React.Ref<HTMLDivElement>;
   reasoningText?: string | null;
+  onOpenStreamingPath?: (path: string) => void;
 }
 
 /** Live streaming assistant row + scroll anchor at the bottom of the chat timeline. */
@@ -46,6 +47,7 @@ export function LovableChatStreamingFooter({
   postBuildStatus,
   messagesEndRef,
   reasoningText,
+  onOpenStreamingPath,
 }: LovableChatStreamingFooterProps) {
   const isBuildLikeMode = mode === "build" || mode === "patch" || mode === "agent" || !!buildStatus;
 
@@ -101,6 +103,7 @@ export function LovableChatStreamingFooter({
             streamingFiles.length > 0 && agentSteps.length === 0 && mode !== "build" && mode !== "patch" && !buildStatus
           }
           generatingPaths={streamingFiles}
+          onOpenStreamingPath={onOpenStreamingPath}
         />
       )}
       <div ref={messagesEndRef} />

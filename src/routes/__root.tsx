@@ -107,7 +107,7 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
         <HeadContent />
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var t=localStorage.getItem("theme");if(t==="light")document.documentElement.classList.remove("dark");else document.documentElement.classList.add("dark");}catch(e){document.documentElement.classList.add("dark");}})();`,
+            __html: `(function(){try{var t=localStorage.getItem("lifemark-theme");if(t==="dark")document.documentElement.classList.add("dark");else document.documentElement.classList.remove("dark");}catch(e){}})();`,
           }}
         />
       </head>
@@ -116,7 +116,7 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
           hydrates, producing a noisy attribute-mismatch warning for every
           affected user. Attribute-level only — children are still checked. */}
       <body suppressHydrationWarning>
-        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
+        <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false} storageKey="lifemark-theme" disableTransitionOnChange>
           {children}
         </ThemeProvider>
         <Scripts />
