@@ -333,6 +333,8 @@ function PreviewPanelImpl({
   } = useSandboxPreview(projectId ?? "");
   const sandboxIdLiveRef = useRef(sandboxId);
   sandboxIdLiveRef.current = sandboxId;
+  const sandboxUrlLiveRef = useRef(sandboxUrl);
+  sandboxUrlLiveRef.current = sandboxUrl;
   /** Hard iframe path — soft-nav updates previewPath only (VEB postMessage). */
   const [sandboxIframePath, setSandboxIframePath] = useState("/");
   const [sandboxSyncInstalling, setSandboxSyncInstalling] = useState(false);
@@ -352,6 +354,12 @@ function PreviewPanelImpl({
   useEffect(() => {
     if (sandboxUrl) setStickySandboxUrl(sandboxUrl);
   }, [sandboxUrl]);
+  useEffect(() => {
+    if (!sandboxSyncInstalling) return;
+    if (sandboxUrl || sandboxPhase === "ready" || sandboxPhase === "starting") {
+      setSandboxSyncInstalling(false);
+    }
+  }, [sandboxSyncInstalling, sandboxUrl, sandboxPhase]);
   const liveSandboxOrigin = sandboxUrl ?? stickySandboxUrl;
 
   // Reset hard path when a new Modal tunnel comes up.
@@ -1429,13 +1437,15 @@ function PreviewPanelImpl({
             { type: "log", text: "[preview] stale sandbox detected — reconnected and re-synced" },
           ]);
         }
-        setSandboxSyncInstalling(!!result.installing);
-        if (result.installing) {
-          // Dep install runs in background; show status briefly then ready for HMR.
+        setSandboxSyncInstalling(!!result.installing && !sandboxUrlLiveRef.current);
+        // Live origin already showing: let Vite pick up new deps without a
+        // lying "Installing…" pill. No URL yet: keep the pill until phase
+        // ready, with a long safety timeout so it cannot stick forever.
+        if (result.installing && !sandboxUrlLiveRef.current) {
           trailing.push(
             window.setTimeout(() => {
               if (!superseded) setSandboxSyncInstalling(false);
-            }, 12_000),
+            }, 90_000),
           );
         }
         // Brief grace for Vite HMR, then mark ready so UrlBarPill stops spinning.
@@ -2186,14 +2196,9 @@ function PreviewPanelImpl({
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       const target = urlInput.startsWith("/") ? urlInput : `/${urlInput}`;
-                      // Tell the ACTIVE engine's iframe to navigate. Both
-                      // engines carry a navigate handler (fallbackHtml URL-sync
-                      // script / veb-bridge PREVIEW_RUNTIME_SCRIPT). Posting
-                      // only to iframeRef silently no-oped on WebContainer.
-                      const targetWin =
-                        previewEngine === "webcontainer"
-                          ? runtimeContainerRef.current?.querySelector("iframe")?.contentWindow
-                          : iframeRef.current?.contentWindow;
+                      // Same window as Back/Forward — sandbox uses sandboxIframeRef,
+                      // not iframeRef. Posting to iframeRef no-ops on the live origin.
+                      const targetWin = getPreviewContentWindow();
                       targetWin?.postMessage(
                         { type: "lifemark-preview-navigate", pathname: target },
                         "*",
@@ -2462,7 +2467,7 @@ function PreviewPanelImpl({
                 }}
               />,
             )}
-            {(!liveSandboxOrigin || !sandboxUrl || sandboxSyncInstalling) && (
+            {(!liveSandboxOrigin || !sandboxUrl) && (
               <div className="absolute top-2 left-1/2 z-20 flex max-w-[min(100%-1rem,28rem)] -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-background/95 px-2.5 py-1 text-[10px] text-muted-foreground">
                 <span className="truncate">
                   {sandboxSyncInstalling

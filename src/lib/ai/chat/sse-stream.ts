@@ -4,6 +4,18 @@ export interface StreamSink {
   isClientGone: () => boolean;
 }
 
+/** Thrown from onChunk when the browser Stop/abort should halt generation. */
+export class ClientGenerationCancelled extends Error {
+  constructor() {
+    super("CLIENT_CANCELLED");
+    this.name = "ClientGenerationCancelled";
+  }
+}
+
+export function isClientGenerationCancelled(error: unknown): boolean {
+  return error instanceof ClientGenerationCancelled;
+}
+
 /** Keeps streaming routes safe when the browser disconnects mid-generation. */
 export function createStreamSink(
   controller: ReadableStreamDefaultController<Uint8Array>,

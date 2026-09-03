@@ -125,7 +125,8 @@ import {
   parseClarifyTurn,
 } from "../chat/clarification.ts";
 import { resolveChatRequestContext } from "../chat/request-context.ts";
-import { createStreamSink } from "../chat/sse-stream.ts";
+import { ClientGenerationCancelled, createStreamSink, isClientGenerationCancelled } from "../chat/sse-stream.ts";
+import { LIVE_STREAM_CONTENT_MAX } from "../streamed-file-event.ts";
 import { createDeployActionResponse } from "../chat/deploy-action.ts";
 import { buildControlledTemplatePrompt,resolveControlledTemplateForPrompt } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
@@ -1589,9 +1590,15 @@ The user has expressed frustration. Do the following:
               // honest at every instant, not just at the end.
               const safeContent = sanitizeStreamedFile(file.path, file.content);
               streamedFiles.push({ path: file.path, content: safeContent, language: file.language });
-              // Notify client that a file is available early
+              // Path chips always. Content lets the client live-apply into the
+              // sandbox without writing project_files until commit.
+              const streamedEvent: Record<string, unknown> = { streamedFile: file.path };
+              if (safeContent.length <= LIVE_STREAM_CONTENT_MAX) {
+                streamedEvent.content = safeContent;
+                streamedEvent.language = file.language;
+              }
               safeEnqueue(
-                encoder.encode(`data: ${JSON.stringify({ streamedFile: file.path })}\n\n`)
+                encoder.encode(`data: ${JSON.stringify(streamedEvent)}\n\n`)
               );
             })
           : null;
@@ -1607,6 +1614,7 @@ The user has expressed frustration. Do the following:
               // ({"patches":[...]}) so OpenAI json_object mode is valid.
               jsonMode: mode === "build" || mode === "patch",
               onChunk: (chunk) => {
+                if (isClientGone()) throw new ClientGenerationCancelled();
                 fullContent += chunk;
                 safeEnqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
                 // Feed chunk into incremental file extractor (build mode only)
@@ -1617,6 +1625,7 @@ The user has expressed frustration. Do the following:
           );
 
           tokensUsed = result.tokensUsed;
+          if (isClientGone()) throw new ClientGenerationCancelled();
 
           // ── Continuation: never ship a truncated build ───────────────────
           // If the model hit the token cap mid-JSON, the response is incomplete
@@ -1629,6 +1638,7 @@ The user has expressed frustration. Do the following:
               ? Math.max(BUILD_CONTINUATION_ROUNDS, 5)
               : BUILD_CONTINUATION_ROUNDS;
             while (
+              !isClientGone() &&
               needsBuildContinuation(fullContent) &&
               contRounds < contCap
             ) {
@@ -1653,6 +1663,7 @@ The user has expressed frustration. Do the following:
                   stream: true,
                   jsonMode: false, // raw continuation of the existing object, not a new one
                   onChunk: (chunk) => {
+                    if (isClientGone()) throw new ClientGenerationCancelled();
                     fullContent += chunk;
                     contChunk += chunk;
                     safeEnqueue(encoder.encode(`data: ${JSON.stringify({ chunk })}\n\n`));
@@ -1660,12 +1671,16 @@ The user has expressed frustration. Do the following:
                   },
                 }, { projectId, userId, task: "chat.build.continuation" });
               } catch (contErr) {
+                if (isClientGenerationCancelled(contErr) || isClientGone()) {
+                  throw new ClientGenerationCancelled();
+                }
                 logger.warn("ai.chat.continuation_failed", { projectId, error: String(contErr) });
                 break;
               }
               if (!contChunk.trim()) break; // model produced nothing more
               tokensUsed += 1000; // rough estimate for the continuation pass
             }
+            if (isClientGone()) throw new ClientGenerationCancelled();
           }
 
           // ── Patch mode: apply find-and-replace patches ────────────────────
@@ -2448,6 +2463,7 @@ The user has expressed frustration. Do the following:
               // streamed fragment reaches canonical project_files, so parse,
               // continuation, or disconnect failures leave the prior project
               // intact instead of producing a half-updated application.
+              if (isClientGone()) throw new ClientGenerationCancelled();
               parsedFiles = await commitGenerationStage(
                 supabase,
                 projectId,
@@ -2873,14 +2889,22 @@ The user has expressed frustration. Do the following:
             );
           }
         } catch (error) {
-          logger.error("ai.chat.stream_error", error instanceof Error ? error : new Error(String(error)), {
-            projectId,
-            userId,
-            mode,
-          });
-          safeEnqueue(
-            encoder.encode(`data: ${JSON.stringify({ error: String(error) })}\n\n`)
-          );
+          if (isClientGenerationCancelled(error) || isClientGone()) {
+            // Stop in the editor aborts the fetch. Do not commit files, wire,
+            // or verify after that — otherwise preview jumps after "Stopped."
+            safeEnqueue(
+              encoder.encode(`data: ${JSON.stringify({ cancelled: true, done: true, filesChanged: false })}\n\n`),
+            );
+          } else {
+            logger.error("ai.chat.stream_error", error instanceof Error ? error : new Error(String(error)), {
+              projectId,
+              userId,
+              mode,
+            });
+            safeEnqueue(
+              encoder.encode(`data: ${JSON.stringify({ error: String(error) })}\n\n`)
+            );
+          }
         } finally {
           clearInterval(heartbeat);
           if (!reservationFinalized) {

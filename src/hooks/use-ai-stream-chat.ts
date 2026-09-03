@@ -12,6 +12,7 @@
 import { useCallback,useMemo } from "react";
 import type { ProjectFile } from "@/types/database";
 import { handleAIStream,type AIStreamHandlers,type HandleAIStreamResult } from "@/lib/ai/handle-ai-stream";
+import { streamedFileEventToUpdate } from "@/lib/ai/streamed-file-event";
 import type { ParsedFileUpdate } from "@/lib/ai/xml-stream-parser";
 import { usePreviewFileSync,type PreviewFileSyncOptions } from "@/hooks/use-preview-file-sync";
 
@@ -43,6 +44,13 @@ export function useAIStreamChat(options: UseAIStreamChatOptions) {
       const shouldApply = opts?.applyFileUpdates ?? applyFileUpdates;
       const handlers: AIStreamHandlers = {
         ...opts?.handlers,
+        onEvent: (event) => {
+          if (shouldApply) {
+            const update = streamedFileEventToUpdate(event);
+            if (update) fileSync.apply(update);
+          }
+          opts?.handlers?.onEvent?.(event);
+        },
         onFileUpdate: shouldApply
           ? async (update) => {
               opts?.onFileUpdate?.(update);
@@ -50,7 +58,7 @@ export function useAIStreamChat(options: UseAIStreamChatOptions) {
             }
           : opts?.onFileUpdate,
         onDone: (summary) => {
-          fileSync.flush();
+          if (!summary.aborted) fileSync.flush();
           opts?.handlers?.onDone?.(summary);
         },
       };

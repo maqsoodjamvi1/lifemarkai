@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createStreamSink } from "./sse-stream.ts";
+import { ClientGenerationCancelled, createStreamSink, isClientGenerationCancelled } from "./sse-stream.ts";
 
 test("createStreamSink enqueues and closes an active stream", () => {
   const chunks: Uint8Array[] = [];
@@ -41,4 +41,9 @@ test("createStreamSink stops writing after client abort", () => {
   assert.equal(sink.safeEnqueue(new Uint8Array([1])), false);
   assert.equal(enqueueCalls, 0);
   assert.equal(disconnects, 1);
+});
+
+test("ClientGenerationCancelled is detected after Stop", () => {
+  assert.equal(isClientGenerationCancelled(new ClientGenerationCancelled()), true);
+  assert.equal(isClientGenerationCancelled(new Error("CLIENT_CANCELLED")), false);
 });

@@ -114,6 +114,7 @@ finalizeBuildActivity,
 type BuildActivityStep,
 } from "@/lib/ai/build-activity";
 import { useAIStreamChat } from "@/hooks/use-ai-stream-chat";
+import { resolveRegenerateMode } from "@/lib/ai/chat/regenerate-mode";
 
 /** Label AND identity for the scope-guard override chip — compared by value. */
 const SCOPE_OVERRIDE_CHIP = "Build it anyway";
@@ -1890,29 +1891,31 @@ function ChatPanelImpl({
   // schema-change confirmation required, no matching snapshot) is
   // non-blocking: we fall through and resend against the current files
   // rather than blocking the edit/regenerate entirely.
-  async function revertFilesToBeforeMessage(msg: Message) {
+  async function revertFilesToBeforeMessage(msg: Message): Promise<boolean> {
     try {
       const listRes = await fetch(`/api/projects/snapshots?projectId=${project.id}`);
-      if (!listRes.ok) return;
+      if (!listRes.ok) return false;
       const page = (await listRes.json()) as { snapshots?: Array<{ id: string; created_at: string }> };
       const snapshots = page.snapshots;
-      if (!Array.isArray(snapshots)) return;
+      if (!Array.isArray(snapshots)) return false;
       const targetAt = new Date(msg.created_at).getTime();
       const target = snapshots.find((s) => new Date(s.created_at).getTime() <= targetAt);
-      if (!target) return;
+      if (!target) return false;
 
       const restoreRes = await fetch("/api/projects/snapshots/restore", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ snapshotId: target.id, projectId: project.id }),
       });
-      if (!restoreRes.ok) return;
+      if (!restoreRes.ok) return false;
       const payload = (await restoreRes.json().catch(() => null)) as { files?: unknown[] } | null;
       if (Array.isArray(payload?.files) && payload.files.length > 0) {
         onFilesUpdate(payload.files as ProjectFile[], { replace: true });
+        return true;
       }
+      return false;
     } catch {
-      /* non-blocking, see comment above */
+      return false;
     }
   }
 
@@ -1957,7 +1960,14 @@ function ChatPanelImpl({
 
     // Actually revert files before resending — see revertFilesToBeforeMessage
     // above for why this was missing.
-    await revertFilesToBeforeMessage(editedMsg);
+    await revertFilesToBeforeMessage(editedMsg).then((ok) => {
+      if (!ok) {
+        toast({
+          title: "Couldn't restore files",
+          description: "Resending against the current project. Use History if you need an earlier snapshot.",
+        });
+      }
+    });
 
     try {
       await truncateChatFromMessage(editingMessageId, true);
@@ -2013,7 +2023,13 @@ function ChatPanelImpl({
 
     // Same missing-revert bug as edit-and-resend above — restore files to
     // what they were right before this prompt's original build ran.
-    await revertFilesToBeforeMessage(lastUserMsg);
+    const reverted = await revertFilesToBeforeMessage(lastUserMsg);
+    if (!reverted) {
+      toast({
+        title: "Couldn't restore files",
+        description: "Regenerating against the current project. Use History if you need an earlier snapshot.",
+      });
+    }
 
     try {
       // Drop the last assistant (and anything after); keep the user prompt.
@@ -2031,28 +2047,14 @@ function ChatPanelImpl({
     const branchedAt = new Date().toISOString();
     pendingBranchRef.current = { snapshotId, branchedAt };
     onMessagesUpdate(truncated);
-    // Without an explicit overrideMode, sendMessage re-runs resolvePromptMode
-    // on the raw prompt text, and — verified live, twice — BOTH plausible
-    // "trust existing state" signals turned out to be poisoned once this bug
-    // had fired even once:
-    //   1. lastUserMsg.mode: a message regenerated while the bug was live
-    //      gets persisted with mode="chat" (whatever resolvePromptMode fell
-    //      back to), so replaying it just repeats the downgrade forever.
-    //   2. the editor's own `mode` prop (the selected chat/build/agent/plan
-    //      tab): captured live via a fetch() interceptor on this exact
-    //      project — it ALSO read "chat" at the moment handleRegenerate ran,
-    //      despite the toolbar visibly showing "Building for web". Something
-    //      upstream syncs the active tab to the last message's (poisoned)
-    //      mode, so this channel inherits the same corruption.
-    // Both are historical/derived state and both were observed corrupted.
-    // The only reliable fix is to not read any of it: force "build"
-    // unconditionally, same as the already-proven handleDesignPreviewSelect/
-    // Skip fix above. Regenerate always re-runs the original prompt from
-    // scratch, so a full "build" pass is correct regardless of which tab
-    // produced the message being regenerated.
+    const lastAsst = messages[lastAsstIdx];
+    const regenMode = resolveRegenerateMode({
+      userMode: lastUserMsg.mode,
+      assistantFilesChanged: (lastAsst?.metadata as { files_changed?: unknown } | null)?.files_changed,
+    });
     await sendMessage(
       getDisplayMessageContent(lastUserMsg),
-      "build",
+      regenMode,
       truncated,
       {
         branchMeta: { snapshotId, branchedAt },
@@ -3934,6 +3936,14 @@ ${(f.content ?? "").slice(0, 8000)}
           }
 
           if (data.done) {
+              if (data.cancelled) {
+                try {
+                  await refreshProjectFiles();
+                } catch {
+                  /* live-applied files stay until next refresh */
+                }
+                return;
+              }
               // Auto-routed surgical patch parsed but every find string missed —
               // recover by rebuilding (patches_failed status only covers the
               // zero-patches case; this covers the all-missed case).
@@ -4389,6 +4399,14 @@ ${(f.content ?? "").slice(0, 8000)}
       });
       await streamEventQueue;
 
+      if (controller.signal.aborted) {
+        try {
+          await refreshProjectFiles();
+        } catch {
+          /* live-applied files stay until next refresh */
+        }
+      }
+
       if (clarifyExited) return;
     } catch (err: unknown) {
       applyBuildSteps([]);
@@ -4397,7 +4415,13 @@ ${(f.content ?? "").slice(0, 8000)}
       const isAbort =
         controller.signal.aborted ||
         (err instanceof DOMException && err.name === "AbortError");
-      if (!isAbort) {
+      if (isAbort) {
+        try {
+          await refreshProjectFiles();
+        } catch {
+          /* keep whatever is on disk in the editor */
+        }
+      } else {
         toast({
           title: "Request failed",
           description: err instanceof Error ? err.message : "Unknown error",
