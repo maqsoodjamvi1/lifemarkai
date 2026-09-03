@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
+import { denyUnlessProjectAccess } from "@/lib/project/access";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { resolveAppBackend } from "@/lib/cloud/project-backend";
 import { queryManagedSql,runManagedSql } from "@/lib/cloud/management";
@@ -61,15 +63,15 @@ function restHeaders(key: string): Record<string, string> {
   };
 }
 
-/** Owner-only project load shared by GET/POST. Returns a Response on failure. */
-async function loadOwnedProject(supabase: Supabase, projectId: string, userId: string) {
+/** Project row after collaborator/owner access is confirmed. */
+async function loadProjectRow(supabase: Supabase, projectId: string) {
   const { data: project } = await supabase
     .from("projects")
     .select("id, user_id, environment, cloud_enabled, cloud_project_ref")
     .eq("id", projectId)
     .single();
-  if (!project || project.user_id !== userId) {
-    return { project: null, error: Response.json({ error: "Forbidden" }, { status: 403 }) };
+  if (!project) {
+    return { project: null, error: Response.json({ error: "Project not found" }, { status: 404 }) };
   }
   return { project: project as OwnedProject, error: null };
 }
@@ -78,13 +80,15 @@ async function loadOwnedProject(supabase: Supabase, projectId: string, userId: s
 async function handleGET(req: Request, params: any) {
   const { id: projectId } = params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const rl = await rateLimitAsync(`db-manager:${user.id}`, RATE_LIMITS.api);
   if (!rl.success) return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
 
-  const { project, error } = await loadOwnedProject(supabase, projectId, user.id);
+  const gate = await denyUnlessProjectAccess(supabase, projectId, user.id, "read");
+  if ("error" in gate) return gate.error;
+  const { project, error } = await loadProjectRow(supabase, projectId);
   if (error) return error;
 
   const backend = await resolveBackend(supabase, project);
@@ -203,13 +207,15 @@ async function handleGET(req: Request, params: any) {
 async function handlePOST(req: Request, params: any) {
   const { id: projectId } = params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const rl = await rateLimitAsync(`db-manager:${user.id}`, RATE_LIMITS.api);
   if (!rl.success) return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
 
-  const { project, error } = await loadOwnedProject(supabase, projectId, user.id);
+  const gate = await denyUnlessProjectAccess(supabase, projectId, user.id, "write");
+  if ("error" in gate) return gate.error;
+  const { project, error } = await loadProjectRow(supabase, projectId);
   if (error) return error;
 
   // Live lock (migration 046): all writes blocked on Live; reads stay allowed.

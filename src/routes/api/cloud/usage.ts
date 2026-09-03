@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient,createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
+import { denyUnlessProjectAccess } from "@/lib/project/access";
 
 /** Native /api/cloud/usage — per-category Cloud usage breakdown. */
 export const Route = createFileRoute("/api/cloud/usage")({
@@ -7,7 +9,7 @@ export const Route = createFileRoute("/api/cloud/usage")({
     handlers: {
       GET: async ({ request }) => {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const sp = new URL(request.url).searchParams;
@@ -15,10 +17,14 @@ export const Route = createFileRoute("/api/cloud/usage")({
         const days = Math.min(parseInt(sp.get("days") ?? "7"), 30);
         if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
+        const gate = await denyUnlessProjectAccess(supabase, projectId, user.id, "read");
+        if ("error" in gate) return gate.error;
+
         const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-        const { data: rows } = await supabase
+        const admin = createAdminClient();
+        const { data: rows } = await admin
           .from("lifemark_cloud_usage").select("*")
-          .eq("project_id", projectId).eq("user_id", user.id)
+          .eq("project_id", projectId)
           .gte("recorded_at", since).order("recorded_at", { ascending: true });
 
         const totals = { db_server_cents: 0, db_storage_cents: 0, compute_cents: 0, storage_cents: 0, live_updates_cents: 0, network_cents: 0, ai_cents: 0 };

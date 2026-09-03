@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
+import { denyUnlessProjectAccess } from "@/lib/project/access";
 import { isManagementConfigured,runManagedSql,queryManagedSql } from "@/lib/cloud/management";
 import { parseCloudToolPermissions } from "@/lib/cloud/permissions";
 import { resolveLinkedSupabaseManagement } from "@/lib/cloud/project-backend";
@@ -29,16 +31,18 @@ async function querySql(ctx: JobCtx, sql: string) {
   return queryUserSupabaseSql(ctx.token, ctx.ref, sql);
 }
 
-async function loadContext(projectId: string | null): Promise<{ error: Response } | JobCtx> {
+async function loadContext(projectId: string | null, need: "read" | "write"): Promise<{ error: Response } | JobCtx> {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return { error: Response.json({ error: "Unauthorized" }, { status: 401 }) };
   if (!projectId) return { error: Response.json({ error: "projectId required" }, { status: 400 }) };
+
+  const gate = await denyUnlessProjectAccess(supabase, projectId, user.id, need);
+  if ("error" in gate) return { error: gate.error };
 
   const { data: project } = await supabase.from("projects")
     .select("id, user_id, environment, cloud_enabled, cloud_status, cloud_project_ref")
     .eq("id", projectId)
-    .eq("user_id", user.id)
     .single();
   if (!project) return { error: Response.json({ error: "Project not found" }, { status: 404 }) };
 
@@ -67,7 +71,7 @@ export const Route = createFileRoute("/api/cloud/jobs")({
   server: {
     handlers: {
       GET: async ({ request }) => {
-        const ctx = await loadContext(new URL(request.url).searchParams.get("projectId"));
+        const ctx = await loadContext(new URL(request.url).searchParams.get("projectId"), "read");
         if ("error" in ctx) return ctx.error;
         await runSql(ctx, "CREATE EXTENSION IF NOT EXISTS pg_cron;");
         const result = await querySql(ctx, "SELECT jobid, jobname, schedule, command, active FROM cron.job ORDER BY jobid;");
@@ -76,7 +80,7 @@ export const Route = createFileRoute("/api/cloud/jobs")({
       },
       POST: async ({ request }) => {
         const body = (await request.json().catch(() => ({}))) as { projectId?: string; name?: string; schedule?: string; command?: string };
-        const ctx = await loadContext(body.projectId ?? null);
+        const ctx = await loadContext(body.projectId ?? null, "write");
         if ("error" in ctx) return ctx.error;
         const name = (body.name ?? "").trim();
         const schedule = (body.schedule ?? "").trim();
@@ -93,7 +97,7 @@ export const Route = createFileRoute("/api/cloud/jobs")({
       },
       DELETE: async ({ request }) => {
         const sp = new URL(request.url).searchParams;
-        const ctx = await loadContext(sp.get("projectId"));
+        const ctx = await loadContext(sp.get("projectId"), "write");
         if ("error" in ctx) return ctx.error;
         const name = (sp.get("name") ?? "").trim();
         if (!JOB_NAME_RE.test(name)) return Response.json({ error: "Invalid job name" }, { status: 400 });

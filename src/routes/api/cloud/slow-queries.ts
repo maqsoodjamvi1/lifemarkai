@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
+import { denyUnlessProjectAccess } from "@/lib/project/access";
 import {
 isManagementConfigured,
 runManagedSql,
@@ -34,25 +36,27 @@ interface SlowQueryRow {
 
 type Supabase = Awaited<ReturnType<typeof createClient>>;
 
-async function loadOwnedCloudProject(supabase: Supabase, userId: string, projectId: string) {
+async function loadCloudProject(supabase: Supabase, projectId: string) {
   const { data: project } = await supabase
     .from("projects")
     .select("id, cloud_enabled, cloud_status, cloud_project_ref")
     .eq("id", projectId)
-    .eq("user_id", userId)
     .single();
   return project ?? null;
 }
 
 async function handleGET(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const projectId = new URL(req.url).searchParams.get("projectId");
   if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
-  const project = await loadOwnedCloudProject(supabase, user.id, projectId);
+  const gate = await denyUnlessProjectAccess(supabase, projectId, user.id, "read");
+  if ("error" in gate) return gate.error;
+
+  const project = await loadCloudProject(supabase, projectId);
   if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
   if (!project.cloud_enabled) {
     return Response.json({ error: "Cloud not enabled for this project" }, { status: 400 });
@@ -99,7 +103,7 @@ async function handleGET(req: Request) {
 
 async function handlePOST(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const { user } = await getServerUser(supabase);
   if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
   const { projectId, query, apply, sql } = await req.json() as {
@@ -110,7 +114,10 @@ async function handlePOST(req: Request) {
   };
   if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
-  const project = await loadOwnedCloudProject(supabase, user.id, projectId);
+  const gate = await denyUnlessProjectAccess(supabase, projectId, user.id, "write");
+  if ("error" in gate) return gate.error;
+
+  const project = await loadCloudProject(supabase, projectId);
   if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
   if (!project.cloud_enabled) {
     return Response.json({ error: "Cloud not enabled for this project" }, { status: 400 });

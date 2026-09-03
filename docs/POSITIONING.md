@@ -23,8 +23,8 @@ Describe the app in chat → LifemarkAI generates it, shows a **live preview**, 
 Low‑code / AI‑assisted development is projected to drive **75% of new application development by 2026** (Gartner). The shift from "developers build software" to "anyone describes software" is happening now — the winners are the tools that make it *reliable*, not just possible.
 
 ## Where it stands (honest)
-- **Built and working:** prompt‑to‑app generation, multi‑model routing, full‑stack auto‑wiring, templates + auto‑select, deploy pipeline, visual editing, agent mode.
-- **Hardening now:** preview reliability (moving to a real bundler), live in‑preview backend execution, and agent consistency — the difference between "demos well" and "a founder ships end‑to‑end the first time."
+- **Built and working:** prompt‑to‑app generation, live Docker preview origin, visual editing, Share/Publish, Cloud auto‑wiring, GitHub two‑way sync — the same editor loop as Lovable.
+- **Keep it warm:** Coolify sandbox at 1 CPU / 1 GB so Traefik and the app are not starved; warm reopen in seconds.
 - **Traction:** _[fill in: signups, apps built, deploys, retention]_ — the honest numbers belong here.
 
 ## The moat

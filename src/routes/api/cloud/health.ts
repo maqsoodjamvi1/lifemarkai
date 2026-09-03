@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
+import { denyUnlessProjectAccess } from "@/lib/project/access";
 import { isManagementConfigured,queryManagedSql,fetchManagedLogs } from "@/lib/cloud/management";
 
 /**
@@ -38,15 +40,18 @@ export const Route = createFileRoute("/api/cloud/health")({
     handlers: {
       GET: async ({ request }) => {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const projectId = new URL(request.url).searchParams.get("projectId");
         if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
+        const gate = await denyUnlessProjectAccess(supabase, projectId, user.id, "read");
+        if ("error" in gate) return gate.error;
+
         const { data: project } = await supabase.from("projects")
           .select("id, cloud_enabled, cloud_instance, cloud_provisioned_at, cloud_project_ref")
-          .eq("id", projectId).eq("user_id", user.id).single();
+          .eq("id", projectId).single();
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
         if (!project.cloud_enabled) {
           return Response.json({ error: "Cloud not enabled for this project" }, { status: 400 });

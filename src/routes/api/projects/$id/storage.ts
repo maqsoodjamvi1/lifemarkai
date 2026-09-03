@@ -1,23 +1,24 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
+import { denyUnlessProjectAccess } from "@/lib/project/access";
 import { rateLimitAsync, RATE_LIMITS } from "@/lib/rate-limit";
 import { resolveStorageHttp, storageHeaders } from "@/lib/cloud/project-backend";
 import { isSafeBucketName, isSafeObjectPath } from "@/lib/cloud/storage-path";
 
 const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
 
-async function loadOwnedProject(
+async function loadProjectRow(
   supabase: Awaited<ReturnType<typeof createClient>>,
   projectId: string,
-  userId: string,
 ) {
   const { data: project } = await supabase
     .from("projects")
     .select("id, user_id, environment, cloud_enabled, cloud_project_ref")
     .eq("id", projectId)
     .single();
-  if (!project || project.user_id !== userId) {
-    return { project: null, error: Response.json({ error: "Forbidden" }, { status: 403 }) };
+  if (!project) {
+    return { project: null, error: Response.json({ error: "Project not found" }, { status: 404 }) };
   }
   return { project, error: null };
 }
@@ -27,13 +28,15 @@ export const Route = createFileRoute("/api/projects/$id/storage")({
     handlers: {
       GET: async ({ request, params }) => {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const rl = await rateLimitAsync(`storage:${user.id}`, RATE_LIMITS.api);
         if (!rl.success) return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
 
-        const { project, error } = await loadOwnedProject(supabase, params.id, user.id);
+        const gate = await denyUnlessProjectAccess(supabase, params.id, user.id, "read");
+        if ("error" in gate) return gate.error;
+        const { project, error } = await loadProjectRow(supabase, params.id);
         if (error) return error;
 
         const target = await resolveStorageHttp(supabase, project);
@@ -82,13 +85,15 @@ export const Route = createFileRoute("/api/projects/$id/storage")({
 
       POST: async ({ request, params }) => {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const rl = await rateLimitAsync(`storage:${user.id}`, RATE_LIMITS.api);
         if (!rl.success) return Response.json({ error: "Rate limit exceeded" }, { status: 429 });
 
-        const { project, error } = await loadOwnedProject(supabase, params.id, user.id);
+        const gate = await denyUnlessProjectAccess(supabase, params.id, user.id, "write");
+        if ("error" in gate) return gate.error;
+        const { project, error } = await loadProjectRow(supabase, params.id);
         if (error) return error;
 
         if (project.environment === "live") {

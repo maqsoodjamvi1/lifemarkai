@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createAdminClient,createClient } from "@/lib/supabase/server";
+import { getServerUser } from "@/lib/supabase/server-user";
+import { canWriteProjectFiles,denyUnlessProjectAccess } from "@/lib/project/access";
 import {
 getManagedProjectStatus,
 getManagedProjectKeys,
@@ -31,18 +33,26 @@ export const Route = createFileRoute("/api/cloud/status")({
     handlers: {
       GET: async ({ request }) => {
         const supabase = await createClient();
-        const { data: { user } } = await supabase.auth.getUser();
+        const { user } = await getServerUser(supabase);
         if (!user) return Response.json({ error: "Unauthorized" }, { status: 401 });
 
         const projectId = new URL(request.url).searchParams.get("projectId");
         if (!projectId) return Response.json({ error: "projectId required" }, { status: 400 });
 
+        const gate = await denyUnlessProjectAccess(supabase, projectId, user.id, "read");
+        if ("error" in gate) return gate.error;
+
         const { data: loadedProject } = await supabase.from("projects")
-          .select(CLOUD_STATUS_PROJECT_COLUMNS).eq("id", projectId).eq("user_id", user.id).single();
+          .select(CLOUD_STATUS_PROJECT_COLUMNS).eq("id", projectId).single();
         let project = loadedProject as CloudStatusProject | null;
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
-        if (project.cloud_status === "provisioning" && project.cloud_project_ref && isManagementConfigured()) {
+        if (
+          project.cloud_status === "provisioning" &&
+          project.cloud_project_ref &&
+          isManagementConfigured() &&
+          canWriteProjectFiles(gate.access)
+        ) {
           const projectRef = project.cloud_project_ref;
           try {
             const { status } = await getManagedProjectStatus(projectRef);
@@ -90,7 +100,8 @@ export const Route = createFileRoute("/api/cloud/status")({
         const { data: tiers } = await supabase.from("lifemark_cloud_instances")
           .select("tier, display_name, monthly_cents, ram_mb, cpu_units, description")
           .order("monthly_cents", { ascending: true });
-        const { data: backups } = await supabase.from("lifemark_cloud_auto_backups")
+        const admin = createAdminClient();
+        const { data: backups } = await admin.from("lifemark_cloud_auto_backups")
           .select("id, snapshot_id, run_date, status, notes")
           .eq("project_id", projectId).order("run_date", { ascending: false }).limit(14);
 

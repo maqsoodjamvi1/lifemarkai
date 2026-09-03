@@ -304,8 +304,8 @@ export function DatabaseManagerPanel({ projectId, isLocked, initialTab = "data" 
         <Database className="w-8 h-8 text-muted-foreground/50" />
         <p className="text-sm font-medium">No backend connected</p>
         <p className="text-xs text-muted-foreground leading-relaxed max-w-xs">
-          This app doesn’t have a database yet. Enable Lifemark Cloud in the ☁️ Cloud tab
-          or connect Supabase in the 🗄 DB tab, then come back here to browse and edit data.
+          This app doesn’t have a database yet. Enable Lifemark Cloud in the Cloud tab,
+          then come back here to browse and edit data.
         </p>
         <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5 mt-1" onClick={() => void loadTables()}>
           <RefreshCw className="w-3 h-3" /> Check again

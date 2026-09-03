@@ -3,7 +3,7 @@ import {
 describeSupabaseError,
 isTransientSupabaseError,
 withSupabaseRetry,
-} from "@/lib/supabase/transient-error";
+} from "../supabase/transient-error.ts";
 
 export type ProjectAccess = "owner" | "editor" | "viewer" | "public";
 
@@ -80,4 +80,33 @@ export function canReadProjectFiles(access: ProjectAccess | null): boolean {
 
 export function canWriteProjectFiles(access: ProjectAccess | null): boolean {
   return access === "owner" || access === "editor";
+}
+
+/** Cloud DB/storage/jobs — teammates only, never a public-link visitor. */
+export function canAccessProjectBackend(access: ProjectAccess | null): boolean {
+  return access === "owner" || access === "editor" || access === "viewer";
+}
+
+/** Owner or accepted collaborator — same gate Lovable uses for Cloud/DB/Storage. */
+export async function denyUnlessProjectAccess(
+  supabase:
+    | Awaited<ReturnType<typeof createClient>>
+    | Awaited<ReturnType<typeof createAdminClient>>,
+  projectId: string,
+  userId: string,
+  need: "read" | "write",
+): Promise<{ access: ProjectAccess } | { error: Response }> {
+  const access = await getProjectAccess(supabase, projectId, userId);
+  if (need === "read" && !canAccessProjectBackend(access)) {
+    return { error: Response.json({ error: "Project not found" }, { status: 404 }) };
+  }
+  if (need === "write" && !canWriteProjectFiles(access)) {
+    return {
+      error: Response.json(
+        { error: canAccessProjectBackend(access) ? "Forbidden" : "Project not found" },
+        { status: canAccessProjectBackend(access) ? 403 : 404 },
+      ),
+    };
+  }
+  return { access: access as ProjectAccess };
 }

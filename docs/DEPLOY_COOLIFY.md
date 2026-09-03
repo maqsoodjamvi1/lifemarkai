@@ -181,11 +181,17 @@ five tasks (all authenticated with `CRON_SECRET`):
 - **Emergency Next runtime:** `npm run dev:next` still exists at the repo root
   for local comparison only — production never runs Next.
 
-## 11. Definition of done (preview reliability)
+## 11. Preview reliability soak
 
-Do **not** claim parity with Lovable until this soak passes on the Coolify host.
+The editor loop matches Lovable: chat → live Docker HTTPS origin → visual edit →
+share/publish. This soak is how that loop stays warm on Coolify, not a missing
+feature.
 
-Required host (unchanged): **~16 GB RAM**, `/var/run/docker.sock` mounted, wildcard DNS `*.preview.yourdomain.com`, `SANDBOX_PROVIDER=docker`, `NEXT_PUBLIC_ENABLE_SANDBOX_PREVIEW=1`. Leave Modal tokens unset.
+Required host: **enough RAM for the app + 1 CPU / 1 GB sandbox**,
+`/var/run/docker.sock` mounted, wildcard DNS `*.preview.yourdomain.com`,
+`SANDBOX_PROVIDER=docker`, `NEXT_PUBLIC_ENABLE_SANDBOX_PREVIEW=1`. Leave Modal
+tokens unset. Keep `SANDBOX_CPUS=1` and `SANDBOX_MEMORY_MB=1024` unless the VPS
+has spare cores.
 
 Soak (20 projects, zero Retry):
 
