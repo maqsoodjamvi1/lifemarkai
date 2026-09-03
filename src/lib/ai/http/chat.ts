@@ -1335,62 +1335,18 @@ The user has expressed frustration. Do the following:
       }
     }
 
-    // ── Subagents: read-only parallel investigation (Lovable-style) ─────────
+    // ── Subagents: cheap keyword scan only BEFORE the SSE stream opens ──────
+    // Parallel model-backed investigators used to `await` here, so Coolify /
+    // Traefik saw no bytes for up to 20s (+ lazy chat-bundle import) and
+    // dropped the request. The thread then showed "request failed, no changes".
+    // Run the keyword scan now (no I/O); run the real fan-out inside the stream
+    // after the first keepalive so the proxy stays open.
     let subagentSteps: SubagentStep[] = [];
-    if (shouldUseSubagents(message, mode, files.length)) {
-      // Real parallel read-only investigators when enabled (default on): three
-      // concurrent fast-tier calls, hard-capped, each given one question and its
-      // own file slice. Costs a fraction of a cent per build, which is why it can
-      // be on without moving the economy posture.
-      //
-      // Falls back to the deterministic keyword scan whenever the fan-out is
-      // disabled or every agent fails. The scan is what shipped before this and is
-      // still a reasonable answer — a build must not degrade because an optional
-      // investigation did.
-      let usedParallel = false;
-      if (parallelSubagentsEnabled()) {
-        try {
-          const assignments = planSubagents(message, files, rankFilesByKeywords);
-          if (assignments.length > 0) {
-            // No onStep callback on purpose. This fan-out runs BEFORE the
-            // response stream is created, so there is no sink to enqueue into
-            // yet. The callback that used to be here referenced `safeEnqueue`,
-            // which is not bound until the ReadableStream opens further down —
-            // so it threw ReferenceError on the FIRST assignment, inside the
-            // try below, and every build silently fell back to the keyword
-            // scan. Parallel subagents never ran once in production.
-            //
-            // Nothing is lost by dropping it: the steps reach the client
-            // anyway, replayed from `subagentSteps` the moment the stream opens.
-            const fanout = await runParallelSubagents(
-              assignments,
-              { projectId, userId },
-            );
-            logger.info("ai.chat.subagents_parallel", {
-              projectId,
-              agents: fanout.outcomes.length,
-              succeeded: fanout.outcomes.filter((o) => o.ok).length,
-              ms: Math.max(0, ...fanout.outcomes.map((o) => o.ms)),
-            });
-            if (fanout.anySucceeded) {
-              subagentSteps = fanout.steps;
-              systemPrompt += `\n\n${fanout.contextBlock}`;
-              usedParallel = true;
-            }
-          }
-        } catch (fanoutErr) {
-          logger.warn("ai.chat.subagents_parallel_failed", {
-            projectId,
-            error: String(fanoutErr),
-          });
-        }
-      }
-
-      if (!usedParallel) {
-        const investigation = runSubagentInvestigation(message, files);
-        subagentSteps = investigation.steps;
-        if (investigation.contextBlock) systemPrompt += investigation.contextBlock;
-      }
+    const wantSubagents = shouldUseSubagents(message, mode, files.length);
+    if (wantSubagents) {
+      const investigation = runSubagentInvestigation(message, files);
+      subagentSteps = investigation.steps;
+      if (investigation.contextBlock) systemPrompt += investigation.contextBlock;
     }
 
     // Build messages array — support image attachments (vision)
@@ -1453,11 +1409,48 @@ The user has expressed frustration. Do the following:
         const heartbeat = setInterval(() => {
           try { if (!isClientGone()) safeEnqueue(encoder.encode(`: keepalive\n\n`)); } catch { /* ignore */ }
         }, 20_000);
+        try { safeEnqueue(encoder.encode(`: keepalive\n\n`)); } catch { /* ignore */ }
 
-        for (const step of subagentSteps) {
-          safeEnqueue(
-            encoder.encode(`data: ${JSON.stringify({ subagent: step })}\n\n`),
-          );
+        let streamedSubagents = false;
+        if (wantSubagents && parallelSubagentsEnabled() && Array.isArray(files)) {
+          try {
+            const assignments = planSubagents(message, files, rankFilesByKeywords);
+            if (assignments.length > 0) {
+              const fanout = await runParallelSubagents(
+                assignments,
+                { projectId, userId },
+                (step) => {
+                  streamedSubagents = true;
+                  safeEnqueue(encoder.encode(`data: ${JSON.stringify({ subagent: step })}\n\n`));
+                },
+              );
+              logger.info("ai.chat.subagents_parallel", {
+                projectId,
+                agents: fanout.outcomes.length,
+                succeeded: fanout.outcomes.filter((o) => o.ok).length,
+                ms: Math.max(0, ...fanout.outcomes.map((o) => o.ms)),
+              });
+              if (fanout.anySucceeded && fanout.contextBlock && messages[0]?.role === "system") {
+                messages[0] = {
+                  role: "system",
+                  content: `${String(messages[0].content)}\n\n${fanout.contextBlock}`,
+                };
+              }
+              if (fanout.steps.length > 0) subagentSteps = fanout.steps;
+            }
+          } catch (fanoutErr) {
+            logger.warn("ai.chat.subagents_parallel_failed", {
+              projectId,
+              error: String(fanoutErr),
+            });
+          }
+        }
+        if (!streamedSubagents) {
+          for (const step of subagentSteps) {
+            safeEnqueue(
+              encoder.encode(`data: ${JSON.stringify({ subagent: step })}\n\n`),
+            );
+          }
         }
 
         // Surface auto-attached skills to the client before the model output

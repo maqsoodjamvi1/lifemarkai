@@ -4422,10 +4422,8 @@ ${(f.content ?? "").slice(0, 8000)}
           /* keep whatever is on disk in the editor */
         }
       } else {
-        toast({
-          title: "Request failed",
-          description: err instanceof Error ? err.message : "Unknown error",
-          variant: "destructive",
+        failInChat({
+          rawError: err instanceof Error ? err.message : "The connection dropped before a reply started.",
         });
       }
     } finally {

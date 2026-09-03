@@ -181,11 +181,14 @@ async function boot() {
   const t0 = Date.now();
   try {
     ensureBundles();
-    // Eager-load fix only (small). Chat/agent lazy on first request so the
-    // event loop stays responsive for /health.
+    // Load chat/agent at boot. Lazy import on the first editor send made Coolify
+    // drop the request (no SSE bytes yet) and the thread showed "request failed,
+    // no changes were made".
     await loadHandler("fix");
+    await loadHandler("chat");
+    await loadHandler("agent");
     ready = true;
-    console.log(`[ai-worker] ready in ${Date.now() - t0}ms (fix eager; chat/agent lazy)`);
+    console.log(`[ai-worker] ready in ${Date.now() - t0}ms (fix+chat+agent eager)`);
   } catch (err) {
     bootError = err;
     console.error("[ai-worker] boot failed", err);
@@ -228,6 +231,7 @@ async function sendWebResponse(res, webRes) {
   if (setCookies.length) {
     res.setHeader("set-cookie", setCookies);
   }
+  if (typeof res.flushHeaders === "function") res.flushHeaders();
   if (!webRes.body) {
     res.end();
     return;

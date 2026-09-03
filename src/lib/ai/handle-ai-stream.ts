@@ -29,7 +29,7 @@ export interface HandleAIStreamOptions {
   signal?: AbortSignal;
   format?: StreamFormat;
   handlers: AIStreamHandlers;
-  /** Idle timeout — abort if no bytes for this long (default 120s) */
+  /** Idle timeout — abort if no bytes for this long (default 180s) */
   idleTimeoutMs?: number;
 }
 
@@ -56,7 +56,7 @@ export async function handleAIStream(
   response: Response,
   options: HandleAIStreamOptions,
 ): Promise<HandleAIStreamResult> {
-  const { handlers, signal, format = "auto", idleTimeoutMs = 120_000 } = options;
+  const { handlers, signal, format = "auto", idleTimeoutMs = 180_000 } = options;
 
   if (!response.ok) {
     let detail = `HTTP ${response.status}`;

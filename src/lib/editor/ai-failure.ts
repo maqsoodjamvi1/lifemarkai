@@ -56,6 +56,19 @@ function isVerificationBlocked(raw: string): boolean {
   return /verification blocked this generation/i.test(raw);
 }
 
+function isDroppedConnection(raw: string): boolean {
+  return (
+    /stream idle timeout/i.test(raw) ||
+    /failed to fetch/i.test(raw) ||
+    /networkerror/i.test(raw) ||
+    /load failed/i.test(raw) ||
+    /ai worker not ready/i.test(raw) ||
+    /ai worker unreachable/i.test(raw) ||
+    /ai worker still starting/i.test(raw) ||
+    /ai worker failed to (start|load)/i.test(raw)
+  );
+}
+
 function verificationReason(raw: string): string {
   return raw
     .replace(/^Error:\s*/i, "")
@@ -98,6 +111,18 @@ export function describeAiFailure(input: AiFailureInput): AiFailureDescription {
         "LifemarkAI generated a candidate update, but rejected it before replacing your files because the preview check found that the app would not render correctly." +
         (reason ? `\n\n**Why it was blocked:** ${reason}` : "") +
         "\n\nResend the message to retry, or make the request more specific about the page/app type and the design you want.",
+    };
+  }
+
+  if (isDroppedConnection(raw)) {
+    return {
+      title: "Connection dropped",
+      summary: "The builder dropped before any files were saved. Resend — nothing was changed.",
+      isPlatformFault: true,
+      chatMarkdown:
+        "⚠️ **The connection to the builder dropped before any files were saved.**\n\n" +
+        "Nothing was changed and your message is still in the thread. Resend to retry — this is usually a proxy timeout or the AI worker still starting after a deploy." +
+        (excerpt ? `\n\n\`\`\`\n${excerpt}\n\`\`\`` : ""),
     };
   }
 

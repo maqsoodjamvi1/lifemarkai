@@ -59,6 +59,20 @@ describe("describeAiFailure", () => {
     assert.ok((d.chatMarkdown).includes("upstream gone"));
   });
 
+  it("treats a dropped builder connection as retryable, not a mystery failure", () => {
+    for (const rawError of [
+      "Stream idle timeout (180000ms)",
+      "Failed to fetch",
+      "AI worker not ready: not ready",
+      "AI worker unreachable",
+    ]) {
+      const d = describeAiFailure({ rawError });
+      assert.equal(d.isPlatformFault, true);
+      assert.match(d.chatMarkdown, /connection to the builder dropped/i);
+      assert.doesNotMatch(d.chatMarkdown, /The request failed/);
+    }
+  });
+
   it("explains verification-blocked generations without calling them random request failures", () => {
     const d = describeAiFailure({
       rawError:
