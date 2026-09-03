@@ -36,8 +36,8 @@ function serve(status: number): Promise<{ port: number; close: () => void }> {
   });
 }
 
-async function probe(port: number): Promise<string> {
-  const { stdout } = await run("sh", ["-c", buildLocalProbeScript(port)]);
+async function probe(port: number, path = "/"): Promise<string> {
+  const { stdout } = await run("sh", ["-c", buildLocalProbeScript(port, path)]);
   return /LM_STATUS=(\S+)/.exec(stdout)?.[1] ?? "";
 }
 
@@ -91,8 +91,14 @@ test(
   },
 );
 
-test("the socket fallback is a last resort, never an accept-path", () => {
+test("default probe hits Vite's client asset, not the app HTML entry", () => {
   const script = buildLocalProbeScript(5173);
+  assert.match(script, /127\.0\.0\.1:5173\/@vite\/client/);
+  assert.equal(script.includes("127.0.0.1:5173/ "), false);
+});
+
+test("the socket fallback is a last resort, never an accept-path", () => {
+  const script = buildLocalProbeScript(5173, "/");
   // `nc` may only appear in the `else` branch — i.e. after both HTTP clients
   // have been ruled out by `command -v`. If it ever appears OR'd onto the end
   // of a status check again, this fails.

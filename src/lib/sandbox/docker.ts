@@ -34,8 +34,8 @@
  *   SANDBOX_PUBLIC_HOST=1.2.3.4        host/IP users' browsers can reach
  *   SANDBOX_PORT_RANGE=42000-42099     host ports available for previews
  *   SANDBOX_IMAGE=node:22-alpine       runtime image
- *   SANDBOX_MEMORY_MB=2048             per-container memory cap (raise with VPS RAM)
- *   SANDBOX_CPUS=2                     per-container CPU cap
+ *   SANDBOX_MEMORY_MB=1024             per-container memory cap
+ *   SANDBOX_CPUS=1                     per-container CPU cap
  *   SANDBOX_PROXY_NETWORK=coolify      Traefik network (auto-picked if unset)
  */
 
@@ -52,7 +52,7 @@ SandboxProgressEvent,
 TypecheckResult,
 } from "./index.ts";
 import { createSandboxProgress } from "./progress.ts";
-import { appServing,DEFAULT_TIMEOUT_MS,trunc,waitForServer } from "./shared.ts";
+import { appServing,DEFAULT_TIMEOUT_MS,trunc } from "./shared.ts";
 import { SYNC_MANIFEST,filesToPrune } from "./prune-files.ts";
 import { parseTscOutput } from "./tsc-diagnostics.ts";
 import { dependenciesAlreadySatisfied } from "./deps-satisfied.ts";
@@ -186,8 +186,8 @@ function cfg() {
     portLo: Number.isFinite(lo) ? lo : 42000,
     portHi: Number.isFinite(hi) ? hi : 42099,
     image: process.env.SANDBOX_IMAGE || "node:22-alpine",
-    memoryMb: Number(process.env.SANDBOX_MEMORY_MB) || 2048,
-    cpus: Number(process.env.SANDBOX_CPUS) || 2,
+    memoryMb: Number(process.env.SANDBOX_MEMORY_MB) || 1024,
+    cpus: Number(process.env.SANDBOX_CPUS) || 1,
     // ── routing ──────────────────────────────────────────────────────────────
     previewDomain,
     // Hostname routing is what makes previews usable in production: Traefik
@@ -198,7 +198,7 @@ function cfg() {
     routeViaProxy: Boolean(previewDomain),
     proxyNetworkExplicit: (process.env.SANDBOX_PROXY_NETWORK || "").trim(),
     certResolver: process.env.SANDBOX_CERT_RESOLVER || "letsencrypt",
-    pidsLimit: Number(process.env.SANDBOX_PIDS_LIMIT) || 1024,
+    pidsLimit: Number(process.env.SANDBOX_PIDS_LIMIT) || 512,
     entrypoint: process.env.SANDBOX_TRAEFIK_ENTRYPOINT || "https",
   };
 }
@@ -352,16 +352,41 @@ async function docker(
   });
 }
 
+const DOCKER_PING_TTL_MS = 5_000;
+let dockerPingCache: { at: number; ok: boolean } | null = null;
+
 export async function isDockerDaemonReachable(timeoutMs = 1500): Promise<boolean> {
+  const now = Date.now();
+  if (dockerPingCache && now - dockerPingCache.at < DOCKER_PING_TTL_MS) {
+    return dockerPingCache.ok;
+  }
   const c = cfg();
   // Opening a missing Windows named pipe can hang past the HTTP timeout.
-  if (!c.tcpHost && !dockerSocketIsPresent(c.socketPath)) return false;
-  try {
-    const res = await docker("GET", "/_ping", undefined, undefined, timeoutMs);
-    return res.status >= 200 && res.status < 300 && res.text.trim() === "OK";
-  } catch {
+  if (!c.tcpHost && !dockerSocketIsPresent(c.socketPath)) {
+    dockerPingCache = { at: now, ok: false };
     return false;
   }
+  try {
+    const res = await docker("GET", "/_ping", undefined, undefined, timeoutMs);
+    const ok = res.status >= 200 && res.status < 300 && res.text.trim() === "OK";
+    dockerPingCache = { at: now, ok };
+    return ok;
+  } catch {
+    dockerPingCache = { at: Date.now(), ok: false };
+    return false;
+  }
+}
+
+/** Shrink leftover 2-CPU sandboxes back to the working 1 CPU / 1 GB cap without a recreate. */
+async function applySandboxLimits(sandboxId: string): Promise<void> {
+  const c = cfg();
+  const memory = c.memoryMb * 1024 * 1024;
+  await docker("POST", `/v1.43/containers/${sandboxId}/update`, {
+    Memory: memory,
+    MemorySwap: memory,
+    NanoCpus: Math.round(c.cpus * 1e9),
+    PidsLimit: c.pidsLimit,
+  }).catch(() => undefined);
 }
 
 async function listDockerNetworkNames(): Promise<string[]> {
@@ -628,8 +653,9 @@ async function claimPort(): Promise<number | null> {
  * and judge it. `nc` survives only as a last resort for an image carrying
  * neither curl nor wget, where a socket check is genuinely all we can do.
  */
-export function buildLocalProbeScript(port: number): string {
-  const url = `http://127.0.0.1:${port}/`;
+export function buildLocalProbeScript(port: number, path = "/@vite/client"): string {
+  const safePath = path.startsWith("/") ? path : `/${path}`;
+  const url = `http://127.0.0.1:${port}${safePath}`;
   return [
     `if command -v curl >/dev/null 2>&1; then`,
     // -w '%{http_code}' reports 000 on a refused/timed-out connection, which
@@ -769,7 +795,7 @@ export class DockerSandboxProvider implements SandboxProvider {
           startCommand: opts.startCommand,
           files: opts.files,
           progress,
-          readyBudgetMs: Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000),
+          readyBudgetMs: Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 30_000),
         });
         if (reused) return reused;
       }
@@ -1104,30 +1130,17 @@ export class DockerSandboxProvider implements SandboxProvider {
         ? `https://${previewHost}`
         : `${c.scheme}://${c.publicHost}:${hostPort}`;
 
-      // READINESS IS MEASURED INSIDE THE CONTAINER, not through the tunnel.
+      // READINESS IS MEASURED INSIDE THE CONTAINER against `/@vite/client`,
+      // not the public tunnel and not the app's `/`.
       //
-      // The old probe fetched `https://<project>.<preview-domain>` from the app
-      // server, which makes boot time depend on things that have nothing to do
-      // with whether the app is up:
-      //
-      //   • Traefik obtains that hostname's certificate through the ACME
-      //     HTTP-01 challenge on FIRST USE. Until it completes, an HTTPS fetch
-      //     throws a TLS error, which the probe cannot distinguish from "vite
-      //     isn't listening" — so a project whose dev server was serving in 15s
-      //     could still burn the entire 120s budget waiting on issuance.
-      //   • Traefik answers 502 for a booting backend, and the probe has to
-      //     special-case that (see backendResponding) to avoid reading the
-      //     proxy's own liveness as the app's.
-      //   • It requires the app server to be able to reach its own public
-      //     hostname, which is a hairpin through the edge on most hosts.
-      //
-      // `wget` against 127.0.0.1 inside the container answers the only question
-      // that matters — is the dev server accepting requests? — in milliseconds,
-      // with no TLS, no DNS and no proxy in the path. Requesting `/` rather
-      // than just opening a socket is deliberate: it makes Vite start its
-      // dependency pre-bundling pass now, during boot, instead of on the user's
-      // first paint.
-      const readyBudget = Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 120_000);
+      // The old public fetch of `https://<project>.<preview-domain>` made boot
+      // wait on Traefik ACME, 502s, and hairpin NAT. Hitting `/` inside the
+      // container is just as bad on Coolify: Vite starts HTML + dependency
+      // pre-bundling, and on a 2-CPU / 2GB sandbox that is 2–3 minutes
+      // (observed: preview.settle_ms 162091 for 43a14e3e, 186469 for a
+      // neighbor). `/@vite/client` is served as soon as the port is bound.
+      // The iframe then loads `/` and pays optimize in the browser.
+      const readyBudget = Math.min(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 30_000);
       const ready = await this.waitForLocalServer(id, innerPort, readyBudget);
 
       if (!ready) {
@@ -1243,6 +1256,8 @@ export class DockerSandboxProvider implements SandboxProvider {
         // 304 = already running, which is a race we are happy to lose.
         if (started.status >= 400 && started.status !== 304) return null;
       }
+
+      await applySandboxLimits(id);
 
       // Prove the project survived. A container whose APP_DIR or node_modules
       // is gone (a failed earlier boot, a manual cleanup) has nothing to offer.
@@ -1396,20 +1411,6 @@ export class DockerSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Poll the dev server from INSIDE the container until it answers.
-   *
-   * Each attempt is one `exec` over the Docker socket — a few tens of
-   * milliseconds, no network egress — so this can poll tightly at first and
-   * report readiness within a second of vite binding the port, rather than up
-   * to a full poll interval late.
-   *
-   * `wget -q -O /dev/null -T 3` treats any HTTP response as success, including
-   * a 404: the question is whether the server is accepting requests, and the
-   * dev server answering *anything* proves that. Busybox wget ships in
-   * node:*-alpine; on a Debian-based image `curl` is the fallback and the
-   * `nc -z` third branch covers an image with neither.
-   */
-  /**
    * Last in-container HTTP status this probe saw, per sandbox.
    *
    * `false` from waitForLocalServer cannot distinguish "nothing is listening"
@@ -1425,6 +1426,17 @@ export class DockerSandboxProvider implements SandboxProvider {
   }
 
 
+  /**
+   * Poll the dev server from INSIDE the container until it answers.
+   *
+   * Each attempt is one `exec` over the Docker socket — a few tens of
+   * milliseconds, no network egress — so this can poll tightly at first and
+   * report readiness within a second of vite binding the port, rather than up
+   * to a full poll interval late.
+   *
+   * The probe hits `/@vite/client` rather than `/` so Vite does not start a
+   * full HTML dependency pre-bundle just to declare ready.
+   */
   private async waitForLocalServer(
     sandboxId: string,
     port: number,
@@ -1787,6 +1799,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       const info = JSON.parse(res.text) as { State?: { Running?: boolean } };
       if (!info.State?.Running) return { ok: false, error: "Container is not running." };
     } catch { /* treat as running */ }
+    await applySandboxLimits(sandboxId);
     const previewUrl = await this.getPreviewUrl(sandboxId);
     if (!previewUrl) return { ok: false, error: "Could not resolve the container's port." };
 
@@ -1809,67 +1822,24 @@ export class DockerSandboxProvider implements SandboxProvider {
 
   async keepAlive(
     sandboxId: string,
-    opts?: { previewUrl?: string },
+    _opts?: { previewUrl?: string },
   ): Promise<{ alive: boolean; tunnelHealthy?: boolean; restarted?: boolean }> {
-    const re = await this.reconnect(sandboxId);
-    if (!re.ok) return { alive: false };
+    const res = await docker("GET", `/v1.43/containers/${sandboxId}/json`);
+    if (res.status >= 400) return { alive: false };
+    try {
+      const info = JSON.parse(res.text) as { State?: { Running?: boolean } };
+      if (!info.State?.Running) return { alive: false };
+    } catch {
+      return { alive: false };
+    }
 
-    // Activity marker for the host GC: the gc script reaps sandboxes whose
-    // marker is stale (idle), NOT by creation age — reaping by age was cutting
-    // off users mid-edit at the 6h mark ("preview goes blank after some time").
-    // Detached fire-and-forget: never delays the heartbeat response.
     void this.exec(sandboxId, "touch /tmp/.lm-keepalive", "/", false, true).catch(
       () => undefined,
     );
-
-    if (!opts?.previewUrl) return { alive: true };
-    // reconnect() already probed inside the container. A second host-side
-    // fetch of localhost:published-port can take tens of seconds on a cold
-    // Vite transform (or fail outright from another container) and the
-    // client used to read that as dead — blanking a preview that was up.
-    if (re.ready) return { alive: true, tunnelHealthy: true };
-
-    const previewHost = (() => {
-      try {
-        return new URL(opts.previewUrl).hostname;
-      } catch {
-        return "";
-      }
-    })();
-    // Local Docker publish: the container is alive; Vite may still be
-    // compiling. Never report tunnelHealthy:false here — that was the
-    // blank "Starting live preview" pane after a successful boot.
-    if (previewHost === "localhost" || previewHost === "127.0.0.1") {
-      return { alive: true };
-    }
-
-    // Remote tunnels (Coolify / Modal): still probe the public URL.
-    const healthy = await waitForServer(opts.previewUrl, 3000);
-    if (healthy) return { alive: true, tunnelHealthy: true };
-
-    // GRACE WINDOW — the tunnel being down while the container is alive almost
-    // always means vite is mid-restart (config re-sync triggers a FULL vite
-    // restart; the in-container supervisor loop revives it within ~1-2s).
-    // Reporting tunnelHealthy:false immediately made the client declare the
-    // sandbox dead and COLD-REBOOT a brand-new container — which, before the
-    // one-per-project teardown, stacked duplicates behind one hostname and
-    // caused the dual-React blank. Wait out the restart window and re-probe;
-    // only report dead if the tunnel stays down.
-    const recovered = await waitForServer(opts.previewUrl, 9000);
-    if (recovered) {
-      // The iframe may be stuck on a connection-reset page from the brief
-      // outage — `restarted` tells the client to bump its reload nonce.
-      return { alive: true, tunnelHealthy: true, restarted: true };
-    }
-
-    // The tunnel is not answering US. That is not the same as the app being
-    // down. Ask the app directly inside the container before condemning it.
-    const innerPort = await this.portFor(sandboxId).catch(() => null);
-    if (innerPort != null) {
-      const localUp = await this.waitForLocalServer(sandboxId, innerPort, 4000);
-      if (localUp) return { alive: true, tunnelHealthy: true, restarted: true };
-    }
-    return { alive: true, tunnelHealthy: false };
+    // Do not probe the public preview host or Vite's `/` here. Last night's
+    // heartbeat did both, paused a live Coolify sandbox, and paid a 2–3
+    // minute cold boot. Container running is enough to keep the iframe.
+    return { alive: true, tunnelHealthy: true };
   }
 
   /** The port the dev server was started on, read back from the container. */

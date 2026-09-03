@@ -7,8 +7,8 @@
  *
  * Draft E2B is only used when ENABLE_E2B_SANDBOX=1 / SANDBOX_PROVIDER=e2b.
  *
- * Lovable parity: GET reconnect before cold POST; persist sandboxId in
- * sessionStorage so reloads can reconnect quickly.
+ * Lovable parity: GET reconnect before cold POST; persist sandboxId and
+ * last preview URL in sessionStorage so reloads paint immediately.
  */
 import { useCallback,useEffect,useRef,useState } from "react";
 import { announcePreviewSettled } from "@/lib/preview/wait-for-preview-success";
@@ -49,6 +49,21 @@ type SandboxStatusResponse = {
 
 function storageKey(projectId: string) {
   return `lifemark-sandbox-${projectId}`;
+}
+
+function urlStorageKey(projectId: string) {
+  return `lifemark-sandbox-url-${projectId}`;
+}
+
+function readStoredPreview(projectId: string): { sandboxId: string | null; previewUrl: string | null } {
+  try {
+    return {
+      sandboxId: sessionStorage.getItem(storageKey(projectId)),
+      previewUrl: sessionStorage.getItem(urlStorageKey(projectId)),
+    };
+  } catch {
+    return { sandboxId: null, previewUrl: null };
+  }
 }
 
 export function useSandboxPreview(projectId: string) {
@@ -139,6 +154,11 @@ export function useSandboxPreview(projectId: string) {
         } else {
           sessionStorage.removeItem(storageKey(projectId));
         }
+        if (merged.previewUrl) {
+          sessionStorage.setItem(urlStorageKey(projectId), merged.previewUrl);
+        } else {
+          sessionStorage.removeItem(urlStorageKey(projectId));
+        }
       } catch { /* private mode */ }
     }
     setState(merged);
@@ -180,8 +200,12 @@ export function useSandboxPreview(projectId: string) {
         ...stateRef.current,
         enabled: true,
         provider: typeof data.provider === "string" ? data.provider : stateRef.current.provider,
-        loading: true,
-        phase: stateRef.current.phase ?? "creating",
+        // A warm origin is already paintable — don't flip back to a spinner
+        // just because Docker status said "yes, the daemon is up".
+        loading: stateRef.current.previewUrl ? false : true,
+        phase: stateRef.current.previewUrl
+          ? (stateRef.current.phase ?? "ready")
+          : (stateRef.current.phase ?? "creating"),
       });
       return true;
     },
@@ -189,7 +213,7 @@ export function useSandboxPreview(projectId: string) {
   );
 
   const reconnectPreview = useCallback(async (): Promise<SandboxPreviewState> => {
-    setState((s) => ({ ...s, loading: true, error: null }));
+    setState((s) => ({ ...s, loading: s.previewUrl ? s.loading : true, error: null }));
     try {
       let storedId: string | null = null;
       try {
@@ -502,12 +526,39 @@ export function useSandboxPreview(projectId: string) {
     bootedForProjectRef.current = projectId;
     resumeColdBootsRef.current = 0;
     void (async () => {
-      // Clear the previous project's previewUrl/sandboxId/error/logs so the
-      // panel never renders another project's app while this one boots —
-      // `enabled` is carried over explicitly (not reset via emptyState's
-      // default `false`) since it's already been confirmed true above and
-      // this effect doesn't re-derive it.
-      setState((s) => emptyState({ enabled: s.enabled, loading: true, phase: "creating", phaseDetail: "Connecting…" }));
+      // Prefer this project's last known origin immediately so a remount or
+      // switch back does not flash Connecting over an app that is still up.
+      // A different project's URL is never in this key, so we cannot paint
+      // the previous app under the new chrome.
+      const stored = readStoredPreview(projectId);
+      if (stored.previewUrl) {
+        sandboxIdRef.current = stored.sandboxId;
+        const painted: SandboxPreviewState = {
+          ...stateRef.current,
+          enabled: stateRef.current.enabled,
+          previewUrl: stored.previewUrl,
+          sandboxId: stored.sandboxId,
+          loading: false,
+          error: null,
+          logs: null,
+          phase: "ready",
+          phaseDetail: null,
+          paused: false,
+          resuming: false,
+        };
+        stateRef.current = painted;
+        setState(painted);
+      } else {
+        const next = emptyState({
+          enabled: stateRef.current.enabled,
+          loading: true,
+          phase: "creating",
+          phaseDetail: "Connecting…",
+        });
+        stateRef.current = next;
+        sandboxIdRef.current = null;
+        setState(next);
+      }
 
       // Always try a warm reconnect first. Docker keeps one container per
       // project across reloads; skipping GET when sessionStorage was empty
@@ -551,15 +602,14 @@ export function useSandboxPreview(projectId: string) {
           // (1) Compute gone — reboot a fresh sandbox before the user sees a dead
           // tunnel. (2) Tunnel dead and the in-place Vite restart didn't recover
           // it — also reboot. Either way, get a working preview automatically.
-          if (d.alive === false || d.tunnelHealthy === false) {
+          if (d.alive === false) {
             // Idle reclaim: pause (keep sandbox id for warm resume). Do not
             // cold-POST in a loop — that was the install spinner death spiral.
-            enterPaused(
-              d.alive === false
-                ? "Preview session expired"
-                : "Preview tunnel paused",
-            );
-          } else if (d.restarted && d.tunnelHealthy) {
+            // tunnelHealthy:false is not a pause: on Coolify the app container
+            // often cannot hairpin to the public preview host, and treating
+            // that as dead forced a 2–3 minute cold boot of a live sandbox.
+            enterPaused("Preview session expired");
+          } else if (d.restarted) {
             // Zombie healed in place: Vite was restarted and the tunnel serves
             // again, but the iframe is still showing the stale connection-reset
             // page (browsers don't auto-retry those). Bump the nonce to reload it.

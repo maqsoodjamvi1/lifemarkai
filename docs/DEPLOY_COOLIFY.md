@@ -116,9 +116,11 @@ container Traefik routes at `https://<project>.preview.yourdomain.com`.
 3. **Same Traefik network:** leave `SANDBOX_PROXY_NETWORK` unset to auto-join
    Coolify’s `coolify` network when it exists, or set `SANDBOX_PROXY_NETWORK=coolify`
    explicitly. Preview containers get `traefik.enable=true` labels.
-4. **RAM:** plan **16 GB** on the VPS if Coolify, the app, and live previews
-   share one box. Each preview defaults to **2 GB / 2 CPU** (`SANDBOX_MEMORY_MB=2048`,
-   `SANDBOX_CPUS=2`). Lower those if you only keep one editor open.
+4. **RAM:** keep the sandbox at **1 GB / 1 CPU** (`SANDBOX_MEMORY_MB=1024`,
+   `SANDBOX_CPUS=1`) so Coolify, Traefik, and the app still have room on the
+   same box. Last night’s 2 GB / 2 CPU default starved the host and turned a
+   live preview into a minutes-long pause/cold-boot. Raise only if the VPS
+   has spare cores.
 5. **Leave Modal tokens unset** so traffic does not go to a paid Modal account.
 6. Redeploy. First preview may take a few minutes (`docker pull` of
    `SANDBOX_IMAGE`). After that, reopen is a warm container reuse.

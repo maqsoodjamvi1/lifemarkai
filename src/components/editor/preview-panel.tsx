@@ -1789,11 +1789,11 @@ function PreviewPanelImpl({
 
   const previewStatusText =
     hideTopChrome
-      ? previewEngine === "sandbox" && !sandboxUrl
+      ? previewEngine === "sandbox" && !liveSandboxOrigin
         ? (modalPhaseLabel || "Starting live preview…")
-        : previewEngine === "sandbox" && sandboxSyncInstalling
+        : previewEngine === "sandbox" && sandboxSyncInstalling && !liveSandboxOrigin
           ? "Installing dependencies…"
-            : previewMachineState === "building" || previewMachineState === "loading" || (previewEngine === "sandbox" && sandboxLoading)
+            : previewMachineState === "building" || previewMachineState === "loading" || (previewEngine === "sandbox" && sandboxLoading && !liveSandboxOrigin)
               ? ((previewEngine === "sandbox" ? modalPhaseLabel : null) || (previewMachineState === "loading" ? "Updating preview…" : "Loading preview…"))
               : previewMachineState === "error"
                 ? "Updating preview…"
@@ -2465,7 +2465,7 @@ function PreviewPanelImpl({
                 }}
               />,
             )}
-            {(!liveSandboxOrigin || !sandboxUrl) && (
+            {!liveSandboxOrigin && (
               <div className="absolute top-2 left-1/2 z-20 flex max-w-[min(100%-1rem,28rem)] -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-background/95 px-2.5 py-1 text-[10px] text-muted-foreground">
                 <span className="truncate">
                   {sandboxSyncInstalling

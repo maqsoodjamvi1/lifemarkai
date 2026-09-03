@@ -703,6 +703,7 @@ async function handleGET(req: Request, params: any) {
       queryId ||
       (typeof meta.sandbox_id === "string" ? meta.sandbox_id : null);
     const claimsReady = phase === "ready" && Boolean(storedTunnelUrl);
+    const dockerHost = getSandboxProviderId() === "docker";
 
     // PROMOTION: a boot that returned before its dev server answered is parked
     // at phase "starting" with its URL already persisted. This poll is what
@@ -718,7 +719,13 @@ async function handleGET(req: Request, params: any) {
     // Only promote from "starting". A new boot parks at "creating"/"installing"
     // while npm runs; promoting any live URL in that window would hand back
     // the PREVIOUS container's address.
-    if (!claimsReady && storedTunnelUrl && phase === "starting") {
+    //
+    // Docker/Coolify: do NOT fetch the public preview host from the app
+    // container. That hairpin (Traefik / ACME) is often unreachable and the
+    // fetch of `/` starts Vite's full optimize pass (minutes). Inner boot
+    // already decided liveness; keep-alive `alive:false` is what reaps a
+    // dead container.
+    if (!claimsReady && storedTunnelUrl && phase === "starting" && !dockerHost) {
       peekPreviewReachable(storedTunnelUrl); // warms the cache in the background
       const probeState = getPreviewProbeState(storedTunnelUrl);
       if (probeState.state === "verified") {
@@ -765,16 +772,20 @@ async function handleGET(req: Request, params: any) {
     // NON-BLOCKING: reads the cached verdict and refreshes in the background.
     // Awaiting the probe here made every poll wait out the network timeout when
     // the tunnel was down, which stacked requests and froze the editor page.
-    const alive = claimsReady ? peekPreviewReachable(previewUrlForProbe!) : false;
+    const alive = claimsReady
+      ? dockerHost
+        ? true
+        : peekPreviewReachable(previewUrlForProbe!)
+      : false;
 
     // isPreviewReachable fails OPEN, so `alive === true` can mean "verified" OR
     // "never once reached". Those look identical to a caller and are completely
     // different to debug, so say which it is rather than implying a check that
     // never succeeded. Warn once per poll window when we're only assuming.
-    const probe = claimsReady
+    const probe = claimsReady && !dockerHost
       ? getPreviewProbeState(previewUrlForProbe!)
       : { state: "unknown" as const, fails: 0, lastStatus: 0 };
-    if (probe.state === "unverified") {
+    if (!dockerHost && probe.state === "unverified") {
       console.warn(
         `[sandbox-preview] reporting ready for ${previewUrlForProbe} but the tunnel has NEVER answered a probe — ` +
           `this server may be unable to reach modal.host at all. Treat ok:true as unconfirmed.`,
@@ -784,26 +795,34 @@ async function handleGET(req: Request, params: any) {
     // dead or expired sandbox. The container is fine; the code inside it does
     // not compile. Telling the user to restart the sandbox there sends them
     // round a loop that cannot fix anything — the file has to be repaired.
-    const appErrored = probe.lastStatus >= 500 && probe.lastStatus !== 502
+    const appErrored = !dockerHost && probe.lastStatus >= 500 && probe.lastStatus !== 502
       && probe.lastStatus !== 503 && probe.lastStatus !== 504;
+
+    const treatUnreachable = claimsReady && !alive && !appErrored && !dockerHost;
+    const keepUrl =
+      Boolean(storedTunnelUrl) &&
+      !treatUnreachable &&
+      (alive || (dockerHost && (claimsReady || phase === "starting")));
 
     return Response.json({
       enabled: true,
-      ok: alive,
-      previewUrl: alive ? storedTunnelUrl : null,
+      ok: dockerHost
+        ? Boolean(storedTunnelUrl && (claimsReady || phase === "starting"))
+        : alive,
+      previewUrl: keepUrl ? storedTunnelUrl : null,
       sandboxId: resolvedSandboxId,
       // Surface the stale-tunnel case distinctly so the UI can offer a restart
       // instead of spinning on a "ready" that will never paint.
       // "reachable" is only asserted when a probe actually succeeded.
-      previewProbe: probe.state,
+      previewProbe: dockerHost && claimsReady ? "verified" : probe.state,
       previewStatus: probe.lastStatus || null,
-      phase: claimsReady && !alive ? (appErrored ? "app_error" : "unreachable") : phase,
+      phase: treatUnreachable ? "unreachable" : (appErrored && claimsReady ? "app_error" : phase),
       phaseDetail:
-        claimsReady && !alive
-          ? appErrored
+        treatUnreachable
+          ? "Preview sandbox is no longer responding — it likely expired. Restart it to get a fresh one."
+          : appErrored && claimsReady
             ? `Your app is running but returned HTTP ${probe.lastStatus} — the code failed to build. Restarting won't help; the error has to be fixed.`
-            : "Preview sandbox is no longer responding — it likely expired. Restart it to get a fresh one."
-          : phaseDetail,
+            : phaseDetail,
       provider: getSandboxProviderId(),
     });
   }

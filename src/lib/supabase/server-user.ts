@@ -1,10 +1,16 @@
 import type { User } from "@supabase/supabase-js";
 import type { createClient } from "./server.ts";
 import { logger } from "../logger.ts";
+import {
+getUserTimeoutMs,
+isAuthCircuitOpen,
+isNetworkishAuthError,
+noteGetUserFailure,
+noteGetUserSuccess,
+shouldLogCircuitOpen,
+} from "./auth-circuit.ts";
 
 type SupabaseServer = Awaited<ReturnType<typeof createClient>>;
-
-const GET_USER_TIMEOUT_MS = 10000;
 
 export type ServerUserResult = {
   user: User | null;
@@ -42,20 +48,30 @@ export type ServerUserResult = {
  * pass.
  *
  * What IS safe to add here, and now in place: the fallback path is logged,
- * so how often it actually fires is observable rather than invisible.
+ * and `auth-circuit.ts` caps the wait at 1.5s when a cookie session exists,
+ * then skips getUser for 30s after two network timeouts so a Supabase blip
+ * cannot stall every editor request for 10s.
  */
 export async function getServerUser(supabase: SupabaseServer): Promise<ServerUserResult> {
   const { data: { session } } = await supabase.auth.getSession();
   const sessionUser = session?.user ?? null;
 
+  if (sessionUser && isAuthCircuitOpen()) {
+    if (shouldLogCircuitOpen()) {
+      logger.warn("auth.server_user.circuit_open", { userId: sessionUser.id });
+    }
+    return { user: sessionUser, authError: new Error("getUser circuit open"), source: "session" };
+  }
+
   let verifiedUser: User | null = null;
   let authError: Error | null = null;
+  const timeoutMs = getUserTimeoutMs(!!sessionUser);
 
   try {
     const result = await Promise.race([
       supabase.auth.getUser(),
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("getUser timeout")), GET_USER_TIMEOUT_MS),
+        setTimeout(() => reject(new Error("getUser timeout")), timeoutMs),
       ),
     ]);
     verifiedUser = result.data.user;
@@ -65,6 +81,7 @@ export async function getServerUser(supabase: SupabaseServer): Promise<ServerUse
   }
 
   if (verifiedUser) {
+    noteGetUserSuccess();
     return { user: verifiedUser, authError, source: "getUser" };
   }
 
@@ -72,10 +89,16 @@ export async function getServerUser(supabase: SupabaseServer): Promise<ServerUse
     // See the fail-open tradeoff documented above: this accepts a locally
     // decoded session without re-checking revocation, only because the
     // server-verified check above failed/timed out.
-    logger.warn("auth.server_user.fallback_to_session", {
-      userId: sessionUser.id,
-      reason: authError?.message ?? "getUser failed with no error detail",
-    });
+    const reason = authError?.message ?? "getUser failed with no error detail";
+    if (isNetworkishAuthError(reason)) {
+      noteGetUserFailure();
+    }
+    if (!isAuthCircuitOpen()) {
+      logger.warn("auth.server_user.fallback_to_session", {
+        userId: sessionUser.id,
+        reason,
+      });
+    }
     return { user: sessionUser, authError, source: "session" };
   }
 
