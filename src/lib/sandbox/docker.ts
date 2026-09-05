@@ -54,6 +54,7 @@ TypecheckResult,
 import { createSandboxProgress } from "./progress.ts";
 import { appServing,DEFAULT_TIMEOUT_MS,trunc } from "./shared.ts";
 import { SYNC_MANIFEST,filesToPrune } from "./prune-files.ts";
+import { previewDeleteCommand } from "../preview/sync-project-snapshot.ts";
 import { parseTscOutput } from "./tsc-diagnostics.ts";
 import { dependenciesAlreadySatisfied } from "./deps-satisfied.ts";
 import {
@@ -1612,7 +1613,7 @@ export class DockerSandboxProvider implements SandboxProvider {
   async writeFiles(
     sandboxId: string,
     files: SandboxFile[],
-    opts?: { prevManifest?: Record<string, string> | null; partial?: boolean },
+    opts?: { prevManifest?: Record<string, string> | null; partial?: boolean; prune?: boolean },
   ): Promise<{ written: string[] }> {
     // INCREMENTAL SYNC — upload only files whose CONTENT actually changed.
     //
@@ -1643,13 +1644,19 @@ export class DockerSandboxProvider implements SandboxProvider {
     // Any parse failure of a self-read falls back to a full upload — worst
     // case is today's behavior.
     const prev = opts?.prevManifest !== undefined ? opts.prevManifest : await this.readSyncManifest(sandboxId);
+    const removed = opts?.prune && !opts.partial && prev
+      ? filesToPrune(Object.keys(prev), files.map((file) => file.path)) : [];
+    if (removed.length) {
+      const result = await this.exec(sandboxId, previewDeleteCommand(removed), APP_DIR);
+      if (result.exitCode !== undefined && result.exitCode !== 0) throw new Error(result.stderr || "Could not prune stale preview files");
+    }
 
     let toWrite = files;
     if (prev) {
       toWrite = files.filter((f) => prev![norm(f.path)] !== hashes[norm(f.path)]);
       // Nothing changed → write NOTHING. Even rewriting just the manifest is
       // pointless churn; skipping the upload entirely is what keeps vite quiet.
-      if (toWrite.length === 0) return { written: [] };
+      if (toWrite.length === 0 && removed.length === 0) return { written: [] };
     }
 
     // `opts.partial` picks REPLACE vs MERGE for the manifest this call writes

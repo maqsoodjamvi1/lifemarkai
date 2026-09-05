@@ -656,7 +656,15 @@ type FunctionOverrides = DatabaseOverrides["public"]["Functions"];
  * document cannot describe precisely.
  */
 export type Database = Omit<GeneratedDatabase, "public"> & {
-  public: Omit<GeneratedPublicSchema, "Functions"> & {
+  public: Omit<GeneratedPublicSchema, "Functions" | "Tables"> & {
+    // Migration 193 adds this nullable field after the generated schema snapshot.
+    Tables: Omit<GeneratedPublicSchema["Tables"], "profiles"> & {
+      profiles: Omit<GeneratedPublicSchema["Tables"]["profiles"], "Row" | "Insert" | "Update"> & {
+        Row: GeneratedPublicSchema["Tables"]["profiles"]["Row"] & { github_api_base: string | null };
+        Insert: GeneratedPublicSchema["Tables"]["profiles"]["Insert"] & { github_api_base?: string | null };
+        Update: GeneratedPublicSchema["Tables"]["profiles"]["Update"] & { github_api_base?: string | null };
+      };
+    };
     Functions: Omit<GeneratedPublicSchema["Functions"], keyof FunctionOverrides> & FunctionOverrides;
   };
 };

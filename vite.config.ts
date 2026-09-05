@@ -4,6 +4,7 @@ import viteReact from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
+import { monacoAssets } from "./scripts/vite-monaco-assets.ts";
 
 const rootDir = fileURLToPath(new URL(".", import.meta.url));
 const srcDir = path.join(rootDir, "src");
@@ -317,6 +318,7 @@ export default defineConfig(({ mode }) => {
       external: true,
     },
     plugins: [
+      monacoAssets(rootDir),
       {
         name: "lifemark-long-request-timeout",
         configureServer(server) {

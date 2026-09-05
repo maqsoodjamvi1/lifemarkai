@@ -4,6 +4,7 @@
 
 import { PREVIEW_ERROR_BRIDGE_SCRIPT } from "./preview-error-bridge.ts";
 import { PREVIEW_PERF_SCRIPT } from "./preview-perf-bridge.ts";
+import { PREVIEW_REVISION_BRIDGE } from "./preview-revision-bridge.ts";
 
 /**
  * ─── EVERYTHING BELOW IS INLINED INTO THE CUSTOMER'S HTML ───────────────────
@@ -482,6 +483,7 @@ export const PREVIEW_RUNTIME_SCRIPT = `(function(){
     if (type === "error") {
       hadRuntimeError = true;
       if (isNoise(text)) return;
+      window.dispatchEvent(new Event('lifemark-preview-update-error'));
     }
     try { window.parent.postMessage({ source:'lifemark-preview', type:type, text:String(text) }, '*'); } catch(e){}
   }
@@ -701,7 +703,7 @@ export function assertNoScriptTerminator(script: string, label: string): string 
 /** Combined preview bridges (VEB + runtime + errors + perf). */
 export function getPreviewBridgeScripts(): string {
   return assertNoScriptTerminator(
-    `${VEB_BRIDGE_SCRIPT}\n${PREVIEW_RUNTIME_SCRIPT}\n${PREVIEW_ERROR_BRIDGE_SCRIPT}\n${PREVIEW_PERF_SCRIPT}`,
+    `${VEB_BRIDGE_SCRIPT}\n${PREVIEW_RUNTIME_SCRIPT}\n${PREVIEW_ERROR_BRIDGE_SCRIPT}\n${PREVIEW_PERF_SCRIPT}\n${PREVIEW_REVISION_BRIDGE}`,
     "preview bridge",
   );
 }
@@ -744,9 +746,18 @@ export function injectVebBridgeIntoJsxDocument(source: string): string {
 }
 
 export function injectVebBridgeIntoNextLayout(source: string): string {
-  if (source.includes("lifemark-veb-ready")) return source;
   const escaped = JSON.stringify(getPreviewBridgeScripts());
   const tag = `<script dangerouslySetInnerHTML={{ __html: ${escaped} }} />`;
+  let refreshed = false;
+  // Refresh our own generated bridge while preserving unrelated inline scripts.
+  source = source.replace(/<script\s+dangerouslySetInnerHTML=\{\{\s*__html:\s*("(?:\\.|[^"\\])*")\s*\}\}\s*\/>/g, (existing, raw: string) => {
+    try {
+      if (!JSON.parse(raw).includes("lifemark-veb-ready")) return existing;
+      refreshed = true;
+      return tag;
+    } catch { return existing; }
+  });
+  if (refreshed || source.includes("lifemark-veb-ready")) return source;
   // JSX documents may close the body with lowercase `</body>` (Next layouts,
   // current TSS scaffold) OR a capitalized component `</Body>` (older TanStack
   // Start API). The old code matched case-insensitively but REPLACED with a

@@ -160,7 +160,7 @@ export interface SandboxProvider {
   writeFiles(
     sandboxId: string,
     files: SandboxFile[],
-    opts?: { partial?: boolean },
+    opts?: { partial?: boolean; prune?: boolean },
   ): Promise<void | { written: string[] }>;
   /**
    * Type-check the project in place, using its OWN installed dependencies.

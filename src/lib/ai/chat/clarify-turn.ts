@@ -1,4 +1,5 @@
 import type { ClarificationOption, ClarifyingQuestion } from "./clarification.ts";
+import { parseClarifyingQuestions } from "./clarification.ts";
 
 export interface ClarifyInterviewQuestion extends ClarifyingQuestion {
   answer: string;
@@ -35,11 +36,15 @@ export function currentClarifyQuestion(
 }
 
 export function normalizeClarifyInterview(session: ClarifyInterview): ClarifyInterview {
-  const questions = session.questions ?? [];
+  const questions = (Array.isArray(session.questions) ? session.questions : []).flatMap((q, index) => {
+    if (!q || typeof q !== "object") return [];
+    const normalized = parseClarifyingQuestions(JSON.stringify([{ ...q, id: q.id || `q${index + 1}` }]))[0];
+    return normalized ? [{ ...normalized, answer: typeof q.answer === "string" ? q.answer : "" }] : [];
+  });
   const firstUnanswered = questions.findIndex((q) => !q.answer.trim());
   const currentIndex =
-    typeof session.currentIndex === "number" && session.currentIndex >= 0
-      ? Math.min(session.currentIndex, questions.length)
+    Number.isFinite(session.currentIndex) && session.currentIndex >= 0
+      ? Math.min(Math.floor(session.currentIndex), questions.length)
       : firstUnanswered === -1
         ? questions.length
         : firstUnanswered;

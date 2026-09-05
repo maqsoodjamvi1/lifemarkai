@@ -25,7 +25,8 @@ import { VebBridgePopover,claimVisualEditCredit } from "./visual-edit-overlay";
 import { PreviewAnnotations } from "./preview-annotations";
 import { PreviewCommentPins } from "./preview-comment-pins";
 import { filterPinsForPage,toCommentPinList } from "@/lib/editor/comment-pin-markers";
-import { PreviewAnnotateModal } from "./preview-annotate-modal";
+import dynamic from "@/lib/lazy-component";
+import { importWithRetry } from "@/lib/import-with-retry";
 import { LifemarkBadge } from "@/components/shared/lifemark-badge";
 import type { ProjectFile } from "@/types/database";
 import { buildFallbackHtml, EMPTY_PREVIEW_HTML } from "@/lib/preview/build-fallback-html";
@@ -48,6 +49,9 @@ sandboxUrlWithPath,
 } from "@/lib/preview/sandbox-url";
 import { getPreviewBarLabel, resolveEditorPreviewSrc } from "@/lib/preview/preview-url";
 import { useSandboxPreview } from "@/lib/preview/use-sandbox-preview";
+import { createPreviewFileSync } from "@/lib/preview/sync-preview-files";
+import { waitForPreviewRevision } from "@/lib/preview/wait-for-preview-revision";
+import { isPreviewFrameMessage } from "@/lib/preview/preview-revision";
 import { usePreviewErrorGuard } from "@/hooks/use-preview-error-guard";
 import { isNoisePreviewError,type PreviewErrorReport } from "@/lib/preview/preview-error-bridge";
 import { derivePreviewPages } from "@/lib/preview/derive-pages";
@@ -116,7 +120,11 @@ interface PreviewPanelProps {
   onOpenPanel?: (panel: string) => void;
   /** When true, inject the guest comments embed into fallback / WebContainer previews. */
   isPublic?: boolean;
+  /** Live mode may display the origin but must never sync source changes. */
+  isLocked?: boolean;
 }
+
+const PreviewAnnotateModal = dynamic(importWithRetry(() => import("./preview-annotate-modal").then((module) => module.PreviewAnnotateModal)), { ssr: false });
 
 const DEVICE_WIDTHS: Record<DeviceSize, string> = {
   mobile: "390px",
@@ -154,6 +162,7 @@ function PreviewPanelImpl({
   hideTopChrome = false,
   onOpenPanel,
   isPublic = false,
+  isLocked = false,
 }: PreviewPanelProps) {
   const outOfCredits = credits !== undefined && credits <= 0;
   const [device, setDevice] = useState<DeviceSize>("desktop");
@@ -201,7 +210,7 @@ function PreviewPanelImpl({
   const [visualEdit, setVisualEdit] = useState(isVisualEditActive ?? false);
   // Visual edits are suppressed while previewing an older version — edits
   // against stale files would target code that no longer exists.
-  const visualEditEnabled = visualEdit && !versionPreviewLabel;
+  const visualEditEnabled = visualEdit && !versionPreviewLabel && !isLocked;
   const [showConsole, setShowConsole] = useState(false);
   const [previewBottomTab, setPreviewBottomTab] = useState<"console" | "network" | "perf">("console");
   /** WebContainer tunnel URL — published to the live-preview bus for agent/tests. */
@@ -311,6 +320,7 @@ function PreviewPanelImpl({
       },
     ]);
   });
+  const sandboxIframeRef = useRef<HTMLIFrameElement>(null);
   // Real cloud sandbox preview (Modal — Lovable parity).
   const {
     previewUrl: sandboxUrl,
@@ -330,7 +340,7 @@ function PreviewPanelImpl({
     statusResolved: sandboxStatusResolved,
     reloadNonce: sandboxReloadNonce,
     lifecycle: sandboxLifecycle,
-  } = useSandboxPreview(projectId ?? "");
+  } = useSandboxPreview(projectId ?? "", sandboxIframeRef);
   const sandboxIdLiveRef = useRef(sandboxId);
   sandboxIdLiveRef.current = sandboxId;
   const sandboxUrlLiveRef = useRef(sandboxUrl);
@@ -406,7 +416,6 @@ function PreviewPanelImpl({
   // WebContainer (initial boot OR a later remountProject). See the
   // remount-on-edit effect below, defined after `filesSignature` exists.
   const wcMountedSignatureRef = useRef<string | null>(null);
-  const sandboxIframeRef = useRef<HTMLIFrameElement>(null);
   const unifiedIframeRef = useRef<HTMLIFrameElement | null>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(false);
@@ -995,7 +1004,8 @@ function PreviewPanelImpl({
       // not a claim. Shape validation below stays, because a compromised preview
       // is still an untrusted sender.
       const expected = getPreviewContentWindow();
-      if (expected && e.source !== expected) return;
+      if (!expected || e.source !== expected) return;
+      if (previewEngine === "sandbox" && !isPreviewFrameMessage(e, expected, sandboxUrlLiveRef.current)) return;
       const d = e.data as Record<string, unknown> | null;
       if (!d || typeof d !== "object") return;
       if (d.source === "lifemark-veb" && visualEditEnabled) {
@@ -1029,7 +1039,6 @@ function PreviewPanelImpl({
         stagePendingTextEditRef.current(data, text);
       }
       if (d.type === "lifemark-veb-ready") {
-        announcePreviewSettled(true);
         getPreviewContentWindow()?.postMessage(
           { type: "lifemark-veb-mode", enabled: visualEditEnabled },
           "*",
@@ -1079,6 +1088,7 @@ function PreviewPanelImpl({
           }).catch(() => {});
         }
         if (type === "success") {
+          if (previewEngine === "sandbox") return;
           // completeHealing already clears errors — don't call both.
           errorGuard.completeHealing();
           window.dispatchEvent(new CustomEvent("lifemark-preview-heal-done"));
@@ -1150,7 +1160,6 @@ function PreviewPanelImpl({
         if (typeof token === "number") {
           sandboxPongTokenRef.current = token;
           sandboxBridgeAliveRef.current = true;
-          announcePreviewSettled(true);
         }
       }
       if (d.type === "lifemark-preview-location") {
@@ -1394,9 +1403,17 @@ function PreviewPanelImpl({
     return () => window.removeEventListener("lifemark-preview-history", onHistoryNav);
   }, [getPreviewContentWindow]);
 
+  // A new sandbox needs a fresh baseline; edits within it share one write queue.
+  const syncPreviewSnapshot = useMemo(
+    () => sandboxId
+      ? createPreviewFileSync(syncSandboxFiles)
+      : async (): ReturnType<typeof syncSandboxFiles> => ({ ok: false, error: "No sandbox" }),
+    [syncSandboxFiles, sandboxId],
+  );
+
   // Modal live sync — push debounced file changes, then clear Loading (HMR in-place).
   useEffect(() => {
-    if (previewEngine !== "sandbox" || !sandboxId || previewFiles.length === 0) return;
+    if (isLocked || previewEngine !== "sandbox" || !sandboxId || previewFiles.length === 0) return;
     if (projectId && !filesBelongToProject(previewFiles, projectId)) return;
     const payload = previewFiles.map((f) => ({ path: f.path, content: f.content ?? "" }));
     // Clearing the 800ms debounce is not enough. Once a sync is in flight this
@@ -1406,11 +1423,12 @@ function PreviewPanelImpl({
     // trailing timers can flip the machine to "ready" while that newer sync is
     // still loading. Supersede the whole run, timers included.
     let superseded = false;
+    const verification = new AbortController();
     const trailing: number[] = [];
     const timer = window.setTimeout(() => {
       void (async () => {
         transitionPreviewMachine("loading", "sandbox file sync");
-        const result = await syncSandboxFiles(payload);
+        const result = await syncPreviewSnapshot(payload);
         if (superseded) return;
         if (!result.ok) {
           setConsoleLines((prev) => [
@@ -1425,7 +1443,7 @@ function PreviewPanelImpl({
               "Your latest changes were saved but the live preview could not be updated. Use the refresh button to restart it.",
             variant: "destructive",
           });
-          transitionPreviewMachine("ready", "sandbox sync failed — keep previous preview");
+          transitionPreviewMachine("error", "sandbox sync failed — keep previous preview");
           announcePreviewSettled(false);
           return;
         }
@@ -1446,22 +1464,33 @@ function PreviewPanelImpl({
             }, 90_000),
           );
         }
-        // Brief grace for Vite HMR, then mark ready so UrlBarPill stops spinning.
-        trailing.push(
-          window.setTimeout(() => {
-            if (superseded) return;
-            transitionPreviewMachine("ready", "sandbox sync applied");
-            announcePreviewSettled(true);
-          }, result.installing ? 2500 : 600),
-        );
+        const painted = result.revision ? await waitForPreviewRevision(
+          result.revision,
+          () => sandboxIframeRef.current?.contentWindow ?? null,
+          () => sandboxUrlLiveRef.current,
+          verification.signal,
+        ) : false;
+        if (superseded) return;
+        setSandboxSyncInstalling(false);
+        transitionPreviewMachine(painted ? "ready" : "error", painted ? "latest revision rendered" : "latest revision did not confirm rendering");
+        announcePreviewSettled(painted);
+        if (painted) {
+          window.dispatchEvent(new CustomEvent("lifemark-preview-heal-done"));
+          setActiveError(null);
+          setPreviewCompileOk(true);
+          setPreviewCompileFailed(false);
+        } else {
+          setConsoleLines((prev) => [...prev.slice(-99), { type: "warn", text: "[preview] Latest changes did not confirm rendering. Check the console or refresh preview." }]);
+        }
       })();
-    }, 800);
+    }, isGenerating ? 800 : 250);
     return () => {
       superseded = true;
+      verification.abort();
       window.clearTimeout(timer);
       for (const t of trailing) window.clearTimeout(t);
     };
-  }, [previewEngine, sandboxId, previewFiles, projectId, syncSandboxFiles, transitionPreviewMachine]);
+  }, [previewEngine, sandboxId, previewFiles, projectId, syncPreviewSnapshot, isGenerating, isLocked, transitionPreviewMachine]);
 
   // Pull Modal Vite/Next logs into the Console tab + agent telemetry (Lovable parity).
   const lastModalTelemetryKeyRef = useRef("");
@@ -2439,7 +2468,7 @@ function PreviewPanelImpl({
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-presentation"
                 allow="clipboard-read; clipboard-write; fullscreen"
                 onLoad={() => {
-                  transitionPreviewMachine("ready", liveSandboxOrigin ? "sandbox iframe loaded" : "preview host loaded");
+                  if (!liveSandboxOrigin) transitionPreviewMachine("ready", "preview host loaded");
                   if (!liveSandboxOrigin) return;
                   const expectAlive = sandboxBridgeAliveRef.current;
                   const token = ++sandboxPingTokenRef.current;

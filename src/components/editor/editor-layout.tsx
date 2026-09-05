@@ -1603,6 +1603,7 @@ export function EditorLayout({
                 fallback={(error, retry) => <PreviewCrashFallback error={error} onRetry={retry} />}
               >
               <PreviewPanel
+                isLocked={isLiveLocked}
                 files={previewVersion?.files ?? files}
                 framework={project.framework}
                 runtime={project.runtime}
@@ -1647,7 +1648,6 @@ export function EditorLayout({
                       profile={profile}
                       files={files}
                       pid={pid}
-                      setRightPanel={applyRightPanel}
                       handleFilesUpdate={handleFilesUpdate}
                       handleEnvUpdateFile={handleEnvUpdateFile}
                       sendPromptToChat={sendPromptToChat}
@@ -1845,7 +1845,6 @@ export function EditorLayout({
                         profile={profile}
                         files={files}
                         pid={pid}
-                        setRightPanel={applyRightPanel}
                         handleFilesUpdate={handleFilesUpdate}
                         handleEnvUpdateFile={handleEnvUpdateFile}
                         sendPromptToChat={sendPromptToChat}
@@ -1924,6 +1923,7 @@ export function EditorLayout({
                     fallback={(error, retry) => <PreviewCrashFallback error={error} onRetry={retry} />}
                   >
                   <PreviewPanel
+                    isLocked={isLiveLocked}
                     files={previewVersion?.files ?? files}
                     framework={project.framework}
                     runtime={project.runtime}

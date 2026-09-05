@@ -36,7 +36,7 @@ test("operator selection outside the core loop remains explicit", () => {
   assert.equal(selectSandboxProvider({ ...base, requested: "e2b" }), "e2b");
 });
 
-test("WebContainer is one explicit fallback and never outranks the sandbox", () => {
+test("product preview stays sandbox-only even when legacy fallback flags are set", () => {
   const base = {
     hasFiles: true,
     staticRuntime: false,
@@ -65,11 +65,11 @@ test("WebContainer is one explicit fallback and never outranks the sandbox", () 
       sandboxEnabled: false,
       explicitWebContainerFallback: true,
     }),
-    "webcontainer",
+    "unavailable",
   );
 });
 
-test("WebContainer is never selected for a project shape it can't actually run", () => {
+test("project shape does not enable the retired product fallback", () => {
   // A project mid-generation (or one whose framework detection missed) can
   // have no package.json yet. Routing that into WebContainer used to run
   // straight into `npm install` with nothing to install against — a
@@ -87,7 +87,7 @@ test("WebContainer is never selected for a project shape it can't actually run",
   );
   assert.equal(
     selectPreviewEngine({ ...base, webContainerProjectShape: true }),
-    "webcontainer",
+    "unavailable",
   );
 });
 
@@ -116,7 +116,7 @@ test("the published core-loop policy matches the behavioral contract", () => {
   const policy = getCoreLoopPolicy({});
   assert.equal(policy.contractVersion, 2);
   assert.equal(policy.sandboxProvider, "docker");
-  assert.equal(policy.browserFallback, "webcontainer");
+  assert.equal(policy.browserFallback, "none");
   assert.equal(policy.previewStrategy, "server-verified");
   assert.deepEqual(
     policy.apiSurface,
@@ -160,7 +160,7 @@ test("generation validation exposes correctness failures to the repair stage", (
   );
 });
 
-test("a live sandbox outranks the static srcdoc renderer", () => {
+test("static projects also require a real sandbox origin", () => {
   // Regression: static won outright, so a vanilla HTML app rendered in the
   // srcdoc iframe even while its own sandbox was live. That iframe has no
   // allow-same-origin (correctly — srcdoc inherits the embedder's origin), so
@@ -179,10 +179,10 @@ test("a live sandbox outranks the static srcdoc renderer", () => {
     "sandbox",
     "a static project must use the real-origin sandbox when one is available",
   );
-  // …but with no sandbox, srcdoc is still the right (and only) renderer.
+  // No sandbox means unavailable, consistently with the product lifecycle tests.
   assert.equal(
     selectPreviewEngine({ ...staticProject, sandboxEnabled: false }),
-    "static",
+    "unavailable",
   );
   // An empty project never renders anything, sandbox or not.
   assert.equal(
@@ -197,7 +197,7 @@ test("a live sandbox outranks the static srcdoc renderer", () => {
       webContainerEnabled: true,
       explicitWebContainerFallback: true,
     }),
-    "static",
-    "static rendering beats the WebContainer fallback when no sandbox exists",
+    "unavailable",
+    "legacy flags do not enable synthetic product previews",
   );
 });

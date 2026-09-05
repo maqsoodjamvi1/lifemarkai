@@ -1,4 +1,5 @@
 import { sanitizeApiKey } from "./key-hygiene.ts";
+import { createRejectedModelCache } from "./rejected-model-cache.ts";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { envTierModel } from "./model-defaults.ts";
@@ -149,6 +150,7 @@ const OPENROUTER_SAFE_MODEL: string = envTierModel(
   "CORE_LOOP_FALLBACK_MODEL",
   envTierModel("OPENROUTER_SAFE_FALLBACK_MODEL", "deepseek/deepseek-v4-flash"),
 );
+const rejectedOpenRouterModels = createRejectedModelCache();
 
 /**
  * True when OpenRouter rejected the request because the model slug itself is
@@ -197,6 +199,9 @@ async function generateOpenRouterSafe(
   options: GenerateOptions,
   model: string,
 ): Promise<GenerateResult> {
+  if (model !== OPENROUTER_SAFE_MODEL && rejectedOpenRouterModels.has(model)) {
+    model = OPENROUTER_SAFE_MODEL;
+  }
   // Track whether any streamed chunks reached the caller — a transient retry
   // after partial output would REPLAY the response and duplicate text in the
   // client, so mid-stream failures must bubble instead of retrying.
@@ -226,8 +231,10 @@ async function generateOpenRouterSafe(
         throw err;
       }
     }
+    // Never replay a partially streamed response through a different model.
+    if (chunksEmitted) throw err;
     if (isInvalidModelError(err) && model !== OPENROUTER_SAFE_MODEL) {
-
+      rejectedOpenRouterModels.add(model);
       console.warn(
         `[ai/provider] OpenRouter rejected "${model}" as an invalid model; ` +
           `retrying with ${OPENROUTER_SAFE_MODEL}.`,

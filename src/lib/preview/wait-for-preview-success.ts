@@ -24,8 +24,8 @@ export function clearPreviewSettled(): void {
 }
 
 /**
- * Resolve when preview is actually ready: sandbox/webcontainer announce
- * `lifemark-preview-settled`, srcdoc iframe posts `{ source: "lifemark-preview", type: "success" }`.
+ * Resolve when the owning preview panel announces a validated render using
+ * `lifemark-preview-settled`. Connectivity and raw guest messages are insufficient.
  * A failed settle (`ok: false`) is ignored so a later successful sync can still win.
  *
  * `notBeforeMs` (epoch ms) ignores settles from a previous generation so a
@@ -52,20 +52,10 @@ export function waitForPreviewSuccess(
       if (done) return;
       done = true;
       clearTimeout(timer);
-      host.removeEventListener("message", onMsg as EventListener);
       host.removeEventListener("lifemark-preview-settled", onSettled as EventListener);
-      host.removeEventListener("lifemark-preview-lifecycle", onLifecycle as EventListener);
       resolve(ok);
     };
     const timer = setTimeout(() => finish(false), timeoutMs);
-
-    function onMsg(event: Event) {
-      const data = (event as MessageEvent).data as { source?: string; type?: string } | undefined;
-      if (data?.source === "lifemark-preview" && data?.type === "success") {
-        if (typeof notBeforeMs === "number" && Date.now() < notBeforeMs) return;
-        finish(true);
-      }
-    }
 
     function onSettled(event: Event) {
       if ((event as CustomEvent<{ ok?: boolean }>).detail?.ok !== true) return;
@@ -73,14 +63,8 @@ export function waitForPreviewSuccess(
       finish(true);
     }
 
-    function onLifecycle(event: Event) {
-      if ((event as CustomEvent<{ lifecycle?: string }>).detail?.lifecycle !== "ready") return;
-      if (typeof notBeforeMs === "number" && Date.now() < notBeforeMs) return;
-      finish(true);
-    }
-
-    host.addEventListener("message", onMsg as EventListener);
+    // Only the owning preview panel can validate iframe origin and revision.
+    // Raw bridge/lifecycle messages prove connectivity, not updated rendering.
     host.addEventListener("lifemark-preview-settled", onSettled as EventListener);
-    host.addEventListener("lifemark-preview-lifecycle", onLifecycle as EventListener);
   });
 }

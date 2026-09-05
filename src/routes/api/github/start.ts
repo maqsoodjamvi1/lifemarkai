@@ -64,7 +64,7 @@ export const Route = createFileRoute("/api/github/start")({
         const projectId = searchParams.get("projectId");
         const returnTo = projectId ? `/editor/${projectId}?github=connected` : "/dashboard?github=connected";
 
-        const githubHost = webOrigin;
+        const githubHost = webOrigin ?? undefined;
         const state = signGatewayOAuthState(
           {
             connector: "github",

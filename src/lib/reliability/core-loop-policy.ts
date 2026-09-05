@@ -11,7 +11,7 @@ export type CoreLoopPolicy = {
   fallbackModel: string;
   previewStrategy: "server-verified";
   sandboxProvider: "docker";
-  browserFallback: "webcontainer";
+  browserFallback: "none";
   apiSurface: string[];
   deploymentProvider: string;
   maxAutomaticRepairRounds: number;
@@ -63,7 +63,7 @@ export function getCoreLoopPolicy(env: Environment = process.env): CoreLoopPolic
       "deepseek/deepseek-v4-flash",
     previewStrategy: "server-verified",
     sandboxProvider: "docker",
-    browserFallback: "webcontainer",
+    browserFallback: "none",
     apiSurface: CORE_LOOP_API_SURFACE.map((entry) => `${entry.method} ${entry.path}`),
     deploymentProvider: env.CORE_LOOP_DEPLOY_PROVIDER?.trim() || "netlify",
     maxAutomaticRepairRounds: positiveInt(env.CORE_LOOP_MAX_REPAIR_ROUNDS, 2),

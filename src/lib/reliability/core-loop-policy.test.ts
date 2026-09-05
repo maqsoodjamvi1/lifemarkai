@@ -16,7 +16,7 @@ test("core-loop policy has one deterministic default path", () => {
     fallbackModel: "deepseek/deepseek-v4-flash",
     previewStrategy: "server-verified",
     sandboxProvider: "docker",
-    browserFallback: "webcontainer",
+    browserFallback: "none",
     apiSurface: [
       "POST /api/projects",
       "POST /api/ai/chat",

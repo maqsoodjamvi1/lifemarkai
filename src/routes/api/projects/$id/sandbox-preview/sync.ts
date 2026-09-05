@@ -15,13 +15,16 @@ import { canWriteProjectFiles,getProjectAccess } from "@/lib/project/access";
 import { getSandboxProvider,isSandboxEnabled,type SandboxFile } from "@/lib/sandbox";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { patchSandboxPreviewFiles } from "@/lib/preview/patch-sandbox-preview-files";
+import { randomUUID } from "node:crypto";
+import { mergePreviewSnapshot, previewDeleteCommand } from "@/lib/preview/sync-project-snapshot";
+import { attachPreviewRevision } from "@/lib/preview/preview-revision";
+import { createKeyedSerialQueue } from "@/lib/editor/keyed-serial-queue";
+
+const serializeSync = createKeyedSerialQueue();
+const snapshotCache = new Map<string, { revision: string; files: SandboxFile[]; at: number }>();
 
 
-interface Params {
-  params: Promise<{ id: string }>;
-}
-
-async function handlePATCH(req: Request, params: any) {
+async function handlePATCH(req: Request, params: { id: string }) {
   const { id: projectId } = params;
 
   if (!isSandboxEnabled()) {
@@ -40,20 +43,35 @@ async function handlePATCH(req: Request, params: any) {
     return Response.json({ error: "Project not found" }, { status: 404 });
   }
 
-  const rl = await rateLimitAsync(`sandbox-sync:${user.id}`, RATE_LIMITS.ai);
+  const rl = await rateLimitAsync(`sandbox-sync:${user.id}`, RATE_LIMITS.api);
   if (!rl.success) {
     return Response.json({ error: "Rate limited" }, { status: 429 });
   }
 
   let sandboxId = "";
   let clientFiles: SandboxFile[] | undefined;
+  let complete = false;
+  let deletedPaths: string[] = [];
+  let baseRevision: string | undefined;
   try {
     const body = (await req.json()) as {
       sandboxId?: string;
       files?: Array<{ path?: string; content?: string }>;
+      complete?: boolean;
+      deletedPaths?: string[];
+      baseRevision?: string;
     };
     sandboxId = body.sandboxId ?? "";
+    complete = body.complete === true;
+    baseRevision = body.baseRevision;
+    if (body.deletedPaths !== undefined && (!Array.isArray(body.deletedPaths) || body.deletedPaths.some((p) => typeof p !== "string"))) {
+      return Response.json({ error: "Invalid deleted paths" }, { status: 400 });
+    }
+    deletedPaths = body.deletedPaths ?? [];
     if (Array.isArray(body.files)) {
+      if (body.files.some((f) => !f || typeof f.path !== "string" || typeof f.content !== "string")) {
+        return Response.json({ error: "Invalid file content" }, { status: 400 });
+      }
       clientFiles = body.files
         .filter((f) => typeof f.path === "string")
         .map((f) => ({ path: f.path!, content: f.content ?? "" }));
@@ -66,19 +84,23 @@ async function handlePATCH(req: Request, params: any) {
     return Response.json({ error: "sandboxId required" }, { status: 400 });
   }
 
-  let syncSourceFiles = clientFiles;
-  if (!syncSourceFiles?.length) {
-    const { data: rows, error } = await supabase
-      .from("project_files")
-      .select("path, content")
-      .eq("project_id", projectId);
-    if (error) return Response.json({ error: error.message }, { status: 500 });
-    syncSourceFiles = (rows ?? [])
-      .filter((r: { path?: string }) => typeof r.path === "string")
-      .map((r: { path: string; content: string | null }) => ({
-        path: r.path,
-        content: r.content ?? "",
-      }));
+  const cached = snapshotCache.get(sandboxId);
+  let storedFiles: SandboxFile[] = [];
+  if (!complete && baseRevision) {
+    if (!cached || cached.revision !== baseRevision || Date.now() - cached.at > 300_000) {
+      return Response.json({ ok: false, fullSyncRequired: true }, { status: 409 });
+    }
+    storedFiles = cached.files;
+  } else if (!complete) {
+    const { data: rows, error: filesError } = await supabase.from("project_files").select("path, content").eq("project_id", projectId);
+    if (filesError) return Response.json({ error: filesError.message }, { status: 500 });
+    storedFiles = (rows ?? []).map((r) => ({ path: r.path, content: r.content ?? "" }));
+  }
+  let syncSourceFiles: SandboxFile[];
+  try {
+    syncSourceFiles = mergePreviewSnapshot(storedFiles, clientFiles ?? [], complete, deletedPaths);
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "Invalid files" }, { status: 400 });
   }
 
   if (!syncSourceFiles?.length) {
@@ -87,9 +109,16 @@ async function handlePATCH(req: Request, params: any) {
 
   const { data: projectRow } = await supabase
     .from("projects")
-    .select("is_public")
+    .select("is_public, metadata, environment")
     .eq("id", projectId)
     .maybeSingle();
+  const metadata = projectRow?.metadata as Record<string, unknown> | null;
+  if (!projectRow || metadata?.sandbox_id !== sandboxId) {
+    return Response.json({ ok: false, error: "Invalid sandbox for this project" }, { status: 409 });
+  }
+  if (projectRow.environment === "live") {
+    return Response.json({ ok: false, environment_locked: true, error: "Live environment is locked" }, { status: 423 });
+  }
 
   const patchOpts = {
     projectId,
@@ -105,18 +134,13 @@ async function handlePATCH(req: Request, params: any) {
   // never mounts. The client-side sync only fires when the AI returns
   // package.json, which it usually doesn't. Reconcile here against the FULL
   // project so a missing dep can never reach the sandbox unresolved.
-  let files: SandboxFile[] = syncSourceFiles as SandboxFile[];
+  // Keep the acknowledged source snapshot separate from sandbox-only repairs.
+  let files: SandboxFile[] = syncSourceFiles.map((file) => ({ ...file }));
   let reconciledPackageJson: string | null = null;
   let reconciledPackages: string[] = [];
   let rejectedPackages: string[] = [];
   try {
-    const { data: allRows } = await supabase
-      .from("project_files")
-      .select("path, content")
-      .eq("project_id", projectId);
-    const allFiles: SandboxFile[] = (allRows ?? [])
-      .filter((r: { path?: string }) => typeof r.path === "string")
-      .map((r: { path: string; content: string | null }) => ({ path: r.path, content: r.content ?? "" }));
+    const allFiles = syncSourceFiles;
     const pkgRow = allFiles.find((f) => f.path.replace(/\\/g, "/") === "package.json");
     if (pkgRow?.content) {
       const { syncPackageJsonDeps } = await import("@/lib/ai/npm-auto-install");
@@ -130,12 +154,10 @@ async function handlePATCH(req: Request, params: any) {
       if (sync && sync.addedPackages.length > 0) {
         reconciledPackageJson = sync.updated;
         reconciledPackages = sync.addedPackages;
-        // Persist so the fix survives reloads + future syncs.
-        await supabase
-          .from("project_files")
-          .update({ content: sync.updated, updated_at: new Date().toISOString() })
-          .eq("project_id", projectId)
-          .eq("path", "package.json");
+        // Preview snapshots include unsaved edits and historical versions.
+        // Repair only the sandbox copy: persisting this manifest here could
+        // overwrite the current saved project with an older preview version.
+        // Each full sync reconciles again; source persistence belongs to saves.
         // Ensure the corrected package.json is part of THIS sync.
         const idx = files.findIndex((f) => f.path.replace(/\\/g, "/") === "package.json");
         if (idx >= 0) files[idx] = { path: files[idx].path, content: sync.updated };
@@ -146,7 +168,9 @@ async function handlePATCH(req: Request, params: any) {
     /* non-fatal — fall through with original files */
   }
 
-  const syncFiles: SandboxFile[] = patchSandboxPreviewFiles(files, patchOpts);
+  const revision = randomUUID();
+  const instrumented = attachPreviewRevision(patchSandboxPreviewFiles(files, patchOpts), revision);
+  const syncFiles: SandboxFile[] = instrumented.files;
   const provider = getSandboxProvider();
   try {
     const incomingPkg =
@@ -159,7 +183,11 @@ async function handlePATCH(req: Request, params: any) {
       /* no existing manifest — treat as a real install if package.json lands */
     }
 
-    const writeResult = await provider.writeFiles(sandboxId, syncFiles);
+    if (deletedPaths.length) {
+      const deletion = await provider.exec(sandboxId, previewDeleteCommand(deletedPaths));
+      if (deletion.exitCode !== undefined && deletion.exitCode !== 0) throw new Error(deletion.stderr || "Could not remove stale preview files");
+    }
+    const writeResult = await provider.writeFiles(sandboxId, syncFiles, { prune: true });
 
     const norm = (p: string) => p.replace(/\\/g, "/");
     // Gate restarts on what ACTUALLY CHANGED ON DISK — nothing weaker works:
@@ -205,15 +233,21 @@ async function handlePATCH(req: Request, params: any) {
       void provider.exec(sandboxId, steps.join(" && ")).catch(() => {});
     }
 
+    snapshotCache.delete(sandboxId);
+    snapshotCache.set(sandboxId, { revision, files, at: Date.now() });
+    while (snapshotCache.size > 100) snapshotCache.delete(snapshotCache.keys().next().value!);
     return Response.json({
       enabled: true,
       ok: true,
       fileCount: syncFiles.length,
       installing: needInstall,
+      revision,
+      requiresReload: instrumented.requiresReload,
       ...(reconciledPackages.length > 0 ? { addedDependencies: reconciledPackages } : {}),
       ...(rejectedPackages.length > 0 ? { rejectedDependencies: rejectedPackages } : {}),
     });
   } catch (e) {
+    snapshotCache.delete(sandboxId);
     const msg = e instanceof Error ? e.message : "Sync failed";
     return Response.json({ enabled: true, ok: false, error: msg });
   }
@@ -223,7 +257,7 @@ async function handlePATCH(req: Request, params: any) {
 export const Route = createFileRoute("/api/projects/$id/sandbox-preview/sync")({
   server: {
     handlers: {
-      PATCH: async ({ request, params }) => handlePATCH(request, params),
+      PATCH: async ({ request, params }) => serializeSync(params.id, () => handlePATCH(request, params)),
     },
   },
 });

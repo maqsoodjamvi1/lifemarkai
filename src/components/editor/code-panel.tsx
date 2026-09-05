@@ -25,7 +25,7 @@ import type * as Monaco from "monaco-editor";
 const MonacoEditor = dynamic(importWithRetry(async () => {
   const monacoReact = await import("@monaco-editor/react");
   monacoReact.loader.config({
-    paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.50.0/min/vs" },
+    paths: { vs: "/monaco/vs" },
   });
   return monacoReact;
 }), {

@@ -25,6 +25,7 @@ HeartPulse,ShieldCheck,Gauge,CalendarClock,Mail
 } from "lucide-react";
 import { CloudSlowQueries } from "./cloud-slow-queries";
 import { CloudJobsPanel } from "./cloud-jobs-panel";
+import { CustomEmailsPanel } from "./custom-emails-panel";
 import { CloudLogsPanel } from "./cloud-logs-panel";
 import { DatabaseManagerPanel } from "./database-manager-panel";
 import { AppAuthPanel } from "./app-auth-panel";

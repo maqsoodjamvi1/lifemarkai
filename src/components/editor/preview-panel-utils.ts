@@ -1,6 +1,6 @@
 export type ProjectFileLike = { path: string; content: string; project_id?: string | null };
 
-export function filesBelongToProject<T extends { project_id?: string | null }>(
+export function filesBelongToProject<T extends { path: string; project_id?: string | null }>(
   files: T[],
   projectId: string,
 ): boolean {

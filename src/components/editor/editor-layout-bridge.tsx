@@ -15,6 +15,7 @@ import { ConfirmDialogProvider } from "@/components/ui/confirm-dialog";
 import { QueryProvider } from "@/components/providers/query-provider";
 import { Toaster } from "@/components/ui/toaster";
 import { EditorLayout } from "./editor-layout";
+import { editorModeSchema } from "@/lib/editor-search";
 import { EditorShell,type EditorShellProps } from "./editor-shell";
 import { clearChunkReloadFlag,installChunkErrorRecovery } from "@/lib/import-with-retry";
 
@@ -121,7 +122,7 @@ export function EditorLayoutBridge(props: EditorLayoutBridgeProps) {
             initialHasMoreMessages={props.hasMore}
             profile={props.profile}
             starterPrompt={props.starterPrompt}
-            starterMode={props.starterMode}
+            starterMode={editorModeSchema.safeParse(props.starterMode).data}
             autoDeploy={props.autoDeploy}
             initialFilePath={props.initialFilePath}
             initialView={props.initialView}

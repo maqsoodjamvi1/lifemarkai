@@ -3894,7 +3894,7 @@ ${(f.content ?? "").slice(0, 8000)}
               if (session && incoming[0]) {
                 const next = appendLiveClarifyQuestion(
                   normalizeClarifyInterview(session),
-                  incoming[0],
+                  clarifySessionFromQuestions(original, incoming).questions[0],
                 );
                 clarifySessionRef.current = next;
                 setActiveClarifySession(next);

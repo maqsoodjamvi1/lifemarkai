@@ -4,9 +4,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { isClarifyDeferredChoice, type ClarifyInterviewQuestion } from "@/lib/ai/chat/clarify-turn";
 
-export type ClarifyQuestion = ClarifyInterviewQuestion & {
-  kind?: "audience" | "palette" | "typography" | "layout" | "structure" | "database" | "general";
-};
+export type ClarifyQuestion = ClarifyInterviewQuestion;
 
 export interface ClarifySession {
   originalPrompt: string;

@@ -11,8 +11,12 @@
  * last preview URL in sessionStorage so reloads paint immediately.
  */
 import { useCallback,useEffect,useRef,useState } from "react";
-import { announcePreviewSettled } from "@/lib/preview/wait-for-preview-success";
+import { clearPreviewSettled } from "@/lib/preview/wait-for-preview-success";
+import { needsSandboxSyncRecovery } from "@/lib/preview/sandbox-sync-recovery";
+import { isPreviewFrameMessage } from "@/lib/preview/preview-revision";
 import { reportPreviewSlo } from "@/lib/preview/preview-slo";
+import { pollPreview, previewPollDelay } from "@/lib/preview/poll-preview";
+import type { PreviewSyncOptions, PreviewSyncResult } from "@/lib/preview/sync-preview-files";
 import {
   announcePreviewLifecycle,
   deriveSandboxLifecycle,
@@ -66,7 +70,8 @@ function readStoredPreview(projectId: string): { sandboxId: string | null; previ
   }
 }
 
-export function useSandboxPreview(projectId: string) {
+export function useSandboxPreview(projectId: string, frameRef?: { readonly current: HTMLIFrameElement | null }) {
+  useEffect(() => { clearPreviewSettled(); }, [projectId]);
   const [state, setState] = useState<SandboxPreviewState>({
     enabled: false,
     previewUrl: null,
@@ -140,6 +145,8 @@ export function useSandboxPreview(projectId: string) {
   const stateRef = useRef(state);
 
   const applyState = useCallback((next: SandboxPreviewState) => {
+    // A completed request from the previous project must not replace this one.
+    if (projectIdRef.current !== projectId) return stateRef.current;
     const merged: SandboxPreviewState = {
       ...next,
       paused: next.paused ?? false,
@@ -242,6 +249,7 @@ export function useSandboxPreview(projectId: string) {
       let data = await tryGet(
         storedId ? `?sandboxId=${encodeURIComponent(storedId)}` : "",
       );
+      if (projectIdRef.current !== projectId) return stateRef.current;
 
       // 2) Stale ID → clear + project-named reconnect (no sandboxId query).
       //    `waking` is explicitly NOT stale: the id resolved to a live container
@@ -321,6 +329,7 @@ export function useSandboxPreview(projectId: string) {
     setState((s) => ({ ...s, loading: true, error: null }));
     try {
       const status = (await fetch("/api/sandbox/status").then((r) => r.json())) as SandboxStatusResponse;
+      if (projectIdRef.current !== projectId) return stateRef.current;
       if (!applyStatus(status)) {
         return stateRef.current;
       }
@@ -343,6 +352,7 @@ export function useSandboxPreview(projectId: string) {
       };
 
       let data = await postOnce();
+      if (projectIdRef.current !== projectId) return stateRef.current;
 
       // Server clears an expired Modal id and asks for one more POST. Do that
       // automatically — showing "Preview could not start" here left users stuck
@@ -565,6 +575,7 @@ export function useSandboxPreview(projectId: string) {
       // started a cold POST that sat on "Syncing changed files" while Vite
       // was already serving — the editor showed a blank starting pane.
       const reconnected = await reconnectPreview();
+      if (projectIdRef.current !== projectId) return;
       if (reconnected.previewUrl) return;
       // "starting" means reconnect found a live sandbox whose app hasn't
       // answered yet. Cold-booting on top of that would delete the container
@@ -583,11 +594,16 @@ export function useSandboxPreview(projectId: string) {
   useEffect(() => {
     if (!projectId || !state.enabled || !state.previewUrl) return;
     let stopped = false;
+    let pending: AbortController | null = null;
     const beat = () => {
-      if (stopped || typeof document !== "undefined" && document.hidden) return;
+      if (stopped || pending || typeof document !== "undefined" && document.hidden) return;
       const sid = sandboxIdRef.current;
       if (!sid) return;
+      const controller = new AbortController();
+      pending = controller;
+      const deadline = window.setTimeout(() => controller.abort(), 12_000);
       void fetch(`/api/projects/${projectId}/sandbox-preview/keep-alive`, {
+        signal: controller.signal,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // Send the tunnel URL so the server can probe it (zombie detection):
@@ -598,7 +614,7 @@ export function useSandboxPreview(projectId: string) {
       })
         .then((r) => r.json())
         .then((d: { alive?: boolean; enabled?: boolean; tunnelHealthy?: boolean; restarted?: boolean }) => {
-          if (stopped || d.enabled === false) return;
+          if (stopped || controller.signal.aborted || projectIdRef.current !== projectId || sandboxIdRef.current !== sid || d.enabled === false) return;
           // (1) Compute gone — reboot a fresh sandbox before the user sees a dead
           // tunnel. (2) Tunnel dead and the in-place Vite restart didn't recover
           // it — also reboot. Either way, get a working preview automatically.
@@ -616,7 +632,11 @@ export function useSandboxPreview(projectId: string) {
             setReloadNonce((n) => n + 1);
           }
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          window.clearTimeout(deadline);
+          if (pending === controller) pending = null;
+        });
     };
     // Probe immediately on mount/URL change — observed live: terminated Modal
     // sandboxes left a blank iframe for minutes because the first beat waited 90s.
@@ -627,6 +647,7 @@ export function useSandboxPreview(projectId: string) {
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       stopped = true;
+      pending?.abort();
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -657,8 +678,13 @@ export function useSandboxPreview(projectId: string) {
   const paintAttemptsRef = useRef(0);
   const lastPaintPingRef = useRef(0);
   useEffect(() => {
+    lastPaintPingRef.current = 0;
+    paintAttemptsRef.current = 0;
+  }, [projectId, state.previewUrl]);
+  useEffect(() => {
     if (!state.enabled || !state.previewUrl) return;
     const onMsg = (e: MessageEvent) => {
+      if (!isPreviewFrameMessage(e, frameRef?.current?.contentWindow ?? null, state.previewUrl)) return;
       const d = e.data as
         | { type?: string; source?: string; nodes?: number; textLen?: number; height?: number }
         | null;
@@ -677,12 +703,10 @@ export function useSandboxPreview(projectId: string) {
     };
     window.addEventListener("message", onMsg);
     return () => window.removeEventListener("message", onMsg);
-  }, [state.enabled, state.previewUrl]);
+  }, [state.enabled, state.previewUrl, frameRef]);
 
   useEffect(() => {
     if (!state.enabled || !state.previewUrl || state.phase !== "ready") return;
-    lastPaintPingRef.current = 0;
-    paintAttemptsRef.current = 0;
     let cancelled = false;
     let timer = 0;
     const schedule = (delay: number) => {
@@ -768,9 +792,9 @@ export function useSandboxPreview(projectId: string) {
     const bootPending = state.loading || !!state.error || state.phase === "error";
     const hasStaleUrlRisk = !!state.previewUrl;
     if (!projectId || !state.enabled || (!bootPending && !hasStaleUrlRisk)) return;
-    const timer = window.setInterval(() => {
+    return pollPreview((signal) => {
       const seq = ++pollSeqRef.current;
-      void fetch(`/api/projects/${projectId}/sandbox-preview?phaseOnly=1`)
+      return fetch(`/api/projects/${projectId}/sandbox-preview?phaseOnly=1`, { signal })
         .then((r) => r.json())
         .then((data: {
           ok?: boolean;
@@ -794,7 +818,7 @@ export function useSandboxPreview(projectId: string) {
           // interval for the new project starts its sequence counter from
           // wherever the shared ref already was, so an old-project response
           // can still look "not stale" to it.
-          if (projectId !== projectIdRef.current) return;
+          if (signal.aborted || projectId !== projectIdRef.current) return;
           // A response older than one we've already acted on is stale —
           // applying it now would overwrite whatever a later, faster
           // response already resolved. Drop it.
@@ -877,8 +901,7 @@ export function useSandboxPreview(projectId: string) {
           }
         })
         .catch(() => {});
-    }, 1200);
-    return () => window.clearInterval(timer);
+    }, previewPollDelay(bootPending), () => document.hidden);
   }, [projectId, state.enabled, state.previewUrl, state.loading, state.error, state.phase, state.provider, applyState, enterPaused]);
 
   const stopPreview = useCallback(() => {
@@ -909,28 +932,26 @@ export function useSandboxPreview(projectId: string) {
   const syncFiles = useCallback(
     async (
       files: Array<{ path: string; content: string }>,
-    ): Promise<{ ok: boolean; installing?: boolean; error?: string; recovered?: boolean }> => {
-      if (!projectId || files.length === 0) {
+      options?: PreviewSyncOptions,
+    ): Promise<PreviewSyncResult> => {
+      if (!projectId || (files.length === 0 && !options?.deletedPaths?.length)) {
         return { ok: false, error: "No sandbox" };
       }
       const doSync = async (
         sandboxId: string,
-      ): Promise<{ ok: boolean; installing?: boolean; error?: string }> => {
+      ): Promise<PreviewSyncResult> => {
         try {
           const res = await fetch(`/api/projects/${projectId}/sandbox-preview/sync`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ sandboxId, files }),
+            body: JSON.stringify({ sandboxId, files, ...options }),
           });
-          const data = (await res.json().catch(() => ({}))) as {
-            ok?: boolean;
-            installing?: boolean;
-            error?: string;
-          };
+          const data = (await res.json().catch(() => ({}))) as PreviewSyncResult;
           if (!res.ok || data.ok === false) {
-            return { ok: false, error: data.error ?? `Sync failed (${res.status})` };
+            return { ok: false, fullSyncRequired: data.fullSyncRequired, error: data.error ?? `Sync failed (${res.status})` };
           }
-          return { ok: true, installing: !!data.installing };
+          if (data.requiresReload && projectIdRef.current === projectId) setReloadNonce((n) => n + 1);
+          return { ...data, ok: true, installing: !!data.installing };
         } catch (e) {
           return { ok: false, error: e instanceof Error ? e.message : "Sync failed" };
         }
@@ -945,18 +966,16 @@ export function useSandboxPreview(projectId: string) {
       // fresh one. Observed live: sync returned "Sandbox … has already completed"
       // silently forever, so AI edits never reached the preview. Drop the stale
       // id, reconnect (project-name lookup finds the live sandbox), retry once.
-      const dead =
-        !result.ok &&
-        /already completed|invalid sandbox|not found|not responding|no such sandbox/i.test(
-          result.error ?? "",
-        );
+      const dead = !result.ok && needsSandboxSyncRecovery(result.error);
       if (dead) {
+        if (projectIdRef.current !== projectId) return result;
         sandboxIdRef.current = null;
         try {
           sessionStorage.removeItem(storageKey(projectId));
         } catch { /* private mode */ }
         const fresh = await reconnectPreview();
-        if (fresh.sandboxId && fresh.sandboxId !== sandboxId) {
+        // Docker resumes stopped containers in place; an unchanged ID is valid.
+        if (projectIdRef.current === projectId && fresh.sandboxId) {
           result = await doSync(fresh.sandboxId);
           return { ...result, recovered: result.ok };
         }
@@ -985,7 +1004,6 @@ export function useSandboxPreview(projectId: string) {
     lastLifecycleRef.current = life;
     announcePreviewLifecycle(life);
     if (life === "ready") {
-      announcePreviewSettled(true);
       resumeColdBootsRef.current = 0;
       const now = Date.now();
       if (bootStartedAtRef.current != null) {

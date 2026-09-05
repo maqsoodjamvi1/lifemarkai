@@ -31,16 +31,16 @@ test("waitForPreviewSuccess ignores settled ok:false and still accepts a later s
   assert.equal(await pending, true);
 });
 
-test("waitForPreviewSuccess resolves on iframe success postMessage", async () => {
+test("waitForPreviewSuccess rejects unvalidated iframe success postMessage", async () => {
   const host = new EventTarget();
   clearPreviewSettled();
-  const pending = waitForPreviewSuccess(2_000, host);
+  const pending = waitForPreviewSuccess(20, host);
   host.dispatchEvent(
     new MessageEvent("message", {
       data: { source: "lifemark-preview", type: "success" },
     }),
   );
-  assert.equal(await pending, true);
+  assert.equal(await pending, false);
 });
 
 test("waitForPreviewSuccess times out when neither signal arrives", async () => {
@@ -72,12 +72,12 @@ test("waitForPreviewSuccess with notBeforeMs ignores an early iframe success pos
   clearPreviewSettled();
 });
 
-test("waitForPreviewSuccess resolves on lifecycle ready for this generation", async () => {
+test("waitForPreviewSuccess does not treat sandbox lifecycle as rendered content", async () => {
   const host = new EventTarget();
   clearPreviewSettled();
-  const pending = waitForPreviewSuccess(2_000, host);
+  const pending = waitForPreviewSuccess(20, host);
   host.dispatchEvent(new CustomEvent("lifemark-preview-lifecycle", { detail: { lifecycle: "ready" } }));
-  assert.equal(await pending, true);
+  assert.equal(await pending, false);
 });
 
 test("waitForPreviewSuccess with notBeforeMs ignores a stale lifecycle ready", async () => {
