@@ -666,7 +666,7 @@ export function buildLocalProbeScript(port: number, path = "/@vite/client"): str
     `elif command -v wget >/dev/null 2>&1; then`,
     // -S prints the response headers to stderr even for a 5xx, so the status
     // survives wget's non-zero exit.
-    `  S=$(wget -q -S -O /dev/null -T 3 ${url} 2>&1 | awk '/HTTP\//{c=$2} END{print c}');`,
+    `  S=$(wget -q -S -O /dev/null -T 3 ${url} 2>&1 | awk '/^[[:space:]]*HTTP/{c=$2} END{print c}');`,
     `else`,
     `  nc -z 127.0.0.1 ${port} 2>/dev/null && S=socket || S=000;`,
     `fi;`,

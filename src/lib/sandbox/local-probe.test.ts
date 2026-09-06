@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import http from "node:http";
 import { promisify } from "node:util";
+import { existsSync } from "node:fs";
 import { buildLocalProbeScript } from "./docker.ts";
 
 const run = promisify(execFile);
@@ -37,14 +38,25 @@ function serve(status: number): Promise<{ port: number; close: () => void }> {
 }
 
 async function probe(port: number, path = "/"): Promise<string> {
-  const { stdout } = await run("sh", ["-c", buildLocalProbeScript(port, path)]);
+  const { stdout } = await run(shell, ["-c", buildLocalProbeScript(port, path)]);
   return /LM_STATUS=(\S+)/.exec(stdout)?.[1] ?? "";
 }
 
-// The script is POSIX sh and runs inside the Linux sandbox container, not on
-// the developer's machine. Skipping on Windows keeps `npm test` green locally
-// while still gating CI, which is where the container behaviour matters.
-const shellAvailable = process.platform !== "win32";
+// Exercise the real POSIX script on Linux and through Git Bash on Windows.
+const gitBash = "C:/Program Files/Git/bin/bash.exe";
+const shell = process.platform === "win32" ? gitBash : "sh";
+const shellAvailable = process.platform !== "win32" || existsSync(gitBash);
+
+test("wget-only images parse HTTP status without falling back to a socket", { skip: !shellAvailable }, async () => {
+  for (const status of [200, 404, 500, 503, 0]) {
+    // Force the branch used by the production Alpine sandbox, even when the
+    // developer or CI machine also has curl installed. Execute the real awk.
+    const harness = `command() { case "$2" in curl) return 1;; wget) return 0;; esac; }; wget() { printf 'HTTP/1.1 ${status} Result\\n' >&2; }; `;
+    const { stdout, stderr } = await run(shell, ["-c", harness + buildLocalProbeScript(5173)]);
+    assert.equal(stderr, "");
+    assert.match(stdout, new RegExp(`LM_STATUS=${status}\\s`));
+  }
+});
 
 test(
   "reports the real status for a dev server that is failing to build",

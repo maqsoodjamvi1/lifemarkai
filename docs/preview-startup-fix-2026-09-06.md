@@ -5,7 +5,7 @@ project remained on the starting/updating status. Its sandbox was running and
 an in-container request to port 5173 returned HTTP 200. The bakery eventually
 rendered while the editor still displayed an updating status.
 
-Two defects were identified:
+Three defects were identified:
 
 - Docker phase polls excluded the readiness promotion used by other providers.
   A boot that exhausted its initial readiness budget could stay at `starting`.
@@ -17,6 +17,12 @@ Two defects were identified:
   does not execute newly inserted script elements. Sync now requests an iframe
   reload when an instrumented SSR document actually changes on disk. Ordinary
   Vite source updates retain HMR. JSX closing-tag capitalization is preserved.
+- The wget readiness branch generated an invalid awk expression (`/HTTP//`)
+  because JavaScript consumed the slash escape. The production image has no
+  curl, so this branch returned status 000 even when Vite answered 200. The
+  parser now matches the HTTP status line without a slash escape. A forced
+  wget-only regression reproduced the failure before the fix; POSIX probe
+  tests also run through Git Bash on Windows instead of silently skipping.
 
 No saved customer project files or database schema were changed. Instrumentation
 is applied to the sandbox copy. Tests cover readiness, concurrent failures and
