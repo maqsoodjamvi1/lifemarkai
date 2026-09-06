@@ -24,6 +24,7 @@ type SandboxFile
 } from "@/lib/sandbox";
 import type { SandboxProgressEvent } from "@/lib/sandbox";
 import { isDockerDaemonReachable } from "@/lib/sandbox/docker";
+import { probeStartingSandbox } from "@/lib/preview/probe-starting-sandbox";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { patchSandboxPreviewFiles } from "@/lib/preview/patch-sandbox-preview-files";
 import type { Database,Json } from "@/types/database";
@@ -704,6 +705,25 @@ async function handleGET(req: Request, params: any) {
       (typeof meta.sandbox_id === "string" ? meta.sandbox_id : null);
     const claimsReady = phase === "ready" && Boolean(storedTunnelUrl);
     const dockerHost = getSandboxProviderId() === "docker";
+
+    // A Docker boot can exhaust its short readiness budget before Vite binds.
+    // Recheck inside the container: public-host hairpin probes are unreliable
+    // on Coolify. Without this, "starting" never becomes ready and the client
+    // ignores the URL returned by every subsequent phase poll.
+    if (dockerHost && phase === "starting" && resolvedSandboxId) {
+      const ready = await probeStartingSandbox(resolvedSandboxId, (id) => getSandboxProvider().reconnect(id));
+      if (ready?.ok && ready.previewUrl) {
+        rememberBootState(projectId, {
+          phase: "ready", phaseDetail: null, previewUrl: ready.previewUrl,
+          sandboxId: ready.sandboxId ?? resolvedSandboxId, ok: true, error: null,
+        });
+        return Response.json({
+          enabled: true, ok: true, phase: "ready", phaseDetail: null,
+          previewUrl: ready.previewUrl, sandboxId: ready.sandboxId ?? resolvedSandboxId,
+          provider: "docker", previewProbe: "verified",
+        });
+      }
+    }
 
     // PROMOTION: a boot that returned before its dev server answered is parked
     // at phase "starting" with its URL already persisted. This poll is what

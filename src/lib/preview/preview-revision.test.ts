@@ -16,3 +16,18 @@ test("paint evidence must come from the current window and origin", () => {
   assert.equal(isPreviewFrameMessage({ source: frame, origin: "https://other.test" }, frame, "https://preview.test"), false);
   assert.equal(isPreviewFrameMessage({ source: null, origin: "https://preview.test" }, null, "https://preview.test"), false);
 });
+
+test("SSR document instrumentation requests reload only when its document changes", () => {
+  const result = attachPreviewRevision([
+    { path: "vite.config.ts", content: "export default {}" },
+    { path: "src/routes/__root.tsx", content: "export function Shell() { return <Html><Body><main>Bakery</main></Body></Html> }" },
+  ], "first");
+  assert.deepEqual(result.reloadWhenChanged, ["src/routes/__root.tsx"]);
+  assert.equal(result.requiresReload, false);
+  const document = result.files.find((f) => f.path === "src/routes/__root.tsx")!.content;
+  assert.match(document, /data-lifemark-revision="true"/);
+  assert.match(document, /\/><\/Body>/);
+  const updated = attachPreviewRevision(result.files, "second");
+  assert.equal(updated.files.find((f) => f.path === "src/routes/__root.tsx")!.content, document);
+  assert.deepEqual(updated.reloadWhenChanged, result.reloadWhenChanged);
+});

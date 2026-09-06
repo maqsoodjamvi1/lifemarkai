@@ -4,12 +4,19 @@ export function attachPreviewRevision<T extends { path: string; content: string 
   const vite = files.some((f) => /(^|\/)vite\.config\./.test(f.path));
   const marker = 'data-lifemark-revision="true"';
   const tag = `<script type="module" ${marker} src="/${PREVIEW_REVISION_PATH}"></script>`;
+  const reloadWhenChanged: string[] = [];
   const next = files.map((file) => {
+    // React does not execute script elements introduced by an SSR document's
+    // HMR update. Reload when this document changes so the browser loads the
+    // revision module; ordinary Vite source edits can still use HMR.
+    if (/(?:^|\/)(?:layout|__root)\.[jt]sx$/.test(file.path) && /<\/body>/i.test(file.content)) {
+      reloadWhenChanged.push(file.path);
+    }
     if (file.content.includes(marker)) return file;
     if (file.path === "index.html") return { ...file, content: file.content.replace(/<\/body>/i, () => `${tag}</body>`) };
     if (/(?:^|\/)(?:layout|__root)\.[jt]sx$/.test(file.path) && /<\/body>/i.test(file.content)) {
       const jsx = `<script type="module" ${marker} src="/${PREVIEW_REVISION_PATH}" />`;
-      return { ...file, content: file.content.replace(/<\/body>/i, () => `${jsx}</body>`) };
+      return { ...file, content: file.content.replace(/<\/body>/i, (close) => `${jsx}${close}`) };
     }
     return file;
   });
@@ -17,6 +24,7 @@ export function attachPreviewRevision<T extends { path: string; content: string 
   return {
     files: [...next.filter((f) => f.path !== path), { path, content: previewRevisionModule(revision) }],
     requiresReload: !vite,
+    reloadWhenChanged,
   };
 }
 

@@ -242,7 +242,7 @@ async function handlePATCH(req: Request, params: { id: string }) {
       fileCount: syncFiles.length,
       installing: needInstall,
       revision,
-      requiresReload: instrumented.requiresReload,
+      requiresReload: instrumented.requiresReload || instrumented.reloadWhenChanged.some((path) => changed.includes(norm(path))),
       ...(reconciledPackages.length > 0 ? { addedDependencies: reconciledPackages } : {}),
       ...(rejectedPackages.length > 0 ? { rejectedDependencies: rejectedPackages } : {}),
     });
