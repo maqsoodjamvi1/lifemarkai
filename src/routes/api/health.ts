@@ -35,6 +35,11 @@ export const Route = createFileRoute("/api/health")({
         } catch {
           aiWorker = "error";
         }
+        // First health probe of a Coolify boot starts the Docker sandbox healer.
+        // Preview 502s otherwise persist until someone opens the editor.
+        void import("@/lib/sandbox").then((mod) => {
+          try { mod.getSandboxProvider(); } catch { /* never fail health */ }
+        }).catch(() => {});
         const healthy = db === "ok";
         return Response.json(
           {

@@ -67,6 +67,7 @@ import {
 import {
   pickProxyNetworkName,
   proxyNetworkMissingError,
+  sandboxRunningFilter,
 } from "./docker-network.ts";
 
 /** Vite's port inside the sandbox. The heartbeat has no opts.port to read. */
@@ -268,6 +269,9 @@ export function mixedContentWarning(): string | null {
  * server handles keep-alive connections fine.
  */
 const dockerAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 30_000, maxSockets: 32 });
+
+let healerTimer: ReturnType<typeof setInterval> | null = null;
+let healInFlight = false;
 
 /** Default budget for a Docker API call that isn't shipping a file payload. */
 const DOCKER_REQUEST_TIMEOUT_MS = 15_000;
@@ -1887,6 +1891,53 @@ export class DockerSandboxProvider implements SandboxProvider {
     if (serving) return { alive: true, tunnelHealthy: true, restarted: attached };
     const recovered = await this.ensureDevServer(sandboxId, innerPort, undefined, 8_000);
     return { alive: true, tunnelHealthy: recovered, restarted: attached || recovered };
+  }
+
+  startBackgroundHealer(): void {
+    if (process.env.NODE_ENV !== "production") return;
+    if (healerTimer) return;
+    const tick = () => {
+      if (healInFlight) return;
+      healInFlight = true;
+      void this.healRunningSandboxes()
+        .catch(() => undefined)
+        .finally(() => {
+          healInFlight = false;
+        });
+    };
+    setTimeout(tick, 5_000).unref();
+    healerTimer = setInterval(tick, 20_000);
+    healerTimer.unref();
+  }
+
+  async healRunningSandboxes(): Promise<{ scanned: number; recovered: number }> {
+    if (!this.isEnabled()) return { scanned: 0, recovered: 0 };
+    const filters = encodeURIComponent(JSON.stringify(sandboxRunningFilter()));
+    const listed = await docker("GET", `/v1.43/containers/json?filters=${filters}`);
+    if (listed.status >= 400) return { scanned: 0, recovered: 0 };
+    let containers: Array<{ Id: string }> = [];
+    try {
+      containers = JSON.parse(listed.text) as typeof containers;
+    } catch {
+      return { scanned: 0, recovered: 0 };
+    }
+    let recovered = 0;
+    for (const ctr of containers.slice(0, 8)) {
+      try {
+        const attached = await attachToProxyNetwork(ctr.Id);
+        const innerPort = (await this.portFor(ctr.Id).catch(() => null)) ?? DEFAULT_INNER_PORT;
+        const serving = await this.waitForLocalServer(ctr.Id, innerPort, 800);
+        if (serving) {
+          if (attached) recovered += 1;
+          continue;
+        }
+        const up = await this.ensureDevServer(ctr.Id, innerPort, undefined, 8_000);
+        if (attached || up) recovered += 1;
+      } catch {
+        /* next sandbox */
+      }
+    }
+    return { scanned: Math.min(containers.length, 8), recovered };
   }
 
   /** The port the dev server was started on, read back from the container. */

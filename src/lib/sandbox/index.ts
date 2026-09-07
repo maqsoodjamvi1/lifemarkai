@@ -200,6 +200,8 @@ export interface SandboxProvider {
   ): Promise<{ alive: boolean; tunnelHealthy?: boolean; restarted?: boolean }>;
   /** Tear down a sandbox. */
   kill(sandboxId: string): Promise<void>;
+  /** Production-only: recover running Docker sandboxes after a Coolify recycle. */
+  startBackgroundHealer?(): void;
 }
 
 import { DEFAULT_TIMEOUT_MS,trunc,waitForServer } from "./shared.ts";
@@ -565,6 +567,7 @@ export function getSandboxProvider(): SandboxProvider {
       : selected === "e2b" ? e2b
       : selected === "vercel" ? vercel
       : modal;
+    cached.startBackgroundHealer?.();
   }
   return cached;
 }

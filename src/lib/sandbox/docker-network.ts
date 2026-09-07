@@ -36,3 +36,8 @@ export function proxyNetworkConnectOk(status: number, body = ""): boolean {
   if (status < 400) return true;
   return status === 403 || status === 409 || /already (exists|connected)/i.test(body);
 }
+
+/** Docker API filter for live preview containers that Traefik may still be routing. */
+export function sandboxRunningFilter(): Record<string, string[]> {
+  return { label: ["lifemark.sandbox=1"], status: ["running"] };
+}
