@@ -2500,7 +2500,8 @@ The user has expressed frustration. Do the following:
               } catch { /* never fail the build */ }
             } catch { backendWiring = null; }
 
-            // 2. Self-verification — render the app, auto-fix runtime errors.
+            // 2. Self-verification — health confirmation only. TanStack apps
+            //    keep using the isolated Docker build, not the fallback renderer.
             //    For pure restyle/redesign edits, skip the slow auto-fix ROUNDS
             //    (verify-only, maxRounds=0): a theme/color/spacing change almost
             //    never introduces build errors, and the fix rounds are the biggest
@@ -2547,7 +2548,11 @@ The user has expressed frustration. Do the following:
             // pre-generation snapshot automatically and report the failure.
             // Core-loop campaigns soft-fail staged verify on purpose; rolling
             // back here would zero fileCount and make the release gate lie.
-            if (verification && !verification.passed && preCommitRevision !== null && !coreLoop) {
+            const fallbackRolledBackABuild =
+              stagedVerification?.passed === true &&
+              stagedVerification.engine === "build" &&
+              verification?.engine !== "build";
+            if (verification && !verification.passed && preCommitRevision !== null && !coreLoop && !fallbackRolledBackABuild) {
               const { data: activeRevision } = await supabase
                 .from("projects")
                 .select("generation_revision")

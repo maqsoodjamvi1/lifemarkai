@@ -922,24 +922,30 @@ export async function handleAiAgent(req: Request) {
                   verification,
                 }).catch(() => {});
               } catch { /* ignore */ }
-              const { data: activeRevision } = await supabase
-                .from("projects")
-                .select("generation_revision")
-                .eq("id", projectId)
-                .single();
-              const expectedRevision = Number((activeRevision as { generation_revision?: number } | null)?.generation_revision);
-              if (Number.isSafeInteger(expectedRevision)) {
-                const { error: rollbackError } = await (supabase as unknown as {
-                  rpc: (name: string, args: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
-                }).rpc("rollback_generation_revision", {
-                  target_project_id: projectId,
-                  target_revision: preAgentRevision,
-                  expected_revision: expectedRevision,
-                });
-                if (!rollbackError) send({
-                  verify_status: "Verification failed after activation. Restored the last working revision.",
-                  auto_rolled_back: true,
-                });
+              const fallbackRolledBackABuild =
+                stagedVerification?.passed === true &&
+                stagedVerification.engine === "build" &&
+                verification.engine !== "build";
+              if (!fallbackRolledBackABuild) {
+                const { data: activeRevision } = await supabase
+                  .from("projects")
+                  .select("generation_revision")
+                  .eq("id", projectId)
+                  .single();
+                const expectedRevision = Number((activeRevision as { generation_revision?: number } | null)?.generation_revision);
+                if (Number.isSafeInteger(expectedRevision)) {
+                  const { error: rollbackError } = await (supabase as unknown as {
+                    rpc: (name: string, args: Record<string, unknown>) => Promise<{ error: { message: string } | null }>;
+                  }).rpc("rollback_generation_revision", {
+                    target_project_id: projectId,
+                    target_revision: preAgentRevision,
+                    expected_revision: expectedRevision,
+                  });
+                  if (!rollbackError) send({
+                    verify_status: "Verification failed after activation. Restored the last working revision.",
+                    auto_rolled_back: true,
+                  });
+                }
               }
             }
           } catch { verification = null; }

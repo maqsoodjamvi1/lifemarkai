@@ -24,7 +24,7 @@ import { findContractErrors } from "../preview/export-contract.ts";
 import { filesWithSyntaxErrors, findMissingListKeys, findUnresolvedLocalImports, runTypecheckGate } from "../verify/typecheck-gate.ts";
 import { findJsxHtmlAttributeDefects } from "../verify/jsx-gate.ts";
 import { typecheckRunningSandbox } from "../preview/typecheck-project.ts";
-import { buildCandidateInSandbox, needsFrameworkBuild } from "../preview/build-candidate.ts";
+import { buildCandidateInSandbox, frameworkBuildVerdict, needsFrameworkBuild } from "../preview/build-candidate.ts";
 import { normalizeRepeatedManifest } from "../sandbox/candidate-build.ts";
 import { pushFileToRunningSandbox } from "../preview/push-to-sandbox.ts";
 import { generateAI } from "./generate.ts";
@@ -694,26 +694,24 @@ export async function runSelfVerification(opts: {
     }
     if (files.length === 0) return null;
 
-    if (opts.candidateFiles) {
-      const manifest = files.find((file) => file.path === "package.json");
-      if (manifest?.content) {
-        const normalized = normalizeRepeatedManifest(manifest.content);
-        if (normalized !== manifest.content) {
-          manifest.content = normalized;
-          result.fixedFiles.push({ path: manifest.path, content: normalized, language: "json" });
-          result.fixesApplied++;
-          emit("Removed identical repeated package manifest blocks.");
-        }
+    const manifest = files.find((file) => file.path === "package.json");
+    if (manifest?.content) {
+      const normalized = normalizeRepeatedManifest(manifest.content);
+      if (normalized !== manifest.content) {
+        manifest.content = normalized;
+        result.fixedFiles.push({ path: manifest.path, content: normalized, language: "json" });
+        result.fixesApplied++;
+        emit("Removed identical repeated package manifest blocks.");
       }
     }
 
     // The fallback browser emulates selected React packages; it cannot execute
     // TanStack's generated route tree or server entry. Nor can the dependency-
     // free tsc gate resolve inherited library props. Neither is valid evidence
-    // for repairing a TanStack candidate. Build the actual candidate using the
-    // preview's installed toolchain, in a separate directory. Never compile the
-    // old live files and treat that as verification of a proposed edit.
-    if (opts.candidateFiles && needsFrameworkBuild(files)) {
+    // for repairing a TanStack candidate — including the post-commit
+    // confirmation pass, which previously used that renderer and rolled back
+    // edits that the isolated Docker build had already accepted.
+    if (needsFrameworkBuild(files)) {
       result.engine = "build";
       result.rounds = 1;
       emit("Building your proposed changes in an isolated preview directory…");
@@ -723,12 +721,10 @@ export async function runSelfVerification(opts: {
         typeof sandboxId === "string" ? sandboxId : "",
         files.map((file) => ({ path: file.path, content: file.content ?? "" })),
       );
-      result.passed = build.available && build.passed;
-      result.errors = result.passed ? [] : build.available ? build.errors : [build.reason ?? "Candidate build unavailable."];
-      emit(result.passed
-        ? "Build verified ✓ — ready to preview."
-        : build.available ? "The proposed changes did not build; your working preview was preserved."
-          : "Build verification could not complete; your working preview was preserved.");
+      const verdict = frameworkBuildVerdict(build, { committed: !opts.candidateFiles });
+      result.passed = verdict.passed;
+      result.errors = verdict.errors;
+      emit(verdict.message);
       return result;
     }
 

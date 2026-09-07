@@ -20,10 +20,14 @@ the existing staged commit path only after the candidate passes.
 
 Results use `engine: "build"`. This validates a production bundle, not browser
 behavior or every TypeScript semantic constraint. It does not claim runtime or
-visual parity. Projects without an existing compatible Docker dependency
-environment still require one before this verification can succeed. A failed
-framework build preserves the working revision without spending fallback AI
-repair rounds on unsupported renderer errors.
+visual parity. The same isolated build is used after commit: the fallback
+renderer and dependency-free type gate must not run on TanStack apps and then
+auto-rollback a candidate the Docker toolchain already accepted. If that
+post-commit confirmation cannot reach the sandbox, the saved revision is kept.
+Projects without an existing compatible Docker dependency environment still
+require one before a *proposed* candidate can pass. A failed framework build
+preserves the working revision without spending fallback AI repair rounds on
+unsupported renderer errors.
 
 Validation before deployment:
 
