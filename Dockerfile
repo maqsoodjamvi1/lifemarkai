@@ -134,4 +134,10 @@ COPY --chown=node:node --from=build /app/scripts ./scripts
 
 EXPOSE 3000
 
+# Coolify / Traefik must not switch onto this container until the server
+# answers. Without this, a rolling deploy returns 502 from the moment the old
+# process is SIGTERM'd until Node binds :3000.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=40s --retries=6 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
 CMD ["node", "scripts/start-production.mjs"]

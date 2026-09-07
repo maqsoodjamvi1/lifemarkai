@@ -30,3 +30,9 @@ export function proxyNetworkMissingError(name: string): string | null {
   }
   return null;
 }
+
+/** Docker returns 403/409 when the container is already on the target network. */
+export function proxyNetworkConnectOk(status: number, body = ""): boolean {
+  if (status < 400) return true;
+  return status === 403 || status === 409 || /already (exists|connected)/i.test(body);
+}

@@ -4,6 +4,7 @@ import {
   COOLIFY_PROXY_NETWORK,
   DEFAULT_SANDBOX_NETWORK,
   pickProxyNetworkName,
+  proxyNetworkConnectOk,
   proxyNetworkMissingError,
 } from "./docker-network.ts";
 
@@ -23,4 +24,11 @@ test("falls back to a dedicated preview network when Coolify is absent", () => {
 test("missing coolify network is a configuration error, not a create", () => {
   assert.ok(proxyNetworkMissingError("coolify"));
   assert.equal(proxyNetworkMissingError(DEFAULT_SANDBOX_NETWORK), null);
+});
+
+test("already-connected Docker network attach is success", () => {
+  assert.equal(proxyNetworkConnectOk(200), true);
+  assert.equal(proxyNetworkConnectOk(403, "already connected"), true);
+  assert.equal(proxyNetworkConnectOk(409, "already exists"), true);
+  assert.equal(proxyNetworkConnectOk(404, "network not found"), false);
 });

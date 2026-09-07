@@ -429,6 +429,21 @@ async function resolveProxyNetworkName(explicit: string): Promise<{ name: string
   return { name };
 }
 
+/** Re-join Traefik's network after a Coolify recycle drops the sandbox endpoint. */
+async function attachToProxyNetwork(sandboxId: string): Promise<boolean> {
+  const c = cfg();
+  if (!c.routeViaProxy) return false;
+  const resolved = await resolveProxyNetworkName(c.proxyNetworkExplicit);
+  if ("error" in resolved) return false;
+  const res = await docker(
+    "POST",
+    `/v1.43/networks/${encodeURIComponent(resolved.name)}/connect`,
+    { Container: sandboxId },
+  );
+  if (res.status < 400) return true;
+  return false;
+}
+
 /**
  * Build a POSIX tar archive in memory.
  *
@@ -1260,6 +1275,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       }
 
       await applySandboxLimits(id);
+      await attachToProxyNetwork(id);
 
       // Prove the project survived. A container whose APP_DIR or node_modules
       // is gone (a failed earlier boot, a manual cleanup) has nothing to offer.
@@ -1311,31 +1327,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       // The supervisor loop is an exec, and execs do not survive a container
       // stop — so a woken container needs one started, while a container that
       // was merely idle already has one.
-      //
-      // Which it is MUST be decided by looking, not by whether vite answers
-      // right now. A supervisor whose vite is mid-restart answers nothing for a
-      // second or two, and starting a second loop on that evidence gives the
-      // container two of them, each stealing the port from the other on every
-      // cycle. That flaps the preview indefinitely and is far worse than the
-      // cold start being avoided.
-      let up = await this.waitForLocalServer(id, innerPort, 1500);
-      if (!up) {
-        const running = await this.exec(
-          id,
-          `ps 2>/dev/null | grep -q "[${SUPERVISOR_TAG[0]}]${SUPERVISOR_TAG.slice(1)}" && echo LM_SUP_UP`,
-          "/",
-        );
-        if (running.stdout.includes("LM_SUP_UP")) {
-          // Someone is already supervising — give its restart loop the time it
-          // needs rather than adding a competitor.
-          up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
-        } else {
-          const cmd = opts.startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
-          progress(createSandboxProgress("starting", cmd));
-          await this.exec(id, supervisorCommand(cmd), APP_DIR, false, true);
-          up = await this.waitForLocalServer(id, innerPort, opts.readyBudgetMs);
-        }
-      }
+      const up = await this.ensureDevServer(id, innerPort, opts.startCommand, opts.readyBudgetMs);
 
       const previewUrl = await this.getPreviewUrl(id);
       if (!previewUrl) return null;
@@ -1410,6 +1402,34 @@ export class DockerSandboxProvider implements SandboxProvider {
     } catch {
       /* pruning is an optimisation of correctness, never a reason to fail a boot */
     }
+  }
+
+  /**
+   * Start the Vite supervisor if it is gone; never start a second loop.
+   *
+   * A supervisor whose vite is mid-restart answers nothing for a second or two,
+   * and starting a competitor on that evidence flaps the port until Traefik
+   * answers 502. Look for the supervisor tag first.
+   */
+  private async ensureDevServer(
+    sandboxId: string,
+    innerPort: number,
+    startCommand: string | undefined,
+    readyBudgetMs: number,
+  ): Promise<boolean> {
+    let up = await this.waitForLocalServer(sandboxId, innerPort, 1500);
+    if (up) return true;
+    const running = await this.exec(
+      sandboxId,
+      `ps 2>/dev/null | grep -q "[${SUPERVISOR_TAG[0]}]${SUPERVISOR_TAG.slice(1)}" && echo LM_SUP_UP`,
+      "/",
+    );
+    if (running.stdout.includes("LM_SUP_UP")) {
+      return this.waitForLocalServer(sandboxId, innerPort, readyBudgetMs);
+    }
+    const cmd = startCommand ?? `npx vite --host 0.0.0.0 --port ${innerPort}`;
+    await this.exec(sandboxId, supervisorCommand(cmd), APP_DIR, false, true);
+    return this.waitForLocalServer(sandboxId, innerPort, readyBudgetMs);
   }
 
   /**
@@ -1829,6 +1849,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       if (!info.State?.Running) return { ok: false, error: "Container is not running." };
     } catch { /* treat as running */ }
     await applySandboxLimits(sandboxId);
+    await attachToProxyNetwork(sandboxId);
     const previewUrl = await this.getPreviewUrl(sandboxId);
     if (!previewUrl) return { ok: false, error: "Could not resolve the container's port." };
 
@@ -1838,13 +1859,8 @@ export class DockerSandboxProvider implements SandboxProvider {
     // one of which serves a 502 through Traefik. Reconnect is the editor's
     // FIRST call on every open, so answering ok:true here on that evidence
     // alone is a direct route to Bad Gateway in the pane.
-    //
-    // A short local probe settles it. It costs one exec (~100ms) when the app
-    // is up, which is the common case; when it's down, waiting a beat is
-    // exactly what the caller needs to know about.
-    const innerPort = await this.portFor(sandboxId).catch(() => null);
-    const ready =
-      innerPort == null ? true : await this.waitForLocalServer(sandboxId, innerPort, 2500);
+    const innerPort = (await this.portFor(sandboxId).catch(() => null)) ?? DEFAULT_INNER_PORT;
+    const ready = await this.ensureDevServer(sandboxId, innerPort, undefined, 8_000);
 
     return { ok: true, sandboxId, previewUrl, ready };
   }
@@ -1865,10 +1881,12 @@ export class DockerSandboxProvider implements SandboxProvider {
     void this.exec(sandboxId, "touch /tmp/.lm-keepalive", "/", false, true).catch(
       () => undefined,
     );
-    // Do not probe the public preview host or Vite's `/` here. Last night's
-    // heartbeat did both, paused a live Coolify sandbox, and paid a 2–3
-    // minute cold boot. Container running is enough to keep the iframe.
-    return { alive: true, tunnelHealthy: true };
+    const attached = await attachToProxyNetwork(sandboxId);
+    const innerPort = (await this.portFor(sandboxId).catch(() => null)) ?? DEFAULT_INNER_PORT;
+    const serving = await this.waitForLocalServer(sandboxId, innerPort, 800);
+    if (serving) return { alive: true, tunnelHealthy: true, restarted: attached };
+    const recovered = await this.ensureDevServer(sandboxId, innerPort, undefined, 8_000);
+    return { alive: true, tunnelHealthy: recovered, restarted: attached || recovered };
   }
 
   /** The port the dev server was started on, read back from the container. */
