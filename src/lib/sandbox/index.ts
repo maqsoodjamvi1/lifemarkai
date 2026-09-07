@@ -24,6 +24,8 @@ export interface SandboxFile {
   content: string;
 }
 
+export type { CandidateBuildResult } from "./candidate-build.ts";
+
 export interface SandboxRunResult {
   ok: boolean;
   sandboxId?: string;
@@ -175,6 +177,11 @@ export interface SandboxProvider {
     sandboxId: string,
     opts?: { timeoutSec?: number },
   ): Promise<TypecheckResult>;
+  /** Compile disposable candidate files without replacing the working preview. */
+  buildCandidate?(
+    sandboxId: string,
+    files: SandboxFile[],
+  ): Promise<import("./candidate-build.ts").CandidateBuildResult>;
   /** Re-derive the live preview URL for a running sandbox. */
   getPreviewUrl(sandboxId: string, port?: number): Promise<string>;
   /** Reconnect to an existing sandbox if still alive (Lovable warm-session parity). */

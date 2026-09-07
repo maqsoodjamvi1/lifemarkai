@@ -14,7 +14,7 @@ export interface AutoWireResult {
 }
 
 export interface SelfVerifyResult {
-  engine: "browser" | "static";
+  engine: "browser" | "static" | "build";
   passed: boolean;
   rounds: number;
   fixesApplied: number;

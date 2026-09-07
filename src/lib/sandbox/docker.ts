@@ -40,7 +40,8 @@
  */
 
 import http from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { candidateBuildScript, parseCandidateBuildResult, validCandidateFiles, type CandidateBuildResult } from "./candidate-build.ts";
 import { dockerSocketIsPresent, resolveDockerSocketPath } from "./docker-socket.ts";
 import type {
 ClaudeCodeResult,
@@ -1770,6 +1771,27 @@ export class DockerSandboxProvider implements SandboxProvider {
       durationMs: Date.now() - started,
       timedOut,
     };
+  }
+
+  async buildCandidate(sandboxId: string, files: SandboxFile[]): Promise<CandidateBuildResult> {
+    if (!validCandidateFiles(files)) {
+      return { available: false, passed: false, errors: [], reason: "Candidate contains invalid file paths." };
+    }
+    const dir = `/tmp/lm-candidate-${randomUUID()}`;
+    try {
+      const mkdir = await this.exec(sandboxId, `mkdir -m 700 ${dir}`, "/");
+      if (mkdir.exitCode !== 0) throw new Error("Could not create candidate directory.");
+      const upload = await docker("PUT", `/v1.43/containers/${sandboxId}/archive?path=${encodeURIComponent(dir)}`, undefined, buildTar(files));
+      if (upload.status >= 400) throw new Error("Could not upload candidate files.");
+      const script = Buffer.from(candidateBuildScript(APP_DIR, dir, 45)).toString("base64");
+      const run = await this.exec(sandboxId, `node -e 'eval(Buffer.from("${script}","base64").toString())'`, "/", true, false, 60_000);
+      return parseCandidateBuildResult(run.stdout);
+    } catch (error) {
+      return { available: false, passed: false, errors: [], reason: error instanceof Error ? error.message : "Candidate build unavailable." };
+    } finally {
+      // dir is a server-generated UUID under /tmp, never a supplied project path.
+      await this.exec(sandboxId, `rm -rf -- ${dir}`, "/").catch(() => {});
+    }
   }
 
   async getPreviewUrl(sandboxId: string): Promise<string> {
