@@ -27,6 +27,7 @@ import { isDockerDaemonReachable } from "@/lib/sandbox/docker";
 import { probeStartingSandbox } from "@/lib/preview/probe-starting-sandbox";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { patchSandboxPreviewFiles } from "@/lib/preview/patch-sandbox-preview-files";
+import { applyManifestRepair } from "@/lib/sandbox/candidate-build";
 import type { Database,Json } from "@/types/database";
 
 
@@ -248,12 +249,12 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
     appOrigin: process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, ""),
   };
 
-  const rawFiles: SandboxFile[] = rows
+  const rawFiles: SandboxFile[] = applyManifestRepair(rows
     .filter((r: { path?: string; content?: string }) => typeof r.path === "string")
     .map((r: { path: string; content: string | null }) => ({
       path: r.path,
       content: r.content ?? "",
-    }));
+    }))).files;
 
   // Cold-boot dependency reconciliation: a project whose persisted package.json
   // already omits an imported package (class-variance-authority, @radix-ui/*,
@@ -261,7 +262,15 @@ async function handlePOSTUnlocked(req: Request, params: { id: string }) {
   // Repair package.json BEFORE the sandbox boots + npm-installs.
   try {
     const pkgRow = rawFiles.find((f) => f.path.replace(/\\/g, "/") === "package.json");
+    const original = rows.find((r: { path?: string }) => r.path === "package.json")?.content ?? "";
     if (pkgRow?.content) {
+      if (pkgRow.content !== original) {
+        await supabase
+          .from("project_files")
+          .update({ content: pkgRow.content, updated_at: new Date().toISOString() })
+          .eq("project_id", projectId)
+          .eq("path", "package.json");
+      }
       const { syncPackageJsonDeps } = await import("@/lib/ai/npm-auto-install");
       const sync = syncPackageJsonDeps(rawFiles, pkgRow.content);
       if (sync && sync.addedPackages.length > 0) {

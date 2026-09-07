@@ -13,6 +13,7 @@ import { createClient } from "@/lib/supabase/server";
 import { getServerUser } from "@/lib/supabase/server-user";
 import { canWriteProjectFiles,getProjectAccess } from "@/lib/project/access";
 import { getSandboxProvider,isSandboxEnabled,type SandboxFile } from "@/lib/sandbox";
+import { applyManifestRepair } from "@/lib/sandbox/candidate-build";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { patchSandboxPreviewFiles } from "@/lib/preview/patch-sandbox-preview-files";
 import { randomUUID } from "node:crypto";
@@ -135,12 +136,23 @@ async function handlePATCH(req: Request, params: { id: string }) {
   // package.json, which it usually doesn't. Reconcile here against the FULL
   // project so a missing dep can never reach the sandbox unresolved.
   // Keep the acknowledged source snapshot separate from sandbox-only repairs.
-  let files: SandboxFile[] = syncSourceFiles.map((file) => ({ ...file }));
+  let files: SandboxFile[] = applyManifestRepair(syncSourceFiles.map((file) => ({ ...file }))).files;
+  const repairedPkg = files.find((f) => f.path.replace(/\\/g, "/") === "package.json");
+  const originalPkg = syncSourceFiles.find((f) => f.path.replace(/\\/g, "/") === "package.json");
+  if (repairedPkg && originalPkg && repairedPkg.content !== originalPkg.content) {
+    try {
+      await supabase
+        .from("project_files")
+        .update({ content: repairedPkg.content, updated_at: new Date().toISOString() })
+        .eq("project_id", projectId)
+        .eq("path", "package.json");
+    } catch { /* sandbox still gets the repaired copy */ }
+  }
   let reconciledPackageJson: string | null = null;
   let reconciledPackages: string[] = [];
   let rejectedPackages: string[] = [];
   try {
-    const allFiles = syncSourceFiles;
+    const allFiles = files;
     const pkgRow = allFiles.find((f) => f.path.replace(/\\/g, "/") === "package.json");
     if (pkgRow?.content) {
       const { syncPackageJsonDeps } = await import("@/lib/ai/npm-auto-install");

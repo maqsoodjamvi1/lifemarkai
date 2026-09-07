@@ -6,11 +6,14 @@ import { join } from "node:path";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
-import { candidateBuildScript, normalizeRepeatedManifest, parseCandidateBuildResult, validCandidateFiles } from "./candidate-build.ts";
+import { candidateBuildScript, applyManifestRepair, normalizeRepeatedManifest, parseCandidateBuildResult, validCandidateFiles } from "./candidate-build.ts";
 
 test("only identical repeated manifests are repaired", () => {
   const valid = JSON.stringify({ name: "bakery", scripts: { dev: "vite" }, type: "module" });
   assert.equal(normalizeRepeatedManifest(Array(6).fill(valid).join("\n")), valid + "\n");
+  const pretty = JSON.stringify({ name: "lifemarkai-app", dependencies: { vite: "^20.14.0" } }, null, 2);
+  assert.equal(JSON.parse(normalizeRepeatedManifest(pretty.repeat(2))).name, "lifemarkai-app");
+  assert.equal(applyManifestRepair([{ path: "package.json", content: pretty.repeat(2) }]).repaired, true);
   for (const text of [valid, valid + '{"name":"different"}', valid + 'junk', '{"broken":']) {
     assert.equal(normalizeRepeatedManifest(text), text);
   }

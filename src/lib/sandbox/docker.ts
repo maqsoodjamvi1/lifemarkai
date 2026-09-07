@@ -41,7 +41,7 @@
 
 import http from "node:http";
 import { createHash, randomUUID } from "node:crypto";
-import { candidateBuildScript, parseCandidateBuildResult, validCandidateFiles, type CandidateBuildResult } from "./candidate-build.ts";
+import { applyManifestRepair, candidateBuildScript, normalizeRepeatedManifest, parseCandidateBuildResult, validCandidateFiles, type CandidateBuildResult } from "./candidate-build.ts";
 import { dockerSocketIsPresent, resolveDockerSocketPath } from "./docker-socket.ts";
 import type {
 ClaudeCodeResult,
@@ -1006,6 +1006,7 @@ export class DockerSandboxProvider implements SandboxProvider {
         : null;
 
       progress(createSandboxProgress("writing", `Uploading ${opts.files.length} files`));
+      const files = applyManifestRepair(opts.files).files;
       // Ship the sync manifest with the cold upload too.
       //
       // `writeFiles` writes one on every warm sync, but the cold path never
@@ -1015,7 +1016,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       // change and answers with a full server restart: a Bad Gateway on first
       // paint, on the boot that was supposed to be the fast one.
       const coldHashes: Record<string, string> = {};
-      for (const f of opts.files) {
+      for (const f of files) {
         coldHashes[f.path.replace(/\\/g, "/")] = createHash("sha1")
           .update(f.content ?? "")
           .digest("hex");
@@ -1025,7 +1026,7 @@ export class DockerSandboxProvider implements SandboxProvider {
         `/v1.43/containers/${id}/archive?path=${encodeURIComponent(APP_DIR)}`,
         undefined,
         buildTar([
-          ...opts.files,
+          ...files,
           { path: SYNC_MANIFEST, content: JSON.stringify(coldHashes) },
         ]),
       );
@@ -1046,7 +1047,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       }
 
       let logs = "";
-      if (opts.files.some((f) => f.path.endsWith("package.json"))) {
+      if (files.some((f) => f.path.endsWith("package.json"))) {
         // Nothing is copied or linked into place. When the image already ships
         // node_modules at this path (see docker/sandbox/Dockerfile), it is
         // simply there, in a shared read-only layer, and npm reconciles it in
@@ -1078,8 +1079,8 @@ export class DockerSandboxProvider implements SandboxProvider {
         // toolchain/tailwind/auto-install passes have mutated it, so any pin
         // those passes add forces the install to happen.
         const projectPackageJson =
-          opts.files.find((f) => f.path === "package.json")?.content ??
-          opts.files.find((f) => f.path.endsWith("/package.json"))?.content ??
+          files.find((f) => f.path === "package.json")?.content ??
+          files.find((f) => f.path.endsWith("/package.json"))?.content ??
           null;
         const depCheck = dependenciesAlreadySatisfied(
           baselinePackageJson,
@@ -1311,7 +1312,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       progress(createSandboxProgress("writing", "Syncing changed files"));
       // Incremental by content hash — an unchanged project writes nothing, so
       // vite is not disturbed at all and HMR keeps whatever state it had.
-      const { written } = await this.writeFiles(id, files, { prevManifest: syncManifest });
+      const { written } = await this.writeFiles(id, applyManifestRepair(files).files, { prevManifest: syncManifest });
 
       let logs = "";
       // Only reinstall when the dependency manifest itself moved. A source-only
@@ -1509,6 +1510,13 @@ export class DockerSandboxProvider implements SandboxProvider {
     sandboxId: string,
     progress: (event: SandboxProgressEvent) => void,
   ): Promise<{ ok: true; logs: string } | { ok: false; error: string; logs: string }> {
+    try {
+      const onDisk = await this.exec(sandboxId, "cat package.json 2>/dev/null || true", APP_DIR);
+      const repaired = normalizeRepeatedManifest(onDisk.stdout ?? "");
+      if (repaired !== (onDisk.stdout ?? "") && repaired.trim().startsWith("{")) {
+        await this.writeFiles(sandboxId, [{ path: "package.json", content: repaired }], { partial: true });
+      }
+    } catch { /* install still runs and reports a real parse error if repair failed */ }
     let logs = "";
     for (let attempt = 1; attempt <= NPM_INSTALL_MAX_ATTEMPTS; attempt += 1) {
       if (attempt > 1) {
@@ -1659,6 +1667,7 @@ export class DockerSandboxProvider implements SandboxProvider {
     // redundant re-upload (safe), never a skipped write of real changes.
     const norm = (p: string) => p.replace(/\\/g, "/");
     const hashes: Record<string, string> = {};
+    files = applyManifestRepair(files).files;
     for (const f of files) {
       hashes[norm(f.path)] = createHash("sha1").update(f.content ?? "").digest("hex");
     }

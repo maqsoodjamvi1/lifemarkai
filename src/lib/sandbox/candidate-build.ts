@@ -24,6 +24,21 @@ export function normalizeRepeatedManifest(content: string): string {
   return content;
 }
 
+/** Collapse a concatenated package.json in a sandbox file list before npm sees it. */
+export function applyManifestRepair<T extends { path: string; content?: string | null }>(
+  files: T[],
+): { files: T[]; repaired: boolean } {
+  let repaired = false;
+  const next = files.map((file) => {
+    if (file.path.replace(/\\/g, "/") !== "package.json" || typeof file.content !== "string") return file;
+    const content = normalizeRepeatedManifest(file.content);
+    if (content === file.content) return file;
+    repaired = true;
+    return { ...file, content };
+  });
+  return { files: next, repaired };
+}
+
 /** Archive paths must never escape the disposable candidate directory. */
 export function validCandidateFiles(files: SandboxFile[]): boolean {
   return files.length > 0 && files.every(({ path, content }) =>
