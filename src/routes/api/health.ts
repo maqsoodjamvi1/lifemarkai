@@ -37,9 +37,14 @@ export const Route = createFileRoute("/api/health")({
         }
         // First health probe of a Coolify boot starts the Docker sandbox healer.
         // Preview 502s otherwise persist until someone opens the editor.
-        void import("@/lib/sandbox").then((mod) => {
+        let healer: { started: boolean; lastAt: number | null; scanned: number; recovered: number } | null = null;
+        try {
+          const mod = await import("@/lib/sandbox");
           try { mod.getSandboxProvider(); } catch { /* never fail health */ }
-        }).catch(() => {});
+          healer = mod.getDockerHealerSnapshot();
+        } catch {
+          healer = null;
+        }
         const healthy = db === "ok";
         return Response.json(
           {
@@ -49,6 +54,8 @@ export const Route = createFileRoute("/api/health")({
             uptimeSeconds: Math.floor((Date.now() - PROCESS_STARTED_MS) / 1000),
             runtime: "tanstack-start",
             timestamp: new Date().toISOString(),
+            commit: process.env.SOURCE_COMMIT || process.env.COOLIFY_SHA || null,
+            healer,
           },
           { status: healthy ? 200 : 503 },
         );

@@ -24,6 +24,18 @@ export function normalizeRepeatedManifest(content: string): string {
   return content;
 }
 
+/** Collapse an on-disk concatenated package.json; null means the file is already valid or not a safe repeat. */
+export function repairedManifestFromDisk(raw: string): string | null {
+  const repaired = normalizeRepeatedManifest(raw);
+  if (repaired === raw) return null;
+  try {
+    JSON.parse(repaired);
+  } catch {
+    return null;
+  }
+  return repaired;
+}
+
 /** Collapse a concatenated package.json in a sandbox file list before npm sees it. */
 export function applyManifestRepair<T extends { path: string; content?: string | null }>(
   files: T[],

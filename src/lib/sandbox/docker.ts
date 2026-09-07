@@ -41,7 +41,7 @@
 
 import http from "node:http";
 import { createHash, randomUUID } from "node:crypto";
-import { applyManifestRepair, candidateBuildScript, normalizeRepeatedManifest, parseCandidateBuildResult, validCandidateFiles, type CandidateBuildResult } from "./candidate-build.ts";
+import { applyManifestRepair, candidateBuildScript, repairedManifestFromDisk, parseCandidateBuildResult, validCandidateFiles, type CandidateBuildResult } from "./candidate-build.ts";
 import { dockerSocketIsPresent, resolveDockerSocketPath } from "./docker-socket.ts";
 import type {
 ClaudeCodeResult,
@@ -66,8 +66,10 @@ import {
 } from "./npm-install.ts";
 import {
   pickProxyNetworkName,
+  proxyNetworkConnectOk,
   proxyNetworkMissingError,
   sandboxRunningFilter,
+  shouldRejoinProxyNetwork,
 } from "./docker-network.ts";
 
 /** Vite's port inside the sandbox. The heartbeat has no opts.port to read. */
@@ -272,6 +274,26 @@ const dockerAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 30_000, ma
 
 let healerTimer: ReturnType<typeof setInterval> | null = null;
 let healInFlight = false;
+const lastProxyRejoin = new Map<string, number>();
+const PROXY_REJOIN_COOLDOWN_MS = 60_000;
+
+export type DockerHealerSnapshot = {
+  started: boolean;
+  lastAt: number | null;
+  scanned: number;
+  recovered: number;
+};
+
+let healerSnapshot: DockerHealerSnapshot = {
+  started: false,
+  lastAt: null,
+  scanned: 0,
+  recovered: 0,
+};
+
+export function getDockerHealerSnapshot(): DockerHealerSnapshot {
+  return { ...healerSnapshot };
+}
 
 /** Default budget for a Docker API call that isn't shipping a file payload. */
 const DOCKER_REQUEST_TIMEOUT_MS = 15_000;
@@ -446,6 +468,41 @@ async function attachToProxyNetwork(sandboxId: string): Promise<boolean> {
   );
   if (res.status < 400) return true;
   return false;
+}
+
+/**
+ * Disconnect then connect so Traefik picks up a fresh endpoint.
+ *
+ * `connect` 403 "already connected" is a lie after Coolify recycles its
+ * network: the sandbox is still listed on an old endpoint while the live
+ * Traefik network has a new ID, so the public Host() rule 502s forever.
+ */
+async function rejoinProxyNetwork(sandboxId: string): Promise<boolean> {
+  const last = lastProxyRejoin.get(sandboxId) ?? 0;
+  if (Date.now() - last < PROXY_REJOIN_COOLDOWN_MS) return false;
+  lastProxyRejoin.set(sandboxId, Date.now());
+  const c = cfg();
+  if (!c.routeViaProxy) return false;
+  const resolved = await resolveProxyNetworkName(c.proxyNetworkExplicit);
+  if ("error" in resolved) return false;
+  const path = `/v1.43/networks/${encodeURIComponent(resolved.name)}`;
+  await docker("POST", `${path}/disconnect`, { Container: sandboxId, Force: true }).catch(() => undefined);
+  const res = await docker("POST", `${path}/connect`, { Container: sandboxId });
+  return proxyNetworkConnectOk(res.status, res.text);
+}
+
+async function publicPreviewStatus(url: string): Promise<number> {
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      redirect: "manual",
+      signal: AbortSignal.timeout(4000),
+      headers: { Accept: "text/html", "User-Agent": "lifemark-sandbox-healer" },
+    });
+    return res.status;
+  } catch {
+    return 0;
+  }
 }
 
 /**
@@ -1409,12 +1466,68 @@ export class DockerSandboxProvider implements SandboxProvider {
     }
   }
 
+  healerSnapshot(): DockerHealerSnapshot {
+    return getDockerHealerSnapshot();
+  }
+
+  /**
+   * Collapse a concatenated package.json already on disk.
+   *
+   * The boot/sync path repairs before npm install. A sandbox that already
+   * failed that install is left with Vite crash-looping on JSON.parse while
+   * the supervisor still looks "up" — heal/reconnect used to wait 8s and
+   * give up without touching the file.
+   */
+  private async repairOnDiskManifest(sandboxId: string, projectId = ""): Promise<boolean> {
+    try {
+      const onDisk = await this.exec(sandboxId, "cat package.json 2>/dev/null || true", APP_DIR, false);
+      const repaired = repairedManifestFromDisk(onDisk.stdout ?? "");
+      if (!repaired) return false;
+      await this.writeFiles(sandboxId, [{ path: "package.json", content: repaired }], { partial: true });
+      const persistId = projectId || await this.projectIdFromLabels(sandboxId);
+      if (persistId) {
+        void import("./persist-repaired-manifest.ts")
+          .then((mod) => mod.persistRepairedPackageJson(persistId, repaired))
+          .catch(() => undefined);
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async projectIdFromLabels(sandboxId: string): Promise<string> {
+    const res = await docker("GET", `/v1.43/containers/${sandboxId}/json`);
+    if (res.status >= 400) return "";
+    try {
+      const info = JSON.parse(res.text) as { Config?: { Labels?: Record<string, string> } };
+      return info.Config?.Labels?.["lifemark.project"] ?? "";
+    } catch {
+      return "";
+    }
+  }
+
+  private async recoverPublicGateway(
+    sandboxId: string,
+    newlyAttached: boolean,
+    innerServing: boolean,
+  ): Promise<boolean> {
+    if (!innerServing) return false;
+    const previewUrl = await this.getPreviewUrl(sandboxId);
+    if (!previewUrl) return false;
+    const publicStatus = await publicPreviewStatus(previewUrl);
+    if (!shouldRejoinProxyNetwork({ innerServing, newlyAttached, publicStatus })) return false;
+    return rejoinProxyNetwork(sandboxId);
+  }
+
   /**
    * Start the Vite supervisor if it is gone; never start a second loop.
    *
    * A supervisor whose vite is mid-restart answers nothing for a second or two,
    * and starting a competitor on that evidence flaps the port until Traefik
-   * answers 502. Look for the supervisor tag first.
+   * answers 502. Look for the supervisor tag first. Repair a concatenated
+   * package.json before waiting, or a crash-looping vite looks "supervised"
+   * forever while Traefik 502s.
    */
   private async ensureDevServer(
     sandboxId: string,
@@ -1424,6 +1537,7 @@ export class DockerSandboxProvider implements SandboxProvider {
   ): Promise<boolean> {
     let up = await this.waitForLocalServer(sandboxId, innerPort, 1500);
     if (up) return true;
+    await this.repairOnDiskManifest(sandboxId);
     const running = await this.exec(
       sandboxId,
       `ps 2>/dev/null | grep -q "[${SUPERVISOR_TAG[0]}]${SUPERVISOR_TAG.slice(1)}" && echo LM_SUP_UP`,
@@ -1511,11 +1625,7 @@ export class DockerSandboxProvider implements SandboxProvider {
     progress: (event: SandboxProgressEvent) => void,
   ): Promise<{ ok: true; logs: string } | { ok: false; error: string; logs: string }> {
     try {
-      const onDisk = await this.exec(sandboxId, "cat package.json 2>/dev/null || true", APP_DIR);
-      const repaired = normalizeRepeatedManifest(onDisk.stdout ?? "");
-      if (repaired !== (onDisk.stdout ?? "") && repaired.trim().startsWith("{")) {
-        await this.writeFiles(sandboxId, [{ path: "package.json", content: repaired }], { partial: true });
-      }
+      await this.repairOnDiskManifest(sandboxId);
     } catch { /* install still runs and reports a real parse error if repair failed */ }
     let logs = "";
     for (let attempt = 1; attempt <= NPM_INSTALL_MAX_ATTEMPTS; attempt += 1) {
@@ -1874,6 +1984,7 @@ export class DockerSandboxProvider implements SandboxProvider {
     // alone is a direct route to Bad Gateway in the pane.
     const innerPort = (await this.portFor(sandboxId).catch(() => null)) ?? DEFAULT_INNER_PORT;
     const ready = await this.ensureDevServer(sandboxId, innerPort, undefined, 8_000);
+    if (ready) await this.recoverPublicGateway(sandboxId, false, true);
 
     return { ok: true, sandboxId, previewUrl, ready };
   }
@@ -1897,14 +2008,20 @@ export class DockerSandboxProvider implements SandboxProvider {
     const attached = await attachToProxyNetwork(sandboxId);
     const innerPort = (await this.portFor(sandboxId).catch(() => null)) ?? DEFAULT_INNER_PORT;
     const serving = await this.waitForLocalServer(sandboxId, innerPort, 800);
-    if (serving) return { alive: true, tunnelHealthy: true, restarted: attached };
+    if (serving) {
+      const rejoined = await this.recoverPublicGateway(sandboxId, attached, true);
+      return { alive: true, tunnelHealthy: true, restarted: attached || rejoined };
+    }
     const recovered = await this.ensureDevServer(sandboxId, innerPort, undefined, 8_000);
-    return { alive: true, tunnelHealthy: recovered, restarted: attached || recovered };
+    const rejoined = recovered ? await this.recoverPublicGateway(sandboxId, attached, recovered) : false;
+    return { alive: true, tunnelHealthy: recovered, restarted: attached || recovered || rejoined };
   }
 
   startBackgroundHealer(): void {
-    if (process.env.NODE_ENV !== "production") return;
+    if (process.env.NODE_ENV === "test") return;
+    if (process.env.NODE_ENV !== "production" && process.env.SANDBOX_HEALER !== "1") return;
     if (healerTimer) return;
+    healerSnapshot = { ...healerSnapshot, started: true };
     const tick = () => {
       if (healInFlight) return;
       healInFlight = true;
@@ -1920,33 +2037,46 @@ export class DockerSandboxProvider implements SandboxProvider {
   }
 
   async healRunningSandboxes(): Promise<{ scanned: number; recovered: number }> {
-    if (!this.isEnabled()) return { scanned: 0, recovered: 0 };
+    const finish = (scanned: number, recovered: number) => {
+      healerSnapshot = {
+        started: healerSnapshot.started || Boolean(healerTimer),
+        lastAt: Date.now(),
+        scanned,
+        recovered,
+      };
+      return { scanned, recovered };
+    };
+    if (!this.isEnabled()) return finish(0, 0);
     const filters = encodeURIComponent(JSON.stringify(sandboxRunningFilter()));
     const listed = await docker("GET", `/v1.43/containers/json?filters=${filters}`);
-    if (listed.status >= 400) return { scanned: 0, recovered: 0 };
-    let containers: Array<{ Id: string }> = [];
+    if (listed.status >= 400) return finish(0, 0);
+    let containers: Array<{ Id: string; Labels?: Record<string, string> }> = [];
     try {
       containers = JSON.parse(listed.text) as typeof containers;
     } catch {
-      return { scanned: 0, recovered: 0 };
+      return finish(0, 0);
     }
     let recovered = 0;
     for (const ctr of containers.slice(0, 8)) {
       try {
+        const projectId = ctr.Labels?.["lifemark.project"] ?? "";
         const attached = await attachToProxyNetwork(ctr.Id);
         const innerPort = (await this.portFor(ctr.Id).catch(() => null)) ?? DEFAULT_INNER_PORT;
         const serving = await this.waitForLocalServer(ctr.Id, innerPort, 800);
         if (serving) {
-          if (attached) recovered += 1;
+          const rejoined = await this.recoverPublicGateway(ctr.Id, attached, true);
+          if (attached || rejoined) recovered += 1;
           continue;
         }
+        await this.repairOnDiskManifest(ctr.Id, projectId);
         const up = await this.ensureDevServer(ctr.Id, innerPort, undefined, 8_000);
-        if (attached || up) recovered += 1;
+        const rejoined = up ? await this.recoverPublicGateway(ctr.Id, attached, up) : false;
+        if (attached || up || rejoined) recovered += 1;
       } catch {
         /* next sandbox */
       }
     }
-    return { scanned: Math.min(containers.length, 8), recovered };
+    return finish(Math.min(containers.length, 8), recovered);
   }
 
   /** The port the dev server was started on, read back from the container. */

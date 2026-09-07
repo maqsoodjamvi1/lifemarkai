@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
-import { candidateBuildScript, applyManifestRepair, normalizeRepeatedManifest, parseCandidateBuildResult, validCandidateFiles } from "./candidate-build.ts";
+import { candidateBuildScript, applyManifestRepair, normalizeRepeatedManifest, repairedManifestFromDisk, parseCandidateBuildResult, validCandidateFiles } from "./candidate-build.ts";
 
 test("only identical repeated manifests are repaired", () => {
   const valid = JSON.stringify({ name: "bakery", scripts: { dev: "vite" }, type: "module" });
@@ -17,6 +17,15 @@ test("only identical repeated manifests are repaired", () => {
   for (const text of [valid, valid + '{"name":"different"}', valid + 'junk', '{"broken":']) {
     assert.equal(normalizeRepeatedManifest(text), text);
   }
+});
+
+test("on-disk repair returns the collapsed object only when JSON was concatenated", () => {
+  const pretty = JSON.stringify({ name: "lifemarkai-app", dependencies: { vite: "^20.14.0" } }, null, 2);
+  const collapsed = repairedManifestFromDisk(pretty.repeat(2));
+  assert.ok(collapsed);
+  assert.equal(JSON.parse(collapsed).name, "lifemarkai-app");
+  assert.equal(repairedManifestFromDisk(pretty), null);
+  assert.equal(repairedManifestFromDisk("{not json"), null);
 });
 
 const require = createRequire(import.meta.url);

@@ -6,7 +6,9 @@ import {
   pickProxyNetworkName,
   proxyNetworkConnectOk,
   proxyNetworkMissingError,
+  publicGatewayDown,
   sandboxRunningFilter,
+  shouldRejoinProxyNetwork,
 } from "./docker-network.ts";
 
 test("explicit SANDBOX_PROXY_NETWORK always wins", () => {
@@ -32,6 +34,15 @@ test("already-connected Docker network attach is success", () => {
   assert.equal(proxyNetworkConnectOk(403, "already connected"), true);
   assert.equal(proxyNetworkConnectOk(409, "already exists"), true);
   assert.equal(proxyNetworkConnectOk(404, "network not found"), false);
+});
+
+test("public 502 with an inner server already attached needs a Traefik rejoin", () => {
+  assert.equal(publicGatewayDown(502), true);
+  assert.equal(publicGatewayDown(200), false);
+  assert.equal(shouldRejoinProxyNetwork({ innerServing: true, newlyAttached: false, publicStatus: 502 }), true);
+  assert.equal(shouldRejoinProxyNetwork({ innerServing: true, newlyAttached: true, publicStatus: 502 }), false);
+  assert.equal(shouldRejoinProxyNetwork({ innerServing: false, newlyAttached: false, publicStatus: 502 }), false);
+  assert.equal(shouldRejoinProxyNetwork({ innerServing: true, newlyAttached: false, publicStatus: 200 }), false);
 });
 
 test("healer only targets running sandbox containers", () => {

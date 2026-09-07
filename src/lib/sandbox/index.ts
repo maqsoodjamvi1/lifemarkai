@@ -202,6 +202,12 @@ export interface SandboxProvider {
   kill(sandboxId: string): Promise<void>;
   /** Production-only: recover running Docker sandboxes after a Coolify recycle. */
   startBackgroundHealer?(): void;
+  healerSnapshot?(): {
+    started: boolean;
+    lastAt: number | null;
+    scanned: number;
+    recovered: number;
+  };
 }
 
 import { DEFAULT_TIMEOUT_MS,trunc,waitForServer } from "./shared.ts";
@@ -220,6 +226,7 @@ export {
   forgetPreviewProbe,
 } from "./shared.ts";
 export { ModalSandboxProvider } from "./modal.ts";
+export { getDockerHealerSnapshot } from "./docker.ts";
 
 const DEFAULT_PORT = 3000;
 

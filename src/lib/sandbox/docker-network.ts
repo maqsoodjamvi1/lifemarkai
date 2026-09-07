@@ -37,6 +37,24 @@ export function proxyNetworkConnectOk(status: number, body = ""): boolean {
   return status === 403 || status === 409 || /already (exists|connected)/i.test(body);
 }
 
+/** Traefik answered, but the sandbox behind it did not. */
+export function publicGatewayDown(status: number): boolean {
+  return status === 502 || status === 503 || status === 504;
+}
+
+/**
+ * Inner vite is up, Traefik still 502s, and a connect was not a fresh attach.
+ * That is the Coolify recycle case: Docker says "already on coolify" while the
+ * current Traefik network endpoint is stale.
+ */
+export function shouldRejoinProxyNetwork(opts: {
+  innerServing: boolean;
+  newlyAttached: boolean;
+  publicStatus: number;
+}): boolean {
+  return opts.innerServing && !opts.newlyAttached && publicGatewayDown(opts.publicStatus);
+}
+
 /** Docker API filter for live preview containers that Traefik may still be routing. */
 export function sandboxRunningFilter(): Record<string, string[]> {
   return { label: ["lifemark.sandbox=1"], status: ["running"] };
