@@ -183,7 +183,7 @@ describe("whitespace fallback preserves the file — review-caught bug #2", () =
     assert.equal(r.ok, true);
     const out = r.files.get("a.ts")!;
     assert.match(out, /const target = 9;/);
-    assert.match(out, /const a = 1;   \n/, "trailing spaces on untouched line 1 must survive");
+    assert.match(out, /const a = 1; {3}\n/, "trailing spaces on untouched line 1 must survive");
     assert.match(out, /const c = 3;\t\n/, "trailing tab on untouched line 3 must survive");
   });
 

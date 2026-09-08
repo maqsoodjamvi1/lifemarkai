@@ -1535,7 +1535,7 @@ export class DockerSandboxProvider implements SandboxProvider {
     startCommand: string | undefined,
     readyBudgetMs: number,
   ): Promise<boolean> {
-    let up = await this.waitForLocalServer(sandboxId, innerPort, 1500);
+    const up = await this.waitForLocalServer(sandboxId, innerPort, 1500);
     if (up) return true;
     await this.repairOnDiskManifest(sandboxId);
     const running = await this.exec(

@@ -106,7 +106,7 @@ ${generatedComponentsBlock}
 Use these as the real starting point (adjust file names/paths to fit the project) rather than rewriting their structure from the description above — the description is there to explain what's THERE, these components are the actual translation. Then make them functional: wire up real interactivity, state, routing, and data instead of leaving them static.` : `Please generate React components that faithfully reproduce this UI using Tailwind CSS classes, using the exact colors, fonts, spacing, and copy given above rather than approximating them. Use semantic HTML and accessible markup, and match the visual hierarchy and layout direction shown above.`}`,
         };
 
-        let appliedFiles: string[] = [];
+        const appliedFiles: string[] = [];
         if (typeof projectId === "string" && UUID_RE.test(projectId) && generatedComponents.length > 0) {
           const listed = await listProjectFiles(projectId);
           const paths = listed.status === "ok" ? listed.files.map((f) => f.path) : [];
