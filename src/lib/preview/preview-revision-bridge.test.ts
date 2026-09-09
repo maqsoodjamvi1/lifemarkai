@@ -7,20 +7,19 @@ function guest() {
   const handlers = new Map<string, (event: Record<string, unknown>) => void>();
   const frames: Array<() => void> = [];
   const messages: unknown[] = [];
-  let state = "";
   const parent = { postMessage: (message: unknown) => messages.push(message) };
   const window = { parent, addEventListener: (type: string, fn: (event: Record<string, unknown>) => void) => handlers.set(type, fn) };
   const root = { querySelectorAll: () => [1], innerText: "Bakery", getBoundingClientRect: () => ({ height: 100 }) };
   runInNewContext(PREVIEW_REVISION_BRIDGE, {
     window,
-    document: { documentElement: { setAttribute: (_key: string, value: string) => { state = value; } }, body: root, getElementById: () => null, querySelector: () => null },
+    document: { body: root, getElementById: () => null, querySelector: () => null },
     requestAnimationFrame: (fn: () => void) => frames.push(fn),
   });
   return {
     emit: (type: string, data: Record<string, unknown> = {}) => handlers.get(type)?.(data),
     challenge: (revision: string) => handlers.get("message")?.({ source: parent, data: { type: "lifemark-preview-verify-revision", revision } }),
     paint: () => { while (frames.length) frames.shift()!(); },
-    state: () => JSON.parse(state), messages,
+    messages,
   };
 }
 
@@ -33,7 +32,7 @@ test("a hidden frame cannot acknowledge before painting; a renewed challenge can
   g.challenge("a");
   g.paint();
   assert.ok(g.messages.length > 0);
-  assert.equal(g.state().revision, "a");
+  assert.equal((g.messages[0] as { revision: string }).revision, "a");
 });
 
 test("revision receipt and an errored update are not paint success", () => {
@@ -46,7 +45,6 @@ test("revision receipt and an errored update are not paint success", () => {
   g.emit("lifemark-preview-update-end");
   g.paint();
   assert.equal(g.messages.length, 0);
-  assert.equal(g.state().failed, true);
 });
 
 test("a newer revision cannot satisfy an old challenge", () => {
