@@ -122,6 +122,8 @@ interface PreviewPanelProps {
   isPublic?: boolean;
   /** Live mode may display the origin but must never sync source changes. */
   isLocked?: boolean;
+  /** Hidden mobile panes cannot reliably provide animation-frame paint evidence. */
+  isVisible?: boolean;
 }
 
 const PreviewAnnotateModal = dynamic(importWithRetry(() => import("./preview-annotate-modal").then((module) => module.PreviewAnnotateModal)), { ssr: false });
@@ -163,6 +165,7 @@ function PreviewPanelImpl({
   onOpenPanel,
   isPublic = false,
   isLocked = false,
+  isVisible = true,
 }: PreviewPanelProps) {
   const outOfCredits = credits !== undefined && credits <= 0;
   const [device, setDevice] = useState<DeviceSize>("desktop");
@@ -1454,6 +1457,10 @@ function PreviewPanelImpl({
           ]);
         }
         setSandboxSyncInstalling(!!result.installing && !sandboxUrlLiveRef.current);
+        // Sync files while Chat is open, but start the paint deadline only
+        // when the iframe is visible. Revealing it reruns this effect using
+        // the cached sync result, so no second upload is necessary.
+        if (!isVisible) return;
         // Live origin already showing: let Vite pick up new deps without a
         // lying "Installing…" pill. No URL yet: keep the pill until phase
         // ready, with a long safety timeout so it cannot stick forever.
@@ -1490,7 +1497,7 @@ function PreviewPanelImpl({
       window.clearTimeout(timer);
       for (const t of trailing) window.clearTimeout(t);
     };
-  }, [previewEngine, sandboxId, previewFiles, projectId, syncPreviewSnapshot, isGenerating, isLocked, transitionPreviewMachine]);
+  }, [previewEngine, sandboxId, previewFiles, projectId, syncPreviewSnapshot, isGenerating, isLocked, isVisible, sandboxReloadNonce, refreshKey, transitionPreviewMachine]);
 
   // Pull Modal Vite/Next logs into the Console tab + agent telemetry (Lovable parity).
   const lastModalTelemetryKeyRef = useRef("");
@@ -1817,7 +1824,9 @@ function PreviewPanelImpl({
                   : null);
 
   const previewStatusText =
-    hideTopChrome
+    !isVisible && previewEngine === "sandbox" && liveSandboxOrigin && previewMachineState === "loading"
+      ? "Open preview to check changes"
+      : hideTopChrome
       ? previewEngine === "sandbox" && !liveSandboxOrigin
         ? (modalPhaseLabel || "Starting live preview…")
         : previewEngine === "sandbox" && sandboxSyncInstalling && !liveSandboxOrigin
@@ -1825,7 +1834,7 @@ function PreviewPanelImpl({
             : previewMachineState === "building" || previewMachineState === "loading" || (previewEngine === "sandbox" && sandboxLoading && !liveSandboxOrigin)
               ? ((previewEngine === "sandbox" ? modalPhaseLabel : null) || (previewMachineState === "loading" ? "Updating preview…" : "Loading preview…"))
               : previewMachineState === "error"
-                ? "Updating preview…"
+                ? "Preview needs refresh"
               : null
       : previewMachineState === "building"
         ? "Preparing preview"
@@ -1834,7 +1843,7 @@ function PreviewPanelImpl({
           : previewMachineState === "unavailable"
             ? "Starting live preview…"
             : previewMachineState === "error"
-              ? "Updating preview…"
+              ? "Preview needs refresh"
               : null;
 
   // Broadcast preview boot status to top-bar UrlBarPill (Lovable parity).
@@ -1992,13 +2001,12 @@ function PreviewPanelImpl({
   // Draft/legacy WebContainer path — hidden unless NEXT_PUBLIC_PREVIEW_WEBCONTAINER=1.
   function refresh() {
     if (previewEngine === "sandbox" && sandboxIframeRef.current?.contentWindow) {
-      try {
-        sandboxIframeRef.current.contentWindow.location.reload();
-        clearPreviewLogs();
-        return;
-      } catch {
-        /* fall through */
-      }
+      // The live frame is cross-origin: location.reload() throws. Remount the
+      // frame explicitly and restart acknowledgment against the cached revision.
+      setRefreshKey((key) => key + 1);
+      transitionPreviewMachine("loading", "manual preview refresh");
+      clearPreviewLogs();
+      return;
     }
     if (previewEngine === "webcontainer") {
       const iframe = runtimeContainerRef.current?.querySelector("iframe");
@@ -2459,7 +2467,7 @@ function PreviewPanelImpl({
             {withDeviceFrame(
               <iframe
                 id="static-preview-panel"
-                key={`live-${editorPreviewSrc.split("?")[0]}-${sandboxReloadNonce}`}
+                key={`live-${editorPreviewSrc.split("?")[0]}-${sandboxReloadNonce}-${refreshKey}`}
                 ref={sandboxIframeRef}
                 src={editorPreviewSrc}
                 data-preview-url={editorPreviewSrc}

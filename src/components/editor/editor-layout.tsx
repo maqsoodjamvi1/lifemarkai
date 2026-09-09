@@ -1603,6 +1603,7 @@ export function EditorLayout({
                 fallback={(error, retry) => <PreviewCrashFallback error={error} onRetry={retry} />}
               >
               <PreviewPanel
+                isVisible={mobilePaneActive === "preview"}
                 isLocked={isLiveLocked}
                 files={previewVersion?.files ?? files}
                 framework={project.framework}

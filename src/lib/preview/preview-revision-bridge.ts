@@ -1,7 +1,11 @@
 /** Runs inside the guest. Revision receipt alone is not render completion. */
 export const PREVIEW_REVISION_BRIDGE = `(function () {
   var revision = null, challenge = null, ready = false, failed = false, updating = false;
+  function report() {
+    document.documentElement.setAttribute('data-lifemark-preview-state', JSON.stringify({ revision: revision, challenge: challenge, ready: ready, failed: failed, updating: updating }));
+  }
   function paint() {
+    report();
     if (!challenge || !ready || failed || updating || revision !== challenge) return;
     requestAnimationFrame(function () { requestAnimationFrame(function () {
       if (!challenge || !ready || failed || updating || revision !== challenge) return;
@@ -14,12 +18,12 @@ export const PREVIEW_REVISION_BRIDGE = `(function () {
       window.parent.postMessage({ type: 'lifemark-preview-revision-painted', revision: revision }, '*');
     }); });
   }
-  window.addEventListener('lifemark-preview-revision', function (e) { revision = e.detail; ready = false; });
-  window.addEventListener('lifemark-preview-update-start', function (e) { updating = true; if (e.detail && e.detail.application) failed = false; ready = false; });
+  window.addEventListener('lifemark-preview-revision', function (e) { revision = e.detail; ready = false; report(); });
+  window.addEventListener('lifemark-preview-update-start', function (e) { updating = true; if (e.detail && e.detail.application) failed = false; ready = false; report(); });
   window.addEventListener('lifemark-preview-update-end', function () { updating = false; ready = true; paint(); });
-  window.addEventListener('lifemark-preview-update-error', function () { failed = true; ready = false; });
-  window.addEventListener('error', function () { failed = true; ready = false; });
-  window.addEventListener('unhandledrejection', function () { failed = true; ready = false; });
+  window.addEventListener('lifemark-preview-update-error', function () { failed = true; ready = false; report(); });
+  window.addEventListener('error', function () { failed = true; ready = false; report(); });
+  window.addEventListener('unhandledrejection', function () { failed = true; ready = false; report(); });
   window.addEventListener('load', function () { ready = true; paint(); });
   window.addEventListener('message', function (e) {
     if (e.source !== window.parent || !e.data || e.data.type !== 'lifemark-preview-verify-revision') return;
