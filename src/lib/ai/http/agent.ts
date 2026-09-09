@@ -550,6 +550,8 @@ export async function handleAiAgent(req: Request) {
           projectFileMap.set(path, { path, content: String(file.content ?? ""), language: detectLanguage(path) });
         }
 
+        const originalManifest = projectFileMap.get("package.json")?.content;
+
         // ── Pre-agent snapshot ───────────────────────────────────────────────
         //
         // The chat build route has taken one of these before every turn for a
@@ -714,7 +716,10 @@ export async function handleAiAgent(req: Request) {
             brand: (projectRow as { name?: string } | null)?.name ?? undefined,
           });
           for (const file of withChrome) {
-            if (file.path === "package.json") {
+            // A source-only edit must keep the installed dependency contract.
+            // Re-pinning an untouched manifest makes isolated verification reject
+            // an otherwise valid edit and needlessly triggers npm installation.
+            if (file.path === "package.json" && file.content !== originalManifest) {
               const aligned = alignGeneratedPackageJson(file.content);
               if (aligned.changed.length > 0) file.content = aligned.content;
               const template = resolveControlledTemplateForPrompt(task, String((projectRow as { framework?: string } | null)?.framework ?? "react"));
