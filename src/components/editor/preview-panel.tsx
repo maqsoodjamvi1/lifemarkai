@@ -37,7 +37,8 @@ import { filesBelongToProject, getRefreshEffectiveFiles } from "./preview-panel-
 import type { PreviewEngine } from "@/lib/preview/resolve-preview-engine";
 import { PhoneFrame,TabletFrame,type DeviceSize } from "./preview-device-frame";
 import { PreviewVisualEditPopover as VebPopover,type VebElement } from "./preview-visual-edit-popover";
-import { LivePreviewWaiting } from "./instant-srcdoc-preview";
+import { InstantSrcdocPreview, LivePreviewWaiting } from "./instant-srcdoc-preview";
+import { requiresFrameworkRuntime } from "@/lib/preview/requires-framework-runtime";
 import { PreviewDesignView } from "./preview-design-view";
 import { announcePreviewSettled } from "@/lib/preview/wait-for-preview-success";
 import { usePreviewMachine } from "./use-preview-machine";
@@ -1320,7 +1321,9 @@ function PreviewPanelImpl({
       clearPreviewLogs();
       clearVebSelection();
       errorGuard.clearErrors();
-      transitionPreviewMachine("loading", "sandbox file sync");
+      if (!sandboxUrlLiveRef.current) {
+        transitionPreviewMachine("loading", "sandbox file sync");
+      }
       return;
     }
     if (engine === "webcontainer") {
@@ -1430,7 +1433,10 @@ function PreviewPanelImpl({
     const trailing: number[] = [];
     const timer = window.setTimeout(() => {
       void (async () => {
-        transitionPreviewMachine("loading", "sandbox file sync");
+        // Do not flip a painted iframe back to "Updating preview…" for HMR sync.
+        if (!sandboxUrlLiveRef.current) {
+          transitionPreviewMachine("loading", "sandbox file sync");
+        }
         const result = await syncPreviewSnapshot(payload);
         if (superseded) return;
         if (!result.ok) {
@@ -1471,15 +1477,26 @@ function PreviewPanelImpl({
             }, 90_000),
           );
         }
-        const painted = result.revision ? await waitForPreviewRevision(
-          result.revision,
-          () => sandboxIframeRef.current?.contentWindow ?? null,
-          () => sandboxUrlLiveRef.current,
-          verification.signal,
-        ) : false;
+        const hasLiveFrame = Boolean(sandboxUrlLiveRef.current);
+        if (!hasLiveFrame) {
+          // Origin is still booting — InstantSrcdocPreview is on screen.
+          // Do not mark the machine error after the revision ping times out.
+          return;
+        }
+        const painted = result.revision
+          ? await waitForPreviewRevision(
+              result.revision,
+              () => sandboxIframeRef.current?.contentWindow ?? null,
+              () => sandboxUrlLiveRef.current,
+              verification.signal,
+            )
+          : false;
         if (superseded) return;
         setSandboxSyncInstalling(false);
-        transitionPreviewMachine(painted ? "ready" : "error", painted ? "latest revision rendered" : "latest revision did not confirm rendering");
+        transitionPreviewMachine(
+          painted ? "ready" : "error",
+          painted ? "latest revision rendered" : "latest revision did not confirm rendering",
+        );
         announcePreviewSettled(painted);
         if (painted) {
           window.dispatchEvent(new CustomEvent("lifemark-preview-heal-done"));
@@ -1497,7 +1514,7 @@ function PreviewPanelImpl({
       window.clearTimeout(timer);
       for (const t of trailing) window.clearTimeout(t);
     };
-  }, [previewEngine, sandboxId, previewFiles, projectId, syncPreviewSnapshot, isGenerating, isLocked, isVisible, sandboxReloadNonce, refreshKey, transitionPreviewMachine]);
+  }, [previewEngine, sandboxId, sandboxUrl, previewFiles, projectId, syncPreviewSnapshot, isGenerating, isLocked, isVisible, sandboxReloadNonce, refreshKey, transitionPreviewMachine]);
 
   // Pull Modal Vite/Next logs into the Console tab + agent telemetry (Lovable parity).
   const lastModalTelemetryKeyRef = useRef("");
@@ -1608,7 +1625,9 @@ function PreviewPanelImpl({
     // Never clear a populated preview with an empty file list.
     if (relevantFiles.length === 0) return;
     previewBuildShaRef.current = sig.slice(0, 12) || `${Date.now()}`;
-    transitionPreviewMachine("building", "project files changed");
+    if (!previewFilesSigRef.current) {
+      transitionPreviewMachine("building", "project files changed");
+    }
     if (previewFilesSigRef.current === "") {
       // Leading edge: empty → first real content renders without delay.
       previewFilesSigRef.current = sig;
@@ -1689,15 +1708,16 @@ function PreviewPanelImpl({
   // live app. buildFallbackHtml already wraps its own healing pipeline in
   // try/catch (see its own source); this outer try/catch is only for the
   // unlikely case something above that layer still throws.
+  const needsLiveFramework = requiresFrameworkRuntime(previewFiles);
   const fallbackPreviewHtml = useMemo(() => {
-    if (!previewFiles.length) return EMPTY_PREVIEW_HTML;
+    if (!previewFiles.length || needsLiveFramework) return EMPTY_PREVIEW_HTML;
     try {
       return buildFallbackHtml(previewFiles);
     } catch (err) {
       console.error("[preview-panel] buildFallbackHtml failed, rendering empty preview:", err);
       return EMPTY_PREVIEW_HTML;
     }
-  }, [previewFiles]);
+  }, [previewFiles, needsLiveFramework]);
 
   // Live file updates for the WebContainer engine. The boot effect above
   // deliberately excludes file content from its deps (a full boot + npm
@@ -1826,6 +1846,8 @@ function PreviewPanelImpl({
   const previewStatusText =
     !isVisible && previewEngine === "sandbox" && liveSandboxOrigin && previewMachineState === "loading"
       ? "Open preview to check changes"
+      : liveSandboxOrigin && (previewMachineState === "ready" || previewMachineState === "loading" || previewMachineState === "building")
+        ? null
       : hideTopChrome
       ? previewEngine === "sandbox" && !liveSandboxOrigin
         ? (modalPhaseLabel || "Starting live preview…")
@@ -2477,7 +2499,13 @@ function PreviewPanelImpl({
                 allow="clipboard-read; clipboard-write; fullscreen"
                 onLoad={() => {
                   if (!liveSandboxOrigin) transitionPreviewMachine("ready", "preview host loaded");
-                  if (!liveSandboxOrigin) return;
+                  // Live origin settle is owned by waitForPreviewRevision after
+                  // sync. Announcing here let generation wait screenshot the
+                  // previous document as soon as the iframe navigated.
+                  if (!liveSandboxOrigin) {
+                    announcePreviewSettled(true);
+                    return;
+                  }
                   const expectAlive = sandboxBridgeAliveRef.current;
                   const token = ++sandboxPingTokenRef.current;
                   sandboxIframeRef.current?.contentWindow?.postMessage(
@@ -2560,28 +2588,41 @@ function PreviewPanelImpl({
               />,
             )}
           </div>
-        ) : (
+        ) : needsLiveFramework ? (
           <LivePreviewWaiting
+            title={sandboxLifecycle === "paused" ? "Live preview paused" : "Starting live preview"}
             paused={sandboxLifecycle === "paused"}
-            title={
-              sandboxLifecycle === "paused"
-                ? "Still building?"
-                : sandboxLifecycle === "resuming"
-                  ? "Resuming live preview"
-                  : !sandboxEnabled && sandboxStatusResolved
-                    ? "Waiting for Docker"
-                    : "Starting live preview"
+            status={sandboxError || modalPhaseLabel || "Connecting to the project’s framework runtime…"}
+            actions={
+              <button type="button" className="rounded-full border px-3 py-1 text-xs" onClick={() => {
+                if (sandboxLifecycle === "paused") void resumeSandboxPreview();
+                else void requestSandboxPreview();
+              }}>
+                {sandboxLifecycle === "paused" ? "Resume preview" : "Retry live preview"}
+              </button>
+            }
+          />
+        ) : (
+          <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+          {withDeviceFrame(
+          <InstantSrcdocPreview
+            html={staticRuntime ? renderedStaticHtml : fallbackPreviewHtml}
+            iframeRef={iframeRef}
+            title="Preview"
+            contentKey={`wait-${filesSignature}-${refreshKey}`}
+            announceSettled={
+              staticRuntime ||
+              sandboxLifecycle === "paused" ||
+              (!sandboxEnabled && sandboxStatusResolved)
             }
             status={
               sandboxLifecycle === "paused"
-                ? "The live preview paused to save resources. Resume when you are ready."
+                ? "Live preview paused — showing instant preview"
                 : sandboxLifecycle === "resuming"
-                  ? "Reconnecting to the live preview…"
-                  : !sandboxStatusResolved
-                    ? "Connecting to live preview…"
-                    : sandboxEnabled
-                      ? (modalPhaseLabel || "Starting live preview…")
-                      : (sandboxError || "Start Docker Desktop so this project can boot on a live preview origin.")
+                  ? "Resuming live preview…"
+                  : !sandboxEnabled && sandboxStatusResolved
+                    ? "Live origin offline — showing instant preview"
+                    : modalPhaseLabel || "Starting live preview…"
             }
             actions={
               sandboxLifecycle === "paused" || sandboxLifecycle === "resuming" ? (
@@ -2590,9 +2631,9 @@ function PreviewPanelImpl({
                 onClick={() => {
                   void resumeSandboxPreview();
                 }}
-                className="h-7 shrink-0 rounded-full bg-violet-600 px-3 text-xs font-medium text-white hover:bg-violet-500"
+                className="h-6 shrink-0 rounded-full bg-violet-600 px-2 text-[10px] font-medium text-white hover:bg-violet-500"
               >
-                Resume preview
+                Resume
               </button>
               ) : !sandboxEnabled && sandboxStatusResolved ? (
               <button
@@ -2600,13 +2641,18 @@ function PreviewPanelImpl({
                 onClick={() => {
                   void requestSandboxPreview();
                 }}
-                className="h-7 shrink-0 rounded-full bg-violet-600 px-3 text-xs font-medium text-white hover:bg-violet-500"
+                className="h-6 shrink-0 rounded-full bg-violet-600 px-2 text-[10px] font-medium text-white hover:bg-violet-500"
               >
-                Retry
+                Retry live
               </button>
               ) : undefined
             }
-          />
+            onReady={() => {
+              transitionPreviewMachine("ready", "srcdoc preview painted");
+            }}
+          />,
+          )}
+          </div>
         )}
 
         {/* Console / Network / Perf — Modal live preview only */}
@@ -2689,43 +2735,23 @@ function PreviewPanelImpl({
           </div>
         )}
 
-        {/* Generation shimmer overlay */}
+        {/* Generation status — keep the preview visible */}
         <AnimatePresence>
           {isGenerating && (
             <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
               transition={{ duration: 0.15 }}
-              className="absolute inset-0 z-40 pointer-events-none"
+              className="pointer-events-none absolute top-3 left-1/2 z-40 -translate-x-1/2"
             >
-              {/* Frosted glass dimmer */}
-              <div className="absolute inset-0 bg-background/60 backdrop-blur-[1px]" />
-              {/* Scanning shimmer line */}
-              <motion.div
-                className="absolute left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-violet-400 to-transparent opacity-70"
-                animate={{ top: ["0%", "100%"] }}
-                transition={{ duration: 1.6, repeat: Infinity, ease: "linear" }}
-              />
-              {/* Status badge */}
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="flex items-center gap-2.5 bg-background/90 backdrop-blur-md border border-violet-500/30 rounded-full px-4 py-2 shadow-xl">
-                  <div className="flex gap-0.5">
-                    {[0, 1, 2].map((i) => (
-                      <motion.div
-                        key={i}
-                        className="w-1.5 h-1.5 rounded-full bg-violet-400"
-                        animate={{ scale: [1, 1.5, 1], opacity: [0.4, 1, 0.4] }}
-                        transition={{ duration: 0.8, delay: i * 0.15, repeat: Infinity }}
-                      />
-                    ))}
-                  </div>
-                  <span className="text-[12px] text-violet-800 dark:text-violet-200 font-medium">
-                    {generatingFileCount > 0
-                      ? `Writing ${generatingFileCount} file${generatingFileCount !== 1 ? "s" : ""}…`
-                      : "AI is generating…"}
-                  </span>
-                </div>
+              <div className="flex items-center gap-2 rounded-full border border-violet-500/30 bg-background/95 px-3 py-1 shadow-sm">
+                <Loader2 className="h-3 w-3 animate-spin text-violet-400" />
+                <span className="text-[11px] font-medium text-violet-800 dark:text-violet-200">
+                  {generatingFileCount > 0
+                    ? `Writing ${generatingFileCount} file${generatingFileCount !== 1 ? "s" : ""}…`
+                    : "AI is generating…"}
+                </span>
               </div>
             </motion.div>
           )}
@@ -2741,14 +2767,14 @@ function PreviewPanelImpl({
           logsVisible={showConsole}
         />
 
-        {previewStatusText && previewMachineState !== "ready" && previewMachineState !== "error" && previewMachineState !== "unavailable" && (
+        {useLiveHttpPreview && previewStatusText && previewMachineState !== "ready" && previewMachineState !== "error" && previewMachineState !== "unavailable" && (
           <div className="absolute top-2 left-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-background/90 border border-border/70 text-[10px] text-muted-foreground shadow-sm">
             <Loader2 className="w-3 h-3 animate-spin text-blue-400" />
             <span>{previewStatusText}</span>
           </div>
         )}
 
-        {hideTopChrome && <LovablePreviewStatusPill label={previewStatusText} />}
+        {hideTopChrome && useLiveHttpPreview && <LovablePreviewStatusPill label={previewStatusText} />}
 
         {hideTopChrome && previewToolbarVisible && (
           <LovablePreviewInteractionToolbar

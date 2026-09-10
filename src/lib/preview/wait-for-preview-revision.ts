@@ -6,7 +6,10 @@ export function waitForPreviewRevision(
   url: () => string | null,
   signal: AbortSignal,
   host: Pick<Window, "addEventListener" | "removeEventListener"> = window,
-  timeoutMs = 60_000,
+  // Visual state no longer blocks on this ping. Generation wait still uses it
+  // when a live iframe exists; 8s is past a healthy HMR paint and short enough
+  // that a missing bridge cannot freeze the pane for a minute.
+  timeoutMs = 8_000,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     if (signal.aborted) { resolve(false); return; }

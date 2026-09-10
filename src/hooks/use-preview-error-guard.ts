@@ -378,7 +378,7 @@ export function usePreviewErrorGuard(
     setPhase((prev) => (prev === "healing" ? "frozen" : prev));
   }, [disarmHealWatchdog]);
 
-  const freezePreview = phase === "frozen" || phase === "healing";
+  const freezePreview = phase === "frozen";
 
   return useMemo(
     () => ({

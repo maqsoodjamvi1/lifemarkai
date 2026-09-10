@@ -12,6 +12,7 @@ export function InstantSrcdocPreview({
   actions,
   onReady,
   contentKey,
+  announceSettled = true,
 }: {
   html: string;
   iframeRef?: Ref<HTMLIFrameElement>;
@@ -20,9 +21,17 @@ export function InstantSrcdocPreview({
   actions?: ReactNode;
   onReady?: () => void;
   contentKey?: string;
+  /**
+   * False while this iframe is only a placeholder for a still-booting live
+   * origin. Generation wait must not treat the simplified srcdoc as the
+   * finished preview, or screenshots capture Babel HTML instead of Vite.
+   */
+  announceSettled?: boolean;
 }) {
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
+  const announceSettledRef = useRef(announceSettled);
+  announceSettledRef.current = announceSettled;
   const settledForKeyRef = useRef<string | null>(null);
   const srcDoc = typeof html === "string" ? html : "";
   const statusText = typeof status === "string" && status.trim() ? status : null;
@@ -52,7 +61,7 @@ export function InstantSrcdocPreview({
           if (settledForKeyRef.current === stamp) return;
           settledForKeyRef.current = stamp;
           try {
-            announcePreviewSettled(true);
+            if (announceSettledRef.current) announcePreviewSettled(true);
             onReadyRef.current?.();
           } catch (err) {
             console.error("[preview] srcdoc ready callback failed", err);
