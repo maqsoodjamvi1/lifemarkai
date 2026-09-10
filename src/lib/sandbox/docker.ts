@@ -95,6 +95,10 @@ const SUPERVISOR_TAG = "LM_SUPERVISOR";
 /** The dev-server supervisor loop — one definition, used by both boot paths. */
 function supervisorCommand(cmd: string): string {
   return (
+    // Boot and health recovery can both pass the ps check before either has
+    // spawned its shell. An OS lock closes that race across app processes and
+    // releases automatically when the supervisor exits or the container stops.
+    `if command -v flock >/dev/null 2>&1; then exec 9>/tmp/lifemark-dev.lock; flock -n 9 || exit 0; fi; ` +
     `while true; do ${cmd} >> ${DEV_LOG} 2>&1; ` +
     `echo "[supervisor] dev server exited ($(date -u +%H:%M:%S)); restarting" >> ${DEV_LOG}; ` +
     `sleep 1; done # ${SUPERVISOR_TAG}`

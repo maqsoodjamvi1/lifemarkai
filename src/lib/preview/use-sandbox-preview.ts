@@ -70,7 +70,7 @@ function readStoredPreview(projectId: string): { sandboxId: string | null; previ
   }
 }
 
-export function useSandboxPreview(projectId: string, frameRef?: { readonly current: HTMLIFrameElement | null }) {
+export function useSandboxPreview(projectId: string, frameRef?: { readonly current: HTMLIFrameElement | null }, isVisible = true) {
   useEffect(() => { clearPreviewSettled(); }, [projectId]);
   const [state, setState] = useState<SandboxPreviewState>({
     enabled: false,
@@ -681,6 +681,11 @@ export function useSandboxPreview(projectId: string, frameRef?: { readonly curre
     lastPaintPingRef.current = 0;
     paintAttemptsRef.current = 0;
   }, [projectId, state.previewUrl]);
+  // Paint belongs to one document. A successful old frame cannot certify the
+  // replacement loaded after a file sync or a recovered dev-server restart.
+  useEffect(() => {
+    lastPaintPingRef.current = 0;
+  }, [reloadNonce]);
   useEffect(() => {
     if (!state.enabled || !state.previewUrl) return;
     const onMsg = (e: MessageEvent) => {
@@ -706,7 +711,7 @@ export function useSandboxPreview(projectId: string, frameRef?: { readonly curre
   }, [state.enabled, state.previewUrl, frameRef]);
 
   useEffect(() => {
-    if (!state.enabled || !state.previewUrl || state.phase !== "ready") return;
+    if (!isVisible || !state.enabled || !state.previewUrl || state.phase !== "ready") return;
     let cancelled = false;
     let timer = 0;
     const schedule = (delay: number) => {
@@ -724,12 +729,12 @@ export function useSandboxPreview(projectId: string, frameRef?: { readonly curre
     // that alone can outlast 6s — so the watchdog was reloading iframes that
     // were mid-first-paint, throwing away the optimizer's progress and making
     // the preview slower in exactly the case it was meant to rescue.
-    schedule(12_000);
+    schedule(12_000 * 2 ** paintAttemptsRef.current);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [state.enabled, state.previewUrl, state.phase]);
+  }, [state.enabled, state.previewUrl, state.phase, reloadNonce, isVisible]);
 
   /** A boot parked at "starting" must not spin forever.
    *

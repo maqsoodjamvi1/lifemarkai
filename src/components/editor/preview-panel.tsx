@@ -343,7 +343,7 @@ function PreviewPanelImpl({
     statusResolved: sandboxStatusResolved,
     reloadNonce: sandboxReloadNonce,
     lifecycle: sandboxLifecycle,
-  } = useSandboxPreview(projectId ?? "", sandboxIframeRef);
+  } = useSandboxPreview(projectId ?? "", sandboxIframeRef, isVisible);
   const sandboxIdLiveRef = useRef(sandboxId);
   sandboxIdLiveRef.current = sandboxId;
   const sandboxUrlLiveRef = useRef(sandboxUrl);
