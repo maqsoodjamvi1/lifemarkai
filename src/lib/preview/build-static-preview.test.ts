@@ -146,3 +146,25 @@ test("buildStaticPreview runs nested local ES modules through an import map", ()
   assert.match(html, /import "app:\/app\.js"/);
   assert.doesNotMatch(html, /from \\"\.\.\/data\/seed\.js/);
 });
+
+test("buildStaticPreview reports a bundler error instead of leaking an unrunnable TSX entry script (#9)", () => {
+  const html = buildStaticPreview([
+    { path: "index.html", content: '<div id="root"></div><script type="module" src="/src/main.tsx"></script>' },
+    { path: "src/main.tsx", content: 'import App from "./App"; App.mount();' },
+  ]);
+  assert.doesNotMatch(html, /src=["']\/src\/main\.tsx["']/);
+  assert.doesNotMatch(html, /<script[^>]*type="module"[^>]*>\s*<\/script>/);
+  assert.match(html, /kind:\s*"bundler"/);
+  assert.match(html, /Failed to compile/);
+  assert.match(html, /src\/main\.tsx/);
+  assert.match(html, /source:\s*"lifemark-preview-errors"/);
+});
+
+test("buildStaticPreview leaves genuinely static projects alone (no bundler error)", () => {
+  const html = buildStaticPreview([
+    { path: "index.html", content: '<script src="app.js"></script>' },
+    { path: "app.js", content: "console.log('ok');" },
+  ]);
+  assert.doesNotMatch(html, /data-lifemark-unsupported-entry/);
+  assert.doesNotMatch(html, /kind:\s*"bundler"/);
+});
