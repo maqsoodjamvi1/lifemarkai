@@ -270,6 +270,29 @@ function injectStaticBridge(html: string, route: string): string {
   return `<!doctype html><html><head>${bridge}</head><body>${html}</body></html>`;
 }
 
+/**
+ * Surface local TypeScript/JSX entry scripts as a preview error instead of
+ * leaving their src URL to resolve against the parent application origin.
+ */
+function unsupportedEntryScriptBridge(paths: string[]): string {
+  const message = `Failed to compile: entry script${paths.length > 1 ? "s" : ""} ${paths.join(", ")} ${
+    paths.length > 1 ? "are" : "is"
+  } TypeScript/JSX and need a bundler, but this project is currently on the static (no-build) preview engine.`;
+  return `<script data-lifemark-unsupported-entry>(function(){
+try {
+  window.parent.postMessage({
+    source: "lifemark-preview-errors",
+    type: "preview-error",
+    kind: "bundler",
+    message: ${JSON.stringify(message)},
+    extra: { paths: ${JSON.stringify(paths)} },
+    url: location.href,
+    timestamp: Date.now()
+  }, "*");
+} catch (e) {}
+})();</script>`;
+}
+
 /** Compose a dependency-free static project into one srcdoc document. */
 export function buildStaticPreview(
   files: Pick<ProjectFile, "path" | "content">[],
@@ -294,18 +317,29 @@ export function buildStaticPreview(
     return `<style data-lifemark-file="${file.path}">\n${rewriteCssAssets(file.content, file.path, fileByPath)}\n</style>`;
   });
 
-  html = html.replace(/<script\b[^>]*\bsrc\s*=\s*(["']).*?\1[^>]*>\s*<\/script>/gis, (tag) => {
+  const unsupportedEntryScripts: string[] = [];
+  html = html.replace(/<script\b[^>]*\bsrc\s*=\s*([\"']).*?\1[^>]*>\s*<\/script>/gis, (tag) => {
     const src = attribute(tag, "src");
     if (!src) return tag;
     const path = resolveLocalReference(src, entry.path);
     const file = path ? fileByPath.get(path) : undefined;
-    if (!file || !/\.(?:m?js)$/i.test(file.path)) return tag;
-    return `<script type="module" data-lifemark-file="${file.path}">import "app:/${file.path}";</script>`;
+    if (!file) return tag;
+    if (/\.(?:m?js)$/i.test(file.path)) {
+      return `<script type="module" data-lifemark-file="${file.path}">import "app:/${file.path}";</script>`;
+    }
+    if (/\.(?:tsx?|jsx)$/i.test(file.path)) {
+      unsupportedEntryScripts.push(file.path);
+      return `<!-- lifemark: ${file.path} needs a bundler; static preview engine can't execute it -->`;
+    }
+    return tag;
   });
   html = rewriteHtmlAssetAttributes(html, entry.path, fileByPath);
   html = rewriteLinkAssets(html, entry.path, fileByPath);
   html = rewriteStaticPageLinks(html, entry.path, fileByPath);
   html = injectIntoHead(html, moduleRegistryScript(normalized));
+  if (unsupportedEntryScripts.length > 0) {
+    html = injectIntoHead(html, unsupportedEntryScriptBridge(unsupportedEntryScripts));
+  }
   // LifemarkData SDK — localStorage mode in the editor preview; published
   // deploys inject the hosted-endpoint variant in build-deploy-files. Runs
   // AFTER the bridge so fragment entries are already wrapped in a full
