@@ -142,3 +142,36 @@ test("prompt block instructs proactive suggested next steps", () => {
   assert.ok(block.includes("Suggested next steps"));
   assert.ok(block.includes("404"));
 });
+
+test("TanStack Start apps are flagged for missing head() SEO, not index.html", () => {
+  const gaps = detectAppGaps([
+    {
+      path: "src/routes/__root.tsx",
+      content: `export const Route = createRootRoute({
+  head: () => ({ meta: [{ title: "Bakery" }] }),
+  component: Root,
+});`,
+    },
+    { path: "src/routes/index.tsx", content: "export const Route = createFileRoute('/')({ component: Home });" },
+    { path: "index.html", content: "<html><body>leftover</body></html>" },
+  ]);
+  assert.ok(gaps.some((g) => g.includes("head()")));
+  assert.ok(!gaps.some((g) => g.includes("index.html")));
+});
+
+test("TanStack Start apps with head() title and description produce no SEO gap", () => {
+  const gaps = detectAppGaps([
+    {
+      path: "src/routes/__root.tsx",
+      content: `export const Route = createRootRoute({
+  head: () => ({
+    meta: [
+      { title: "Bakery" },
+      { name: "description", content: "Fresh bread daily" },
+    ],
+  }),
+});`,
+    },
+  ]);
+  assert.ok(!gaps.some((g) => g.includes("SEO")));
+});

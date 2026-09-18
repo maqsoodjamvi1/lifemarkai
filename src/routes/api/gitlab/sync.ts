@@ -11,6 +11,7 @@ createOrGetMR,
 } from "@/lib/gitlab/client";
 import { logger } from "@/lib/logger";
 import { getProjectAccess,canWriteProjectFiles } from "@/lib/project/access";
+import { dropForbiddenTanStackMergeFiles } from "@/lib/ai/project-contract-validate";
 
 /** Native /api/gitlab/sync — actions: create | push | pull | mr | status. */
 const LANG_MAP: Record<string, string> = {
@@ -102,7 +103,11 @@ export const Route = createFileRoute("/api/gitlab/sync")({
         // ── Pull ──
         if (action === "pull") {
           const files = await pullFiles(token, glProjectId, branch);
-          for (const file of files) {
+          const allowed = dropForbiddenTanStackMergeFiles(
+            files,
+            (project.project_files ?? []) as Array<{ path: string }>,
+          );
+          for (const file of allowed.files) {
             const ext = file.path.split(".").pop()?.toLowerCase() ?? "";
             await supabase.from("project_files").upsert({
               project_id: projectId,
@@ -111,8 +116,10 @@ export const Route = createFileRoute("/api/gitlab/sync")({
               language: LANG_MAP[ext] ?? "plaintext",
             }, { onConflict: "project_id,path" });
           }
-          logger.info("gitlab.sync.pull", { projectId, branch, fileCount: files.length });
-          return Response.json({ files: files.length, branch });
+          logger.info("gitlab.sync.pull", {
+            projectId, branch, fileCount: allowed.files.length, dropped: allowed.dropped.length,
+          });
+          return Response.json({ files: allowed.files.length, dropped: allowed.dropped, branch });
         }
 
         // ── MR ──

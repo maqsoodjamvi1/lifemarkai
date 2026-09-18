@@ -4,6 +4,8 @@ import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { extractSchemaFromFiles,dumpSourceDatabase,buildSeedSql } from "@/lib/import/lovable-db";
 import { parseCloudToolPermissions } from "@/lib/cloud/permissions";
 import { runManagedSql } from "@/lib/cloud/management";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 
 /**
  * Native /api/projects/:id/import-database — bring a Lovable/Supabase project's
@@ -89,9 +91,20 @@ export const Route = createFileRoute("/api/projects/$id/import-database")({
           const staged: Array<{ path: string; content: string; language: string }> = [];
           if (schemaSql) staged.push({ path: "supabase/import/schema.sql", content: schemaSql, language: "sql" });
           if (tablesWithData.length > 0) staged.push({ path: "supabase/import/seed.sql", content: seedSql, language: "sql" });
-          for (const f of staged) {
+          const { data: existingRows } = await supabase
+            .from("project_files")
+            .select("path, content, language")
+            .eq("project_id", projectId);
+          const existingFiles = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+          const constrained = constrainRepairFiles(
+            staged,
+            existingFiles,
+            readProjectContractFromFiles(existingFiles),
+            staged.map((file) => file.path),
+          );
+          for (const f of constrained.files) {
             await supabase.from("project_files").upsert(
-              { project_id: projectId, path: f.path, content: f.content, language: f.language },
+              { project_id: projectId, path: f.path, content: f.content, language: f.language ?? "sql" },
               { onConflict: "project_id,path" },
             );
           }
@@ -122,7 +135,7 @@ export const Route = createFileRoute("/api/projects/$id/import-database")({
             totalRows: dump.totalRows,
             skippedTables: dump.skippedTables,
             truncatedTables: dump.tables.filter((t) => t.truncated).map((t) => t.name),
-            stagedFiles: staged.map((f) => f.path),
+            stagedFiles: constrained.files.map((f) => f.path),
           });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);

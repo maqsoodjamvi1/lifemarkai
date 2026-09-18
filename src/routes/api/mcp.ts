@@ -21,6 +21,8 @@ import { DEFAULT_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { OPENROUTER_MODEL_IDS } from "@/lib/ai/openrouter-models";
 import { validateApiKey,hasScope,type ApiScope } from "@/lib/api/api-key";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 
 // Per-tool scope requirements. Legacy mcp_api_token identities carry an empty
 // scope list, which hasScope() treats as full access (no breakage). Scoped
@@ -232,10 +234,35 @@ async function callTool(toolName: string, args: Record<string, any>, userId: str
       };
       const detectedLang = language ?? (LANG_MAP[ext] ?? "plaintext");
 
-      const { error } = await admin
+      const { data: existingRows } = await admin
         .from("project_files")
-        .upsert({ project_id, path, content, language: detectedLang }, { onConflict: "project_id,path" });
-      if (error) throw new Error(error.message);
+        .select("path, content, language")
+        .eq("project_id", project_id);
+      const existing = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+      const constrained = constrainRepairFiles(
+        [{ path, content, language: detectedLang }],
+        existing,
+        readProjectContractFromFiles(existing),
+        [path],
+      );
+      if (!constrained.files.some((file) => file.path === path)) {
+        throw new Error("That file is not allowed on this project");
+      }
+
+      for (const file of constrained.files) {
+        const { error } = await admin
+          .from("project_files")
+          .upsert(
+            {
+              project_id,
+              path: file.path,
+              content: file.content,
+              language: file.language ?? detectedLang,
+            },
+            { onConflict: "project_id,path" },
+          );
+        if (error) throw new Error(error.message);
+      }
       return { ok: true, path, language: detectedLang };
     }
 

@@ -9,6 +9,8 @@ isManagementConfigured,
 configureManagedAuthRedirects,
 } from "@/lib/cloud/management";
 import { ENV_FILE_PATH,parseEnvFile,serializeEnvFile } from "@/lib/project/env-file";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 
 const CLOUD_STATUS_PROJECT_COLUMNS = [
   "id", "cloud_enabled", "cloud_region", "cloud_instance", "cloud_status",
@@ -72,16 +74,31 @@ export const Route = createFileRoute("/api/cloud/status")({
 
               if (keys.anonKey && project.cloud_supabase_url) {
                 try {
-                  const { data: envRow } = await supabase.from("project_files")
-                    .select("id, content").eq("project_id", projectId).eq("path", ENV_FILE_PATH).maybeSingle();
+                  const { data: existingRows } = await supabase.from("project_files")
+                    .select("path, content, language").eq("project_id", projectId);
+                  const existing = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+                  const envRow = existing.find((row) => row.path === ENV_FILE_PATH);
                   const env = parseEnvFile(envRow?.content ?? "");
                   if (env.VITE_SUPABASE_URL !== project.cloud_supabase_url || env.VITE_SUPABASE_ANON_KEY !== keys.anonKey) {
                     env.VITE_SUPABASE_URL = project.cloud_supabase_url;
                     env.VITE_SUPABASE_ANON_KEY = keys.anonKey;
-                    await supabase.from("project_files").upsert(
-                      { project_id: projectId, path: ENV_FILE_PATH, content: serializeEnvFile(env), language: "plaintext" },
-                      { onConflict: "project_id,path" },
+                    const constrained = constrainRepairFiles(
+                      [{ path: ENV_FILE_PATH, content: serializeEnvFile(env), language: "plaintext" }],
+                      existing,
+                      readProjectContractFromFiles(existing),
+                      [ENV_FILE_PATH],
                     );
+                    for (const file of constrained.files) {
+                      await supabase.from("project_files").upsert(
+                        {
+                          project_id: projectId,
+                          path: file.path,
+                          content: file.content,
+                          language: file.language ?? (file.path === ENV_FILE_PATH ? "plaintext" : "json"),
+                        },
+                        { onConflict: "project_id,path" },
+                      );
+                    }
                   }
                 } catch { /* best-effort */ }
 

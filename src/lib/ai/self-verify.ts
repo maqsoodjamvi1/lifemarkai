@@ -15,6 +15,7 @@
  */
 import { z } from "zod";
 import { recordEvent } from "../observability/events.ts";
+import { setCorrelation } from "../observability/correlation.ts";
 
 import { buildFallbackHtml } from "../preview/build-fallback-html.ts";
 import { buildStaticPreview } from "../preview/build-static-preview.ts";
@@ -39,10 +40,34 @@ import { fingerprintError } from "./failure-fingerprint.ts";
 import { recordRepairOutcome } from "./record-outcome.ts";
 import type { ProjectFile } from "../../types/database.ts";
 import { buildRepairContext } from "./repair-context.ts";
+import { selectRepairSlice } from "./repair-slice.ts";
+import { collectContractSmokeRoutes, readProjectContractFromFiles, type ProjectContract } from "./project-contract.ts";
+import { constrainRepairFiles, formatProjectContractErrors } from "./project-contract-validate.ts";
 import { loadOptionalPlaywright } from "../optional-playwright.ts";
 import { isLadderExhausted,resolveRepairTier,shouldPromoteRepairTier } from "./repair-ladder.ts";
 import { buildPriorAttemptsBlock,lookupPriorAttempts,suggestedStartingTier } from "./repair-memory.ts";
 import { applyEditBlocks,validateEditBatch } from "./edit-blocks.ts";
+import type { GenerationAttempt } from "./generation-attempt.ts";
+import { hasGenerationStep } from "./generation-attempt.ts";
+import { recordAttemptStep, runDurableStep, persistStepArtifact } from "./generation-loop.ts";
+import type { BuildRunStore } from "../build-runs/store.ts";
+import { attemptClusterFields } from "./failure-cluster.ts";
+import { failBounded } from "../reliability/core-loop-machine.ts";
+import {
+  CANDIDATE_WORKFLOW_STEPS,
+  PREVIEW_WORKFLOW_STEPS,
+  diffsFromFixedFiles,
+  emptyPreviewGateEvidence,
+  evaluatePreviewVerificationGate,
+  evidenceFromCandidateBuild,
+  failedStep,
+  mergePreviewGateEvidence,
+  passedStep,
+  skippedStep,
+  type PreviewGateEvidence,
+  type PreviewWorkflowStep,
+} from "./preview-verification-gate.ts";
+import { classifyPreviewFailureLayer, targetedRepairHint } from "./env-graph.ts";
 
 export interface SelfVerifyResult {
   engine: "browser" | "static" | "build";
@@ -52,6 +77,10 @@ export interface SelfVerifyResult {
   /** Files rewritten by fix rounds (path → new content) */
   fixedFiles: Array<{ path: string; content: string; language: string }>;
   errors: string[];
+  failureFamilies?: string[];
+  previewGate?: import("./preview-verification-gate.ts").PreviewGateSummary;
+  /** Repair budget / ladder / time cap hit — the preview must not keep retrying. */
+  boundedFailure?: boolean;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -240,15 +269,16 @@ async function visionDesignReview(screenshotBase64: string): Promise<string[]> {
  * value to substitute — and the list is capped so verification stays inside
  * its time budget.
  */
-function extractAppRoutes(files: ProjectFile[]): string[] {
+function extractAppRoutes(files: ProjectFile[], contract?: ProjectContract | null): string[] {
+  const routes = new Set(collectContractSmokeRoutes(files, contract));
   const router = files.find((f) => /^src\/App\.(tsx|jsx)$/.test(f.path));
-  if (!router?.content) return [];
-  const routes = new Set<string>();
-  for (const m of router.content.matchAll(/path\s*=\s*["']([^"']+)["']/g)) {
-    const p = m[1];
-    if (!p.startsWith("/")) continue;
-    if (p === "/" || p.includes(":") || p.includes("*")) continue;
-    routes.add(p);
+  if (router?.content) {
+    for (const m of router.content.matchAll(/path\s*=\s*["']([^"']+)["']/g)) {
+      const p = m[1];
+      if (!p.startsWith("/")) continue;
+      if (p === "/" || p.includes(":") || p.includes("*")) continue;
+      routes.add(p);
+    }
   }
   return [...routes].slice(0, 8);
 }
@@ -642,6 +672,12 @@ export async function runSelfVerification(opts: {
   candidateFiles?: ProjectFile[];
   /** Defaults false for candidate mode and true for legacy live verification. */
   persistFixes?: boolean;
+  /** When set, typecheck / production build / browser smoke become attempt steps. */
+  attempt?: GenerationAttempt;
+  /** Governs smoke routes and the repair slice. Falls back to project-contract.json in the file set. */
+  contract?: ProjectContract | null;
+  store?: BuildRunStore | null;
+  runId?: string | null;
 }): Promise<SelfVerifyResult | null> {
   const { supabase, projectId } = opts;
   const emit = opts.emit ?? (() => {});
@@ -679,6 +715,11 @@ export async function runSelfVerification(opts: {
     fixedFiles: [],
     errors: [],
   };
+  const stampFamilies = () => {
+    result.failureFamilies = attemptClusterFields(
+      result.errors.map((message) => ({ message })),
+    ).families.split(",").filter(Boolean);
+  };
 
   try {
     // Load the full project (verification needs every file, not just this build's)
@@ -693,6 +734,30 @@ export async function runSelfVerification(opts: {
       files = (rows ?? []) as ProjectFile[];
     }
     if (files.length === 0) return null;
+    let contract = opts.contract ?? readProjectContractFromFiles(files);
+    const filesBefore = files.map((file) => ({ path: file.path, content: file.content ?? "" }));
+    let originalFailures: Array<{ message: string }> = [];
+
+    const applyIndependentGate = (
+      evidence: PreviewGateEvidence,
+      requiredSteps: PreviewWorkflowStep[],
+    ) => {
+      const gate = evaluatePreviewVerificationGate({
+        originalFailures,
+        remainingErrors: result.errors,
+        diffs: diffsFromFixedFiles(filesBefore, result.fixedFiles, files),
+        evidence,
+        requiredSteps,
+      });
+      result.previewGate = gate.summary;
+      if (!gate.accepted) {
+        result.passed = false;
+        for (const reason of gate.rejectionReasons) {
+          if (!result.errors.includes(reason)) result.errors.push(reason);
+        }
+      }
+      stampFamilies();
+    };
 
     const manifest = files.find((file) => file.path === "package.json");
     if (manifest?.content) {
@@ -715,16 +780,124 @@ export async function runSelfVerification(opts: {
       result.engine = "build";
       result.rounds = 1;
       emit("Building your proposed changes in an isolated preview directory…");
-      const { data: project } = await supabase.from("projects").select("metadata").eq("id", projectId).maybeSingle();
+      const { data: project } = await supabase.from("projects").select("metadata, preview_url, deployed_url").eq("id", projectId).maybeSingle();
       const sandboxId = project?.metadata?.sandbox_id;
-      const build = await buildCandidateInSandbox(
-        typeof sandboxId === "string" ? sandboxId : "",
-        files.map((file) => ({ path: file.path, content: file.content ?? "" })),
+      if (typeof sandboxId === "string" && sandboxId) setCorrelation({ sandboxSessionId: sandboxId });
+      const runBuild = async () => {
+        const build = await buildCandidateInSandbox(
+          typeof sandboxId === "string" ? sandboxId : "",
+          files.map((file) => ({ path: file.path, content: file.content ?? "" })),
+        );
+        return { build, verdict: frameworkBuildVerdict(build, { committed: !opts.candidateFiles }) };
+      };
+      const recordBoot = Boolean(opts.attempt) && !hasGenerationStep(opts.attempt, "boot");
+      const { build, verdict } = recordBoot
+        ? await runDurableStep({
+          attempt: opts.attempt!,
+          step: "boot",
+          store: opts.store,
+          runId: opts.runId,
+          persist: true,
+          fn: runBuild,
+        })
+        : await runBuild();
+      const contractErrors = formatProjectContractErrors(files, contract);
+      result.errors = [...verdict.errors, ...contractErrors];
+      if (originalFailures.length === 0 && result.errors.length > 0) {
+        originalFailures = result.errors.map((message) => ({ message }));
+      }
+
+      let evidence = mergePreviewGateEvidence(
+        emptyPreviewGateEvidence(),
+        evidenceFromCandidateBuild(build),
       );
-      const verdict = frameworkBuildVerdict(build, { committed: !opts.candidateFiles });
-      result.passed = verdict.passed;
-      result.errors = verdict.errors;
-      emit(verdict.message);
+      if (build.stages?.boot) {
+        evidence = mergePreviewGateEvidence(evidence, { boot: passedStep() });
+      }
+
+      if (!evidence.typecheck.ran) {
+        const local = await runTypecheckGate(files);
+        if (local.available) {
+          evidence = mergePreviewGateEvidence(evidence, {
+            typecheck: local.errors.length === 0
+              ? passedStep()
+              : failedStep(local.errors.slice(0, 6).map((error) => error.formatted)),
+          });
+          if (local.errors.length > 0) {
+            result.errors = [...result.errors, ...local.errors.slice(0, 6).map((error) => error.formatted)];
+          }
+        }
+      }
+
+      if (!opts.candidateFiles) {
+        let liveUrl =
+          typeof opts.previewUrl === "string" && /^https?:\/\//i.test(opts.previewUrl.trim())
+            ? opts.previewUrl.trim()
+            : null;
+        const preview = (project as { preview_url?: string | null } | null)?.preview_url;
+        const deployed = (project as { deployed_url?: string | null } | null)?.deployed_url;
+        if (!liveUrl && typeof preview === "string" && /^https?:\/\//i.test(preview)) liveUrl = preview;
+        else if (!liveUrl && typeof deployed === "string" && /^https?:\/\//i.test(deployed)) liveUrl = deployed;
+        const playwright = await loadOptionalPlaywright();
+        if (playwright && liveUrl) {
+          emit("Testing the production preview in a real browser…");
+          const smoke = await renderAndCollectErrors(
+            playwright,
+            "",
+            liveUrl,
+            false,
+            collectContractSmokeRoutes(files, contract),
+          );
+          evidence = mergePreviewGateEvidence(evidence, {
+            smoke: smoke.errors.length === 0 ? passedStep() : failedStep(smoke.errors),
+          });
+          if (smoke.errors.length > 0) result.errors = [...result.errors, ...smoke.errors];
+        }
+      }
+
+      result.passed = verdict.passed && contractErrors.length === 0 && result.errors.length === 0;
+      const installFailed = result.errors.some((message) => /npm install|not on the install allowlist|ERESOLVE/i.test(message));
+      if (!hasGenerationStep(opts.attempt, "install")) {
+        recordAttemptStep(opts.attempt, "install", {
+          ok: evidence.install.passed,
+          error: installFailed ? result.errors.find((message) => /npm install|ERESOLVE|allowlist/i.test(message)) : undefined,
+        });
+        if (opts.attempt) {
+          await persistStepArtifact(opts.store, opts.runId, `${opts.attempt.attemptId}:install`, {
+            ok: evidence.install.passed,
+            errorCount: installFailed ? 1 : 0,
+            families: attemptClusterFields(result.errors.map((message) => ({ message }))).families,
+          });
+        }
+      }
+      const toolchainUnavailable = !build.available && !opts.candidateFiles;
+      if (toolchainUnavailable) {
+        stampFamilies();
+        result.previewGate = {
+          accepted: result.passed,
+          layer: originalFailures.length ? classifyPreviewFailureLayer(originalFailures) : null,
+          repairAccepted: null,
+          falseGreen: false,
+          incompleteWorkflow: true,
+          mismatch: build.reason ?? "candidate build unavailable",
+        };
+      } else {
+        applyIndependentGate(
+          evidence,
+          opts.candidateFiles ? CANDIDATE_WORKFLOW_STEPS : PREVIEW_WORKFLOW_STEPS,
+        );
+      }
+      if (contractErrors.length > 0) {
+        emit(
+          `Contract check found ${contractErrors.length} missing file${contractErrors.length === 1 ? "" : "s"} — the candidate is incomplete.`,
+        );
+      } else if (!result.passed) {
+        emit(result.previewGate?.incompleteWorkflow
+          ? "Preview verification requires install, type-check, production build, health check and a browser page-load."
+          : verdict.message);
+      } else {
+        emit(verdict.message);
+      }
       return result;
     }
 
@@ -858,7 +1031,7 @@ export async function runSelfVerification(opts: {
       // each as a precise, directly actionable instruction. That's what makes
       // the auto-fix round actually succeed rather than flailing on a stack
       // trace that points into minified react-dom.
-      const contractErrors = findContractErrors(files);
+      const exportContractErrors = findContractErrors(files);
 
       // ── Deterministic type-check, BEFORE the browser ───────────────────────
       // A compile error found here names the file, line and column. The same
@@ -968,7 +1141,8 @@ export async function runSelfVerification(opts: {
         }
       }
 
-      const typeErrors = [...importErrors, ...dependencyErrors, ...typeErrorList, ...keyWarnings, ...jsxHtmlWarnings];
+      const contractErrors = formatProjectContractErrors(files, contract);
+      const typeErrors = [...importErrors, ...dependencyErrors, ...typeErrorList, ...keyWarnings, ...jsxHtmlWarnings, ...exportContractErrors, ...contractErrors];
 
       // Which compiler ran is worth knowing in production. "local" on a live
       // build means the sandbox check silently returned null — no container,
@@ -986,12 +1160,17 @@ export async function runSelfVerification(opts: {
       // add about code that does not build, and skipping the launch here is
       // what turns the gate into a latency SAVING rather than an extra step.
       if (typeErrors.length > 0) {
-        const what = importErrors.length > 0 && typeErrorList.length === 0 ? "Missing file" : "Compile";
+        const what =
+          contractErrors.length > 0 && typeErrorList.length === 0 && importErrors.length === 0
+            ? "Contract"
+            : importErrors.length > 0 && typeErrorList.length === 0
+              ? "Missing file"
+              : "Compile";
         emit(`${what} check found ${typeErrors.length} error${typeErrors.length === 1 ? "" : "s"} — fixing before preview…`);
       }
 
       const visionEnabled = process.env.VISION_REVIEW === "true";
-      const appRoutes = extractAppRoutes(files);
+      const appRoutes = extractAppRoutes(files, contract);
       let rendered: { errors: string[]; screenshot: string | null };
       if (typeErrors.length > 0) {
         rendered = { errors: [], screenshot: null };
@@ -1024,12 +1203,56 @@ export async function runSelfVerification(opts: {
       // message must see — see the note by shouldPromoteRepairTier below.
       const allErrors = [...new Set([...typeErrors, ...contractErrors, ...runtimeErrors])];
       const errorCount = allErrors.length;
+      if (round === 0) {
+        if (!hasGenerationStep(opts.attempt, "validate")) {
+          recordAttemptStep(opts.attempt, "validate", {
+            ok: typeErrors.length === 0 && contractErrors.length === 0,
+            error: typeErrors[0] ?? contractErrors[0],
+          });
+          if (opts.attempt) {
+            await persistStepArtifact(opts.store, opts.runId, `${opts.attempt.attemptId}:validate`, {
+              ok: typeErrors.length === 0 && contractErrors.length === 0,
+              errorCount: typeErrors.length + contractErrors.length,
+              families: attemptClusterFields(
+                [...typeErrors, ...contractErrors].map((message) => ({ message })),
+              ).families,
+            });
+          }
+        }
+        if (typeErrors.length === 0 && !hasGenerationStep(opts.attempt, "smoke")) {
+          recordAttemptStep(opts.attempt, "smoke", {
+            ok: runtimeErrors.length === 0,
+            error: runtimeErrors[0],
+          });
+          if (opts.attempt) {
+            await persistStepArtifact(opts.store, opts.runId, `${opts.attempt.attemptId}:smoke`, {
+              ok: runtimeErrors.length === 0,
+              errorCount: runtimeErrors.length,
+            });
+          }
+        }
+      }
       // Still capped: this is what gets shown in `result.errors`, fed into the
       // deterministic repair pass, and used to build the repair model's prompt
       // context further down. That cap is a legitimate, separate cost-control
       // decision — unrelated to the counting bug fixed by errorCount above.
       let errors = allErrors.slice(0, 6);
       const roundSignal: "typecheck" | "runtime" = typeErrors.length > 0 ? "typecheck" : "runtime";
+      if (originalFailures.length === 0 && errors.length > 0) {
+        originalFailures = errors.map((message) => ({ message }));
+      }
+
+      const browserEvidence = mergePreviewGateEvidence(emptyPreviewGateEvidence(), {
+        typecheck: typeErrors.length === 0 ? passedStep() : failedStep(typeErrors),
+        smoke: typeErrors.length > 0
+          ? skippedStep("browser smoke skipped because type-check failed")
+          : (playwright || result.engine === "static")
+            ? (runtimeErrors.length === 0 ? passedStep() : failedStep(runtimeErrors))
+            : skippedStep("Playwright page-load did not run"),
+      });
+      const browserRequired: PreviewWorkflowStep[] = typeErrors.length > 0
+        ? ["typecheck"]
+        : ["typecheck", "smoke"];
 
       // ── Vision design review (env-gated, Lovable "agent looks at the result") ──
       // Only when the app renders cleanly: a vision model screens the actual
@@ -1050,7 +1273,8 @@ export async function runSelfVerification(opts: {
       if (errors.length === 0) {
         result.passed = true;
         result.errors = [];
-        emit("Verified — your app runs without errors ✓");
+        applyIndependentGate(browserEvidence, browserRequired);
+        emit(result.passed ? "Verified — your app runs without errors ✓" : "Independent preview verification rejected the candidate.");
         return result;
       }
 
@@ -1083,7 +1307,20 @@ export async function runSelfVerification(opts: {
       const ladderExhausted = isLadderExhausted(repairTier, repairTiers.length);
 
       if (round - freeRounds === maxRounds || ladderExhausted || Date.now() - startedAt > TIME_BUDGET_MS) {
-        emit(`Verification found ${errorCount} issue${errorCount === 1 ? "" : "s"} — open the preview to review.`);
+        const reason = ladderExhausted
+          ? "Repair ladder exhausted"
+          : Date.now() - startedAt > TIME_BUDGET_MS
+            ? "Verification time budget exhausted"
+            : "Repair round budget exhausted";
+        emit(`${reason} with ${errorCount} issue${errorCount === 1 ? "" : "s"} still standing — preview will not keep retrying.`);
+        result.boundedFailure = true;
+        if (opts.attempt?.coreLoop) {
+          opts.attempt.coreLoop = failBounded(opts.attempt.coreLoop, {
+            summary: `${reason} (${errorCount} remaining)`,
+            artifact: { rounds: result.rounds, errorCount },
+          });
+        }
+        applyIndependentGate(browserEvidence, browserRequired);
         return result;
       }
 
@@ -1101,10 +1338,18 @@ export async function runSelfVerification(opts: {
           const written: string[] = [];
           const rejected: string[] = [];
           const persistFixes = opts.persistFixes ?? !opts.candidateFiles;
-          const nextByPath = new Map(det.files.map((f) => [f.path, f]));
-          for (const path of detTouched) {
-            const nf = nextByPath.get(path);
-            if (!nf || typeof nf.content !== "string") continue;
+          const constrained = constrainRepairFiles(
+            det.files.filter((file) => detTouched.includes(file.path)),
+            files,
+            contract,
+          );
+          if (constrained.dropped.length > 0) {
+            console.warn(`[self-verify] dropped undeclared repair files: ${constrained.dropped.join(", ")}`);
+          }
+          if (constrained.contract) contract = constrained.contract;
+          for (const nf of constrained.files) {
+            const path = nf.path;
+            if (typeof nf.content !== "string") continue;
             // Same write guard as the paid path: this loop is driven by a
             // failing preview, and "deterministic" is not a licence to blank a
             // working file if a fixer ever misbehaves.
@@ -1141,6 +1386,13 @@ export async function runSelfVerification(opts: {
           if (written.length > 0) {
             result.fixesApplied += 1;
             freeRounds += 1;
+            recordAttemptStep(opts.attempt, "repair", { ok: true });
+            if (opts.attempt) {
+              await persistStepArtifact(opts.store, opts.runId, `${opts.attempt.attemptId}:repair:${opts.attempt.repairCount}`, {
+                ok: true,
+                errorCount: 0,
+              });
+            }
             emit(`Fixed ${written.length} file${written.length === 1 ? "" : "s"} locally (no AI) — re-verifying…`);
             // Scored exactly like a paid attempt: held open and settled against
             // what the NEXT round's checks observe, under model "deterministic",
@@ -1177,8 +1429,17 @@ export async function runSelfVerification(opts: {
       // never mean an emptier one.
       const namedByCompiler = filesNamedByCompiler(files, errors);
       const usePreciseContext = roundSignal === "typecheck" && namedByCompiler.length > 0;
-      const contextFiles = usePreciseContext ? namedByCompiler : relevantFiles(files, errors);
-      const context = buildRepairContext(contextFiles, errors);
+      const slice = selectRepairSlice(files, errors, contract);
+      const contextFiles = slice.files.length > 0
+        ? slice.files
+        : usePreciseContext
+          ? namedByCompiler
+          : relevantFiles(files, errors);
+      const context = [
+        `${targetedRepairHint(classifyPreviewFailureLayer(errors.map((message) => ({ message }))))}\n`,
+        slice.brief ? `${slice.brief}\n` : "",
+        buildRepairContext(contextFiles, errors),
+      ].join("");
       const diagnosis = buildPreviewDiagnosis(
         files,
         errors.map((message) => ({
@@ -1355,9 +1616,22 @@ export async function runSelfVerification(opts: {
           `[self-verify] rejected edit batch: ${resolved.editFailures.join("; ")}`,
         );
       }
-      const fixedFiles = resolved.files;
+      const constrained = constrainRepairFiles(resolved.files, files, contract);
+      if (constrained.dropped.length > 0) {
+        console.warn(`[self-verify] dropped undeclared repair files: ${constrained.dropped.join(", ")}`);
+      }
+      if (constrained.contract) contract = constrained.contract;
+      const fixedFiles = constrained.files;
       if (fixedFiles.length === 0) {
         emit("Couldn't auto-fix — open the preview to review the error.");
+        applyIndependentGate(emptyPreviewGateEvidence(), []);
+        recordAttemptStep(opts.attempt, "repair", { ok: false, error: "repair produced no contracted files" });
+        if (opts.attempt) {
+          await persistStepArtifact(opts.store, opts.runId, `${opts.attempt.attemptId}:repair:${opts.attempt.repairCount}`, {
+            ok: false,
+            errorCount: 1,
+          });
+        }
         return result;
       }
 
@@ -1438,6 +1712,16 @@ export async function runSelfVerification(opts: {
         else files = [...files, { path: f.path, content: f.content, language } as ProjectFile];
       }
       result.fixesApplied += 1;
+      recordAttemptStep(opts.attempt, "repair", {
+        ok: written.length > 0,
+        error: written.length > 0 ? undefined : "auto-fix wrote no files",
+      });
+      if (opts.attempt) {
+        await persistStepArtifact(opts.store, opts.runId, `${opts.attempt.attemptId}:repair:${opts.attempt.repairCount}`, {
+          ok: written.length > 0,
+          errorCount: written.length > 0 ? 0 : 1,
+        });
+      }
       // Hold the attempt open. It cannot be scored yet — the label is whatever
       // the NEXT round's render finds, and the only honest verdict on a repair
       // is what the code does afterwards, not what the model claimed.
@@ -1463,6 +1747,7 @@ export async function runSelfVerification(opts: {
       errorCount: result.errors.length,
       durationMs: Date.now() - startedAt,
     });
+    applyIndependentGate(emptyPreviewGateEvidence(), result.fixesApplied > 0 ? [] : []);
     return result;
   } catch (err) {
     // Verification must never break the build — but a silently swallowed

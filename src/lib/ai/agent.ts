@@ -1,5 +1,7 @@
 import { generateAI } from "./generate.ts";
 import { recordAiEval } from "./eval-log.ts";
+import { recordEvent } from "../observability/events.ts";
+import { isForbiddenTanStackEntry } from "./project-contract-validate.ts";
 import type { AIMessage,ToolDefinition,ToolCall } from "./provider.ts";
 import { DEFAULT_CODING_MODEL } from "./model-defaults.ts";
 import { demoteByEvidence,fetchRecentStats } from "./model-performance.ts";
@@ -126,6 +128,11 @@ function buildTools(
   onFileDelete?: (path: string) => void,
 ): Record<string, AgentTool> {
   const fileMap = new Map(files.map((f) => [f.path, f.content]));
+  const looksTanStack = fileMap.has("src/routes/__root.tsx") || fileMap.has("src/router.tsx");
+  const refuseForbiddenEntry = (path: string): string | null => {
+    if (!looksTanStack || !isForbiddenTanStackEntry(path)) return null;
+    return `Refused: ${path} is not part of a TanStack Start app. The Start plugin owns the entry — edit src/routes/ instead.`;
+  };
 
   return {
     read_file: {
@@ -150,6 +157,8 @@ function buildTools(
         if (typeof path !== "string" || !path) return "Error: path is required and must be a non-empty string.";
         if (typeof content !== "string") return "Error: content is required and must be a string.";
         const p = path;
+        const forbidden = refuseForbiddenEntry(p);
+        if (forbidden) return forbidden;
         const next = content;
         // File Demolition guard: reject an overwrite that drops >100 lines of an
         // existing file down to near-nothing — almost always an accidental
@@ -212,6 +221,8 @@ function buildTools(
       execute: async ({ path, old_string, new_string }: Record<string, unknown>) => {
         if (typeof path !== "string" || !path) return "Error: path is required and must be a non-empty string.";
         const p = path;
+        const forbidden = refuseForbiddenEntry(p);
+        if (forbidden) return forbidden;
         const content = fileMap.get(p);
         if (content === undefined) return `File not found: ${p}`;
         const oldStr = String(old_string ?? "");
@@ -899,6 +910,14 @@ export async function runAgent(options: AgentRunOptions): Promise<AgentResult> {
       toolCalls: (aiResult.toolCalls as ToolCall[]).length,
       toolErrors: toolErrorCount,
       success: toolErrorCount === 0,
+    });
+    recordEvent("ai_generation_completed", {
+      task: "agent.tool_dispatch",
+      callKind: "tool",
+      durationMs: Date.now() - dispatchStartedAt,
+      toolCallCount: (aiResult.toolCalls as ToolCall[]).length,
+      success: toolErrorCount === 0,
+      tokensUsed: 0,
     });
 
     // Feed all observations back as a single user message, with an escalating

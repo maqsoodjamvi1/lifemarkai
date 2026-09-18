@@ -17,6 +17,8 @@
  */
 
 import { ENV_FILE_PATH,parseEnvFile,serializeEnvFile } from "../project/env-file.ts";
+import { readProjectContractFromFiles } from "../ai/project-contract.ts";
+import { constrainRepairFiles } from "../ai/project-contract-validate.ts";
 import {
 isManagementConfigured,
 createManagedProject,
@@ -93,10 +95,23 @@ async function upsertProjectFile(
   content: string,
   language = "typescript"
 ): Promise<void> {
-  await supabase.from("project_files").upsert(
-    { project_id: projectId, path, content, language },
-    { onConflict: "project_id,path" }
+  const { data: existingRows } = await supabase
+    .from("project_files")
+    .select("path, content, language")
+    .eq("project_id", projectId);
+  const existing = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+  const constrained = constrainRepairFiles(
+    [{ path, content, language }],
+    existing,
+    readProjectContractFromFiles(existing),
+    [path],
   );
+  for (const file of constrained.files) {
+    await supabase.from("project_files").upsert(
+      { project_id: projectId, path: file.path, content: file.content, language: file.language ?? language },
+      { onConflict: "project_id,path" }
+    );
+  }
 }
 
 /**

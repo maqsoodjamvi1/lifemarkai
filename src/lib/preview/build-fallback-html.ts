@@ -15,8 +15,8 @@ NEXT_VIRTUAL_ENTRY_PATH,
 import { PREVIEW_PERF_SCRIPT } from "./preview-perf-bridge.ts";
 import { filesContentSignature } from "./files-signature.ts";
 
-/** Bump when preview transform logic changes — forces iframe remount in editor. */
-export const PREVIEW_ENGINE_REV = "46";
+/** Bump when preview transform logic changes — included in the HTML cache key. */
+export const PREVIEW_ENGINE_REV = "50";
 
 /** Strip PostCSS-only directives — invalid in a raw <style> tag. */
 export function sanitizePreviewCss(css: string): string {
@@ -133,7 +133,7 @@ const FALLBACK_HTML_CACHE_LIMIT = 8;
 const fallbackHtmlCache = new Map<string, string>();
 
 export function buildFallbackHtml(files: ProjectFile[]): string {
-  const key = filesContentSignature(files);
+  const key = `${PREVIEW_ENGINE_REV}:${filesContentSignature(files)}`;
   const cached = fallbackHtmlCache.get(key);
   if (cached !== undefined) return cached;
   const html = buildFallbackHtmlUncached(files);
@@ -153,6 +153,10 @@ function buildFallbackHtmlUncached(files: ProjectFile[]): string {
   } catch (err) {
     console.error("buildFallbackHtml: healing pipeline failed, using unhealed files", err);
   }
+  const isTanStackStart = files.some((f) => {
+    const path = f.path.replace(/\\/g, "/").replace(/^\/+/, "");
+    return path === "src/routes/__root.tsx" || path === "src/router.tsx";
+  });
   // Static HTML project — serve as-is
   const indexHtml = files.find(
     (f) => f.path === "index.html" || f.path === "/index.html"
@@ -176,7 +180,7 @@ function buildFallbackHtmlUncached(files: ProjectFile[]): string {
   const looksLikeBundlerEntry =
     !!indexHtml?.content?.includes("src/main.tsx") ||
     scriptSrcs.some((src) => /\/(main|index)\.(tsx|jsx|ts)(\?|$)/i.test(src));
-  if (indexHtml?.content && !looksLikeBundlerEntry) {
+  if (indexHtml?.content && !looksLikeBundlerEntry && !isTanStackStart) {
     return indexHtml.content;
   }
 
@@ -239,7 +243,8 @@ function buildFallbackHtmlUncached(files: ProjectFile[]): string {
         return 3.8;
       }
     }
-    if (/(^|\/)app\.(tsx|jsx)$/.test(s)) return 5; // entry — render root, last
+    if (/(^|\/)app\.(tsx|jsx)$/.test(s)) return 5; // Vite entry — render root, last
+    if (/\/routes\//.test(s)) return 4.2; // TanStack file routes — after components
     if (/\/pages?\//.test(s)) return 4;
     if (/\/components?\//.test(s)) return 3;
     if (
@@ -305,15 +310,19 @@ function buildFallbackHtmlUncached(files: ProjectFile[]): string {
   };
   const sorted = topoSortByImports(seedOrder);
 
-  const mainFile =
-    files.find((f) => f.path === "src/App.tsx" || f.path === "App.tsx") ??
-    files.find((f) => f.path.endsWith("App.tsx") || f.path.endsWith("App.jsx")) ??
-    sorted[sorted.length - 1];
+  const mainFile = isTanStackStart
+    ? files.find((f) => f.path === "src/routes/index.tsx") ??
+      files.find((f) => f.path === "src/App.tsx" || f.path === "App.tsx") ??
+      files.find((f) => f.path.endsWith("App.tsx") || f.path.endsWith("App.jsx")) ??
+      sorted[sorted.length - 1]
+    : files.find((f) => f.path === "src/App.tsx" || f.path === "App.tsx") ??
+      files.find((f) => f.path.endsWith("App.tsx") || f.path.endsWith("App.jsx")) ??
+      sorted[sorted.length - 1];
 
   if (!mainFile) {
     return buildDiagnosticHtml(
       "No entry file found",
-      `Found ${codeFiles.length} code file${codeFiles.length === 1 ? "" : "s"} but no App.tsx / App.jsx / src/App.tsx as the entry point. Available code files: ${codeFiles.slice(0, 5).map((f) => f.path).join(", ")}${codeFiles.length > 5 ? "…" : ""}`,
+      `Found ${codeFiles.length} code file${codeFiles.length === 1 ? "" : "s"} but no App.tsx / App.jsx / src/App.tsx / src/routes/index.tsx as the entry point. Available code files: ${codeFiles.slice(0, 5).map((f) => f.path).join(", ")}${codeFiles.length > 5 ? "…" : ""}`,
     );
   }
 
@@ -369,7 +378,7 @@ function buildFallbackHtmlUncached(files: ProjectFile[]): string {
 
   /** Resolve ./ and ../ imports to a stable project path for __Mrequire. */
   function resolveProjectImport(fromFile: string, importPath: string): string {
-    const clean = importPath.replace(/\.(tsx?|jsx?)$/, "");
+    const clean = importPath.split("?")[0].replace(/\.(tsx?|jsx?)$/, "");
     if (clean.startsWith("@/")) return `src/${clean.slice(2)}`;
     if (!clean.startsWith(".")) return clean;
     const base = fromFile.includes("/") ? fromFile.slice(0, fromFile.lastIndexOf("/")) : "";
@@ -382,9 +391,9 @@ function buildFallbackHtmlUncached(files: ProjectFile[]): string {
     return out.join("/");
   }
 
-  /** Default import binding — missing module or non-component export → undefined (shows placeholder). */
+  /** Default import binding — functions (components) and strings (Vite `?url`). Missing-module proxies stay undefined. */
   const defaultImportExpr = (modVar: string, binding: string) =>
-    `const ${binding} = (function(){var m=${modVar};if(!m||typeof m!=='object')return undefined;var c=m.default!==undefined?m.default:m;return typeof c==='function'?c:undefined;})();`;
+    `const ${binding} = (function(){var m=${modVar};if(m==null)return undefined;if(typeof m!=='object')return typeof m==='function'||typeof m==='string'?m:undefined;var c=m.default!==undefined?m.default:m;return typeof c==='function'||typeof c==='string'?c:undefined;})();`;
 
   /**
    * Remove // and /* *\/ comments, string-aware so we never touch text inside
@@ -546,8 +555,20 @@ function buildFallbackHtmlUncached(files: ProjectFile[]): string {
     const { masked: maskedSrc, restore: restoreTemplates } = maskTemplateLiterals(src);
     src = maskedSrc;
 
-    // Strip CSS / asset imports
-    src = src.replace(/import\s+['"][^'"]+\.css['"]\s*;?\n?/g, "");
+    // Strip CSS / asset side-effect imports (including Vite `?url` / `?raw`).
+    src = src.replace(/import\s+['"][^'"]+\.css(?:\?[^'"]*)?['"]\s*;?\n?/g, "");
+    // Nested <html>/<body>/<head> inside #root breaks the iframe the same way
+    // a Next root layout does. TanStack Start's scaffold __root.tsx renders a
+    // document shell; swap tags so the layout wrap still mounts.
+    if (/(^|\/)__root\.tsx$/.test(file.path)) {
+      src = src
+        .replace(/<html(?=[\s/>])/g, "<div data-start-html")
+        .replace(/<\/html>/g, "</div>")
+        .replace(/<body(?=[\s/>])/g, "<div data-start-body")
+        .replace(/<\/body>/g, "</div>")
+        .replace(/<head(?=[\s/>])/g, "<div data-start-head hidden")
+        .replace(/<\/head>/g, "</div>");
+    }
     // Strip `import type` — including MULTI-LINE named forms
     // (`import type {\n  Foo,\n  Bar,\n} from './types'`). The old single-line
     // regex missed those; the final safety net then commented out only the
@@ -758,7 +779,8 @@ function buildFallbackHtmlUncached(files: ProjectFile[]): string {
     // __Mrequire. A leftover `import` statement is a guaranteed SyntaxError in
     // these non-module Babel scripts and takes down the ENTIRE preview — an
     // unknown binding is merely undefined and __Mrequire warns about it.
-    const genericRequire = (spec: string) => `window.__Mrequire('${spec.replace(/'/g, "\\'")}')`;
+    const genericRequire = (spec: string) =>
+      `window.__Mrequire('${spec.split("?")[0].replace(/'/g, "\\'")}')`;
     // import * as N from 'x'
     src = src.replace(
       /import\s+\*\s+as\s+([\w$]+)\s+from\s+['"]([^'"]+)['"]\s*;?\n?/g,
@@ -1071,8 +1093,9 @@ function buildFallbackHtmlUncached(files: ProjectFile[]): string {
 window.__M = {};
 window.__Mdefine = function(name, exports) { window.__M[name] = exports; };
 window.__Mrequire = function(path) {
+  path = String(path || '').split('?')[0];
   function normPreviewPath(p) {
-    var s = p.replace(/^@\\//, 'src/').replace(/\\.(tsx?|jsx?)$/, '');
+    var s = String(p || '').split('?')[0].replace(/^@\\//, 'src/').replace(/\\.(tsx?|jsx?)$/, '');
     var parts = s.split('/');
     var out = [];
     for (var i = 0; i < parts.length; i++) {
@@ -1096,6 +1119,12 @@ window.__Mrequire = function(path) {
   for (var i = 0; i < candidates.length; i++) {
     if (window.__M[candidates[i]]) return window.__M[candidates[i]];
   }
+  // Vite stylesheet ?url imports — query already stripped.
+  // Bind a string so Root head.links href is defined and defaultImportExpr
+  // does not reject the module as a non-component.
+  if (/\\.css$/i.test(norm) || /\\.css$/i.test(path)) {
+    return { default: '/virtual/' + (norm || path), __esModule: true };
+  }
   // React core
   if (path === 'react' || path === 'React') return window.React;
   if (path === 'react-dom' || path === 'react-dom/client') return window.ReactDOM;
@@ -1106,6 +1135,9 @@ window.__Mrequire = function(path) {
   if (path === 'recharts') return window.__recharts || {};
   // Routing
   if (path === 'react-router-dom' || path === 'react-router') return window.__reactRouterDom || {};
+  if (path === '@tanstack/react-router' || path === '@tanstack/react-start' || path.indexOf('@tanstack/react-router/') === 0) {
+    return window.__tanstackRouter || {};
+  }
   // Next.js runtime (App Router preview) — shims injected below in next mode
   // only. 'next/' prefix check keeps 'next-themes' etc. off this branch; when
   // __nextShims is absent (non-Next project) we fall through to the warn+{}.
@@ -1536,11 +1568,43 @@ window.__reactRouterDom = (function() {
     useSearchParams: function() { return [new URLSearchParams(), function() {}]; },
   };
 })();
+window.__tanstackRouter = (function() {
+  function createFileRoute(routePath) {
+    return function(opts) {
+      opts = opts || {};
+      return { path: routePath, options: opts, component: opts.component };
+    };
+  }
+  function Link(props) {
+    props = props || {};
+    return React.createElement('a', { href: props.to || props.href || '#' }, props.children);
+  }
+  return {
+    createFileRoute: createFileRoute,
+    createRootRoute: function(opts) { return createFileRoute('/')(opts); },
+    createRootRouteWithContext: function() { return function(opts) { return createFileRoute('/')(opts); }; },
+    Link: Link,
+    Outlet: function() {
+      var child = window.__lmOutletChild;
+      return typeof child === 'function' ? React.createElement(child) : null;
+    },
+    HeadContent: function() { return null; },
+    Scripts: function() { return null; },
+    Navigate: function() { return null; },
+    redirect: function() { return null; },
+    createRouter: function(opts) { return opts || {}; },
+    useParams: function() { return (window.__reactRouterDom && window.__reactRouterDom.useParams) ? window.__reactRouterDom.useParams() : {}; },
+    useNavigate: function() { return (window.__reactRouterDom && window.__reactRouterDom.useNavigate) ? window.__reactRouterDom.useNavigate() : function() {}; },
+    useRouterState: function() { return { location: { pathname: '/' } }; },
+    useSearch: function() { return {}; },
+    useRouter: function() { return { navigate: function() {} }; },
+  };
+})();
 ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
 </script>`;
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-preview-engine="${PREVIEW_ENGINE_REV}">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -1659,7 +1723,19 @@ ${isNextApp ? NEXT_RUNTIME_SHIMS : ""}
         var mod = window.__Mrequire('${entryPath}');
         var _entry = mod && (mod.default !== undefined ? mod.default : mod);
         var AppComp = typeof _entry === 'function' ? _entry : null;
-        if (!AppComp) { showError('${entryPath}', 'No default export (App component) found.'); return; }
+        if (!AppComp && mod && mod.Route) {
+          AppComp = mod.Route.component || (mod.Route.options && mod.Route.options.component) || null;
+        }
+        if (!AppComp) { showError('${entryPath}', 'No default export or Route.component found.'); return; }
+        var rootMod = window.__M['src/routes/__root.tsx'];
+        if (!rootMod) {
+          try { rootMod = window.__Mrequire('src/routes/__root.tsx'); } catch (e) { rootMod = null; }
+        }
+        var RootComp = rootMod && rootMod.Route && (rootMod.Route.component || (rootMod.Route.options && rootMod.Route.options.component));
+        if (typeof RootComp === 'function') {
+          window.__lmOutletChild = AppComp;
+          AppComp = RootComp;
+        }
         // Reliability guard: a single undefined component (bad import or a
         // default/named export mismatch, or a member of an unshimmed dep) must
         // NOT throw React #130 and freeze the whole preview. Render a visible

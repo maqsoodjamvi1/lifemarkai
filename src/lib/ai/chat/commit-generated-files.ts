@@ -3,6 +3,8 @@ import { sanitizeGeneratedFile } from "../html-sanity.ts";
 import type { ParsedFile } from "../code-parser.ts";
 import { enforceGeneratedFileContract } from "../generated-file-contract.ts";
 import { sanitizePackageJsonDependencies } from "../package-allowlist.ts";
+import { readProjectContractFromFiles } from "../project-contract.ts";
+import { constrainRepairFiles } from "../project-contract-validate.ts";
 
 export async function commitGeneratedFiles(
   supabase: ReturnType<typeof createClientFromRequest>,
@@ -23,16 +25,22 @@ export async function commitGeneratedFiles(
         ? sanitizePackageJsonDependencies(sanitizeGeneratedFile(file.path, file.content))
         : sanitizeGeneratedFile(file.path, file.content),
   }));
-  const { data: previousRows, error: previousError } = await supabase
+  const { data: existingRows, error: previousError } = await supabase
     .from("project_files")
-    .select("path, content")
-    .eq("project_id", projectId)
-    .in("path", sanitizedFiles.map((file) => file.path));
+    .select("path, content, language")
+    .eq("project_id", projectId);
   if (previousError) throw new Error(`Could not validate generated-file replacements: ${previousError.message}`);
-  const contractedFiles = enforceGeneratedFileContract(
-    sanitizedFiles,
-    (previousRows ?? []) as Array<{ path: string; content: string }>,
+  const existing = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+  const contractedFiles = enforceGeneratedFileContract(sanitizedFiles, existing);
+  const constrained = constrainRepairFiles(
+    contractedFiles,
+    existing,
+    readProjectContractFromFiles(contractedFiles, existing),
   );
+  if (constrained.files.length === 0) {
+    throw new Error("Generated files are outside the project contract");
+  }
+  const toCommit = constrained.files;
   const rpc = supabase as unknown as {
     rpc: (name: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { code?: string; message: string } | null }>;
   };
@@ -50,7 +58,7 @@ export async function commitGeneratedFiles(
     const { error: commitError } = await rpc.rpc("commit_generation", {
       target_run_id: runId,
       expected_revision: baseRevision,
-      staged_files: contractedFiles.map((file) => ({
+      staged_files: toCommit.map((file) => ({
         path: file.path,
         content: file.content,
         language: file.language,
@@ -62,7 +70,7 @@ export async function commitGeneratedFiles(
       }
       throw new Error(`Could not atomically save generated files: ${commitError.message}`);
     }
-    return contractedFiles;
+    return toCommit;
   }
 
   // Rolling deployment compatibility: migration 166 may reach the app database
@@ -71,7 +79,7 @@ export async function commitGeneratedFiles(
   const rpcMissing = beginError.code === "PGRST202" || /begin_generation.*schema cache|function.*not found/i.test(beginError.message);
   if (!rpcMissing) throw new Error(`Could not start generated-file transaction: ${beginError.message}`);
   const { error } = await supabase.from("project_files").upsert(
-    contractedFiles.map((file) => ({
+    toCommit.map((file) => ({
       project_id: projectId,
       path: file.path,
       content: file.content,
@@ -80,5 +88,5 @@ export async function commitGeneratedFiles(
     { onConflict: "project_id,path" },
   );
   if (error) throw new Error(`Could not save generated files: ${error.message}`);
-  return contractedFiles;
+  return toCommit;
 }

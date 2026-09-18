@@ -1,3 +1,5 @@
+import { requiresFrameworkRuntime } from "./requires-framework-runtime.ts";
+
 export const PREVIEW_REVISION_PATH = "__lifemark_preview_revision.js";
 
 export function attachPreviewRevision<T extends { path: string; content: string }>(files: T[], revision: string) {
@@ -5,11 +7,13 @@ export function attachPreviewRevision<T extends { path: string; content: string 
   const marker = 'data-lifemark-revision="true"';
   const tag = `<script type="module" ${marker} src="/${PREVIEW_REVISION_PATH}"></script>`;
   const reloadWhenChanged: string[] = [];
+  const framework = requiresFrameworkRuntime(files);
   const next = files.map((file) => {
     // React does not execute script elements introduced by an SSR document's
     // HMR update. Reload when this document changes so the browser loads the
     // revision module; ordinary Vite source edits can still use HMR.
-    if (/(?:^|\/)(?:layout|__root)\.[jt]sx$/.test(file.path) && /<\/body>/i.test(file.content)) {
+    if (framework && /\.[cm]?[jt]sx?$/.test(file.path) ||
+        /(?:^|\/)(?:layout|__root)\.[jt]sx$/.test(file.path) && /<\/body>/i.test(file.content)) {
       reloadWhenChanged.push(file.path);
     }
     if (file.content.includes(marker)) return file;

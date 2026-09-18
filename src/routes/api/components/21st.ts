@@ -1,5 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 
 /**
  * Native /api/components/21st — import a 21st.dev component into a project file.
@@ -72,27 +74,55 @@ export const Route = createFileRoute("/api/components/21st")({
           }, { status: 422 });
         }
 
-        const finalPath = targetPath ?? `src/components/${componentName}.tsx`;
+        const finalPath = (typeof targetPath === "string" && targetPath.trim()
+          ? targetPath.trim().replace(/\\/g, "/").replace(/^\/+/, "")
+          : `src/components/${componentName}.tsx`);
 
-        const { data: existing } = await supabase
+        const { data: existingRows } = await supabase
           .from("project_files")
-          .select("id")
-          .eq("project_id", projectId)
-          .eq("path", finalPath)
-          .maybeSingle();
-
-        if (existing) {
-          await supabase.from("project_files").update({ content: code, language: "tsx" }).eq("id", existing.id);
-        } else {
-          await supabase.from("project_files").insert({ project_id: projectId, path: finalPath, language: "tsx", content: code });
+          .select("path, content, language")
+          .eq("project_id", projectId);
+        const existingFiles = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+        const constrained = constrainRepairFiles(
+          [{ path: finalPath, content: code, language: "tsx" }],
+          existingFiles,
+          readProjectContractFromFiles(existingFiles),
+          [finalPath],
+        );
+        if (constrained.files.length === 0) {
+          return Response.json(
+            { error: `${finalPath} is outside the project contract. Import into src/components/ instead of a Vite entry.` },
+            { status: 400 },
+          );
         }
 
+        for (const file of constrained.files) {
+          const { data: existing } = await supabase
+            .from("project_files")
+            .select("id")
+            .eq("project_id", projectId)
+            .eq("path", file.path)
+            .maybeSingle();
+
+          if (existing) {
+            await supabase.from("project_files").update({ content: file.content, language: file.language ?? "tsx" }).eq("id", existing.id);
+          } else {
+            await supabase.from("project_files").insert({
+              project_id: projectId,
+              path: file.path,
+              content: file.content,
+              language: file.language ?? "tsx",
+            });
+          }
+        }
+
+        const written = constrained.files.find((file) => file.path === finalPath) ?? constrained.files[0];
         return Response.json({
           ok: true,
           component: componentName,
-          path: finalPath,
-          bytes: code.length,
-          next_step: `Import ${componentName} from "${finalPath.replace(/\.tsx$/, "")}" in your page.`,
+          path: written.path,
+          bytes: written.content.length,
+          next_step: `Import ${componentName} from "${written.path.replace(/\.tsx$/, "")}" in your page.`,
         });
       },
     },

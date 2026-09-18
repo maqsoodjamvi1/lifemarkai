@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { CONTENT_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 import {
 cancelCreditReservation,
 reserveCredits,
@@ -21,6 +23,7 @@ Always return a JSON object with this exact shape:
 }
 
 Rules:
+- For TanStack Start (src/routes/__root.tsx present): generate src/routes/api/send-email.ts and src/components/EmailForm.tsx. NEVER write index.html, src/main.tsx, or src/App.tsx.
 - For Next.js (App Router): generate app/api/send-email/route.ts and a React component
 - For plain React: generate a serverless function at api/send-email.ts and a React component
 - The API route must read RESEND_API_KEY from process.env (never hardcode it)
@@ -105,9 +108,26 @@ Return only the JSON object with the generated files.`;
       throw new Error("AI returned no files");
     }
 
-    // Upsert files into the project
+    const { data: existingRows } = await supabase
+      .from("project_files")
+      .select("path, content, language")
+      .eq("project_id", projectId);
+    const existingFiles = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+    const proposed = parsed.files.filter(
+      (file) => typeof file?.path === "string" && typeof file.content === "string",
+    );
+    const constrained = constrainRepairFiles(
+      proposed,
+      existingFiles,
+      readProjectContractFromFiles(existingFiles),
+      proposed.map((file) => file.path),
+    );
+    if (constrained.files.length === 0) {
+      throw new Error("Generated email files are outside the project contract");
+    }
+
     const upserted = [];
-    for (const file of parsed.files) {
+    for (const file of constrained.files) {
       const { data, error } = await supabase
         .from("project_files")
         .upsert(

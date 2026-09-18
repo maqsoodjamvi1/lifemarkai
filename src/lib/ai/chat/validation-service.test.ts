@@ -277,3 +277,45 @@ test("normalization declares imported allowed libraries and repoints misplaced i
   const index = normalized.files.find((f) => f.path === "src/routes/index.tsx");
   assert.match(index?.content ?? "", /from "\.\.\/components\/Card"/);
 });
+
+test("normalization drops files that are not in project-contract.json", async () => {
+  const { buildFallbackProjectContract, contractAsProjectFile } = await import("../project-contract.ts");
+  const contract = buildFallbackProjectContract("Build a bakery");
+  const generated = [
+    ...tanstackStartScaffold({}, "Bakery"),
+    contractAsProjectFile(contract),
+    { path: "src/components/Hero.tsx", content: "export function Hero() { return null; }", language: "typescriptreact" },
+  ];
+  const normalized = normalizeGenerationStage(generated, [], {
+    prompt: "Build a bakery",
+    framework: "tanstack",
+    appType: "marketing-website",
+    brand: "Bakery",
+  });
+  assert.deepEqual(normalized.droppedUndeclared, ["src/components/Hero.tsx"]);
+  assert.equal(normalized.files.some((file) => file.path === "src/components/Hero.tsx"), false);
+  assert.equal(normalized.projectContract?.framework, "tanstack-start");
+});
+
+test("an explicit architect contract still flags missing product files after generate omits them", async () => {
+  const { buildFallbackProjectContract, contractAsProjectFile } = await import("../project-contract.ts");
+  const contract = buildFallbackProjectContract("Build a bakery");
+  contract.files.push({
+    path: "src/components/Hero.tsx",
+    purpose: "Hero section",
+    owner: "product",
+    exports: [{ name: "Hero", kind: "named" }],
+    dependsOn: [],
+  });
+  const generated = [
+    ...tanstackStartScaffold({}, "Bakery"),
+    contractAsProjectFile(buildFallbackProjectContract("Build a bakery")),
+  ];
+  const result = validateGenerationStage(generated, [], { contract });
+  assert.ok(
+    result.correctnessErrors.some(
+      (error) => error.type === "missing_contract_file" && error.file === "src/components/Hero.tsx",
+    ),
+    JSON.stringify(result.correctnessErrors),
+  );
+});

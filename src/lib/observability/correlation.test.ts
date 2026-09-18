@@ -6,6 +6,7 @@ CORRELATION_HEADERS,
 applyCorrelationHeaders,
 correlationFields,
 correlationFromRequest,
+currentTraceContext,
 ensureBuildRunId,
 getCorrelation,
 newBuildRunId,
@@ -101,7 +102,11 @@ describe("setCorrelation", () => {
 
   it("omits unset ids from log fields", () => {
     runWithCorrelation({ requestId: "req_x" }, () => {
-      assert.deepEqual(Object.keys(correlationFields()), ["requestId"]);
+      const fields = correlationFields();
+      assert.equal(fields.requestId, "req_x");
+      assert.equal(fields.userId, undefined);
+      assert.match(fields.traceId ?? "", /^[a-f0-9]{32}$/);
+      assert.match(fields.spanId ?? "", /^[a-f0-9]{16}$/);
     });
   });
 });
@@ -186,14 +191,30 @@ describe("header propagation", () => {
     });
   });
 
-  it("round-trips through a proxy hop", () => {
-    runWithCorrelation({ requestId: "req_3", buildRunId: newBuildRunId() }, () => {
+  it("round-trips attemptId with the other correlation ids", () => {
+    runWithCorrelation({ requestId: "req_3", buildRunId: newBuildRunId(), attemptId: "att_live" }, () => {
       const outbound = applyCorrelationHeaders(new Headers());
       const downstream = correlationFromRequest(
         new Request("http://127.0.0.1:3010/ai/chat", { headers: outbound }),
       );
       assert.equal(downstream.requestId, "req_3");
       assert.equal(downstream.buildRunId, getCorrelation()!.buildRunId);
+      assert.equal(downstream.attemptId, "att_live");
+      assert.equal(outbound.get(CORRELATION_HEADERS.attemptId), "att_live");
+    });
+  });
+
+  it("round-trips a W3C traceparent so generation, sandbox, and deploy share one trace", () => {
+    runWithCorrelation({ requestId: "req_trace" }, () => {
+      const parent = currentTraceContext();
+      assert.ok(parent);
+      const outbound = applyCorrelationHeaders(new Headers());
+      const downstream = correlationFromRequest(
+        new Request("http://127.0.0.1:3010/ai/chat", { headers: outbound }),
+      );
+      assert.equal(downstream.traceId, parent!.traceId);
+      assert.equal(downstream.spanId, parent!.spanId);
+      assert.equal(outbound.get(CORRELATION_HEADERS.traceparent), `00-${parent!.traceId}-${parent!.spanId}-01`);
     });
   });
 });

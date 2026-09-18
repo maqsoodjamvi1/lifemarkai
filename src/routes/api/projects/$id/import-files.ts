@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { getProjectAccess,canReadProjectFiles,canWriteProjectFiles } from "@/lib/project/access";
+import { dropForbiddenTanStackMergeFiles } from "@/lib/ai/project-contract-validate";
 
 /**
  * Native /api/projects/:id/import-files — copy selected files from a source
@@ -64,12 +65,23 @@ export const Route = createFileRoute("/api/projects/$id/import-files")({
           return Response.json({ error: "No matching files found in source project" }, { status: 404 });
         }
 
-        const toInsert = sourceFiles.map((f: { path: string; content: string; language: string }) => ({
+        const { data: targetFiles } = await supabase
+          .from("project_files")
+          .select("path")
+          .eq("project_id", targetProjectId);
+        const allowed = dropForbiddenTanStackMergeFiles(
+          sourceFiles as Array<{ path: string; content: string; language: string }>,
+          (targetFiles ?? []) as Array<{ path: string }>,
+        );
+        const toInsert = allowed.files.map((f) => ({
           project_id: targetProjectId,
           path: f.path,
           content: f.content,
           language: f.language,
         }));
+        if (toInsert.length === 0) {
+          return Response.json({ imported: [], dropped: allowed.dropped });
+        }
 
         const { data: imported, error: upsertErr } = await supabase
           .from("project_files")
@@ -78,7 +90,7 @@ export const Route = createFileRoute("/api/projects/$id/import-files")({
 
         if (upsertErr) return Response.json({ error: upsertErr.message }, { status: 500 });
 
-        return Response.json({ imported, count: imported?.length ?? 0 });
+        return Response.json({ imported, count: imported?.length ?? 0, dropped: allowed.dropped });
       },
     },
   },

@@ -86,7 +86,7 @@ test("a placeholder home page does not count", () => {
 });
 
 test("the TanStack shape of the same scaffold is also recognised", () => {
-  for (const path of ["src/router.tsx", "src/routeTree.gen.ts", "src/routes/__root.tsx", "src/routes/index.tsx"]) {
+  for (const path of ["src/router.tsx", "src/routeTree.gen.ts", "src/routes/__root.tsx", "src/routes/index.tsx", "src/components/layout/SiteChrome.tsx", "project-contract.json"]) {
     assert.equal(SCAFFOLD_FILE_RE.test(path), true, path);
   }
 });

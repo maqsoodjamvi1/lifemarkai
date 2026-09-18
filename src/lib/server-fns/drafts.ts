@@ -15,6 +15,7 @@ canReadProjectFiles,
 canWriteProjectFiles,
 getProjectAccess,
 } from "@/lib/project/access";
+import { dropForbiddenTanStackMergeFiles } from "../ai/project-contract-validate.ts";
 
 const DRAFT_SELECT = "id, name, draft_of, draft_root_id, draft_label, created_at, updated_at" as const;
 
@@ -129,9 +130,11 @@ export async function createProjectDraft(data: { projectId?: string }) {
     language: string;
   }>;
 
-  if (sourceFiles.length > 0) {
+  const draftFiles = dropForbiddenTanStackMergeFiles(sourceFiles).files;
+
+  if (draftFiles.length > 0) {
     const { error: filesErr } = await supabase.from("project_files").insert(
-      sourceFiles.map((f) => ({
+      draftFiles.map((f) => ({
         project_id: newProject.id,
         path: f.path,
         content: f.content,

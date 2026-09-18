@@ -30,3 +30,24 @@ export function LovableVerificationCard({ passed, engine, errors = [] }: Lovable
     </div>
   );
 }
+
+export function LovableAttemptTrace({
+  attemptId,
+  firstBootSuccess,
+  repairCount,
+  topFamily,
+}: {
+  attemptId: string;
+  firstBootSuccess?: boolean;
+  repairCount?: number;
+  topFamily?: string | null;
+}) {
+  return (
+    <div className="mt-1 px-1 text-[10px] text-muted-foreground font-mono truncate" title={attemptId}>
+      {attemptId}
+      {firstBootSuccess === true ? " · first boot" : firstBootSuccess === false ? " · not first-boot" : ""}
+      {repairCount ? ` · ${repairCount} repair${repairCount === 1 ? "" : "s"}` : ""}
+      {topFamily ? ` · ${topFamily}` : ""}
+    </div>
+  );
+}

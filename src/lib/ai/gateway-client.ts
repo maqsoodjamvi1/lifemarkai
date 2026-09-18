@@ -15,6 +15,7 @@
 
 import type { GenerateOptions,GenerateResult,AIModel } from "./provider.ts";
 import { recordEvent } from "../observability/events.ts";
+import { applyCorrelationHeaders } from "../observability/correlation.ts";
 import { getDefaultAiModel } from "./model-defaults.ts";
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -115,6 +116,9 @@ export async function generateViaGateway(
 
   if (ctx.projectId) headers["X-Lifemark-Project-Id"] = ctx.projectId;
   if (ctx.userId) headers["X-Lifemark-User-Id"] = ctx.userId;
+  applyCorrelationHeaders(new Headers(headers)).forEach((value, key) => {
+    headers[key] = value;
+  });
 
   const endpoint = `${gatewayUrl.replace(/\/$/, "")}/v1/chat`;
 

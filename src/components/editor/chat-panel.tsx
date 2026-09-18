@@ -2558,6 +2558,12 @@ function ChatPanelImpl({
         free?: boolean;
         deterministic?: boolean;
         freeFixesRemainingToday?: number;
+        attemptId?: string;
+        firstBootSuccess?: boolean;
+        repairCount?: number;
+        durationMs?: number;
+        topFamily?: string | null;
+        families?: string;
       };
 
       if (typeof data.freeFixesRemainingToday === "number") {
@@ -2613,7 +2619,19 @@ function ChatPanelImpl({
         tokens_used: data.tokensUsed ?? null,
         model: DEFAULT_CODING_MODEL,
         mode: "build",
-        metadata: null,
+        metadata:
+          typeof data.attemptId === "string"
+            ? ({
+                generation_attempt: {
+                  attemptId: data.attemptId,
+                  firstBootSuccess: data.firstBootSuccess === true,
+                  repairCount: typeof data.repairCount === "number" ? data.repairCount : 0,
+                  durationMs: typeof data.durationMs === "number" ? data.durationMs : 0,
+                  topFamily: typeof data.topFamily === "string" ? data.topFamily : null,
+                  families: typeof data.families === "string" ? data.families : "",
+                },
+              } as unknown as Json)
+            : null,
         rating: null,
         created_at: new Date().toISOString(),
       };
@@ -3452,7 +3470,12 @@ ${(f.content ?? "").slice(0, 8000)}
               }
 
               if (data.done) {
-                setPostBuildStatus(null);
+                if (data.boundedFailure) {
+                  setPostBuildStatus("Repair budget exhausted — preview will not keep retrying.");
+                  window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+                } else {
+                  setPostBuildStatus(null);
+                }
                 setAgentSteps((prev) => prev.map((s) => ({ ...s, status: "done" as const })));
                 setTimeout(() => setAgentSteps([]), 5000);
 
@@ -3944,6 +3967,10 @@ ${(f.content ?? "").slice(0, 8000)}
                 }
                 return;
               }
+              if (data.boundedFailure) {
+                setPostBuildStatus("Repair budget exhausted — preview will not keep retrying.");
+                window.dispatchEvent(new CustomEvent("lifemark-preview-heal-failed"));
+              }
               // Auto-routed surgical patch parsed but every find string missed —
               // recover by rebuilding (patches_failed status only covers the
               // zero-patches case; this covers the all-missed case).
@@ -3954,7 +3981,7 @@ ${(f.content ?? "").slice(0, 8000)}
                   description: "The quick patch didn't match — rebuilding the change properly.",
                 });
               }
-              setPostBuildStatus(null);
+              if (!data.boundedFailure) setPostBuildStatus(null);
               const assistantId =
                 (typeof data.assistantMessageId === "string" && data.assistantMessageId) ||
                 streamingAssistantId;
@@ -4164,6 +4191,16 @@ ${(f.content ?? "").slice(0, 8000)}
                   // Pre-build snapshot id — powers per-message Revert / Preview version
                   if (typeof data.snapshot_id === "string") meta.snapshot_id = data.snapshot_id;
                   if (attachedSkills.length > 0) meta.skills_attached = attachedSkills;
+                  if (typeof data.attemptId === "string") {
+                    meta.generation_attempt = {
+                      attemptId: data.attemptId,
+                      firstBootSuccess: data.firstBootSuccess === true,
+                      repairCount: typeof data.repairCount === "number" ? data.repairCount : 0,
+                      durationMs: typeof data.durationMs === "number" ? data.durationMs : 0,
+                      topFamily: typeof data.topFamily === "string" ? data.topFamily : null,
+                      families: typeof data.families === "string" ? data.families : "",
+                    };
+                  }
                   return Object.keys(meta).length > 0 ? (meta as unknown as Json) : null;
                 })(),
                 rating: null,

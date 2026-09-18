@@ -120,6 +120,23 @@ describe("buildRepairContext — large files, error deep in the file", () => {
   });
 });
 
+describe("buildRepairContext — long lines before an error", () => {
+  it("keeps the reported line within budget instead of spending it on preceding context", () => {
+    const lines = Array.from({ length: 100 }, (_, i) => `const line${i} = '${"x".repeat(300)}';`);
+    lines[79] = "const broken = MissingComponent;";
+    const content = lines.join("\n");
+    const ctx = buildRepairContext([{ path: "src/App.tsx", content }] as never,
+      ["src/App.tsx:80:16 — TS2304: Cannot find name 'MissingComponent'"], 1000);
+    const body = ctx.slice(ctx.indexOf("===\n") + 4);
+    assert.ok(body.includes(lines[79]), "repair must see the actual broken line");
+    assert.ok(body.length <= 1000, "must not increase the token budget to include the error");
+    assert.ok(content.includes(body), "excerpt must remain an exact substring for targeted edits");
+    const range = ctx.match(/showing lines (\d+)-(\d+)/);
+    assert.ok(range);
+    assert.equal(Number(range[2]) - Number(range[1]) + 1, body.split("\n").length);
+  });
+});
+
 describe("buildRepairContext — multiple files", () => {
   it("joins each file's block with a blank-line separator, mixing small and windowed files", () => {
     const small = { path: "src/small.ts", content: "export const x = 1;\n" };

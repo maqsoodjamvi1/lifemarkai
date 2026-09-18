@@ -39,7 +39,7 @@ export function EditorShell({
   const [activePath, setActivePath] = useState(
     () =>
       initialFilePath ||
-      files.find((f) => f.path === "src/App.tsx" || f.path === "app/page.tsx" || f.path === "index.html")
+      files.find((f) => f.path === "src/routes/index.tsx" || f.path === "src/routes/__root.tsx" || f.path === "src/App.tsx" || f.path === "app/page.tsx" || f.path === "index.html")
         ?.path ||
       files[0]?.path ||
       "",

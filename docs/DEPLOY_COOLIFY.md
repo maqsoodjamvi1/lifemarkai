@@ -116,11 +116,15 @@ container Traefik routes at `https://<project>.preview.yourdomain.com`.
 3. **Same Traefik network:** leave `SANDBOX_PROXY_NETWORK` unset to auto-join
    Coolify’s `coolify` network when it exists, or set `SANDBOX_PROXY_NETWORK=coolify`
    explicitly. Preview containers get `traefik.enable=true` labels.
-4. **RAM:** keep the sandbox at **1 GB / 1 CPU** (`SANDBOX_MEMORY_MB=1024`,
-   `SANDBOX_CPUS=1`) so Coolify, Traefik, and the app still have room on the
-   same box. Last night’s 2 GB / 2 CPU default starved the host and turned a
-   live preview into a minutes-long pause/cold-boot. Raise only if the VPS
-   has spare cores.
+4. **RAM:** keep **this** Coolify host at **1 GB / 1 CPU** (`SANDBOX_MEMORY_MB=1024`,
+   `SANDBOX_CPUS=1`) so Coolify, Traefik, and the app still have room. A 2 GB
+   sandbox on Hostinger starved the box. Put 2 GB sandboxes on a **dedicated
+   preview host** (Oracle Always Free) instead:
+   `SANDBOX_DOCKER_HOST=http://172.17.0.1:2375` (SSH tunnel to that daemon —
+   never a public Docker TCP port) and `SANDBOX_REMOTE_MEMORY_MB=2048`.
+   Point `*.preview.yourdomain.com` at the dedicated host. If that daemon is
+   down, the editor keeps instant preview — it will **not** spawn 2 GB
+   containers here.
 5. **Leave Modal tokens unset** so traffic does not go to a paid Modal account.
 6. Redeploy. First preview may take a few minutes (`docker pull` of
    `SANDBOX_IMAGE`). After that, reopen is a warm container reuse.
@@ -187,11 +191,12 @@ The editor loop matches Lovable: chat → live Docker HTTPS origin → visual ed
 share/publish. This soak is how that loop stays warm on Coolify, not a missing
 feature.
 
-Required host: **enough RAM for the app + 1 CPU / 1 GB sandbox**,
-`/var/run/docker.sock` mounted, wildcard DNS `*.preview.yourdomain.com`,
-`SANDBOX_PROVIDER=docker`, `NEXT_PUBLIC_ENABLE_SANDBOX_PREVIEW=1`. Leave Modal
-tokens unset. Keep `SANDBOX_CPUS=1` and `SANDBOX_MEMORY_MB=1024` unless the VPS
-has spare cores.
+Required host: **enough RAM for the app + 1 CPU / 1 GB local sandbox** (or a
+dedicated `SANDBOX_DOCKER_HOST` at 2 GB), `/var/run/docker.sock` mounted for
+the local fallback, wildcard DNS `*.preview.yourdomain.com` at the preview
+host, `SANDBOX_PROVIDER=docker`, `NEXT_PUBLIC_ENABLE_SANDBOX_PREVIEW=1`. Leave
+Modal tokens unset. Keep Hostinger at `SANDBOX_CPUS=1` and
+`SANDBOX_MEMORY_MB=1024`.
 
 Soak (20 projects, zero Retry):
 

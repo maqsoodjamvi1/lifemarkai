@@ -4,6 +4,7 @@ import { Octokit } from "@octokit/rest";
 import JSZip from "jszip";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { detectLanguage } from "@/lib/ai/code-parser";
+import { dropForbiddenTanStackMergeFiles } from "@/lib/ai/project-contract-validate";
 import { adaptLovableProject,type ImportFile } from "@/lib/import/lovable-adapter";
 import {
 cancelCreditReservation,
@@ -242,8 +243,11 @@ async function handlePOST(req: Request) {
       });
     }
 
-    for (let i = 0; i < adapted.files.length; i += 50) {
-      const batch = adapted.files.slice(i, i + 50).map((f) => ({
+    const allowedImport = dropForbiddenTanStackMergeFiles(adapted.files);
+    const importFiles = allowedImport.files;
+
+    for (let i = 0; i < importFiles.length; i += 50) {
+      const batch = importFiles.slice(i, i + 50).map((f) => ({
         project_id: project.id,
         path: f.path,
         content: f.content,
@@ -260,7 +264,7 @@ async function handlePOST(req: Request) {
         role: "assistant",
         mode: "chat",
         content: [
-          `👋 **Imported from Lovable** — ${adapted.files.length} files from ${sourceLabel}.`,
+          `👋 **Imported from Lovable** — ${importFiles.length} files from ${sourceLabel}.`,
           "",
           ...(adapted.notes.length > 0
             ? ["**Migration notes:**", ...adapted.notes.map((n) => `- ${n}`)]
@@ -283,7 +287,7 @@ async function handlePOST(req: Request) {
     return Response.json({
       projectId: project.id,
       name: projectName,
-      filesImported: adapted.files.length,
+      filesImported: importFiles.length,
       isLovable: adapted.isLovable,
       notes: adapted.notes,
     });

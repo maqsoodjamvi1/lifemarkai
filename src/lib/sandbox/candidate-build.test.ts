@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequire } from "node:module";
@@ -43,7 +43,7 @@ test("missing build output never passes", () => {
   }
 });
 
-function fixture(options: { broken?: boolean; changedDeps?: boolean; timedOut?: boolean; repeatedLiveManifest?: boolean } = {}) {
+function fixture(options: { broken?: boolean; changedDeps?: boolean; installFailed?: boolean; timedOut?: boolean; repeatedLiveManifest?: boolean } = {}) {
   const root = mkdtempSync(join(tmpdir(), "lm-candidate-test-"));
   const app = join(root, "app"), candidate = join(root, "candidate");
   mkdirSync(join(app, "node_modules/vite/bin"), { recursive: true });
@@ -70,8 +70,17 @@ function fixture(options: { broken?: boolean; changedDeps?: boolean; timedOut?: 
         spawnSync(command: string, args: string[], opts: Parameters<typeof spawnSync>[2]) {
           calls++;
           assert.equal(command, "timeout");
-          assert.equal(args[0], "45");
           assert.equal(opts?.cwd, candidate);
+          if (args[1] === "npm") {
+            assert.equal(args[0], "90");
+            assert.equal(existsSync(join(candidate, "node_modules")), false);
+            if (options.installFailed) return { status: 1, stderr: "Dependency unavailable" };
+            mkdirSync(join(candidate, "node_modules/vite/bin"), { recursive: true });
+            copyFileSync(join(app, "node_modules/vite/bin/vite.js"), join(candidate, "node_modules/vite/bin/vite.js"));
+            return { status: 0 };
+          }
+          assert.equal(args[0], "45");
+          if (options.changedDeps) assert.equal(args[2], join(candidate, "node_modules/vite/bin/vite.js"));
           if (options.timedOut) return { status: 124, stdout: "", stderr: "" };
           // The production command uses POSIX timeout. Run its actual Node
           // child directly in this cross-platform fixture.
@@ -88,7 +97,12 @@ function fixture(options: { broken?: boolean; changedDeps?: boolean; timedOut?: 
 }
 
 test("build compiles candidate content without overwriting the live project", () => {
-  assert.deepEqual(fixture().result, { available: true, passed: true, errors: [] });
+  assert.deepEqual(fixture().result, {
+    available: true,
+    passed: true,
+    errors: [],
+    stages: { install: true, typecheck: false, build: true, boot: true },
+  });
 });
 
 test("repaired manifest can reuse the dependencies of an exactly repeated live manifest", () => {
@@ -100,12 +114,22 @@ test("a broken candidate fails even when the live version is good", () => {
   assert.equal(result.available, true);
   assert.equal(result.passed, false);
   assert.match(result.errors.join("\n"), /Invalid candidate module/);
+  assert.equal(result.stages?.build, false);
 });
 
-test("changed dependencies cannot be verified against the old installation", () => {
+test("changed dependencies install and build in the isolated candidate directory", () => {
   const { result, calls } = fixture({ changedDeps: true });
-  assert.equal(result.available, false);
-  assert.equal(calls, 0);
+  assert.equal(result.passed, true);
+  assert.equal(calls, 2);
+});
+
+test("failed candidate installation never builds or changes the working preview", () => {
+  const { result, calls } = fixture({ changedDeps: true, installFailed: true });
+  assert.equal(result.passed, false);
+  assert.match(result.errors.join(" "), /Dependency unavailable/);
+  assert.equal(calls, 1);
+  assert.equal(result.stages?.install, false);
+  assert.equal(result.stages?.build, false);
 });
 
 test("timed out build is unknown, not a clean build", () => {

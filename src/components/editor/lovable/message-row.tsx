@@ -19,7 +19,7 @@ import { LovablePlanReadyCard,LovableStepPlanCard,parseLovableStepPlan } from ".
 import { LovableSuggestionChips } from "./suggestion-chips";
 import { LovableChangedFilesCard } from "./changed-files-card";
 import { LovablePreviewSnapshotCard } from "./preview-snapshot-card";
-import { LovableVerificationCard } from "./verification-card";
+import { LovableAttemptTrace, LovableVerificationCard } from "./verification-card";
 import { LovableMessageMetaBadges } from "./message-meta-badges";
 import { LovableMessageReactions } from "./message-reactions";
 import { LovableMessageEditInline } from "./message-edit-inline";
@@ -268,6 +268,14 @@ export function LovableMessageRow({
   const verification = (msg.metadata as {
     verification?: { passed?: boolean; engine?: string; fixesApplied?: number; errors?: string[] };
   } | null)?.verification;
+  const generationAttempt = (msg.metadata as {
+    generation_attempt?: {
+      attemptId?: string;
+      firstBootSuccess?: boolean;
+      repairCount?: number;
+      topFamily?: string | null;
+    };
+  } | null)?.generation_attempt;
   const isClarifyTurn = !!(msg.metadata as { clarify?: boolean } | null)?.clarify;
 
   const agentTrace = (msg.metadata as {
@@ -452,6 +460,14 @@ export function LovableMessageRow({
             passed={verification.passed}
             engine={verification.engine}
             errors={verification.errors}
+          />
+        )}
+        {msg.role === "assistant" && typeof generationAttempt?.attemptId === "string" && (
+          <LovableAttemptTrace
+            attemptId={generationAttempt.attemptId}
+            firstBootSuccess={generationAttempt.firstBootSuccess}
+            repairCount={generationAttempt.repairCount}
+            topFamily={generationAttempt.topFamily}
           />
         )}
 

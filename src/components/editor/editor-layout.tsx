@@ -289,7 +289,7 @@ export function EditorLayout({
     (initialFilePath
       ? initialFiles.find((f) => f.path === initialFilePath)
       : undefined) ||
-      initialFiles.find((f) => f.path === "app/page.tsx" || f.path === "src/App.tsx" || f.path === "index.html") ||
+      initialFiles.find((f) => f.path === "src/routes/index.tsx" || f.path === "src/routes/__root.tsx" || f.path === "app/page.tsx" || f.path === "src/App.tsx" || f.path === "index.html") ||
       initialFiles[0] ||
       null
   );

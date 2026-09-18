@@ -190,9 +190,16 @@ export function pickDesignDirection(prompt: string): DesignDirection {
 }
 
 /** Prompt block describing the chosen direction. Empty string if no prompt. */
-export function buildDesignDirectionBlock(prompt: string): string {
+export function buildDesignDirectionBlock(prompt: string, framework?: string): string {
   if (!prompt || !prompt.trim()) return "";
   const d = pickDesignDirection(prompt);
+  const isStart = framework === "tanstack-start" || framework === "tanstack";
+  const fontLoad = isStart
+    ? "the root route `head()` links or @import in CSS"
+    : "Google Fonts (<link> in index.html or @import in CSS)";
+  const chromeMount = isStart
+    ? "src/routes/__root.tsx around <Outlet /> (e.g. <Header/> … <Outlet/> … <Footer/>)"
+    : "App.tsx (e.g. <Header/> … <Footer/>)";
   return `
 
 ---
@@ -201,7 +208,7 @@ Use this specific, cohesive aesthetic so the result looks intentional and distin
 (not a generic template). Commit to it fully across every section:
 - Theme: ${d.theme}
 - Palette: ${d.palette}
-- Fonts: ${d.fonts} — load via Google Fonts (<link> in index.html or @import in CSS).
+- Fonts: ${d.fonts} — load via ${fontLoad}.
 - Radius: ${d.radius} · Shadows: ${d.shadow}
 - Vibe: ${d.vibe}
 - ${d.notes}
@@ -214,7 +221,7 @@ portfolio / home page MUST render:
    and a main row with **logo + menu links on one row** (optional CTA/cart on the
    same row). Implement as <Header/> / layout/Header.tsx.
 2. A real **footer** at the bottom.
-Both must be mounted in App.tsx (e.g. <Header/> … <Footer/>). A page with a
+Both must be mounted in ${chromeMount}. A page with a
 single-row-only nav, no top bar, no logo, no menu, or no footer is an incomplete
 build. Use the "${d.theme}" theme —
 ${d.theme === "light" ? "light surfaces with dark text; do NOT ship a black/near-black page background unless the direction above is explicitly dark" : "commit to the dark surfaces described above"}.

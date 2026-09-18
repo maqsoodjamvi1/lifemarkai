@@ -29,6 +29,7 @@ import {
   normalizeGitHubWebOrigin,
   resolveGitHubApiBase,
 } from "@/lib/github/host";
+import { dropForbiddenTanStackMergeFiles } from "@/lib/ai/project-contract-validate";
 
 function githubAuthFromProfile(profile: {
   github_access_token: string;
@@ -223,18 +224,34 @@ export async function pullAndStoreFiles(
   auth: GitHubAuth,
   repo: string,
   branch: string,
-): Promise<{ fileCount: number; failedPaths: string[] }> {
+): Promise<{
+  fileCount: number;
+  failedPaths: string[];
+  dropped: string[];
+  pulledFiles: Array<{ path: string; content: string; language: string }>;
+}> {
   const files = await pullFiles(auth, repo, branch);
+  const { data: existing } = await supabase
+    .from("project_files")
+    .select("path")
+    .eq("project_id", projectId);
+  const allowed = dropForbiddenTanStackMergeFiles(
+    files,
+    (existing ?? []) as Array<{ path: string }>,
+  );
   const failedPaths: string[] = [];
-  for (const file of files) {
+  const pulledFiles: Array<{ path: string; content: string; language: string }> = [];
+  for (const file of allowed.files) {
     const ext = file.path.split(".").pop()?.toLowerCase() ?? "";
+    const language = LANG_MAP[ext] ?? "plaintext";
     const { error } = await supabase.from("project_files").upsert(
-      { project_id: projectId, path: file.path, content: file.content, language: LANG_MAP[ext] ?? "plaintext" },
+      { project_id: projectId, path: file.path, content: file.content, language },
       { onConflict: "project_id,path" },
     );
     if (error) failedPaths.push(file.path);
+    else pulledFiles.push({ path: file.path, content: file.content, language });
   }
-  return { fileCount: files.length - failedPaths.length, failedPaths };
+  return { fileCount: pulledFiles.length, failedPaths, dropped: allowed.dropped, pulledFiles };
 }
 
 /**
@@ -374,19 +391,9 @@ export async function githubSync(data: any) {
     }
 
     if (action === "pull") {
-      const files = await pullFiles(auth, repo, branch);
-      // Every upsert's `{ error }` was discarded and the count returned was
-      // the number FETCHED from GitHub, not the number written. A pull that
-      // stored nothing reported "N files updated".
-      const failedPaths: string[] = [];
-      for (const file of files) {
-        const ext = file.path.split(".").pop()?.toLowerCase() ?? "";
-        const { error } = await supabase.from("project_files").upsert(
-          { project_id: projectId, path: file.path, content: file.content, language: LANG_MAP[ext] ?? "plaintext" },
-          { onConflict: "project_id,path" },
-        );
-        if (error) failedPaths.push(file.path);
-      }
+      const { fileCount, failedPaths, dropped, pulledFiles } = await pullAndStoreFiles(
+        supabase, projectId, auth, repo, branch,
+      );
       if (failedPaths.length > 0) {
         logger.error("github.sync.pull_write_failed", new Error("project_files upsert failed"), {
           projectId,
@@ -395,28 +402,19 @@ export async function githubSync(data: any) {
           paths: failedPaths.slice(0, 10),
         });
       }
-      logger.info("github.sync.pull", {
-        projectId,
-        branch,
-        fileCount: files.length - failedPaths.length,
-      });
+      logger.info("github.sync.pull", { projectId, branch, fileCount, dropped: dropped.length });
       return {
         status: "ok" as const,
         payload: {
-          files: files.length - failedPaths.length,
+          files: fileCount,
           failed: failedPaths.length,
+          dropped,
           branch,
           // The editor holds the PRE-pull content in memory. Without handing
           // the new files back, the next keystroke autosave PATCHes the stale
           // version straight over what was just pulled — the user pulls a
           // teammate's work and silently overwrites it.
-          pulledFiles: files
-            .filter((f) => !failedPaths.includes(f.path))
-            .map((f) => ({
-              path: f.path,
-              content: f.content,
-              language: LANG_MAP[f.path.split(".").pop()?.toLowerCase() ?? ""] ?? "plaintext",
-            })),
+          pulledFiles,
         },
       };
     }

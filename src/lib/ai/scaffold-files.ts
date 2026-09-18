@@ -44,7 +44,7 @@
  */
 
 export const SCAFFOLD_FILE_RE =
-  /^(index\.html|styles\.css|app\.js|package\.json|package-lock\.json|vite\.config\.(t|j)s|components\.json|tsconfig(\.app|\.node)?\.json|tailwind\.config\.(t|j)s|postcss\.config\.js|eslint\.config\.js|\.gitignore|README\.md|public\/.*|src\/(main|App)\.tsx|src\/App\.css|src\/index\.css|src\/styles\.css|src\/vite-env\.d\.ts|src\/lib\/utils\.ts|src\/hooks\/use-mobile\.tsx|src\/pages\/(Index|NotFound)\.tsx|src\/components\/ui\/.*|src\/components\/layout\/(Header|Footer)\.tsx|src\/router\.tsx|src\/routeTree\.gen\.ts|src\/routes\/(__root|index)\.tsx)$/;
+  /^(project-contract\.json|index\.html|styles\.css|app\.js|package\.json|package-lock\.json|vite\.config\.(t|j)s|components\.json|tsconfig(\.app|\.node)?\.json|tailwind\.config\.(t|j)s|postcss\.config\.js|eslint\.config\.js|\.gitignore|README\.md|public\/.*|src\/(main|App)\.tsx|src\/App\.css|src\/index\.css|src\/styles\.css|src\/vite-env\.d\.ts|src\/lib\/utils\.ts|src\/hooks\/use-mobile\.tsx|src\/pages\/(Index|NotFound)\.tsx|src\/components\/ui\/.*|src\/components\/layout\/(Header|Footer|SiteChrome)\.tsx|src\/router\.tsx|src\/routeTree\.gen\.ts|src\/routes\/(__root|index)\.tsx)$/;
 
 /** A home page this large is the user's app, not the starter placeholder. */
 export const GROWN_HOME_PAGE_CHARS = 1500;

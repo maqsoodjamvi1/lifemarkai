@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { BALANCED_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 import {
 cancelCreditReservation,
 reserveCredits,
@@ -104,22 +106,34 @@ Return only the JSON object.`;
       throw new Error("AI returned incomplete data");
     }
 
-    // Upsert into project files
-    const { data: file, error } = await supabase
+    const { data: existingRows } = await supabase
+      .from("project_files")
+      .select("path, content, language")
+      .eq("project_id", projectId);
+    const existingFiles = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+    const constrained = constrainRepairFiles(
+      [{ path: parsed.testPath, content: parsed.content, language: parsed.language ?? "typescript" }],
+      existingFiles,
+      readProjectContractFromFiles(existingFiles),
+      [parsed.testPath],
+    );
+    if (constrained.files.length === 0) {
+      throw new Error("Generated test is outside the project contract");
+    }
+
+    const { error } = await supabase
       .from("project_files")
       .upsert(
-        {
+        constrained.files.map((file) => ({
           project_id: projectId,
-          path: parsed.testPath,
-          content: parsed.content,
-          language: parsed.language ?? "typescript",
-        },
-        { onConflict: "project_id,path" }
-      )
-      .select()
-      .single();
-
+          path: file.path,
+          content: file.content,
+          language: file.language ?? "typescript",
+        })),
+        { onConflict: "project_id,path" },
+      );
     if (error) throw new Error(error.message);
+    const file = constrained.files.find((row) => row.path === parsed.testPath) ?? constrained.files[0];
 
     await settleCreditReservation(supabase, reservation.id, 1);
     reservationFinalized = true;

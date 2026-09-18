@@ -11,11 +11,20 @@ import { normalizeProjectImports } from "../../preview/normalize-imports.ts";
 import { syncProjectDependencies } from "../../verify/dependency-gate.ts";
 import { lockControlledDependencyVersions, resolveControlledTemplateForPrompt } from "../../templates/controlled-registry.ts";
 import { tanstackStartScaffold } from "../../templates/tanstack-start-scaffold.ts";
+import {
+  readProjectContractFromFiles,
+  type ProjectContract,
+} from "../project-contract.ts";
+import {
+  applyGeneratedContract,
+  validateFilesAgainstProjectContract,
+} from "../project-contract-validate.ts";
 
 export type GenerationValidationOptions = {
   minFiles?: number;
   appType?: string;
   singlePage?: boolean;
+  contract?: ProjectContract | null;
 };
 
 export type GenerationValidationResult = {
@@ -30,6 +39,7 @@ export type GenerationNormalizationOptions = {
   framework: string;
   appType?: string;
   brand?: string;
+  contract?: ProjectContract | null;
 };
 
 export type GenerationNormalizationResult = {
@@ -40,6 +50,8 @@ export type GenerationNormalizationResult = {
   /** Allowed packages imported by the generation but absent from package.json,
    * written in at their allowlist-pinned versions. */
   addedDependencies: string[];
+  droppedUndeclared: string[];
+  projectContract: ProjectContract | null;
 };
 
 function alignTanStackRuntimeImports(files: ParsedFile[]): ParsedFile[] {
@@ -197,7 +209,24 @@ export function normalizeGenerationStage(
     addedDependencies.push(...synced.added);
   }
 
-  return { files: normalized, alignedDependencies, controlledDependencies, controlledTemplate, addedDependencies };
+  let projectContract = options.contract ?? readProjectContractFromFiles(normalized, existingFiles);
+  const droppedUndeclared: string[] = [];
+  if (projectContract) {
+    const restricted = applyGeneratedContract(normalized, existingFiles, projectContract);
+    normalized = restricted.files;
+    droppedUndeclared.push(...restricted.dropped);
+    projectContract = restricted.contract;
+  }
+
+  return {
+    files: normalized,
+    alignedDependencies,
+    controlledDependencies,
+    controlledTemplate,
+    addedDependencies,
+    droppedUndeclared,
+    projectContract,
+  };
 }
 
 /** Validate correctness and product completeness as one deterministic stage. */
@@ -208,10 +237,15 @@ export function validateGenerationStage(
 ): GenerationValidationResult {
   const correctnessErrors = validateGeneratedFiles(files, existingFiles);
   const richnessErrors = assessGenerationQuality(files, existingFiles, options);
+  const contractErrors = validateFilesAgainstProjectContract(
+    files,
+    existingFiles,
+    options.contract ?? readProjectContractFromFiles(files, existingFiles),
+  );
   return {
-    correctnessErrors,
+    correctnessErrors: [...correctnessErrors, ...contractErrors],
     richnessErrors,
-    validationErrors: [...correctnessErrors, ...richnessErrors],
+    validationErrors: [...correctnessErrors, ...contractErrors, ...richnessErrors],
     needsEnrichment: richnessErrors.length > 0,
   };
 }

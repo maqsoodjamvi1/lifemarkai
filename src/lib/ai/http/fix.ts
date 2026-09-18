@@ -20,6 +20,21 @@ SANDBOX_PUSH_SETTLE_MS,
 import { fingerprintDiagnostic,scoreRepair } from "../failure-fingerprint.ts";
 import { recordRepairOutcome } from "../record-outcome.ts";
 import { isFatal } from "../../sandbox/tsc-diagnostics.ts";
+import { ensureBuildRunId, getCorrelation, setCorrelation } from "../../observability/correlation.ts";
+import { isFeatureEnabled } from "../../config/features.ts";
+import { BuildRunStore } from "../../build-runs/store.ts";
+import { createAdminClient } from "../../supabase/server.ts";
+import {
+  attemptClientFields,
+  closeGenerationAttempt,
+  createGenerationAttempt,
+} from "../generation-attempt.ts";
+import { persistStepArtifact, recordAttemptStep } from "../generation-loop.ts";
+import { generationOrderForContract, readProjectContractFromFiles } from "../project-contract.ts";
+import { constrainRepairFiles } from "../project-contract-validate.ts";
+import { renderProjectContractPromptBlock } from "../project-contract-prompt.ts";
+import { selectRepairSlice } from "../repair-slice.ts";
+import { buildRepairContext } from "../repair-context.ts";
 
 /**
  * Free daily "Try to fix" quota (Lovable parity — error fixes are Lovable's
@@ -118,7 +133,14 @@ async function parseFixResponse(
   }
 
   if (!files.length) {
-    throw new Error("AI response missing files array");
+    const trimmed = raw.trim();
+    const looksTruncated = trimmed.length > 0 && !/[}\]]\s*$/.test(trimmed);
+    const budget = Number(process.env.AUTO_FIX_MAX_TOKENS) || 16000;
+    throw new Error(
+      looksTruncated
+        ? `AI response was truncated at ${budget} output tokens — the JSON never closed. Raise AUTO_FIX_MAX_TOKENS or ask the fix to touch fewer files.`
+        : "AI response missing files array",
+    );
   }
   return {
     files,
@@ -166,6 +188,53 @@ export async function handleAiFix(req: Request) {
     );
   }
 
+  setCorrelation({ userId: user.id, projectId });
+  const attempt = createGenerationAttempt(projectId);
+  let buildRunStore: BuildRunStore | null = null;
+  let buildRunId: string | null = null;
+  let buildRunFinished = false;
+  if (isFeatureEnabled("vercelWorkflow", { userId: user.id, projectId })) {
+    try {
+      const admin = createAdminClient();
+      buildRunStore = new BuildRunStore(admin as never);
+      buildRunId = getCorrelation()?.buildRunId ?? ensureBuildRunId();
+      attempt.buildRunId = buildRunId;
+      setCorrelation({ buildRunId });
+      await buildRunStore.startRun({
+        runId: buildRunId,
+        projectId,
+        userId: user.id,
+        mode: "patch",
+        model: getDefaultAiModel(),
+      });
+    } catch (err) {
+      logger.warn("ai.fix.build_run_start_failed", { projectId, error: String(err) });
+      buildRunStore = null;
+      buildRunId = null;
+    }
+  }
+  const closeAttempt = (opts: { firstBootSuccess: boolean; tokensUsed?: number; error?: string }) => {
+    closeGenerationAttempt(attempt, {
+      firstBootSuccess: opts.firstBootSuccess,
+      tokensUsed: opts.tokensUsed ?? 0,
+      error: opts.error,
+    });
+    void persistStepArtifact(buildRunStore, buildRunId, `${attempt.attemptId}:repair`, {
+      ok: opts.firstBootSuccess,
+      error: opts.error,
+      tokensUsed: opts.tokensUsed ?? 0,
+    });
+    if (buildRunStore && buildRunId && !buildRunFinished) {
+      buildRunFinished = true;
+      void buildRunStore.finishRun({
+        runId: buildRunId,
+        status: opts.firstBootSuccess ? "completed" : "failed",
+        failureCode: opts.error,
+      });
+    }
+  };
+
+  try {
   const buildErrorText = String(buildError);
   const { data: dbFiles } = await supabase
     .from("project_files")
@@ -194,13 +263,20 @@ export async function handleAiFix(req: Request) {
   }
   const workingFiles = [...workingByPath.values()];
   const runtimeMessages = normalizeRuntimeErrors(runtimeErrors, buildErrorText).map((err) => err.message);
+  const projectContract = readProjectContractFromFiles(workingFiles);
+  const constrainProposed = <T extends { path: string; content: string; language?: string }>(proposed: T[]) =>
+    constrainRepairFiles(proposed, workingFiles, projectContract);
   const { deterministicRepair } = await import("@/lib/ai/deterministic-repair");
   const local = deterministicRepair(workingFiles, [buildErrorText, ...runtimeMessages]);
   if (local.changedPaths.length > 0 || local.createdPaths.length > 0) {
     const touched = new Set([...local.changedPaths, ...local.createdPaths]);
+    const constrained = constrainProposed(local.files.filter((file) => touched.has(file.path)));
+    if (constrained.dropped.length > 0) {
+      logger.info("ai.fix.undeclared_files_dropped", { projectId, dropped: constrained.dropped });
+    }
     const written: string[] = [];
-    for (const next of local.files) {
-      if (!touched.has(next.path) || typeof next.content !== "string") continue;
+    for (const next of constrained.files) {
+      if (typeof next.content !== "string") continue;
       const previous = workingByPath.get(next.path)?.content ?? null;
       const verdict = guardFileWrite({ path: next.path, next: next.content, previous });
       if (!verdict.ok) continue;
@@ -224,13 +300,16 @@ export async function handleAiFix(req: Request) {
     }
     if (written.length > 0) {
       logger.info("ai.fix.local_repair", { projectId, files: written });
+      recordAttemptStep(attempt, "repair", { ok: true });
+      closeAttempt({ firstBootSuccess: true, tokensUsed: 0 });
       return Response.json({
-        files: local.files.filter((file) => touched.has(file.path) && typeof file.content === "string"),
+        files: constrained.files.filter((file) => typeof file.content === "string"),
         explanation: `Fixed ${written.length} file${written.length === 1 ? "" : "s"} on the server without AI (imports, assets, or dependencies).`,
         tokensUsed: 0,
         free: true,
         deterministic: true,
         freeFixesRemainingToday: FREE_FIXES_PER_DAY,
+        ...attemptClientFields(attempt),
       });
     }
   }
@@ -245,7 +324,11 @@ export async function handleAiFix(req: Request) {
     });
   } catch (error) {
     console.error("Unable to claim auto-fix quota:", error);
-    return Response.json({ error: "Unable to verify the daily fix quota" }, { status: 500 });
+    closeAttempt({ firstBootSuccess: false, error: "Unable to verify the daily fix quota" });
+    return Response.json(
+      { error: "Unable to verify the daily fix quota", ...attemptClientFields(attempt) },
+      { status: 500 },
+    );
   }
 
   const isFreeFix = freeUseNumber > 0;
@@ -260,18 +343,28 @@ export async function handleAiFix(req: Request) {
       });
     } catch (error) {
       console.error("Unable to reserve auto-fix credits:", error);
-      return Response.json({ error: "Unable to reserve credits" }, { status: 500 });
+      closeAttempt({ firstBootSuccess: false, error: "Unable to reserve credits" });
+      return Response.json(
+        { error: "Unable to reserve credits", ...attemptClientFields(attempt) },
+        { status: 500 },
+      );
     }
     if (!reservation) {
-      return Response.json({ error: "Insufficient credits" }, { status: 402 });
+      closeAttempt({ firstBootSuccess: false, error: "Insufficient credits" });
+      return Response.json(
+        { error: "Insufficient credits", ...attemptClientFields(attempt) },
+        { status: 402 },
+      );
     }
   }
 
   const fileList = workingFiles;
-  const fileContext = fileList
-    .slice(0, 10)
-    .map((f: { path: string; content: string }) => `=== ${f.path} ===\n${f.content}`)
-    .join("\n\n");
+  const repairErrors = [buildErrorText, ...runtimeMessages];
+  const slice = selectRepairSlice(fileList, repairErrors, projectContract);
+  const fileContext = buildRepairContext(
+    (slice.files.length > 0 ? slice.files : fileList.slice(0, 10)) as Parameters<typeof buildRepairContext>[0],
+    repairErrors,
+  );
 
   const [{ appendPreviewDiagnosis }, { generateAI }, { ensureCommonGeneratedSupportFiles }] =
     await Promise.all([
@@ -291,8 +384,8 @@ export async function handleAiFix(req: Request) {
 \`\`\`
 ${enrichedError}
 \`\`\`
-
-Current files:
+${slice.brief ? `\n${slice.brief}\n` : ""}
+Current files (failing dependency slice only):
 ${fileContext}
 
 Return the fixed files as JSON.`;
@@ -304,7 +397,16 @@ Return the fixed files as JSON.`;
       {
         model: getDefaultAiModel(),
         messages: [
-          { role: "system", content: AUTO_FIX_SYSTEM_PROMPT },
+          {
+            role: "system",
+            content: projectContract
+              ? `${AUTO_FIX_SYSTEM_PROMPT}\n${renderProjectContractPromptBlock(
+                  projectContract,
+                  generationOrderForContract(projectContract),
+                  { incremental: true },
+                )}`
+              : AUTO_FIX_SYSTEM_PROMPT,
+          },
           { role: "user", content: userPrompt },
         ],
         temperature: 0.1,
@@ -332,6 +434,11 @@ Return the fixed files as JSON.`;
 
     const parsed = await parseFixResponse(rawContent, fileList);
     parsed.files = ensureCommonGeneratedSupportFiles(parsed.files, fileList);
+    const constrained = constrainProposed(parsed.files);
+    if (constrained.dropped.length > 0) {
+      logger.info("ai.fix.undeclared_files_dropped", { projectId, dropped: constrained.dropped });
+    }
+    parsed.files = constrained.files;
 
     // Snapshot the compiler's view BEFORE touching anything. This is the only
     // objective label available for "did the fix help" — the runtime error that
@@ -509,14 +616,23 @@ Return the fixed files as JSON.`;
         .catch(() => {});
     }
 
+    recordAttemptStep(attempt, "repair", { ok: written.length > 0 });
+    closeAttempt({
+      firstBootSuccess: written.length > 0,
+      tokensUsed: result.tokensUsed ?? 0,
+      error: written.length > 0 ? undefined : "auto-fix wrote no files",
+    });
+
     return Response.json({
       files: parsed.files,
       explanation: parsed.explanation,
       tokensUsed: result.tokensUsed ?? 0,
       free: isFreeFix,
       freeFixesRemainingToday: Math.max(0, isFreeFix ? FREE_FIXES_PER_DAY - freeUseNumber : 0),
+      ...attemptClientFields(attempt),
     });
   } catch (err) {
+    closeAttempt({ firstBootSuccess: false, error: err instanceof Error ? err.message : "auto-fix failed" });
     if (reservation && !reservationSettled) {
       try {
         if (providerReturned) {
@@ -530,9 +646,19 @@ Return the fixed files as JSON.`;
     }
     console.error("Auto-fix error:", err);
     return Response.json(
-      { error: "Failed to auto-fix. Please fix manually." },
+      { error: "Failed to auto-fix. Please fix manually.", ...attemptClientFields(attempt) },
       { status: 500 },
     );
+  }
+  } catch (err) {
+    closeAttempt({ firstBootSuccess: false, error: err instanceof Error ? err.message : "auto-fix failed" });
+    console.error("Auto-fix error:", err);
+    return Response.json(
+      { error: "Failed to auto-fix. Please fix manually.", ...attemptClientFields(attempt) },
+      { status: 500 },
+    );
+  } finally {
+    closeAttempt({ firstBootSuccess: false });
   }
 }
 

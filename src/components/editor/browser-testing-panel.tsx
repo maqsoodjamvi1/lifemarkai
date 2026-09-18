@@ -49,7 +49,7 @@ function parseTestNames(content: string): string[] {
 }
 
 function buildFilesSample(files: ProjectFile[]): string {
-  const priority = ["app/page.tsx", "src/App.tsx", "index.html", "src/index.tsx"];
+  const priority = ["src/routes/index.tsx", "src/routes/__root.tsx", "app/page.tsx", "src/App.tsx", "index.html", "src/index.tsx"];
   const ordered = [
     ...priority.map((p) => files.find((f) => f.path === p)).filter(Boolean) as ProjectFile[],
     ...files.filter((f) => f.path.endsWith(".tsx") && !priority.includes(f.path)).slice(0, 3),

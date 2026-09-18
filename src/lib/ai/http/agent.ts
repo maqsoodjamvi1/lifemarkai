@@ -45,7 +45,128 @@ import { setCorrelation } from "../../observability/correlation.ts";
 import { ensureBuildRunId,getCorrelation } from "../../observability/correlation.ts";
 import { isFeatureEnabled } from "../../config/features.ts";
 import { BuildRunStore } from "../../build-runs/store.ts";
+import { isGreenfieldProject } from "../scaffold-files.ts";
+import {
+  contractAsProjectFile,
+  generationOrderForContract,
+  PROJECT_CONTRACT_PATH,
+  readProjectContractFromFiles,
+  shouldGenerateProjectContract,
+  type ProjectContract,
+} from "../project-contract.ts";
+import { applyGeneratedContract, shouldLiveStreamGeneratedPath, isForbiddenTanStackEntry } from "../project-contract-validate.ts";
+import { renderProjectContractPromptBlock } from "../project-contract-prompt.ts";
+import { runProjectContractStage } from "../project-contract-stage.ts";
+import { validateGenerationStage } from "../chat/validation-service.ts";
+import { runRepairStage } from "../chat/repair-service.ts";
+import { attemptClientFields, closeGenerationAttempt, createGenerationAttempt } from "../generation-attempt.ts";
+import { recordPreviewGateSample } from "../preview-gate-metrics.ts";
+import { runDurableStep, recordAttemptStep, persistStepArtifact } from "../generation-loop.ts";
+import { verificationClientFields, type SelfVerifyResult } from "./result-types.ts";
+import { coreLoopRunTerminal, failBounded } from "../../reliability/core-loop-machine.ts";
 
+function adoptGeneratedFile(
+  projectFileMap: Map<string, { path: string; content: string; language?: string }>,
+  file: { path: string; content: string; language?: string },
+  projectContract: ProjectContract | null,
+  send: (payload: object) => void,
+): boolean {
+  const cleanPath = file.path.replace(/\\/g, "/").replace(/^\/+/, "");
+  const existing = Array.from(projectFileMap.values());
+  if (isForbiddenTanStackEntry(cleanPath) && (
+    projectContract?.framework === "tanstack-start" ||
+    projectFileMap.has("src/routes/__root.tsx") ||
+    projectFileMap.has("src/router.tsx")
+  )) {
+    return false;
+  }
+  const live = shouldLiveStreamGeneratedPath(
+    cleanPath,
+    existing,
+    projectContract,
+    file.content,
+  );
+  projectFileMap.set(cleanPath, {
+    path: cleanPath,
+    content: file.content,
+    language: file.language ?? detectLanguage(cleanPath),
+  });
+  if (live) {
+    send({ fileUpdated: { path: cleanPath, content: file.content.slice(0, 100) + "..." } });
+  }
+  return true;
+}
+
+async function fulfillProjectContractGaps(opts: {
+  projectFileMap: Map<string, { path: string; content: string; language?: string }>;
+  existingFiles: Array<{ path: string; content?: string | null }>;
+  contract: ProjectContract;
+  projectId: string;
+  userId: string;
+  task: string;
+  fileCount: number;
+  greenfield: boolean;
+  send: (payload: object) => void;
+}): Promise<{ contract: ProjectContract; filledPaths: string[] }> {
+  const existing = opts.existingFiles.map((file) => ({
+    path: file.path.replace(/\\/g, "/").replace(/^\/+/, ""),
+    content: file.content ?? "",
+    language: detectLanguage(file.path),
+  }));
+  const filledPaths: string[] = [];
+  let contract = opts.contract;
+  const maxTokens = maxOutputTokensForRequest({
+    mode: "agent",
+    prompt: opts.task,
+    fileCount: opts.fileCount,
+    defaultBuildMax: 8000,
+    defaultChatMax: 4000,
+  });
+  for (let pass = 0; pass < 2; pass++) {
+    const files = Array.from(opts.projectFileMap.values()).map((file) => ({
+      path: file.path,
+      content: file.content ?? "",
+      language: file.language ?? detectLanguage(file.path),
+    }));
+    const { validationErrors, needsEnrichment } = validateGenerationStage(files, existing, { contract });
+    const blocking = validationErrors.filter(
+      (error) =>
+        error.severity === "error" &&
+        (error.type === "missing_contract_file" || error.type === "missing_contract_route"),
+    );
+    if (blocking.length === 0) break;
+    opts.send({
+      status: "fixing",
+      message: pass === 0
+        ? `Filling ${blocking.length} contracted file gap(s)…`
+        : `${blocking.length} contracted file(s) still missing — retrying…`,
+    });
+    const repaired = await runRepairStage({
+      files,
+      existingFiles: existing,
+      errors: blocking.map((error) => error.message),
+      needsEnrichment,
+      majorGreenfield: opts.greenfield,
+      simpleEconomyRequest: isSimpleEditorRequest(opts.task),
+      round: pass,
+      maxTokens,
+      projectId: opts.projectId,
+      userId: opts.userId,
+      contract,
+    });
+    if (!repaired) break;
+    for (const file of repaired.files) {
+      const prev = opts.projectFileMap.get(file.path);
+      if (prev && (prev.content ?? "") === file.content) continue;
+      if (adoptGeneratedFile(opts.projectFileMap, file, contract, opts.send)) {
+        filledPaths.push(file.path);
+      }
+    }
+    const next = readProjectContractFromFiles(Array.from(opts.projectFileMap.values()));
+    if (next) contract = next;
+  }
+  return { contract, filledPaths };
+}
 
 export async function handleAiAgent(req: Request) {
   const supabase = createClientFromRequest(req);
@@ -541,6 +662,41 @@ export async function handleAiAgent(req: Request) {
       let reservationFinalized = false;
       let producedBillableWork = false;
       let finalCreditCost: number | null = null;
+      const attempt = createGenerationAttempt(projectId);
+      if (buildRunId) attempt.buildRunId = buildRunId;
+      const sandboxSessionId = (projectRow as { metadata?: { sandbox_id?: unknown } } | null)?.metadata?.sandbox_id;
+      if (typeof sandboxSessionId === "string" && sandboxSessionId) {
+        setCorrelation({ sandboxSessionId });
+        attempt.sandboxSessionId = sandboxSessionId;
+      }
+      recordAttemptStep(attempt, "plan", { ok: true });
+      let lastPreviewGate: SelfVerifyResult["previewGate"];
+      const closeAttempt = (opts: {
+        firstBootSuccess: boolean;
+        tokensUsed?: number;
+        error?: string;
+        extraErrors?: Array<{ type?: string; message: string; file?: string | null }>;
+      }) => {
+        closeGenerationAttempt(attempt, {
+          firstBootSuccess: opts.firstBootSuccess,
+          tokensUsed: opts.tokensUsed ?? 0,
+          error: opts.error,
+          errors: opts.extraErrors,
+          repairAccepted: lastPreviewGate?.repairAccepted,
+          falseGreen: lastPreviewGate?.falseGreen,
+          costCredits: finalCreditCost ?? 0,
+          gateLayer: lastPreviewGate?.layer,
+        });
+        recordPreviewGateSample({
+          firstBootSuccess: opts.firstBootSuccess,
+          repairAccepted: lastPreviewGate?.repairAccepted ?? null,
+          falseGreen: lastPreviewGate?.falseGreen === true,
+          durationMs: Date.now() - attempt.startedAt,
+          costCredits: finalCreditCost ?? 0,
+        });
+      };
+      let agentKnowledge = knowledge;
+      let projectContract: ProjectContract | null = null;
 
       try {
         const projectFileMap = new Map<string, { path: string; content: string; language?: string }>();
@@ -596,7 +752,55 @@ export async function handleAiAgent(req: Request) {
           }
         }
 
-        const result = await runAgent({
+        const result = await (async () => {
+          const framework = String((projectRow as { framework?: string } | null)?.framework ?? "tanstack-start");
+          const greenfield = isGreenfieldProject((files ?? []) as Array<{ path: string }>);
+          projectContract = readProjectContractFromFiles(Array.from(projectFileMap.values()));
+          if (shouldGenerateProjectContract({ mode: "build", greenfield, framework })) {
+            send({ status: "planning", message: "Writing project contract…" });
+            const staged = await runDurableStep({
+              attempt,
+              step: "contract",
+              store: buildRunStore,
+              runId: buildRunId,
+              tokensOf: (contracted) => contracted.tokensUsed,
+              fn: () => runProjectContractStage({
+                prompt: task,
+                projectId,
+                userId: user.id,
+                model: effectiveModel,
+              }),
+            });
+            projectContract = staged.contract;
+            const contractFile = contractAsProjectFile(staged.contract);
+            projectFileMap.set(contractFile.path, { path: contractFile.path, content: contractFile.content, language: "json" });
+            agentKnowledge = [knowledge, renderProjectContractPromptBlock(staged.contract, staged.generationOrder)]
+              .filter(Boolean)
+              .join("\n\n---\n\n");
+            send({
+              status: "contract_ready",
+              fileCount: staged.contract.files.length,
+              routeCount: staged.contract.routes.length,
+              source: staged.source,
+            });
+          } else if (projectContract) {
+            agentKnowledge = [
+              knowledge,
+              renderProjectContractPromptBlock(
+                projectContract,
+                generationOrderForContract(projectContract),
+                { incremental: true },
+              ),
+            ].filter(Boolean).join("\n\n---\n\n");
+          }
+
+          return runDurableStep({
+            attempt,
+            step: "generate",
+            persist: false,
+            timeoutMs: 0,
+            tokensOf: (generated) => generated.tokensUsed,
+            fn: () => runAgent({
           task,
           projectId,
           userId: user.id,
@@ -609,7 +813,10 @@ export async function handleAiAgent(req: Request) {
               : null) ??
             (projectRow as { deployed_url?: string | null } | null)?.deployed_url ??
             null,
-          files: files ?? [],
+          files: [
+            ...(files ?? []),
+            ...(projectContract ? [contractAsProjectFile(projectContract)] : []),
+          ],
           // Seed the agent with ranked file CONTENT, not just a path list.
           // buildProjectContext is the same BM25-ranked, per-file-budgeted
           // selector the build path uses, so this costs nothing extra and stops
@@ -633,7 +840,7 @@ export async function handleAiAgent(req: Request) {
             defaultBuildMax: 8000,
             defaultChatMax: 4000,
           }),
-          knowledge,
+          knowledge: agentKnowledge,
           extraTools: extraTools.length > 0 ? extraTools : undefined,
           onStep: (step: AgentStep) => {
             producedBillableWork = true;
@@ -651,8 +858,25 @@ export async function handleAiAgent(req: Request) {
               return;
             }
             const cleanPath = path.replace(/\\/g, "/").replace(/^\/+/, "");
+            const existing = Array.from(projectFileMap.values());
+            if (isForbiddenTanStackEntry(cleanPath) && (
+              projectContract?.framework === "tanstack-start" ||
+              projectFileMap.has("src/routes/__root.tsx") ||
+              projectFileMap.has("src/router.tsx")
+            )) {
+              send({ warning: `Skipped forbidden TanStack entry ${cleanPath}.` });
+              return;
+            }
+            const live = shouldLiveStreamGeneratedPath(
+              cleanPath,
+              existing,
+              projectContract,
+              content,
+            );
             projectFileMap.set(cleanPath, { path: cleanPath, content, language: detectLanguage(cleanPath) });
-            send({ fileUpdated: { path: cleanPath, content: content.slice(0, 100) + "..." } });
+            if (live) {
+              send({ fileUpdated: { path: cleanPath, content: content.slice(0, 100) + "..." } });
+            }
 
             // Staged only: activation happens once after verification.
             // And into the RUNNING preview container — the DB alone leaves the
@@ -680,15 +904,16 @@ export async function handleAiAgent(req: Request) {
             projectFileMap.delete(cleanPath);
             send({ fileDeleted: { path: cleanPath } });
           },
-        });
+            }),
+          });
+        })();
 
         const supportFiles = ensureCommonGeneratedSupportFiles(Array.from(projectFileMap.values())).filter(
           (file) => !projectFileMap.has(file.path.replace(/\\/g, "/").replace(/^\/+/, "")),
         );
         if (supportFiles.length > 0) {
           for (const file of supportFiles) {
-            projectFileMap.set(file.path, { path: file.path, content: file.content, language: file.language });
-            send({ fileUpdated: { path: file.path, content: file.content.slice(0, 100) + "..." } });
+            adoptGeneratedFile(projectFileMap, file, projectContract, send);
           }
         }
         // ── Post-generation guarantees ────────────────────────────────────
@@ -731,17 +956,80 @@ export async function handleAiAgent(req: Request) {
           }
           if (guaranteed.length > 0) {
             for (const file of guaranteed) {
-              projectFileMap.set(file.path, { path: file.path, content: file.content, language: file.language });
-              send({ fileUpdated: { path: file.path, content: file.content.slice(0, 100) + "..." } });
+              adoptGeneratedFile(projectFileMap, file, projectContract, send);
             }
           }
         } catch {
           // Never fail a build over a guarantee pass.
         }
 
+        if (projectContract) {
+          const restricted = applyGeneratedContract(
+            Array.from(projectFileMap.values()).map((file) => ({
+              path: file.path,
+              content: file.content ?? "",
+              language: file.language,
+            })),
+            (files ?? []) as Array<{ path: string }>,
+            projectContract,
+          );
+          if (restricted.dropped.length > 0) {
+            for (const path of restricted.dropped) projectFileMap.delete(path);
+            send({
+              status: "contract_trimmed",
+              dropped: restricted.dropped.slice(0, 20),
+            });
+          }
+          projectContract = restricted.contract;
+          for (const file of restricted.files) {
+            projectFileMap.set(file.path, { path: file.path, content: file.content, language: file.language ?? detectLanguage(file.path) });
+          }
+        }
+
+        const filledContractPaths: string[] = [];
+        if (projectContract) {
+          const filled = await fulfillProjectContractGaps({
+            projectFileMap,
+            existingFiles: (files ?? []) as Array<{ path: string; content?: string | null }>,
+            contract: projectContract,
+            projectId,
+            userId: user.id,
+            task: costTask,
+            fileCount,
+            greenfield: isGreenfieldProject((files ?? []) as Array<{ path: string }>),
+            send,
+          });
+          projectContract = filled.contract;
+          filledContractPaths.push(...filled.filledPaths);
+          if (filled.filledPaths.length > 0) {
+            const restricted = applyGeneratedContract(
+              Array.from(projectFileMap.values()).map((file) => ({
+                path: file.path,
+                content: file.content ?? "",
+                language: file.language,
+              })),
+              (files ?? []) as Array<{ path: string }>,
+              projectContract,
+            );
+            if (restricted.dropped.length > 0) {
+              for (const path of restricted.dropped) projectFileMap.delete(path);
+            }
+            projectContract = restricted.contract;
+            for (const file of restricted.files) {
+              projectFileMap.set(file.path, { path: file.path, content: file.content, language: file.language ?? detectLanguage(file.path) });
+            }
+          }
+        }
+
         const filesChanged = Array.from(
-          new Set([...(Array.isArray(result.filesChanged) ? result.filesChanged : []), ...supportFiles.map((file) => file.path), ...guaranteed.map((file) => file.path)]),
-        );
+          new Set([
+            ...(Array.isArray(result.filesChanged) ? result.filesChanged : []),
+            ...supportFiles.map((file) => file.path),
+            ...guaranteed.map((file) => file.path),
+            ...filledContractPaths,
+            ...(projectContract ? [PROJECT_CONTRACT_PATH] : []),
+          ]),
+        ).filter((path) => !projectContract || projectFileMap.has(path));
 
         let stagedVerification = null;
         const preAgentRevision = Number((projectRow as { generation_revision?: number } | null)?.generation_revision ?? 0);
@@ -766,8 +1054,13 @@ export async function handleAiAgent(req: Request) {
             userId: user.id,
             candidateFiles: candidateFiles as unknown as import("@/types/database").ProjectFile[],
             persistFixes: false,
+            attempt,
+            contract: projectContract,
+            store: buildRunStore,
+            runId: buildRunId,
             emit: (status) => send({ verify_status: status }),
           });
+          if (stagedVerification?.previewGate) lastPreviewGate = stagedVerification.previewGate;
           if (!stagedVerification?.passed) {
             const reason = stagedVerification?.errors[0] ?? "candidate verification could not complete";
             try {
@@ -801,6 +1094,11 @@ export async function handleAiAgent(req: Request) {
             "agent",
             Array.from(projectFileMap.values()),
           );
+          recordAttemptStep(attempt, "publish", { ok: committed.length > 0 });
+          await persistStepArtifact(buildRunStore, buildRunId, `${attempt.attemptId}:publish`, {
+            ok: committed.length > 0,
+            fileCount: committed.length,
+          });
           for (const file of committed) pushFileToRunningSandbox(supabase, projectId, file.path, file.content);
         }
 
@@ -843,6 +1141,7 @@ export async function handleAiAgent(req: Request) {
                 // last CHAT build had saved — usually far further back than the
                 // user intended, and silently.
                 ...(preAgentSnapshotId ? { snapshot_id: preAgentSnapshotId } : {}),
+                generation_attempt: { attemptId: attempt.attemptId },
               },
             },
           ],
@@ -909,7 +1208,12 @@ export async function handleAiAgent(req: Request) {
               userId: user.id,
               emit: (status) => send({ verify_status: status }),
               maxRounds: stagedVerification ? 0 : simpleAgentRequest ? 0 : undefined,
+              attempt,
+              contract: projectContract,
+              store: stagedVerification ? null : buildRunStore,
+              runId: stagedVerification ? null : buildRunId,
             });
+            if (verification?.previewGate) lastPreviewGate = verification.previewGate;
             // Errors that survive the auto-fix rounds become 'runtime' health
             // findings, which is what feeds the learned-rules flywheel
             // (lib/ai/learned-rules.ts needs >=2 hits per class before it
@@ -1004,6 +1308,39 @@ export async function handleAiAgent(req: Request) {
           }).catch(() => {});
         }
 
+        if (verification?.boundedFailure && attempt.coreLoop.state !== "FAILED_BOUNDED") {
+          attempt.coreLoop = failBounded(attempt.coreLoop, {
+            summary: verification.errors[0] || "Verification failed after bounded repair",
+            artifact: { rounds: verification.rounds },
+          });
+        }
+        closeAttempt({
+          firstBootSuccess: filesChanged.length > 0 && verification?.passed !== false,
+          tokensUsed: result.tokensUsed,
+          extraErrors: (verification?.errors ?? []).map((message) => ({ message })),
+        });
+        const verificationMeta = verificationClientFields(verification);
+        if (assistantMessageId) {
+          try {
+            const { data: row } = await supabase
+              .from("messages")
+              .select("metadata")
+              .eq("id", assistantMessageId)
+              .maybeSingle();
+            const prev = ((row as { metadata?: Record<string, unknown> } | null)?.metadata ?? {}) as Record<string, unknown>;
+            await supabase
+              .from("messages")
+              .update({
+                metadata: {
+                  ...prev,
+                  generation_attempt: attemptClientFields(attempt),
+                  ...(verificationMeta ? { verification: verificationMeta } : {}),
+                } as unknown as import("@/types/database").Json,
+              })
+              .eq("id", assistantMessageId);
+          } catch { /* best-effort — SSE still carries the attempt */ }
+        }
+
         send({
           done: true,
           summary: result.summary,
@@ -1012,22 +1349,24 @@ export async function handleAiAgent(req: Request) {
           remainingCredits,
           assistantMessageId,
           backend_wired: backendWiring ?? undefined,
-          verification: verification
-            ? { engine: verification.engine, passed: verification.passed, fixesApplied: verification.fixesApplied, errors: verification.errors }
-            : undefined,
+          verification: verificationMeta,
+          ...attemptClientFields(attempt),
         });
         if (buildRunStore && buildRunId) {
+          const terminal = coreLoopRunTerminal(attempt.coreLoop, verification?.passed);
           await buildRunStore.finishRun({
             runId: buildRunId,
-            status: "completed",
+            status: terminal.status,
+            failureCode: terminal.failureCode,
             creditsFinalized: finalCreditCost ?? undefined,
             creditFinalizationKey: `fin_${creditReservation.id}`,
-            verificationPassed: verification?.passed,
+            verificationPassed: terminal.verificationPassed,
           });
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Agent failed";
-        send({ error: msg });
+        closeAttempt({ firstBootSuccess: false, error: msg });
+        send({ error: msg, ...attemptClientFields(attempt) });
         if (buildRunStore && buildRunId) {
           await buildRunStore.finishRun({
             runId: buildRunId,
@@ -1036,6 +1375,7 @@ export async function handleAiAgent(req: Request) {
           });
         }
       } finally {
+        closeAttempt({ firstBootSuccess: false });
         if (!reservationFinalized) {
           try {
             if (producedBillableWork) {

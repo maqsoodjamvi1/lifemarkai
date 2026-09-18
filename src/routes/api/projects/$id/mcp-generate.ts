@@ -6,6 +6,8 @@ generateAppMcpFiles,
 MCP_GENERATED_BANNER,
 type McpServerSpec,
 } from "@/lib/ai/app-mcp-codegen";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 
 /**
  * Native /api/projects/:id/mcp-generate — write an MCP server INTO the app.
@@ -110,23 +112,30 @@ export const Route = createFileRoute("/api/projects/$id/mcp-generate")({
         };
 
         // Existing content decides what is regenerated vs left alone.
-        const { data: existing } = await supabase
+        const { data: existingRows } = await supabase
           .from("project_files")
-          .select("path, content")
-          .eq("project_id", id)
-          .like("path", "%mcp%");
+          .select("path, content, language")
+          .eq("project_id", id);
+        const existingAll = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+        const existingMcp = existingAll.filter((file) => /mcp/i.test(file.path));
 
-        const generated = generateAppMcpFiles(spec, existing ?? []);
-        const skipped = (existing ?? [])
+        const generated = generateAppMcpFiles(spec, existingMcp);
+        const skipped = existingMcp
           .filter(
-            (f: any) =>
+            (f) =>
               typeof f.content === "string" &&
               !f.content.startsWith(MCP_GENERATED_BANNER) &&
               /(^src\/lib\/mcp\/|^supabase\/functions\/mcp\/|^\.lifemark\/mcp\/)/.test(f.path),
           )
-          .map((f: any) => f.path);
+          .map((f) => f.path);
 
-        for (const file of generated) {
+        const constrained = constrainRepairFiles(
+          generated,
+          existingAll,
+          readProjectContractFromFiles(existingAll),
+          generated.map((file) => file.path),
+        );
+        for (const file of constrained.files) {
           await supabase.from("project_files").upsert(
             {
               project_id: id,
@@ -139,12 +148,13 @@ export const Route = createFileRoute("/api/projects/$id/mcp-generate")({
           );
         }
 
-        const manifest = generated.find((f) => f.path.endsWith("manifest.json"));
+        const written = constrained.files;
+        const manifest = written.find((f) => f.path.endsWith("manifest.json"));
 
         return Response.json({
           ok: true,
           endpoint: `https://${projectRef}.supabase.co/functions/v1/mcp`,
-          written: generated.map((f) => f.path),
+          written: written.map((f) => f.path),
           skippedUserOwned: skipped,
           manifest: manifest ? JSON.parse(manifest.content) : null,
           next: "Deploy the edge function (supabase/functions/mcp) so the endpoint goes live.",

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildFallbackHtml } from "./build-fallback-html.ts";
+import { buildFallbackHtml, PREVIEW_ENGINE_REV } from "./build-fallback-html.ts";
+import { tanstackStartScaffold } from "../templates/tanstack-start-scaffold.ts";
 import type { ProjectFile } from "../../types/database.ts";
 
 function file(path: string, content: string): ProjectFile {
@@ -135,4 +136,92 @@ test("buildFallbackHtml returns a cached result for byte-identical input", () =>
   ]);
   assert.notEqual(third, first);
   assert.match(third, /different marker/);
+});
+
+test("fallback preview uses src/routes/index.tsx even when a stray App.tsx exists", () => {
+  const html = buildFallbackHtml([
+    file(
+      "src/routes/__root.tsx",
+      `import { createRootRoute, Outlet } from "@tanstack/react-router";
+function Root() { return <div data-shell="1"><Outlet /></div>; }
+export const Route = createRootRoute({ component: Root });
+`,
+    ),
+    file(
+      "src/routes/index.tsx",
+      `import { createFileRoute } from "@tanstack/react-router";
+function Home() { return <h1>Neighborhood Bakery</h1>; }
+export const Route = createFileRoute("/")({ component: Home });
+`,
+    ),
+    file("src/App.tsx", "export default function App(){ return <h1>Vite leftover</h1>; }"),
+  ]);
+  assert.match(html, /Neighborhood Bakery/);
+  assert.match(html, /window\.__Mrequire\('src\/routes\/index\.tsx'\)/);
+  assert.doesNotMatch(html, /window\.__Mrequire\('src\/App\.tsx'\)/);
+});
+
+test("fallback preview does not early-return a stray index.html on TanStack Start apps", () => {
+  const html = buildFallbackHtml([
+    file("index.html", "<!doctype html><html><body><p>vanilla leftover</p></body></html>"),
+    file(
+      "src/routes/__root.tsx",
+      `import { createRootRoute, Outlet } from "@tanstack/react-router";
+function Root() { return <div data-shell="1"><Outlet /></div>; }
+export const Route = createRootRoute({ component: Root });
+`,
+    ),
+    file(
+      "src/routes/index.tsx",
+      `import { createFileRoute } from "@tanstack/react-router";
+function Home() { return <h1>Start home</h1>; }
+export const Route = createFileRoute("/")({ component: Home });
+`,
+    ),
+  ]);
+  assert.doesNotMatch(html, /vanilla leftover/);
+  assert.match(html, /Start home/);
+  assert.match(html, /__tanstackRouter/);
+});
+
+test("fallback preview uses src/routes/index.tsx on TanStack Start apps", () => {
+  const html = buildFallbackHtml([
+    file(
+      "src/routes/__root.tsx",
+      `import { createRootRoute, Outlet } from "@tanstack/react-router";
+function Root() { return <div data-shell="1"><Outlet /></div>; }
+export const Route = createRootRoute({ component: Root });
+`,
+    ),
+    file(
+      "src/routes/index.tsx",
+      `import { createFileRoute } from "@tanstack/react-router";
+function Home() { return <h1>Neighborhood Bakery</h1>; }
+export const Route = createFileRoute("/")({ component: Home });
+`,
+    ),
+  ]);
+  assert.doesNotMatch(html, /No entry file found/);
+  assert.match(html, /src\/routes\/index\.tsx/);
+  assert.match(html, /Neighborhood Bakery/);
+  assert.match(html, /__tanstackRouter/);
+  assert.match(html, /Route\.component/);
+  assert.match(html, /__lmOutletChild/);
+  assert.match(html, /data-shell/);
+});
+
+test("fallback preview evaluates TanStack Start __root with styles.css?url", () => {
+  const html = buildFallbackHtml(
+    tanstackStartScaffold().map((f) => file(f.path, f.content)),
+  );
+  assert.doesNotMatch(html, /No entry file found/);
+  assert.match(html, new RegExp(`data-preview-engine="${PREVIEW_ENGINE_REV}"`));
+  assert.doesNotMatch(html, /__Mrequire\('src\/styles\.css\?url'\)/);
+  assert.match(html, /\/virtual\/' \+ \(norm \|\| path\)/);
+  assert.match(html, /data-start-html/);
+  assert.match(html, /data-start-body/);
+  assert.match(html, /SiteChrome/);
+  assert.match(html, /__lmOutletChild/);
+  assert.match(html, /src\/routes\/__root\.tsx/);
+  assert.match(html, /src\/routes\/index\.tsx/);
 });

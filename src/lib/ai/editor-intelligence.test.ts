@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolvePromptMode,shouldFocusPreviewAfterGeneration } from "./editor-intelligence.ts";
+import { resolvePromptMode,shouldFocusPreviewAfterGeneration,pickActiveFileAfterUpdate } from "./editor-intelligence.ts";
 
 test("resolvePromptMode interviews hello from the chat tab on an empty project", () => {
   const mode = resolvePromptMode("hello", {
@@ -233,4 +233,18 @@ test("shouldFocusPreviewAfterGeneration snaps to preview after chat writes files
   assert.equal(shouldFocusPreviewAfterGeneration("chat", 2), true);
   assert.equal(shouldFocusPreviewAfterGeneration("chat", 0), false);
   assert.equal(shouldFocusPreviewAfterGeneration("plan", 3), false);
+});
+
+test("pickActiveFileAfterUpdate prefers Start routes over leftover App.tsx", () => {
+  const files = [
+    { path: "src/App.tsx", content: "export default function App(){ return null; }" },
+    { path: "src/routes/__root.tsx", content: "export const Route = {}" },
+    { path: "src/routes/index.tsx", content: "export const Route = {}" },
+  ] as never;
+  const picked = pickActiveFileAfterUpdate(
+    files,
+    ["src/App.tsx", "src/routes/index.tsx", "src/routes/__root.tsx"],
+    null,
+  );
+  assert.equal(picked?.path, "src/routes/index.tsx");
 });

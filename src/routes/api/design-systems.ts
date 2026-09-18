@@ -1,6 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { createFileRoute } from "@tanstack/react-router";
 import type { Database,Json } from "@/types/database";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 
 /**
  * Design Systems API
@@ -93,26 +95,44 @@ async function handlePOST(req: Request) {
       .eq("path", ".lovable/system.md")
       .maybeSingle();
     if (!existing) {
-      await supabase.from("project_files").insert([
+      const { data: existingRows } = await supabase
+        .from("project_files")
+        .select("path, content, language")
+        .eq("project_id", projectId);
+      const existingFiles = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+      const seed = [
         {
-          project_id: projectId,
           path: ".lovable/system.md",
           language: "markdown",
-          content: `# Design System: ${(meta as any)?.name ?? "Untitled"}\n\n## Installation\n_Describe how to install this design system in connected projects._\n\n## High-level guidelines\n_Code patterns, design principles, decision trees._\n`,
+          content: `# Design System: ${(meta as { name?: string } | undefined)?.name ?? "Untitled"}\n\n## Installation\n_Describe how to install this design system in connected projects._\n\n## High-level guidelines\n_Code patterns, design principles, decision trees._\n`,
         },
         {
-          project_id: projectId,
           path: ".lovable/rules/components.md",
           language: "markdown",
           content: `# Components\n\n_Per-component specifications: Button, Input, Modal, etc._\n`,
         },
         {
-          project_id: projectId,
           path: ".lovable/rules/styling.md",
           language: "markdown",
           content: `# Styling\n\n## Colors\n## Typography\n## Spacing\n`,
         },
-      ]);
+      ];
+      const constrained = constrainRepairFiles(
+        seed,
+        existingFiles,
+        readProjectContractFromFiles(existingFiles),
+        seed.map((file) => file.path),
+      );
+      if (constrained.files.length > 0) {
+        await supabase.from("project_files").insert(
+          constrained.files.map((file) => ({
+            project_id: projectId,
+            path: file.path,
+            language: file.language ?? "markdown",
+            content: file.content,
+          })),
+        );
+      }
     }
   }
 

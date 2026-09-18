@@ -86,6 +86,27 @@ export async function processDeployJob(job: Job<DeployJobPayload>) {
         if (projectError) throw projectError;
         await job.updateProgress(100);
         logger.info("deploy.worker_live", { deploymentId: payload.deploymentId, projectId: payload.projectId, url });
+        try {
+          await withTraceSpan("core_loop.public_health", {
+            parent,
+            attributes: { "deployment.id": payload.deploymentId, "http.url.host": new URL(url).host },
+          }, async () => {
+            const res = await fetch(url, {
+              method: "GET",
+              redirect: "manual",
+              signal: AbortSignal.timeout(8_000),
+            });
+            if (res.status >= 500) {
+              throw new Error(`public URL returned HTTP ${res.status}`);
+            }
+          });
+        } catch (healthError) {
+          logger.warn("deploy.public_health_unverified", {
+            deploymentId: payload.deploymentId,
+            url,
+            error: healthError instanceof Error ? healthError.message : String(healthError),
+          });
+        }
         fireProjectWebhookEvent(supabase, payload.projectId, "build_complete", { url, provider: payload.provider }).catch(() => {});
         fireProjectWebhookEvent(supabase, payload.projectId, "deploy_success", { url, provider: payload.provider }).catch(() => {});
         return { status: "live" as const, url };

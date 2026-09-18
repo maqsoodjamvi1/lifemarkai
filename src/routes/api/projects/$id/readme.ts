@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { generateAI } from "@/lib/ai/generate";
 import { FAST_CODING_MODEL } from "@/lib/ai/model-defaults";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 
 // POST /api/projects/[id]/readme
 // Reads project files, generates a README.md with AI, upserts it as a project file.
@@ -91,31 +93,61 @@ Generate a complete README.md for this project.`;
     return Response.json({ error: "AI returned empty response." }, { status: 500 });
   }
 
-  // Upsert README.md as a project file
-  const { data: existing } = await supabase
+  // Upsert README.md as a project file. Constrain so a contracted Start app
+  // grows the contract to include README.md instead of dropping extras, and
+  // never plants Vite SPA entries if the model wrapped the markdown in JSON.
+  const { data: existingRows } = await supabase
+    .from("project_files")
+    .select("path, content, language")
+    .eq("project_id", id);
+  const existing = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+  const constrained = constrainRepairFiles(
+    [{ path: "README.md", content: readme, language: "markdown" }],
+    existing,
+    readProjectContractFromFiles(existing),
+    ["README.md"],
+  );
+  const readmeFile = constrained.files.find((file) => file.path === "README.md");
+  if (!readmeFile) {
+    return Response.json({ error: "README.md is not allowed on this project." }, { status: 400 });
+  }
+
+  const { data: existingReadme } = await supabase
     .from("project_files")
     .select("id")
     .eq("project_id", id)
     .eq("path", "README.md")
     .maybeSingle();
 
-  if (existing) {
+  if (existingReadme) {
     await supabase
       .from("project_files")
-      .update({ content: readme, language: "markdown" })
-      .eq("id", existing.id);
+      .update({ content: readmeFile.content, language: "markdown" })
+      .eq("id", existingReadme.id);
   } else {
     await supabase
       .from("project_files")
       .insert({
         project_id: id,
         path: "README.md",
-        content: readme,
+        content: readmeFile.content,
         language: "markdown",
       });
   }
+  for (const file of constrained.files) {
+    if (file.path === "README.md") continue;
+    await supabase.from("project_files").upsert(
+      {
+        project_id: id,
+        path: file.path,
+        content: file.content,
+        language: file.language ?? "json",
+      },
+      { onConflict: "project_id,path" },
+    );
+  }
 
-  return Response.json({ content: readme, path: "README.md" });
+  return Response.json({ content: readmeFile.content, path: "README.md" });
 }
 
 

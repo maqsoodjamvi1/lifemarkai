@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { hasSupabaseWired } from "@/lib/projects/detect-supabase-wiring";
+import { dropForbiddenTanStackMergeFiles } from "@/lib/ai/project-contract-validate";
 
 /** Native /api/projects/:id/remix — fork a public, remix-enabled project. */
 const MESSAGE_COPY_LIMIT = 500;
@@ -29,7 +30,9 @@ export const Route = createFileRoute("/api/projects/$id/remix")({
           return Response.json({ error: "Project not found or remixing disabled" }, { status: 404 });
         }
 
-        const sourceFiles = (source.project_files ?? []) as Array<{ path: string; content: string; language: string }>;
+        const sourceFiles = dropForbiddenTanStackMergeFiles(
+          (source.project_files ?? []) as Array<{ path: string; content: string; language: string }>,
+        ).files;
         const supabaseCheck = hasSupabaseWired(sourceFiles);
 
         if (body.dryRun) {

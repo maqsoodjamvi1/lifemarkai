@@ -8,6 +8,7 @@ import { Octokit } from "@octokit/rest";
 import { createClient } from "../supabase/server.ts";
 import { rateLimitAsync,RATE_LIMITS } from "../rate-limit.ts";
 import { detectLanguage } from "../ai/code-parser.ts";
+import { dropForbiddenTanStackMergeFiles } from "../ai/project-contract-validate.ts";
 import {
 cancelCreditReservation,
 reserveCredits,
@@ -163,8 +164,11 @@ export async function importGithubRepo(data: { repoUrl: string; branch?: string 
       if (projectError || !project) return { status: "error", code: 500, message: "Failed to create project" };
       durableImportStarted = true;
 
-      for (let i = 0; i < fileContents.length; i += 50) {
-        const batch = fileContents.slice(i, i + 50).map((f) => ({
+      const allowedImport = dropForbiddenTanStackMergeFiles(fileContents);
+      const importFiles = allowedImport.files;
+
+      for (let i = 0; i < importFiles.length; i += 50) {
+        const batch = importFiles.slice(i, i + 50).map((f) => ({
           project_id: project.id,
           path: f.path,
           content: f.content,
@@ -180,7 +184,7 @@ export async function importGithubRepo(data: { repoUrl: string; branch?: string 
 
       return {
         status: "ok",
-        payload: { projectId: project.id, name: projectName, filesImported: fileContents.length, branch: targetBranch },
+        payload: { projectId: project.id, name: projectName, filesImported: importFiles.length, branch: targetBranch },
       };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

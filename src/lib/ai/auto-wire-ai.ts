@@ -13,6 +13,8 @@
  * Best-effort: wiring failures never fail the build. Mirrors lib/cloud/auto-wire.ts.
  */
 import { ENV_FILE_PATH,parseEnvFile,serializeEnvFile } from "../project/env-file.ts";
+import { readProjectContractFromFiles } from "./project-contract.ts";
+import { constrainRepairFiles } from "./project-contract-validate.ts";
 
 export interface AiWireResult {
   intentDetected: boolean;
@@ -127,10 +129,23 @@ async function upsertProjectFile(
   content: string,
   language = "typescript",
 ): Promise<void> {
-  await supabase.from("project_files").upsert(
-    { project_id: projectId, path, content, language },
-    { onConflict: "project_id,path" },
+  const { data: existingRows } = await supabase
+    .from("project_files")
+    .select("path, content, language")
+    .eq("project_id", projectId);
+  const existing = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+  const constrained = constrainRepairFiles(
+    [{ path, content, language }],
+    existing,
+    readProjectContractFromFiles(existing),
+    [path],
   );
+  for (const file of constrained.files) {
+    await supabase.from("project_files").upsert(
+      { project_id: projectId, path: file.path, content: file.content, language: file.language ?? language },
+      { onConflict: "project_id,path" },
+    );
+  }
 }
 
 /**

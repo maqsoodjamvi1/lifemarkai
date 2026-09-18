@@ -5,6 +5,8 @@ import { describeFigmaTree, type FigmaNode } from "@/lib/figma/describe-tree";
 import { generateComponentFromFigmaNode } from "@/lib/figma/generate-component";
 import { buildFigmaImportFiles } from "@/lib/figma/apply-import";
 import { listProjectFiles, upsertProjectFile } from "@/lib/server-fns/project-files";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -109,9 +111,20 @@ Use these as the real starting point (adjust file names/paths to fit the project
         const appliedFiles: string[] = [];
         if (typeof projectId === "string" && UUID_RE.test(projectId) && generatedComponents.length > 0) {
           const listed = await listProjectFiles(projectId);
-          const paths = listed.status === "ok" ? listed.files.map((f) => f.path) : [];
+          const existing = listed.status === "ok" ? listed.files : [];
+          const paths = existing.map((f) => f.path);
           const writes = buildFigmaImportFiles(paths, generatedComponents);
-          for (const w of writes) {
+          const existingForContract = existing.map((f) => ({
+            path: f.path,
+            content: String(f.content ?? ""),
+            language: typeof f.language === "string" ? f.language : undefined,
+          }));
+          const constrained = constrainRepairFiles(
+            writes,
+            existingForContract,
+            readProjectContractFromFiles(existingForContract),
+          );
+          for (const w of constrained.files) {
             const saved = await upsertProjectFile({
               projectId,
               path: w.path,

@@ -25,6 +25,9 @@ import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { runInitiative } from "@/lib/ai/editor-lenses/orchestrator";
 import { getRole } from "@/lib/ai/editor-lenses/roles";
 import { runAgent } from "@/lib/ai/agent";
+import { detectLanguage } from "@/lib/ai/code-parser";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 import { runSelfVerification,type SelfVerifyResult } from "@/lib/ai/self-verify";
 import { recordVerificationFindings } from "@/lib/ai/self-healing";
 import type { AgentRoleId,AutonomyGates,EditorIntelligenceEvent } from "@/lib/ai/editor-lenses/types";
@@ -441,19 +444,33 @@ async function handlePOST(req: Request) {
               billableWorkReturned = true;
               agentCreditsThisRequest += Math.round((result.tokensUsed / 1000) * 0.05 * 100) / 100;
             }
-            const changedFiles = [...changed.entries()].map(([path, content]) => ({ path, content }));
-            // Persist the agent's file changes to project_files so the build is real.
-            if (changedFiles.length) {
+            const changedFiles = [...changed.entries()].map(([path, content]) => ({
+              path,
+              content,
+              language: detectLanguage(path),
+            }));
+            const contract = readProjectContractFromFiles(files as Array<{ path: string; content: string }>);
+            const constrained = constrainRepairFiles(
+              changedFiles,
+              files as Array<{ path: string; content: string }>,
+              contract,
+            );
+            if (constrained.files.length) {
               try {
                 await db.from("project_files").upsert(
-                  changedFiles.map((f) => ({ project_id: projectId, path: f.path, content: f.content })),
+                  constrained.files.map((file) => ({
+                    project_id: projectId,
+                    path: file.path,
+                    content: file.content,
+                    language: file.language ?? detectLanguage(file.path),
+                  })),
                   { onConflict: "project_id,path" },
                 );
               } catch {
                 /* non-fatal - still report the change in the stream */
               }
             }
-            return { files: changedFiles, summary: result.summary };
+            return { files: constrained.files, summary: result.summary };
           },
         })) {
           // Intercept the final `done` event: run the real QA self-verify loop

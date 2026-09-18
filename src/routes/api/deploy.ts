@@ -8,6 +8,7 @@ import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { enqueueDeployJob,getDeployQueue } from "@/lib/queue/client";
 import { logger } from "@/lib/logger";
 import { createTraceContext,parseTraceparent,traceparent } from "@/lib/monitoring/tracing";
+import { currentTraceContext } from "@/lib/observability/correlation";
 import { evaluatePublishGate,publishGateResponseBody } from "@/lib/security/publish-gate";
 import { fireProjectWebhookEvent } from "@/lib/webhooks/dispatch";
 
@@ -409,7 +410,9 @@ async function handlePOST(req: Request) {
       // keep the Redis payload small and avoid stale snapshots.
       projectName: project.name as string,
       badgeHidden: (project as any).badge_hidden ?? false,
-      traceparent: traceparent(createTraceContext(parseTraceparent(req.headers.get("traceparent")))),
+      traceparent: traceparent(
+        currentTraceContext() ?? createTraceContext(parseTraceparent(req.headers.get("traceparent"))),
+      ),
     });
     logger.info("deploy.queued", { deploymentId: deployment.id, projectId, userId: user.id });
     return Response.json({

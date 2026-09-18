@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createClient } from "@/lib/supabase/server";
 import { detectLanguage } from "@/lib/ai/code-parser";
+import { dropForbiddenTanStackMergeFiles } from "@/lib/ai/project-contract-validate";
 
 // Paths/patterns to skip when importing
 const SKIP_PATTERNS = [
@@ -88,11 +89,16 @@ async function handlePOST(req: Request, params: any) {
   const existingMap = new Map<string, string>(
     ((existing ?? []) as Array<{ id: string; path: string }>).map((f) => [f.path, f.id])
   );
+  const allowed = dropForbiddenTanStackMergeFiles(
+    toImport,
+    (existing ?? []) as Array<{ path: string }>,
+  );
+  const toImportSafe = allowed.files;
 
   const toUpdate: Array<{ id: string; content: string; language: string }> = [];
   const toInsert: Array<{ project_id: string; path: string; content: string; language: string }> = [];
 
-  for (const entry of toImport) {
+  for (const entry of toImportSafe) {
     const content = entry.content;
     const language = detectLanguage(entry.path);
     const existingId = existingMap.get(entry.path);
@@ -126,10 +132,11 @@ async function handlePOST(req: Request, params: any) {
   }
 
   return Response.json({
-    imported: toImport.length,
+    imported: toImportSafe.length,
     updated: toUpdate.length,
     inserted: toInsert.length,
     errors: errors.length,
+    dropped: allowed.dropped,
   });
 }
 

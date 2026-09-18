@@ -29,12 +29,17 @@
  *  CONFIG
  * ────────────────────────────────────────────────────────────────────────────
  *   SANDBOX_PROVIDER=docker            select this provider
- *   DOCKER_SOCKET=/var/run/docker.sock unix socket (default), or
- *   DOCKER_HOST=http://127.0.0.1:2375  TCP daemon (never expose this publicly)
+ *   SANDBOX_DOCKER_HOST=http://172.17.0.1:2375
+ *     Dedicated preview daemon (Oracle). When set, this process never
+ *     creates sandboxes on the app host. Do not expose Docker TCP publicly —
+ *     SSH-tunnel it to the Coolify host and point this at the tunnel.
+ *   SANDBOX_REMOTE_MEMORY_MB=2048      RAM cap on the dedicated host
+ *   DOCKER_SOCKET=/var/run/docker.sock local daemon when SANDBOX_DOCKER_HOST is unset
+ *   DOCKER_HOST=http://127.0.0.1:2375  local TCP (never public; ignored if remote is set)
  *   SANDBOX_PUBLIC_HOST=1.2.3.4        host/IP users' browsers can reach
  *   SANDBOX_PORT_RANGE=42000-42099     host ports available for previews
  *   SANDBOX_IMAGE=node:22-alpine       runtime image
- *   SANDBOX_MEMORY_MB=1024             per-container memory cap
+ *   SANDBOX_MEMORY_MB=1024             local (Hostinger) RAM cap — keep at 1 GB
  *   SANDBOX_CPUS=1                     per-container CPU cap
  *   SANDBOX_PROXY_NETWORK=coolify      Traefik network (auto-picked if unset)
  */
@@ -43,6 +48,7 @@ import http from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { applyManifestRepair, candidateBuildScript, repairedManifestFromDisk, parseCandidateBuildResult, validCandidateFiles, type CandidateBuildResult } from "./candidate-build.ts";
 import { dockerSocketIsPresent, resolveDockerSocketPath } from "./docker-socket.ts";
+import { resolveDockerSandboxEndpoint } from "./docker-endpoint.ts";
 import type {
 ClaudeCodeResult,
 CommandResult,
@@ -71,6 +77,22 @@ import {
   sandboxRunningFilter,
   shouldRejoinProxyNetwork,
 } from "./docker-network.ts";
+import {
+  registryEgressReady,
+  sandboxEgressMode,
+  sandboxIsolationHostConfig,
+  sandboxIsolationLabels,
+  sandboxIsolationNetworkCreateBody,
+  sandboxIsolationNetworkName,
+  sandboxNpmInstallEnv,
+} from "./isolation-policy.ts";
+import { correlationFields } from "../observability/correlation.ts";
+import {
+  detectAnomalousSandboxProbe,
+  redactSandboxOutput,
+  sandboxIsolationPolicy,
+} from "./sandbox-boundary.ts";
+import { recordEvent } from "../observability/events.ts";
 
 /** Vite's port inside the sandbox. The heartbeat has no opts.port to read. */
 const DEFAULT_INNER_PORT = 5173;
@@ -182,12 +204,14 @@ function cfg() {
   const [lo, hi] = (process.env.SANDBOX_PORT_RANGE ?? "42000-42099")
     .split("-")
     .map((n) => Number(n.trim()));
+  const endpoint = resolveDockerSandboxEndpoint();
   // Wildcard domain enables hostname routing. Without it we fall back to
   // publishing host ports, which only works when the editor is also on http.
   const previewDomain = normalizeHost(process.env.SANDBOX_PREVIEW_DOMAIN || "");
   return {
     socketPath: resolveDockerSocketPath(),
-    tcpHost: process.env.DOCKER_HOST || "",
+    tcpHost: endpoint.tcpHost,
+    hostKind: endpoint.kind,
     publicHost: normalizeHost(process.env.SANDBOX_PUBLIC_HOST || ""),
     // http for a bare IP; set to "https" once previews sit behind a TLS proxy.
     // This matters more than it looks — see mixedContentWarning() below.
@@ -195,8 +219,8 @@ function cfg() {
     portLo: Number.isFinite(lo) ? lo : 42000,
     portHi: Number.isFinite(hi) ? hi : 42099,
     image: process.env.SANDBOX_IMAGE || "node:22-alpine",
-    memoryMb: Number(process.env.SANDBOX_MEMORY_MB) || 1024,
-    cpus: Number(process.env.SANDBOX_CPUS) || 1,
+    memoryMb: endpoint.memoryMb,
+    cpus: endpoint.cpus,
     // ── routing ──────────────────────────────────────────────────────────────
     previewDomain,
     // Hostname routing is what makes previews usable in production: Traefik
@@ -210,6 +234,15 @@ function cfg() {
     pidsLimit: Number(process.env.SANDBOX_PIDS_LIMIT) || 512,
     entrypoint: process.env.SANDBOX_TRAEFIK_ENTRYPOINT || "https",
   };
+}
+
+/** Status/debug: which daemon will run the next sandbox, and its RAM cap. */
+export function getDockerSandboxRuntimeInfo(): {
+  hostKind: "remote" | "local";
+  memoryMb: number;
+} {
+  const c = cfg();
+  return { hostKind: c.hostKind, memoryMb: c.memoryMb };
 }
 
 /**
@@ -330,6 +363,9 @@ async function docker(
   else if (payload) headers["Content-Type"] = "application/json";
   if (payload) headers["Content-Length"] = String(payload.byteLength);
 
+  if (c.hostKind === "remote" && !c.tcpHost) {
+    return Promise.reject(new Error("SANDBOX_DOCKER_HOST is set but empty after trim"));
+  }
   const opts: http.RequestOptions = c.tcpHost
     ? (() => {
         const u = new URL(c.tcpHost);
@@ -393,6 +429,12 @@ export async function isDockerDaemonReachable(timeoutMs = 1500): Promise<boolean
     return dockerPingCache.ok;
   }
   const c = cfg();
+  // Remote primary must not fall through to Hostinger's socket — that would
+  // spawn 2 GB sandboxes on the app host when Oracle is down.
+  if (c.hostKind === "remote" && !c.tcpHost) {
+    dockerPingCache = { at: now, ok: false };
+    return false;
+  }
   // Opening a missing Windows named pipe can hang past the HTTP timeout.
   if (!c.tcpHost && !dockerSocketIsPresent(c.socketPath)) {
     dockerPingCache = { at: now, ok: false };
@@ -409,7 +451,7 @@ export async function isDockerDaemonReachable(timeoutMs = 1500): Promise<boolean
   }
 }
 
-/** Shrink leftover 2-CPU sandboxes back to the working 1 CPU / 1 GB cap without a recreate. */
+/** Shrink leftover oversized sandboxes back to the active host cap without a recreate. */
 async function applySandboxLimits(sandboxId: string): Promise<void> {
   const c = cfg();
   const memory = c.memoryMb * 1024 * 1024;
@@ -446,6 +488,19 @@ async function ensureProxyNetwork(name: string): Promise<{ ok: true } | { ok: fa
     return {
       ok: false,
       error: `Could not create Docker network "${name}": ${trunc(created.text, 300)}`,
+    };
+  }
+  return { ok: true };
+}
+
+async function ensureIsolationNetwork(name: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const names = await listDockerNetworkNames();
+  if (names.includes(name)) return { ok: true };
+  const created = await docker("POST", "/v1.43/networks/create", sandboxIsolationNetworkCreateBody(name, true));
+  if (created.status >= 400 && created.status !== 409) {
+    return {
+      ok: false,
+      error: `Could not create isolation network "${name}": ${trunc(created.text, 300)}`,
     };
   }
   return { ok: true };
@@ -890,6 +945,21 @@ export class DockerSandboxProvider implements SandboxProvider {
       }
 
       progress(createSandboxProgress("creating", "Creating container"));
+      const egressReady = registryEgressReady();
+      if (!egressReady.ok) {
+        return { ok: false, error: egressReady.error };
+      }
+      const useIsolationNet = sandboxEgressMode() === "registry";
+      const isolationNetwork = sandboxIsolationNetworkName();
+      if (useIsolationNet) {
+        const isolated = await ensureIsolationNetwork(isolationNetwork);
+        if (!isolated.ok) return { ok: false, error: isolated.error };
+      }
+      const isolation = sandboxIsolationPolicy(opts.projectId ?? "");
+      const jobLabels = sandboxIsolationLabels({
+        projectId: opts.projectId,
+        ...correlationFields(),
+      });
       const createBody = {
         Image: c.image,
         // NO WorkingDir here on purpose — see the APP_DIR note above. Setting it
@@ -908,17 +978,24 @@ export class DockerSandboxProvider implements SandboxProvider {
           "npm_config_fetch_retry_maxtimeout=120000",
           "npm_config_fetch_timeout=600000",
           "CI=1",
+          ...sandboxNpmInstallEnv(),
         ],
         ExposedPorts: { [`${innerPort}/tcp`]: {} },
         // Proxy mode: join the network Traefik watches. Port mode: publish to host.
-        ...(c.routeViaProxy
-          ? { NetworkingConfig: { EndpointsConfig: { [proxyNetwork]: {} } } }
-          : {}),
+        ...(useIsolationNet
+          ? { NetworkingConfig: { EndpointsConfig: { [isolationNetwork]: {} } } }
+          : c.routeViaProxy
+            ? { NetworkingConfig: { EndpointsConfig: { [proxyNetwork]: {} } } }
+            : {}),
         HostConfig: {
           PortBindings: c.routeViaProxy
             ? {}
             : { [`${innerPort}/tcp`]: [{ HostPort: String(hostPort) }] },
-          ...(c.routeViaProxy ? { NetworkMode: proxyNetwork } : {}),
+          ...(useIsolationNet
+            ? { NetworkMode: isolationNetwork }
+            : c.routeViaProxy
+              ? { NetworkMode: proxyNetwork }
+              : {}),
           // Init (tini) as pid 1 is LOAD-BEARING. Without it pid 1 is our
           // `sleep infinity`, which never reaps children: when vite's file
           // watcher triggers a self-restart (late .env/config writes), the
@@ -926,20 +1003,19 @@ export class DockerSandboxProvider implements SandboxProvider {
           // as `[npm run dev]`/`[esbuild]` zombies, "server restarted." as the
           // final log line, connection refused on 5173, and 502 from Traefik.
           Init: true,
-          Memory: c.memoryMb * 1024 * 1024,
-          NanoCpus: Math.round(c.cpus * 1e9),
-          PidsLimit: c.pidsLimit,
-          CapDrop: ["ALL"],
-          SecurityOpt: ["no-new-privileges"],
-          // No bind mounts. Never mount the docker socket into a sandbox.
-          Binds: [],
+          ...sandboxIsolationHostConfig({
+            memoryMb: c.memoryMb,
+            cpus: c.cpus,
+            pidsLimit: c.pidsLimit,
+          }),
+          ExtraHosts: isolation.extraHosts,
           AutoRemove: false,
           RestartPolicy: { Name: "no" },
         },
         Labels: {
-          "lifemark.sandbox": "1",
-          "lifemark.project": opts.projectId ?? "",
           "lifemark.created": new Date().toISOString(),
+          ...isolation.labels,
+          ...jobLabels,
           // Survives the container being STOPPED, which `Ports` does not. A
           // stopped container still owns this binding and will re-take it when
           // warm reuse wakes it, so `claimPort` has to count it as in use.
@@ -1010,6 +1086,9 @@ export class DockerSandboxProvider implements SandboxProvider {
       if (start.status >= 400) {
         cleanupOrphan();
         return { ok: false, error: `docker start failed (${start.status}): ${trunc(start.text, 400)}` };
+      }
+      if (useIsolationNet && c.routeViaProxy) {
+        await attachToProxyNetwork(id);
       }
 
       // The Cmd above also mkdirs, but `start` returns as soon as the process is
@@ -1754,7 +1833,14 @@ export class DockerSandboxProvider implements SandboxProvider {
 
   async getDevLogs(sandboxId: string, lines = 200): Promise<string> {
     const res = await this.exec(sandboxId, `tail -n ${lines} ${DEV_LOG} 2>/dev/null || true`);
-    return trunc(res.stdout);
+    const text = redactSandboxOutput(trunc(res.stdout));
+    const probe = detectAnomalousSandboxProbe(text);
+    if (probe.shouldTerminate) {
+      recordEvent("sandbox_probe_terminated", { reason: probe.reason ?? "anomalous probe" });
+      await this.kill(sandboxId).catch(() => undefined);
+      return `[sandbox terminated: ${probe.reason ?? "anomalous probe"}]\n${text}`;
+    }
+    return text;
   }
 
   async writeFiles(
@@ -1931,7 +2017,7 @@ export class DockerSandboxProvider implements SandboxProvider {
       const upload = await docker("PUT", `/v1.43/containers/${sandboxId}/archive?path=${encodeURIComponent(dir)}`, undefined, buildTar(files));
       if (upload.status >= 400) throw new Error("Could not upload candidate files.");
       const script = Buffer.from(candidateBuildScript(APP_DIR, dir, 45)).toString("base64");
-      const run = await this.exec(sandboxId, `node -e 'eval(Buffer.from("${script}","base64").toString())'`, "/", true, false, 60_000);
+      const run = await this.exec(sandboxId, `node -e 'eval(Buffer.from("${script}","base64").toString())'`, "/", true, false, 150_000);
       return parseCandidateBuildResult(run.stdout);
     } catch (error) {
       return { available: false, passed: false, errors: [], reason: error instanceof Error ? error.message : "Candidate build unavailable." };

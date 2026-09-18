@@ -79,10 +79,20 @@ export function buildRepairContext(
       }
 
       const lines = content.split("\n");
-      const firstLine = Math.max(1, Math.min(...errorLines) - CONTEXT_WINDOW_MARGIN_LINES);
+      const targetLine = Math.min(lines.length, Math.min(...errorLines));
+      let firstLine = Math.max(1, targetLine - CONTEXT_WINDOW_MARGIN_LINES);
       const lastLine = Math.min(lines.length, Math.max(...errorLines) + CONTEXT_WINDOW_MARGIN_LINES);
+      // Long preceding lines can consume the whole budget before the error
+      // itself. Drop leading context until the target line fits, keeping the
+      // excerpt contiguous so exact-match repair edits remain valid.
+      let requiredChars = lines.slice(firstLine - 1, targetLine).join("\n").length;
+      while (firstLine < targetLine && requiredChars > maxCharsPerFile) {
+        requiredChars -= lines[firstLine - 1].length + 1;
+        firstLine++;
+      }
       const windowed = lines.slice(firstLine - 1, lastLine).join("\n").slice(0, maxCharsPerFile);
-      return `=== ${f.path} (showing lines ${firstLine}-${lastLine} of ${lines.length}, windowed around the reported error) ===\n${windowed}`;
+      const shownLastLine = firstLine + windowed.split("\n").length - 1;
+      return `=== ${f.path} (showing lines ${firstLine}-${shownLastLine} of ${lines.length}, windowed around the reported error) ===\n${windowed}`;
     })
     .join("\n\n");
 }

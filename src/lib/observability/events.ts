@@ -23,6 +23,13 @@ export type ObservabilityEvent =
   // AI
   | "ai_generation_completed"
   | "ai_generation_failed"
+  | "generation_contract_completed"
+  | "generation_attempt_completed"
+  | "generation_step_completed"
+  | "core_loop_state_changed"
+  | "preview_gate_completed"
+  | "preview_gate_window"
+  | "repair_verifier_completed"
   // Build pipeline
   | "build_verification_completed"
   | "build_repair_round"
@@ -30,6 +37,7 @@ export type ObservabilityEvent =
   | "sandbox_boot_completed"
   | "sandbox_boot_failed"
   | "sandbox_reconnected"
+  | "sandbox_probe_terminated"
   // Deploy
   | "deployment_completed"
   | "deployment_failed"

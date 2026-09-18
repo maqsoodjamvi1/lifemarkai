@@ -10,6 +10,8 @@ canWriteProjectFiles,
 getProjectAccess,
 } from "@/lib/project/access";
 import { ENV_FILE_PATH,parseEnvFile,serializeEnvFile } from "../project/env-file.ts";
+import { readProjectContractFromFiles } from "../ai/project-contract.ts";
+import { constrainRepairFiles } from "../ai/project-contract-validate.ts";
 
 async function loadEnvRecord(
   supabase: Awaited<ReturnType<typeof createClient>>,
@@ -89,30 +91,46 @@ export async function upsertEnvVar(input: {
   const key = input.key.trim();
 
   return withEnvLock(input.projectId, async () => {
-    const row = await loadEnvRecord(supabase, input.projectId);
+    const { data: existingRows } = await supabase
+      .from("project_files")
+      .select("path, content, language")
+      .eq("project_id", input.projectId);
+    const existing = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+    const row = existing.find((file) => file.path === ENV_FILE_PATH);
     const vars = parseEnvFile(row?.content ?? "");
     vars[key] = input.value;
     const content = serializeEnvFile(vars);
 
     // The result was discarded, so the route above answered `{ ok: true }` for
     // a write that never landed — on the panel where the values are API keys.
-    const { error } = row
-      ? await supabase
-          .from("project_files")
-          .update({ content, updated_at: new Date().toISOString() })
-          .eq("id", row.id)
-      : await supabase.from("project_files").insert({
+    // Constrain so a contracted app grows project-contract.json to include
+    // .env.local instead of dropping it on the next generate.
+    const constrained = constrainRepairFiles(
+      [{ path: ENV_FILE_PATH, content, language: "plaintext" }],
+      existing,
+      readProjectContractFromFiles(existing),
+      [ENV_FILE_PATH],
+    );
+    let error: { message?: string } | null = null;
+    for (const file of constrained.files) {
+      const result = await supabase.from("project_files").upsert(
+        {
           project_id: input.projectId,
-          path: ENV_FILE_PATH,
-          content,
-          language: "plaintext",
-        });
+          path: file.path,
+          content: file.content,
+          language: file.language ?? (file.path === ENV_FILE_PATH ? "plaintext" : "json"),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "project_id,path" },
+      );
+      if (result.error) error = result.error;
+    }
 
-    if (error) {
+    if (error || !constrained.files.some((file) => file.path === ENV_FILE_PATH)) {
       return {
         status: "error" as const,
         key,
-        message: error.message ?? "Could not save the variable.",
+        message: error?.message ?? "Could not save the variable.",
       };
     }
     return { status: "ok" as const, key };

@@ -17,6 +17,8 @@ getProjectAccess,
 import type { Database } from "../../types/database.ts";
 import { sanitizeGeneratedFile } from "../ai/html-sanity.ts";
 import { pushFileToRunningSandbox } from "../preview/push-to-sandbox.ts";
+import { readProjectContractFromFiles } from "../ai/project-contract.ts";
+import { constrainRepairFiles, isForbiddenTanStackEntry } from "../ai/project-contract-validate.ts";
 
 async function requireUser() {
   const supabase = await createClient();
@@ -54,26 +56,43 @@ export async function upsertProjectFile(input: {
   if (!canWriteProjectFiles(access)) return { status: "not_found" as const };
 
   const content = sanitizeGeneratedFile(input.path, String(input.content ?? ""));
-  const { data: file, error } = await supabase
+  const { data: existingRows } = await supabase
     .from("project_files")
-    .upsert(
-      {
-        project_id: input.projectId,
-        path: input.path,
-        content,
-        language: input.language ?? "plaintext",
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "project_id,path" },
-    )
-    .select()
-    .single();
-
-  if (error || !file) {
-    return { status: "error" as const, message: "Could not save the file. Try again." };
+    .select("path, content, language")
+    .eq("project_id", input.projectId);
+  const existing = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+  const constrained = constrainRepairFiles(
+    [{ path: input.path, content, language: input.language ?? "plaintext" }],
+    existing,
+    readProjectContractFromFiles(existing),
+    [input.path],
+  );
+  if (!constrained.files.some((file) => file.path === input.path)) {
+    return { status: "error" as const, message: "That file is not allowed on this project." };
   }
-  // Keep the live preview in step with the database — see push-to-sandbox.ts.
-  pushFileToRunningSandbox(supabase, input.projectId, input.path, content);
+
+  let file: unknown = null;
+  for (const next of constrained.files) {
+    const { data, error } = await supabase
+      .from("project_files")
+      .upsert(
+        {
+          project_id: input.projectId,
+          path: next.path,
+          content: next.content,
+          language: next.language ?? input.language ?? "plaintext",
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "project_id,path" },
+      )
+      .select()
+      .single();
+    if (error || !data) {
+      return { status: "error" as const, message: "Could not save the file. Try again." };
+    }
+    if (next.path === input.path) file = data;
+    pushFileToRunningSandbox(supabase, input.projectId, next.path, next.content);
+  }
   return { status: "ok" as const, file };
 }
 
@@ -106,7 +125,19 @@ export async function patchProjectFile(input: {
     }
     updatePayload.content = sanitizeGeneratedFile(effectivePath, String(input.content));
   }
-  if (input.path !== undefined) updatePayload.path = input.path;
+  if (input.path !== undefined) {
+    const { data: existingRows } = await supabase
+      .from("project_files")
+      .select("path")
+      .eq("project_id", input.projectId);
+    const looksTanStack = (existingRows ?? []).some(
+      (row) => row.path === "src/routes/__root.tsx" || row.path === "src/router.tsx",
+    );
+    if (looksTanStack && isForbiddenTanStackEntry(input.path)) {
+      return { status: "error" as const, message: "That file is not allowed on this project." };
+    }
+    updatePayload.path = input.path;
+  }
 
   const { data: file, error } = await supabase
     .from("project_files")

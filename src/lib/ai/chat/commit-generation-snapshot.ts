@@ -2,6 +2,8 @@ import type { createClientFromRequest } from "../../supabase/request-client.ts";
 import { sanitizeGeneratedFile } from "../html-sanity.ts";
 import { enforceGeneratedFileContract } from "../generated-file-contract.ts";
 import { sanitizePackageJsonDependencies } from "../package-allowlist.ts";
+import { readProjectContractFromFiles } from "../project-contract.ts";
+import { constrainRepairFiles } from "../project-contract-validate.ts";
 
 export type SnapshotFile = { path: string; content: string; language?: string };
 
@@ -37,6 +39,20 @@ export async function commitGenerationSnapshot(
     language: file.language ?? "text",
   }));
   const staged = enforceGeneratedFileContract(sanitized);
+  const { data: existingRows } = await supabase
+    .from("project_files")
+    .select("path, content, language")
+    .eq("project_id", projectId);
+  const existing = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+  const constrained = constrainRepairFiles(
+    staged,
+    existing,
+    readProjectContractFromFiles(staged, existing),
+  );
+  if (constrained.files.length === 0) {
+    throw new Error("Generated files are outside the project contract");
+  }
+  const toCommit = constrained.files;
   const rpc = supabase as unknown as {
     rpc: (name: string, args: Record<string, unknown>) => Promise<{
       data: unknown;
@@ -55,8 +71,8 @@ export async function commitGenerationSnapshot(
   const { error: commitError } = await rpc.rpc("commit_generation_snapshot", {
     target_run_id: runId,
     expected_revision: baseRevision,
-    staged_files: staged,
+    staged_files: toCommit,
   });
   if (commitError) throw new Error(`Could not activate verified generation: ${commitError.message}`);
-  return staged;
+  return toCommit;
 }

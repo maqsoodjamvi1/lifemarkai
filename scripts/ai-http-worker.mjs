@@ -34,6 +34,7 @@ const CORRELATION_HEADERS = {
   buildRunId: "x-lifemark-build-run-id",
   sandboxSessionId: "x-lifemark-sandbox-session-id",
   deploymentId: "x-lifemark-deployment-id",
+  attemptId: "x-lifemark-attempt-id",
 };
 
 function correlationFromHeaders(request, route) {
@@ -49,6 +50,7 @@ function correlationFromHeaders(request, route) {
     buildRunId: read(CORRELATION_HEADERS.buildRunId),
     sandboxSessionId: read(CORRELATION_HEADERS.sandboxSessionId),
     deploymentId: read(CORRELATION_HEADERS.deploymentId),
+    attemptId: read(CORRELATION_HEADERS.attemptId),
     route: `ai-worker/${route}`,
   };
 }

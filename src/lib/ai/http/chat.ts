@@ -1,5 +1,5 @@
 import { createAdminClient } from "../../supabase/server.ts";
-import { setCorrelation } from "../../observability/correlation.ts";
+import { setCorrelation, ensureBuildRunId, getCorrelation } from "../../observability/correlation.ts";
 import { canWriteProjectFiles,getProjectAccess } from "../../project/access.ts";
 import { runGenerationStage } from "../chat/generation-service.ts";
 import { DEFAULT_CHAT_MODEL } from "../model-defaults.ts";
@@ -87,6 +87,7 @@ reserveStageCredits,
 settleStageCredits,
 } from "../chat/accounting-service.ts";
 import type { AutoWireResult,SelfVerifyResult } from "./result-types.ts";
+import { verificationClientFields } from "./result-types.ts";
 import { autoWireAi } from "../auto-wire-ai.ts";
 import { selectRelevantFiles } from "../file-selector.ts";
 import { buildCompletedBuildActivity } from "../build-activity.ts";
@@ -116,6 +117,26 @@ import { pushFileToRunningSandbox } from "../../preview/push-to-sandbox.ts";
 import { buildStaticGenerationPrompt } from "../prompts/static-build.ts";
 import { runRepairStage } from "../chat/repair-service.ts";
 import {
+  ensureContractFile,
+  generationOrderForContract,
+  readProjectContractFromFiles,
+  shouldGenerateProjectContract,
+} from "../project-contract.ts";
+import { renderProjectContractPromptBlock } from "../project-contract-prompt.ts";
+import { runProjectContractStage } from "../project-contract-stage.ts";
+import { undeclaredFileErrors, shouldLiveStreamGeneratedPath, constrainRepairFiles } from "../project-contract-validate.ts";
+import {
+  attemptClientFields,
+  beginGenerationStep,
+  closeGenerationAttempt,
+  createGenerationAttempt,
+  finishGenerationStep,
+} from "../generation-attempt.ts";
+import { persistStepArtifact, runDurableStep, recordAttemptStep } from "../generation-loop.ts";
+import { attemptClusterFields } from "../failure-cluster.ts";
+import { isFeatureEnabled } from "../../config/features.ts";
+import { BuildRunStore } from "../../build-runs/store.ts";
+import {
   buildClarificationPrompt,
   buildClarifyContinueUserContent,
   fallbackClarifyTurn,
@@ -131,6 +152,8 @@ import { createDeployActionResponse } from "../chat/deploy-action.ts";
 import { buildControlledTemplatePrompt,resolveControlledTemplateForPrompt } from "../../templates/controlled-registry.ts";
 import { recordGenerationVerification } from "../generation-observability.ts";
 import { getCoreLoopPolicy,isCoreLoopRequest } from "../../reliability/core-loop-policy.ts";
+import { coreLoopRunTerminal, failBounded } from "../../reliability/core-loop-machine.ts";
+import { recordPreviewGateSample } from "../preview-gate-metrics.ts";
 
 // Generation + backend wiring + self-verification can exceed a minute on
 // complex builds (Lovable budgets 15 min for agent runs).
@@ -846,6 +869,8 @@ export async function handleAiChat(req: Request) {
 
     // Build system prompt based on mode + framework
     // Chat/plan modes get full codebase context (up to 60k chars); build mode embeds up to 80k.
+    let effectiveFramework = framework;
+    const greenfield = isGreenfieldProject(Array.isArray(files) ? files : []);
     let systemPrompt: string;
     if (mode === "build") {
       // Route to the right generator based on target framework
@@ -880,7 +905,6 @@ export async function handleAiChat(req: Request) {
       });
       // Static → full-stack upgrade path: "upgrade to full-stack" on a static
       // project converts it to TanStack Start for this and future builds.
-      let effectiveFramework = framework;
       let upgradeNotReady = false;
       if (framework === "static" && isUpgradeToFullStackIntent(message)) {
         if (isCloudProvisioningConfigured()) {
@@ -943,7 +967,6 @@ export async function handleAiChat(req: Request) {
       // false on every first build since scaffolding was introduced — which
       // silently skipped both the starter template AND the design baseline for
       // exactly the request that needed them most.
-      const greenfield = isGreenfieldProject(files);
       const greenfieldIntent = greenfield ? classifyBuildIntent(message) : null;
       const autoTemplateId =
         templateId ?? (greenfield ? pickStarterTemplate(message) : null);
@@ -953,7 +976,7 @@ export async function handleAiChat(req: Request) {
         (greenfield || isRestyleRequest) &&
         !(greenfieldIntent && isAppShellAppType(greenfieldIntent.appType))
       ) {
-        systemPrompt += buildDesignDirectionBlock(message);
+        systemPrompt += buildDesignDirectionBlock(message, effectiveFramework);
       }
 
       // ── Incremental edit safety (Lovable-style preservation) ────────────────
@@ -1386,10 +1409,51 @@ The user has expressed frustration. Do the following:
     const stream = new ReadableStream({
       async start(controller) {
         const turnStartedAt = Date.now();
+        const attempt = createGenerationAttempt(projectId);
+        const projectMeta = projectRes.data as {
+          preview_url?: string | null;
+          metadata?: { sandbox_id?: unknown } | null;
+        } | null;
+        const sandboxSessionId =
+          typeof projectMeta?.metadata?.sandbox_id === "string" ? projectMeta.metadata.sandbox_id : undefined;
+        if (sandboxSessionId) setCorrelation({ sandboxSessionId });
+        attempt.sandboxSessionId = sandboxSessionId ?? attempt.sandboxSessionId;
+        if (mode === "build") recordAttemptStep(attempt, "plan", { ok: true });
+        let projectContract: import("../project-contract.ts").ProjectContract | null = null;
+        let lastAttemptErrors: Array<{ type?: string; message: string; file?: string | null }> = [];
+        let buildRunStore: BuildRunStore | null = null;
+        let buildRunId: string | null = null;
+        let buildRunFinished = false;
+        let verificationPassed: boolean | undefined;
+        let lastPreviewGate: SelfVerifyResult["previewGate"];
         const { safeEnqueue, safeClose, isClientGone } = createStreamSink(controller, encoder, req.signal);
         let fullContent = "";
         let tokensUsed = 0;
         let usedAutoFix = false;
+        const closeAttempt = (opts?: {
+          firstBootSuccess?: boolean;
+          error?: string;
+          extraErrors?: Array<{ type?: string; message: string; file?: string | null }>;
+        }) => {
+          const gate = lastPreviewGate;
+          closeGenerationAttempt(attempt, {
+            firstBootSuccess: opts?.firstBootSuccess ?? false,
+            tokensUsed,
+            error: opts?.error,
+            errors: [...lastAttemptErrors, ...(opts?.extraErrors ?? [])],
+            repairAccepted: gate?.repairAccepted,
+            falseGreen: gate?.falseGreen,
+            costCredits: finalCreditCost ?? 0,
+            gateLayer: gate?.layer,
+          });
+          recordPreviewGateSample({
+            firstBootSuccess: opts?.firstBootSuccess ?? false,
+            repairAccepted: gate?.repairAccepted ?? null,
+            falseGreen: gate?.falseGreen === true,
+            durationMs: Date.now() - attempt.startedAt,
+            costCredits: finalCreditCost ?? 0,
+          });
+        };
         const streamedFilePaths = new Set<string>();
         // Keep streamed files in memory for progress and billing only. Canonical
         // project_files are written only after the complete response parses and
@@ -1546,6 +1610,28 @@ The user has expressed frustration. Do the following:
           }
         }
 
+        if (mode === "build" && isFeatureEnabled("vercelWorkflow", { userId, projectId })) {
+          try {
+            const admin = await createAdminClient();
+            buildRunStore = new BuildRunStore(admin as never);
+            buildRunId = getCorrelation()?.buildRunId ?? ensureBuildRunId();
+            attempt.buildRunId = buildRunId;
+            await buildRunStore.startRun({
+              runId: buildRunId,
+              projectId,
+              userId,
+              mode: "build",
+              model: effectiveModel,
+              creditsReserved: creditReservation.amount,
+              creditReservationKey: `resv_${creditReservation.id}`,
+            });
+          } catch (err) {
+            logger.warn("ai.chat.build_run_start_failed", { projectId, error: String(err) });
+            buildRunStore = null;
+            buildRunId = null;
+          }
+        }
+
         if (attachedSkills.length > 0) {
           safeEnqueue(
             encoder.encode(
@@ -1572,6 +1658,14 @@ The user has expressed frustration. Do the following:
         const fileExtractor = mode === "build"
           ? new StreamingFileExtractor((file) => {
               if (streamedFilePaths.has(file.path)) return; // dedupe
+              if (!shouldLiveStreamGeneratedPath(
+                file.path,
+                Array.isArray(files) ? files : [],
+                projectContract,
+                file.content,
+              )) {
+                return;
+              }
               streamedFilePaths.add(file.path);
               // Sanitize HERE too, not only in the final loop. The extractor
               // emits a file the moment its closing delimiter arrives, and a
@@ -1597,7 +1691,68 @@ The user has expressed frustration. Do the following:
           : null;
 
         try {
-          const result = await runGenerationStage(
+          if (shouldGenerateProjectContract({ mode, greenfield, framework: effectiveFramework })) {
+            safeEnqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({ status: "planning", message: "Writing project contract…" })}\n\n`,
+              ),
+            );
+            const staged = await runDurableStep({
+              attempt,
+              step: "contract",
+              store: buildRunStore,
+              runId: buildRunId,
+              tokensOf: (result) => result.tokensUsed,
+              fn: () => runProjectContractStage({
+                prompt: message,
+                projectId,
+                userId,
+                model: effectiveModel,
+              }),
+            });
+            projectContract = staged.contract;
+            tokensUsed += staged.tokensUsed;
+            const system = messages[0];
+            if (system?.role === "system" && typeof system.content === "string") {
+              system.content += renderProjectContractPromptBlock(staged.contract, staged.generationOrder);
+            }
+            logger.info("ai.chat.project_contract", {
+              projectId,
+              source: staged.source,
+              files: staged.contract.files.length,
+              routes: staged.contract.routes.length,
+            });
+            safeEnqueue(
+              encoder.encode(
+                `data: ${JSON.stringify({
+                  status: "contract_ready",
+                  fileCount: staged.contract.files.length,
+                  routeCount: staged.contract.routes.length,
+                  source: staged.source,
+                })}\n\n`,
+              ),
+            );
+          } else if (Array.isArray(files)) {
+            projectContract = readProjectContractFromFiles(files as Array<{ path: string; content: string }>);
+            if (projectContract) {
+              const system = messages[0];
+              if (system?.role === "system" && typeof system.content === "string") {
+                system.content += renderProjectContractPromptBlock(
+                  projectContract,
+                  generationOrderForContract(projectContract),
+                  { incremental: true },
+                );
+              }
+            }
+          }
+
+          const result = await runDurableStep({
+            attempt,
+            step: "generate",
+            persist: false,
+            timeoutMs: 0,
+            tokensOf: (generated) => generated.tokensUsed,
+            fn: () => runGenerationStage(
             {
               model: effectiveModel,
               messages,
@@ -1615,9 +1770,9 @@ The user has expressed frustration. Do the following:
               },
             },
             { projectId, userId, task: `chat.${mode}.primary` },
-          );
-
-          tokensUsed = result.tokensUsed;
+          ),
+          });
+          tokensUsed += result.tokensUsed;
           if (isClientGone()) throw new ClientGenerationCancelled();
 
           // ── Continuation: never ship a truncated build ───────────────────
@@ -1987,19 +2142,28 @@ The user has expressed frustration. Do the following:
               }
               const applied = patchResults.filter((r) => r.applied);
               const failed = patchResults.filter((r) => !r.applied);
-              if (applied.length > 0) patchOutcome = "applied";
-              // Upsert FINAL content per path — sequential multi-patches on the
-              // same file must not be overwritten by an earlier intermediate result.
-              for (const pr of collapsePatchResults(patchResults)) {
+              const langMap: Record<string, string> = { ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", css: "css", html: "html", json: "json", md: "markdown" };
+              const collapsed = collapsePatchResults(patchResults).map((pr) => {
                 const lang = pr.path.split(".").pop()?.toLowerCase() ?? "text";
-                const langMap: Record<string, string> = { ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", css: "css", html: "html", json: "json", md: "markdown" };
-                parsedFiles.push({ path: pr.path, content: pr.content, language: langMap[lang] ?? lang });
+                return { path: pr.path, content: pr.content, language: langMap[lang] ?? lang };
+              });
+              const constrained = constrainRepairFiles(
+                collapsed,
+                projectFiles as Array<{ path: string; content: string }>,
+                projectContract ?? readProjectContractFromFiles(projectFiles as Array<{ path: string; content: string }>),
+              );
+              if (constrained.dropped.length > 0) {
+                logger.info("ai.chat.patch_undeclared_files_dropped", {
+                  projectId,
+                  dropped: constrained.dropped,
+                });
+              }
+              if (constrained.files.length > 0) patchOutcome = "applied";
+              for (const pr of constrained.files) {
+                parsedFiles.push({ path: pr.path, content: pr.content, language: pr.language ?? "text" });
                 await supabase.from("project_files").upsert({
-                  project_id: projectId, path: pr.path, content: pr.content, language: langMap[lang] ?? lang,
+                  project_id: projectId, path: pr.path, content: pr.content, language: pr.language ?? "text",
                 }, { onConflict: "project_id,path" });
-                // Reach the RUNNING preview container too — a DB-only save
-                // leaves the sandbox serving the pre-patch file until the
-                // container is recreated (observed stale-preview bug).
                 pushFileToRunningSandbox(supabase, projectId, pr.path, pr.content);
               }
               for (const pr of failed) {
@@ -2086,16 +2250,27 @@ The user has expressed frustration. Do the following:
               });
             }
 
+            let droppedUndeclared: string[] = [];
             const normalizeBuildCandidate = (candidate: ParsedFile[]): ParsedFile[] => {
-              if (mode !== "build" || candidate.length === 0) {
-                return prepareGeneratedFiles(candidate, existingFiles);
+              const withContract = projectContract ? ensureContractFile(candidate, projectContract) : candidate;
+              if (mode !== "build" || withContract.length === 0) {
+                return prepareGeneratedFiles(withContract, existingFiles);
               }
-              const normalized = normalizeGenerationStage(candidate, existingFiles, {
+              const normalized = normalizeGenerationStage(withContract, existingFiles, {
                 prompt: costPrompt,
                 framework,
                 appType: buildIntent?.appType,
                 brand: projectData?.name ?? undefined,
+                contract: projectContract,
               });
+              droppedUndeclared = normalized.droppedUndeclared;
+              if (normalized.projectContract) projectContract = normalized.projectContract;
+              if (normalized.droppedUndeclared.length > 0) {
+                logger.info("ai.chat.undeclared_files_dropped", {
+                  projectId,
+                  dropped: normalized.droppedUndeclared,
+                });
+              }
               if (normalized.alignedDependencies.length > 0) {
                 logger.info("ai.chat.package_pins_aligned", {
                   projectId,
@@ -2116,17 +2291,25 @@ The user has expressed frustration. Do the following:
 
             // ── Validation pass (up to 3 enrichment rounds on large greenfield) ─
             if (finalFiles.length > 0) {
+              const validateStep = beginGenerationStep(attempt, "validate");
               const maxEnrichPasses = isMajorGreenfieldBuild(message, fileCount) ? 3 : 2;
               let previousValidationSignature: string | null = null;
               for (let enrichPass = 0; enrichPass < maxEnrichPasses; enrichPass++) {
                 const {
-                  validationErrors,
+                  validationErrors: stageErrors,
                   needsEnrichment,
                 } = validateGenerationStage(finalFiles, existingFiles, {
                   minFiles: buildIntent?.minFiles,
                   appType: buildIntent?.appType,
                   singlePage: buildIntent?.singlePage,
+                  contract: projectContract,
                 });
+                const validationErrors = [...undeclaredFileErrors(droppedUndeclared), ...stageErrors];
+                lastAttemptErrors = validationErrors.map((error) => ({
+                  type: error.type,
+                  message: error.message,
+                  file: error.file ?? null,
+                }));
 
                 // Local scan first: missing imports/assets/deps are fixed on
                 // this server with no model, even when validation is otherwise green.
@@ -2167,6 +2350,7 @@ The user has expressed frustration. Do the following:
                 previousValidationSignature = validationSignature;
 
                 usedAutoFix = true;
+                const repairStep = beginGenerationStep(attempt, "repair", { repairRound: enrichPass });
                 const statusMsg =
                   enrichPass === 0
                     ? `Auto-fixing ${validationErrors.length} issue(s)…`
@@ -2195,15 +2379,30 @@ The user has expressed frustration. Do the following:
                     maxTokens: outputMaxTokens,
                     projectId,
                     userId,
+                    contract: projectContract,
                   });
-                  if (!repaired) break;
+                  if (!repaired) {
+                    finishGenerationStep(repairStep, { ok: false, error: "repair produced no files" }, attempt);
+                    break;
+                  }
                   finalFiles = normalizeBuildCandidate(repaired.files);
                   tokensUsed += repaired.tokenEstimate;
+                  finishGenerationStep(repairStep, { ok: true, tokensUsed: repaired.tokenEstimate }, attempt);
                 } catch (fixErr) {
+                  finishGenerationStep(repairStep, { ok: false, error: String(fixErr) }, attempt);
                   logger.warn("ai.chat.autofix_failed", { projectId, error: String(fixErr) });
                   break;
                 }
               }
+              finishGenerationStep(validateStep, {
+                ok: lastAttemptErrors.length === 0,
+                error: lastAttemptErrors[0]?.message,
+              }, attempt);
+              await persistStepArtifact(buildRunStore, buildRunId, validateStep.idempotencyKey, {
+                ok: lastAttemptErrors.length === 0,
+                errorCount: lastAttemptErrors.length,
+                families: attemptClusterFields(lastAttemptErrors).families,
+              });
 
             } else {
               // ── Zero files parsed: the model ignored the build output format
@@ -2279,11 +2478,15 @@ The user has expressed frustration. Do the following:
               finalFiles.length > 0 &&
               (coreLoop || isMajorGreenfieldBuild(message, fileCount))
             ) {
-              const remaining = validateGenerationStage(finalFiles, existingFiles, {
-                minFiles: buildIntent?.minFiles,
-                appType: buildIntent?.appType,
-                singlePage: buildIntent?.singlePage,
-              }).validationErrors.filter((error) => error.severity === "error");
+              const remaining = [
+                ...undeclaredFileErrors(droppedUndeclared),
+                ...validateGenerationStage(finalFiles, existingFiles, {
+                  minFiles: buildIntent?.minFiles,
+                  appType: buildIntent?.appType,
+                  singlePage: buildIntent?.singlePage,
+                  contract: projectContract,
+                }).validationErrors,
+              ].filter((error) => error.severity === "error");
               if (remaining.length > 0) {
                 throw new Error(
                   `Generation contract remained invalid after bounded repair: ${remaining
@@ -2359,8 +2562,13 @@ The user has expressed frustration. Do the following:
                 candidateFiles: Array.from(candidateByPath.values()) as unknown as import("@/types/database").ProjectFile[],
                 persistFixes: false,
                 maxRounds: coreLoop ? coreLoopPolicy.maxAutomaticRepairRounds : undefined,
+                attempt,
+                contract: projectContract,
+                store: buildRunStore,
+                runId: buildRunId,
                 emit: (status) => safeEnqueue(encoder.encode(`data: ${JSON.stringify({ verify_status: status })}\n\n`)),
               });
+              if (stagedVerification?.previewGate) lastPreviewGate = stagedVerification.previewGate;
               if (!stagedVerification?.passed) {
                 const reason = stagedVerification?.errors[0] ?? "candidate verification could not complete";
                 try {
@@ -2462,6 +2670,11 @@ The user has expressed frustration. Do the following:
                 projectId,
                 parsedFiles,
               );
+              recordAttemptStep(attempt, "publish", { ok: parsedFiles.length > 0 });
+              await persistStepArtifact(buildRunStore, buildRunId, `${attempt.attemptId}:publish`, {
+                ok: parsedFiles.length > 0,
+                fileCount: parsedFiles.length,
+              });
 
             }
           }
@@ -2518,7 +2731,14 @@ The user has expressed frustration. Do the following:
                 userId,
                 emit: emitStatus("verify_status"),
                 maxRounds: stagedVerification ? 0 : verifyOnlyFastLane ? 0 : undefined,
+                attempt,
+                contract: projectContract,
+                // Reusing the staged boot artifact would skip the post-activation
+                // check. Record in-memory only; hasGenerationStep drops duplicates.
+                store: stagedVerification ? null : buildRunStore,
+                runId: stagedVerification ? null : buildRunId,
               });
+              if (verification?.previewGate) lastPreviewGate = verification.previewGate;
               if (verification && verification.fixesApplied > 0) {
                 usedAutoFix = true;
                 // Merge fix-round rewrites into the build's file list so the
@@ -2542,6 +2762,28 @@ The user has expressed frustration. Do the following:
                 }).catch(() => {});
               }
             } catch { verification = null; }
+
+            verificationPassed = verification?.passed;
+            if (verification?.boundedFailure && attempt.coreLoop.state !== "FAILED_BOUNDED") {
+              attempt.coreLoop = failBounded(attempt.coreLoop, {
+                summary: verification.errors[0] || "Verification failed after bounded repair",
+                artifact: { rounds: verification.rounds },
+              });
+            }
+            closeAttempt({
+              firstBootSuccess: parsedFiles.length > 0 && !usedAutoFix && verification?.passed !== false,
+              extraErrors: (verification?.errors ?? []).map((message) => ({ message })),
+            });
+            if (buildRunStore && buildRunId && !buildRunFinished) {
+              buildRunFinished = true;
+              const terminal = coreLoopRunTerminal(attempt.coreLoop, verificationPassed);
+              await buildRunStore.finishRun({
+                runId: buildRunId,
+                status: terminal.status,
+                failureCode: terminal.failureCode,
+                verificationPassed: terminal.verificationPassed,
+              });
+            }
 
             // A candidate passed isolated checks but failed after activation
             // (for example environment-specific startup). Restore the exact
@@ -2606,6 +2848,18 @@ The user has expressed frustration. Do the following:
                 }
               : {};
 
+          if (!attempt.finalized) {
+            closeAttempt({
+              firstBootSuccess:
+                mode === "build" || mode === "patch"
+                  ? parsedFiles.length > 0 && !usedAutoFix && verification?.passed !== false
+                  : true,
+              extraErrors: (verification?.errors ?? []).map((message) => ({ message })),
+            });
+          }
+          const generationAttemptMeta = attemptClientFields(attempt);
+          const verificationMeta = verificationClientFields(verification);
+
           const assistantMetadata: Record<string, unknown> | null =
             (mode === "build" || mode === "patch") && parsedFiles.length > 0
               ? {
@@ -2614,9 +2868,10 @@ The user has expressed frustration. Do the following:
                   work_seconds: Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000)),
                   ...(buildActivity ? { build_activity: buildActivity, steps: buildActivity.length } : {}),
                   ...skillsMeta,
+                  generation_attempt: generationAttemptMeta,
+                  ...(verificationMeta ? { verification: verificationMeta } : {}),
                 }
-              : buildActivity || attachedSkills.length > 0
-                ? {
+              : {
                     ...(buildActivity
                       ? {
                           build_activity: buildActivity,
@@ -2625,8 +2880,9 @@ The user has expressed frustration. Do the following:
                         }
                       : {}),
                     ...skillsMeta,
-                  }
-                : null;
+                    generation_attempt: generationAttemptMeta,
+                    ...(verificationMeta ? { verification: verificationMeta } : {}),
+                  };
 
           const creditCost = computeCreditCost({
             mode,
@@ -2735,6 +2991,18 @@ The user has expressed frustration. Do the following:
             if (settled == null) throw new Error("Unable to settle reserved credits");
             remainingCredits = settled;
             reservationFinalized = true;
+            if (buildRunStore && buildRunId && !buildRunFinished) {
+              buildRunFinished = true;
+              const terminal = coreLoopRunTerminal(attempt.coreLoop, verificationPassed);
+              await buildRunStore.finishRun({
+                runId: buildRunId,
+                status: terminal.status,
+                failureCode: terminal.failureCode,
+                creditsFinalized: creditCost,
+                creditFinalizationKey: `fin_${creditReservation.id}`,
+                verificationPassed: terminal.verificationPassed,
+              });
+            }
           } catch (settleErr) {
             logger.error(
               "ai.chat.settle_credits_failed",
@@ -2855,14 +3123,8 @@ The user has expressed frustration. Do the following:
                 backend_wired: backendWiring ?? undefined,
                 patch_failed: mode === "patch" && patchOutcome === "failed" ? true : undefined,
                 auto_routed: autoRoutedPatch || undefined,
-                verification: verification
-                  ? {
-                      engine: verification.engine,
-                      passed: verification.passed,
-                      fixesApplied: verification.fixesApplied,
-                      errors: verification.errors,
-                    }
-                  : undefined,
+                ...attemptClientFields(attempt),
+                verification: verificationMeta,
                 // Human-readable summary for the chat bubble — without this the
                 // client renders the raw JSON blob (escaped \n and all).
                 displayMessage:
@@ -2888,22 +3150,37 @@ The user has expressed frustration. Do the following:
           }
         } catch (error) {
           if (isClientGenerationCancelled(error) || isClientGone()) {
+            closeAttempt({ firstBootSuccess: false, error: "cancelled" });
             // Stop in the editor aborts the fetch. Do not commit files, wire,
             // or verify after that — otherwise preview jumps after "Stopped."
             safeEnqueue(
-              encoder.encode(`data: ${JSON.stringify({ cancelled: true, done: true, filesChanged: false })}\n\n`),
+              encoder.encode(`data: ${JSON.stringify({ cancelled: true, done: true, filesChanged: false, ...attemptClientFields(attempt) })}\n\n`),
             );
+            if (buildRunStore && buildRunId && !buildRunFinished) {
+              buildRunFinished = true;
+              await buildRunStore.finishRun({ runId: buildRunId, status: "cancelled" });
+            }
           } else {
             logger.error("ai.chat.stream_error", error instanceof Error ? error : new Error(String(error)), {
               projectId,
               userId,
               mode,
             });
+            closeAttempt({ firstBootSuccess: false, error: String(error) });
             safeEnqueue(
-              encoder.encode(`data: ${JSON.stringify({ error: String(error) })}\n\n`)
+              encoder.encode(`data: ${JSON.stringify({ error: String(error), ...attemptClientFields(attempt) })}\n\n`)
             );
+            if (buildRunStore && buildRunId && !buildRunFinished) {
+              buildRunFinished = true;
+              await buildRunStore.finishRun({
+                runId: buildRunId,
+                status: "failed",
+                failureCode: String(error).slice(0, 200),
+              });
+            }
           }
         } finally {
+          closeAttempt({ firstBootSuccess: false });
           clearInterval(heartbeat);
           if (!reservationFinalized) {
             try {
@@ -2933,6 +3210,13 @@ The user has expressed frustration. Do the following:
                 { projectId, userId, mode, reservationId: creditReservation.id },
               );
             }
+          }
+          if (buildRunStore && buildRunId && !buildRunFinished) {
+            buildRunFinished = true;
+            await buildRunStore.finishRun({
+              runId: buildRunId,
+              status: "failed",
+            });
           }
           safeClose();
         }

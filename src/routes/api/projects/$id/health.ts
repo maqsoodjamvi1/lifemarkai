@@ -4,6 +4,8 @@ import { generateAI } from "@/lib/ai/generate";
 import { getDefaultAiModel } from "@/lib/ai/model-defaults";
 import { rateLimitAsync,RATE_LIMITS } from "@/lib/rate-limit";
 import { runHealthScan } from "@/lib/ai/self-healing";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 import {
 cancelCreditReservation,
 reserveCredits,
@@ -227,8 +229,22 @@ ${contextFiles.length > 0
         return Response.json({ error: "AI returned an invalid fix" }, { status: 502 });
       }
 
+      const { data: projectFiles } = await supabase
+        .from("project_files")
+        .select("path, content, language")
+        .eq("project_id", id);
+      const existingFiles = (projectFiles ?? []) as Array<{ path: string; content: string; language?: string }>;
+      const constrained = constrainRepairFiles(
+        fix.files,
+        existingFiles,
+        readProjectContractFromFiles(existingFiles),
+      );
+      if (constrained.files.length === 0) {
+        return Response.json({ error: "AI returned a fix outside the project contract" }, { status: 502 });
+      }
+
       const proposedFix = {
-        files: fix.files,
+        files: constrained.files,
         summary: fix.summary ?? finding.title,
         proposed_at: new Date().toISOString(),
       };
@@ -301,8 +317,22 @@ ${contextFiles.length > 0
       return Response.json({ error: "No accepted files to apply" }, { status: 400 });
     }
 
+    const { data: projectFiles } = await supabase
+      .from("project_files")
+      .select("path, content, language")
+      .eq("project_id", id);
+    const existingFiles = (projectFiles ?? []) as Array<{ path: string; content: string; language?: string }>;
+    const constrained = constrainRepairFiles(
+      fixFiles,
+      existingFiles,
+      readProjectContractFromFiles(existingFiles),
+    );
+    if (constrained.files.length === 0) {
+      return Response.json({ error: "Fix is outside the project contract" }, { status: 400 });
+    }
+
     const { error: upsertErr } = await supabase.from("project_files").upsert(
-      fixFiles.map((file) => ({ project_id: id, path: file.path, content: file.content })),
+      constrained.files.map((file) => ({ project_id: id, path: file.path, content: file.content })),
       { onConflict: "project_id,path" }
     );
     if (upsertErr) return Response.json({ error: upsertErr.message }, { status: 500 });
@@ -315,7 +345,7 @@ ${contextFiles.length > 0
       .single();
     if (statusErr) return Response.json({ error: statusErr.message }, { status: 500 });
 
-    return Response.json({ ok: true, applied: fixFiles.length, finding: updated });
+    return Response.json({ ok: true, applied: constrained.files.length, finding: updated });
   }
 
   return Response.json(

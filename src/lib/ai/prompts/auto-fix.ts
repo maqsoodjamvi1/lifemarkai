@@ -59,7 +59,7 @@ export const AUTO_FIX_SYSTEM_PROMPT = `${AUTO_FIX_BASE}
   "fix_description": "What you changed and why — 2-3 sentences",
   "files": [
     {
-      "path": "src/App.tsx",
+      "path": "src/routes/index.tsx",
       "content": "// COMPLETE fixed file — never truncated"
     }
   ]
@@ -85,7 +85,7 @@ export const AUTO_FIX_EDITS_SYSTEM_PROMPT = `${AUTO_FIX_BASE}
 
 PREFERRED — targeted anchored edits:
 \`\`\`json
-{"edits": [{"path": "src/App.tsx", "search": "<exact current lines, copied VERBATIM from the provided file, unique within it>", "replace": "<replacement lines>"}]}
+{"edits": [{"path": "src/routes/index.tsx", "search": "<exact current lines, copied VERBATIM from the provided file, unique within it>", "replace": "<replacement lines>"}]}
 \`\`\`
 - Copy \`search\` text exactly from the file as given — do not retype, reformat, or fix whitespace inside it.
 - Each \`search\` must match its file exactly once; include a neighbouring line if needed to make it unique.
@@ -93,7 +93,7 @@ PREFERRED — targeted anchored edits:
 
 Whole files — ONLY for a file that must be created, or rewritten almost entirely:
 \`\`\`json
-{"files": [{"path": "src/App.tsx", "content": "// COMPLETE file — never truncated"}]}
+{"files": [{"path": "src/routes/index.tsx", "content": "// COMPLETE file — never truncated"}]}
 \`\`\`
 
 A "diagnosis" string field may accompany either shape. No prose outside the JSON.

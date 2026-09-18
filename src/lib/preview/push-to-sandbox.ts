@@ -20,6 +20,7 @@ import { getSandboxProvider,isSandboxEnabled } from "@/lib/sandbox";
 import { ensureViteTunnelHmr } from "./patch-sandbox-preview-files.ts";
 import { repairImportsInFile } from "./normalize-imports.ts";
 import { injectLifemarkDataSdk } from "./lifemark-data.ts";
+import { preservePreviewDocuments } from "./preview-document-instrumentation.ts";
 
 /** Writes are deduped per project so a burst of agent saves coalesces. */
 const pending = new Map<string, Map<string, string>>();
@@ -204,5 +205,5 @@ async function flush(
   // would see the whole rest of the project as "changed" and re-upload it,
   // restarting vite — the exact stale-preview flakiness this sync path
   // exists to eliminate, reintroduced by itself.
-  await provider.writeFiles(sandboxId, withData, { partial: true });
+  await provider.writeFiles(sandboxId, preservePreviewDocuments(withData), { partial: true });
 }

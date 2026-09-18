@@ -189,9 +189,25 @@ export function detectAppGaps(files: FileLike[]): string[] {
   }
 
   // 5. Missing page title or meta description on the main document.
-  const index = files.find((f) => baseName(f.path) === "index.html");
-  if (index?.content && (!/<title>[^<]+<\/title>/i.test(index.content) || !/meta\s+name="description"/i.test(index.content))) {
-    gaps.push("index.html is missing a <title> and/or meta description (SEO basics)");
+  const isTanStackStart = files.some((f) => {
+    const path = (f.path ?? "").replace(/\\/g, "/");
+    return path === "src/routes/__root.tsx" || path === "src/router.tsx";
+  });
+  if (isTanStackStart) {
+    const routeContent = files
+      .filter((f) => /^src\/routes\//.test((f.path ?? "").replace(/\\/g, "/")))
+      .map((f) => f.content ?? "")
+      .join("\n");
+    const hasTitle = /title:\s*["'`][^"'`]+["'`]/.test(routeContent);
+    const hasDescription = /name:\s*["']description["']/.test(routeContent);
+    if (!hasTitle || !hasDescription) {
+      gaps.push("TanStack routes are missing head() title and/or meta description (SEO basics)");
+    }
+  } else {
+    const index = files.find((f) => baseName(f.path) === "index.html");
+    if (index?.content && (!/<title>[^<]+<\/title>/i.test(index.content) || !/meta\s+name="description"/i.test(index.content))) {
+      gaps.push("index.html is missing a <title> and/or meta description (SEO basics)");
+    }
   }
 
   return gaps.slice(0, 3);

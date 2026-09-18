@@ -11,6 +11,7 @@
  *   buildRunId       one user-visible build, stable across chat -> verify -> repair
  *   sandboxSessionId one sandbox lifetime (create ... terminate)
  *   deploymentId     one deploy attempt
+ *   attemptId        one generation attempt (`att_…`), stamped onto LLM/tool spans
  *
  * Propagation is AsyncLocalStorage in-process and `x-lifemark-*` headers across
  * processes. The ALS instance is pinned to a globalThis key for the same reason
@@ -21,16 +22,29 @@
  * Server-only (imports node:async_hooks).
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  createTraceContext,
+  parseTraceparent,
+  traceparent,
+  type TraceContext,
+} from "../monitoring/tracing.ts";
 
 export interface CorrelationContext {
   requestId: string;
   buildRunId?: string;
   sandboxSessionId?: string;
   deploymentId?: string;
+  /** One user request's generation-attempt trace (`att_…`). */
+  attemptId?: string;
   projectId?: string;
   userId?: string;
   /** Logical route/handler name, e.g. "api/ai/chat". */
   route?: string;
+  /** W3C trace-id (32 hex). Shared across generation, sandbox, verify, deploy. */
+  traceId?: string;
+  /** W3C span-id (16 hex) for the current request span. */
+  spanId?: string;
+  sampled?: boolean;
 }
 
 export const CORRELATION_HEADERS = {
@@ -38,6 +52,8 @@ export const CORRELATION_HEADERS = {
   buildRunId: "x-lifemark-build-run-id",
   sandboxSessionId: "x-lifemark-sandbox-session-id",
   deploymentId: "x-lifemark-deployment-id",
+  attemptId: "x-lifemark-attempt-id",
+  traceparent: "traceparent",
 } as const;
 
 type Als = AsyncLocalStorage<CorrelationContext>;
@@ -112,10 +128,20 @@ export function runWithCorrelation<T>(
   fn: () => T,
 ): T {
   const existing = getCorrelation();
+  const inheritedTrace: TraceContext | null =
+    seed.traceId && seed.spanId
+      ? { traceId: seed.traceId, spanId: seed.spanId, sampled: seed.sampled ?? true }
+      : existing?.traceId && existing.spanId
+        ? { traceId: existing.traceId, spanId: existing.spanId, sampled: existing.sampled ?? true }
+        : null;
+  const trace = inheritedTrace ?? createTraceContext();
   const ctx: CorrelationContext = {
     ...existing,
     ...seed,
     requestId: seed.requestId ?? existing?.requestId ?? newRequestId(),
+    traceId: trace.traceId,
+    spanId: trace.spanId,
+    sampled: trace.sampled,
   };
   return getAls().run(ctx, fn);
 }
@@ -156,12 +182,31 @@ export function ensureBuildRunId(): string {
 export function correlationFromRequest(request: {
   headers: { get(name: string): string | null };
 }): Partial<CorrelationContext> {
+  const parent = parseTraceparent(request.headers.get(CORRELATION_HEADERS.traceparent));
   return {
     requestId: sanitizeId(request.headers.get(CORRELATION_HEADERS.requestId)),
     buildRunId: sanitizeId(request.headers.get(CORRELATION_HEADERS.buildRunId)),
     sandboxSessionId: sanitizeId(request.headers.get(CORRELATION_HEADERS.sandboxSessionId)),
     deploymentId: sanitizeId(request.headers.get(CORRELATION_HEADERS.deploymentId)),
+    attemptId: sanitizeId(request.headers.get(CORRELATION_HEADERS.attemptId)),
+    traceId: parent?.traceId,
+    spanId: parent?.spanId,
+    sampled: parent?.sampled,
   };
+}
+
+export function currentTraceContext(): TraceContext | null {
+  const ctx = getCorrelation();
+  if (!ctx?.traceId || !ctx.spanId) return null;
+  return { traceId: ctx.traceId, spanId: ctx.spanId, sampled: ctx.sampled ?? true };
+}
+
+export function ensureTraceContext(): TraceContext {
+  const existing = currentTraceContext();
+  if (existing) return existing;
+  const created = createTraceContext();
+  setCorrelation({ traceId: created.traceId, spanId: created.spanId, sampled: created.sampled });
+  return created;
 }
 
 /** Stamp the current ids onto outbound headers (worker proxy, gateway, deploy). */
@@ -173,11 +218,15 @@ export function applyCorrelationHeaders(headers: Headers): Headers {
     [CORRELATION_HEADERS.buildRunId, ctx.buildRunId],
     [CORRELATION_HEADERS.sandboxSessionId, ctx.sandboxSessionId],
     [CORRELATION_HEADERS.deploymentId, ctx.deploymentId],
+    [CORRELATION_HEADERS.attemptId, ctx.attemptId],
   ];
   for (const [name, value] of pairs) {
     if (value) headers.set(name, value);
     else headers.delete(name);
   }
+  const trace = currentTraceContext();
+  if (trace) headers.set(CORRELATION_HEADERS.traceparent, traceparent(trace));
+  else headers.delete(CORRELATION_HEADERS.traceparent);
   return headers;
 }
 

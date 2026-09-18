@@ -77,6 +77,7 @@ export async function generateAI(
       toolCallCount: result.toolCalls?.length ?? 0,
       viaGateway,
       success: true,
+      callKind: (result.toolCalls?.length ?? 0) > 0 ? "tool" : "llm",
     });
     return result;
   } catch (err) {
@@ -96,6 +97,7 @@ export async function generateAI(
       durationMs: Date.now() - startedAt,
       viaGateway,
       success: false,
+      callKind: "llm",
       error: err instanceof Error ? err.message : String(err),
     });
     // Improvement #6: surface one actionable sentence (401/402/429/5xx) to the

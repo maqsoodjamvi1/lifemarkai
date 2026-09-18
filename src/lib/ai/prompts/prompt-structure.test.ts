@@ -58,6 +58,22 @@ test("repair contracts match their parsers: files-only route vs edits-preferred 
   assert.match(AUTO_FIX_EDITS_SYSTEM_PROMPT, /"edits"/);
   assert.match(AUTO_FIX_EDITS_SYSTEM_PROMPT, /all-or-nothing/);
   assert.match(AUTO_FIX_EDITS_SYSTEM_PROMPT, /VERBATIM/);
+  assert.match(AUTO_FIX_SYSTEM_PROMPT, /src\/routes\/index\.tsx/);
+  assert.match(AUTO_FIX_EDITS_SYSTEM_PROMPT, /src\/routes\/index\.tsx/);
+  assert.doesNotMatch(AUTO_FIX_EDITS_SYSTEM_PROMPT, /src\/App\.tsx/);
+});
+
+test("the agent ReAct examples do not teach Vite entries", async () => {
+  const { AGENT_SYSTEM_PROMPT } = await import("../system-prompts.ts");
+  assert.match(AGENT_SYSTEM_PROMPT, /src\/routes\/index\.tsx/);
+  assert.doesNotMatch(AGENT_SYSTEM_PROMPT, /src\/App\.tsx/);
+});
+
+test("the patch prompt routes Start apps through file routes, not Vite App.tsx", async () => {
+  const { PATCH_SYSTEM_PROMPT } = await import("../system-prompts.ts");
+  assert.match(PATCH_SYSTEM_PROMPT, /src\/routes\//);
+  assert.match(PATCH_SYSTEM_PROMPT, /TanStack Start/);
+  assert.match(PATCH_SYSTEM_PROMPT, /Never add/);
 });
 
 test("no prompt reopens the package allowlist it sits next to", () => {
@@ -150,4 +166,46 @@ test("keyboard focus states and reduced-motion are mandated on every build", () 
     assert.match(prompt, /focus-visible:ring-2/, request);
     assert.match(prompt, /prefers-reduced-motion/, request);
   }
+});
+
+test("screenshot-to-code prompt emits TanStack Start routes, not Vite App.tsx", async () => {
+  const { SCREENSHOT_TO_CODE_SYSTEM_PROMPT } = await import("../system-prompts.ts");
+  assert.match(SCREENSHOT_TO_CODE_SYSTEM_PROMPT, /src\/routes\/index\.tsx/);
+  assert.match(SCREENSHOT_TO_CODE_SYSTEM_PROMPT, /NEVER include index\.html, src\/main\.tsx, or src\/App\.tsx/);
+  assert.doesNotMatch(SCREENSHOT_TO_CODE_SYSTEM_PROMPT, /"path": "src\/App\.tsx"/);
+});
+
+test("the project-contract prompt block forbids undeclared files", async () => {
+  const { buildFallbackProjectContract, parseProjectContract } = await import("../project-contract.ts");
+  const { renderProjectContractPromptBlock } = await import("../project-contract-prompt.ts");
+  const parsed = parseProjectContract(buildFallbackProjectContract("Build a bakery site"));
+  const block = renderProjectContractPromptBlock(parsed.contract, parsed.generationOrder);
+  assert.match(block, /MACHINE-CHECKABLE PROJECT CONTRACT/);
+  assert.match(block, /Do not write files that are not listed/);
+  assert.match(block, /src\/routes\/index\.tsx/);
+});
+
+test("architect prompt keeps one-page landings on the home route", async () => {
+  const { buildProjectContractPrompt } = await import("../project-contract-prompt.ts");
+  const prompt = buildProjectContractPrompt("Build a bakery landing page");
+  assert.match(prompt, /one-page landing/);
+  assert.match(prompt, /Extra `src\/routes\/\*\.tsx` pages only when the request names them/);
+});
+
+test("TanStack generation prompt fails a near-empty index route, not App.tsx", async () => {
+  const { buildAppGenerationSystemPrompt } = await import("../system-prompts.ts");
+  const start = buildAppGenerationSystemPrompt("tanstack-start");
+  assert.match(start, /near-empty src\/routes\/index\.tsx/);
+  assert.doesNotMatch(start, /near-empty App\.tsx/);
+  const vite = buildAppGenerationSystemPrompt("react");
+  assert.match(vite, /near-empty App\.tsx/);
+});
+
+test("design direction mounts chrome in __root on Start and App.tsx on Vite", async () => {
+  const { buildDesignDirectionBlock } = await import("../design-directions.ts");
+  const start = buildDesignDirectionBlock("landing page for a bakery", "tanstack-start");
+  assert.match(start, /src\/routes\/__root\.tsx/);
+  assert.doesNotMatch(start, /mounted in App\.tsx/);
+  const vite = buildDesignDirectionBlock("landing page for a bakery", "react");
+  assert.match(vite, /mounted in App\.tsx/);
 });

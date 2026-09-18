@@ -254,7 +254,11 @@ async function handlePATCH(req: Request, params: { id: string }) {
       fileCount: syncFiles.length,
       installing: needInstall,
       revision,
-      requiresReload: instrumented.requiresReload || instrumented.reloadWhenChanged.some((path) => changed.includes(norm(path))),
+      // Background saves may have written the new source before this request.
+      // The browser still needs the new SSR document even when disk is current.
+      requiresReload: instrumented.requiresReload || instrumented.reloadWhenChanged.some((path) =>
+        changed.includes(norm(path)) || (clientFiles ?? []).some((file) => norm(file.path) === norm(path)),
+      ),
       ...(reconciledPackages.length > 0 ? { addedDependencies: reconciledPackages } : {}),
       ...(rejectedPackages.length > 0 ? { rejectedDependencies: rejectedPackages } : {}),
     });

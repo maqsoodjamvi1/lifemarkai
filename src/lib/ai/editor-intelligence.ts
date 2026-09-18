@@ -194,12 +194,16 @@ const INVESTIGATE_KEYWORDS =
   /\b(please investigate|what would happen if|what happens if|what if we|could you investigate|help me investigate|look into why|figure out why|find out why|diagnose why|root cause)\b/i;
 
 const ENTRYPOINTS = [
+  "src/routes/__root.tsx",
+  "src/routes/index.tsx",
   "app/page.tsx",
   "src/App.tsx",
   "src/main.tsx",
   "src/pages/Home.tsx",
   "index.html",
 ];
+const START_ENTRYPOINTS = ["src/routes/index.tsx", "src/routes/__root.tsx"];
+const VITE_SPA_ENTRIES = ["src/App.tsx", "src/main.tsx", "index.html"];
 
 /** Rough project maturity from file list. */
 export function inferProjectStage(files: Pick<ProjectFile, "path">[]): ProjectStage {
@@ -699,9 +703,18 @@ export function pickActiveFileAfterUpdate(
 ): ProjectFile | null {
   if (updatedPaths.length === 0) return current;
 
+  const looksStart = files.some((file) => {
+    const path = file.path.replace(/\\/g, "/");
+    return path === "src/routes/__root.tsx" || path === "src/router.tsx";
+  });
+
   const priority = (path: string) => {
+    if (looksStart) {
+      if (START_ENTRYPOINTS.includes(path)) return 0;
+      if (VITE_SPA_ENTRIES.includes(path)) return 6;
+    }
     if (ENTRYPOINTS.includes(path)) return 0;
-    if (/pages\/|app\/page|App\.tsx/i.test(path)) return 1;
+    if (/pages\/|app\/page|App\.tsx/i.test(path) && !(looksStart && /App\.tsx/i.test(path))) return 1;
     if (/components\//i.test(path)) return 2;
     if (/\.tsx?$/.test(path)) return 3;
     return 4;

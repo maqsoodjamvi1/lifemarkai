@@ -6,19 +6,23 @@
  */
 import { createFileRoute } from "@tanstack/react-router";
 import { getSandboxProviderId,isSandboxEnabled } from "@/lib/sandbox";
-import { isDockerDaemonReachable } from "@/lib/sandbox/docker";
+import { getDockerSandboxRuntimeInfo, isDockerDaemonReachable } from "@/lib/sandbox/docker";
+import { dockerDaemonUnreachableHint } from "@/lib/sandbox/docker-endpoint";
 import { getPreviewSloSnapshot } from "@/lib/preview/preview-slo";
 
 
 async function handleGET(_req: Request) {
   const configured = isSandboxEnabled();
   const provider = configured ? getSandboxProviderId() : null;
+  const runtime = provider === "docker" ? getDockerSandboxRuntimeInfo() : null;
   const reachable = provider === "docker" ? await isDockerDaemonReachable() : configured;
   const hint =
-    provider === "docker" && configured && !reachable
-      ? process.platform === "win32"
-        ? "Docker Desktop is not running. Start it, and live preview will boot on its own."
-        : "Docker is configured but the daemon is not reachable. On Coolify, mount /var/run/docker.sock into this app."
+    provider === "docker"
+      ? dockerDaemonUnreachableHint({
+          configured,
+          reachable,
+          hostKind: runtime?.hostKind ?? "local",
+        })
       : null;
 
   return Response.json({
@@ -26,6 +30,8 @@ async function handleGET(_req: Request) {
     provider,
     configured,
     reachable,
+    host: runtime?.hostKind ?? null,
+    memoryMb: runtime?.memoryMb ?? null,
     hint,
     slo: getPreviewSloSnapshot(),
   });

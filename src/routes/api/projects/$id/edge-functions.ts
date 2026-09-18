@@ -9,6 +9,8 @@ isManagementTokenConfigured,
 listManagedEdgeFunctions,
 } from "@/lib/cloud/management";
 import { deployUserEdgeFunction,listUserEdgeFunctions } from "@/lib/cloud/user-supabase";
+import { readProjectContractFromFiles } from "@/lib/ai/project-contract";
+import { constrainRepairFiles } from "@/lib/ai/project-contract-validate";
 
 /**
  * Native /api/projects/:id/edge-functions — list (GET) / save+deploy (POST)
@@ -90,14 +92,30 @@ export const Route = createFileRoute("/api/projects/$id/edge-functions")({
         if (!project) return Response.json({ error: "Project not found" }, { status: 404 });
 
         const path = `supabase/functions/${slug}/index.ts`;
-        const { error: saveError } = await supabase.from("project_files").upsert({
-          project_id: projectId,
-          path,
-          content: code,
-          language: "typescript",
-          updated_at: new Date().toISOString(),
-        }, { onConflict: "project_id,path" });
-        if (saveError) return Response.json({ error: saveError.message }, { status: 500 });
+        const { data: existingRows } = await supabase
+          .from("project_files")
+          .select("path, content, language")
+          .eq("project_id", projectId);
+        const existingFiles = (existingRows ?? []) as Array<{ path: string; content: string; language?: string }>;
+        const constrained = constrainRepairFiles(
+          [{ path, content: code, language: "typescript" }],
+          existingFiles,
+          readProjectContractFromFiles(existingFiles),
+          [path],
+        );
+        if (constrained.files.length === 0) {
+          return Response.json({ error: "Edge function path is outside the project contract" }, { status: 400 });
+        }
+        for (const row of constrained.files) {
+          const { error: saveError } = await supabase.from("project_files").upsert({
+            project_id: projectId,
+            path: row.path,
+            content: row.content,
+            language: row.language ?? "typescript",
+            updated_at: new Date().toISOString(),
+          }, { onConflict: "project_id,path" });
+          if (saveError) return Response.json({ error: saveError.message }, { status: 500 });
+        }
 
         if (project.cloud_project_ref && isManagementTokenConfigured()) {
           const deployment = await deployManagedEdgeFunction(project.cloud_project_ref, {
