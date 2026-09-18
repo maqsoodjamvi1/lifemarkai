@@ -42,6 +42,7 @@ TeamGrid,
 type ConsoleState,
 type GateInfo,
 } from "./editor-intelligence-console";
+import { drainSseData, safeBrowserStorage } from "./editor-intelligence-stream";
 
 interface IntelligenceLens {
   id: string;
@@ -276,7 +277,7 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
     if (line) setBuildLog((prev) => [...prev.slice(-200), line]);
     if (ev.type === "initiative_run" && typeof ev.initiativeId === "string") {
       setActiveRunId(ev.initiativeId);
-      localStorage.setItem(runKey, ev.initiativeId);
+      safeBrowserStorage((storage) => storage.setItem(runKey, ev.initiativeId as string));
     }
     if (ev.type === "file_change" && typeof ev.path === "string") {
       if (!runChangedPathsRef.current.includes(ev.path)) {
@@ -289,7 +290,7 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
       );
     }
     if (ev.type === "done") {
-      localStorage.removeItem(runKey);
+      safeBrowserStorage((storage) => storage.removeItem(runKey));
       setActiveRunId(null);
       const doneFiles = Array.isArray(ev.filesChanged)
         ? (ev.filesChanged as string[]).filter((p) => typeof p === "string")
@@ -365,19 +366,25 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        const frames = buf.split("\n\n");
-        buf = frames.pop() ?? "";
-        for (const frame of frames) {
-          const dl = frame.split("\n").find((l) => l.startsWith("data: "));
-          if (!dl) continue;
+      const ingestData = (payloads: string[]) => {
+        for (const payload of payloads) {
           let ev: Record<string, unknown>;
-          try { ev = JSON.parse(dl.slice(6)); } catch { continue; }
+          try { ev = JSON.parse(payload); } catch { continue; }
           ingestEvent(ev);
         }
+      };
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          buf += decoder.decode();
+          const drained = drainSseData(buf, true);
+          ingestData(drained.data);
+          break;
+        }
+        buf += decoder.decode(value, { stream: true });
+        const drained = drainSseData(buf);
+        buf = drained.remainder;
+        ingestData(drained.data);
       }
       await loadIntelligence(); // refresh roster/discussion/decisions from the shared tables
     } catch (err) {
@@ -400,7 +407,7 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
       const res = await fetch(`/api/editor-intelligence/initiative/${runId}`, { cache: "no-store" });
       if (!res.ok) {
         if (res.status === 404) {
-          localStorage.removeItem(runKey);
+          safeBrowserStorage((storage) => storage.removeItem(runKey));
           setActiveRunId(null);
         }
         if (!opts.silent) setBuildLog((prev) => [...prev, `Replay failed (${res.status})`]);
@@ -422,7 +429,7 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
       setBuildLog(lines.slice(-200));
       const status = data.run?.status;
       if (status === "done" || status === "failed") {
-        localStorage.removeItem(runKey);
+        safeBrowserStorage((storage) => storage.removeItem(runKey));
         setActiveRunId(null);
       } else {
         setActiveRunId(runId);
@@ -452,7 +459,8 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadIntelligence();
-    const storedRunId = localStorage.getItem(runKey);
+    let storedRunId: string | null = null;
+    safeBrowserStorage((storage) => { storedRunId = storage.getItem(runKey); });
     if (storedRunId) {
       setActiveRunId(storedRunId);
       // Repopulate the console from the durable event history on mount.
@@ -461,8 +469,11 @@ export function EditorIntelligencePanel({ projectId, onSendPromptToChat }: Edito
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // Keep the ref pointing at the current runBuild closure (fresh buildGoal/building).
-  runBuildRef.current = runBuild;
+  // Keep the external listener on a stable subscription while updating its
+  // callback after commit. Mutating the ref during render is unsafe in React 19.
+  useEffect(() => {
+    runBuildRef.current = runBuild;
+  });
 
   // External trigger: other surfaces dispatch `lifemark-intelligence-run` with a
   // goal to kick off a full multi-agent initiative here instead of a single-model
