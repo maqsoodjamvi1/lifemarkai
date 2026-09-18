@@ -13,6 +13,9 @@ const base: CoreLoopAttempt = {
   prompt: "Build a CRM",
   startedAt: "2026-08-13T00:00:00.000Z",
   generationMs: 1_000,
+  totalDurationMs: 2_000,
+  firstBootPassed: true,
+  falseGreen: false,
   generationPassed: true,
   previewPassed: true,
   deploymentPassed: true,
@@ -33,6 +36,9 @@ test("summarizes the required reliability and cost metrics", () => {
       ...base,
       index: 2,
       generationMs: 3_000,
+      totalDurationMs: 6_000,
+      firstBootPassed: false,
+      falseGreen: true,
       previewPassed: false,
       deploymentPassed: false,
       publicUrlPassed: false,
@@ -53,6 +59,10 @@ test("summarizes the required reliability and cost metrics", () => {
   assert.equal(summary.automaticRepairSuccessRate, 0);
   assert.equal(summary.manualInterventionRate, 0.5);
   assert.equal(summary.averageGenerationMs, 2_000);
+  assert.equal(summary.p50DurationMs, 6_000);
+  assert.equal(summary.p95DurationMs, 6_000);
+  assert.equal(summary.firstBootSuccessRate, 0.5);
+  assert.equal(summary.falseGreenRate, 0.5);
   assert.equal(summary.averageCreditsPerProject, 3);
   assert.equal(summary.averageAiCostCentsPerProject, 6);
   assert.equal(summary.averageSandboxCostCentsPerProject, 2);

@@ -500,6 +500,7 @@ async function main() {
   for (let index = 0; index < ATTEMPTS; index += 1) {
     const prompt = prompts[index % prompts.length];
     const startedAt = new Date().toISOString();
+    const attemptStartedMs = Date.now();
     let stage: CoreLoopStage = "project";
     let sandboxId: string | null = null;
     const attempt: CoreLoopAttempt = {
@@ -575,6 +576,7 @@ async function main() {
 
       stage = "preview";
       const remotePreview = await startRemotePreview(project.id, cookie);
+      attempt.firstBootPassed = true;
       sandboxId = remotePreview.sandboxId;
       if (CORE_LOOP_POLICY.previewStrategy !== "server-verified") {
         const previewResponse = await withTransientRetries(
@@ -632,10 +634,13 @@ async function main() {
       attempt.publicUrlPassed = publicResponse.ok;
       if (!attempt.publicUrlPassed) throw new Error(`public URL returned ${publicResponse.status}`);
     } catch (error) {
+      if (stage === "preview" && attempt.firstBootPassed == null) attempt.firstBootPassed = false;
       attempt.failedStage = stage;
       attempt.error = error instanceof Error ? error.message : String(error);
       attempt.manualInterventionRequired = true;
+      attempt.falseGreen = attempt.generationPassed && stage === "preview";
     } finally {
+      attempt.totalDurationMs = Date.now() - attemptStartedMs;
       if (attempt.projectId) {
         if (!sandboxId) {
           try {

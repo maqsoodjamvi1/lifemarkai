@@ -43,6 +43,7 @@ import { loadOptionalPlaywright } from "../optional-playwright.ts";
 import { isLadderExhausted,resolveRepairTier,shouldPromoteRepairTier } from "./repair-ladder.ts";
 import { buildPriorAttemptsBlock,lookupPriorAttempts,suggestedStartingTier } from "./repair-memory.ts";
 import { applyEditBlocks,validateEditBatch } from "./edit-blocks.ts";
+import { verifyRepairPatch } from "./repair-verifier.ts";
 
 export interface SelfVerifyResult {
   engine: "browser" | "static" | "build";
@@ -1380,6 +1381,16 @@ export async function runSelfVerification(opts: {
           path: rf.path,
           content: rf.content,
         } as ProjectFile);
+      }
+      const independentVerdict = verifyRepairPatch({
+        originalErrors: errors,
+        beforeFiles: files,
+        afterFiles: [...repairCandidate.values()],
+      });
+      if (!independentVerdict.accepted) {
+        console.warn(`[self-verify] independent verifier rejected patch: ${independentVerdict.reasons.join("; ")}`);
+        emit(`Rejected an unrelated repair — expected a ${independentVerdict.originalLayer} fix.`);
+        return result;
       }
       const corrupted = await filesWithSyntaxErrors([...repairCandidate.values()]).catch(
         () => new Map<string, string>(),

@@ -3,6 +3,8 @@ import { parseAIResponse,type ParsedFile } from "../code-parser.ts";
 import { AUTO_FIX_SYSTEM_PROMPT,buildRepairPrompt } from "../system-prompts.ts";
 import { prepareGeneratedFiles } from "./validation-service.ts";
 import { runGenerationStage } from "./generation-service.ts";
+import { buildEnvironmentGraph,classifyRepairFailure } from "../env-graph.ts";
+import { verifyRepairPatch } from "../repair-verifier.ts";
 
 export type RepairStageOptions = {
   files: ParsedFile[];
@@ -36,11 +38,12 @@ export type RepairStageResult = {
 export async function runRepairStage(
   options: RepairStageOptions,
 ): Promise<RepairStageResult | null> {
-  const repairPrompt = buildRepairPrompt(
+  const classification = classifyRepairFailure(options.errors, buildEnvironmentGraph(options.files));
+  const repairPrompt = `[Repair scope: ${classification.layer}] Change only the layer supported by the execution errors.\n\n${buildRepairPrompt(
     options.files,
     options.errors,
     options.needsEnrichment ? options.blueprint : undefined,
-  );
+  )}`;
   const repairModel = selectRepairModel(options);
   let repairContent = "";
 
@@ -75,8 +78,15 @@ export async function runRepairStage(
 
   const merged = new Map(options.files.map((file) => [file.path, file]));
   for (const file of repaired.files) merged.set(file.path, file);
+  const files = prepareGeneratedFiles(Array.from(merged.values()), options.existingFiles);
+  const verification = verifyRepairPatch({
+    originalErrors: options.errors,
+    beforeFiles: options.files,
+    afterFiles: files,
+  });
+  if (!verification.accepted) return null;
   return {
-    files: prepareGeneratedFiles(Array.from(merged.values()), options.existingFiles),
+    files,
     tokenEstimate: 1_000,
   };
 }

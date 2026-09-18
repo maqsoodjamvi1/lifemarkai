@@ -13,6 +13,10 @@ export interface CoreLoopAttempt {
   projectId?: string;
   startedAt: string;
   generationMs?: number;
+  totalDurationMs?: number;
+  firstBootPassed?: boolean;
+  /** Generation verification passed, but an independent preview check failed. */
+  falseGreen?: boolean;
   generationPassed: boolean;
   previewPassed: boolean;
   deploymentPassed: boolean;
@@ -40,6 +44,10 @@ export interface CoreLoopSummary {
   automaticRepairSuccessRate: number | null;
   manualInterventionRate: number;
   averageGenerationMs: number | null;
+  p50DurationMs: number | null;
+  p95DurationMs: number | null;
+  firstBootSuccessRate: number | null;
+  falseGreenRate: number;
   averageCreditsPerProject: number | null;
   averageAiCostCentsPerProject: number | null;
   averageSandboxCostCentsPerProject: number | null;
@@ -49,12 +57,21 @@ export interface CoreLoopSummary {
 const rate = (passed: number, total: number) => total === 0 ? 0 : passed / total;
 const average = (values: number[]) =>
   values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
+const percentile = (values: number[], p: number) => {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.ceil((sorted.length - 1) * p)] ?? null;
+};
 
 export function summarizeCoreLoop(attempts: CoreLoopAttempt[]): CoreLoopSummary {
+  // This report is an operational rolling window, not an all-time average.
+  attempts = attempts.slice(-50);
   const repairs = attempts.filter((attempt) => attempt.automaticRepairUsed);
   const knownCredits = attempts.flatMap((attempt) => attempt.creditsUsed == null ? [] : [attempt.creditsUsed]);
   const knownAiCosts = attempts.flatMap((attempt) => attempt.aiCostCents == null ? [] : [attempt.aiCostCents]);
   const knownSandboxCosts = attempts.flatMap((attempt) => attempt.sandboxCostCents == null ? [] : [attempt.sandboxCostCents]);
+  const durations = attempts.flatMap((attempt) => attempt.totalDurationMs == null ? [] : [attempt.totalDurationMs]);
+  const bootAttempts = attempts.filter((attempt) => attempt.firstBootPassed != null);
 
   return {
     attempts: attempts.length,
@@ -70,6 +87,10 @@ export function summarizeCoreLoop(attempts: CoreLoopAttempt[]): CoreLoopSummary 
       attempts.length,
     ),
     averageGenerationMs: average(attempts.flatMap((attempt) => attempt.generationMs == null ? [] : [attempt.generationMs])),
+    p50DurationMs: percentile(durations, 0.5),
+    p95DurationMs: percentile(durations, 0.95),
+    firstBootSuccessRate: bootAttempts.length === 0 ? null : rate(bootAttempts.filter((attempt) => attempt.firstBootPassed).length, bootAttempts.length),
+    falseGreenRate: rate(attempts.filter((attempt) => attempt.falseGreen).length, attempts.length),
     averageCreditsPerProject: average(knownCredits),
     averageAiCostCentsPerProject: average(knownAiCosts),
     averageSandboxCostCentsPerProject: average(knownSandboxCosts),
@@ -99,6 +120,7 @@ export function assessCoreLoopReleaseGate(
   if (summary.deploymentSuccessRate < 0.95) reasons.push("deployment success is below 95%");
   if (summary.publicUrlSuccessRate < 0.95) reasons.push("public URL success is below 95%");
   if (summary.manualInterventionRate > 0.05) reasons.push("manual intervention exceeds 5%");
+  if (summary.falseGreenRate > 0) reasons.push("independent preview verification found false-green generations");
   if (!summary.costTelemetryComplete) reasons.push("cost telemetry is incomplete");
 
   const eligible = summary.attempts >= minimumAttempts;
