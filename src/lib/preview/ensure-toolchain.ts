@@ -89,7 +89,7 @@ export function ensureTypecheckToolchain<
   const added: string[] = [];
   for (const name of wanted) {
     if (have(name)) continue;
-    const pin = pins[name];
+    const pin = pins[name] ?? DEFAULT_TOOLCHAIN_PINS[name];
     if (!pin) continue;
     dev[name] = pin;
     added.push(name);

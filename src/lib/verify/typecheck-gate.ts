@@ -39,11 +39,12 @@
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { availableParallelism } from "node:os";
-import { createRequire } from "node:module";
+import { createRequire, isBuiltin } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { BUNDLER_ASSET_RE } from "./bundler-assets.ts";
+import { missingMapJsxKeys } from "./map-jsx.ts";
 
 import type { ProjectFile } from "../../types/database.ts";
 
@@ -179,9 +180,9 @@ const AMBIENT_NAMES = new Set([
 ]);
 
 function isAmbientNameDiagnostic(code: number, message: string): boolean {
-  if (code !== 2304 && code !== 2503) return false;
+  if (code !== 2304 && code !== 2503 && code !== 2591) return false;
   const name = message.match(/Cannot find (?:name|namespace) '([^']+)'/)?.[1];
-  return Boolean(name && AMBIENT_NAMES.has(name));
+  return Boolean(name && (AMBIENT_NAMES.has(name) || (code === 2591 && isBuiltin(name))));
 }
 
 /** Source files worth compiling. Everything else (css, json, md, svg) is noise. */
@@ -550,10 +551,8 @@ export async function filesWithSyntaxErrors(files: ProjectFile[]): Promise<Map<s
  * fine — and it is entirely mechanical to detect, so paying a model to find it
  * would be absurd.
  *
- * Conservative by construction: it only fires when a `.map(` callback opens JSX
- * on the same or next line AND no `key=` appears before that element's first
- * `>`. Anything it cannot read confidently is skipped, because a false positive
- * here would send a repair to "fix" correct code.
+ * Parse directly returned JSX so arrows inside attributes and strings containing
+ * JSX cannot hide an existing key or trigger a repair of correct code.
  */
 export interface MissingKeyWarning {
   path: string;
@@ -569,26 +568,12 @@ export function findMissingListKeys(
     if (typeof f?.path !== "string" || typeof f.content !== "string") continue;
     if (!/\.(tsx|jsx)$/i.test(f.path)) continue;
 
-    const src = f.content;
-    for (const m of src.matchAll(/\.map\s*\(/g)) {
-      // Start AFTER the map callback's arrow. A first version searched from the
-      // `.map(` itself and matched the ENCLOSING element — so `{xs.map(x =>
-      // <Row key={x.id} />)}` inside a <div> was reported against the <div>,
-      // and every correct file was flagged. Only the element the callback
-      // RETURNS can carry the key.
-      const from = m.index! + m[0].length;
-      const arrow = src.indexOf("=>", from);
-      if (arrow < 0 || arrow - from > 120) continue;   // not an arrow callback
-      const after = src.slice(arrow + 2, arrow + 400);
-      // Skip a wrapping paren/brace/newline to reach the element itself.
-      const open = after.match(/^[\s(){]*<([A-Za-z][\w.]*)\b([^>]*)>/);
-      if (!open) continue;                              // fragment, or not JSX
-      if (/\bkey\s*=/.test(open[2])) continue;
-      const line = src.slice(0, arrow).split("\n").length;
+    for (const { callback, element, file } of missingMapJsxKeys(f.content)) {
+      const line = file.getLineAndCharacterOfPosition(callback.getStart(file)).line + 1;
       out.push({
         path: f.path,
         line,
-        formatted: `${f.path}:${line} — <${open[1]}> returned from .map() has no \`key\` prop (React logs this as a console error)`,
+        formatted: `${f.path}:${line} — <${element.tagName.getText(file)}> returned from .map() has no \`key\` prop (React logs this as a console error)`,
       });
       break;
     }

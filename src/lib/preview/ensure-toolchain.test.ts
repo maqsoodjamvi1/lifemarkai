@@ -133,3 +133,12 @@ test("output stays valid JSON", () => {
   assert.doesNotThrow(() => JSON.parse(raw));
   assert.match(raw, /\n$/, "trailing newline, like the other writers");
 });
+
+test("custom framework pins still restore Node types for the Vite config", () => {
+  const files = [
+    { path: "package.json", content: "{}" },
+    { path: "vite.config.ts", content: 'import { fileURLToPath } from "node:url";' },
+  ];
+  const out = ensureTypecheckToolchain(files, { typescript: "^5.5.0" });
+  assert.equal(devDepsOf(out)["@types/node"], "^20.14.0");
+});

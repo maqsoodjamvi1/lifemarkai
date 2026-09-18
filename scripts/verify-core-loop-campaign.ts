@@ -521,7 +521,7 @@ async function main() {
     try {
       const project = await jsonFetch<{ id: string }>("/api/projects", cookie, {
         method: "POST",
-        body: JSON.stringify({ name: `Core Loop ${Date.now()} ${index + 1}`, framework: "react" }),
+        body: JSON.stringify({ name: `Core Loop ${Date.now()} ${index + 1}`, framework: CORE_LOOP_POLICY.framework }),
       });
       attempt.projectId = project.id;
 

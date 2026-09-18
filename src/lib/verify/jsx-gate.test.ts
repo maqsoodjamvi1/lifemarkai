@@ -35,6 +35,25 @@ export default () => <p className="ok">x</p>;`;
 });
 
 describe("repairJsxPreviewDefects", () => {
+  it("preserves a key after an arrow handler or greater-than expression", () => {
+    const files = [{ path: "src/Header.tsx", content: `export const Header = ({links}) => <nav>{links.map(link => <a onClick={() => close()} title={link.rank > 1 ? 'high' : 'low'} key={link.href}>{link.label}</a>)}</nav>;` }];
+    assert.deepEqual(findJsxPreviewDefects(files), []);
+    assert.deepEqual(repairJsxPreviewDefects(files).files, files);
+  });
+
+  it("does not interpret map-like strings as JSX and preserves destructured callback parameters", () => {
+    const content = `const sample = 'items.map(item => <Row />)'; export const List = ({items}) => <div>{items.map(({id, label}) => <a onClick={() => close()}>{label}</a>)}</div>`;
+    const result = repairJsxPreviewDefects([{ path: "src/List.tsx", content }]);
+    assert.match(result.files[0].content, /map\(\(\{id, label\}, i\) => <a key=\{i\}/);
+    assert.ok(result.files[0].content.includes("'items.map(item => <Row />)'"));
+    assert.deepEqual(repairJsxPreviewDefects(result.files).changedPaths, []);
+  });
+
+  it("preserves callback modifiers, return types and trailing commas", () => {
+    const content = `const rows = items.map(async (item: Item,): Promise<JSX.Element> => <Row value={item} />);`;
+    const result = repairJsxPreviewDefects([{ path: "src/List.tsx", content }]);
+    assert.match(result.files[0].content, /async \(item: Item, i\): Promise<JSX.Element> => <Row key=\{i\}/);
+  });
   it("adds a key to a .map() JSX element and an index param", () => {
     const files = [
       {

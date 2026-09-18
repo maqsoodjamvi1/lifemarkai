@@ -11,9 +11,12 @@ export function attachPreviewRevision<T extends { path: string; content: string 
   const next = files.map((file) => {
     // React does not execute script elements introduced by an SSR document's
     // HMR update. Reload when this document changes so the browser loads the
-    // revision module; ordinary Vite source edits can still use HMR.
-    if (framework && /\.[cm]?[jt]sx?$/.test(file.path) ||
-        /(?:^|\/)(?:layout|__root)\.[jt]sx$/.test(file.path) && /<\/body>/i.test(file.content)) {
+    // revision module. Route modules also affect the SSR document, while
+    // ordinary framework components can still use HMR.
+    const isFrameworkRoute = framework && /\.[cm]?[jt]sx?$/.test(file.path) &&
+      /@tanstack\/react-router/.test(file.content) && /export\s+const\s+Route\s*=/.test(file.content);
+    const isDocument = /(?:^|\/)(?:layout|__root)\.[jt]sx$/.test(file.path) && /<\/body>/i.test(file.content);
+    if (isFrameworkRoute || isDocument) {
       reloadWhenChanged.push(file.path);
     }
     if (file.content.includes(marker)) return file;

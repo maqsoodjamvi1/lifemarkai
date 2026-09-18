@@ -50,6 +50,14 @@ describe("typecheck gate — catches what a browser render cannot", () => {
 });
 
 describe("typecheck gate — does not invent errors", () => {
+  it("ignores unavailable Node ambient types without hiding unknown application names", async () => {
+    const r = await runTypecheckGate([
+      f("vite.config.ts", `import { fileURLToPath } from "node:url";\nexport const root = fileURLToPath(new URL('.', import.meta.url));\nexport const broken = missingHelper();`),
+    ]);
+    assert.equal(r.available, true);
+    assert.ok(r.errors.some((e) => /missingHelper/.test(e.message)));
+    assert.ok(!r.errors.some((e) => /node:url/.test(e.message)), JSON.stringify(r.errors));
+  });
   it("passes clean TSX that imports react", async () => {
     // There is no node_modules here. If module-resolution noise leaked through,
     // every generated file in the product would report as broken.

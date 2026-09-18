@@ -147,7 +147,7 @@ async function fulfillProjectContractGaps(opts: {
       errors: blocking.map((error) => error.message),
       needsEnrichment,
       majorGreenfield: opts.greenfield,
-      simpleEconomyRequest: isSimpleEditorRequest(opts.task),
+      simpleEconomyRequest: isSimpleEditorRequest({ mode: "agent", prompt: opts.task, fileCount: opts.fileCount }),
       round: pass,
       maxTokens,
       projectId: opts.projectId,

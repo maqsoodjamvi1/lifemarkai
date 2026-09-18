@@ -11,6 +11,8 @@
  */
 
 import { findMissingListKeys } from "./typecheck-gate.ts";
+import ts from "typescript";
+import { missingMapJsxKeys } from "./map-jsx.ts";
 
 export interface JsxFile {
   path: string;
@@ -223,39 +225,26 @@ function insertMapKeys(source: string): string {
 }
 
 function insertOneMapKey(src: string): string {
-  for (const m of src.matchAll(/\.map\s*\(/g)) {
-    const from = m.index! + m[0].length;
-    const arrow = src.indexOf("=>", from);
-    if (arrow < 0 || arrow - from > 160) continue;
-    const after = src.slice(arrow + 2, arrow + 400);
-    const open = after.match(/^([\s(){]*)<([A-Za-z][\w.]*)\b([^>]*)>/);
-    if (!open) continue;
-    if (/\bkey\s*=/.test(open[3]!)) continue;
-
-    const params = src.slice(from, arrow);
-    let withIndex = src;
-    let keyExpr = "i";
-    if (!/,/.test(params)) {
-      const paren = params.match(/^\s*\(\s*([^)]+?)\s*\)\s*$/);
-      const bare = params.match(/^\s*([A-Za-z_$][\w$]*)\s*$/);
-      if (paren) {
-        withIndex = `${src.slice(0, from)}(${paren[1]}, i) ${src.slice(arrow)}`;
-      } else if (bare) {
-        withIndex = `${src.slice(0, from)}(${bare[1]}, i) ${src.slice(arrow)}`;
-      } else {
-        continue;
-      }
-    } else {
-      const second = params.split(",").map((part) => part.trim())[1]?.replace(/[):].*$/, "").trim();
-      if (second) keyExpr = second.split(":")[0]!.trim() || "i";
+  for (const { callback, element, file } of missingMapJsxKeys(src)) {
+    const index = callback.parameters[1];
+    if (index && !ts.isIdentifier(index.name)) continue;
+    let keyExpr = index?.name.getText(file) ?? "i";
+    if (!index) {
+      while (new RegExp(`\\b${keyExpr}\\b`).test(callback.getText(file))) keyExpr = `_${keyExpr}`;
     }
-
-    const newArrow = withIndex.indexOf("=>", from);
-    if (newArrow < 0) continue;
-    const tagStart = withIndex.indexOf(`<${open[2]}`, newArrow);
-    if (tagStart < 0) continue;
-    const insertAt = tagStart + 1 + open[2]!.length;
-    return `${withIndex.slice(0, insertAt)} key={${keyExpr}}${withIndex.slice(insertAt)}`;
+    const insertAt = element.tagName.end;
+    let result = `${src.slice(0, insertAt)} key={${keyExpr}}${src.slice(insertAt)}`;
+    if (!index) {
+      const first = callback.parameters[0];
+      if (callback.getChildren(file).some((child) => child.kind === ts.SyntaxKind.OpenParenToken)) {
+        const at = callback.parameters.end;
+        const addition = first ? `${callback.parameters.hasTrailingComma ? " " : ", "}${keyExpr}` : `_item, ${keyExpr}`;
+        result = `${result.slice(0, at)}${addition}${result.slice(at)}`;
+      } else if (first) {
+        result = `${result.slice(0, first.getStart(file))}(${first.getText(file)}, ${keyExpr})${result.slice(first.end)}`;
+      }
+    }
+    return result;
   }
   return src;
 }

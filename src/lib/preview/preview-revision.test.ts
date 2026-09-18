@@ -31,3 +31,23 @@ test("SSR document instrumentation requests reload only when its document change
   assert.equal(updated.files.find((f) => f.path === "src/routes/__root.tsx")!.content, document);
   assert.deepEqual(updated.reloadWhenChanged, result.reloadWhenChanged);
 });
+
+test("TanStack route and document edits reload while framework components retain HMR", () => {
+  const files = [
+    { path: "package.json", content: '{"dependencies":{"@tanstack/react-start":"1.0.0"}}' },
+    { path: "vite.config.ts", content: "export default { plugins: [tanstackStart()] }" },
+    { path: "src/routes/index.tsx", content: "import { createFileRoute } from '@tanstack/react-router'; export const Route = createFileRoute('/')({ component: Home });" },
+    { path: "src/routes/__root.tsx", content: "export function Shell() { return <html><body><Outlet /></body></html> }" },
+    { path: "src/components/Card.tsx", content: "export function Card() { return <article>Hello</article> }" },
+    { path: "src/components/Nav.jsx", content: "import { Link } from '@tanstack/react-router'; export function Nav() { return <Link to='/'>Home</Link> }" },
+    { path: "src/components/layout.tsx", content: "export function Layout() { return <main>Hello</main> }" },
+    { path: "src/lib/utils.ts", content: "export const identity = (value: string) => value;" },
+  ];
+  const initial = attachPreviewRevision(files, "first");
+  assert.equal(initial.requiresReload, false);
+  assert.deepEqual(initial.reloadWhenChanged, ["src/routes/index.tsx", "src/routes/__root.tsx"]);
+
+  const updated = attachPreviewRevision(initial.files, "second");
+  assert.equal(updated.requiresReload, false);
+  assert.deepEqual(updated.reloadWhenChanged, initial.reloadWhenChanged);
+});
