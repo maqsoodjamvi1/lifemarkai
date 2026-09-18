@@ -11,6 +11,7 @@ import { normalizeProjectImports } from "../../preview/normalize-imports.ts";
 import { syncProjectDependencies } from "../../verify/dependency-gate.ts";
 import { lockControlledDependencyVersions, resolveControlledTemplateForPrompt } from "../../templates/controlled-registry.ts";
 import { tanstackStartScaffold } from "../../templates/tanstack-start-scaffold.ts";
+import { ensureTanStackEsm } from "../../preview/ensure-tanstack-esm.ts";
 import {
   readProjectContractFromFiles,
   type ProjectContract,
@@ -182,6 +183,7 @@ export function normalizeGenerationStage(
       lockedPackage.devDependencies?.["@tanstack/react-start"]
     ) {
       normalized = applyControlledTanStackInfrastructure(normalized, options.brand);
+      normalized = ensureTanStackEsm(normalized);
       normalized = alignTanStackRuntimeImports(normalized);
     }
     controlledDependencies.push(...locked.changed);

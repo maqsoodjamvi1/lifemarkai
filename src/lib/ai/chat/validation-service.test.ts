@@ -3,6 +3,15 @@ import assert from "node:assert/strict";
 import { tanstackStartScaffold } from "../../templates/tanstack-start-scaffold.ts";
 import { generationValidationSignature, normalizeGenerationStage, validateGenerationStage } from "./validation-service.ts";
 
+test("a rewritten manifest still boots the ESM-only TanStack plugin", () => {
+  const normalized = normalizeGenerationStage([
+    { path: "package.json", content: '{"scripts":{"dev":"vite"}}', language: "json" },
+  ], [], { prompt: "Build a bakery website", framework: "tanstack", appType: "marketing-website" });
+  const pkg = JSON.parse(normalized.files.find((file) => file.path === "package.json")!.content);
+  assert.equal(pkg.type, "module");
+  assert.ok(pkg.dependencies["@tanstack/react-start"]);
+});
+
 test("normalization completes the TanStack package contract before correctness validation", () => {
   const generated = tanstackStartScaffold({}, "Neighborhood Bakery").map((file) => {
     if (file.path === "package.json") {

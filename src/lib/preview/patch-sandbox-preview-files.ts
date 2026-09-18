@@ -4,6 +4,7 @@ type WebContainerPatchOpts,
 } from "./patch-vite-for-webcontainer.ts";
 import { isTanStackStartProject, tanstackStartScaffold } from "../templates/tanstack-start-scaffold.ts";
 import { ensureTypecheckToolchain } from "./ensure-toolchain.ts";
+import { ensureTanStackEsm } from "./ensure-tanstack-esm.ts";
 import { LOVABLE_VITE_DEV_DEPENDENCIES } from "../templates/lovable-vite-scaffold.ts";
 import { normalizeProjectImports } from "./normalize-imports.ts";
 import { ensureLifemarkDataSdkInFiles } from "./lifemark-data.ts";
@@ -392,9 +393,11 @@ export function patchSandboxPreviewFiles<T extends { path: string; content?: str
         ensureSupabaseEnv(
           ensureTailwindPluginDeps(
             ensureTypecheckToolchain(
-              stripGeneratedRouteTree(
-                ensureTanStackStylesFile(
-                  ensureViteEntryFiles(normalizeProjectImports(stripDataInitStubs(files))),
+              ensureTanStackEsm(
+                stripGeneratedRouteTree(
+                  ensureTanStackStylesFile(
+                    ensureViteEntryFiles(normalizeProjectImports(stripDataInitStubs(files))),
+                  ),
                 ),
               ),
               LOVABLE_VITE_DEV_DEPENDENCIES,
