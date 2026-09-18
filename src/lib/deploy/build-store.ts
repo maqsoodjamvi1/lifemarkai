@@ -9,6 +9,7 @@
  * Server-only (service-role client). Never import from a client component.
  */
 import { createAdminClient } from "../supabase/server.ts";
+import { encodeBuildContent } from "./build-content.ts";
 
 export interface StoredBuildFile {
   path: string;
@@ -68,19 +69,15 @@ export async function storeBuild(
   const rows = files.flatMap((f) => {
       const path = normaliseBuildPath(f.path);
       if (!path) return [];
-      const encoding = f.encoding ?? (isTextAsset(path) ? "utf8" : "base64");
-      const byteSize =
-        encoding === "base64"
-          ? Math.floor((f.content.length * 3) / 4)
-          : Buffer.byteLength(f.content, "utf8");
+      const stored = encodeBuildContent(f.content ?? "", f.encoding ?? (isTextAsset(path) ? "utf8" : "base64"));
       return [{
         project_id: projectId,
         build_id: buildId,
         path,
-        content: f.content ?? "",
-        encoding,
+        content: stored.content,
+        encoding: stored.encoding,
         content_type: contentTypeFor(path),
-        byte_size: byteSize,
+        byte_size: stored.byteSize,
       }];
     });
 
