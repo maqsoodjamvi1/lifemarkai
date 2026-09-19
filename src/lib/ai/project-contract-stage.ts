@@ -1,4 +1,4 @@
-import { runGenerationStage } from "./chat/generation-service.ts";
+import type { runGenerationStage } from "./chat/generation-service.ts";
 import { classifyBuildIntent } from "./build-intent.ts";
 import {
   completeProjectContract,
@@ -12,25 +12,22 @@ export async function runProjectContractStage(opts: {
   projectId: string;
   userId: string;
   model: string;
-}): Promise<ProjectContractStageResult> {
+}, generate?: typeof runGenerationStage): Promise<ProjectContractStageResult> {
   return completeProjectContract({
     prompt: opts.prompt,
     projectId: opts.projectId,
     generate: async ({ messages, task }) => {
-      let content = "";
-      const result = await runGenerationStage(
+      const invoke = generate ?? (await import("./chat/generation-service.ts")).runGenerationStage;
+      const result = await invoke(
         {
           model: opts.model,
           messages,
           maxTokens: Math.min(9_000, Math.max(3_500, classifyBuildIntent(opts.prompt).minFiles * 300)),
           jsonMode: true,
-          onChunk: (chunk) => {
-            content += chunk;
-          },
         },
         { projectId: opts.projectId, userId: opts.userId, task },
       );
-      return { content, tokensUsed: result.tokensUsed ?? 0 };
+      return { content: result.content, tokensUsed: result.tokensUsed ?? 0 };
     },
   });
 }

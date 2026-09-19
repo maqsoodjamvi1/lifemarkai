@@ -15,7 +15,7 @@
  */
 import { randomUUID } from "crypto";
 import { tryViteBuild, looksLikeViteProject, type BuildFile } from "./build-project.ts";
-import { storeBuild, normaliseBuildPath } from "./build-store.ts";
+import { normaliseBuildPath } from "./asset-kind.ts";
 import { buildDeployIndexHtml } from "./build-deploy-files.ts";
 import { rerootClientBuild } from "./tss-publish.ts";
 import { recordEvent } from "../observability/events.ts";
@@ -89,6 +89,7 @@ export async function publishBuild(
   files: BuildFile[],
   onLog?: (line: string) => void,
   deploymentUrl?: string,
+  compile: typeof tryViteBuild = tryViteBuild,
 ): Promise<PublishBuildResult> {
   const buildId = randomUUID();
   // Phase 1: the deploy attempt gets a correlation id so its events join the
@@ -106,17 +107,16 @@ export async function publishBuild(
 
   if (looksLikeViteProject(files)) {
     onLog?.("[publish] compiling with vite…");
-    output = await tryViteBuild(files, onLog, deploymentUrl);
+    output = await compile(files, onLog, deploymentUrl);
     compiled = Boolean(output);
     if (!output) {
       const buildDisabled = process.env.ENABLE_SERVER_VITE_BUILD !== "true";
-      onLog?.(
-        buildDisabled
-          ? "[publish] ENABLE_SERVER_VITE_BUILD is not 'true' — publishing bundled static entry"
-          : "[publish] vite build produced no dist/ — publishing bundled static entry",
-      );
-      output = bundledViteFallback(files, projectId);
-      compiled = false;
+      const detail = buildDisabled
+        ? "Server compilation is disabled; enable ENABLE_SERVER_VITE_BUILD to publish this Vite app"
+        : "Vite compilation failed or produced no output; fix the build errors before publishing";
+      onLog?.(`[publish] ${detail}`);
+      recordEvent("deployment_failed", { reason: "compile_failed", durationMs: Date.now() - publishStartedAt });
+      return { ok: false, buildId: null, fileCount: 0, detail, compiled: false };
     }
   } else if (isPlainStaticSite(files)) {
     onLog?.("[publish] static site — no compile step needed");
@@ -152,6 +152,7 @@ export async function publishBuild(
   // slower/older concurrent publish for the same project can never flip
   // live_build_id back to stale content after a newer one already won —
   // see storeBuild's header comment.
+  const { storeBuild } = await import("./build-store.ts");
   const stored = await storeBuild(projectId, buildId, output, {
     startedAt: new Date(publishStartedAt).toISOString(),
   });

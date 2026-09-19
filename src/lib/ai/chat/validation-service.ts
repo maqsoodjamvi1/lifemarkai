@@ -8,6 +8,7 @@ import { ensureCommonGeneratedSupportFiles } from "../generated-support-files.ts
 import { ensureWebsiteChrome } from "../website-chrome.ts";
 import { alignGeneratedPackageJson, stripGeneratedRouteTree } from "../../preview/align-package-json.ts";
 import { normalizeProjectImports } from "../../preview/normalize-imports.ts";
+import { normalizeLucideImports } from "../../preview/normalize-lucide-imports.ts";
 import { syncProjectDependencies } from "../../verify/dependency-gate.ts";
 import { lockControlledDependencyVersions, resolveControlledTemplateForPrompt } from "../../templates/controlled-registry.ts";
 import { tanstackStartScaffold } from "../../templates/tanstack-start-scaffold.ts";
@@ -199,6 +200,9 @@ export function normalizeGenerationStage(
   // against the ACTUAL file set the generation is shipping, before validation
   // ever sees it.
   normalized = normalizeProjectImports(normalized);
+  normalized = normalized.map((file) => /\.[cm]?[jt]sx?$/.test(file.path)
+    ? { ...file, content: normalizeLucideImports(file.content) }
+    : file);
 
   // Library contract: every ALLOWED npm package the code imports is written
   // into package.json at its allowlist-pinned version — the same pins the
