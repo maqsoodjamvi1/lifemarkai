@@ -1,7 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { tanstackStartScaffold } from "../../templates/tanstack-start-scaffold.ts";
+import { TANSTACK_RUNTIME_PINS, TANSTACK_BUILD_VITE_PIN } from "../../preview/tanstack-runtime-pins.ts";
 import { generationValidationSignature, normalizeGenerationStage, validateGenerationStage } from "./validation-service.ts";
+
+test("undefined components enter bounded validation repair before the commit guard", () => {
+  const path = "src/routes/index.tsx";
+  const source = "import { createFileRoute } from '@tanstack/react-router'; export const Route = createFileRoute('/')({component: Home}); function Home() { return <Kpi />; }";
+  const files = tanstackStartScaffold({}).map((file) => file.path === path ? { ...file, content: source } : file);
+  const result = validateGenerationStage(files, []);
+  assert.ok(result.correctnessErrors.some((error) => error.type === "undefined-component" && error.file === path && error.message.includes("Kpi")));
+  const repaired = files.map((file) => file.path === path ? { ...file, content: `${source}\nfunction Kpi() { return <div>Sales: 42</div>; }` } : file);
+  assert.equal(validateGenerationStage(repaired, []).correctnessErrors.some((error) => error.type === "undefined-component"), false);
+});
 
 test("a rewritten manifest still boots the ESM-only TanStack plugin", () => {
   const normalized = normalizeGenerationStage([
@@ -42,10 +53,10 @@ test("normalization completes the TanStack package contract before correctness v
   const packageFile = normalized.files.find((file) => file.path === "package.json");
   const pkg = JSON.parse(packageFile?.content ?? "{}");
 
-  assert.equal(pkg.dependencies["@tanstack/react-router"], "^1.170.0");
-  assert.equal(pkg.dependencies["@tanstack/react-start"], "^1.168.0");
+  assert.equal(pkg.dependencies["@tanstack/react-router"], TANSTACK_RUNTIME_PINS["@tanstack/react-router"]);
+  assert.equal(pkg.dependencies["@tanstack/react-start"], TANSTACK_RUNTIME_PINS["@tanstack/react-start"]);
   assert.equal(pkg.dependencies["class-variance-authority"], "^0.7.0");
-  assert.equal(pkg.devDependencies.vite, "^7.0.0");
+  assert.equal(pkg.devDependencies.vite, TANSTACK_BUILD_VITE_PIN);
   assert.ok(normalized.controlledDependencies.some((change) => change.includes("@tanstack/react-router: missing")));
 
   const result = validateGenerationStage(normalized.files, [], {

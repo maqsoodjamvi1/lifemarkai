@@ -1,4 +1,5 @@
 import { renderPackageAllowlistCompact } from "./package-allowlist.ts";
+import { classifyBuildIntent, buildUserDirective } from "./build-intent.ts";
 import {
   PROJECT_CONTRACT_PATH,
   PROJECT_CONTRACT_VERSION,
@@ -6,6 +7,7 @@ import {
 } from "./project-contract.ts";
 
 export function buildProjectContractPrompt(request: string): string {
+  const intent = classifyBuildIntent(request);
   return `You are LifemarkAI Architect. Produce a machine-checkable project contract for a greenfield TanStack Start app BEFORE any source files are written.
 
 Return ONLY JSON with this shape:
@@ -38,10 +40,16 @@ Hard rules:
 - dependsOn must name other contracted file paths (not npm packages). The graph must be acyclic.
 - List EVERY product file you will later generate. Files not listed will be discarded.
 - List EVERY public export a dependent file will import.
-- A one-page landing / marketing request should keep product files to \`src/routes/index.tsx\` plus components that page imports. Extra \`src/routes/*.tsx\` pages only when the request names them.
+- ${intent.singlePage
+    ? "This is an explicit single-page request (one-page landing). Keep one home route plus the components it imports. Extra `src/routes/*.tsx` pages only when the request names them."
+    : "This is a multi-page product. Plan every route, feature component, data-access module, and migration required by the blueprint below; do not collapse it into one home page."}
 - Packages must come from this allowlist:
 ${renderPackageAllowlistCompact()}
-- Keep the file list as small as the product allows. Prefer composing existing scaffold chrome over inventing a second header.
+- Plan at least ${intent.minFiles} meaningful files, matching the same completeness gate used after generation. Prefer composing existing scaffold chrome over inventing a second header.
+
+Product requirements shared with generation and validation:
+${buildUserDirective(intent)}
+${intent.blueprint}
 
 User request:
 ${request}`;

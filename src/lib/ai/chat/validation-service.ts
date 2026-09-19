@@ -12,6 +12,7 @@ import { syncProjectDependencies } from "../../verify/dependency-gate.ts";
 import { lockControlledDependencyVersions, resolveControlledTemplateForPrompt } from "../../templates/controlled-registry.ts";
 import { tanstackStartScaffold } from "../../templates/tanstack-start-scaffold.ts";
 import { ensureTanStackEsm } from "../../preview/ensure-tanstack-esm.ts";
+import { guardFileWrite } from "../guard-file-write.ts";
 import {
   readProjectContractFromFiles,
   type ProjectContract,
@@ -238,6 +239,14 @@ export function validateGenerationStage(
   options: GenerationValidationOptions = {},
 ): GenerationValidationResult {
   const correctnessErrors = validateGeneratedFiles(files, existingFiles);
+  // Run the commit guard while bounded repair is still possible. Previously an
+  // undefined JSX component could pass validation and fail only at final save.
+  for (const file of files) {
+    const verdict = guardFileWrite({ path: file.path, next: file.content, previous: existingFiles.find((row) => row.path === file.path)?.content });
+    if (!verdict.ok) {
+      correctnessErrors.push({ type: verdict.code ?? "unsafe-write", file: file.path, message: verdict.reason ?? "File write rejected", severity: "error" });
+    }
+  }
   const richnessErrors = assessGenerationQuality(files, existingFiles, options);
   const contractErrors = validateFilesAgainstProjectContract(
     files,

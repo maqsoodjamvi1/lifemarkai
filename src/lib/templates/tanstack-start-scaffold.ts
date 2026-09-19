@@ -16,6 +16,7 @@
  */
 
 import { BASE_APP_DEPENDENCIES,BASE_APP_DEV_DEPENDENCIES } from "../preview/base-app-deps.ts";
+import { TANSTACK_RUNTIME_PINS, TANSTACK_BUILD_VITE_PIN } from "../preview/tanstack-runtime-pins.ts";
 import { deriveBrand,siteChromeFiles } from "./site-chrome.ts";
 
 export interface ScaffoldFile {
@@ -31,8 +32,7 @@ export const TANSTACK_START_DEPENDENCIES: Record<string, string> = (() => {
   delete deps["react-router-dom"]; // routing is TanStack Router in Start apps
   return {
     ...deps,
-    "@tanstack/react-start": "^1.168.0",
-    "@tanstack/react-router": "^1.170.0",
+    ...TANSTACK_RUNTIME_PINS,
   };
 })();
 
@@ -42,7 +42,7 @@ export const TANSTACK_START_DEV_DEPENDENCIES: Record<string, string> = {
   // @tanstack/react-start requires vite >= 7 (peer dep). The base set pins
   // vite ^5 for the plain Vite scaffold; override here or npm install exits 1
   // with ERESOLVE inside the preview sandbox.
-  vite: "^7.0.0",
+  vite: TANSTACK_BUILD_VITE_PIN,
 };
 
 const PACKAGE_JSON = (extra: Record<string, string> = {}): string =>

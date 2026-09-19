@@ -22,6 +22,7 @@ import * as os from "os";
 import * as path from "path";
 import { fixHtmlEntry } from "../preview/patch-vite-for-webcontainer.ts";
 import { isTextAsset } from "./asset-kind.ts";
+import { pinTanStackRuntimeManifest } from "../preview/tanstack-runtime-pins.ts";
 
 // Same Vite entry candidates the preview repair uses, so a deploy build doesn't
 // die on a mis-pointed index.html entry script (e.g. /src/main.ts vs .tsx).
@@ -148,6 +149,7 @@ export async function tryViteBuild(
     const allPaths = new Set(files.map((f) => f.path.replace(/\\/g, "/").replace(/^\/+/, "")));
     const entry = BUILD_ENTRY_CANDIDATES.find((c) => allPaths.has(c)) ?? null;
 
+    let manifestChanged = false;
     // Write all project files into the temp dir
     for (const f of files) {
       const rel = f.path.replace(/\\/g, "/").replace(/^\/+/, "");
@@ -160,6 +162,11 @@ export async function tryViteBuild(
       // outside the mkdtemp sandbox.
       if (rel.split("/").some((seg) => seg === "..")) continue;
       let content = f.content ?? "";
+      if (rel === "package.json") {
+        const pinned = pinTanStackRuntimeManifest(content);
+        manifestChanged = pinned !== content;
+        content = pinned;
+      }
       if (/^(public\/)?index\.html$/.test(rel)) content = fixHtmlEntry(content, entry);
       // Legacy TSS configs (generated before the scaffold shipped the hook)
       // get the LM_PUBLISH_SPA switch injected here, in the temp copy only.
@@ -169,7 +176,9 @@ export async function tryViteBuild(
       await fs.writeFile(dest, content, "utf-8");
     }
 
-    const hasLock = files.some((f) => f.path === "package-lock.json");
+    // npm ci rejects a lock produced for the previous runtime. npm install
+    // refreshes it in this disposable build directory when pins have changed.
+    const hasLock = !manifestChanged && files.some((f) => f.path === "package-lock.json");
     onLog?.("[build] installing dependencies…");
     const installCode = await run(
       "npm",

@@ -1,4 +1,5 @@
 import { runGenerationStage } from "./chat/generation-service.ts";
+import { classifyBuildIntent } from "./build-intent.ts";
 import {
   completeProjectContract,
   type ProjectContractStageResult,
@@ -21,7 +22,7 @@ export async function runProjectContractStage(opts: {
         {
           model: opts.model,
           messages,
-          maxTokens: 3_500,
+          maxTokens: Math.min(9_000, Math.max(3_500, classifyBuildIntent(opts.prompt).minFiles * 300)),
           jsonMode: true,
           onChunk: (chunk) => {
             content += chunk;

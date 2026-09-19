@@ -25,7 +25,7 @@ export interface ControlledTemplate {
   cacheKey: string;
 }
 
-const VERSION = "2026.08.1";
+const VERSION = "2026.09.20";
 
 /**
  * Module sets by product SHAPE, not by product name. A template's modules are
