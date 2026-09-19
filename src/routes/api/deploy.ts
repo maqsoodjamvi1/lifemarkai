@@ -432,9 +432,11 @@ async function handlePOST(req: Request) {
       // ENABLE_SERVER_VITE_BUILD); on success deploy the production dist/.
       let viteBuilt: Array<{ path: string; content: string }> | null = null;
       try {
-        const { tryViteBuild } = await import("@/lib/deploy/build-project");
-        const built = await tryViteBuild(projectFiles);
-        if (built && built.length > 0) viteBuilt = built;
+        if (provider === "netlify" && NETLIFY_TOKEN) {
+          const { tryViteBuild } = await import("@/lib/deploy/build-project");
+          const built = await tryViteBuild(projectFiles);
+          if (built && built.length > 0) viteBuilt = built;
+        }
       } catch { /* fall back to static files */ }
 
       if (provider === "vercel" && VERCEL_TOKEN) {
@@ -469,7 +471,7 @@ async function handlePOST(req: Request) {
         const buildLog: string[] = [];
         const result = await publishBuild(projectId, projectFiles, (line) => {
           buildLog.push(line);
-        });
+        }, lifemarkUrl());
 
         if (!result.ok) {
           // The failure reason goes in build_log, NOT an `error` column —

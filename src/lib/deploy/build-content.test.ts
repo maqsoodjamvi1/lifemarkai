@@ -1,6 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { encodeBuildContent } from "./build-content.ts";
+import { encodeBuildContent, transformBuildDocument } from "./build-content.ts";
+
+test("stored HTML receives identical serving transforms with either encoding", () => {
+  const html = '<html><head><script src="/assets/app.js"></script></head><body>\0</body></html>';
+  for (const encoding of ["utf8", "base64"] as const) {
+    const document = transformBuildDocument({
+      path: "index.html", content: encoding === "base64" ? Buffer.from(html).toString("base64") : html,
+      encoding, byteSize: Buffer.byteLength(html),
+    }, (decoded) => decoded.replace('/assets/', '/preview-by-slug/test/assets/'));
+    assert.equal(document.encoding, "utf8");
+    assert.equal(document.content, html.replace('/assets/', '/preview-by-slug/test/assets/'));
+    assert.equal(document.byteSize, Buffer.byteLength(document.content));
+    assert.equal(document.path, "index.html");
+  }
+});
 
 test("compiled text with NUL survives database JSON and decodes without changing bytes", () => {
   const source = 'const marker="\0";document.body.textContent="Café 🥐";';

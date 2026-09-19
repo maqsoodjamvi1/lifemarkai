@@ -88,6 +88,7 @@ export async function publishBuild(
   projectId: string,
   files: BuildFile[],
   onLog?: (line: string) => void,
+  deploymentUrl?: string,
 ): Promise<PublishBuildResult> {
   const buildId = randomUUID();
   // Phase 1: the deploy attempt gets a correlation id so its events join the
@@ -105,7 +106,7 @@ export async function publishBuild(
 
   if (looksLikeViteProject(files)) {
     onLog?.("[publish] compiling with vite…");
-    output = await tryViteBuild(files, onLog);
+    output = await tryViteBuild(files, onLog, deploymentUrl);
     compiled = Boolean(output);
     if (!output) {
       const buildDisabled = process.env.ENABLE_SERVER_VITE_BUILD !== "true";

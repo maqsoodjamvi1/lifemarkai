@@ -32,6 +32,17 @@ export interface PublishFile {
   encoding?: "utf8" | "base64";
 }
 
+/** The compiler and TanStack router must agree with the served URL prefix. */
+export function publishBasePath(deploymentUrl?: string): string {
+  if (!deploymentUrl) return "/";
+  const path = new URL(deploymentUrl).pathname.replace(/\/+$/, "");
+  if (!path) return "/";
+  if (!/^\/preview-by-slug\/[a-zA-Z0-9_-]+$/.test(path)) {
+    throw new Error("Unsupported published app base path");
+  }
+  return `${path}/`;
+}
+
 /**
  * The exact options the scaffold ships. Injected verbatim into legacy
  * configs so old and new projects publish identically.

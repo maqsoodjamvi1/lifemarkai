@@ -59,9 +59,6 @@ export async function processDeployJob(job: Job<DeployJobPayload>) {
       const buildLog: string[] = [];
       try {
         await job.updateProgress(10);
-        const result = await publishBuild(payload.projectId, files, (line) => buildLog.push(line));
-        if (!result.ok) throw new Error(result.detail);
-
         const { data: owner } = await supabase
           .from("profiles")
           .select("branded_subdomain,branded_status")
@@ -74,6 +71,9 @@ export async function processDeployJob(job: Job<DeployJobPayload>) {
           brandedSubdomain: owner?.branded_subdomain,
           brandedStatus: owner?.branded_status,
         });
+
+        const result = await publishBuild(payload.projectId, files, (line) => buildLog.push(line), url);
+        if (!result.ok) throw new Error(result.detail);
 
         const deployedAt = new Date().toISOString();
         const { error: deploymentError } = await supabase.from("deployments").update({

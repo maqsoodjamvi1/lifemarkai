@@ -269,9 +269,11 @@ export async function publishProjectFromChat(
     // Preview == deploy: try a real `vite build` when opted in (same as deploy route)
     let viteBuilt: typeof projectFiles | null = null;
     try {
-      const { tryViteBuild } = await import("@/lib/deploy/build-project");
-      const built = await tryViteBuild(projectFiles);
-      if (built && built.length > 0) viteBuilt = built as typeof projectFiles;
+      if (provider === "netlify") {
+        const { tryViteBuild } = await import("@/lib/deploy/build-project");
+        const built = await tryViteBuild(projectFiles);
+        if (built && built.length > 0) viteBuilt = built as typeof projectFiles;
+      }
     } catch {
       /* fall back to static files */
     }
@@ -305,7 +307,7 @@ export async function publishProjectFromChat(
       // is ever handed back.
       emit("Building your app…");
       const { publishBuild } = await import("@/lib/deploy/publish-build");
-      const result = await publishBuild(projectId, projectFiles, (line) => emit(line));
+      const result = await publishBuild(projectId, projectFiles, (line) => emit(line), lifemarkUrl());
       if (!result.ok) {
         await supabase
           .from("deployments")

@@ -3,6 +3,7 @@ import { createAdminClient,createClient } from "@/lib/supabase/server";
 import { servePreviewHtml } from "@/lib/preview/serve-preview";
 import { appSlugFromHost } from "@/lib/deploy/apps-host";
 import { injectLifemarkDataSdk } from "@/lib/preview/lifemark-data";
+import { transformBuildDocument } from "@/lib/deploy/build-content";
 import {
 readLiveBuildFile,
 buildFileResponse,
@@ -94,19 +95,19 @@ async function handleGET(req: Request, params: any): Promise<Response> {
       // Vite emits root-absolute paths (`/assets/…`), which would otherwise
       // resolve against the origin and 404. Only the HTML is rewritten; the
       // assets themselves are served byte-for-byte.
-      if (file.path === "index.html" && file.encoding === "utf8") {
+      if (file.path === "index.html") {
         // Serve-time LifemarkData injection: stored builds predate the SDK (and
         // Netlify/Vercel deploys inject at build time instead), so the hosted
         // data backend is wired here for every self-hosted app. Idempotent —
         // skips documents that already carry the SDK.
-        const withData = injectLifemarkDataSdk(
-          rewriteAssetPaths(file.content, `preview-by-slug/${slug}`),
+        const document = transformBuildDocument(file, (html) => injectLifemarkDataSdk(
+          appSlugFromHost(req.headers.get("host")) ? html : rewriteAssetPaths(html, `preview-by-slug/${slug}`),
           {
             slug,
             apiBase: process.env.NEXT_PUBLIC_APP_URL ?? process.env.APP_URL ?? null,
           },
-        );
-        return buildFileResponse({ ...file, content: withData });
+        ));
+        return buildFileResponse(document);
       }
       return buildFileResponse(file);
     }

@@ -16,7 +16,7 @@
  */
 
 import { spawn } from "child_process";
-import { ensureTssSpaPublishHook } from "./tss-publish.ts";
+import { ensureTssSpaPublishHook, publishBasePath } from "./tss-publish.ts";
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -132,6 +132,7 @@ async function readDirRecursive(dir: string, base = dir): Promise<BuildFile[]> {
 export async function tryViteBuild(
   files: BuildFile[],
   onLog?: (line: string) => void,
+  deploymentUrl?: string,
 ): Promise<BuildFile[] | null> {
   if (process.env.ENABLE_SERVER_VITE_BUILD !== "true") return null;
   if (!looksLikeViteProject(files)) {
@@ -183,7 +184,8 @@ export async function tryViteBuild(
     }
 
     onLog?.("[build] running vite build…");
-    const buildCode = await run("npx", ["vite", "build"], tmp, 180_000, onLog);
+    const buildArgs = ["vite", "build", ...(deploymentUrl ? [`--base=${publishBasePath(deploymentUrl)}`] : [])];
+    const buildCode = await run("npx", buildArgs, tmp, 180_000, onLog);
     if (buildCode !== 0) {
       onLog?.(`[build] vite build failed (code ${buildCode}) — using static deploy`);
       return null;

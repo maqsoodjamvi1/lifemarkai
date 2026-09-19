@@ -4,7 +4,17 @@ import {
   ensureTssSpaPublishHook,
   rerootClientBuild,
   TSS_SPA_PUBLISH_OPTIONS,
+  publishBasePath,
 } from "./tss-publish.ts";
+
+test("publish base matches path hosting while standalone domains keep root routing", () => {
+  assert.equal(publishBasePath("https://lifemarkai.com/preview-by-slug/my-app"), "/preview-by-slug/my-app/");
+  assert.equal(publishBasePath("https://lifemarkai.com/preview-by-slug/my-app/"), "/preview-by-slug/my-app/");
+  assert.equal(publishBasePath("https://my-app.apps.lifemarkai.com"), "/");
+  assert.equal(publishBasePath(), "/");
+  assert.throws(() => publishBasePath("https://lifemarkai.com/unexpected/path"));
+  assert.throws(() => publishBasePath("https://lifemarkai.com/preview-by-slug/bad%20path"));
+});
 
 const SCAFFOLD_STYLE = `import { defineConfig } from "vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";

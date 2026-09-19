@@ -12,6 +12,7 @@ import {
 } from "../src/lib/reliability/core-loop-report.ts";
 import { getCoreLoopPolicy, pinCoreLoopCampaignAiModel } from "../src/lib/reliability/core-loop-policy.ts";
 import { assertCoreLoopApiRequest } from "../src/lib/reliability/core-loop-api-surface.ts";
+import { verifyPublishedPage } from "../src/lib/reliability/verify-published-page.ts";
 
 function loadEnv(path = ".env.local") {
   try {
@@ -629,8 +630,10 @@ async function main() {
       stage = "public-url";
       if (!deployment.url) throw new Error("deployment became live without a URL");
       const publicResponse = await fetch(deployment.url, { redirect: "follow" });
-      attempt.publicUrlPassed = publicResponse.ok;
-      if (!attempt.publicUrlPassed) throw new Error(`public URL returned ${publicResponse.status}`);
+      if (!publicResponse.ok) throw new Error(`public URL returned ${publicResponse.status}`);
+      const browserProof = await verifyPublishedPage(deployment.url);
+      attempt.publicUrlPassed = browserProof.passed;
+      if (!browserProof.passed) throw new Error(`published browser verification failed: ${browserProof.errors.join("; ")}`);
     } catch (error) {
       attempt.failedStage = stage;
       attempt.error = error instanceof Error ? error.message : String(error);
