@@ -98,7 +98,7 @@ const TSCONFIG = JSON.stringify(
       noEmit: true,
       baseUrl: ".",
       paths: { "@/*": ["./src/*"] },
-      types: ["node"],
+      types: ["node", "vite/client"],
     },
     include: ["src", "vite.config.ts"],
   },

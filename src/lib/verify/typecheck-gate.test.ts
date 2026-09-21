@@ -22,6 +22,14 @@ import {
 const f = (path: string, content: string) => ({ path, content }) as never;
 
 describe("typecheck gate — catches what a browser render cannot", () => {
+  it("accepts Vite env access but retains real type errors", async () => {
+    const valid = await runTypecheckGate([f("src/env.ts", "export const url = import.meta.env.VITE_SUPABASE_URL; export const dev: boolean = import.meta.env.DEV;")]);
+    assert.equal(valid.available, true);
+    assert.deepEqual(valid.errors, []);
+    const invalid = await runTypecheckGate([f("src/env.ts", "export const dev: number = import.meta.env.DEV;")]);
+    assert.equal(invalid.available, true);
+    assert.ok(invalid.errors.some((error) => error.formatted.includes("TS2322")));
+  });
   it("catches a syntax error, with file and line", async () => {
     const r = await runTypecheckGate([f("src/App.tsx", `export function App() {\n  return <div>hi</div>;\n`)]);
     assert.equal(r.available, true);

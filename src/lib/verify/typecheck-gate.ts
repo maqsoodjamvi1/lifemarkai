@@ -285,6 +285,19 @@ const ROUTETREE_SHIM = `declare module "*routeTree.gen" {
 }
 `;
 
+// The isolated checker has no Vite package to supply these ambient types.
+// Match Vite's custom-env index while retaining types for its built-in flags.
+const VITE_ENV_SHIM = `interface ImportMetaEnv {
+  readonly [key: string]: any;
+  readonly BASE_URL: string;
+  readonly MODE: string;
+  readonly DEV: boolean;
+  readonly PROD: boolean;
+  readonly SSR: boolean;
+}
+interface ImportMeta { readonly env: ImportMetaEnv }
+`;
+
 const TSCONFIG = {
   compilerOptions: {
     noEmit: true,
@@ -356,6 +369,7 @@ export async function runTypecheckGate(
     await writeFile(join(dir, "__jsx-shim.d.ts"), JSX_SHIM, "utf8");
     await writeFile(join(dir, "__asset-shim.d.ts"), ASSET_SHIM, "utf8");
     await writeFile(join(dir, "__routetree-shim.d.ts"), ROUTETREE_SHIM, "utf8");
+    await writeFile(join(dir, "__vite-env-shim.d.ts"), VITE_ENV_SHIM, "utf8");
 
     let stdout = "";
     try {
