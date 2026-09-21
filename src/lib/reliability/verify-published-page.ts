@@ -17,6 +17,10 @@ export async function verifyPublishedPage(url: string) {
       }
     });
     const response = await page.goto(url, { waitUntil: "networkidle", timeout: 60_000 });
+    // SPA hydration can commit after the network has gone idle. Wait for the
+    // same content requirement we assert below, rather than sampling the shell.
+    await page.waitForFunction(() => (document.body?.innerText.trim().length ?? 0) >= 100,
+      undefined, { timeout: 15_000 }).catch(() => {});
     const text = (await page.locator("body").innerText()).trim();
     if (!response?.ok()) errors.push(`Document returned ${response?.status() ?? "no response"}`);
     if (text.length < 100) errors.push("Published page has no meaningful rendered content");
