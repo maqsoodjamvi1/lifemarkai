@@ -37,6 +37,7 @@ Hard rules:
 - TanStack Start only. No index.html, no src/main.tsx, no src/App.tsx, no react-router-dom.
 - Required files: package.json, tsconfig.json, vite.config.ts, tailwind.config.js, postcss.config.js, src/styles.css, src/router.tsx, src/routes/__root.tsx, src/routes/index.tsx, src/lib/utils.ts, src/components/layout/Header.tsx, src/components/layout/Footer.tsx, src/components/layout/SiteChrome.tsx.
 - Every page is a file under src/routes/ that exports Route via createFileRoute.
+- src/router.tsx is platform-owned and exports only getRouter. Do not contract src/routeTree.gen.ts; the router plugin generates it.
 - dependsOn must name other contracted file paths (not npm packages). The graph must be acyclic.
 - List EVERY product file you will later generate. Files not listed will be discarded.
 - List EVERY public export a dependent file will import.

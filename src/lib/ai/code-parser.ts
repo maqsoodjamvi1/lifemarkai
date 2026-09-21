@@ -755,7 +755,7 @@ function parseNamedImports(clause: string): string[] {
   if (!match) return [];
   return match[1]
     .split(",")
-    .map((raw) => raw.trim().split(/\s+as\s+/i)[0]?.trim())
+    .map((raw) => raw.trim().replace(/^type\s+/, "").split(/\s+as\s+/i)[0]?.trim())
     .filter((name): name is string => !!name);
 }
 

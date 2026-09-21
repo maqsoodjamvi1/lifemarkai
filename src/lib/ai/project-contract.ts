@@ -531,7 +531,16 @@ export function parseProjectContract(
       })
     : [];
 
-  const files = mergeFiles(fallback.files, parsedFiles);
+  // The router plugin generates its tree; the platform supplies getRouter().
+  // Model plans must not add exports to the canonical router that normalization
+  // will replace, or require a generated tree that normalization removes.
+  const generatedTree = (path: string) => /(?:^|\/)routeTree\.gen\.[jt]sx?$/.test(path);
+  const router = REQUIRED_TANSTACK_CONTRACT_FILES.find((file) => file.path === "src/router.tsx")!;
+  const files = mergeFiles(fallback.files, parsedFiles)
+    .filter((file) => !generatedTree(file.path))
+    .map((file) => file.path === router.path
+      ? { ...router, exports: [...router.exports], dependsOn: [] }
+      : { ...file, dependsOn: file.dependsOn.filter((path) => !generatedTree(path)) });
   const routesByPath = new Map(fallback.routes.map((route) => [route.path, route]));
   for (const route of parsedRoutes) routesByPath.set(route.path, route);
   const packagesByName = new Map(fallback.packages.map((pkg) => [pkg.name, pkg]));
