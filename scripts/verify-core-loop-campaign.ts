@@ -12,6 +12,7 @@ import {
 } from "../src/lib/reliability/core-loop-report.ts";
 import { getCoreLoopPolicy, pinCoreLoopCampaignAiModel } from "../src/lib/reliability/core-loop-policy.ts";
 import { assertCoreLoopApiRequest } from "../src/lib/reliability/core-loop-api-surface.ts";
+import { createCampaignCookieProvider } from "../src/lib/reliability/campaign-session.ts";
 import { verifyPublishedPage } from "../src/lib/reliability/verify-published-page.ts";
 
 function loadEnv(path = ".env.local") {
@@ -171,7 +172,7 @@ async function sandboxPreviewReady(state: SandboxPreview): Promise<boolean> {
   }
 }
 
-async function startRemotePreview(projectId: string, cookie: string) {
+async function startRemotePreview(projectId: string, cookie: () => Promise<string>) {
   const start = await withTransientRetries("sandbox-preview POST", () =>
     jsonFetch<SandboxPreview>(`/api/projects/${projectId}/sandbox-preview`, cookie, {
       method: "POST",
@@ -209,7 +210,7 @@ async function startRemotePreview(projectId: string, cookie: string) {
 async function stopRemotePreview(
   projectId: string,
   sandboxId: string,
-  cookie: string,
+  cookie: () => Promise<string>,
 ) {
   try {
     await jsonFetch(
@@ -333,7 +334,7 @@ function coreLoopUrl(path: string, method: string): string {
   return `${BASE_URL}${path}`;
 }
 
-async function jsonFetch<T>(path: string, cookie: string, init: RequestInit = {}): Promise<T> {
+async function jsonFetch<T>(path: string, cookie: () => Promise<string>, init: RequestInit = {}): Promise<T> {
   const method = init.method ?? "GET";
   const timeoutMs =
     init.signal
@@ -349,7 +350,7 @@ async function jsonFetch<T>(path: string, cookie: string, init: RequestInit = {}
     response = await fetch(coreLoopUrl(path, method), {
       ...init,
       signal,
-      headers: { "Content-Type": "application/json", Cookie: cookie, ...init.headers },
+      headers: { "Content-Type": "application/json", Cookie: await cookie(), ...init.headers },
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
@@ -412,7 +413,7 @@ async function readDoneEvent(response: Response, timeoutMs = GENERATION_TIMEOUT_
   throw new Error("generation stream ended without a done event");
 }
 
-async function waitForDeployment(projectId: string, cookie: string): Promise<Deployment> {
+async function waitForDeployment(projectId: string, cookie: () => Promise<string>): Promise<Deployment> {
   const deadline = Date.now() + DEPLOY_TIMEOUT_MS;
   while (Date.now() < deadline) {
     const deployments = await jsonFetch<Deployment[]>(`/api/deploy?projectId=${encodeURIComponent(projectId)}`, cookie);
@@ -471,7 +472,7 @@ async function main() {
     }
     return data;
   });
-  const cookie = authCookie(auth.session!);
+  const cookie = createCampaignCookieProvider(client.auth, authCookie);
 
   const profileClient = admin ?? client;
   const { data: profile, error: profileError } = await profileClient
@@ -537,7 +538,7 @@ async function main() {
           try {
             const generationResponse = await fetch(coreLoopUrl("/api/ai/chat", "POST"), {
               method: "POST",
-              headers: { "Content-Type": "application/json", Cookie: cookie },
+              headers: { "Content-Type": "application/json", Cookie: await cookie() },
               signal: generationAbort.signal,
               body: JSON.stringify({
                 projectId: project.id,
@@ -729,3 +730,4 @@ main().catch((error) => {
   console.error(error instanceof Error ? error.stack : error);
   process.exit(1);
 });
+
