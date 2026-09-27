@@ -18,4 +18,4 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Test structural risk service
-        run: cargo test --locked
+        run: cargo test
