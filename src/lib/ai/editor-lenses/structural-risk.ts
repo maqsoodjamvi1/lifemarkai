@@ -10,7 +10,10 @@ export async function enrichStructuralRisk(
   let bytes = 0;
   const selected = [...files].filter(([path, content]) => {
     const size = Buffer.byteLength(content, "utf8");
-    if (path.includes("..") || size > 100_000 || bytes + size > 1_000_000) return false;
+    // Only supported source files. In particular, do not send .env or project
+    // configuration files containing credentials to the optional service.
+    if (!/\.[cm]?[jt]sx?$/.test(path) || path.includes("..") ||
+        size > 100_000 || bytes + size > 1_000_000) return false;
     bytes += size;
     return true;
   }).slice(0, 100);
@@ -20,9 +23,13 @@ export async function enrichStructuralRisk(
     task,
     // Require a literal path from the project; guessing symbols from prose
     // produced false high-risk debates in the original PR.
-    targetPaths: paths.filter((path) =>
-      `${task.title} ${task.acceptance ?? ""}`.includes(path),
-    ),
+    targetPaths: paths.filter((path) => {
+      const text = `${task.title} ${task.acceptance ?? ""}`;
+      const index = text.indexOf(path);
+      if (index < 0) return false;
+      const after = text[index + path.length];
+      return !after || !/[\w./-]/.test(after);
+    }),
   })).filter(({ targetPaths }) => targetPaths.length);
   if (!relevant.length) return;
 
