@@ -1,0 +1,27 @@
+name: Structural risk service
+
+on:
+  pull_request:
+    paths:
+      - 'services/rust-ast/**'
+      - '.github/workflows/structural-risk.yml'
+  workflow_dispatch:
+
+jobs:
+  rust-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/rust-ast
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Test structural risk service
+        run: cargo test
+      - name: Exercise live service isolation
+        run: |
+          cargo run --quiet &
+          service_pid=$!
+          trap 'kill "$service_pid" 2>/dev/null || true' EXIT
+          python3 smoke.py
