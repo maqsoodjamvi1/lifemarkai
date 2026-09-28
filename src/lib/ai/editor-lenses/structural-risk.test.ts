@@ -34,7 +34,7 @@ test("unavailable service preserves planner risk", async () => {
   } finally { globalThis.fetch = originalFetch; }
 });
 
-test("never sends project environment files to the side service", async () => {
+test("never sends project environment or configuration files to the side service", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, init) => {
     const body = JSON.parse(String(init?.body));
@@ -43,7 +43,10 @@ test("never sends project environment files to the side service", async () => {
   };
   try {
     await enrichStructuralRisk([task("Edit src/a.ts")], new Map([
-      [".env.local", "API_KEY=secret"], ["src/a.ts", "export function a() {}"],
+      [".env.local", "API_KEY=secret"],
+      ["vite.config.ts", "const API_KEY = \"secret\""],
+      ["next.config.js", "module.exports = { secret: \"secret\" }"],
+      ["src/a.ts", "export function a() {}"],
     ]), "http://127.0.0.1:8765");
   } finally { globalThis.fetch = originalFetch; }
 });
