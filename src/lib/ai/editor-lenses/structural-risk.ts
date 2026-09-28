@@ -8,11 +8,12 @@ export async function enrichStructuralRisk(
 ): Promise<void> {
   if (!serviceUrl || !tasks.length || !files.size) return;
   let bytes = 0;
+  const configSource = /(?:^|\/)(?:[^/]+\.)?config\.[cm]?[jt]s$/i;
   const selected = [...files].filter(([path, content]) => {
     const size = Buffer.byteLength(content, "utf8");
     // Only supported source files. In particular, do not send .env or project
     // configuration files containing credentials to the optional service.
-    if (!/\.[cm]?[jt]sx?$/.test(path) || path.includes("..") ||
+    if (!/\.[cm]?[jt]sx?$/.test(path) || path.includes("..") || configSource.test(path) ||
         size > 100_000 || bytes + size > 1_000_000) return false;
     bytes += size;
     return true;
