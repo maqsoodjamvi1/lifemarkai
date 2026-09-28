@@ -2,6 +2,26 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { collectExports, findContractErrors, findMissingExports, findMissingModules } from "./export-contract.ts";
 
+test("export contracts recognize type re-exports, namespace exports and default aliases", () => {
+  const exports = collectExports(`
+    export type { MenuItem, InquiryValues as FormValues } from './types';
+    export * as bakery from './bakery';
+    const Page = () => null;
+    export { Page as default };
+  `);
+  assert.deepEqual([...exports.names].sort(), ["FormValues", "MenuItem", "bakery", "default"]);
+  assert.equal(exports.hasStarReexport, false);
+});
+
+test("namespace barrels accept the namespace but still reject invented exports", () => {
+  const missing = findMissingExports([
+    { path: "src/data.ts", content: "export const menu = [];" },
+    { path: "src/index.ts", content: "export * as bakery from './data';" },
+    { path: "src/page.ts", content: "import { bakery, invented } from './index';" },
+  ]);
+  assert.deepEqual(missing.map((error) => error.name), ["invented"]);
+});
+
 // Regression: `export const A = [], B = [];` only registered `A` — every
 // name after the first in a comma-separated declaration list was silently
 // dropped. That produced a false positive in findMissingExports for a

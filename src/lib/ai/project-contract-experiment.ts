@@ -46,6 +46,7 @@ export interface ContractExperimentFixture {
 
 export interface ContractExperimentRun {
   id: string;
+  expectFirstBoot: boolean;
   family: ContractExperimentFamily;
   classifiedFamily: FailureFamily | "none";
   firstBootSuccess: boolean;
@@ -496,6 +497,7 @@ export function scoreContractFixture(fixture: ContractExperimentFixture): Contra
   const clusters = clusterFailures(errors);
   return {
     id: fixture.id,
+    expectFirstBoot: fixture.expectFirstBoot,
     family: fixture.family,
     classifiedFamily: clusters[0]?.family ?? "none",
     firstBootSuccess,
@@ -557,5 +559,19 @@ export function formatContractExperimentReport(report: ContractExperimentReport)
     families,
     "Clustered defect families:",
     clusters || "  (none)",
+  ].join("\n");
+}
+
+export function unexpectedContractOutcomes(report: ContractExperimentReport): ContractExperimentRun[] {
+  return report.results.filter((result) => result.firstBootSuccess !== result.expectFirstBoot);
+}
+
+export function formatContractFailureReport(report: ContractExperimentReport): string {
+  const unexpected = unexpectedContractOutcomes(report);
+  return [
+    `Generation-contract gate: ${report.runs} fixtures, ${unexpected.length} unexpected first-boot outcomes`,
+    ...unexpected.map((result) =>
+      `  ${result.family}: ${result.id} expected=${result.expectFirstBoot} actual=${result.firstBootSuccess} errors=${result.errorCount} clusters=${result.clusters.join(",") || "none"}`,
+    ),
   ].join("\n");
 }

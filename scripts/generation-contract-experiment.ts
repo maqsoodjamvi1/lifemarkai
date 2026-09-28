@@ -16,7 +16,9 @@
 import { readFileSync } from "node:fs";
 import {
   formatContractExperimentReport,
+  formatContractFailureReport,
   runContractExperiment,
+  unexpectedContractOutcomes,
 } from "../src/lib/ai/project-contract-experiment.ts";
 
 function loadEnv(path = ".env.local") {
@@ -34,8 +36,6 @@ function loadEnv(path = ".env.local") {
   }
 }
 
-loadEnv();
-
 function argValue(name: string, fallback: number): number {
   const raw = process.argv.find((arg) => arg.startsWith(`${name}=`));
   if (!raw) return fallback;
@@ -45,6 +45,10 @@ function argValue(name: string, fallback: number): number {
 
 const live = process.argv.includes("--live");
 if (live) {
+  if (process.env.CI || process.env.GITHUB_ACTIONS || process.argv.includes("--check")) {
+    console.error("Live paid-model experiments are disabled in CI/release checks.");
+    process.exit(2);
+  }
   loadEnv();
   if (!process.env.OPENROUTER_API_KEY?.trim() && !process.env.OPENAI_API_KEY?.trim()) {
     console.error("Live architect runs need OPENROUTER_API_KEY or OPENAI_API_KEY.");
@@ -61,14 +65,8 @@ if (live) {
 
 const report = runContractExperiment();
 console.log(formatContractExperimentReport(report));
-const mismatched = report.results.filter((result) => {
-  const fixtureExpectsSuccess = result.id.startsWith("valid-");
-  return result.firstBootSuccess !== fixtureExpectsSuccess;
-});
+console.log(formatContractFailureReport(report));
+const mismatched = unexpectedContractOutcomes(report);
 if (mismatched.length > 0) {
-  console.error("Unexpected outcomes:");
-  for (const result of mismatched) {
-    console.error(`  ${result.id} firstBoot=${result.firstBootSuccess} errors=${result.errorCount}`);
-  }
   process.exit(1);
 }

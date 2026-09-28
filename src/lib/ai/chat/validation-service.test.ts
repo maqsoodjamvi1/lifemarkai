@@ -4,6 +4,15 @@ import { tanstackStartScaffold } from "../../templates/tanstack-start-scaffold.t
 import { TANSTACK_RUNTIME_PINS, TANSTACK_BUILD_VITE_PIN } from "../../preview/tanstack-runtime-pins.ts";
 import { generationValidationSignature, normalizeGenerationStage, validateGenerationStage } from "./validation-service.ts";
 
+test("malformed generated manifests reach bounded repair instead of crashing normalization", () => {
+  const generated = tanstackStartScaffold({}).map((file) => file.path === "package.json"
+    ? { ...file, content: `${file.content}\nUnexpected trailing output` }
+    : file);
+  const normalized = normalizeGenerationStage(generated, [], { prompt: "Build a clinic app", framework: "tanstack" });
+  const validation = validateGenerationStage(normalized.files, []);
+  assert.ok(validation.correctnessErrors.some((error) => error.type === "invalid_package_json"));
+});
+
 test("undefined components enter bounded validation repair before the commit guard", () => {
   const path = "src/routes/index.tsx";
   const source = "import { createFileRoute } from '@tanstack/react-router'; export const Route = createFileRoute('/')({component: Home}); function Home() { return <Kpi />; }";

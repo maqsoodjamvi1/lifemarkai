@@ -176,13 +176,18 @@ export function normalizeGenerationStage(
     const template = resolveControlledTemplateForPrompt(options.prompt, options.framework);
     const locked = lockControlledDependencyVersions(normalized[packageIndex].content, template);
     normalized[packageIndex] = { ...normalized[packageIndex], content: locked.content };
-    const lockedPackage = JSON.parse(locked.content) as {
+    let lockedPackage: {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
-    };
+    } | null = null;
+    try {
+      lockedPackage = JSON.parse(locked.content);
+    } catch {
+      // Preserve malformed source so validation can request bounded repair.
+    }
     if (
-      lockedPackage.dependencies?.["@tanstack/react-start"] ||
-      lockedPackage.devDependencies?.["@tanstack/react-start"]
+      lockedPackage?.dependencies?.["@tanstack/react-start"] ||
+      lockedPackage?.devDependencies?.["@tanstack/react-start"]
     ) {
       normalized = applyControlledTanStackInfrastructure(normalized, options.brand);
       normalized = ensureTanStackEsm(normalized);

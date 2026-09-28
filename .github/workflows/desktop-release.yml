@@ -53,6 +53,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Deterministic generation-contract gate
+        run: npm run verify:generation-contract
+
       # The desktop app is a thin shell that loads the hosted web app, so no
       # Next.js build is bundled — electron-builder only packages electron/** +
       # icons (see `files` in electron-builder.yml).

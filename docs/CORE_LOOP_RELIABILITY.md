@@ -106,12 +106,24 @@ LifeMarkAI to become ready, runs 50 attempts, writes the report, and stops Vite:
 npm run verify:core-loop:one-flow
 ```
 
-To enforce the required order in one command—one complete smoke run, followed
-only on success by exactly 50 attempts—run:
+To enforce the required order in one command—deterministic generation-contract
+fixtures, one complete smoke run, then exactly 50 attempts, each starting only
+after the previous phase passes—run:
 
 ```bash
 npm run verify:core-loop:release
 ```
+
+The fixture gate also runs independently in CI and before desktop release
+packaging via `npm run verify:generation-contract`. It checks each fixture's
+declared `expectFirstBoot` value, exits nonzero on any mismatch, and prints
+failure families, fixture IDs, expected/actual outcomes, and defect clusters.
+Expected failures are coverage, not release failures. These are static contract
+checks with injected failure cases, not evidence of a real browser boot.
+This command needs no server, Docker, credentials, or paid model calls.
+Live architect experiments remain manual opt-ins; `--live` is rejected in CI
+and when combined with the release gate's `--check` flag. The paid core-loop
+smoke/50-run phases remain outside CI.
 
 For diagnosis, the smoke phase remains available by itself:
 
@@ -153,7 +165,7 @@ Sequence that avoids paying for a broken harness:
 git pull
 npm ci                     # not `npm install`
 npm run verify:core-loop:smoke     # 1 attempt, proves the whole path
-npm run verify:core-loop:release   # smoke again, then the 50-run gate
+npm run verify:core-loop:release   # deterministic contract gate, smoke, then the 50-run gate
 ```
 
 If `npm ci` leaves Rolldown's Linux binding missing — the runner checks for it

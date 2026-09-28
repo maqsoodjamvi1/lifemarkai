@@ -20,6 +20,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Deterministic generation-contract gate
+        run: npm run verify:generation-contract
+
       - name: Type check
         run: npm run type-check
 

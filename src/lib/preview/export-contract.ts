@@ -175,6 +175,10 @@ export function collectExports(content: string): ModuleExports {
     .replace(/(^|[^:])\/\/.*$/gm, "$1");
 
   if (/export\s+\*\s+from/.test(src)) hasStarReexport = true;
+  // Namespace re-exports expose exactly one name, not every source export.
+  for (const m of src.matchAll(/export\s+(?:type\s+)?\*\s+as\s+([\w$]+)\s+from\b/g)) {
+    names.add(m[1]);
+  }
 
   // export const/let/var NAME    (also: export const A = 1, B = 2, C = f(x, y))
   //
@@ -208,14 +212,14 @@ export function collectExports(content: string): ModuleExports {
     names.add(m[1]);
   }
   // export { A, B as C, default as D }  — including re-export form `export { x } from '…'`
-  for (const m of src.matchAll(/export\s*\{([^}]*)\}/g)) {
+  for (const m of src.matchAll(/export\s*(?:type\s+)?\{([^}]*)\}/g)) {
     for (const raw of m[1].split(",")) {
       const piece = raw.trim();
       if (!piece) continue;
       // "A as B" exports B; "A" exports A
       const asMatch = piece.match(/(?:[\w$]+)\s+as\s+([\w$]+)/);
       const name = asMatch ? asMatch[1] : piece.replace(/^type\s+/, "").trim();
-      if (name && name !== "default") names.add(name);
+      if (name) names.add(name);
     }
   }
   if (/export\s+default\b/.test(src)) names.add("default");
