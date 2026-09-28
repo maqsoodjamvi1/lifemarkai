@@ -14,6 +14,7 @@
  * module stays DB-agnostic and yields events so it is unit-testable.
  */
 import { generateAI } from "../generate.ts";
+import { enrichStructuralRisk } from "./structural-risk.ts";
 import type { AIMessage } from "../provider.ts";
 import { getRole,resolveTier,TEAM_ROLE_IDS } from "./roles.ts";
 import type {
@@ -319,6 +320,7 @@ export async function* runInitiative(opts: InitiativeOptions): AsyncGenerator<Ed
   }
 
   // 2) Debate high-risk decisions before execution
+  await enrichStructuralRisk(tasks, ctx.files);
   yield { type: "initiative_status", status: "debating" };
   const highRisk = tasks.filter((t) => t.risk >= DEBATE_RISK_THRESHOLD);
   for (const t of highRisk) {
