@@ -191,6 +191,30 @@ export const CONNECTOR_REGISTRY: Record<string, ConnectorSpec> = {
     requiredEnv: ["GOOGLE_MAPS_API_KEY"],
     headers: () => ({}),
   },
+  // Google Business Profile is a federated API: Google deliberately uses
+  // different allowlisted hosts for account discovery, location management,
+  // reviews/posts/media, and performance. Keep separate registry entries so
+  // connector-proxy never needs arbitrary-host forwarding.
+  google_business_profile: {
+    baseUrl: "https://mybusinessaccountmanagement.googleapis.com/v1",
+    requiredEnv: ["GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN}` }),
+  },
+  google_business_information: {
+    baseUrl: "https://mybusinessbusinessinformation.googleapis.com/v1",
+    requiredEnv: ["GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN}` }),
+  },
+  google_business_engagement: {
+    baseUrl: "https://mybusiness.googleapis.com/v4",
+    requiredEnv: ["GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN}` }),
+  },
+  google_business_performance: {
+    baseUrl: "https://businessprofileperformance.googleapis.com/v1",
+    requiredEnv: ["GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN}` }),
+  },
   snowflake: {
     // Account-scoped SQL API, e.g. https://<account>.snowflakecomputing.com
     // Normalised like the Databricks entry: a user who pastes the bare host
