@@ -438,6 +438,27 @@ export const CONNECTORS: Connector[] = [
     oauthFlow: false,
   },
   {
+    id: "google_business_profile",
+    name: "Google Business Profile",
+    description: "Manage locations, reviews, posts, photos, and performance metrics",
+    category: "Productivity",
+    emoji: "🏪",
+    color: "bg-blue-500/20 text-blue-700 dark:text-blue-300",
+    fields: [
+      {
+        key: "GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN",
+        label: "OAuth Access Token",
+        placeholder: "ya29.…",
+        secret: true,
+        helpUrl: "https://developers.google.com/my-business/content/implement-oauth",
+      },
+    ],
+    docsUrl: "https://developers.google.com/my-business",
+    // Manual token is intentional for the first guarded release. A managed
+    // refresh-token flow follows only after Google's GBP API access approval.
+    oauthFlow: false,
+  },
+  {
     id: "google_search_console",
     name: "Google Search Console",
     description: "Verify domains, submit sitemaps, read search analytics",
