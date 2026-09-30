@@ -3190,7 +3190,12 @@ function ChatPanelImpl({
      * anything had happened at all. That is the "nothing happens when I hit
      * send" report. Keep `tempUserMsg`, and put the explanation under it.
      */
-    const failInChat = (input: { status?: number; rawError?: string | null }) => {
+    const failInChat = (input: {
+      status?: number;
+      rawError?: string | null;
+      requestId?: string | null;
+      failureClass?: "request" | "generation" | "connection" | "verification" | null;
+    }) => {
       const described = describeAiFailure(input);
       const errMsg: Message = {
         id: `ai-error-${Date.now()}`,
@@ -3367,7 +3372,9 @@ ${(f.content ?? "").slice(0, 8000)}
           }),
         });
 
-        if (!res.ok || !res.body) {
+        const requestId = res.headers.get("x-lifemark-request-id");
+
+      if (!res.ok || !res.body) {
           // The agent route now rejects informational questions (409) rather than
           // burning a 30-iteration run on something needing no edits. Silently
           // re-send in chat mode — the user asked a question, they should just
@@ -3707,6 +3714,8 @@ ${(f.content ?? "").slice(0, 8000)}
         const described = failInChat({
           status: res.status,
           rawError: await readErrorBody(res),
+          requestId,
+          failureClass: "request",
         });
         if (res.status === 402 && !described.isPlatformFault) {
           onCreditsUpdate(0);
@@ -4430,7 +4439,11 @@ ${(f.content ?? "").slice(0, 8000)}
           // failInChat) is unreachable for this frame shape, so call
           // failInChat directly here instead.
           onError: (err) => {
-            failInChat({ rawError: err.message });
+            failInChat({
+              rawError: err.message,
+              requestId,
+              failureClass: "generation",
+            });
           },
         },
       });
