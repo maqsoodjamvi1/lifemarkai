@@ -18,6 +18,8 @@ The Business Profile API is federated across separate Google hosts. LifeMarkAI t
 - Only manage profiles owned by the customer or profiles the customer has explicitly authorized the agency to manage.
 - Never accept an arbitrary upstream host from generated apps.
 - Store the OAuth token server-side in the project's encrypted environment file.
+- Enforce `GET` as the only upstream method in both the generated-app proxy and
+  the agent connector runtime. A UI convention is not a security boundary.
 - Start with a manually supplied short-lived access token. Do not advertise one-click OAuth until Google approves the project for Business Profile API access and refresh-token handling is implemented.
 - Treat HTTP 401/403 as an expired or insufficient-scope connection, not as an app-generation failure.
 - Treat HTTP 429 as a bounded connector failure and surface a retry time; do not start an AI repair loop.
@@ -34,6 +36,10 @@ Build one reusable local-business dashboard template with:
 5. An audit trail showing who approved each external write.
 
 Write actions require an explicit approval step. Read-only dashboards may refresh automatically.
+
+The initial connector release is read-only. Review replies, profile edits, and
+other external writes remain unavailable until approval, execution, and audit
+are enforced and tested as one transaction boundary.
 
 ## Packaging hypothesis
 

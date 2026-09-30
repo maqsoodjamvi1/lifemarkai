@@ -17,8 +17,10 @@
  */
 import {
 CONNECTOR_REGISTRY,
+connectorAllowsMethod,
 resolveConnectorBaseUrl,
 } from "@/lib/integrations/connector-registry";
+import type { ConnectorMethod } from "@/lib/integrations/connector-registry";
 import { ENV_FILE_PATH,parseEnvFile } from "../project/env-file.ts";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -124,6 +126,13 @@ export async function executeConnectorCall(
   const method = (args.method ?? "GET").toUpperCase();
   if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
     return { ok: false, result: `Unsupported method ${method}` };
+  }
+  if (!connectorAllowsMethod(spec, method as ConnectorMethod)) {
+    return {
+      ok: false,
+      status: 405,
+      result: `Connector "${args.connector}" does not allow ${method}. Allowed methods: ${spec.allowedMethods?.join(", ") ?? "none"}`,
+    };
   }
 
   // Approval gate — writes only
