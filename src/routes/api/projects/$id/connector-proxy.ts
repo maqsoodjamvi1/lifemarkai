@@ -3,8 +3,10 @@ import { createClient,createAdminClient } from "@/lib/supabase/server";
 import { ENV_FILE_PATH,parseEnvFile } from "@/lib/project/env-file";
 import {
 CONNECTOR_REGISTRY,
+connectorAllowsMethod,
 resolveConnectorBaseUrl,
 } from "@/lib/integrations/connector-registry";
+import type { ConnectorMethod } from "@/lib/integrations/connector-registry";
 import { getAppUserConnection,ensureFreshToken } from "@/lib/integrations/app-user-connections";
 import { rateLimit } from "@/lib/rate-limit";
 
@@ -141,6 +143,14 @@ async function handlePOST(req: Request, params: any) {
   const method = (body.method ?? "GET").toUpperCase();
   if (!["GET", "POST", "PUT", "PATCH", "DELETE"].includes(method)) {
     return Response.json({ error: "Unsupported method" }, { status: 400, headers });
+  }
+  if (!connectorAllowsMethod(spec, method as ConnectorMethod)) {
+    return Response.json(
+      {
+        error: `Connector "${body.connector}" does not allow ${method}. Allowed methods: ${spec.allowedMethods?.join(", ") ?? "none"}`,
+      },
+      { status: 405, headers: { ...headers, Allow: spec.allowedMethods?.join(", ") ?? "" } },
+    );
   }
 
   // ── App-user connector (per-end-user OAuth, migration 154) ──────────────────

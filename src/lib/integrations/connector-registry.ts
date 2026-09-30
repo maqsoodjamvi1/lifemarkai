@@ -13,11 +13,18 @@
 export interface ConnectorSpec {
   /** API base URL — forwarded paths are appended to this */
   baseUrl: string | ((env: Record<string, string>) => string);
+  /**
+   * Optional upstream HTTP-method allowlist. Omit only when the connector is
+   * intentionally allowed to use every method supported by the gateway.
+   */
+  allowedMethods?: readonly ConnectorMethod[];
   /** Env keys that must be present for the connector to work */
   requiredEnv: string[];
   /** Build auth/extra headers from env */
   headers: (env: Record<string, string>) => Record<string, string>;
 }
+
+export type ConnectorMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 function basic(user: string, pass: string): string {
   return "Basic " + Buffer.from(`${user}:${pass}`).toString("base64");
@@ -190,6 +197,34 @@ export const CONNECTOR_REGISTRY: Record<string, ConnectorSpec> = {
     baseUrl: "https://maps.googleapis.com/maps/api",
     requiredEnv: ["GOOGLE_MAPS_API_KEY"],
     headers: () => ({}),
+  },
+  // Google Business Profile is a federated API: Google deliberately uses
+  // different allowlisted hosts for account discovery, location management,
+  // reviews/posts/media, and performance. Keep separate registry entries so
+  // connector-proxy never needs arbitrary-host forwarding.
+  google_business_profile: {
+    baseUrl: "https://mybusinessaccountmanagement.googleapis.com/v1",
+    allowedMethods: ["GET"],
+    requiredEnv: ["GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN}` }),
+  },
+  google_business_information: {
+    baseUrl: "https://mybusinessbusinessinformation.googleapis.com/v1",
+    allowedMethods: ["GET"],
+    requiredEnv: ["GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN}` }),
+  },
+  google_business_engagement: {
+    baseUrl: "https://mybusiness.googleapis.com/v4",
+    allowedMethods: ["GET"],
+    requiredEnv: ["GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN}` }),
+  },
+  google_business_performance: {
+    baseUrl: "https://businessprofileperformance.googleapis.com/v1",
+    allowedMethods: ["GET"],
+    requiredEnv: ["GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN"],
+    headers: (env) => ({ Authorization: `Bearer ${env.GOOGLE_BUSINESS_PROFILE_ACCESS_TOKEN}` }),
   },
   snowflake: {
     // Account-scoped SQL API, e.g. https://<account>.snowflakecomputing.com
@@ -1299,4 +1334,8 @@ export const CONNECTOR_REGISTRY: Record<string, ConnectorSpec> = {
 
 export function resolveConnectorBaseUrl(spec: ConnectorSpec, env: Record<string, string>): string {
   return typeof spec.baseUrl === "function" ? spec.baseUrl(env) : spec.baseUrl;
+}
+
+export function connectorAllowsMethod(spec: ConnectorSpec, method: ConnectorMethod): boolean {
+  return !spec.allowedMethods || spec.allowedMethods.includes(method);
 }
