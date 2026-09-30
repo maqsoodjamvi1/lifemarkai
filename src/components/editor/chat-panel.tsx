@@ -3372,7 +3372,7 @@ ${(f.content ?? "").slice(0, 8000)}
           }),
         });
 
-      if (!res.ok || !res.body) {
+        if (!res.ok || !res.body) {
           // The agent route now rejects informational questions (409) rather than
           // burning a 30-iteration run on something needing no edits. Silently
           // re-send in chat mode — the user asked a question, they should just
