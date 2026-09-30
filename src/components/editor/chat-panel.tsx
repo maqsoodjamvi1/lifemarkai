@@ -3372,8 +3372,6 @@ ${(f.content ?? "").slice(0, 8000)}
           }),
         });
 
-        const requestId = res.headers.get("x-lifemark-request-id");
-
       if (!res.ok || !res.body) {
           // The agent route now rejects informational questions (409) rather than
           // burning a 30-iteration run on something needing no edits. Silently
@@ -3702,6 +3700,8 @@ ${(f.content ?? "").slice(0, 8000)}
             : {}),
         }),
       });
+
+      const requestId = res.headers.get("x-lifemark-request-id");
 
       if (!res.ok || !res.body) {
         // Every non-2xx lands here, including the ones that used to fall
