@@ -99,6 +99,17 @@ describe("describeAiFailure", () => {
     }
   });
 
+  it("surfaces a safe failure class and request id for log correlation", () => {
+    const d = describeAiFailure({
+      status: 500,
+      rawError: "provider request failed",
+      failureClass: "generation",
+      requestId: "req_abc123",
+    });
+    assert.match(d.chatMarkdown, /Failure class: generation/);
+    assert.match(d.chatMarkdown, /Request ID: req_abc123/);
+  });
+
   it("falls back to something usable with no status and no text", () => {
     const d = describeAiFailure({});
     assert.ok(d.title);
