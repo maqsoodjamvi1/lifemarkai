@@ -14,6 +14,7 @@ import { getCoreLoopPolicy, pinCoreLoopCampaignAiModel } from "../src/lib/reliab
 import { assertCoreLoopApiRequest } from "../src/lib/reliability/core-loop-api-surface.ts";
 import { createCampaignCookieProvider } from "../src/lib/reliability/campaign-session.ts";
 import { verifyPublishedPage } from "../src/lib/reliability/verify-published-page.ts";
+import { deriveRequirementAcceptancePack } from "../src/lib/ai/requirement-acceptance.ts";
 
 function loadEnv(path = ".env.local") {
   try {
@@ -576,6 +577,10 @@ async function main() {
       if (!attempt.generationPassed) throw new Error("generation completed without files");
 
       stage = "preview";
+      // Created by the evaluator after generation and never exposed to the
+      // generator or repair prompt. This catches healthy but incomplete apps.
+      const acceptancePack = deriveRequirementAcceptancePack(prompt);
+      attempt.acceptancePackId = acceptancePack.id;
       const remotePreview = await startRemotePreview(project.id, cookie);
       sandboxId = remotePreview.sandboxId;
       if (CORE_LOOP_POLICY.previewStrategy !== "server-verified") {
@@ -601,14 +606,19 @@ async function main() {
         () =>
           jsonFetch<{
             ok?: boolean;
+            workflowOk?: boolean;
+            nearGreen?: boolean;
+            acceptance?: { passed: boolean; passedCount: number; totalCount: number } | null;
             checks?: Array<{ name: string; pass: boolean; detail?: string }>;
           }>(`/api/projects/${project.id}/preview-verify`, cookie, {
             method: "POST",
-            body: JSON.stringify({ previewUrl: remotePreview.previewUrl }),
+            body: JSON.stringify({ previewUrl: remotePreview.previewUrl, acceptancePack }),
           }),
         3,
       );
       attempt.previewPassed = preview.ok === true;
+      attempt.nearGreen = preview.nearGreen === true;
+      attempt.acceptancePassed = preview.acceptance?.passed ?? false;
       if (!attempt.previewPassed) {
         const failed = preview.checks
           ?.filter((check) => !check.pass)
