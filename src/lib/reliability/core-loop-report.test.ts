@@ -15,6 +15,8 @@ const base: CoreLoopAttempt = {
   generationMs: 1_000,
   generationPassed: true,
   previewPassed: true,
+  acceptancePassed: true,
+  nearGreen: false,
   deploymentPassed: true,
   publicUrlPassed: true,
   automaticRepairUsed: false,
@@ -49,6 +51,8 @@ test("summarizes the required reliability and cost metrics", () => {
 
   assert.equal(summary.generationSuccessRate, 1);
   assert.equal(summary.previewSuccessRate, 0.5);
+  assert.equal(summary.acceptanceSuccessRate, 1);
+  assert.equal(summary.nearGreenRate, 0);
   assert.equal(summary.deploymentSuccessRate, 0.5);
   assert.equal(summary.automaticRepairSuccessRate, 0);
   assert.equal(summary.manualInterventionRate, 0.5);
@@ -57,6 +61,18 @@ test("summarizes the required reliability and cost metrics", () => {
   assert.equal(summary.averageAiCostCentsPerProject, 6);
   assert.equal(summary.averageSandboxCostCentsPerProject, 2);
   assert.equal(summary.costTelemetryComplete, true);
+});
+
+test("near-green attempts block release even when infrastructure checks pass", () => {
+  const summary = summarizeCoreLoop(Array.from({ length: 50 }, (_, index) => ({
+    ...base,
+    index: index + 1,
+    nearGreen: index === 0,
+    acceptancePassed: index !== 0,
+  })));
+  const gate = assessCoreLoopReleaseGate(summary, true);
+  assert.equal(gate.passed, false);
+  assert.match(gate.reasons.join(" "), /near-green rate must be zero/);
 });
 
 test("does not pretend missing cost telemetry is zero", () => {
