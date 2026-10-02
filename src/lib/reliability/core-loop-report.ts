@@ -15,6 +15,10 @@ export interface CoreLoopAttempt {
   generationMs?: number;
   generationPassed: boolean;
   previewPassed: boolean;
+  /** The five-step workflow passed but withheld requirements did not. */
+  nearGreen?: boolean;
+  acceptancePassed?: boolean;
+  acceptancePackId?: string;
   deploymentPassed: boolean;
   publicUrlPassed: boolean;
   automaticRepairUsed: boolean;
@@ -35,6 +39,8 @@ export interface CoreLoopSummary {
   attempts: number;
   generationSuccessRate: number;
   previewSuccessRate: number;
+  acceptanceSuccessRate: number;
+  nearGreenRate: number;
   deploymentSuccessRate: number;
   publicUrlSuccessRate: number;
   automaticRepairSuccessRate: number | null;
@@ -60,6 +66,8 @@ export function summarizeCoreLoop(attempts: CoreLoopAttempt[]): CoreLoopSummary 
     attempts: attempts.length,
     generationSuccessRate: rate(attempts.filter((attempt) => attempt.generationPassed).length, attempts.length),
     previewSuccessRate: rate(attempts.filter((attempt) => attempt.previewPassed).length, attempts.length),
+    acceptanceSuccessRate: rate(attempts.filter((attempt) => attempt.acceptancePassed === true).length, attempts.length),
+    nearGreenRate: rate(attempts.filter((attempt) => attempt.nearGreen === true).length, attempts.length),
     deploymentSuccessRate: rate(attempts.filter((attempt) => attempt.deploymentPassed).length, attempts.length),
     publicUrlSuccessRate: rate(attempts.filter((attempt) => attempt.publicUrlPassed).length, attempts.length),
     automaticRepairSuccessRate: repairs.length === 0
@@ -96,6 +104,8 @@ export function assessCoreLoopReleaseGate(
   if (!registrationPassed) reasons.push("fresh registration and credit grant were not proven");
   if (summary.generationSuccessRate < 0.95) reasons.push("generation success is below 95%");
   if (summary.previewSuccessRate < 0.95) reasons.push("preview success is below 95%");
+  if (summary.acceptanceSuccessRate < 0.95) reasons.push("withheld requirement acceptance is below 95%");
+  if (summary.nearGreenRate > 0) reasons.push("false/near-green rate must be zero");
   if (summary.deploymentSuccessRate < 0.95) reasons.push("deployment success is below 95%");
   if (summary.publicUrlSuccessRate < 0.95) reasons.push("public URL success is below 95%");
   if (summary.manualInterventionRate > 0.05) reasons.push("manual intervention exceeds 5%");
