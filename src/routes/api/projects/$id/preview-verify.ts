@@ -144,6 +144,7 @@ async function handlePOST(req: Request, params: any) {
           }]
         : []),
       {
+        name: liveLabel,
         pass: runtime.passed,
         detail: runtime.passed
           ? previewUrl
