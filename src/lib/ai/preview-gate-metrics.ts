@@ -13,6 +13,7 @@ export interface PreviewGateSample {
   firstBootSuccess: boolean;
   repairAccepted: boolean | null;
   falseGreen: boolean;
+  nearGreen?: boolean;
   durationMs: number;
   costCredits: number;
 }
@@ -22,6 +23,7 @@ export interface PreviewGateWindowStats {
   firstBootSuccessRate: number;
   repairAcceptanceRate: number;
   falseGreenRate: number;
+  nearGreenRate: number;
   medianDurationMs: number;
   totalCostCredits: number;
   meanCostCredits: number;
@@ -39,6 +41,7 @@ export function recordPreviewGateSample(sample: Omit<PreviewGateSample, "at"> & 
     firstBootSuccess: sample.firstBootSuccess,
     repairAccepted: sample.repairAccepted,
     falseGreen: sample.falseGreen,
+    nearGreen: sample.nearGreen === true,
     durationMs: Math.max(0, sample.durationMs),
     costCredits: Math.max(0, sample.costCredits),
   });
@@ -49,6 +52,7 @@ export function recordPreviewGateSample(sample: Omit<PreviewGateSample, "at"> & 
     firstBootSuccessRate: stats.firstBootSuccessRate,
     repairAcceptanceRate: stats.repairAcceptanceRate,
     falseGreenRate: stats.falseGreenRate,
+    nearGreenRate: stats.nearGreenRate,
     medianDurationMs: stats.medianDurationMs,
     totalCostCredits: stats.totalCostCredits,
   });
@@ -70,6 +74,7 @@ export function previewGateWindowStats(): PreviewGateWindowStats {
       firstBootSuccessRate: 0,
       repairAcceptanceRate: 0,
       falseGreenRate: 0,
+      nearGreenRate: 0,
       medianDurationMs: 0,
       totalCostCredits: 0,
       meanCostCredits: 0,
@@ -79,12 +84,14 @@ export function previewGateWindowStats(): PreviewGateWindowStats {
   const firstBoot = samples.filter((sample) => sample.firstBootSuccess).length;
   const accepted = repairs.filter((sample) => sample.repairAccepted === true).length;
   const falseGreen = samples.filter((sample) => sample.falseGreen).length;
+  const nearGreen = samples.filter((sample) => sample.nearGreen === true).length;
   const totalCostCredits = samples.reduce((sum, sample) => sum + sample.costCredits, 0);
   return {
     n,
     firstBootSuccessRate: firstBoot / n,
     repairAcceptanceRate: repairs.length === 0 ? 0 : accepted / repairs.length,
     falseGreenRate: falseGreen / n,
+    nearGreenRate: nearGreen / n,
     medianDurationMs: median(samples.map((sample) => sample.durationMs)),
     totalCostCredits,
     meanCostCredits: totalCostCredits / n,
