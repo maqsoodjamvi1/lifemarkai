@@ -168,6 +168,7 @@ import { Route as ApiSkillsImportRouteImport } from './routes/api/skills/import'
 import { Route as ApiSnippetsIdRouteImport } from './routes/api/snippets/$id'
 import { Route as ApiTeamsIdRouteImport } from './routes/api/teams/$id'
 import { Route as ApiTeamsTransferRouteImport } from './routes/api/teams/transfer'
+import { Route as ApiTelemetryClientRouteImport } from './routes/api/telemetry/client'
 import { Route as ApiTelemetryPanelOpenRouteImport } from './routes/api/telemetry/panel-open'
 import { Route as ApiTestsRunRouteImport } from './routes/api/tests/run'
 import { Route as ApiV1ProjectsRouteImport } from './routes/api/v1/projects'
@@ -183,6 +184,8 @@ import { Route as DashboardDashboardSettingsWorkspaceKnowledgeRouteImport } from
 import { Route as ApiAiAnalyzeCapabilitiesRouteImport } from './routes/api/ai/analyze/capabilities'
 import { Route as ApiAiGenerateEmailTestRouteImport } from './routes/api/ai/generate-email/test'
 import { Route as ApiAppsIdMcpRouteImport } from './routes/api/apps/$id/mcp'
+import { Route as ApiBuildRunsIdCancelRouteImport } from './routes/api/build-runs/$id/cancel'
+import { Route as ApiBuildRunsIdEventsRouteImport } from './routes/api/build-runs/$id/events'
 import { Route as ApiEditorIntelligenceInitiativeIdRouteImport } from './routes/api/editor-intelligence/initiative/$id'
 import { Route as ApiGatewayConnectorSplatRouteImport } from './routes/api/gateway/$connector/$'
 import { Route as ApiIntegrationsOpenaiBuildRouteImport } from './routes/api/integrations/openai/build'
@@ -1083,6 +1086,11 @@ const ApiTeamsTransferRoute = ApiTeamsTransferRouteImport.update({
   path: '/transfer',
   getParentRoute: () => ApiTeamsRoute,
 } as any)
+const ApiTelemetryClientRoute = ApiTelemetryClientRouteImport.update({
+  id: '/api/telemetry/client',
+  path: '/api/telemetry/client',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiTelemetryPanelOpenRoute = ApiTelemetryPanelOpenRouteImport.update({
   id: '/api/telemetry/panel-open',
   path: '/api/telemetry/panel-open',
@@ -1163,6 +1171,16 @@ const ApiAiGenerateEmailTestRoute = ApiAiGenerateEmailTestRouteImport.update({
 const ApiAppsIdMcpRoute = ApiAppsIdMcpRouteImport.update({
   id: '/api/apps/$id/mcp',
   path: '/api/apps/$id/mcp',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiBuildRunsIdCancelRoute = ApiBuildRunsIdCancelRouteImport.update({
+  id: '/api/build-runs/$id/cancel',
+  path: '/api/build-runs/$id/cancel',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiBuildRunsIdEventsRoute = ApiBuildRunsIdEventsRouteImport.update({
+  id: '/api/build-runs/$id/events',
+  path: '/api/build-runs/$id/events',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiEditorIntelligenceInitiativeIdRoute =
@@ -1812,6 +1830,7 @@ export interface FileRoutesByFullPath {
   '/api/snippets/$id': typeof ApiSnippetsIdRoute
   '/api/teams/$id': typeof ApiTeamsIdRouteWithChildren
   '/api/teams/transfer': typeof ApiTeamsTransferRoute
+  '/api/telemetry/client': typeof ApiTelemetryClientRoute
   '/api/telemetry/panel-open': typeof ApiTelemetryPanelOpenRoute
   '/api/tests/run': typeof ApiTestsRunRoute
   '/api/v1/projects': typeof ApiV1ProjectsRouteWithChildren
@@ -1827,6 +1846,8 @@ export interface FileRoutesByFullPath {
   '/api/ai/analyze/capabilities': typeof ApiAiAnalyzeCapabilitiesRoute
   '/api/ai/generate-email/test': typeof ApiAiGenerateEmailTestRoute
   '/api/apps/$id/mcp': typeof ApiAppsIdMcpRoute
+  '/api/build-runs/$id/cancel': typeof ApiBuildRunsIdCancelRoute
+  '/api/build-runs/$id/events': typeof ApiBuildRunsIdEventsRoute
   '/api/editor-intelligence/initiative/$id': typeof ApiEditorIntelligenceInitiativeIdRoute
   '/api/gateway/$connector/$': typeof ApiGatewayConnectorSplatRoute
   '/api/integrations/openai/build': typeof ApiIntegrationsOpenaiBuildRoute
@@ -2076,6 +2097,7 @@ export interface FileRoutesByTo {
   '/api/snippets/$id': typeof ApiSnippetsIdRoute
   '/api/teams/$id': typeof ApiTeamsIdRouteWithChildren
   '/api/teams/transfer': typeof ApiTeamsTransferRoute
+  '/api/telemetry/client': typeof ApiTelemetryClientRoute
   '/api/telemetry/panel-open': typeof ApiTelemetryPanelOpenRoute
   '/api/tests/run': typeof ApiTestsRunRoute
   '/api/v1/projects': typeof ApiV1ProjectsRouteWithChildren
@@ -2091,6 +2113,8 @@ export interface FileRoutesByTo {
   '/api/ai/analyze/capabilities': typeof ApiAiAnalyzeCapabilitiesRoute
   '/api/ai/generate-email/test': typeof ApiAiGenerateEmailTestRoute
   '/api/apps/$id/mcp': typeof ApiAppsIdMcpRoute
+  '/api/build-runs/$id/cancel': typeof ApiBuildRunsIdCancelRoute
+  '/api/build-runs/$id/events': typeof ApiBuildRunsIdEventsRoute
   '/api/editor-intelligence/initiative/$id': typeof ApiEditorIntelligenceInitiativeIdRoute
   '/api/gateway/$connector/$': typeof ApiGatewayConnectorSplatRoute
   '/api/integrations/openai/build': typeof ApiIntegrationsOpenaiBuildRoute
@@ -2342,6 +2366,7 @@ export interface FileRoutesById {
   '/api/snippets/$id': typeof ApiSnippetsIdRoute
   '/api/teams/$id': typeof ApiTeamsIdRouteWithChildren
   '/api/teams/transfer': typeof ApiTeamsTransferRoute
+  '/api/telemetry/client': typeof ApiTelemetryClientRoute
   '/api/telemetry/panel-open': typeof ApiTelemetryPanelOpenRoute
   '/api/tests/run': typeof ApiTestsRunRoute
   '/api/v1/projects': typeof ApiV1ProjectsRouteWithChildren
@@ -2357,6 +2382,8 @@ export interface FileRoutesById {
   '/api/ai/analyze/capabilities': typeof ApiAiAnalyzeCapabilitiesRoute
   '/api/ai/generate-email/test': typeof ApiAiGenerateEmailTestRoute
   '/api/apps/$id/mcp': typeof ApiAppsIdMcpRoute
+  '/api/build-runs/$id/cancel': typeof ApiBuildRunsIdCancelRoute
+  '/api/build-runs/$id/events': typeof ApiBuildRunsIdEventsRoute
   '/api/editor-intelligence/initiative/$id': typeof ApiEditorIntelligenceInitiativeIdRoute
   '/api/gateway/$connector/$': typeof ApiGatewayConnectorSplatRoute
   '/api/integrations/openai/build': typeof ApiIntegrationsOpenaiBuildRoute
@@ -2608,6 +2635,7 @@ export interface FileRouteTypes {
     | '/api/snippets/$id'
     | '/api/teams/$id'
     | '/api/teams/transfer'
+    | '/api/telemetry/client'
     | '/api/telemetry/panel-open'
     | '/api/tests/run'
     | '/api/v1/projects'
@@ -2623,6 +2651,8 @@ export interface FileRouteTypes {
     | '/api/ai/analyze/capabilities'
     | '/api/ai/generate-email/test'
     | '/api/apps/$id/mcp'
+    | '/api/build-runs/$id/cancel'
+    | '/api/build-runs/$id/events'
     | '/api/editor-intelligence/initiative/$id'
     | '/api/gateway/$connector/$'
     | '/api/integrations/openai/build'
@@ -2872,6 +2902,7 @@ export interface FileRouteTypes {
     | '/api/snippets/$id'
     | '/api/teams/$id'
     | '/api/teams/transfer'
+    | '/api/telemetry/client'
     | '/api/telemetry/panel-open'
     | '/api/tests/run'
     | '/api/v1/projects'
@@ -2887,6 +2918,8 @@ export interface FileRouteTypes {
     | '/api/ai/analyze/capabilities'
     | '/api/ai/generate-email/test'
     | '/api/apps/$id/mcp'
+    | '/api/build-runs/$id/cancel'
+    | '/api/build-runs/$id/events'
     | '/api/editor-intelligence/initiative/$id'
     | '/api/gateway/$connector/$'
     | '/api/integrations/openai/build'
@@ -3137,6 +3170,7 @@ export interface FileRouteTypes {
     | '/api/snippets/$id'
     | '/api/teams/$id'
     | '/api/teams/transfer'
+    | '/api/telemetry/client'
     | '/api/telemetry/panel-open'
     | '/api/tests/run'
     | '/api/v1/projects'
@@ -3152,6 +3186,8 @@ export interface FileRouteTypes {
     | '/api/ai/analyze/capabilities'
     | '/api/ai/generate-email/test'
     | '/api/apps/$id/mcp'
+    | '/api/build-runs/$id/cancel'
+    | '/api/build-runs/$id/events'
     | '/api/editor-intelligence/initiative/$id'
     | '/api/gateway/$connector/$'
     | '/api/integrations/openai/build'
@@ -3369,6 +3405,7 @@ export interface RootRouteChildren {
   ApiSecurityLeakedKeyRoute: typeof ApiSecurityLeakedKeyRoute
   ApiSecurityScanRoute: typeof ApiSecurityScanRouteWithChildren
   ApiSecurityScheduledScanRoute: typeof ApiSecurityScheduledScanRoute
+  ApiTelemetryClientRoute: typeof ApiTelemetryClientRoute
   ApiTelemetryPanelOpenRoute: typeof ApiTelemetryPanelOpenRoute
   ApiTestsRunRoute: typeof ApiTestsRunRoute
   ApiV1ProjectsRoute: typeof ApiV1ProjectsRouteWithChildren
@@ -3376,6 +3413,8 @@ export interface RootRouteChildren {
   ApiWorkspaceIdentityRoute: typeof ApiWorkspaceIdentityRoute
   PUsernameProjectSlugRoute: typeof PUsernameProjectSlugRoute
   ApiAppsIdMcpRoute: typeof ApiAppsIdMcpRoute
+  ApiBuildRunsIdCancelRoute: typeof ApiBuildRunsIdCancelRoute
+  ApiBuildRunsIdEventsRoute: typeof ApiBuildRunsIdEventsRoute
   ApiGatewayConnectorSplatRoute: typeof ApiGatewayConnectorSplatRoute
   ApiIntegrationsOpenaiBuildRoute: typeof ApiIntegrationsOpenaiBuildRoute
   ApiIntegrationsOpenaiOpenapiDotjsonRoute: typeof ApiIntegrationsOpenaiOpenapiDotjsonRoute
@@ -4504,6 +4543,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTeamsTransferRouteImport
       parentRoute: typeof ApiTeamsRoute
     }
+    '/api/telemetry/client': {
+      id: '/api/telemetry/client'
+      path: '/api/telemetry/client'
+      fullPath: '/api/telemetry/client'
+      preLoaderRoute: typeof ApiTelemetryClientRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/telemetry/panel-open': {
       id: '/api/telemetry/panel-open'
       path: '/api/telemetry/panel-open'
@@ -4607,6 +4653,20 @@ declare module '@tanstack/react-router' {
       path: '/api/apps/$id/mcp'
       fullPath: '/api/apps/$id/mcp'
       preLoaderRoute: typeof ApiAppsIdMcpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/build-runs/$id/cancel': {
+      id: '/api/build-runs/$id/cancel'
+      path: '/api/build-runs/$id/cancel'
+      fullPath: '/api/build-runs/$id/cancel'
+      preLoaderRoute: typeof ApiBuildRunsIdCancelRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/build-runs/$id/events': {
+      id: '/api/build-runs/$id/events'
+      path: '/api/build-runs/$id/events'
+      fullPath: '/api/build-runs/$id/events'
+      preLoaderRoute: typeof ApiBuildRunsIdEventsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/editor-intelligence/initiative/$id': {
@@ -5936,6 +5996,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiSecurityLeakedKeyRoute: ApiSecurityLeakedKeyRoute,
   ApiSecurityScanRoute: ApiSecurityScanRouteWithChildren,
   ApiSecurityScheduledScanRoute: ApiSecurityScheduledScanRoute,
+  ApiTelemetryClientRoute: ApiTelemetryClientRoute,
   ApiTelemetryPanelOpenRoute: ApiTelemetryPanelOpenRoute,
   ApiTestsRunRoute: ApiTestsRunRoute,
   ApiV1ProjectsRoute: ApiV1ProjectsRouteWithChildren,
@@ -5943,6 +6004,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiWorkspaceIdentityRoute: ApiWorkspaceIdentityRoute,
   PUsernameProjectSlugRoute: PUsernameProjectSlugRoute,
   ApiAppsIdMcpRoute: ApiAppsIdMcpRoute,
+  ApiBuildRunsIdCancelRoute: ApiBuildRunsIdCancelRoute,
+  ApiBuildRunsIdEventsRoute: ApiBuildRunsIdEventsRoute,
   ApiGatewayConnectorSplatRoute: ApiGatewayConnectorSplatRoute,
   ApiIntegrationsOpenaiBuildRoute: ApiIntegrationsOpenaiBuildRoute,
   ApiIntegrationsOpenaiOpenapiDotjsonRoute:

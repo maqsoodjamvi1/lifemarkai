@@ -1,0 +1,74 @@
+name: Core-loop release gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [agent/core-loop-reliability]
+    paths: [.github/workflows/core-loop-release.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-loop-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Verify required private configuration
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CORE_LOOP_EMAIL: ${{ secrets.CORE_LOOP_EMAIL }}
+          CORE_LOOP_PASSWORD: ${{ secrets.CORE_LOOP_PASSWORD }}
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          for name in VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY CORE_LOOP_EMAIL CORE_LOOP_PASSWORD NETLIFY_AUTH_TOKEN OPENROUTER_API_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not configured for this Actions job"
+              exit 1
+            fi
+          done
+
+      - run: npm ci
+
+      - name: Run infrastructure contracts
+        run: npm run test:infrastructure-contracts
+
+      - name: Docker daemon check
+        run: docker info --format '{{.ServerVersion}}'
+
+      - name: Smoke then 50 authenticated attempts
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          CORE_LOOP_EMAIL: ${{ secrets.CORE_LOOP_EMAIL }}
+          CORE_LOOP_PASSWORD: ${{ secrets.CORE_LOOP_PASSWORD }}
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CORE_LOOP_DEPLOY_PROVIDER: netlify
+          CORE_LOOP_REQUIRE_REGISTRATION_PROOF: 'true'
+          SANDBOX_PUBLIC_HOST: localhost
+          VITE_APP_URL: http://localhost:3001
+        run: npm run verify:core-loop:release
+
+      - name: Publish aggregate gate result
+        if: always()
+        run: |
+          if [ -f artifacts/core-loop/latest.json ]; then
+            node -e 'const r=require("./artifacts/core-loop/latest.json"); console.log(JSON.stringify({campaignStartedAt:r.campaignStartedAt,completedAt:r.completedAt,attempts:r.attempts?.length,summary:r.summary,releaseGate:r.releaseGate},null,2))' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo 'No campaign report was produced. Check the failed preflight or smoke step.' >> "$GITHUB_STEP_SUMMARY"
+          fi

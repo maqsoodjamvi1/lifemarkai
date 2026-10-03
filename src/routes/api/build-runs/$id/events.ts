@@ -32,11 +32,20 @@ export const Route = createFileRoute("/api/build-runs/$id/events")({
         const cursor = Number.isFinite(after) && after >= 0 ? Math.floor(after) : 0;
 
         // RLS scopes both queries to the caller's own runs.
-        const { data: run } = await supabase
+        const { data: runData } = await supabase
           .from("build_runs")
           .select("id, status, mode, verification_passed, failure_code, started_at, completed_at")
           .eq("id", runId)
           .maybeSingle();
+        const run = runData as {
+          id: string;
+          status: string;
+          mode: string;
+          verification_passed: boolean | null;
+          failure_code: string | null;
+          started_at: string;
+          completed_at: string | null;
+        } | null;
         if (!run) return Response.json({ error: "Not found" }, { status: 404 });
 
         const { data: events } = await supabase
@@ -50,7 +59,9 @@ export const Route = createFileRoute("/api/build-runs/$id/events")({
         return Response.json({
           run,
           events: events ?? [],
-          nextCursor: events?.length ? events[events.length - 1].id : cursor,
+          nextCursor: events?.length
+            ? (events[events.length - 1] as { id: number }).id
+            : cursor,
         });
       },
     },
