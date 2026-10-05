@@ -4382,7 +4382,11 @@ ${(f.content ?? "").slice(0, 8000)}
               // OpenRouter balance for days: every build 402'd invisibly).
               // Persist a readable in-chat error with the actual cause, and
               // keep the user's message so it can be resent.
-              failInChat({ rawError: String(data.error) });
+              failInChat({
+                rawError: String(data.error),
+                requestId,
+                failureClass: "generation",
+              });
             }
           } catch {}
         };
