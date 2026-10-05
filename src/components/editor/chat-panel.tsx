@@ -3219,6 +3219,7 @@ function ChatPanelImpl({
       return described;
     };
 
+    let requestId: string | null = null;
     try {
       // If user sent an image without a custom message (or only the auto-suggested mockup prompt),
       // prepend a strong mockup-to-code system instruction so the AI knows to reproduce the UI.
@@ -3625,7 +3626,11 @@ ${(f.content ?? "").slice(0, 8000)}
                 // message, explain the cause under it. Shares describeAiFailure
                 // with the pre-stream paths so a 402 cannot mean one thing here
                 // and something else two hundred lines away.
-                failInChat({ rawError: String(data.error) });
+                failInChat({
+                rawError: String(data.error),
+                requestId,
+                failureClass: "generation",
+              });
               }
             } catch {}
           }
@@ -3701,7 +3706,7 @@ ${(f.content ?? "").slice(0, 8000)}
         }),
       });
 
-      const requestId = res.headers.get("x-lifemark-request-id");
+      requestId = res.headers.get("x-lifemark-request-id");
 
       if (!res.ok || !res.body) {
         // Every non-2xx lands here, including the ones that used to fall
@@ -4474,6 +4479,8 @@ ${(f.content ?? "").slice(0, 8000)}
       } else {
         failInChat({
           rawError: err instanceof Error ? err.message : "The connection dropped before a reply started.",
+          requestId,
+          failureClass: "connection",
         });
       }
     } finally {
