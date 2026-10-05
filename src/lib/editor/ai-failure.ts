@@ -25,6 +25,10 @@ export interface AiFailureInput {
   status?: number;
   /** The server's error text — from a JSON body, or an SSE `{error}` payload. */
   rawError?: string | null;
+  /** Safe request identifier echoed by the server for log correlation. */
+  requestId?: string | null;
+  /** Coarse stage label; never contains provider payloads or secrets. */
+  failureClass?: "request" | "generation" | "connection" | "verification" | null;
 }
 
 export interface AiFailureDescription {
@@ -76,7 +80,7 @@ function verificationReason(raw: string): string {
     .trim();
 }
 
-export function describeAiFailure(input: AiFailureInput): AiFailureDescription {
+function describeAiFailureBase(input: AiFailureInput): AiFailureDescription {
   const raw = (input.rawError ?? "").trim();
   const status = input.status;
   const excerpt = raw.length > 400 ? `${raw.slice(0, 400)}…` : raw;
@@ -211,6 +215,30 @@ export function describeAiFailure(input: AiFailureInput): AiFailureDescription {
       `⚠️ **The request failed${statusPart}**, so no changes were made.\n\n` +
       "Your message is still in the thread — resend to retry." +
       (excerpt ? `\n\n\`\`\`\n${excerpt}\n\`\`\`` : ""),
+  };
+}
+
+/**
+ * Add safe operational diagnostics to every classified failure. The request id
+ * is already echoed by the server; surfacing it here lets support find the
+ * matching Start/worker log lines without exposing provider payloads.
+ */
+export function describeAiFailure(input: AiFailureInput): AiFailureDescription {
+  const described = describeAiFailureBase(input);
+  const requestId = input.requestId?.trim();
+  const failureClass = input.failureClass?.trim();
+  if (!requestId && !failureClass) return described;
+
+  const diagnostics = [
+    failureClass ? `Failure class: ${failureClass}` : null,
+    requestId ? `Request ID: ${requestId}` : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return {
+    ...described,
+    chatMarkdown:
+      described.chatMarkdown +
+      `\n\n**Diagnostic reference**\n\n\`${diagnostics.join(" · ")}\``,
   };
 }
 

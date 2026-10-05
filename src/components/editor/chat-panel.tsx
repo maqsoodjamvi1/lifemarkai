@@ -3190,7 +3190,12 @@ function ChatPanelImpl({
      * anything had happened at all. That is the "nothing happens when I hit
      * send" report. Keep `tempUserMsg`, and put the explanation under it.
      */
-    const failInChat = (input: { status?: number; rawError?: string | null }) => {
+    const failInChat = (input: {
+      status?: number;
+      rawError?: string | null;
+      requestId?: string | null;
+      failureClass?: "request" | "generation" | "connection" | "verification" | null;
+    }) => {
       const described = describeAiFailure(input);
       const errMsg: Message = {
         id: `ai-error-${Date.now()}`,
@@ -3214,6 +3219,7 @@ function ChatPanelImpl({
       return described;
     };
 
+    let requestId: string | null = null;
     try {
       // If user sent an image without a custom message (or only the auto-suggested mockup prompt),
       // prepend a strong mockup-to-code system instruction so the AI knows to reproduce the UI.
@@ -3620,7 +3626,11 @@ ${(f.content ?? "").slice(0, 8000)}
                 // message, explain the cause under it. Shares describeAiFailure
                 // with the pre-stream paths so a 402 cannot mean one thing here
                 // and something else two hundred lines away.
-                failInChat({ rawError: String(data.error) });
+                failInChat({
+                rawError: String(data.error),
+                requestId,
+                failureClass: "generation",
+              });
               }
             } catch {}
           }
@@ -3696,6 +3706,8 @@ ${(f.content ?? "").slice(0, 8000)}
         }),
       });
 
+      requestId = res.headers.get("x-lifemark-request-id");
+
       if (!res.ok || !res.body) {
         // Every non-2xx lands here, including the ones that used to fall
         // through to a bare `throw new Error("API error: 500")` and surface as
@@ -3707,6 +3719,8 @@ ${(f.content ?? "").slice(0, 8000)}
         const described = failInChat({
           status: res.status,
           rawError: await readErrorBody(res),
+          requestId,
+          failureClass: "request",
         });
         if (res.status === 402 && !described.isPlatformFault) {
           onCreditsUpdate(0);
@@ -4368,7 +4382,11 @@ ${(f.content ?? "").slice(0, 8000)}
               // OpenRouter balance for days: every build 402'd invisibly).
               // Persist a readable in-chat error with the actual cause, and
               // keep the user's message so it can be resent.
-              failInChat({ rawError: String(data.error) });
+              failInChat({
+                rawError: String(data.error),
+                requestId,
+                failureClass: "generation",
+              });
             }
           } catch {}
         };
@@ -4430,7 +4448,11 @@ ${(f.content ?? "").slice(0, 8000)}
           // failInChat) is unreachable for this frame shape, so call
           // failInChat directly here instead.
           onError: (err) => {
-            failInChat({ rawError: err.message });
+            failInChat({
+              rawError: err.message,
+              requestId,
+              failureClass: "generation",
+            });
           },
         },
       });
@@ -4461,6 +4483,8 @@ ${(f.content ?? "").slice(0, 8000)}
       } else {
         failInChat({
           rawError: err instanceof Error ? err.message : "The connection dropped before a reply started.",
+          requestId,
+          failureClass: "connection",
         });
       }
     } finally {
